@@ -1,0 +1,9 @@
+# OCaml / dune
+_build/
+*.install
+.merlin
+# Rust
+/target
+Cargo.lock
+# OS
+.DS_Store

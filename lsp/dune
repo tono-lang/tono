@@ -1,0 +1,3 @@
+(executable
+ (name tono_lsp)
+ (libraries tono_frontend))
