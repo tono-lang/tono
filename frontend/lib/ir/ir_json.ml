@@ -269,27 +269,29 @@ let decode_constraint j =
   let* kvs = as_assoc j in
   match List.filter (fun (k, _) -> List.mem k constraint_keys) kvs with
   | [ ("range", v) ] ->
+      let* () = ensure_only [ "range" ] kvs in
       let* o = as_assoc v in
       let get k = List.assoc_opt k o in
-      let* min =
-        match get "min" with
+      let float_opt k =
+        match get k with
         | None -> Ok None
         | Some x ->
             let* f = as_float x in
             Ok (Some f)
       in
-      let* max =
-        match get "max" with
-        | None -> Ok None
-        | Some x ->
-            let* f = as_float x in
-            Ok (Some f)
+      let bool_flag k =
+        match get k with
+        | None -> Ok false
+        | Some (`Bool b) -> Ok b
+        | Some _ -> err "%s must be a boolean" k
       in
-      let excl k = match get k with Some (`Bool b) -> b | _ -> false in
-      Ok
-        (Ir.Range
-           { min; max; excl_min = excl "exclMin"; excl_max = excl "exclMax" })
+      let* min = float_opt "min" in
+      let* max = float_opt "max" in
+      let* excl_min = bool_flag "exclMin" in
+      let* excl_max = bool_flag "exclMax" in
+      Ok (Ir.Range { min; max; excl_min; excl_max })
   | [ ("length", v) ] ->
+      let* () = ensure_only [ "length" ] kvs in
       let* o = as_assoc v in
       let get k = List.assoc_opt k o in
       let opt k =
@@ -303,9 +305,11 @@ let decode_constraint j =
       let* max = opt "max" in
       Ok (Ir.Length { min; max })
   | [ ("pattern", v) ] ->
+      let* () = ensure_only [ "pattern" ] kvs in
       let* s = as_string v in
       Ok (Ir.Pattern s)
   | [ ("multipleOf", v) ] ->
+      let* () = ensure_only [ "multipleOf" ] kvs in
       let* f = as_float v in
       Ok (Ir.MultipleOf f)
   | [] -> err "constraint object has no recognized key"
@@ -412,8 +416,11 @@ let decode_shape_kind kvs =
   | "union" ->
       let* params = params () in
       let* members = members () in
-      let discriminator =
-        match get "discriminator" with Some (`String s) -> s | _ -> "type"
+      let* discriminator =
+        match get "discriminator" with
+        | None -> Ok "type"
+        | Some (`String s) -> Ok s
+        | Some _ -> err "union discriminator must be a string"
       in
       Ok (Ir.Union { params; members; discriminator })
   | "enum" ->
@@ -431,7 +438,12 @@ let decode_shape_kind kvs =
             let* xs = as_list v in
             map_result decode_enum_value xs
       in
-      let open_ = match get "open" with Some (`Bool b) -> b | _ -> true in
+      let* open_ =
+        match get "open" with
+        | None -> Ok true
+        | Some (`Bool b) -> Ok b
+        | Some _ -> err "enum open flag must be a boolean"
+      in
       Ok (Ir.Enum { backing; values; open_ })
   | "service" ->
       let* operations =

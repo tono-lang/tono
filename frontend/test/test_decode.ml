@@ -59,6 +59,10 @@ let constraint_suite =
       {|{"range": {"min": 1e999}}|};
     fails "multipleOf not finite" Ir_json.decode_constraint
       {|{"multipleOf": 1e999}|};
+    fails "constraint extra sibling key" Ir_json.decode_constraint
+      {|{"pattern": "x", "bogus": 1}|};
+    fails "range exclMin wrong type" Ir_json.decode_constraint
+      {|{"range": {"exclMin": "yes"}}|};
     ok "range without excl flags defaults false" Ir_json.decode_constraint
       {|{"range": {"min": 1}}|};
     ok "length empty bounds" Ir_json.decode_constraint {|{"length": {}}|};
@@ -121,6 +125,10 @@ let shape_suite =
       {|{"id": "x#Y", "kind": "structure", "members": 5}|};
     fails "structure traits not array" Ir_json.decode_shape
       {|{"id": "x#Y", "kind": "structure", "traits": 5}|};
+    fails "union discriminator wrong type" Ir_json.decode_shape
+      {|{"id": "x#U", "kind": "union", "discriminator": 5}|};
+    fails "enum open wrong type" Ir_json.decode_shape
+      {|{"id": "x#E", "kind": "enum", "backing": "string", "open": "yes"}|};
     fails "enum missing backing" Ir_json.decode_shape
       {|{"id": "x#Y", "kind": "enum"}|};
     fails "enum bad backing" Ir_json.decode_shape

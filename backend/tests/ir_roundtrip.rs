@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use tono_backend::ir::{self, check_roundtrip, decode_model, Prim, ShapeKind, Tref};
+use tono_backend::ir::{self, check_roundtrip, decode_model, Constraint, Prim, ShapeKind, Tref};
 
 const FIXTURE_NAMES: [&str; 4] = [
     "list_charges",
@@ -195,6 +195,16 @@ fn decode_tolerates_omitted_optional_fields() {
         _ => panic!("expected an enum"),
     }
     assert!(decode_model(r#"{"tono_ir_version":1}"#).is_ok());
+}
+
+#[test]
+fn constraint_decode_tolerance_matches_frontend() {
+    // exclMin/exclMax default to false when absent, as the frontend does.
+    assert!(serde_json::from_str::<Constraint>(r#"{"range":{"min":1.0}}"#).is_ok());
+    // an extra sibling key on the tagged wrapper is rejected on both sides.
+    assert!(serde_json::from_str::<Constraint>(r#"{"pattern":"x","bogus":1}"#).is_err());
+    // a wrong-typed exclusive flag is rejected on both sides.
+    assert!(serde_json::from_str::<Constraint>(r#"{"range":{"exclMin":"yes"}}"#).is_err());
 }
 
 // ── Divergence sentinels ────────────────────────────────────────────────

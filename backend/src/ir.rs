@@ -159,9 +159,9 @@ pub enum Constraint {
         min: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         max: Option<f64>,
-        #[serde(rename = "exclMin")]
+        #[serde(rename = "exclMin", default)]
         excl_min: bool,
-        #[serde(rename = "exclMax")]
+        #[serde(rename = "exclMax", default)]
         excl_max: bool,
     },
     Length {
@@ -288,17 +288,23 @@ pub struct Model {
     pub modules: Vec<Module>,
 }
 
-/// Decode a model, refusing any document whose schema version this build does
-/// not recognize rather than attempting a partial decode.
+#[derive(Deserialize)]
+struct VersionEnvelope {
+    tono_ir_version: u32,
+}
+
+/// Decode a model. The schema version is checked from the envelope *before*
+/// decoding the rest, so an unrecognized version fails loudly with a version
+/// error rather than a downstream parse error (matching the frontend order).
 pub fn decode_model(json: &str) -> Result<Model, String> {
-    let model: Model = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if model.tono_ir_version != TONO_IR_VERSION {
+    let envelope: VersionEnvelope = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if envelope.tono_ir_version != TONO_IR_VERSION {
         return Err(format!(
             "unsupported tono_ir_version {} (this build supports {})",
-            model.tono_ir_version, TONO_IR_VERSION
+            envelope.tono_ir_version, TONO_IR_VERSION
         ));
     }
-    Ok(model)
+    serde_json::from_str(json).map_err(|e| e.to_string())
 }
 
 /// Result of checking that a document survives a decode/re-encode round-trip.

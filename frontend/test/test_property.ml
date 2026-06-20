@@ -167,10 +167,13 @@ let gen_model : Ir.model G.t =
 let print_model m = Ir_json.to_canonical_string (Ir_json.encode_model m)
 
 let roundtrip =
-  QCheck.Test.make ~count:1000 ~name:"decode (encode m) = m"
+  QCheck.Test.make ~count:1000 ~name:"decode (parse (to_string (encode m))) = m"
     (QCheck.make ~print:print_model gen_model) (fun m ->
       let j = Ir_json.encode_model m in
-      match Ir_json.decode_model j with
+      (* Go through the full text pipe (serialize then parse) so the property
+         exercises string emission and parsing, not just the in-memory AST. *)
+      let parsed = Yojson.Safe.from_string (Yojson.Safe.to_string j) in
+      match Ir_json.decode_model parsed with
       | Error _ -> false
       | Ok m' ->
           String.equal
