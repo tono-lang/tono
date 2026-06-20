@@ -49,8 +49,8 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: "5.2"
-      - name: Install tooling
-        run: opam install ocamlformat bisect_ppx --yes
+      - name: Install tooling and frontend dependencies
+        run: opam install ocamlformat bisect_ppx yojson alcotest qcheck-core --yes
       - name: Format check
         run: opam exec -- dune build @fmt
       - name: Build (warnings = errors)
