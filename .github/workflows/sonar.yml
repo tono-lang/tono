@@ -22,9 +22,8 @@ jobs:
         if: env.SONAR_TOKEN != ''
         with:
           fetch-depth: 0
-      # Verify version/action against the Sonar docs after creating the account.
       - name: SonarQube Scan
         if: env.SONAR_TOKEN != ''
-        uses: SonarSource/sonarqube-scan-action@v4
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
