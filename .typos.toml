@@ -1,0 +1,2 @@
+[files]
+extend-exclude = ["LICENSE", "LICENSE-*", "NOTICE"]
