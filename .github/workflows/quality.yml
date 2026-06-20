@@ -1,0 +1,51 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  duplication:
+    name: Duplication (jscpd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: jscpd (fail if duplication > 3%)
+        run: >
+          npx --yes jscpd .
+          --threshold 3
+          --reporters consoleFull
+          --ignore "**/target/**,**/_build/**,**/node_modules/**,**/*.lock"
+
+  file-size:
+    name: File size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check file sizes
+        run: bash scripts/check-file-size.sh
+
+  unused-deps:
+    name: Unused deps (cargo-machete)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - run: cargo machete
+
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@master

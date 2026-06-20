@@ -1,0 +1,29 @@
+name: Sonar
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sonarqube:
+    name: SonarQube Cloud
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Note when token is absent
+        if: env.SONAR_TOKEN == ''
+        run: echo "SONAR_TOKEN secret not set; skipping analysis until the Sonar account is connected."
+      - uses: actions/checkout@v4
+        if: env.SONAR_TOKEN != ''
+        with:
+          fetch-depth: 0
+      - name: SonarQube Scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
