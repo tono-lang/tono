@@ -7,6 +7,9 @@ yanked = "deny"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Internal path dependencies (e.g. the cli depending on the backend) resolve to a
+# wildcard version requirement; allow that without weakening the external check.
+allow-wildcard-paths = true
 
 [licenses]
 allow = [
@@ -19,6 +22,8 @@ allow = [
   "Unicode-3.0",
   "Zlib",
 ]
+# Our own workspace crates are unpublished; skip the license check for them.
+private = { ignore = true }
 
 [sources]
 unknown-registry = "deny"
