@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy (warnings = errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build
+        run: cargo build --workspace
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Test + coverage (lines >= 95%)
+        run: cargo llvm-cov --workspace --fail-under-lines 95 --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-lcov
+          path: lcov.info
+          if-no-files-found: ignore
+
+  ocaml:
+    name: OCaml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.2"
+      - name: Install tooling
+        run: opam install ocamlformat bisect_ppx --yes
+      - name: Format check
+        run: opam exec -- dune build @fmt
+      - name: Build (warnings = errors)
+        run: opam exec -- dune build
+      - name: Test
+        run: opam exec -- dune runtest
+      - name: Coverage (lines >= 95%)
+        run: |
+          opam exec -- dune runtest --instrument-with bisect_ppx --force
+          opam exec -- bisect-ppx-report summary | tee coverage.txt
+          pct=$(grep -oE '[0-9]+(\.[0-9]+)?%' coverage.txt | head -1 | tr -d '%')
+          echo "OCaml line coverage: ${pct:-0}%"
+          awk -v p="${pct:-0}" 'BEGIN { exit (p+0 >= 95) ? 0 : 1 }' \
+            || { echo "::error::OCaml coverage ${pct:-0}% is below 95%"; exit 1; }
+
+  # Single aggregating check — this is the one to mark "required" in branch protection.
+  ci-success:
+    name: CI success
+    runs-on: ubuntu-latest
+    needs: [rust, ocaml]
+    if: always()
+    steps:
+      - name: Verify required jobs
+        run: |
+          if [ "${{ needs.rust.result }}" != "success" ] || [ "${{ needs.ocaml.result }}" != "success" ]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi
+          echo "All required jobs passed."

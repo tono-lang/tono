@@ -1,0 +1,11 @@
+version: 2
+# Note: opam/OCaml is not supported by Dependabot; update OCaml deps manually.
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

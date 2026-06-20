@@ -1,0 +1,3 @@
+profile = default
+# Pin `version = <x>` here once a specific ocamlformat release is chosen,
+# so local and CI formatting stay identical.
