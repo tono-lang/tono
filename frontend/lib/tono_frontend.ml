@@ -5,3 +5,11 @@ let version = "0.0.0"
    A custom main module suppresses dune's automatic submodule aliasing. *)
 module Ir = Ir
 module Ir_json = Ir_json
+module Span = Span
+module Diagnostic = Diagnostic
+module Token = Token
+module Lexer = Lexer
+module Ast = Ast
+module Parser_state = Parser_state
+module Parser = Parser
+module Lower = Lower
