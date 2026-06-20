@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# Cross-language IR contract gate. Builds and tests both sides, then pipes each
-# canonical example from the OCaml encoder through the Rust decoder/re-encoder
-# and diffs the result. Any divergence exits non-zero and breaks the build.
+# Local convenience runner for the cross-language IR contract. It builds and
+# tests both sides, then pipes each canonical example from the OCaml encoder
+# through the Rust decoder/re-encoder and diffs the result.
+#
+# This script is NOT the CI gate. CI enforces the same contract without it: the
+# OCaml golden check pins fixtures == frontend encoding, and the Rust round-trip
+# test proves the backend reproduces those fixtures as data. This script just
+# bundles both directions for a quick local check.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -23,7 +28,7 @@ cargo test -p tono-backend
 echo "==> live cross-language round-trip (OCaml encode -> Rust decode/re-encode)"
 dump="_build/default/frontend/tools/dump_fixtures.exe"
 mirror="target/debug/ir_roundtrip"
-examples="list_charges nullable_charge open_enum_union primitives"
+examples="list_charges nullable_charge open_enum_union primitives service_api"
 for name in $examples; do
   # The mirror decodes the frontend's JSON, re-encodes it, and exits non-zero
   # (printing the difference) if the two disagree as data.

@@ -152,6 +152,9 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
   outside the contract.
 - **Structured integer fields** (`length` bounds, enum values) carry small
   counts in practice; they round-trip exactly within a signed 63-bit integer.
+- **Meta-schema vs runtime wire.** Integer `default`/trait values are plain JSON
+  numbers *in the IR*. How a generated SDK serializes an `i64` on its own runtime
+  wire (e.g. as a string) is a separate concern and does not affect this encoding.
 
 ## Regenerating the fixtures
 

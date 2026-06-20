@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tono_backend::ir::{self, check_roundtrip, decode_model, Constraint, Prim, ShapeKind, Tref};
 
-const FIXTURE_NAMES: [&str; 4] = [
+const FIXTURE_NAMES: [&str; 5] = [
     "list_charges",
     "nullable_charge",
     "open_enum_union",
     "primitives",
+    "service_api",
 ];
 
 const ALL_PRIMS: [&str; 16] = [
@@ -110,6 +111,7 @@ fn version_gate_rejects_unknown_version() {
     assert!(decode_model(r#"{"tono_ir_version":1,"modules":[]}"#).is_ok());
     assert!(decode_model(r#"{"tono_ir_version":2,"modules":[]}"#).is_err());
     assert!(decode_model(r#"{"tono_ir_version":0,"modules":[]}"#).is_err());
+    assert!(decode_model(r#"{"modules":[]}"#).is_err());
 }
 
 // ── Number fidelity ─────────────────────────────────────────────────────

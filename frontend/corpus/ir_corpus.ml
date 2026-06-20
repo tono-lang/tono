@@ -231,6 +231,59 @@ let primitives : Ir.model =
       ];
   }
 
+(* Example: a service and an operation that exercise every operation field
+   (input, output, and a non-empty errors list), so the cross-language contract
+   pins the service kind and a fully-populated operation, not only the empty one. *)
+let service_api : Ir.model =
+  let request : Ir.shape =
+    {
+      id = "payments#ListChargesRequest";
+      kind =
+        Ir.Structure
+          { params = []; members = [ member "limit" u32 ~required:false ] };
+      traits = [];
+    }
+  in
+  let not_found : Ir.shape =
+    {
+      id = "payments#NotFound";
+      kind =
+        Ir.Structure { params = []; members = [ member "message" string_t ] };
+      traits = [];
+    }
+  in
+  let list_charges_op : Ir.shape =
+    {
+      id = "payments#ListCharges";
+      kind =
+        Ir.Operation
+          {
+            input = Some (ref_ "payments#ListChargesRequest" []);
+            output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
+            errors = [ ref_ "payments#NotFound" [] ];
+          };
+      traits = [];
+    }
+  in
+  let service : Ir.shape =
+    {
+      id = "payments#Payments";
+      kind = Ir.Service { operations = [ "payments#ListCharges" ] };
+      traits = [ trait "core#doc" (`String "Payments API.") ];
+    }
+  in
+  {
+    tono_ir_version = Ir_json.current_ir_version;
+    modules =
+      [
+        {
+          mod_name = "payments";
+          shapes = [ request; not_found; service ];
+          operations = [ list_charges_op ];
+        };
+      ];
+  }
+
 (* The full corpus, keyed by fixture file name. *)
 let examples : (string * Ir.model) list =
   [
@@ -238,4 +291,5 @@ let examples : (string * Ir.model) list =
     ("nullable_charge", nullable_charge);
     ("open_enum_union", open_enum_union);
     ("primitives", primitives);
+    ("service_api", service_api);
   ]

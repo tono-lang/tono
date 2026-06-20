@@ -288,23 +288,22 @@ pub struct Model {
     pub modules: Vec<Module>,
 }
 
-#[derive(Deserialize)]
-struct VersionEnvelope {
-    tono_ir_version: u32,
-}
-
-/// Decode a model. The schema version is checked from the envelope *before*
-/// decoding the rest, so an unrecognized version fails loudly with a version
-/// error rather than a downstream parse error (matching the frontend order).
+/// Decode a model. The JSON is parsed once; the schema version is checked from
+/// the parsed value *before* the model is built, so an unrecognized version
+/// fails loudly with a version error rather than a downstream field error
+/// (matching the frontend order).
 pub fn decode_model(json: &str) -> Result<Model, String> {
-    let envelope: VersionEnvelope = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if envelope.tono_ir_version != TONO_IR_VERSION {
+    let value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let version = value
+        .get("tono_ir_version")
+        .and_then(Value::as_u64)
+        .ok_or("model is missing an integer tono_ir_version")?;
+    if version != u64::from(TONO_IR_VERSION) {
         return Err(format!(
-            "unsupported tono_ir_version {} (this build supports {})",
-            envelope.tono_ir_version, TONO_IR_VERSION
+            "unsupported tono_ir_version {version} (this build supports {TONO_IR_VERSION})"
         ));
     }
-    serde_json::from_str(json).map_err(|e| e.to_string())
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
 /// Result of checking that a document survives a decode/re-encode round-trip.
