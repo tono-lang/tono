@@ -179,7 +179,7 @@ let parse_member st : Ast.member =
   let traits = parse_trailing_traits st in
   { Ast.mname = name; mname_span = nt.span; mtype = ty; mtraits = traits }
 
-let parse_members st : Ast.member list =
+let parse_members st ~what : Ast.member list =
   let rec go acc =
     match (P.peek st).kind with
     | Token.RBrace | Token.Eof -> List.rev acc
@@ -189,8 +189,9 @@ let parse_members st : Ast.member list =
         go acc
     | _ ->
         P.error st (P.peek st).span
-          (Printf.sprintf "unexpected %s in struct body"
-             (Token.describe (P.peek st).kind));
+          (Printf.sprintf "unexpected %s in %s body"
+             (Token.describe (P.peek st).kind)
+             what);
         ignore (P.advance st);
         go acc
   in
@@ -222,10 +223,10 @@ let parse_generics st : string list =
     ignore (P.expect st Token.RBracket "']' to close type parameters");
     ps)
 
-(* struct ::= "struct" name generics? "{" member* "}" *)
-let parse_struct st ~pub ~dtraits : Ast.decl =
-  ignore (P.advance st);
-  (* 'struct' *)
+(* Shared header+body for the brace-with-members shapes (struct, union): a name,
+   optional generics, and a braced member list. [what] names the keyword for the
+   diagnostics. *)
+let parse_shape_body st ~what =
   let nt = P.peek st in
   let name =
     match nt.kind with
@@ -233,17 +234,210 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
         ignore (P.advance st);
         n
     | _ ->
-        P.error st nt.span "expected a struct name";
+        P.error st nt.span (Printf.sprintf "expected a %s name" what);
         ""
   in
   let params = parse_generics st in
-  ignore (P.expect st Token.LBrace "'{' to open the struct body");
-  let members = parse_members st in
-  ignore (P.expect st Token.RBrace "'}' to close the struct body");
+  ignore
+    (P.expect st Token.LBrace (Printf.sprintf "'{' to open the %s body" what));
+  let members = parse_members st ~what in
+  ignore
+    (P.expect st Token.RBrace (Printf.sprintf "'}' to close the %s body" what));
+  (name, nt.span, params, members)
+
+(* struct ::= "struct" name generics? "{" member* "}" *)
+let parse_struct st ~pub ~dtraits : Ast.decl =
+  ignore (P.advance st);
+  (* 'struct' *)
+  let name, span, params, members = parse_shape_body st ~what:"struct" in
+  {
+    Ast.dname = name;
+    dname_span = span;
+    pub;
+    dtraits;
+    dkind = Ast.DStruct { params; members };
+  }
+
+(* union ::= "union" name generics? "{" member* "}" *)
+let parse_union st ~pub ~dtraits : Ast.decl =
+  ignore (P.advance st);
+  (* 'union' *)
+  let name, span, params, members = parse_shape_body st ~what:"union" in
+  {
+    Ast.dname = name;
+    dname_span = span;
+    pub;
+    dtraits;
+    dkind = Ast.DUnion { params; members };
+  }
+
+(* case ::= name ("=" int)? trait*  — the name token is already consumed and
+   passed in, so the only caller that reaches here had an identifier in hand. *)
+let parse_enum_case st ~name ~name_span : Ast.enum_case =
+  let cint =
+    match (P.peek st).kind with
+    | Token.Eq -> (
+        ignore (P.advance st);
+        match (P.peek st).kind with
+        | Token.Int n ->
+            ignore (P.advance st);
+            Some n
+        | _ ->
+            P.error st (P.peek st).span "expected an integer after '='";
+            None)
+    | _ -> None
+  in
+  let traits = parse_trailing_traits st in
+  { Ast.cname = name; cname_span = name_span; cint; ctraits = traits }
+
+let parse_enum_cases st : Ast.enum_case list =
+  let rec go acc =
+    match (P.peek st).kind with
+    | Token.RBrace | Token.Eof -> List.rev acc
+    | Token.Ident name ->
+        let nt = P.advance st in
+        go (parse_enum_case st ~name ~name_span:nt.span :: acc)
+    | Token.Comma ->
+        ignore (P.advance st);
+        go acc
+    | _ ->
+        P.error st (P.peek st).span
+          (Printf.sprintf "unexpected %s in enum body"
+             (Token.describe (P.peek st).kind));
+        ignore (P.advance st);
+        go acc
+  in
+  go []
+
+(* enum ::= "enum" name "{" case* "}" *)
+let parse_enum st ~pub ~dtraits : Ast.decl =
+  ignore (P.advance st);
+  (* 'enum' *)
+  let nt = P.peek st in
+  let name =
+    match nt.kind with
+    | Token.Ident n ->
+        ignore (P.advance st);
+        n
+    | _ ->
+        P.error st nt.span "expected an enum name";
+        ""
+  in
+  ignore (P.expect st Token.LBrace "'{' to open the enum body");
+  let cases = parse_enum_cases st in
+  ignore (P.expect st Token.RBrace "'}' to close the enum body");
   {
     Ast.dname = name;
     dname_span = nt.span;
     pub;
     dtraits;
-    dkind = Ast.DStruct { params; members };
+    dkind = Ast.DEnum { cases };
   }
+
+(* op ::= "op" name "(" type? ")" then an optional "-> type" and an optional
+   "throws" clause listing comma-separated error types. *)
+let parse_op st ~pub ~dtraits : Ast.decl =
+  ignore (P.advance st);
+  (* 'op' *)
+  let nt = P.peek st in
+  let name =
+    match nt.kind with
+    | Token.Ident n ->
+        ignore (P.advance st);
+        n
+    | _ ->
+        P.error st nt.span "expected an operation name";
+        ""
+  in
+  ignore (P.expect st Token.LParen "'(' after the operation name");
+  let input =
+    match (P.peek st).kind with
+    | Token.RParen -> None
+    | _ -> Some (parse_type st)
+  in
+  ignore (P.expect st Token.RParen "')' to close the operation input");
+  let output =
+    match (P.peek st).kind with
+    | Token.Arrow ->
+        ignore (P.advance st);
+        Some (parse_type st)
+    | _ -> None
+  in
+  let errors =
+    match (P.peek st).kind with
+    | Token.KwThrows ->
+        ignore (P.advance st);
+        let first = parse_type st in
+        let rec more acc =
+          match (P.peek st).kind with
+          | Token.Comma ->
+              ignore (P.advance st);
+              more (parse_type st :: acc)
+          | _ -> List.rev acc
+        in
+        more [ first ]
+    | _ -> []
+  in
+  {
+    Ast.dname = name;
+    dname_span = nt.span;
+    pub;
+    dtraits;
+    dkind = Ast.DOp { input; output; errors };
+  }
+
+(* ── Declarations and files ────────────────────────────────────────────── *)
+
+(* decl ::= trait* "pub"? (struct | union | enum | op). Returns [None] when the
+   keyword is missing so the file loop can resynchronize. *)
+let parse_decl st : Ast.decl option =
+  let dtraits = parse_trailing_traits st in
+  let pub =
+    match (P.peek st).kind with
+    | Token.KwPub ->
+        ignore (P.advance st);
+        true
+    | _ -> false
+  in
+  match (P.peek st).kind with
+  | Token.KwStruct -> Some (parse_struct st ~pub ~dtraits)
+  | Token.KwUnion -> Some (parse_union st ~pub ~dtraits)
+  | Token.KwEnum -> Some (parse_enum st ~pub ~dtraits)
+  | Token.KwOp -> Some (parse_op st ~pub ~dtraits)
+  | _ ->
+      P.error st (P.peek st).span
+        (Printf.sprintf
+           "expected a declaration (struct, enum, union, or op), found %s"
+           (Token.describe (P.peek st).kind));
+      None
+
+(* A declaration can start with a trait, [pub], or one of the shape keywords;
+   resynchronization skips to the next such token. *)
+let is_decl_start = function
+  | Token.At | Token.KwPub | Token.KwStruct | Token.KwUnion | Token.KwEnum
+  | Token.KwOp ->
+      true
+  | _ -> false
+
+let parse_file st : Ast.file =
+  let rec go acc =
+    if P.at_eof st then List.rev acc
+    else
+      match parse_decl st with
+      | Some d -> go (d :: acc)
+      | None ->
+          (* parse_decl already diagnosed; ensure progress, then skip to the
+             next declaration boundary. *)
+          if not (P.at_eof st) then ignore (P.advance st);
+          while (not (P.at_eof st)) && not (is_decl_start (P.peek st).kind) do
+            ignore (P.advance st)
+          done;
+          go acc
+  in
+  go []
+
+let parse (src : string) : Ast.file * Diagnostic.t list =
+  let toks, lex_diags = Lexer.tokenize src in
+  let st = P.create toks in
+  let file = parse_file st in
+  (file, lex_diags @ P.diagnostics st)

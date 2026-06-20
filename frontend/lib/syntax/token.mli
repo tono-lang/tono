@@ -7,6 +7,7 @@ type kind =
   | KwOp
   | KwMap
   | KwPub
+  | KwThrows
   | Ident of string
   | Prim of string
   | Str of string
@@ -23,6 +24,7 @@ type kind =
   | Comma
   | Dot
   | Eq
+  | Arrow
   | Eof
 
 type t = { kind : kind; span : Span.span }

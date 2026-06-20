@@ -63,7 +63,9 @@ let is_snake_case (s : string) : bool =
        s
 
 let check_snake diags span what name =
-  if not (is_snake_case name) then
+  (* An empty name only arises from an already-diagnosed parse error, so skip it
+     rather than pile on a misleading "must be snake_case" report. *)
+  if (not (String.equal name "")) && not (is_snake_case name) then
     report diags
       (Diagnostic.error span
          (Printf.sprintf "%s '%s' must be snake_case" what name))
@@ -170,12 +172,18 @@ let lower_member ~params ~diags (m : Ast.member) : Ir.member =
 
 (* ── Declarations ──────────────────────────────────────────────────────── *)
 
+(* Pull a named shape-level trait out of the bag, returning the matches and the
+   rest. Used for [@open]/[@discriminator], which become structured IR fields
+   rather than bag entries. *)
+let take_trait name (traits : Ast.trait list) =
+  List.partition (fun (t : Ast.trait) -> String.equal t.tname name) traits
+
 let lower_decl ~diags (d : Ast.decl) : Ir.shape =
   check_snake diags d.dname_span "shape name" d.dname;
   let pub_trait =
     if d.pub then [ { Ir.trait_id = "core#pub"; value = `Null } ] else []
   in
-  let traits = pub_trait @ lower_bag_traits d.dtraits in
+  let bag rest = pub_trait @ lower_bag_traits rest in
   match d.dkind with
   | Ast.DStruct { params; members } ->
       {
@@ -183,8 +191,86 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
         kind =
           Ir.Structure
             { params; members = List.map (lower_member ~params ~diags) members };
-        traits;
+        traits = bag d.dtraits;
       }
+  | Ast.DUnion { params; members } ->
+      let disc, rest = take_trait "discriminator" d.dtraits in
+      let discriminator =
+        match disc with
+        | { Ast.targs = Ast.AString s :: _; _ } :: _ -> Some s
+        | { Ast.tspan; _ } :: _ ->
+            report diags
+              (Diagnostic.error tspan "@discriminator expects a string argument");
+            None
+        | [] -> None
+      in
+      {
+        Ir.id = d.dname;
+        kind =
+          Ir.union ?discriminator ~params
+            ~members:(List.map (lower_member ~params ~diags) members)
+            ();
+        traits = bag rest;
+      }
+  | Ast.DEnum { cases } ->
+      let open_traits, rest = take_trait "open" d.dtraits in
+      let open_ = open_traits <> [] in
+      let int_backed =
+        List.exists (fun (c : Ast.enum_case) -> c.cint <> None) cases
+      in
+      let backing = if int_backed then `Int else `String in
+      let values =
+        List.map
+          (fun (c : Ast.enum_case) ->
+            check_snake diags c.cname_span "enum case" c.cname;
+            if c.ctraits <> [] then
+              report diags
+                (Diagnostic.error c.cname_span
+                   "enum case traits are not supported");
+            if int_backed && c.cint = None then
+              report diags
+                (Diagnostic.error c.cname_span
+                   "every case of an int-backed enum needs an explicit '= \
+                    value'");
+            (c.cname, c.cint))
+          cases
+      in
+      {
+        Ir.id = d.dname;
+        kind = Ir.Enum { backing; values; open_ };
+        traits = bag rest;
+      }
+  | Ast.DOp { input; output; errors } ->
+      let lower_opt = Option.map (lower_type ~params:[] ~diags) in
+      {
+        Ir.id = d.dname;
+        kind =
+          Ir.Operation
+            {
+              input = lower_opt input;
+              output = lower_opt output;
+              errors = List.map (lower_type ~params:[] ~diags) errors;
+            };
+        traits = bag d.dtraits;
+      }
+
+(* Lower a whole file into a module: operations land in [operations], every other
+   shape in [shapes], preserving declaration order. *)
+let lower_file ~module_name ~diags (file : Ast.file) : Ir.module_ =
+  let shapes_rev = ref [] in
+  let ops_rev = ref [] in
+  List.iter
+    (fun d ->
+      let shape = lower_decl ~diags d in
+      match shape.Ir.kind with
+      | Ir.Operation _ -> ops_rev := shape :: !ops_rev
+      | _ -> shapes_rev := shape :: !shapes_rev)
+    file;
+  {
+    Ir.mod_name = module_name;
+    shapes = List.rev !shapes_rev;
+    operations = List.rev !ops_rev;
+  }
 
 (* Exposed for testing the primitive-keyword mapping in isolation, including its
    defensive default (the lexer only ever yields the keywords above). *)

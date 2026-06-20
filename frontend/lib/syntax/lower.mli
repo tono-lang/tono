@@ -17,6 +17,11 @@ val lower_member :
 (* Lower a surface declaration to an IR shape. *)
 val lower_decl : diags:Diagnostic.t list ref -> Ast.decl -> Ir.shape
 
+(* Lower a file of declarations into a module; [module_name] becomes its name and
+   operations are separated from the other shapes. *)
+val lower_file :
+  module_name:string -> diags:Diagnostic.t list ref -> Ast.file -> Ir.module_
+
 (* Implementation details surfaced for unit testing. *)
 module Internal : sig
   (* Map a primitive keyword (as the lexer recognizes it) to an IR primitive. *)

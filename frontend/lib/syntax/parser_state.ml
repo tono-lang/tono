@@ -19,6 +19,8 @@ let advance st =
   if t.Token.kind <> Token.Eof then st.pos <- st.pos + 1;
   t
 
+let at_eof st = (peek st).Token.kind = Token.Eof
+
 let error st (span : Span.span) (message : string) =
   st.diags <- Diagnostic.error span message :: st.diags
 

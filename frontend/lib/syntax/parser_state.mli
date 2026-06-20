@@ -10,6 +10,9 @@ val peek : t -> Token.t
 (* Return the current token and move forward (stops at [Eof]). *)
 val advance : t -> Token.t
 
+(* Whether the cursor is at the end-of-file token. *)
+val at_eof : t -> bool
+
 (* Record an error diagnostic at a span. *)
 val error : t -> Span.span -> string -> unit
 

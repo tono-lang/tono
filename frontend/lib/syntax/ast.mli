@@ -23,7 +23,18 @@ type member = {
   mtraits : trait list;
 }
 
-type decl_kind = DStruct of { params : string list; members : member list }
+type enum_case = {
+  cname : string;
+  cname_span : Span.span;
+  cint : int option;
+  ctraits : trait list;
+}
+
+type decl_kind =
+  | DStruct of { params : string list; members : member list }
+  | DEnum of { cases : enum_case list }
+  | DUnion of { params : string list; members : member list }
+  | DOp of { input : ty option; output : ty option; errors : ty list }
 
 type decl = {
   dname : string;

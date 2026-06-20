@@ -105,10 +105,43 @@ let struct_body_recovery () =
       Alcotest.(check (list string))
         "recovered member" [ "a" ]
         (List.map (fun (m : Ast.member) -> m.mname) members)
+  | _ -> Alcotest.fail "expected a struct"
 
 let generics_errors () =
   nonempty "bad type parameter" (struct_diags "struct s[1] { a: i64 }");
   nonempty "trailing comma in params" (struct_diags "struct p[T,] { a: i64 }")
+
+(* ── enum / union / op ─────────────────────────────────────────────────── *)
+
+let decl_diags parse src =
+  let st, ld = state src in
+  let _ = parse st ~pub:false ~dtraits:[] in
+  ld @ Parser_state.diagnostics st
+
+let enum_errors () =
+  nonempty "missing enum name" (decl_diags Parser.parse_enum "enum { a }");
+  nonempty "missing brace" (decl_diags Parser.parse_enum "enum e a }");
+  nonempty "non-int after '='" (decl_diags Parser.parse_enum "enum e { a = x }");
+  nonempty "junk in body" (decl_diags Parser.parse_enum "enum e { a : i64 }")
+
+let contains ~sub s =
+  let n = String.length sub and m = String.length s in
+  let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
+  n = 0 || go 0
+
+let union_errors () =
+  nonempty "missing union name" (decl_diags Parser.parse_union "union { a: a }");
+  (* A stray token in a union body names "union", not "struct". *)
+  let ds = decl_diags Parser.parse_union "union u { ? }" in
+  Alcotest.(check bool)
+    "body diagnostic names union" true
+    (List.exists
+       (fun (d : Diagnostic.t) -> contains ~sub:"union body" d.message)
+       ds)
+
+let op_errors () =
+  nonempty "missing op name" (decl_diags Parser.parse_op "op () -> charge");
+  nonempty "missing paren" (decl_diags Parser.parse_op "op create -> charge")
 
 (* ── Well-formed repetition (fills the comma loops) ─────────────────────── *)
 
@@ -151,5 +184,11 @@ let () =
           Alcotest.test_case "body recovery" `Quick struct_body_recovery;
           Alcotest.test_case "generics errors" `Quick generics_errors;
           Alcotest.test_case "repetition paths" `Quick repetition_paths;
+        ] );
+      ( "decls",
+        [
+          Alcotest.test_case "enum errors" `Quick enum_errors;
+          Alcotest.test_case "union errors" `Quick union_errors;
+          Alcotest.test_case "op errors" `Quick op_errors;
         ] );
     ]

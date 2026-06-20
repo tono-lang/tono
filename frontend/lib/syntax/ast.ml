@@ -25,9 +25,20 @@ type member = {
   mtraits : trait list;
 }
 
-(* A sum type with one constructor for now; enum/union/operation kinds are added
-   alongside their parsers. *)
-type decl_kind = DStruct of { params : string list; members : member list }
+(* One variant of an enum: a name, an optional [= N] for int-backed enums, and
+   any trailing traits. *)
+type enum_case = {
+  cname : string;
+  cname_span : Span.span;
+  cint : int option;
+  ctraits : trait list;
+}
+
+type decl_kind =
+  | DStruct of { params : string list; members : member list }
+  | DEnum of { cases : enum_case list }
+  | DUnion of { params : string list; members : member list }
+  | DOp of { input : ty option; output : ty option; errors : ty list }
 
 type decl = {
   dname : string;

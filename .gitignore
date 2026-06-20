@@ -2,6 +2,9 @@
 _build/
 *.install
 .merlin
+# Coverage (bisect_ppx)
+*.coverage
+_coverage/
 # Rust
 /target
 Cargo.lock
