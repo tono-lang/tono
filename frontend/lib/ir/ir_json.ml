@@ -541,3 +541,10 @@ let rec canonicalize (j : Ir.json) : Ir.json =
 
 let to_canonical_string (j : Ir.json) : string =
   Yojson.Safe.to_string (canonicalize j)
+
+(* Re-exported low-level helpers so their edge cases can be tested directly while
+   staying out of the intended public surface (see the .mli). *)
+module Internal = struct
+  let as_int = as_int
+  let as_float = as_float
+end

@@ -206,15 +206,16 @@ let helper_coercions () =
     | Error _ -> ()
     | Ok _ -> Alcotest.failf "%s: expected error" name
   in
-  check_ok "as_int intlit fits" (Ir_json.as_int (`Intlit "5"));
+  check_ok "as_int intlit fits" (Ir_json.Internal.as_int (`Intlit "5"));
   check_err "as_int intlit overflow"
-    (Ir_json.as_int (`Intlit "99999999999999999999"));
-  check_err "as_int non-integer" (Ir_json.as_int (`Bool true));
-  (match Ir_json.as_float (`Intlit "5") with
+    (Ir_json.Internal.as_int (`Intlit "99999999999999999999"));
+  check_err "as_int non-integer" (Ir_json.Internal.as_int (`Bool true));
+  (match Ir_json.Internal.as_float (`Intlit "5") with
   | Ok f -> Alcotest.(check (float 0.)) "as_float intlit" 5.0 f
   | Error e -> Alcotest.failf "as_float intlit: %s" e);
-  check_err "as_float not-a-number intlit" (Ir_json.as_float (`Intlit "abc"));
-  check_err "as_float non-number" (Ir_json.as_float (`Bool true))
+  check_err "as_float not-a-number intlit"
+    (Ir_json.Internal.as_float (`Intlit "abc"));
+  check_err "as_float non-number" (Ir_json.Internal.as_float (`Bool true))
 
 let canonicalize_collapses_intlit () =
   Alcotest.(check string)
