@@ -1,0 +1,14 @@
+(executable
+ (name dump_fixtures)
+ (libraries tono_frontend ir_corpus yojson))
+
+; Golden gate: the checked-in fixtures must match what the encoder produces for
+; the canonical corpus. Regenerate with:
+;   dune exec frontend/tools/dump_fixtures.exe -- write ir-schema/fixtures
+
+(rule
+ (alias runtest)
+ (deps
+  (glob_files %{workspace_root}/ir-schema/fixtures/*.json))
+ (action
+  (run %{exe:dump_fixtures.exe} check %{workspace_root}/ir-schema/fixtures)))

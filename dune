@@ -1,1 +1,3 @@
-(dirs frontend lsp)
+(dirs frontend lsp ir-schema)
+
+(data_only_dirs ir-schema)
