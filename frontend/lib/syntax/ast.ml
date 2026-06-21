@@ -13,6 +13,7 @@ type ty =
 type trait_arg =
   | AString of string
   | AInt of int
+  | AFloat of float
   | AName of string (* an identifier argument: a type/name ref or HTTP method *)
   | AKv of string * trait_arg (* key: value, e.g. @range(min: 0) *)
 

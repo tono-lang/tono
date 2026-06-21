@@ -161,19 +161,39 @@ let scan_string st start =
   then scan_triple st start
   else scan_single st start
 
-let scan_int st start =
+(* A numeric literal: an optional leading '-', digits, and an optional
+   fractional '.' digits part (which makes it a float). The caller guarantees the
+   cursor is on '-' or a digit. *)
+let scan_number st start =
   let b = st.off in
+  if cur st = '-' then bump st;
   while (not (at_end st)) && is_digit (cur st) do
     bump st
   done;
+  let is_float =
+    (not (at_end st))
+    && cur st = '.'
+    && match char_at st (st.off + 1) with Some d -> is_digit d | None -> false
+  in
+  if is_float then (
+    bump st;
+    (* '.' *)
+    while (not (at_end st)) && is_digit (cur st) do
+      bump st
+    done);
   let text = String.sub st.src b (st.off - b) in
-  match int_of_string_opt text with
-  | Some n -> add_tok st (Token.Int n) ~start
-  | None ->
-      add_diag st Diagnostic.Error
-        (Printf.sprintf "integer literal '%s' is out of range" text)
-        ~start;
-      add_tok st (Token.Int 0) ~start
+  if is_float then
+    (* [text] is always a syntactically valid float here, so this never fails;
+       a huge magnitude becomes infinity rather than raising. *)
+    add_tok st (Token.Float (float_of_string text)) ~start
+  else
+    match int_of_string_opt text with
+    | Some n -> add_tok st (Token.Int n) ~start
+    | None ->
+        add_diag st Diagnostic.Error
+          (Printf.sprintf "integer literal '%s' is out of range" text)
+          ~start;
+        add_tok st (Token.Int 0) ~start
 
 let scan_ident st start =
   let b = st.off in
@@ -256,11 +276,16 @@ let tokenize (src : string) : Token.t list * Diagnostic.t list =
           bump st;
           bump st;
           add_tok st Token.Arrow ~start
+      | '-'
+        when match char_at st (st.off + 1) with
+             | Some d -> is_digit d
+             | None -> false ->
+          scan_number st start
       | '@' ->
           bump st;
           add_tok st Token.At ~start
       | '"' -> scan_string st start
-      | c when is_digit c -> scan_int st start
+      | c when is_digit c -> scan_number st start
       | c when is_ident_start c -> scan_ident st start
       | _ ->
           bump st;

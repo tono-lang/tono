@@ -14,6 +14,7 @@ type kind =
   | Prim of string (* a recognized primitive keyword, e.g. "i64" *)
   | Str of string (* decoded string-literal content *)
   | Int of int
+  | Float of float
   | At
   | LBrace
   | RBrace
@@ -45,6 +46,7 @@ let describe (k : kind) : string =
   | Prim s -> Printf.sprintf "type '%s'" s
   | Str _ -> "string literal"
   | Int n -> Printf.sprintf "integer '%d'" n
+  | Float f -> Printf.sprintf "number '%g'" f
   | At -> "'@'"
   | LBrace -> "'{'"
   | RBrace -> "'}'"

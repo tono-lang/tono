@@ -87,6 +87,9 @@ let parse_trait_value st : Ast.trait_arg =
   | Token.Int n ->
       ignore (P.advance st);
       Ast.AInt n
+  | Token.Float f ->
+      ignore (P.advance st);
+      Ast.AFloat f
   | Token.Ident n ->
       ignore (P.advance st);
       Ast.AName n
@@ -103,6 +106,9 @@ let parse_trait_arg st : Ast.trait_arg =
   | Token.Int n ->
       ignore (P.advance st);
       Ast.AInt n
+  | Token.Float f ->
+      ignore (P.advance st);
+      Ast.AFloat f
   | Token.Ident n -> (
       ignore (P.advance st);
       match (P.peek st).kind with
@@ -440,4 +446,4 @@ let parse (src : string) : Ast.file * Diagnostic.t list =
   let toks, lex_diags = Lexer.tokenize src in
   let st = P.create toks in
   let file = parse_file st in
-  (file, lex_diags @ P.diagnostics st)
+  (file, Diagnostic.sort (lex_diags @ P.diagnostics st))

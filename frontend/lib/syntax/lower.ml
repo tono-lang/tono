@@ -75,15 +75,28 @@ let check_snake diags span what name =
 let rec json_of_arg : Ast.trait_arg -> Ir.json = function
   | Ast.AString s -> `String s
   | Ast.AInt n -> `Int n
+  | Ast.AFloat f -> `Float f
   | Ast.AName s -> `String s
   | Ast.AKv (k, v) -> `Assoc [ (k, json_of_arg v) ]
 
+(* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
+   -> {"method":"get","path":"/x"}); any positional arg keeps the uniform array
+   form, where each keyword arg stays a single-key object. *)
 let json_of_args : Ast.trait_arg list -> Ir.json = function
   | [] -> `Null
-  | args -> `List (List.map json_of_arg args)
+  | args ->
+      let to_pair = function
+        | Ast.AKv (k, v) -> Some (k, json_of_arg v)
+        | _ -> None
+      in
+      let pairs = List.filter_map to_pair args in
+      if List.length pairs = List.length args then `Assoc pairs
+      else `List (List.map json_of_arg args)
 
+(* The bare trait name; the module-resolution pass qualifies it (core# or
+   module#) once the full set of declared names is known. *)
 let bag_trait (tr : Ast.trait) : Ir.trait =
-  { Ir.trait_id = "core#" ^ tr.tname; value = json_of_args tr.targs }
+  { Ir.trait_id = tr.tname; value = json_of_args tr.targs }
 
 let lower_bag_traits trs = List.map bag_trait trs
 
@@ -95,12 +108,20 @@ let kv_arg key args =
     args
 
 let int_of_arg = function Ast.AInt n -> Some n | _ -> None
-let float_of_arg = function Ast.AInt n -> Some (float_of_int n) | _ -> None
 
-(* Bounds accept either positional [min, max] or keyword [min:, max:] forms. *)
+let float_of_arg = function
+  | Ast.AInt n -> Some (float_of_int n)
+  | Ast.AFloat f -> Some f
+  | _ -> None
+
+(* Bounds accept either positional [min, max] (numbers) or keyword [min:, max:]
+   forms. Two positional keyword args must not match here -- they belong to the
+   keyword branch. *)
 let range_bounds args =
   match args with
-  | [ Ast.AInt a; Ast.AInt b ] -> (Some (float_of_int a), Some (float_of_int b))
+  | [ ((Ast.AInt _ | Ast.AFloat _) as a); ((Ast.AInt _ | Ast.AFloat _) as b) ]
+    ->
+      (float_of_arg a, float_of_arg b)
   | _ ->
       ( Option.bind (kv_arg "min" args) float_of_arg,
         Option.bind (kv_arg "max" args) float_of_arg )
@@ -112,13 +133,24 @@ let length_bounds args =
       ( Option.bind (kv_arg "min" args) int_of_arg,
         Option.bind (kv_arg "max" args) int_of_arg )
 
+(* Bounds given but none recognized (e.g. [@range(5)] or [@range(min: "x")]) is a
+   silent no-op otherwise, so flag it rather than emit an empty constraint. *)
+let warn_unparsed_bounds diags (tr : Ast.trait) min max =
+  if tr.targs <> [] && min = None && max = None then
+    report diags
+      (Diagnostic.error tr.tspan
+         (Printf.sprintf
+            "@%s expects (min, max) or (min: N, max: N) numeric bounds" tr.tname))
+
 let constraint_of_trait diags (tr : Ast.trait) : Ir.constraint_ option =
   match tr.tname with
   | "range" ->
       let min, max = range_bounds tr.targs in
+      warn_unparsed_bounds diags tr min max;
       Some (Ir.range ?min ?max ())
   | "length" ->
       let min, max = length_bounds tr.targs in
+      warn_unparsed_bounds diags tr min max;
       Some (Ir.length ?min ?max ())
   | "pattern" -> (
       match tr.targs with
@@ -128,11 +160,11 @@ let constraint_of_trait diags (tr : Ast.trait) : Ir.constraint_ option =
             (Diagnostic.error tr.tspan "@pattern expects a string argument");
           None)
   | "multipleOf" -> (
-      match tr.targs with
-      | Ast.AInt n :: _ -> Some (Ir.multiple_of (float_of_int n))
-      | _ ->
+      match Option.bind (List.nth_opt tr.targs 0) float_of_arg with
+      | Some f -> Some (Ir.multiple_of f)
+      | None ->
           report diags
-            (Diagnostic.error tr.tspan "@multipleOf expects an integer argument");
+            (Diagnostic.error tr.tspan "@multipleOf expects a number argument");
           None)
   | _ -> None
 
@@ -151,7 +183,15 @@ let lower_member ~params ~diags (m : Ast.member) : Ir.member =
   List.iter
     (fun (tr : Ast.trait) ->
       match tr.tname with
-      | "required" -> required := true
+      | "required" ->
+          if nullable then
+            report diags
+              (Diagnostic.error m.mname_span
+                 (Printf.sprintf
+                    "@required on the nullable member '%s' is contradictory; \
+                     drop the '?' or the @required"
+                    m.mname));
+          required := true
       | "default" ->
           let v = match tr.targs with a :: _ -> json_of_arg a | [] -> `Null in
           default := Some v
@@ -181,7 +221,7 @@ let take_trait name (traits : Ast.trait list) =
 let lower_decl ~diags (d : Ast.decl) : Ir.shape =
   check_snake diags d.dname_span "shape name" d.dname;
   let pub_trait =
-    if d.pub then [ { Ir.trait_id = "core#pub"; value = `Null } ] else []
+    if d.pub then [ { Ir.trait_id = "pub"; value = `Null } ] else []
   in
   let bag rest = pub_trait @ lower_bag_traits rest in
   match d.dkind with
@@ -254,8 +294,60 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
         traits = bag d.dtraits;
       }
 
+(* Qualify bare names against the module: a name declared in this file becomes
+   [module#name]; any other name is taken to be a core builtin ([core#name]). A
+   shape's own id is always local. This is a light intra-file resolution; cross-
+   module imports are a future concern (the surface has no import syntax yet). *)
+let resolve_module ~module_name (m : Ir.module_) : Ir.module_ =
+  let declared =
+    List.map (fun (s : Ir.shape) -> s.Ir.id) (m.shapes @ m.operations)
+  in
+  let qualify name =
+    if List.mem name declared then module_name ^ "#" ^ name else "core#" ^ name
+  in
+  let rec tref : Ir.tref -> Ir.tref = function
+    | Ir.Ref (name, args) -> Ir.Ref (qualify name, List.map tref args)
+    | Ir.List t -> Ir.List (tref t)
+    | Ir.Map (k, v) -> Ir.Map (tref k, tref v)
+    | (Ir.Prim _ | Ir.Param _) as t -> t
+  in
+  let trait (t : Ir.trait) : Ir.trait =
+    { t with trait_id = qualify t.trait_id }
+  in
+  let member (mem : Ir.member) : Ir.member =
+    { mem with target = tref mem.target; traits = List.map trait mem.traits }
+  in
+  let kind : Ir.shape_kind -> Ir.shape_kind = function
+    | Ir.Structure { params; members } ->
+        Ir.Structure { params; members = List.map member members }
+    | Ir.Union { params; members; discriminator } ->
+        Ir.Union { params; members = List.map member members; discriminator }
+    | Ir.Enum _ as k -> k
+    | Ir.Service { operations } ->
+        Ir.Service { operations = List.map qualify operations }
+    | Ir.Operation { input; output; errors } ->
+        Ir.Operation
+          {
+            input = Option.map tref input;
+            output = Option.map tref output;
+            errors = List.map tref errors;
+          }
+  in
+  let shape (s : Ir.shape) : Ir.shape =
+    {
+      Ir.id = module_name ^ "#" ^ s.Ir.id;
+      kind = kind s.Ir.kind;
+      traits = List.map trait s.Ir.traits;
+    }
+  in
+  {
+    Ir.mod_name = module_name;
+    shapes = List.map shape m.shapes;
+    operations = List.map shape m.operations;
+  }
+
 (* Lower a whole file into a module: operations land in [operations], every other
-   shape in [shapes], preserving declaration order. *)
+   shape in [shapes], preserving declaration order, then names are qualified. *)
 let lower_file ~module_name ~diags (file : Ast.file) : Ir.module_ =
   let shapes_rev = ref [] in
   let ops_rev = ref [] in
@@ -266,11 +358,12 @@ let lower_file ~module_name ~diags (file : Ast.file) : Ir.module_ =
       | Ir.Operation _ -> ops_rev := shape :: !ops_rev
       | _ -> shapes_rev := shape :: !shapes_rev)
     file;
-  {
-    Ir.mod_name = module_name;
-    shapes = List.rev !shapes_rev;
-    operations = List.rev !ops_rev;
-  }
+  resolve_module ~module_name
+    {
+      Ir.mod_name = module_name;
+      shapes = List.rev !shapes_rev;
+      operations = List.rev !ops_rev;
+    }
 
 (* Exposed for testing the primitive-keyword mapping in isolation, including its
    defensive default (the lexer only ever yields the keywords above). *)

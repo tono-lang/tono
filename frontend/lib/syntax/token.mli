@@ -12,6 +12,7 @@ type kind =
   | Prim of string
   | Str of string
   | Int of int
+  | Float of float
   | At
   | LBrace
   | RBrace

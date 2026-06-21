@@ -15,6 +15,7 @@ let show_kind : Token.kind -> string = function
   | Prim s -> "prim:" ^ s
   | Str s -> "str:" ^ s
   | Int n -> "int:" ^ string_of_int n
+  | Float f -> "float:" ^ string_of_float f
   | At -> "@"
   | LBrace -> "{"
   | RBrace -> "}"
@@ -149,6 +150,12 @@ let int_overflow () =
     "overflow diagnosed" true
     (List.length (diags_of "999999999999999999999999999999") >= 1)
 
+let negative_and_float () =
+  Alcotest.(check (list string))
+    "signed integers and fractional numbers"
+    [ "int:42"; "int:-10"; "float:3.14"; "float:-2.5"; "eof" ]
+    (kinds "42 -10 3.14 -2.5")
+
 (* ── Lexical error recovery ────────────────────────────────────────────── *)
 
 let has_str toks =
@@ -224,6 +231,7 @@ let () =
         [
           Alcotest.test_case "int literal" `Quick int_literals;
           Alcotest.test_case "overflow" `Quick int_overflow;
+          Alcotest.test_case "negative and float" `Quick negative_and_float;
         ] );
       ( "recovery",
         [

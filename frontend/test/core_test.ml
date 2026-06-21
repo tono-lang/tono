@@ -64,6 +64,7 @@ let describe_all () =
       Prim "i64";
       Str "s";
       Int 5;
+      Float 2.5;
       At;
       LBrace;
       RBrace;
@@ -94,6 +95,7 @@ let describe_all () =
       "type 'i64'";
       "string literal";
       "integer '5'";
+      "number '2.5'";
       "'@'";
       "'{'";
       "'}'";

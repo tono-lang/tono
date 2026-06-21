@@ -143,6 +143,18 @@ let op_errors () =
   nonempty "missing op name" (decl_diags Parser.parse_op "op () -> charge");
   nonempty "missing paren" (decl_diags Parser.parse_op "op create -> charge")
 
+(* Diagnostics point at the offending token, not the start of input. *)
+let diagnostic_span_and_message () =
+  let st, _ = state "struct s { x i64 }" in
+  let _ = Parser.parse_struct st ~pub:false ~dtraits:[] in
+  match Parser_state.diagnostics st with
+  | d :: _ ->
+      Alcotest.(check bool) "mentions ':'" true (contains ~sub:"':'" d.message);
+      (* 'i64' begins at offset 13 / column 14, where the ':' was expected. *)
+      Alcotest.(check int) "span offset at i64" 13 d.span.start.offset;
+      Alcotest.(check int) "span column at i64" 14 d.span.start.col
+  | [] -> Alcotest.fail "expected a diagnostic"
+
 (* ── Well-formed repetition (fills the comma loops) ─────────────────────── *)
 
 let repetition_paths () =
@@ -190,5 +202,7 @@ let () =
           Alcotest.test_case "enum errors" `Quick enum_errors;
           Alcotest.test_case "union errors" `Quick union_errors;
           Alcotest.test_case "op errors" `Quick op_errors;
+          Alcotest.test_case "diagnostic span and message" `Quick
+            diagnostic_span_and_message;
         ] );
     ]

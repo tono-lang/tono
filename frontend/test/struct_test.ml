@@ -87,29 +87,34 @@ let noncore_traits_in_bag () =
   let a = member "a" src in
   Alcotest.(check int) "no constraints" 0 (List.length a.constraints);
   let ids = List.map (fun (t : Ir.trait) -> t.trait_id) a.traits in
+  (* lower_decl leaves trait ids bare; module resolution qualifies them. *)
   Alcotest.(check (list string))
     "bag trait ids"
-    [ "core#wire"; "core#deprecated"; "core#doc" ]
+    [ "wire"; "deprecated"; "doc" ]
     ids;
   let wire = List.hd a.traits in
   Alcotest.(check string)
     "wire value" {|["amount"]|}
     (Ir_json.to_canonical_string wire.value)
 
-(* Bag traits keep every argument form: bare names, key:string and key:name. *)
+(* Bag trait values: positional args form an array; all-keyword args collapse to
+   one object; a mix keeps the array form with each kv a single-key object. *)
 let bag_arg_forms () =
   let src =
-    {|struct s { a: i64 @flag(verbose) @meta(owner: "me") @cfg(mode: fast) }|}
+    {|struct s { a: i64 @flag(verbose) @cfg(mode: fast)
+       @http(method: "get", path: "/x") @mix(first, k: 1) }|}
   in
   let a = member "a" src in
   let value id =
     let t = List.find (fun (t : Ir.trait) -> t.trait_id = id) a.traits in
     Ir_json.to_canonical_string t.value
   in
-  Alcotest.(check string) "bare name arg" {|["verbose"]|} (value "core#flag");
+  Alcotest.(check string) "positional arg" {|["verbose"]|} (value "flag");
+  Alcotest.(check string) "single kv" {|{"mode":"fast"}|} (value "cfg");
   Alcotest.(check string)
-    "kv string arg" {|[{"owner":"me"}]|} (value "core#meta");
-  Alcotest.(check string) "kv name arg" {|[{"mode":"fast"}]|} (value "core#cfg")
+    "multi kv merged" {|{"method":"get","path":"/x"}|} (value "http");
+  Alcotest.(check string)
+    "mixed stays array" {|["first",{"k":1}]|} (value "mix")
 
 (* Constraints also accept positional [min, max] bounds. *)
 let positional_bounds () =
@@ -136,6 +141,61 @@ let constraint_arg_errors () =
     "multipleOf dropped" 0
     (List.length (member "b" src).constraints)
 
+let msg_contains sub ds =
+  let has s =
+    let n = String.length sub and m = String.length s in
+    let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
+    n = 0 || go 0
+  in
+  List.exists (fun (d : Diagnostic.t) -> has d.message) ds
+
+(* An unrecognized bound shape is flagged rather than silently dropped. *)
+let unparsed_bounds_diagnosed () =
+  Alcotest.(check bool)
+    "single positional range flagged" true
+    (msg_contains "@range expects" (diags_of "struct s { a: i64 @range(5) }"));
+  Alcotest.(check bool)
+    "single positional length flagged" true
+    (msg_contains "@length expects"
+       (diags_of "struct s { a: string @length(5) }"));
+  Alcotest.(check bool)
+    "mistyped kv bound flagged" true
+    (msg_contains "@range expects"
+       (diags_of {|struct s { a: i64 @range(min: "x") }|}))
+
+(* @required on a nullable member is a contradiction the IR cannot represent. *)
+let required_on_nullable () =
+  Alcotest.(check bool)
+    "required on nullable flagged" true
+    (msg_contains "contradictory"
+       (diags_of "struct s { a: string? @required }"));
+  Alcotest.(check int)
+    "required on a plain member is clean" 0
+    (List.length (diags_of "struct s { a: string @required }"))
+
+(* Signed and fractional numbers flow through to constraints and defaults. *)
+let signed_and_fractional () =
+  let a = member "a" "struct s { a: i64 @range(min: -10, max: 10) }" in
+  Alcotest.(check string)
+    "negative keyword bound"
+    {|{"range":{"exclMax":false,"exclMin":false,"max":10.0,"min":-10.0}}|}
+    (cons_str (List.hd a.constraints));
+  let b = member "b" "struct s { b: float @range(-1.5, 1.5) }" in
+  Alcotest.(check string)
+    "fractional positional bound"
+    {|{"range":{"exclMax":false,"exclMin":false,"max":1.5,"min":-1.5}}|}
+    (cons_str (List.hd b.constraints));
+  let c = member "c" "struct s { c: float @multipleOf(0.5) }" in
+  Alcotest.(check string)
+    "fractional multipleOf" {|{"multipleOf":0.5}|}
+    (cons_str (List.hd c.constraints));
+  let d = member "d" "struct s { d: i64 @default(-1) }" in
+  Alcotest.(check string)
+    "negative default" "-1"
+    (match d.default with
+    | Some v -> Ir_json.to_canonical_string v
+    | None -> "<none>")
+
 (* ── Generics ──────────────────────────────────────────────────────────── *)
 
 let generic_param_use () =
@@ -154,7 +214,7 @@ let pub_trait () =
   let s = shape_of ~pub:true "struct charge { a: i64 }" in
   Alcotest.(check bool)
     "pub recorded" true
-    (List.exists (fun (t : Ir.trait) -> t.trait_id = "core#pub") s.traits)
+    (List.exists (fun (t : Ir.trait) -> t.trait_id = "pub") s.traits)
 
 (* ── snake_case ────────────────────────────────────────────────────────── *)
 
@@ -185,6 +245,11 @@ let () =
           Alcotest.test_case "positional bounds" `Quick positional_bounds;
           Alcotest.test_case "constraint arg errors" `Quick
             constraint_arg_errors;
+          Alcotest.test_case "unparsed bounds diagnosed" `Quick
+            unparsed_bounds_diagnosed;
+          Alcotest.test_case "required on nullable" `Quick required_on_nullable;
+          Alcotest.test_case "signed and fractional" `Quick
+            signed_and_fractional;
           Alcotest.test_case "generic param use" `Quick generic_param_use;
           Alcotest.test_case "pub trait" `Quick pub_trait;
           Alcotest.test_case "snake_case checks" `Quick snake_case_checks;

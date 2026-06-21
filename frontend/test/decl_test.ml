@@ -52,6 +52,14 @@ let enum_open () =
     {|{"backing":"string","id":"currency","kind":"enum","open":true,"traits":[],"values":[["usd",null],["eur",null]]}|}
     (shape_json shape)
 
+let enum_negative () =
+  let shape, ds = run Parser.parse_enum "enum sign { neg = -1, zero = 0 }" in
+  Alcotest.(check int) "no diagnostics" 0 (List.length ds);
+  Alcotest.(check string)
+    "negative int-backed enum"
+    {|{"backing":"int","id":"sign","kind":"enum","open":false,"traits":[],"values":[["neg",-1],["zero",0]]}|}
+    (shape_json shape)
+
 let enum_int_missing_value () =
   let _, ds = run Parser.parse_enum "enum mixed { a = 1, b }" in
   Alcotest.(check bool) "missing int value diagnosed" true (List.length ds >= 1)
@@ -107,7 +115,7 @@ let union_discriminator_and_bag () =
       Alcotest.(check string) "custom discriminator" "kind" discriminator
   | _ -> Alcotest.fail "expected a union");
   Alcotest.(check (list string))
-    "discriminator consumed, doc kept" [ "core#doc" ] (trait_ids shape)
+    "discriminator consumed, doc kept" [ "doc" ] (trait_ids shape)
 
 let union_bad_discriminator () =
   let _, ds =
@@ -171,6 +179,7 @@ let () =
         [
           Alcotest.test_case "string backed" `Quick enum_string_backed;
           Alcotest.test_case "int backed" `Quick enum_int_backed;
+          Alcotest.test_case "negative values" `Quick enum_negative;
           Alcotest.test_case "open" `Quick enum_open;
           Alcotest.test_case "int missing value" `Quick enum_int_missing_value;
           Alcotest.test_case "case snake_case" `Quick enum_case_snake;

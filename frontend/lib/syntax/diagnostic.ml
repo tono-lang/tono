@@ -17,3 +17,9 @@ let to_string (d : t) : string =
   Printf.sprintf "%s: %s: %s" (Span.to_string d.span)
     (severity_to_string d.severity)
     d.message
+
+(* Stable sort by source position so combined lex/parse/lowering diagnostics read
+   in source order; ties keep their original (phase) order. *)
+let sort (ds : t list) : t list =
+  let offset (d : t) = d.span.start.offset in
+  List.stable_sort (fun a b -> Int.compare (offset a) (offset b)) ds

@@ -11,6 +11,7 @@ type ty =
 type trait_arg =
   | AString of string
   | AInt of int
+  | AFloat of float
   | AName of string
   | AKv of string * trait_arg
 
