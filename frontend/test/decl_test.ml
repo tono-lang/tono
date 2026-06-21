@@ -93,7 +93,7 @@ let union_basic () =
 
 let union_generics () =
   let shape, _ =
-    run Parser.parse_union "union box[t] { some(t)\n none(unit) }"
+    run Parser.parse_union "union box[t] { some(t)\n tagged(tag) }"
   in
   match shape.kind with
   | Ir.Union { params; members; _ } ->
