@@ -93,8 +93,7 @@ let json_of_args : Ast.trait_arg list -> Ir.json = function
       if List.length pairs = List.length args then `Assoc pairs
       else `List (List.map json_of_arg args)
 
-(* The bare trait name; the module-resolution pass qualifies it (core# or
-   module#) once the full set of declared names is known. *)
+(* The trait name is emitted bare; namespace resolution is a later pass. *)
 let bag_trait (tr : Ast.trait) : Ir.trait =
   { Ir.trait_id = tr.tname; value = json_of_args tr.targs }
 
@@ -319,15 +318,22 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
       }
   | Ast.DOp { input; output } ->
       let lower_opt = Option.map (lower_type ~params:[] ~diags) in
-      (* @errors(A, B) is lifted into Operation.errors; each arg is a type name. *)
+      (* @errors(A, B) lists the operation's error types by name; repeated
+         @errors traits accumulate. A non-name argument has no type to point
+         at, so it is diagnosed rather than silently dropped. *)
       let errs, rest = take_trait "errors" d.dtraits in
       let errors =
-        match errs with
-        | tr :: _ ->
+        List.concat_map
+          (fun (tr : Ast.trait) ->
             List.filter_map
-              (function Ast.AName n -> Some (Ir.Ref (n, [])) | _ -> None)
-              tr.Ast.targs
-        | [] -> []
+              (function
+                | Ast.AName n -> Some (Ir.Ref (n, []))
+                | _ ->
+                    report diags
+                      (Diagnostic.error tr.tspan "@errors expects type names");
+                    None)
+              tr.Ast.targs)
+          errs
       in
       {
         Ir.id = d.dname;

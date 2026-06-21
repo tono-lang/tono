@@ -179,6 +179,31 @@ let op_no_output () =
       Alcotest.(check int) "no errors" 0 (List.length errors)
   | _ -> Alcotest.fail "expected an operation"
 
+(* An @errors argument that is not a type name has nothing to refer to. *)
+let op_errors_bad_arg () =
+  let shape, ds = run Parser.parse_op {|op f() @errors("oops")|} in
+  Alcotest.(check bool) "non-name arg diagnosed" true (List.length ds >= 1);
+  match shape.kind with
+  | Ir.Operation { errors; _ } ->
+      Alcotest.(check int) "dropped, not invented" 0 (List.length errors)
+  | _ -> Alcotest.fail "expected an operation"
+
+(* Repeated @errors traits accumulate rather than dropping all but the first. *)
+let op_errors_accumulate () =
+  let shape, ds = run Parser.parse_op "op f() @errors(a) @errors(b, c)" in
+  Alcotest.(check int) "no diagnostics" 0 (List.length ds);
+  match shape.kind with
+  | Ir.Operation { errors; _ } ->
+      Alcotest.(check (list string))
+        "all errors kept"
+        [
+          {|{"args":[],"ref":"a"}|};
+          {|{"args":[],"ref":"b"}|};
+          {|{"args":[],"ref":"c"}|};
+        ]
+        (List.map tref_str errors)
+  | _ -> Alcotest.fail "expected an operation"
+
 let () =
   Alcotest.run "decl"
     [
@@ -208,5 +233,7 @@ let () =
           Alcotest.test_case "full signature" `Quick op_full;
           Alcotest.test_case "no input" `Quick op_no_input;
           Alcotest.test_case "no output" `Quick op_no_output;
+          Alcotest.test_case "errors bad arg" `Quick op_errors_bad_arg;
+          Alcotest.test_case "errors accumulate" `Quick op_errors_accumulate;
         ] );
     ]
