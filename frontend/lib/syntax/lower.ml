@@ -248,7 +248,7 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
             { params; members = List.map (lower_member ~params ~diags) members };
         traits = bag d.dtraits;
       }
-  | Ast.DUnion { params; members } ->
+  | Ast.DUnion { params; variants } ->
       let disc, rest = take_trait "discriminator" d.dtraits in
       let discriminator =
         match disc with
@@ -259,11 +259,33 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
             None
         | [] -> None
       in
+      let variant (v : Ast.union_variant) : Ir.member =
+        check_snake diags v.vname_span "variant" v.vname;
+        let target =
+          match v.vpayload with
+          | Some t -> lower_type ~params ~diags t
+          | None ->
+              report diags
+                (Diagnostic.error v.vname_span
+                   (Printf.sprintf
+                      "union variant '%s' needs a payload type, e.g. %s(T)"
+                      v.vname v.vname));
+              Ir.Ref ("", [])
+        in
+        {
+          Ir.name = v.vname;
+          target;
+          required = true;
+          default = None;
+          constraints = [];
+          traits = lower_bag_traits v.vtraits;
+        }
+      in
       {
         Ir.id = d.dname;
         kind =
           Ir.union ?discriminator ~params
-            ~members:(List.map (lower_member ~params ~diags) members)
+            ~members:(List.map variant variants)
             ();
         traits = bag rest;
       }
@@ -295,100 +317,29 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
         kind = Ir.Enum { backing; values; open_ };
         traits = bag rest;
       }
-  | Ast.DOp { input; output; errors } ->
+  | Ast.DOp { input; output } ->
       let lower_opt = Option.map (lower_type ~params:[] ~diags) in
+      (* @errors(A, B) is lifted into Operation.errors; each arg is a type name. *)
+      let errs, rest = take_trait "errors" d.dtraits in
+      let errors =
+        match errs with
+        | tr :: _ ->
+            List.filter_map
+              (function Ast.AName n -> Some (Ir.Ref (n, [])) | _ -> None)
+              tr.Ast.targs
+        | [] -> []
+      in
       {
         Ir.id = d.dname;
         kind =
           Ir.Operation
-            {
-              input = lower_opt input;
-              output = lower_opt output;
-              errors = List.map (lower_type ~params:[] ~diags) errors;
-            };
-        traits = bag d.dtraits;
+            { input = lower_opt input; output = lower_opt output; errors };
+        traits = bag rest;
       }
 
-(* The traits the language itself defines. A surface @trait whose name is in this
-   set is namespaced [core#]; any other is treated as a module-local custom trait
-   ([module#name]). Matches the fixtures: core#doc / core#wire / core#pub vs the
-   custom x#luhn. Lifted traits (required/default/range/...) never reach the bag
-   but are listed so the set names the full core vocabulary. *)
-let core_traits =
-  [
-    "pub";
-    "doc";
-    "wire";
-    "deprecated";
-    "required";
-    "default";
-    "range";
-    "length";
-    "pattern";
-    "multipleOf";
-    "open";
-    "discriminator";
-  ]
-
-(* Qualify bare names against the module. Type references resolve in the opposite
-   direction from traits: a referenced type name not declared here is a core
-   builtin ([core#]), while a trait name not in the core set is a module-local
-   custom trait ([module#]). A shape's own id is always local. This is a light
-   intra-file resolution; cross-module imports are a future concern. *)
-let resolve_module ~module_name (m : Ir.module_) : Ir.module_ =
-  let declared =
-    List.map (fun (s : Ir.shape) -> s.Ir.id) (m.shapes @ m.operations)
-  in
-  let qualify_ref name =
-    if List.mem name declared then module_name ^ "#" ^ name else "core#" ^ name
-  in
-  let qualify_trait name =
-    if List.mem name core_traits then "core#" ^ name
-    else module_name ^ "#" ^ name
-  in
-  let rec tref : Ir.tref -> Ir.tref = function
-    | Ir.Ref (name, args) -> Ir.Ref (qualify_ref name, List.map tref args)
-    | Ir.List t -> Ir.List (tref t)
-    | Ir.Map (k, v) -> Ir.Map (tref k, tref v)
-    | (Ir.Prim _ | Ir.Param _) as t -> t
-  in
-  let trait (t : Ir.trait) : Ir.trait =
-    { t with trait_id = qualify_trait t.trait_id }
-  in
-  let member (mem : Ir.member) : Ir.member =
-    { mem with target = tref mem.target; traits = List.map trait mem.traits }
-  in
-  let kind : Ir.shape_kind -> Ir.shape_kind = function
-    | Ir.Structure { params; members } ->
-        Ir.Structure { params; members = List.map member members }
-    | Ir.Union { params; members; discriminator } ->
-        Ir.Union { params; members = List.map member members; discriminator }
-    | Ir.Enum _ as k -> k
-    | Ir.Service { operations } ->
-        Ir.Service { operations = List.map qualify_ref operations }
-    | Ir.Operation { input; output; errors } ->
-        Ir.Operation
-          {
-            input = Option.map tref input;
-            output = Option.map tref output;
-            errors = List.map tref errors;
-          }
-  in
-  let shape (s : Ir.shape) : Ir.shape =
-    {
-      Ir.id = module_name ^ "#" ^ s.Ir.id;
-      kind = kind s.Ir.kind;
-      traits = List.map trait s.Ir.traits;
-    }
-  in
-  {
-    Ir.mod_name = module_name;
-    shapes = List.map shape m.shapes;
-    operations = List.map shape m.operations;
-  }
-
 (* Lower a whole file into a module: operations land in [operations], every other
-   shape in [shapes], preserving declaration order, then names are qualified. *)
+   shape in [shapes], preserving declaration order. Names are emitted bare; the
+   module/core namespacing is a later name-resolution pass (separate PRD). *)
 let lower_file ~module_name ~diags (file : Ast.file) : Ir.module_ =
   let shapes_rev = ref [] in
   let ops_rev = ref [] in
@@ -399,12 +350,11 @@ let lower_file ~module_name ~diags (file : Ast.file) : Ir.module_ =
       | Ir.Operation _ -> ops_rev := shape :: !ops_rev
       | _ -> shapes_rev := shape :: !shapes_rev)
     file;
-  resolve_module ~module_name
-    {
-      Ir.mod_name = module_name;
-      shapes = List.rev !shapes_rev;
-      operations = List.rev !ops_rev;
-    }
+  {
+    Ir.mod_name = module_name;
+    shapes = List.rev !shapes_rev;
+    operations = List.rev !ops_rev;
+  }
 
 (* Exposed for testing the primitive-keyword mapping in isolation, including its
    defensive default (the lexer only ever yields the keywords above). *)

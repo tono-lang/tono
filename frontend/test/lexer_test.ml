@@ -10,7 +10,6 @@ let show_kind : Token.kind -> string = function
   | KwOp -> "op"
   | KwMap -> "map"
   | KwPub -> "pub"
-  | KwThrows -> "throws"
   | Ident s -> "id:" ^ s
   | Prim s -> "prim:" ^ s
   | Str s -> "str:" ^ s
@@ -28,7 +27,6 @@ let show_kind : Token.kind -> string = function
   | Comma -> ","
   | Dot -> "."
   | Eq -> "="
-  | Arrow -> "->"
   | Eof -> "eof"
 
 let kinds src = List.map (fun (t : Token.t) -> show_kind t.kind) (toks_of src)
@@ -50,7 +48,6 @@ let all_kinds () =
       "op";
       "map";
       "pub";
-      "throws";
       "id:name";
       "prim:i64";
       "str:s";
@@ -67,11 +64,10 @@ let all_kinds () =
       ",";
       ".";
       "=";
-      "->";
       "eof";
     ]
     (kinds
-       {|struct enum union op map pub throws name i64 "s" 5 @ { } [ ] ( ) : ? , . = ->|})
+       {|struct enum union op map pub name i64 "s" 5 @ { } [ ] ( ) : ? , . =|})
 
 let member_tokens () =
   Alcotest.(check (list string))
@@ -202,9 +198,8 @@ let empty_source () =
   Alcotest.(check (list string)) "just eof" [ "eof" ] (kinds "");
   Alcotest.(check int) "no diagnostics" 0 (List.length (diags_of "   \n  "))
 
-let arrow_and_dash () =
-  Alcotest.(check (list string)) "arrow token" [ "->"; "eof" ] (kinds "->");
-  (* A bare '-' (not followed by '>') is an unexpected character. *)
+let lone_dash () =
+  (* A '-' not before a digit is an unexpected character. *)
   let _, ds = Lexer.tokenize "a - b" in
   Alcotest.(check bool) "lone dash diagnosed" true (List.length ds >= 1)
 
@@ -218,7 +213,7 @@ let () =
           Alcotest.test_case "spans" `Quick spans;
           Alcotest.test_case "comments discarded" `Quick comments_discarded;
           Alcotest.test_case "empty source" `Quick empty_source;
-          Alcotest.test_case "arrow and dash" `Quick arrow_and_dash;
+          Alcotest.test_case "lone dash" `Quick lone_dash;
         ] );
       ( "strings",
         [

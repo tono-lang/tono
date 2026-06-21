@@ -59,7 +59,6 @@ let describe_all () =
       KwOp;
       KwMap;
       KwPub;
-      KwThrows;
       Ident "x";
       Prim "i64";
       Str "s";
@@ -77,7 +76,6 @@ let describe_all () =
       Comma;
       Dot;
       Eq;
-      Arrow;
       Eof;
     ]
   in
@@ -90,7 +88,6 @@ let describe_all () =
       "'op'";
       "'map'";
       "'pub'";
-      "'throws'";
       "identifier 'x'";
       "type 'i64'";
       "string literal";
@@ -108,7 +105,6 @@ let describe_all () =
       "','";
       "'.'";
       "'='";
-      "'->'";
       "end of file";
     ]
     (List.map Token.describe all)

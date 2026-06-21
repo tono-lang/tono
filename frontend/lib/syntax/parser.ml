@@ -264,22 +264,86 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
     dkind = Ast.DStruct { params; members };
   }
 
-(* union ::= "union" name generics? "{" member* "}" *)
+(* variant ::= name ( "(" type ")" )? trait*  — the name token is already
+   consumed and passed in, so the only caller that reaches here had an
+   identifier in hand. *)
+let parse_variant st ~name ~name_span : Ast.union_variant =
+  let payload =
+    match (P.peek st).kind with
+    | Token.LParen ->
+        ignore (P.advance st);
+        let t = parse_type st in
+        ignore (P.expect st Token.RParen "')' to close the variant payload");
+        Some t
+    | _ -> None
+  in
+  let traits = parse_trailing_traits st in
+  {
+    Ast.vname = name;
+    vname_span = name_span;
+    vpayload = payload;
+    vtraits = traits;
+  }
+
+let parse_variants st : Ast.union_variant list =
+  let rec go acc =
+    match (P.peek st).kind with
+    | Token.RBrace | Token.Eof -> List.rev acc
+    | Token.Ident name ->
+        let nt = P.advance st in
+        go (parse_variant st ~name ~name_span:nt.span :: acc)
+    | Token.Comma ->
+        ignore (P.advance st);
+        go acc
+    | _ ->
+        P.error st (P.peek st).span
+          (Printf.sprintf "unexpected %s in union body"
+             (Token.describe (P.peek st).kind));
+        ignore (P.advance st);
+        go acc
+  in
+  go []
+
+(* union ::= "union" name generics? "{" variant* "}" *)
 let parse_union st ~pub ~dtraits : Ast.decl =
   ignore (P.advance st);
   (* 'union' *)
-  let name, span, params, members = parse_shape_body st ~what:"union" in
+  let nt = P.peek st in
+  let name =
+    match nt.kind with
+    | Token.Ident n ->
+        ignore (P.advance st);
+        n
+    | _ ->
+        P.error st nt.span "expected a union name";
+        ""
+  in
+  let params = parse_generics st in
+  (* traits after the name (e.g. @discriminator) join the shape-level traits *)
+  let dtraits = dtraits @ parse_trailing_traits st in
+  ignore (P.expect st Token.LBrace "'{' to open the union body");
+  let variants = parse_variants st in
+  ignore (P.expect st Token.RBrace "'}' to close the union body");
   {
     Ast.dname = name;
-    dname_span = span;
+    dname_span = nt.span;
     pub;
     dtraits;
-    dkind = Ast.DUnion { params; members };
+    dkind = Ast.DUnion { params; variants };
   }
 
 (* case ::= name ("=" int)? trait*  — the name token is already consumed and
    passed in, so the only caller that reaches here had an identifier in hand. *)
 let parse_enum_case st ~name ~name_span : Ast.enum_case =
+  (* A payload here means the author wanted a union; diagnose and skip it. *)
+  (match (P.peek st).kind with
+  | Token.LParen ->
+      P.error st (P.peek st).span
+        "enum cases carry no payload; use a 'union' for variants with data";
+      ignore (P.advance st);
+      ignore (parse_type st);
+      ignore (P.expect st Token.RParen "')' to close the payload")
+  | _ -> ());
   let cint =
     match (P.peek st).kind with
     | Token.Eq -> (
@@ -329,6 +393,8 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
         P.error st nt.span "expected an enum name";
         ""
   in
+  (* traits after the name (e.g. @open) join the shape-level traits *)
+  let dtraits = dtraits @ parse_trailing_traits st in
   ignore (P.expect st Token.LBrace "'{' to open the enum body");
   let cases = parse_enum_cases st in
   ignore (P.expect st Token.RBrace "'}' to close the enum body");
@@ -340,8 +406,8 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
     dkind = Ast.DEnum { cases };
   }
 
-(* op ::= "op" name "(" type? ")" then an optional "-> type" and an optional
-   "throws" clause listing comma-separated error types. *)
+(* op ::= "op" name "(" type? ")" ( ":" type )? op_trait*  — the output type is
+   optional, and errors are carried by a trailing "@errors(...)" trait. *)
 let parse_op st ~pub ~dtraits : Ast.decl =
   ignore (P.advance st);
   (* 'op' *)
@@ -364,32 +430,20 @@ let parse_op st ~pub ~dtraits : Ast.decl =
   ignore (P.expect st Token.RParen "')' to close the operation input");
   let output =
     match (P.peek st).kind with
-    | Token.Arrow ->
+    | Token.Colon ->
         ignore (P.advance st);
         Some (parse_type st)
     | _ -> None
   in
-  let errors =
-    match (P.peek st).kind with
-    | Token.KwThrows ->
-        ignore (P.advance st);
-        let first = parse_type st in
-        let rec more acc =
-          match (P.peek st).kind with
-          | Token.Comma ->
-              ignore (P.advance st);
-              more (parse_type st :: acc)
-          | _ -> List.rev acc
-        in
-        more [ first ]
-    | _ -> []
-  in
+  (* Trailing op traits (@http, @errors, @async, ...) join the shape traits;
+     lowering lifts @errors into Operation.errors and bags the rest. *)
+  let dtraits = dtraits @ parse_trailing_traits st in
   {
     Ast.dname = name;
     dname_span = nt.span;
     pub;
     dtraits;
-    dkind = Ast.DOp { input; output; errors };
+    dkind = Ast.DOp { input; output };
   }
 
 (* ── Declarations and files ────────────────────────────────────────────── *)

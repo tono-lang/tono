@@ -35,11 +35,20 @@ type enum_case = {
   ctraits : trait list;
 }
 
+(* One variant of a union: a name, an optional payload type, and trailing traits.
+   Lowers to an IR member (name = variant, target = payload). *)
+type union_variant = {
+  vname : string;
+  vname_span : Span.span;
+  vpayload : ty option;
+  vtraits : trait list;
+}
+
 type decl_kind =
   | DStruct of { params : string list; members : member list }
   | DEnum of { cases : enum_case list }
-  | DUnion of { params : string list; members : member list }
-  | DOp of { input : ty option; output : ty option; errors : ty list }
+  | DUnion of { params : string list; variants : union_variant list }
+  | DOp of { input : ty option; output : ty option }
 
 type decl = {
   dname : string;

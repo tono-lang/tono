@@ -10,7 +10,7 @@ let golden_module () =
     {|
 struct point { x: i64, y: i64 }
 enum dir { north, south }
-op origin() -> point
+op origin(): point
 |}
   in
   let compiled, ds = Tono_frontend.compile ~module_name:"geo" src in
@@ -32,14 +32,14 @@ op origin() -> point
       shapes =
         [
           {
-            id = "geo#point";
+            id = "point";
             kind =
               Ir.Structure
                 { params = []; members = [ member "x" i64; member "y" i64 ] };
             traits = [];
           };
           {
-            id = "geo#dir";
+            id = "dir";
             kind =
               Ir.Enum
                 {
@@ -53,12 +53,12 @@ op origin() -> point
       operations =
         [
           {
-            id = "geo#origin";
+            id = "origin";
             kind =
               Ir.Operation
                 {
                   input = None;
-                  output = Some (Ir.Ref ("geo#point", []));
+                  output = Some (Ir.Ref ("point", []));
                   errors = [];
                 };
             traits = [];
@@ -87,28 +87,21 @@ enum currency { usd, eur }
 enum http_code { ok = 200, error = 500 }
 
 @discriminator("kind")
-union source { card: card, bank: bank_account }
+union source { card(card), bank(bank_account) }
 
 struct page[t] { items: []t, next: string? }
 
-op create_charge(charge) -> charge throws not_found
+op create_charge(charge): charge @errors(not_found)
 |}
   in
   let m, ds = Tono_frontend.compile ~module_name:"payments" src in
   Alcotest.(check int) "compiles cleanly" 0 (List.length ds);
   Alcotest.(check (list string))
     "shape ids"
-    [
-      "payments#charge";
-      "payments#currency";
-      "payments#http_code";
-      "payments#source";
-      "payments#page";
-    ]
+    [ "charge"; "currency"; "http_code"; "source"; "page" ]
     (List.map (fun (s : Ir.shape) -> s.id) m.shapes);
   Alcotest.(check (list string))
-    "operation ids"
-    [ "payments#create_charge" ]
+    "operation ids" [ "create_charge" ]
     (List.map (fun (s : Ir.shape) -> s.id) m.operations);
   let json = Ir_json.encode_module m in
   match Ir_json.decode_module json with

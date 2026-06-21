@@ -101,8 +101,8 @@ let noncore_traits_in_bag () =
    one object; a mix keeps the array form with each kv a single-key object. *)
 let bag_arg_forms () =
   let src =
-    {|struct s { a: i64 @flag(verbose) @cfg(mode: fast)
-       @http(method: "get", path: "/x") @mix(first, k: 1) }|}
+    {|struct s { a: i64 @flag(verbose) @cfg(mode: fast) @scale(2.5)
+       @tune(rate: 0.5) @http(method: "get", path: "/x") @mix(first, k: 1) }|}
   in
   let a = member "a" src in
   let value id =
@@ -111,6 +111,8 @@ let bag_arg_forms () =
   in
   Alcotest.(check string) "positional arg" {|["verbose"]|} (value "flag");
   Alcotest.(check string) "single kv" {|{"mode":"fast"}|} (value "cfg");
+  Alcotest.(check string) "positional float arg" {|[2.5]|} (value "scale");
+  Alcotest.(check string) "kv float arg" {|{"rate":0.5}|} (value "tune");
   Alcotest.(check string)
     "multi kv merged" {|{"method":"get","path":"/x"}|} (value "http");
   Alcotest.(check string)

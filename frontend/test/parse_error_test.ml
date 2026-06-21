@@ -122,7 +122,10 @@ let enum_errors () =
   nonempty "missing enum name" (decl_diags Parser.parse_enum "enum { a }");
   nonempty "missing brace" (decl_diags Parser.parse_enum "enum e a }");
   nonempty "non-int after '='" (decl_diags Parser.parse_enum "enum e { a = x }");
-  nonempty "junk in body" (decl_diags Parser.parse_enum "enum e { a : i64 }")
+  nonempty "junk in body" (decl_diags Parser.parse_enum "enum e { a : i64 }");
+  (* A payload on an enum case is the union author's mistake; it is diagnosed. *)
+  nonempty "case payload rejected"
+    (decl_diags Parser.parse_enum "enum e { a(i64) }")
 
 let contains ~sub s =
   let n = String.length sub and m = String.length s in
@@ -140,8 +143,8 @@ let union_errors () =
        ds)
 
 let op_errors () =
-  nonempty "missing op name" (decl_diags Parser.parse_op "op () -> charge");
-  nonempty "missing paren" (decl_diags Parser.parse_op "op create -> charge")
+  nonempty "missing op name" (decl_diags Parser.parse_op "op (): charge");
+  nonempty "missing paren" (decl_diags Parser.parse_op "op create: charge")
 
 (* Diagnostics point at the offending token, not the start of input. *)
 let diagnostic_span_and_message () =

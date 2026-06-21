@@ -76,7 +76,7 @@ let enum_case_traits_rejected () =
 
 let union_basic () =
   let shape, ds =
-    run Parser.parse_union "union source { card: card\n bank: bank_account }"
+    run Parser.parse_union "union source { card(card)\n bank(bank_account) }"
   in
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   match shape.kind with
@@ -93,7 +93,7 @@ let union_basic () =
 
 let union_generics () =
   let shape, _ =
-    run Parser.parse_union "union box[t] { some: t\n none: unit }"
+    run Parser.parse_union "union box[t] { some(t)\n none(unit) }"
   in
   match shape.kind with
   | Ir.Union { params; members; _ } ->
@@ -108,7 +108,7 @@ let union_discriminator_and_bag () =
     run
       ~dtraits:
         [ one_trait {|@doc("hi")|}; one_trait {|@discriminator("kind")|} ]
-      Parser.parse_union "union event { a: a\n b: b }"
+      Parser.parse_union "union event { a(a)\n b(b) }"
   in
   (match shape.kind with
   | Ir.Union { discriminator; _ } ->
@@ -121,10 +121,17 @@ let union_bad_discriminator () =
   let _, ds =
     run
       ~dtraits:[ one_trait "@discriminator(5)" ]
-      Parser.parse_union "union u { a: a }"
+      Parser.parse_union "union u { a(a) }"
   in
   Alcotest.(check bool)
     "non-string discriminator diagnosed" true
+    (List.length ds >= 1)
+
+(* A variant without a payload has nothing to carry; lowering diagnoses it. *)
+let union_variant_needs_payload () =
+  let _, ds = run Parser.parse_union "union u { a, b(b) }" in
+  Alcotest.(check bool)
+    "payloadless variant diagnosed" true
     (List.length ds >= 1)
 
 (* ── Operation ─────────────────────────────────────────────────────────── *)
@@ -132,8 +139,8 @@ let union_bad_discriminator () =
 let op_full () =
   let shape, ds =
     run Parser.parse_op
-      "op create_charge(create_charge_input) -> charge throws not_found, \
-       rate_limited"
+      "op create_charge(create_charge_input): charge @errors(not_found, \
+       rate_limited)"
   in
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   match shape.kind with
@@ -152,7 +159,7 @@ let op_full () =
   | _ -> Alcotest.fail "expected an operation"
 
 let op_no_input () =
-  let shape, _ = run Parser.parse_op "op list_charges() -> page[charge]" in
+  let shape, _ = run Parser.parse_op "op list_charges(): page[charge]" in
   match shape.kind with
   | Ir.Operation { input; output; errors } ->
       Alcotest.(check string) "no input" "<none>" (tref_opt input);
@@ -193,6 +200,8 @@ let () =
           Alcotest.test_case "discriminator and bag" `Quick
             union_discriminator_and_bag;
           Alcotest.test_case "bad discriminator" `Quick union_bad_discriminator;
+          Alcotest.test_case "variant needs payload" `Quick
+            union_variant_needs_payload;
         ] );
       ( "operation",
         [
