@@ -138,17 +138,13 @@ let namespace_resolution () =
     {|{"map":[{"prim":"string"},{"args":[],"ref":"pay#charge"}]}|}
     (target_of "lookup" s)
 
-(* A trait whose name is a declared shape resolves to module#; a core trait
-   resolves to core#. *)
+(* A custom trait (not in the core set, and with no shape of the same name)
+   resolves to module#; a core trait resolves to core#. *)
 let trait_namespace_resolution () =
-  let m, _ =
-    run ~module_name:"lab"
-      "struct meta { x: i64 }\n@meta @doc(\"k\") struct k { y: i64 }"
-  in
-  let k = List.find (fun (s : Ir.shape) -> s.id = "lab#k") m.shapes in
+  let m, _ = run ~module_name:"lab" {|@luhn @doc("k") struct k { y: i64 }|} in
+  let k = List.hd m.shapes in
   Alcotest.(check (list string))
-    "declared-name trait module-scoped, core trait core#"
-    [ "lab#meta"; "core#doc" ]
+    "custom trait module-scoped, core trait core#" [ "lab#luhn"; "core#doc" ]
     (List.map (fun (t : Ir.trait) -> t.trait_id) k.traits)
 
 let () =

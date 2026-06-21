@@ -133,7 +133,7 @@ let length_bounds args =
       ( Option.bind (kv_arg "min" args) int_of_arg,
         Option.bind (kv_arg "max" args) int_of_arg )
 
-(* Bounds given but none recognized (e.g. [@range(5)] or [@range(min: "x")]) is a
+(* Bounds given but none recognized (e.g. [@range(5)] or [@range("x")]) is a
    silent no-op otherwise, so flag it rather than emit an empty constraint. *)
 let warn_unparsed_bounds diags (tr : Ast.trait) min max =
   if tr.targs <> [] && min = None && max = None then
@@ -142,15 +142,30 @@ let warn_unparsed_bounds diags (tr : Ast.trait) min max =
          (Printf.sprintf
             "@%s expects (min, max) or (min: N, max: N) numeric bounds" tr.tname))
 
+(* A [min:]/[max:] keyword arg whose value is not numeric is dropped silently
+   otherwise (e.g. [@range(min: 5, max: "x")] keeps min, loses max), so flag each
+   such argument individually. [numeric] is [float_of_arg] or [int_of_arg]. *)
+let warn_bad_bound_kvs diags (tr : Ast.trait) numeric =
+  List.iter
+    (function
+      | Ast.AKv ((("min" | "max") as k), v) when numeric v = None ->
+          report diags
+            (Diagnostic.error tr.tspan
+               (Printf.sprintf "@%s %s must be a number" tr.tname k))
+      | _ -> ())
+    tr.targs
+
 let constraint_of_trait diags (tr : Ast.trait) : Ir.constraint_ option =
   match tr.tname with
   | "range" ->
       let min, max = range_bounds tr.targs in
       warn_unparsed_bounds diags tr min max;
+      warn_bad_bound_kvs diags tr float_of_arg;
       Some (Ir.range ?min ?max ())
   | "length" ->
       let min, max = length_bounds tr.targs in
       warn_unparsed_bounds diags tr min max;
+      warn_bad_bound_kvs diags tr int_of_arg;
       Some (Ir.length ?min ?max ())
   | "pattern" -> (
       match tr.targs with
@@ -294,25 +309,51 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
         traits = bag d.dtraits;
       }
 
-(* Qualify bare names against the module: a name declared in this file becomes
-   [module#name]; any other name is taken to be a core builtin ([core#name]). A
-   shape's own id is always local. This is a light intra-file resolution; cross-
-   module imports are a future concern (the surface has no import syntax yet). *)
+(* The traits the language itself defines. A surface @trait whose name is in this
+   set is namespaced [core#]; any other is treated as a module-local custom trait
+   ([module#name]). Matches the fixtures: core#doc / core#wire / core#pub vs the
+   custom x#luhn. Lifted traits (required/default/range/...) never reach the bag
+   but are listed so the set names the full core vocabulary. *)
+let core_traits =
+  [
+    "pub";
+    "doc";
+    "wire";
+    "deprecated";
+    "required";
+    "default";
+    "range";
+    "length";
+    "pattern";
+    "multipleOf";
+    "open";
+    "discriminator";
+  ]
+
+(* Qualify bare names against the module. Type references resolve in the opposite
+   direction from traits: a referenced type name not declared here is a core
+   builtin ([core#]), while a trait name not in the core set is a module-local
+   custom trait ([module#]). A shape's own id is always local. This is a light
+   intra-file resolution; cross-module imports are a future concern. *)
 let resolve_module ~module_name (m : Ir.module_) : Ir.module_ =
   let declared =
     List.map (fun (s : Ir.shape) -> s.Ir.id) (m.shapes @ m.operations)
   in
-  let qualify name =
+  let qualify_ref name =
     if List.mem name declared then module_name ^ "#" ^ name else "core#" ^ name
   in
+  let qualify_trait name =
+    if List.mem name core_traits then "core#" ^ name
+    else module_name ^ "#" ^ name
+  in
   let rec tref : Ir.tref -> Ir.tref = function
-    | Ir.Ref (name, args) -> Ir.Ref (qualify name, List.map tref args)
+    | Ir.Ref (name, args) -> Ir.Ref (qualify_ref name, List.map tref args)
     | Ir.List t -> Ir.List (tref t)
     | Ir.Map (k, v) -> Ir.Map (tref k, tref v)
     | (Ir.Prim _ | Ir.Param _) as t -> t
   in
   let trait (t : Ir.trait) : Ir.trait =
-    { t with trait_id = qualify t.trait_id }
+    { t with trait_id = qualify_trait t.trait_id }
   in
   let member (mem : Ir.member) : Ir.member =
     { mem with target = tref mem.target; traits = List.map trait mem.traits }
@@ -324,7 +365,7 @@ let resolve_module ~module_name (m : Ir.module_) : Ir.module_ =
         Ir.Union { params; members = List.map member members; discriminator }
     | Ir.Enum _ as k -> k
     | Ir.Service { operations } ->
-        Ir.Service { operations = List.map qualify operations }
+        Ir.Service { operations = List.map qualify_ref operations }
     | Ir.Operation { input; output; errors } ->
         Ir.Operation
           {

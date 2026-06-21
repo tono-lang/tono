@@ -161,7 +161,12 @@ let unparsed_bounds_diagnosed () =
   Alcotest.(check bool)
     "mistyped kv bound flagged" true
     (msg_contains "@range expects"
-       (diags_of {|struct s { a: i64 @range(min: "x") }|}))
+       (diags_of {|struct s { a: i64 @range(min: "x") }|}));
+  (* A partial mistyped bound (one good, one bad) is still flagged per-arg. *)
+  Alcotest.(check bool)
+    "partial mistyped kv bound flagged" true
+    (msg_contains "max must be a number"
+       (diags_of {|struct s { a: i64 @range(min: 5, max: "x") }|}))
 
 (* @required on a nullable member is a contradiction the IR cannot represent. *)
 let required_on_nullable () =
