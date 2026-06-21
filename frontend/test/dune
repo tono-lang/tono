@@ -1,3 +1,14 @@
 (tests
- (names test_ir test_decode test_property)
+ (names
+  test_ir
+  test_decode
+  test_property
+  lexer_test
+  type_test
+  struct_test
+  core_test
+  parse_error_test
+  decl_test
+  file_test
+  golden_test)
  (libraries tono_frontend alcotest qcheck-core qcheck-core.runner yojson))
