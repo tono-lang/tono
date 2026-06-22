@@ -102,8 +102,8 @@ let nullable_charge : Ir.model =
       [ { mod_name = "payments"; shapes = [ charge ]; operations = [] } ];
   }
 
-(* Example: an open enum (records the flag only) and a union whose variant wire
-   tags are member names, overridable by a wire trait. *)
+(* Example: an enum (every enum is open) and a union whose variant wire tags are
+   member names, overridable by a wire trait. *)
 let open_enum_union : Ir.model =
   let status : Ir.shape =
     {
@@ -113,7 +113,6 @@ let open_enum_union : Ir.model =
           {
             backing = `String;
             values = [ ("active", None); ("closed", None); ("refunded", None) ];
-            open_ = true;
           };
       traits = [];
     }
@@ -211,11 +210,7 @@ let primitives : Ir.model =
       id = "lab#Priority";
       kind =
         Ir.Enum
-          {
-            backing = `Int;
-            values = [ ("low", Some 0); ("high", Some 10) ];
-            open_ = false;
-          };
+          { backing = `Int; values = [ ("low", Some 0); ("high", Some 10) ] };
       traits = [];
     }
   in

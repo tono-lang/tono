@@ -9,7 +9,8 @@ use serde_json::Value;
 
 /// IR schema revision this build understands. Bumped by one on every
 /// incompatible change; there is no negotiation across versions.
-pub const TONO_IR_VERSION: u32 = 1;
+/// v2 removed the enum `open` field (every enum is open).
+pub const TONO_IR_VERSION: u32 = 2;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -180,10 +181,6 @@ pub struct Trait {
     pub value: Value,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 fn default_discriminator() -> String {
     "type".to_string()
 }
@@ -248,8 +245,6 @@ pub enum ShapeKind {
         backing: EnumBacking,
         #[serde(default)]
         values: Vec<(String, Option<i64>)>,
-        #[serde(default = "default_true")]
-        open: bool,
     },
     Service {
         #[serde(default)]

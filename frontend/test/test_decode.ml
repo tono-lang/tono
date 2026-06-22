@@ -127,8 +127,6 @@ let shape_suite =
       {|{"id": "x#Y", "kind": "structure", "traits": 5}|};
     fails "union discriminator wrong type" Ir_json.decode_shape
       {|{"id": "x#U", "kind": "union", "discriminator": 5}|};
-    fails "enum open wrong type" Ir_json.decode_shape
-      {|{"id": "x#E", "kind": "enum", "backing": "string", "open": "yes"}|};
     fails "enum missing backing" Ir_json.decode_shape
       {|{"id": "x#Y", "kind": "enum"}|};
     fails "enum bad backing" Ir_json.decode_shape
@@ -168,15 +166,6 @@ let union_discriminator_defaults () =
         "discriminator defaults to type" "type" discriminator
   | _ -> Alcotest.fail "expected a union"
 
-let enum_open_defaults () =
-  match
-    Ir_json.decode_shape
-      (parse {|{"id": "x#E", "kind": "enum", "backing": "string"}|})
-  with
-  | Ok { kind = Ir.Enum { open_; _ }; _ } ->
-      Alcotest.(check bool) "open defaults true" true open_
-  | _ -> Alcotest.fail "expected an enum"
-
 (* ── Modules / model ───────────────────────────────────────────────────── *)
 
 let model_suite =
@@ -190,8 +179,8 @@ let model_suite =
     fails "model version not integer" Ir_json.decode_model
       {|{"tono_ir_version": "x", "modules": []}|};
     fails "model modules not array" Ir_json.decode_model
-      {|{"tono_ir_version": 1, "modules": 5}|};
-    ok "model without modules" Ir_json.decode_model {|{"tono_ir_version": 1}|};
+      {|{"tono_ir_version": 2, "modules": 5}|};
+    ok "model without modules" Ir_json.decode_model {|{"tono_ir_version": 2}|};
     ok "module minimal" Ir_json.decode_module {|{"name": "m"}|};
   ]
 
@@ -243,7 +232,6 @@ let helper_suite =
     Alcotest.test_case "range excl defaults" `Quick range_excl_defaults;
     Alcotest.test_case "union discriminator default" `Quick
       union_discriminator_defaults;
-    Alcotest.test_case "enum open default" `Quick enum_open_defaults;
   ]
 
 let () =
