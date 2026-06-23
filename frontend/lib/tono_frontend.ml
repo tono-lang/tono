@@ -15,6 +15,10 @@ module Parser = Parser
 module Lower = Lower
 module Typecheck = Typecheck
 
+(* The pure calculus: a self-contained, total expression sub-language. Its
+   modules carry a [Calc_] prefix because the library namespace is flat. *)
+module Calc_ast = Calc_ast
+
 (* The frontend pipeline: lex and parse source text, lower it to an IR module,
    then typecheck that module. [module_name] names the resulting module. All lex,
    parse, lowering, and typecheck diagnostics are merged and returned in source
