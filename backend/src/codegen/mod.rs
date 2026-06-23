@@ -7,6 +7,7 @@
 //! module owns the language-agnostic core; per-language Symbol tables and render
 //! rules are supplied by target backends.
 
+pub mod imports;
 pub mod symbol;
 pub mod tree;
 

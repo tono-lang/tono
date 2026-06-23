@@ -1,0 +1,313 @@
+//! Deterministic, transitive import collection.
+//!
+//! A file's import set is never written by hand: it is folded from the symbols
+//! reachable from the file's declarations. Walking gathers each referenced
+//! symbol's import, recurses into the symbol's `references` (so a generic
+//! `Page<Charge>` pulls both `Page` and `Charge`), deduplicates, and orders
+//! deterministically so the output is byte-stable across runs. Imports whose
+//! module equals the file's own module are dropped, since a type defined in this
+//! file needs no import.
+
+use std::collections::{BTreeSet, HashSet};
+
+use crate::codegen::symbol::{Import, Symbol};
+use crate::codegen::tree::{Decl, File, TypeExpr};
+
+/// Collect the deduplicated, deterministically-ordered import set of a file.
+///
+/// Determinism comes from a `BTreeSet`, which orders imports by `(module,
+/// imported)` regardless of discovery order; the self-module imports are
+/// filtered out on the way to the returned `Vec`.
+pub fn collect(file: &File) -> Vec<Import> {
+    let mut acc: BTreeSet<Import> = BTreeSet::new();
+    // Guards against reference cycles and skips re-walking a symbol already
+    // seen. Keyed on (name, import) so two distinct same-named symbols from
+    // different modules are still both visited.
+    let mut visited: HashSet<(String, Option<Import>)> = HashSet::new();
+    for decl in &file.decls {
+        walk_decl(decl, &mut acc, &mut visited);
+    }
+    acc.into_iter()
+        .filter(|import| import.module != file.module)
+        .collect()
+}
+
+fn walk_decl(
+    decl: &Decl,
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    match decl {
+        Decl::Interface(interface) => {
+            for field in &interface.fields {
+                walk_type(&field.ty, acc, visited);
+            }
+        }
+        Decl::Union(union) => {
+            for variant in &union.variants {
+                for field in &variant.fields {
+                    walk_type(&field.ty, acc, visited);
+                }
+            }
+        }
+        Decl::Method(method) => {
+            for param in &method.params {
+                walk_type(&param.ty, acc, visited);
+            }
+            if let Some(ret) = &method.ret {
+                walk_type(ret, acc, visited);
+            }
+        }
+        // Enum members and the enum's own name are identifiers, not type
+        // references: an enum declaration contributes no imports.
+        Decl::Enum(_) => {}
+    }
+}
+
+fn walk_type(
+    ty: &TypeExpr,
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    match ty {
+        TypeExpr::Ref(symbol) => collect_symbol(symbol, acc, visited),
+        TypeExpr::List(inner) | TypeExpr::Nullable(inner) => walk_type(inner, acc, visited),
+        TypeExpr::Map(key, value) => {
+            walk_type(key, acc, visited);
+            walk_type(value, acc, visited);
+        }
+        TypeExpr::Generic(symbol, args) => {
+            collect_symbol(symbol, acc, visited);
+            for arg in args {
+                walk_type(arg, acc, visited);
+            }
+        }
+    }
+}
+
+fn collect_symbol(
+    symbol: &Symbol,
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    let key = (symbol.name.clone(), symbol.import.clone());
+    if !visited.insert(key) {
+        // Already processed: its import is collected and its references walked.
+        return;
+    }
+    if let Some(import) = &symbol.import {
+        acc.insert(import.clone());
+    }
+    for reference in &symbol.references {
+        collect_symbol(reference, acc, visited);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, Method, UnionDecl, Variant};
+
+    fn field(name: &str, ty: TypeExpr) -> Field {
+        Field {
+            name: Symbol::builtin(name),
+            ty,
+            nullable: false,
+            wire: None,
+        }
+    }
+
+    fn interface_file(module: &str, fields: Vec<Field>) -> File {
+        File {
+            module: module.into(),
+            decls: vec![Decl::Interface(Interface {
+                name: Symbol::builtin("Subject"),
+                fields,
+            })],
+        }
+    }
+
+    #[test]
+    fn a_referenced_symbol_emits_its_import_once() {
+        let file = interface_file(
+            "billing",
+            vec![field(
+                "method",
+                TypeExpr::Ref(Symbol::imported(
+                    "PaymentMethod",
+                    "payments",
+                    "PaymentMethod",
+                )),
+            )],
+        );
+        assert_eq!(
+            collect(&file),
+            vec![Import {
+                module: "payments".into(),
+                imported: "PaymentMethod".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn two_fields_referencing_the_same_symbol_do_not_duplicate() {
+        let charge = || TypeExpr::Ref(Symbol::imported("Charge", "payments", "Charge"));
+        let file = interface_file("billing", vec![field("a", charge()), field("b", charge())]);
+        assert_eq!(collect(&file).len(), 1);
+    }
+
+    #[test]
+    fn builtins_contribute_no_imports() {
+        let file = interface_file(
+            "billing",
+            vec![field("id", TypeExpr::Ref(Symbol::builtin("string")))],
+        );
+        assert!(collect(&file).is_empty());
+    }
+
+    #[test]
+    fn generic_collects_head_and_args_transitively_across_modules() {
+        // Page<Charge>: Page from core, Charge from payments. Both modeled two
+        // ways to prove the fold reaches the argument either via Generic args or
+        // via Symbol.references.
+        let via_args = TypeExpr::Generic(
+            Symbol::imported("Page", "core", "Page"),
+            vec![TypeExpr::Ref(Symbol::imported(
+                "Charge", "payments", "Charge",
+            ))],
+        );
+        let via_references = TypeExpr::Ref(
+            Symbol::imported("Page", "core", "Page")
+                .referencing(vec![Symbol::imported("Charge", "payments", "Charge")]),
+        );
+        let expected = vec![
+            Import {
+                module: "core".into(),
+                imported: "Page".into(),
+            },
+            Import {
+                module: "payments".into(),
+                imported: "Charge".into(),
+            },
+        ];
+        assert_eq!(
+            collect(&interface_file("billing", vec![field("p", via_args)])),
+            expected
+        );
+        assert_eq!(
+            collect(&interface_file("billing", vec![field("p", via_references)])),
+            expected
+        );
+    }
+
+    #[test]
+    fn self_module_imports_are_dropped() {
+        // A symbol whose import points back at the file's own module needs no
+        // import statement.
+        let file = interface_file(
+            "payments",
+            vec![field(
+                "self_ref",
+                TypeExpr::Ref(Symbol::imported("Charge", "payments", "Charge")),
+            )],
+        );
+        assert!(collect(&file).is_empty());
+    }
+
+    #[test]
+    fn ordering_is_deterministic_by_module_then_imported() {
+        let file = interface_file(
+            "billing",
+            vec![
+                field("z", TypeExpr::Ref(Symbol::imported("Z", "zeta", "Z"))),
+                field("a", TypeExpr::Ref(Symbol::imported("A", "alpha", "A"))),
+                field("b", TypeExpr::Ref(Symbol::imported("B", "alpha", "B"))),
+            ],
+        );
+        let modules: Vec<_> = collect(&file)
+            .into_iter()
+            .map(|i| (i.module, i.imported))
+            .collect();
+        assert_eq!(
+            modules,
+            vec![
+                ("alpha".into(), "A".into()),
+                ("alpha".into(), "B".into()),
+                ("zeta".into(), "Z".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_map_and_nullable_descend_into_their_children() {
+        let file = interface_file(
+            "billing",
+            vec![field(
+                "nested",
+                TypeExpr::list(TypeExpr::map(
+                    TypeExpr::Ref(Symbol::imported("Key", "k", "Key")),
+                    TypeExpr::nullable(TypeExpr::Ref(Symbol::imported("Val", "v", "Val"))),
+                )),
+            )],
+        );
+        assert_eq!(collect(&file).len(), 2);
+    }
+
+    #[test]
+    fn reference_cycles_terminate() {
+        // Two symbols that reference each other. The visited guard stops the
+        // recursion; both imports are still collected.
+        let mut a = Symbol::imported("A", "ma", "A");
+        let b = Symbol::imported("B", "mb", "B").referencing(vec![a.clone()]);
+        a.references = vec![b];
+        let file = interface_file("billing", vec![field("a", TypeExpr::Ref(a))]);
+        assert_eq!(collect(&file).len(), 2);
+    }
+
+    #[test]
+    fn methods_collect_from_params_and_return_and_enums_contribute_nothing() {
+        let file = File {
+            module: "billing".into(),
+            decls: vec![
+                Decl::Enum(EnumDecl {
+                    name: Symbol::builtin("Status"),
+                    members: vec![Symbol::builtin("Active")],
+                }),
+                Decl::Method(Method {
+                    name: Symbol::builtin("create"),
+                    params: vec![field(
+                        "input",
+                        TypeExpr::Ref(Symbol::imported("In", "req", "In")),
+                    )],
+                    ret: Some(TypeExpr::Ref(Symbol::imported("Out", "resp", "Out"))),
+                }),
+                Decl::Method(Method {
+                    name: Symbol::builtin("ping"),
+                    params: vec![],
+                    ret: None,
+                }),
+            ],
+        };
+        assert_eq!(collect(&file).len(), 2);
+    }
+
+    #[test]
+    fn union_variant_fields_contribute_imports() {
+        let file = File {
+            module: "billing".into(),
+            decls: vec![Decl::Union(UnionDecl {
+                name: Symbol::builtin("Method"),
+                discriminator: "type".into(),
+                variants: vec![Variant {
+                    name: Symbol::builtin("Card"),
+                    fields: vec![field(
+                        "brand",
+                        TypeExpr::Ref(Symbol::imported("Brand", "cards", "Brand")),
+                    )],
+                    wire: None,
+                }],
+            })],
+        };
+        assert_eq!(collect(&file).len(), 1);
+    }
+}
