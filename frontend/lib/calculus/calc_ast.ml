@@ -5,9 +5,10 @@
    checker resolves those against the IR and the calculus type system. *)
 
 type lit =
-  (* The integer value is kept as text to preserve i64 without host precision
-     loss in the frontend (mirrors the wire format). *)
-  | Int of { value : string; width : int; signed : bool }
+  (* Raw digit text (a leading '-' folded in by the parser). Kept as text to
+     preserve i64 without host precision loss; the width and signedness are not
+     syntactic -- the type checker infers them from context. *)
+  | Int of string
   | Float of float
   | Str of string
   | Bool of bool
@@ -52,6 +53,7 @@ and expr_kind =
   | None_
   | Coalesce of expr * expr (* ?? *)
   | Ctor of string * (string * expr) list (* struct value or union variant *)
+  | EError (* a parse error already reported here *)
 
 (* A function: named parameters with surface types, a surface return type, and a
    body expression. [name_span] anchors definition-level diagnostics. *)

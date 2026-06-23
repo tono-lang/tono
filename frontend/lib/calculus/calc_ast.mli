@@ -2,11 +2,7 @@
    @computed / @validate traits. Boundary types reuse the surface grammar
    [Ast.ty]; every expression node carries a span for diagnostics. *)
 
-type lit =
-  | Int of { value : string; width : int; signed : bool }
-  | Float of float
-  | Str of string
-  | Bool of bool
+type lit = Int of string | Float of float | Str of string | Bool of bool
 
 type binop =
   | Add
@@ -47,6 +43,7 @@ and expr_kind =
   | None_
   | Coalesce of expr * expr
   | Ctor of string * (string * expr) list
+  | EError
 
 type fn_def = {
   name : string;
