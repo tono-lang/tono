@@ -99,6 +99,41 @@ let duplicate_shape () =
     "duplicate" [ "TC0002" ]
     (codes "struct a { x: i64 }\nstruct a { y: i64 }")
 
+(* ── Nullability (TC0007) ──────────────────────────────────────────────── *)
+
+(* A required non-nullable member and a bare nullable member are both fine. *)
+let nullability_ok () =
+  Alcotest.(check (list string))
+    "no codes" []
+    (codes "struct s { a: i64 @required, b: i64? }")
+
+let nullability_conflict () =
+  Alcotest.(check (list string))
+    "@required on a T? member" [ "TC0007" ]
+    (codes "struct s { x: i64? @required }")
+
+(* ── Enums (TC0008 / TC0009) ───────────────────────────────────────────── *)
+
+let enum_ok () =
+  Alcotest.(check (list string))
+    "string- and int-backed enums" []
+    (codes "enum colour { red, green }\nenum level { low = 1, high = 2 }")
+
+let enum_duplicate_name () =
+  Alcotest.(check (list string))
+    "repeated value name" [ "TC0008" ]
+    (codes "enum e { a, b, a }")
+
+let enum_duplicate_int () =
+  Alcotest.(check (list string))
+    "repeated backing value" [ "TC0008" ]
+    (codes "enum e { a = 1, b = 1 }")
+
+let enum_backing_mismatch () =
+  Alcotest.(check (list string))
+    "int-backed case missing its value" [ "TC0009" ]
+    (codes "enum e { a = 1, b }")
+
 let () =
   Alcotest.run "typecheck"
     [
@@ -117,10 +152,23 @@ let () =
           Alcotest.test_case "generic applied ok" `Quick generic_applied_ok;
           Alcotest.test_case "generic too few" `Quick generic_too_few;
           Alcotest.test_case "generic too many" `Quick generic_too_many;
-          Alcotest.test_case "one arg arity two" `Quick generic_one_arg_arity_two;
+          Alcotest.test_case "one arg arity two" `Quick
+            generic_one_arg_arity_two;
           Alcotest.test_case "non-generic applied" `Quick non_generic_applied;
           Alcotest.test_case "type param applied" `Quick type_param_applied;
         ] );
       ( "duplicate",
         [ Alcotest.test_case "duplicate shape" `Quick duplicate_shape ] );
+      ( "nullability",
+        [
+          Alcotest.test_case "nullability ok" `Quick nullability_ok;
+          Alcotest.test_case "nullability conflict" `Quick nullability_conflict;
+        ] );
+      ( "enums",
+        [
+          Alcotest.test_case "enum ok" `Quick enum_ok;
+          Alcotest.test_case "duplicate name" `Quick enum_duplicate_name;
+          Alcotest.test_case "duplicate int" `Quick enum_duplicate_int;
+          Alcotest.test_case "backing mismatch" `Quick enum_backing_mismatch;
+        ] );
     ]

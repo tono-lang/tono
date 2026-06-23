@@ -8,3 +8,8 @@ val duplicate_shape : string
    lowering, so an out-of-scope name surfaces as [unknown_type]. *)
 val generic_arity_mismatch : string
 val non_generic_applied : string
+
+(* TC0006 (bounds_not_supported) is a parse-level rejection; no constant here. *)
+val nullability_conflict : string
+val enum_value_duplicate : string
+val enum_backing_mismatch : string

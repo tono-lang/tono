@@ -9,3 +9,9 @@ let duplicate_shape = "TC0002"
    distinct unbound-parameter code. *)
 let generic_arity_mismatch = "TC0004"
 let non_generic_applied = "TC0005"
+
+(* TC0006 (bounds_not_supported) is rejected at parse time; the checker never
+   reaches a bound to report, so the code has no constant here. *)
+let nullability_conflict = "TC0007"
+let enum_value_duplicate = "TC0008"
+let enum_backing_mismatch = "TC0009"
