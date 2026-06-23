@@ -40,7 +40,8 @@ mod tests {
     use crate::codegen::symbol::{Import, Symbol};
     use crate::codegen::target::{Fragment, Target};
     use crate::codegen::tree::{
-        Decl, EnumDecl, Field, Interface, Method, TypeExpr, UnionDecl, Variant,
+        Alias, Decl, EnumDecl, Field, FnBody, Function, Interface, Method, TypeExpr, UnionDecl,
+        Variant,
     };
     use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
     use serde_json::{json, Value};
@@ -85,6 +86,18 @@ mod tests {
             out.push_str(&format!("    {}: {ty},\n", field.name.name));
             out
         }
+
+        fn render_sig(&self, params: &[Field], ret: &Option<TypeExpr>) -> String {
+            let params: Vec<String> = params
+                .iter()
+                .map(|p| format!("{}: {}", p.name.name, self.render_type(&p.ty)))
+                .collect();
+            let ret = ret
+                .as_ref()
+                .map(|r| format!(" -> {}", self.render_type(r)))
+                .unwrap_or_default();
+            format!("({}){ret}", params.join(", "))
+        }
     }
 
     impl RenderRules for RustRules {
@@ -119,21 +132,16 @@ mod tests {
                     format!("pub enum {} {{\n{variants}}}", decl.name.name)
                 }
                 Decl::Method(method) => {
-                    let params: Vec<String> = method
-                        .params
-                        .iter()
-                        .map(|p| format!("{}: {}", p.name.name, self.render_type(&p.ty)))
-                        .collect();
-                    let ret = method
-                        .ret
-                        .as_ref()
-                        .map(|r| format!(" -> {}", self.render_type(r)))
-                        .unwrap_or_default();
-                    format!(
-                        "pub fn {}({}){ret} {{ runtime.execute() }}",
-                        method.name.name,
-                        params.join(", ")
-                    )
+                    let sig = self.render_sig(&method.params, &method.ret);
+                    format!("pub fn {}{sig} {{ runtime.execute() }}", method.name.name)
+                }
+                Decl::Function(function) => {
+                    let sig = self.render_sig(&function.params, &function.ret);
+                    let FnBody::Raw { text, .. } = &function.body;
+                    format!("pub fn {}{sig} {{ {text} }}", function.name.name)
+                }
+                Decl::Alias(alias) => {
+                    format!("pub type {} = {};", alias.name.name, alias.value)
                 }
             }
         }
@@ -279,6 +287,45 @@ mod tests {
     }
 
     #[test]
+    fn an_alias_renders_as_a_type_definition() {
+        let alias = Decl::Alias(Alias {
+            name: Symbol::builtin("Uuid"),
+            value: "String".into(),
+        });
+        assert_eq!(RustRules.render_decl(&alias), "pub type Uuid = String;");
+    }
+
+    #[test]
+    fn render_emits_a_function_and_collects_its_body_refs() {
+        // A codec-style function: its return type and the symbols its (opaque)
+        // body references all feed import collection.
+        let file = File {
+            module: "billing".into(),
+            decls: vec![Decl::Function(Function {
+                name: Symbol::builtin("decodeCharge"),
+                params: vec![Field {
+                    name: Symbol::builtin("raw"),
+                    ty: TypeExpr::Ref(Symbol::builtin("unknown")),
+                    nullable: false,
+                    wire: None,
+                }],
+                ret: Some(TypeExpr::Ref(Symbol::imported("Charge", "model", "Charge"))),
+                body: FnBody::Raw {
+                    text: "return decodeUuid(raw.id);".into(),
+                    refs: vec![Symbol::imported("decodeUuid", "codecs", "decodeUuid")],
+                },
+            })],
+        };
+        let out = render_file(&file, &RustRules, &passthrough()).text;
+        assert!(out.contains(
+            "pub fn decodeCharge(raw: unknown) -> Charge { return decodeUuid(raw.id); }"
+        ));
+        // The return type and a body-referenced symbol are both imported.
+        assert!(out.contains("use model::Charge;"));
+        assert!(out.contains("use codecs::decodeUuid;"));
+    }
+
+    #[test]
     fn a_file_with_only_builtins_has_no_import_block() {
         let file = File {
             module: "billing".into(),
@@ -391,6 +438,7 @@ mod tests {
                     variants: vec![Variant {
                         name: Symbol::builtin("Card"),
                         fields: vec![],
+                        payload: None,
                         wire: None,
                     }],
                 }),

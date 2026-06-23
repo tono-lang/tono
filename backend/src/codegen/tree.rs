@@ -24,6 +24,17 @@ pub enum Decl {
     Enum(EnumDecl),
     Union(UnionDecl),
     Method(Method),
+    Function(Function),
+    Alias(Alias),
+}
+
+/// A named type alias whose definition is target text (e.g. a branded
+/// well-known type). The definition references no symbols the engine must
+/// import, so it carries none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alias {
+    pub name: Symbol,
+    pub value: String,
 }
 
 /// A product type: a named structure/interface with fields.
@@ -56,6 +67,26 @@ pub struct Method {
     pub ret: Option<TypeExpr>,
 }
 
+/// A free function with a real body, used for generated codecs and helpers. Its
+/// signature is symbol-typed so import collection sees its parameter and return
+/// types; the body additionally declares the symbols it references so those
+/// imports are collected too, even though the body statements are target text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Function {
+    pub name: Symbol,
+    pub params: Vec<Field>,
+    pub ret: Option<TypeExpr>,
+    pub body: FnBody,
+}
+
+/// A function body. The statements are rendered text (the formatter is the
+/// layout authority), paired with the symbols the text references so the engine
+/// can still collect their imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FnBody {
+    Raw { text: String, refs: Vec<Symbol> },
+}
+
 /// An enumeration: a name and its members, each an idiomatic-cased symbol. The
 /// open-enum `Unknown` arm is a target render concern, not stored here.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,12 +105,15 @@ pub struct UnionDecl {
     pub variants: Vec<Variant>,
 }
 
-/// A union variant: a struct with an optional wire-tag override (defaulting to
-/// the variant name when absent).
+/// A union variant. Its `name` is the wire tag (overridable by `wire`). A
+/// variant carries its payload either inline as `fields` or, when the IR
+/// references a payload shape, as a `payload` type the discriminator object is
+/// intersected with; the two are alternatives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Variant {
     pub name: Symbol,
     pub fields: Vec<Field>,
+    pub payload: Option<TypeExpr>,
     pub wire: Option<String>,
 }
 
@@ -178,6 +212,7 @@ mod tests {
                     variants: vec![Variant {
                         name: Symbol::builtin("Card"),
                         fields: vec![],
+                        payload: None,
                         wire: Some("card".into()),
                     }],
                 }),
