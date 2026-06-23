@@ -425,6 +425,7 @@ mod tests {
                     variants: vec![Variant {
                         name: Symbol::builtin("Card"),
                         fields: vec![],
+                        payload: None,
                         wire: None,
                     }],
                 }),

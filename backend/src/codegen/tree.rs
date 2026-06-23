@@ -95,12 +95,15 @@ pub struct UnionDecl {
     pub variants: Vec<Variant>,
 }
 
-/// A union variant: a struct with an optional wire-tag override (defaulting to
-/// the variant name when absent).
+/// A union variant. Its `name` is the wire tag (overridable by `wire`). A
+/// variant carries its payload either inline as `fields` or, when the IR
+/// references a payload shape, as a `payload` type the discriminator object is
+/// intersected with; the two are alternatives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Variant {
     pub name: Symbol,
     pub fields: Vec<Field>,
+    pub payload: Option<TypeExpr>,
     pub wire: Option<String>,
 }
 
@@ -199,6 +202,7 @@ mod tests {
                     variants: vec![Variant {
                         name: Symbol::builtin("Card"),
                         fields: vec![],
+                        payload: None,
                         wire: Some("card".into()),
                     }],
                 }),

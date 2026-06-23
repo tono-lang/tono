@@ -48,6 +48,9 @@ fn walk_decl(
                 for field in &variant.fields {
                     walk_type(&field.ty, acc, visited);
                 }
+                if let Some(payload) = &variant.payload {
+                    walk_type(payload, acc, visited);
+                }
             }
         }
         Decl::Method(method) => {
@@ -332,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn union_variant_fields_contribute_imports() {
+    fn union_variant_fields_and_payloads_contribute_imports() {
         let file = File {
             module: "billing".into(),
             decls: vec![Decl::Union(UnionDecl {
@@ -344,10 +347,14 @@ mod tests {
                         "brand",
                         TypeExpr::Ref(Symbol::imported("Brand", "cards", "Brand")),
                     )],
+                    payload: Some(TypeExpr::Ref(Symbol::imported(
+                        "CardData", "cards", "CardData",
+                    ))),
                     wire: None,
                 }],
             })],
         };
-        assert_eq!(collect(&file).len(), 1);
+        // The variant field's type and the variant payload's type.
+        assert_eq!(collect(&file).len(), 2);
     }
 }

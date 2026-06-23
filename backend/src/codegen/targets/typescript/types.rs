@@ -4,7 +4,7 @@
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::targets::typescript::symbols::symbol_of;
-use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr};
+use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr, UnionDecl, Variant};
 use crate::ir::{Member, Shape, ShapeKind, Tref};
 
 /// The idiomatic TypeScript casing: PascalCase types, camelCase fields and
@@ -47,7 +47,28 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
                 .map(|(value, _)| Symbol::builtin(value.clone()))
                 .collect(),
         })],
+        ShapeKind::Union {
+            members,
+            discriminator,
+            ..
+        } => vec![Decl::Union(UnionDecl {
+            name: type_name(&shape.id, config),
+            discriminator: discriminator.clone(),
+            variants: members.iter().map(variant_of).collect(),
+        })],
         _ => vec![],
+    }
+}
+
+/// Build a union variant: the tag is the member name (overridable by `@wire`),
+/// and the payload is the referenced type the discriminator object intersects
+/// with. The tag is a wire value, kept verbatim rather than cased.
+fn variant_of(member: &Member) -> Variant {
+    Variant {
+        name: Symbol::builtin(member.name.clone()),
+        fields: Vec::new(),
+        payload: Some(type_expr_of(&member.target)),
+        wire: wire_of(&member.traits),
     }
 }
 
@@ -189,6 +210,33 @@ mod tests {
                 && d.members.len() == 2
                 && d.members[0].name == "pending"
                 && d.members[1].name == "settled"));
+    }
+
+    #[test]
+    fn a_union_becomes_a_discriminated_union_decl() {
+        let shape = Shape {
+            id: "billing#payment_method".into(),
+            kind: ShapeKind::Union {
+                params: vec![],
+                discriminator: "type".into(),
+                members: vec![member(
+                    "card",
+                    Tref::Ref {
+                        id: "billing#CardData".into(),
+                        args: vec![],
+                    },
+                    true,
+                )],
+            },
+            traits: vec![],
+        };
+        let decls = emit_type(&shape, &ts_casing());
+        assert!(matches!(&decls[..], [Decl::Union(u)]
+            if u.name.name == "PaymentMethod"
+                && u.discriminator == "type"
+                && u.variants.len() == 1
+                && u.variants[0].name.name == "card"
+                && u.variants[0].payload.is_some()));
     }
 
     #[test]

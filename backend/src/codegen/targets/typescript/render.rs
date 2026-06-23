@@ -5,7 +5,7 @@
 
 use crate::codegen::symbol::Import;
 use crate::codegen::target::RenderRules;
-use crate::codegen::tree::{Decl, Field, TypeExpr};
+use crate::codegen::tree::{Decl, Field, TypeExpr, Variant};
 
 /// The TypeScript render rules.
 pub struct TsRules;
@@ -47,6 +47,20 @@ impl TsRules {
             format!("  {}: {ty};\n", field.name.name)
         }
     }
+
+    fn render_variant(&self, discriminator: &str, variant: &Variant) -> String {
+        let tag = variant
+            .wire
+            .as_deref()
+            .unwrap_or(variant.name.name.as_str());
+        let head = format!("{{ {discriminator}: \"{tag}\" }}");
+        // A variant with a payload intersects the discriminator object with it;
+        // a payload-less variant is a bare tag (a marker variant).
+        match &variant.payload {
+            Some(payload) => format!("({head} & {})", self.render_type(payload)),
+            None => head,
+        }
+    }
 }
 
 impl RenderRules for TsRules {
@@ -79,8 +93,16 @@ impl RenderRules for TsRules {
                 arms.push("(string & {})".into());
                 format!("export type {} = {};", decl.name.name, arms.join(" | "))
             }
+            Decl::Union(decl) => {
+                let arms: Vec<String> = decl
+                    .variants
+                    .iter()
+                    .map(|v| self.render_variant(&decl.discriminator, v))
+                    .collect();
+                format!("export type {} = {};", decl.name.name, arms.join(" | "))
+            }
             // Rendered by later phases; nothing is emitted for them yet.
-            Decl::Union(_) | Decl::Method(_) | Decl::Function(_) => String::new(),
+            Decl::Method(_) | Decl::Function(_) => String::new(),
         }
     }
 }
@@ -186,16 +208,35 @@ mod tests {
     }
 
     #[test]
-    fn deferred_declarations_render_nothing_yet() {
-        let union = Decl::Union(UnionDecl {
-            name: Symbol::builtin("Method"),
-            discriminator: "type".into(),
-            variants: vec![Variant {
-                name: Symbol::builtin("Card"),
-                fields: vec![],
-                wire: None,
-            }],
+    fn a_union_renders_as_a_discriminated_union() {
+        // A variant with a payload intersects the discriminator object with it;
+        // a payload-less variant is a bare tag, and its tag honors @wire.
+        let decl = Decl::Union(UnionDecl {
+            name: Symbol::builtin("PaymentMethod"),
+            discriminator: "kind".into(),
+            variants: vec![
+                Variant {
+                    name: Symbol::builtin("card"),
+                    fields: vec![],
+                    payload: Some(TypeExpr::Ref(Symbol::builtin("CardData"))),
+                    wire: None,
+                },
+                Variant {
+                    name: Symbol::builtin("cash"),
+                    fields: vec![],
+                    payload: None,
+                    wire: Some("CASH".into()),
+                },
+            ],
         });
+        assert_eq!(
+            TsRules.render_decl(&decl),
+            "export type PaymentMethod = ({ kind: \"card\" } & CardData) | { kind: \"CASH\" };"
+        );
+    }
+
+    #[test]
+    fn deferred_declarations_render_nothing_yet() {
         let method = Decl::Method(Method {
             name: Symbol::builtin("ping"),
             params: vec![],
@@ -210,7 +251,6 @@ mod tests {
                 refs: vec![],
             },
         });
-        assert_eq!(TsRules.render_decl(&union), "");
         assert_eq!(TsRules.render_decl(&method), "");
         assert_eq!(TsRules.render_decl(&function), "");
     }
