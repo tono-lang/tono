@@ -13,6 +13,7 @@ pub mod imports;
 pub mod render;
 pub mod symbol;
 pub mod target;
+pub mod targets;
 pub mod tree;
 
 pub use casing::{CaseStyle, CasingConfig};
