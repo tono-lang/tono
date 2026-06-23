@@ -13,10 +13,15 @@ module Ast = Ast
 module Parser_state = Parser_state
 module Parser = Parser
 module Lower = Lower
+module Typecheck = Typecheck
 
 (* The frontend pipeline: lex and parse source text, then lower it to an IR
    module. [module_name] names the resulting module. All lex, parse, and lowering
-   diagnostics are merged and returned in source order. *)
+   diagnostics are merged and returned in source order.
+
+   The typecheck pass (Typecheck.check_module) is exposed but not yet wired into
+   [compile]: existing golden fixtures reference not-yet-declared types on
+   purpose, so wiring it on requires making those fixtures self-contained first. *)
 let compile ?(module_name = "") (src : string) : Ir.module_ * Diagnostic.t list
     =
   let file, parse_diags = Parser.parse src in
