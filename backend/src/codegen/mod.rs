@@ -10,10 +10,14 @@
 pub mod casing;
 pub mod format;
 pub mod imports;
+pub mod render;
 pub mod symbol;
+pub mod target;
 pub mod tree;
 
 pub use casing::{CaseStyle, CasingConfig};
 pub use format::{Formatted, Formatter};
+pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};
+pub use target::{Fragment, RenderRules, Target};
 pub use tree::{Decl, EnumDecl, Field, File, Interface, Method, TypeExpr, UnionDecl, Variant};
