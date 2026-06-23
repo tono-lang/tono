@@ -21,6 +21,8 @@ module Calc_ast = Calc_ast
 module Calc_token = Calc_token
 module Calc_lexer = Calc_lexer
 module Calc_parser = Calc_parser
+module Calc_types = Calc_types
+module Calc_check = Calc_check
 
 (* The frontend pipeline: lex and parse source text, lower it to an IR module,
    then typecheck that module. [module_name] names the resulting module. All lex,

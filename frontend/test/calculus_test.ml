@@ -280,9 +280,187 @@ let describe_all () =
       Alcotest.(check bool) "non-empty" true (String.length (describe k) > 0))
     all
 
+(* ── Type checker ──────────────────────────────────────────────────────── *)
+
+(* A shape environment built by compiling .tono source; the calculus checks
+   against it. *)
+let env =
+  fst
+    (compile
+       "struct item { amount: i64, label: string }\n\
+        struct cart { items: []item, tags: map[string]i64 }\n\
+        struct card { last4: string }\n\
+        struct pix { key: string }\n\
+        union pm { card(card), pix(pix) }\n\
+        enum colour { red, green }")
+
+let ccodes src =
+  let prog, pd = Calc_parser.parse src in
+  if pd <> [] then [ "PARSE" ]
+  else
+    List.filter_map
+      (fun (d : Diagnostic.t) -> d.code)
+      (Calc_check.check env prog)
+
+let chk label expected src =
+  Alcotest.(check (list string)) label expected (ccodes src)
+
+let check_ok () =
+  chk "arith" [] "fn f(a: i64, b: i64) -> i64 = a + b - a * b";
+  chk "float arith" [] "fn f(a: float, b: float) -> float = a / b";
+  chk "literal adopts width" [] "fn f(a: i32) -> i32 = a + 1";
+  chk "compare" [] "fn f(a: i64, b: i64) -> bool = a < b && a == b || !(a > b)";
+  chk "concat" [] "fn f(a: string, b: string) -> string = a ++ b";
+  chk "if let" [] "fn f(a: i64) -> i64 = let y = a in if y == y then y else 0";
+  chk "field" [] "fn f(it: item) -> string = it.label";
+  chk "guarded div" []
+    "fn f(a: i64, b: i64) -> i64 = if b != 0 then a / b else 0";
+  chk "guarded mod 0==b" []
+    "fn f(a: i64, b: i64) -> i64 = if 0 == b then 0 else a % b";
+  chk "literal divisor" [] "fn f(a: i64) -> i64 = a / 3";
+  chk "length" [] "fn f(c: cart) -> i64 = length(c.items)";
+  chk "get opt" [] "fn f(c: cart) -> item? = get(c.items, 0)";
+  chk "head some none" []
+    "fn f(c: cart) -> item? = if length(c.items) == 0 then None else \
+     head(c.items)";
+  chk "lookup get_or" []
+    "fn f(c: cart, k: string) -> i64 = get_or(c.tags, k, 0)";
+  chk "to_int to_float" [] "fn f(x: float) -> float = to_float(to_int(x) ?? 0)";
+  chk "ctor" [] "fn f() -> card = card { last4: \"1234\" }";
+  chk "match union" []
+    "fn f(p: pm) -> string = match p { card(c) => c.last4 pix(x) => x.key \
+     Unknown(u) => \"?\" }";
+  chk "match enum" []
+    "fn f(c: colour) -> i64 = match c { red => 1 green => 2 Unknown(u) => 0 }";
+  chk "map filter fold" []
+    "fn dbl(x: i64) -> i64 = x * 2\n\
+     fn pos(x: i64) -> bool = x > 0\n\
+     fn add(a: i64, x: i64) -> i64 = a + x\n\
+     fn f(xs: []i64) -> i64 = fold(filter(map(xs, dbl), pos), 0, add)";
+  chk "find" []
+    "fn pos(x: i64) -> bool = x > 0\n\
+     fn f(xs: []i64) -> i64 = find(xs, pos) ?? 0"
+
+let check_errors () =
+  chk "unbound var" [ "CA0001" ] "fn f() -> i64 = x";
+  chk "unknown fn" [ "CA0001" ] "fn f() -> i64 = g(1)";
+  chk "combinator fn unknown" [ "CA0001" ]
+    "fn f(xs: []i64) -> []i64 = map(xs, g)";
+  chk "fn wrong arity" [ "CA0002" ]
+    "fn g(a: i64) -> i64 = a\nfn f() -> i64 = g(1, 2)";
+  chk "builtin wrong arity" [ "CA0002" ] "fn f(c: cart) -> i64 = length(c, c)";
+  chk "mixed width" [ "CA0003" ] "fn f(a: i64, b: i32) -> i64 = a + b";
+  chk "int plus float" [ "CA0003" ] "fn f(a: i64, b: float) -> i64 = a + b";
+  chk "non-bool cond" [ "CA0003" ] "fn f(a: i64) -> i64 = if a then 1 else 2";
+  chk "non-bool and" [ "CA0003" ] "fn f(a: i64, b: bool) -> bool = a && b";
+  chk "concat non-string" [ "CA0003" ]
+    "fn f(a: i64, b: string) -> string = a ++ b";
+  chk "incomparable" [ "CA0003" ] "fn f(a: i64, b: string) -> bool = a == b";
+  chk "arg mismatch" [ "CA0003" ]
+    "fn g(a: string) -> string = a\nfn f() -> string = g(1)";
+  chk "not a list" [ "CA0003" ] "fn f(a: i64) -> i64 = length(a)";
+  chk "not a map" [ "CA0003" ]
+    "fn f(c: cart) -> i64 = get_or(c.items, \"k\", 0)";
+  chk "to_float non-int" [ "CA0003" ] "fn f(s: string) -> float = to_float(s)";
+  chk "coalesce mismatch" [ "CA0003" ]
+    "fn f(c: cart) -> string = head(c.items) ?? 0";
+  chk "coalesce non-optional" [ "CA0003" ] "fn f(a: i64) -> i64 = a ?? 0";
+  chk "combinator fn shape" [ "CA0003" ]
+    "fn two(a: i64, b: i64) -> i64 = a\nfn f(xs: []i64) -> []i64 = map(xs, two)";
+  chk "ret mismatch" [ "CA0003" ] "fn f() -> string = 1";
+  chk "field non-struct" [ "CA0004" ] "fn f(a: i64) -> i64 = a.x";
+  chk "unknown field" [ "CA0004" ] "fn f(it: item) -> i64 = it.nope";
+  chk "ctor unknown field" [ "CA0004" ] "fn f() -> card = card { nope: \"x\" }";
+  chk "ctor non-struct" [ "CA0003" ] "fn f() -> pm = pm { x: 1 }";
+  chk "unguarded div" [ "CA0005" ] "fn f(a: i64, b: i64) -> i64 = a / b";
+  chk "unguarded mod" [ "CA0005" ] "fn f(a: i64, b: i64) -> i64 = a % b";
+  chk "match non-sum" [ "CA0006" ]
+    "fn f(a: i64) -> i64 = match a { x => 1 Unknown(u) => 0 }";
+  chk "unknown variant" [ "CA0007"; "CA0008" ]
+    "fn f(p: pm) -> string = match p { nope(c) => \"x\" Unknown(u) => \"?\" }";
+  chk "missing variant" [ "CA0008" ]
+    "fn f(p: pm) -> string = match p { card(c) => c.last4 Unknown(u) => \"?\" }";
+  chk "missing unknown" [ "CA0008" ]
+    "fn f(p: pm) -> string = match p { card(c) => c.last4 pix(x) => x.key }";
+  chk "divergent arms" [ "CA0009" ]
+    "fn f(c: colour) -> i64 = match c { red => 1 green => \"x\" Unknown(u) => \
+     0 }";
+  chk "recursion" [ "CA0010" ]
+    "fn a(x: i64) -> i64 = b(x)\nfn b(x: i64) -> i64 = a(x)";
+  chk "self recursion" [ "CA0010" ] "fn a(x: i64) -> i64 = a(x)";
+  (* An already-Err operand does not cascade into a second diagnostic. *)
+  chk "no cascade" [ "CA0001" ] "fn f() -> i64 = x + 1";
+  chk "match err scrutinee" [ "CA0001" ]
+    "fn f() -> i64 = match x { a => 1 Unknown(u) => 0 }";
+  chk "head wrong arity" [ "CA0002" ]
+    "fn f(c: cart) -> item? = head(c.items, 0)";
+  chk "find non-function arg" [ "CA0003" ]
+    "fn f(xs: []i64) -> i64 = find(xs, 1) ?? 0";
+  chk "find wrong predicate" [ "CA0003" ]
+    "fn p(a: i64, b: i64) -> bool = true\n\
+     fn f(xs: []i64) -> i64 = find(xs, p) ?? 0";
+  chk "fold wrong function" [ "CA0003" ]
+    "fn g(x: i64) -> i64 = x\nfn f(xs: []i64) -> i64 = fold(xs, 0, g)";
+  chk "find predicate not bool" [ "CA0003" ]
+    "fn p(x: i64) -> i64 = x\nfn f(xs: []i64) -> i64 = find(xs, p) ?? 0";
+  chk "lookup wrong key" [ "CA0003" ]
+    "fn f(c: cart) -> i64 = get_or(c.tags, 1, 0)"
+
+(* Exercise the type system's rendering and compatibility directly. *)
+let types_unit () =
+  let open Calc_types in
+  let i8 = Prim (Ir.Int { bits = 8; signed = true }) in
+  let u32 = Prim (Ir.Int { bits = 32; signed = false }) in
+  let all =
+    [
+      Prim Ir.Bool;
+      Prim Ir.String;
+      Prim Ir.Bytes;
+      i8;
+      u32;
+      Prim Ir.Float;
+      Prim Ir.Timestamp;
+      Prim Ir.Date;
+      Prim Ir.Duration;
+      Prim Ir.Uuid;
+      Ref ("x", []);
+      Ref ("p", [ Prim Ir.Bool ]);
+      List i8;
+      Map (Prim Ir.String, i8);
+      Opt i8;
+      Fn ([ i8 ], Prim Ir.Bool);
+      Int_lit;
+      Err;
+    ]
+  in
+  List.iter
+    (fun t ->
+      Alcotest.(check bool) "rendered" true (String.length (to_string t) > 0))
+    all;
+  let yes l a b = Alcotest.(check bool) l true (compat a b) in
+  let no l a b = Alcotest.(check bool) l false (compat a b) in
+  yes "err left" Err i8;
+  yes "err right" i8 Err;
+  yes "intlit~u32" Int_lit u32;
+  yes "u32~intlit" u32 Int_lit;
+  yes "intlit~intlit" Int_lit Int_lit;
+  yes "ref applied" (Ref ("p", [ i8 ])) (Ref ("p", [ i8 ]));
+  yes "list" (List i8) (List i8);
+  yes "map" (Map (i8, i8)) (Map (i8, i8));
+  yes "opt" (Opt i8) (Opt i8);
+  yes "fn" (Fn ([ i8 ], i8)) (Fn ([ i8 ], i8));
+  no "prim diff" i8 (Prim Ir.Bool);
+  no "ref name diff" (Ref ("a", [])) (Ref ("b", []));
+  no "ref arity diff" (Ref ("a", [ i8 ])) (Ref ("a", []));
+  no "fn arity diff" (Fn ([ i8 ], i8)) (Fn ([], i8));
+  no "list vs map" (List i8) (Map (i8, i8));
+  Alcotest.(check bool) "numeric float" true (is_numeric (Prim Ir.Float));
+  Alcotest.(check bool) "numeric bool" false (is_numeric (Prim Ir.Bool))
+
 let () =
   Alcotest.run "calculus"
     [
+      ("types", [ Alcotest.test_case "rendering and compat" `Quick types_unit ]);
       ( "lexer",
         [
           Alcotest.test_case "operators" `Quick lexer_ops;
@@ -302,5 +480,10 @@ let () =
           Alcotest.test_case "types parse" `Quick types_parse;
           Alcotest.test_case "clean program" `Quick clean_program;
           Alcotest.test_case "negatives" `Quick negatives;
+        ] );
+      ( "check",
+        [
+          Alcotest.test_case "ok" `Quick check_ok;
+          Alcotest.test_case "errors" `Quick check_errors;
         ] );
     ]
