@@ -170,12 +170,16 @@ let unparsed_bounds_diagnosed () =
     (msg_contains "max must be a number"
        (diags_of {|struct s { a: i64 @range(min: 5, max: "x") }|}))
 
-(* @required on a nullable member is a contradiction the IR cannot represent. *)
+(* Lowering records the requested [required] state and leaves the
+   nullable-vs-required contradiction for the typechecker (TC0007), so it emits
+   no diagnostic of its own here. *)
 let required_on_nullable () =
+  Alcotest.(check int)
+    "lowering does not judge the conflict" 0
+    (List.length (diags_of "struct s { a: string? @required }"));
   Alcotest.(check bool)
-    "required on nullable flagged" true
-    (msg_contains "contradictory"
-       (diags_of "struct s { a: string? @required }"));
+    "required flag is recorded" true
+    (member "a" "struct s { a: string? @required }").required;
   Alcotest.(check int)
     "required on a plain member is clean" 0
     (List.length (diags_of "struct s { a: string @required }"))
