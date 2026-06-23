@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn a_structure_renders_to_a_typescript_interface_end_to_end() {
         let shape = Shape {
-            id: "billing#charge".into(),
+            id: "billing#Charge".into(),
             kind: ShapeKind::Structure {
                 params: vec![],
                 members: vec![

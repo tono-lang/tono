@@ -7,13 +7,11 @@ use crate::codegen::targets::typescript::symbols::symbol_of;
 use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr, UnionDecl, Variant};
 use crate::ir::{Member, Shape, ShapeKind, Tref};
 
-/// The idiomatic TypeScript casing: PascalCase types, camelCase fields and
-/// methods. Enum members are not cased here: an open-enum literal is the wire tag
-/// itself, kept verbatim.
+/// The idiomatic TypeScript casing: camelCase fields and methods. Type names are
+/// PascalCase in the IR and used as-is (not cased), and enum members and variant
+/// tags are wire values kept verbatim, so only the field/method default matters.
 pub fn ts_casing() -> CasingConfig {
     CasingConfig::new(CaseStyle::Camel)
-        .with(SymbolKind::Type, CaseStyle::Pascal)
-        .with(SymbolKind::Variant, CaseStyle::Pascal)
 }
 
 /// Convert an IR type reference into a component-tree type expression, resolving
@@ -75,16 +73,14 @@ fn variant_of(member: &Member) -> Variant {
     }
 }
 
-/// The PascalCase identifier for a shape's own name (after the `module#`
-/// prefix), honoring a TypeScript `@rename`.
-pub(crate) fn type_ident(shape: &Shape, config: &CasingConfig) -> String {
+/// The identifier for a shape's own name (after the `module#` prefix). Type
+/// names are PascalCase in the IR, so they are used as-is (casing them would
+/// corrupt multi-word names like `KitchenSink`); only a TypeScript `@rename`
+/// overrides the identifier. The casing config is unused for types but kept for
+/// signature symmetry with the field path.
+pub(crate) fn type_ident(shape: &Shape, _config: &CasingConfig) -> String {
     let local = shape.id.rsplit('#').next().unwrap_or(&shape.id);
-    casing::transform(
-        local,
-        SymbolKind::Type,
-        config,
-        rename_of(&shape.traits).as_deref(),
-    )
+    rename_of(&shape.traits).unwrap_or_else(|| local.to_string())
 }
 
 /// The camelCase identifier for a member, honoring a TypeScript `@rename`. This
@@ -197,7 +193,7 @@ mod tests {
     #[test]
     fn a_structure_becomes_an_interface_with_cased_fields() {
         let shape = structure(
-            "billing#charge",
+            "billing#Charge",
             vec![
                 member("amount_cents", Tref::Prim(Prim::I64), true),
                 member("note", Tref::Prim(Prim::String), false),
@@ -219,7 +215,7 @@ mod tests {
             id: "core#wire".into(),
             value: json!("amount"),
         }];
-        let shape = structure("billing#charge", vec![m]);
+        let shape = structure("billing#Charge", vec![m]);
         let decls = emit_type(&shape, &ts_casing());
         // The identifier is cased; the wire key is the override, independently.
         assert!(matches!(&decls[..], [Decl::Interface(i)]
@@ -241,7 +237,7 @@ mod tests {
             },
         ];
         let shape = Shape {
-            id: "billing#charge".into(),
+            id: "billing#Charge".into(),
             kind: ShapeKind::Structure {
                 params: vec![],
                 members: vec![m],
@@ -265,7 +261,7 @@ mod tests {
             id: "core#rename".into(),
             value: json!({ "rust": "amount_cents" }),
         }];
-        let shape = structure("billing#charge", vec![m]);
+        let shape = structure("billing#Charge", vec![m]);
         let decls = emit_type(&shape, &ts_casing());
         // No TypeScript rename, so the camelCase default applies.
         assert!(matches!(&decls[..], [Decl::Interface(i)]
@@ -275,7 +271,7 @@ mod tests {
     #[test]
     fn an_enum_becomes_a_literal_union_of_verbatim_tags() {
         let shape = Shape {
-            id: "billing#status".into(),
+            id: "billing#Status".into(),
             kind: ShapeKind::Enum {
                 backing: crate::ir::EnumBacking::String,
                 values: vec![("pending".into(), None), ("settled".into(), None)],
@@ -293,7 +289,7 @@ mod tests {
     #[test]
     fn a_union_becomes_a_discriminated_union_decl() {
         let shape = Shape {
-            id: "billing#payment_method".into(),
+            id: "billing#PaymentMethod".into(),
             kind: ShapeKind::Union {
                 params: vec![],
                 discriminator: "type".into(),
