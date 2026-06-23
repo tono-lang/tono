@@ -59,7 +59,12 @@ let add_tok st kind ~start =
 
 let add_diag st severity message ~start =
   st.diags <-
-    { Diagnostic.span = { Span.start; finish = pos st }; severity; message }
+    {
+      Diagnostic.span = { Span.start; finish = pos st };
+      severity;
+      message;
+      code = None;
+    }
     :: st.diags
 
 let classify (text : string) : Token.kind =
