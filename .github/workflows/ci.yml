@@ -66,16 +66,34 @@ jobs:
           awk -v p="${pct:-0}" 'BEGIN { exit (p+0 >= 95) ? 0 : 1 }' \
             || { echo "::error::OCaml coverage ${pct:-0}% is below 95%"; exit 1; }
 
+  typescript:
+    name: TypeScript codegen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the TypeScript toolchain
+        run: npm ci
+        working-directory: backend/codegen-tests/typescript
+      - name: Generate, compile, and round-trip the emitted TypeScript
+        run: cargo test --test typescript_roundtrip
+
   # Single aggregating check - this is the one to mark "required" in branch protection.
   ci-success:
     name: CI success
     runs-on: ubuntu-latest
-    needs: [rust, ocaml]
+    needs: [rust, ocaml, typescript]
     if: always()
     steps:
       - name: Verify required jobs
         run: |
-          if [ "${{ needs.rust.result }}" != "success" ] || [ "${{ needs.ocaml.result }}" != "success" ]; then
+          if [ "${{ needs.rust.result }}" != "success" ] \
+            || [ "${{ needs.ocaml.result }}" != "success" ] \
+            || [ "${{ needs.typescript.result }}" != "success" ]; then
             echo "One or more required jobs failed."
             exit 1
           fi
