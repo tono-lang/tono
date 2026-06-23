@@ -13,3 +13,7 @@ val non_generic_applied : string
 val nullability_conflict : string
 val enum_value_duplicate : string
 val enum_backing_mismatch : string
+val constraint_type_mismatch : string
+val constraint_malformed : string
+val default_type_mismatch : string
+val default_violates_constraint : string

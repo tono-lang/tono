@@ -9,4 +9,5 @@ let check_module ~(file : Ast.file) (m : Ir.module_) :
   let ref_diags = Resolve.resolve_decls tbl file in
   let member_diags = Check_member.check_decls file in
   let enum_diags = Check_enum.check_decls file in
-  (m, dup_diags @ ref_diags @ member_diags @ enum_diags)
+  let constraint_diags = Check_constraints.check ~file m in
+  (m, dup_diags @ ref_diags @ member_diags @ enum_diags @ constraint_diags)

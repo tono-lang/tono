@@ -134,6 +134,210 @@ let enum_backing_mismatch () =
     "int-backed case missing its value" [ "TC0009" ]
     (codes "enum e { a = 1, b }")
 
+(* ── Constraint type-compatibility (TC0010) ────────────────────────────── *)
+
+(* Each core constraint on a compatible target lifts with no diagnostic. *)
+let constraints_ok () =
+  Alcotest.(check (list string))
+    "well-typed constraints" []
+    (codes
+       "struct s {\n\
+       \  a: i64 @range(min: 0, max: 9),\n\
+       \  b: string @length(min: 1, max: 3),\n\
+       \  c: string @pattern(\"^a(b)[c]$\"),\n\
+       \  d: i64 @multipleOf(2)\n\
+        }")
+
+let range_on_string () =
+  Alcotest.(check (list string))
+    "@range on a string" [ "TC0010" ]
+    (codes "struct s { x: string @range(min: 0, max: 9) }")
+
+let length_on_int () =
+  Alcotest.(check (list string))
+    "@length on an int" [ "TC0010" ]
+    (codes "struct s { x: i64 @length(min: 1) }")
+
+let pattern_on_int () =
+  Alcotest.(check (list string))
+    "@pattern on an int" [ "TC0010" ]
+    (codes "struct s { x: i64 @pattern(\"^a\") }")
+
+let multiple_on_string () =
+  Alcotest.(check (list string))
+    "@multipleOf on a string" [ "TC0010" ]
+    (codes "struct s { x: string @multipleOf(2) }")
+
+(* @length applies to bytes and collections as well as strings. *)
+let length_on_bytes () =
+  Alcotest.(check (list string))
+    "@length on bytes" []
+    (codes "struct s { x: bytes @length(min: 1) }")
+
+let length_on_list () =
+  Alcotest.(check (list string))
+    "@length on a list" []
+    (codes "struct s { x: []i64 @length(min: 1) }")
+
+let length_on_map () =
+  Alcotest.(check (list string))
+    "@length on a map" []
+    (codes "struct s { x: map[string]i64 @length(min: 1) }")
+
+(* ── Constraint well-formedness (TC0011) ───────────────────────────────── *)
+
+let range_min_gt_max () =
+  Alcotest.(check (list string))
+    "@range min > max" [ "TC0011" ]
+    (codes "struct s { x: i64 @range(min: 9, max: 0) }")
+
+let length_negative () =
+  Alcotest.(check (list string))
+    "@length with a negative bound" [ "TC0011" ]
+    (codes "struct s { x: string @length(min: -1) }")
+
+let length_inverted () =
+  Alcotest.(check (list string))
+    "@length min > max" [ "TC0011" ]
+    (codes "struct s { x: string @length(min: 3, max: 1) }")
+
+let length_max_negative () =
+  Alcotest.(check (list string))
+    "@length with a negative max" [ "TC0011" ]
+    (codes "struct s { x: string @length(max: -1) }")
+
+let multiple_non_positive () =
+  Alcotest.(check (list string))
+    "@multipleOf of zero" [ "TC0011" ]
+    (codes "struct s { x: i64 @multipleOf(0) }")
+
+let pattern_empty () =
+  Alcotest.(check (list string))
+    "empty @pattern" [ "TC0011" ]
+    (codes "struct s { x: string @pattern(\"\") }")
+
+let pattern_unbalanced () =
+  Alcotest.(check (list string))
+    "unbalanced @pattern" [ "TC0011" ]
+    (codes "struct s { x: string @pattern(\"a(b\") }")
+
+let pattern_unmatched_paren () =
+  Alcotest.(check (list string))
+    "a close paren with nothing open" [ "TC0011" ]
+    (codes "struct s { x: string @pattern(\"a)b\") }")
+
+let pattern_unmatched_bracket () =
+  Alcotest.(check (list string))
+    "a close bracket with nothing open" [ "TC0011" ]
+    (codes "struct s { x: string @pattern(\"a]b\") }")
+
+(* ── Default type (TC0012) ─────────────────────────────────────────────── *)
+
+(* A default whose type matches the member (including a non-scalar target, which
+   v1 accepts without deep typing) carries no diagnostic. *)
+let default_ok () =
+  Alcotest.(check (list string))
+    "well-typed defaults" []
+    (codes
+       "struct s { a: i64 @default(3), b: string @default(\"x\"), c: bool \
+        @default(true) }")
+
+let default_string_on_int () =
+  Alcotest.(check (list string))
+    "string default on an int" [ "TC0012" ]
+    (codes "struct s { x: i64 @default(\"x\") }")
+
+let default_int_on_string () =
+  Alcotest.(check (list string))
+    "int default on a string" [ "TC0012" ]
+    (codes "struct s { x: string @default(5) }")
+
+let default_string_on_float () =
+  Alcotest.(check (list string))
+    "string default on a float" [ "TC0012" ]
+    (codes "struct s { x: float @default(\"x\") }")
+
+(* An int literal is a valid float default. *)
+let default_int_on_float () =
+  Alcotest.(check (list string))
+    "int default on a float" []
+    (codes "struct s { x: float @default(3) }")
+
+(* ── Default constraint satisfaction (TC0013) ──────────────────────────── *)
+
+(* A default within its range and a float default exercise the numeric path. *)
+let default_in_range () =
+  Alcotest.(check (list string))
+    "default inside the range" []
+    (codes "struct s { x: i64 @range(min: 0, max: 9) @default(5) }")
+
+let default_below_range () =
+  Alcotest.(check (list string))
+    "default below the range" [ "TC0013" ]
+    (codes "struct s { x: i64 @range(min: 10) @default(5) }")
+
+let default_float_above_range () =
+  Alcotest.(check (list string))
+    "float default above the range" [ "TC0013" ]
+    (codes "struct s { x: float @range(min: 0, max: 1) @default(2.5) }")
+
+let default_not_multiple () =
+  Alcotest.(check (list string))
+    "default not a multiple" [ "TC0013" ]
+    (codes "struct s { x: i64 @multipleOf(3) @default(5) }")
+
+let default_length_violation () =
+  Alcotest.(check (list string))
+    "default longer than @length max" [ "TC0013" ]
+    (codes "struct s { x: string @length(max: 2) @default(\"abcd\") }")
+
+let default_length_too_short () =
+  Alcotest.(check (list string))
+    "default shorter than @length min" [ "TC0013" ]
+    (codes "struct s { x: string @length(min: 3) @default(\"ab\") }")
+
+(* A @pattern with a default is left unchecked (no regex engine), so a default
+   that matches the type stays silent. *)
+let default_with_pattern () =
+  Alcotest.(check (list string))
+    "default alongside a pattern" []
+    (codes "struct s { x: string @pattern(\"^a\") @default(\"anything\") }")
+
+(* A default that satisfies @multipleOf and one whose length is within @length
+   bounds both stay silent. *)
+let default_multiple_ok () =
+  Alcotest.(check (list string))
+    "default that is a multiple" []
+    (codes "struct s { x: i64 @multipleOf(3) @default(6) }")
+
+let default_length_ok () =
+  Alcotest.(check (list string))
+    "default within length bounds" []
+    (codes "struct s { x: string @length(min: 1, max: 5) @default(\"ab\") }")
+
+(* Single-sided bounds exercise the absent-bound (None) arms of the checks. *)
+let default_range_max_only () =
+  Alcotest.(check (list string))
+    "default under a max-only range" []
+    (codes "struct s { x: i64 @range(max: 10) @default(5) }")
+
+let default_length_min_only () =
+  Alcotest.(check (list string))
+    "default over a min-only length" []
+    (codes "struct s { x: string @length(min: 1) @default(\"abc\") }")
+
+(* When the constraint is itself type-incompatible (TC0010), a type-matched
+   default cannot be range/length-checked, so only the constraint error stands. *)
+let default_non_numeric_with_range () =
+  Alcotest.(check (list string))
+    "string default under a misapplied @range" [ "TC0010" ]
+    (codes "struct s { x: string @range(min: 0) @default(\"a\") }")
+
+let default_numeric_with_length () =
+  Alcotest.(check (list string))
+    "int default under a misapplied @length" [ "TC0010" ]
+    (codes "struct s { x: i64 @length(min: 1) @default(5) }")
+
 let () =
   Alcotest.run "typecheck"
     [
@@ -170,5 +374,59 @@ let () =
           Alcotest.test_case "duplicate name" `Quick enum_duplicate_name;
           Alcotest.test_case "duplicate int" `Quick enum_duplicate_int;
           Alcotest.test_case "backing mismatch" `Quick enum_backing_mismatch;
+        ] );
+      ( "constraints",
+        [
+          Alcotest.test_case "constraints ok" `Quick constraints_ok;
+          Alcotest.test_case "range on string" `Quick range_on_string;
+          Alcotest.test_case "length on int" `Quick length_on_int;
+          Alcotest.test_case "pattern on int" `Quick pattern_on_int;
+          Alcotest.test_case "multipleOf on string" `Quick multiple_on_string;
+          Alcotest.test_case "length on bytes" `Quick length_on_bytes;
+          Alcotest.test_case "length on list" `Quick length_on_list;
+          Alcotest.test_case "length on map" `Quick length_on_map;
+          Alcotest.test_case "range min>max" `Quick range_min_gt_max;
+          Alcotest.test_case "length negative" `Quick length_negative;
+          Alcotest.test_case "length max negative" `Quick length_max_negative;
+          Alcotest.test_case "length inverted" `Quick length_inverted;
+          Alcotest.test_case "multipleOf non-positive" `Quick
+            multiple_non_positive;
+          Alcotest.test_case "pattern empty" `Quick pattern_empty;
+          Alcotest.test_case "pattern unbalanced" `Quick pattern_unbalanced;
+          Alcotest.test_case "pattern unmatched paren" `Quick
+            pattern_unmatched_paren;
+          Alcotest.test_case "pattern unmatched bracket" `Quick
+            pattern_unmatched_bracket;
+        ] );
+      ( "defaults",
+        [
+          Alcotest.test_case "default ok" `Quick default_ok;
+          Alcotest.test_case "string default on int" `Quick
+            default_string_on_int;
+          Alcotest.test_case "int default on string" `Quick
+            default_int_on_string;
+          Alcotest.test_case "string default on float" `Quick
+            default_string_on_float;
+          Alcotest.test_case "int default on float" `Quick default_int_on_float;
+          Alcotest.test_case "default in range" `Quick default_in_range;
+          Alcotest.test_case "default below range" `Quick default_below_range;
+          Alcotest.test_case "float default above range" `Quick
+            default_float_above_range;
+          Alcotest.test_case "default not multiple" `Quick default_not_multiple;
+          Alcotest.test_case "default length violation" `Quick
+            default_length_violation;
+          Alcotest.test_case "default length too short" `Quick
+            default_length_too_short;
+          Alcotest.test_case "default with pattern" `Quick default_with_pattern;
+          Alcotest.test_case "default multiple ok" `Quick default_multiple_ok;
+          Alcotest.test_case "default length ok" `Quick default_length_ok;
+          Alcotest.test_case "default range max only" `Quick
+            default_range_max_only;
+          Alcotest.test_case "default length min only" `Quick
+            default_length_min_only;
+          Alcotest.test_case "string default with range" `Quick
+            default_non_numeric_with_range;
+          Alcotest.test_case "int default with length" `Quick
+            default_numeric_with_length;
         ] );
     ]
