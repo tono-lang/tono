@@ -19,7 +19,7 @@ pub struct Import {
 
 /// The kind of a symbol, so the casing transform can pick the idiomatic default
 /// casing for the position the symbol appears in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SymbolKind {
     Type,
     Field,

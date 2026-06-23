@@ -7,9 +7,11 @@
 //! module owns the language-agnostic core; per-language Symbol tables and render
 //! rules are supplied by target backends.
 
+pub mod casing;
 pub mod imports;
 pub mod symbol;
 pub mod tree;
 
+pub use casing::{CaseStyle, CasingConfig};
 pub use symbol::{Import, Symbol, SymbolKind};
 pub use tree::{Decl, EnumDecl, Field, File, Interface, Method, TypeExpr, UnionDecl, Variant};
