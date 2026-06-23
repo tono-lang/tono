@@ -11,7 +11,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::codegen::symbol::{Import, Symbol};
-use crate::codegen::tree::{Decl, File, TypeExpr};
+use crate::codegen::tree::{Decl, Field, File, FnBody, TypeExpr};
 
 /// Collect the deduplicated, deterministically-ordered import set of a file.
 ///
@@ -38,49 +38,67 @@ fn walk_decl(
     visited: &mut HashSet<(String, Option<Import>)>,
 ) {
     match decl {
-        Decl::Interface(interface) => {
-            for field in &interface.fields {
-                walk_type(&field.ty, acc, visited);
-            }
-        }
+        Decl::Interface(interface) => walk_fields(&interface.fields, acc, visited),
         Decl::Union(union) => {
             for variant in &union.variants {
-                for field in &variant.fields {
-                    walk_type(&field.ty, acc, visited);
-                }
-                if let Some(payload) = &variant.payload {
-                    walk_type(payload, acc, visited);
-                }
+                walk_fields(&variant.fields, acc, visited);
+                walk_opt_type(variant.payload.as_ref(), acc, visited);
             }
         }
-        Decl::Method(method) => {
-            for param in &method.params {
-                walk_type(&param.ty, acc, visited);
-            }
-            if let Some(ret) = &method.ret {
-                walk_type(ret, acc, visited);
-            }
-        }
+        Decl::Method(method) => walk_signature(&method.params, method.ret.as_ref(), acc, visited),
         Decl::Function(function) => {
-            for param in &function.params {
-                walk_type(&param.ty, acc, visited);
-            }
-            if let Some(ret) = &function.ret {
-                walk_type(ret, acc, visited);
-            }
-            // The body statements are opaque text, but the symbols they
-            // reference are declared so their imports are still collected.
-            match &function.body {
-                crate::codegen::tree::FnBody::Raw { refs, .. } => {
-                    for symbol in refs {
-                        collect_symbol(symbol, acc, visited);
-                    }
-                }
-            }
+            walk_signature(&function.params, function.ret.as_ref(), acc, visited);
+            walk_body(&function.body, acc, visited);
         }
         // Enum members and the enum's own name are identifiers, and an alias's
         // definition is opaque text: neither contributes imports.
         Decl::Enum(_) | Decl::Alias(_) => {}
+    }
+}
+
+fn walk_fields(
+    fields: &[Field],
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    for field in fields {
+        walk_type(&field.ty, acc, visited);
+    }
+}
+
+fn walk_signature(
+    params: &[Field],
+    ret: Option<&TypeExpr>,
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    walk_fields(params, acc, visited);
+    walk_opt_type(ret, acc, visited);
+}
+
+fn walk_opt_type(
+    ty: Option<&TypeExpr>,
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    if let Some(ty) = ty {
+        walk_type(ty, acc, visited);
+    }
+}
+
+// A function body's statements are opaque text, but the symbols they reference
+// are declared so their imports are still collected.
+fn walk_body(
+    body: &FnBody,
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    match body {
+        FnBody::Raw { refs, .. } => {
+            for symbol in refs {
+                collect_symbol(symbol, acc, visited);
+            }
+        }
     }
 }
 
