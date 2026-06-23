@@ -46,7 +46,10 @@ let diag_to_string () =
     (Diagnostic.to_string (Diagnostic.error some_span "boom"));
   Alcotest.(check string)
     "warning renders" "1:1-5: warning: careful"
-    (Diagnostic.to_string (Diagnostic.warning some_span "careful"))
+    (Diagnostic.to_string (Diagnostic.warning some_span "careful"));
+  Alcotest.(check string)
+    "code prefixes the message" "1:1-5: error: TC0001: boom"
+    (Diagnostic.to_string (Diagnostic.error ~code:"TC0001" some_span "boom"))
 
 (* ── Token descriptions ────────────────────────────────────────────────── *)
 

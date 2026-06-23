@@ -198,13 +198,8 @@ let lower_member ~params ~diags (m : Ast.member) : Ir.member =
     (fun (tr : Ast.trait) ->
       match tr.tname with
       | "required" ->
-          if nullable then
-            report diags
-              (Diagnostic.error m.mname_span
-                 (Printf.sprintf
-                    "@required on the nullable member '%s' is contradictory; \
-                     drop the '?' or the @required"
-                    m.mname));
+          (* The nullable-vs-required conflict is a semantic check the
+             typechecker reports (TC0007); lowering only records the state. *)
           required := true
       | "default" ->
           let v = match tr.targs with a :: _ -> json_of_arg a | [] -> `Null in
@@ -301,11 +296,8 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
               report diags
                 (Diagnostic.error c.cname_span
                    "enum case traits are not supported");
-            if int_backed && c.cint = None then
-              report diags
-                (Diagnostic.error c.cname_span
-                   "every case of an int-backed enum needs an explicit '= \
-                    value'");
+            (* Backing consistency (an int-backed case missing its value) is a
+               semantic check the typechecker reports (TC0009). *)
             (c.cname, c.cint))
           cases
       in

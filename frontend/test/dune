@@ -10,5 +10,6 @@
   parse_error_test
   decl_test
   file_test
-  golden_test)
+  golden_test
+  typecheck_test)
  (libraries tono_frontend alcotest qcheck-core qcheck-core.runner yojson))

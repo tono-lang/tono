@@ -48,9 +48,16 @@ let enum_negative () =
     {|{"backing":"int","id":"sign","kind":"enum","traits":[],"values":[["neg",-1],["zero",0]]}|}
     (shape_json shape)
 
+(* Lowering records the (possibly inconsistent) backing without judging it; the
+   missing int value on an int-backed enum is the typechecker's concern (TC0009),
+   so lowering produces the value list with [b] carrying no explicit value. *)
 let enum_int_missing_value () =
-  let _, ds = run Parser.parse_enum "enum mixed { a = 1, b }" in
-  Alcotest.(check bool) "missing int value diagnosed" true (List.length ds >= 1)
+  let shape, ds = run Parser.parse_enum "enum mixed { a = 1, b }" in
+  Alcotest.(check int) "lowering does not judge backing" 0 (List.length ds);
+  Alcotest.(check string)
+    "value list keeps b without a value"
+    {|{"backing":"int","id":"mixed","kind":"enum","traits":[],"values":[["a",1],["b",null]]}|}
+    (shape_json shape)
 
 let enum_case_snake () =
   let _, ds = run Parser.parse_enum "enum e { Active }" in
