@@ -1,6 +1,7 @@
 (* Resolve every type reference in a file against the symbol table plus the
    in-scope generic parameters of the enclosing shape. An unresolved name is a
-   TC0001. Arity of a generic application is checked in a later phase. *)
+   TC0001; a generic applied with the wrong number of arguments is a TC0004; type
+   arguments on a non-generic shape or a type parameter are a TC0005. *)
 
 (* Resolve a single surface type; [params] are the type-parameter names in scope
    of the enclosing shape. *)

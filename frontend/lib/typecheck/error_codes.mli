@@ -3,3 +3,8 @@
 
 val unknown_type : string
 val duplicate_shape : string
+
+(* TC0003 is intentionally unused: type-parameter scope is resolved during
+   lowering, so an out-of-scope name surfaces as [unknown_type]. *)
+val generic_arity_mismatch : string
+val non_generic_applied : string

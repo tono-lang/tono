@@ -11,5 +11,5 @@ type t
    definition wins so later lookups resolve to it. *)
 val build : Ast.file -> t * Diagnostic.t list
 
-(* Whether a name is declared in the table. *)
-val mem : string -> t -> bool
+(* Look up a declared shape by name. *)
+val find : string -> t -> entry option

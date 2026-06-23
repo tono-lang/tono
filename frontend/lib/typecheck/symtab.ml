@@ -1,5 +1,5 @@
 (* Global symbol table over a single file's declarations. Cross-module resolution
-   is a later concern (PRD-12); here every shape lives in one flat namespace. *)
+   is a later concern; here every shape lives in one flat namespace. *)
 
 module SMap = Map.Make (String)
 
@@ -31,4 +31,4 @@ let build (file : Ast.file) : t * Diagnostic.t list =
             diags ))
     (SMap.empty, []) file
 
-let mem name (t : t) = SMap.mem name t
+let find name (t : t) = SMap.find_opt name t
