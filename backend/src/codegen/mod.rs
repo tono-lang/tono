@@ -20,4 +20,6 @@ pub use format::{Formatted, Formatter};
 pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};
 pub use target::{Fragment, RenderRules, Target};
-pub use tree::{Decl, EnumDecl, Field, File, Interface, Method, TypeExpr, UnionDecl, Variant};
+pub use tree::{
+    Decl, EnumDecl, Field, File, FnBody, Function, Interface, Method, TypeExpr, UnionDecl, Variant,
+};

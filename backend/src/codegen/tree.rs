@@ -24,6 +24,7 @@ pub enum Decl {
     Enum(EnumDecl),
     Union(UnionDecl),
     Method(Method),
+    Function(Function),
 }
 
 /// A product type: a named structure/interface with fields.
@@ -54,6 +55,26 @@ pub struct Method {
     pub name: Symbol,
     pub params: Vec<Field>,
     pub ret: Option<TypeExpr>,
+}
+
+/// A free function with a real body, used for generated codecs and helpers. Its
+/// signature is symbol-typed so import collection sees its parameter and return
+/// types; the body additionally declares the symbols it references so those
+/// imports are collected too, even though the body statements are target text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Function {
+    pub name: Symbol,
+    pub params: Vec<Field>,
+    pub ret: Option<TypeExpr>,
+    pub body: FnBody,
+}
+
+/// A function body. The statements are rendered text (the formatter is the
+/// layout authority), paired with the symbols the text references so the engine
+/// can still collect their imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FnBody {
+    Raw { text: String, refs: Vec<Symbol> },
 }
 
 /// An enumeration: a name and its members, each an idiomatic-cased symbol. The

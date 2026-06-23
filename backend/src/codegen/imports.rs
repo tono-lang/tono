@@ -58,6 +58,23 @@ fn walk_decl(
                 walk_type(ret, acc, visited);
             }
         }
+        Decl::Function(function) => {
+            for param in &function.params {
+                walk_type(&param.ty, acc, visited);
+            }
+            if let Some(ret) = &function.ret {
+                walk_type(ret, acc, visited);
+            }
+            // The body statements are opaque text, but the symbols they
+            // reference are declared so their imports are still collected.
+            match &function.body {
+                crate::codegen::tree::FnBody::Raw { refs, .. } => {
+                    for symbol in refs {
+                        collect_symbol(symbol, acc, visited);
+                    }
+                }
+            }
+        }
         // Enum members and the enum's own name are identifiers, not type
         // references: an enum declaration contributes no imports.
         Decl::Enum(_) => {}
@@ -106,7 +123,9 @@ fn collect_symbol(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, Method, UnionDecl, Variant};
+    use crate::codegen::tree::{
+        Decl, EnumDecl, Field, FnBody, Function, Interface, Method, UnionDecl, Variant,
+    };
 
     fn field(name: &str, ty: TypeExpr) -> Field {
         Field {
@@ -289,6 +308,27 @@ mod tests {
             ],
         };
         assert_eq!(collect(&file).len(), 2);
+    }
+
+    #[test]
+    fn function_signature_and_body_refs_contribute_imports() {
+        let file = File {
+            module: "billing".into(),
+            decls: vec![Decl::Function(Function {
+                name: Symbol::builtin("decode"),
+                params: vec![field(
+                    "raw",
+                    TypeExpr::Ref(Symbol::imported("In", "req", "In")),
+                )],
+                ret: Some(TypeExpr::Ref(Symbol::imported("Out", "resp", "Out"))),
+                body: FnBody::Raw {
+                    text: "return helper(raw);".into(),
+                    refs: vec![Symbol::imported("helper", "codecs", "helper")],
+                },
+            })],
+        };
+        // param type, return type, and the body-referenced symbol.
+        assert_eq!(collect(&file).len(), 3);
     }
 
     #[test]
