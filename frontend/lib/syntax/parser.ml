@@ -393,8 +393,8 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
         P.error st nt.span "expected an enum name";
         ""
   in
-  (* traits after the name (e.g. @open) join the shape-level traits *)
-  let dtraits = dtraits @ parse_trailing_traits st in
+  (* an enum carries no positional trait after its name (every enum is open;
+     shape-level traits like @doc are leading, handled by parse_decl) *)
   ignore (P.expect st Token.LBrace "'{' to open the enum body");
   let cases = parse_enum_cases st in
   ignore (P.expect st Token.RBrace "'}' to close the enum body");

@@ -12,8 +12,9 @@
    [result]. *)
 
 (* The IR schema revision this build understands. Bumped by one on every
-   incompatible change to the wire format; there is no negotiation. *)
-let current_ir_version = 1
+   incompatible change to the wire format; there is no negotiation.
+   v2 removed the enum [open] field (every enum is open). *)
+let current_ir_version = 2
 
 (* ── Encoding ──────────────────────────────────────────────────────────── *)
 
@@ -110,12 +111,11 @@ and encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("members", members ms);
         ("discriminator", `String discriminator);
       ]
-  | Enum { backing; values; open_ } ->
+  | Enum { backing; values } ->
       [
         ("kind", `String "enum");
         ("backing", `String (encode_backing backing));
         ("values", `List (List.map encode_enum_value values));
-        ("open", `Bool open_);
       ]
   | Service { operations } ->
       [
@@ -438,13 +438,7 @@ let decode_shape_kind kvs =
             let* xs = as_list v in
             map_result decode_enum_value xs
       in
-      let* open_ =
-        match get "open" with
-        | None -> Ok true
-        | Some (`Bool b) -> Ok b
-        | Some _ -> err "enum open flag must be a boolean"
-      in
-      Ok (Ir.Enum { backing; values; open_ })
+      Ok (Ir.Enum { backing; values })
   | "service" ->
       let* operations =
         match get "operations" with

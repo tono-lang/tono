@@ -137,9 +137,8 @@ let gen_shape_kind : Ir.shape_kind G.t =
        and+ discriminator = G.oneof_list [ "type"; "kind"; "@type" ] in
        Ir.Union { params; members; discriminator });
       (let+ backing = G.oneof_list [ `String; `Int ]
-       and+ values = G.list_size (G.int_range 0 3) gen_enum_value
-       and+ open_ = G.bool in
-       Ir.Enum { backing; values; open_ });
+       and+ values = G.list_size (G.int_range 0 3) gen_enum_value in
+       Ir.Enum { backing; values });
       (let+ operations = G.list_size (G.int_range 0 3) gen_ident in
        Ir.Service { operations });
       (let+ input = gen_opt gen_tref

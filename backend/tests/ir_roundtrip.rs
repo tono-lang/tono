@@ -108,8 +108,9 @@ fn tref_uses_flat_ref_form() {
 
 #[test]
 fn version_gate_rejects_unknown_version() {
-    assert!(decode_model(r#"{"tono_ir_version":1,"modules":[]}"#).is_ok());
-    assert!(decode_model(r#"{"tono_ir_version":2,"modules":[]}"#).is_err());
+    assert!(decode_model(r#"{"tono_ir_version":2,"modules":[]}"#).is_ok());
+    assert!(decode_model(r#"{"tono_ir_version":3,"modules":[]}"#).is_err());
+    assert!(decode_model(r#"{"tono_ir_version":1,"modules":[]}"#).is_err());
     assert!(decode_model(r#"{"tono_ir_version":0,"modules":[]}"#).is_err());
     assert!(decode_model(r#"{"modules":[]}"#).is_err());
 }
@@ -121,7 +122,7 @@ fn float_text_divergence_is_tolerated() {
     // The frontend (yojson) and backend (serde_json) format small floats with
     // different text ("1e-05" vs "0.00001"), so the contract compares JSON data,
     // not bytes: the round-trip still holds.
-    let doc = r#"{"tono_ir_version":1,"modules":[{"name":"m","operations":[],
+    let doc = r#"{"tono_ir_version":2,"modules":[{"name":"m","operations":[],
         "shapes":[{"id":"s#S","kind":"structure","params":[],"traits":[],
         "members":[{"name":"a","target":{"prim":"float"},"required":true,
         "default":1e-05,"constraints":[{"multipleOf":1e-7}],"traits":[]}]}]}]}"#;
@@ -149,7 +150,7 @@ fn large_integer_in_trait_value_is_exact() {
 
 #[test]
 fn present_null_default_survives_roundtrip() {
-    let doc = r#"{"tono_ir_version":1,"modules":[{"name":"m","operations":[],
+    let doc = r#"{"tono_ir_version":2,"modules":[{"name":"m","operations":[],
         "shapes":[{"id":"s#S","kind":"structure","params":[],"traits":[],
         "members":[{"name":"a","target":{"prim":"string"},"required":false,
         "default":null,"constraints":[],"traits":[]}]}]}]}"#;
@@ -164,7 +165,7 @@ fn present_null_default_survives_roundtrip() {
 
 #[test]
 fn absent_default_stays_absent() {
-    let doc = r#"{"tono_ir_version":1,"modules":[{"name":"m","operations":[],
+    let doc = r#"{"tono_ir_version":2,"modules":[{"name":"m","operations":[],
         "shapes":[{"id":"s#S","kind":"structure","params":[],"traits":[],
         "members":[{"name":"a","target":{"prim":"string"},"required":true,
         "constraints":[],"traits":[]}]}]}]}"#;
@@ -179,7 +180,7 @@ fn absent_default_stays_absent() {
 fn decode_tolerates_omitted_optional_fields() {
     // The frontend decoder defaults these fields; the mirror must accept the
     // same partial documents instead of rejecting them.
-    let doc = r#"{"tono_ir_version":1,"modules":[{"name":"m","shapes":[
+    let doc = r#"{"tono_ir_version":2,"modules":[{"name":"m","shapes":[
         {"id":"s#S","kind":"structure"},
         {"id":"u#U","kind":"union","members":[]},
         {"id":"e#E","kind":"enum","backing":"string"},
@@ -193,10 +194,10 @@ fn decode_tolerates_omitted_optional_fields() {
         _ => panic!("expected a union"),
     }
     match &shapes[2].kind {
-        ShapeKind::Enum { open, .. } => assert!(*open, "open defaults true"),
+        ShapeKind::Enum { .. } => (),
         _ => panic!("expected an enum"),
     }
-    assert!(decode_model(r#"{"tono_ir_version":1}"#).is_ok());
+    assert!(decode_model(r#"{"tono_ir_version":2}"#).is_ok());
 }
 
 #[test]
@@ -245,7 +246,7 @@ fn no_mixin_construct() {
 #[test]
 fn sentinel_missing_required_field_fails_decode() {
     // A member without its `required` field must be refused, not defaulted.
-    let bad = r#"{"tono_ir_version":1,"modules":[{"name":"m","operations":[],
+    let bad = r#"{"tono_ir_version":2,"modules":[{"name":"m","operations":[],
         "shapes":[{"id":"x#Y","kind":"structure","params":[],"traits":[],
         "members":[{"name":"a","target":{"prim":"bool"},"constraints":[],"traits":[]}]}]}]}"#;
     assert!(
@@ -293,7 +294,7 @@ fn bin_accepts_a_matching_fixture() {
 
 #[test]
 fn bin_fails_on_bad_input() {
-    let out = run_mirror_bin(r#"{"tono_ir_version":2,"modules":[]}"#);
+    let out = run_mirror_bin(r#"{"tono_ir_version":999,"modules":[]}"#);
     assert!(!out.status.success(), "wrong version must exit non-zero");
 }
 

@@ -133,7 +133,7 @@ let index_resolves () =
   in
   let m : Ir.model =
     {
-      tono_ir_version = 1;
+      tono_ir_version = Ir_json.current_ir_version;
       modules =
         [ { mod_name = "payments"; shapes = [ s ]; operations = [ op ] } ];
     }
@@ -429,11 +429,7 @@ let enum_shape : Ir.shape =
     id = "payments#Status";
     kind =
       Ir.Enum
-        {
-          backing = `String;
-          values = [ ("active", None); ("closed", None) ];
-          open_ = true;
-        };
+        { backing = `String; values = [ ("active", None); ("closed", None) ] };
     traits = [];
   }
 
@@ -441,12 +437,7 @@ let int_enum_shape : Ir.shape =
   {
     id = "payments#Code";
     kind =
-      Ir.Enum
-        {
-          backing = `Int;
-          values = [ ("ok", Some 0); ("fail", Some 1) ];
-          open_ = false;
-        };
+      Ir.Enum { backing = `Int; values = [ ("ok", Some 0); ("fail", Some 1) ] };
     traits = [];
   }
 
@@ -491,7 +482,7 @@ let shape_suite =
     roundtrip_shape "structure" struct_shape;
     roundtrip_shape "generic structure" generic_struct;
     roundtrip_shape "union" union_shape;
-    roundtrip_shape "string enum (open)" enum_shape;
+    roundtrip_shape "string enum" enum_shape;
     roundtrip_shape "int enum (closed)" int_enum_shape;
     roundtrip_shape "service" service_shape;
     roundtrip_shape "operation" operation_shape;
@@ -554,7 +545,7 @@ let negative_suite =
     decode_fails "constraint multiple keys" ~decode:Ir_json.decode_constraint
       (`Assoc [ ("pattern", `String "x"); ("multipleOf", `Float 1.) ]);
     decode_fails "model wrong version" ~decode:Ir_json.decode_model
-      (`Assoc [ ("tono_ir_version", `Int 2); ("modules", `List []) ]);
+      (`Assoc [ ("tono_ir_version", `Int 999); ("modules", `List []) ]);
     decode_fails "model missing version" ~decode:Ir_json.decode_model
       (`Assoc [ ("modules", `List []) ]);
   ]

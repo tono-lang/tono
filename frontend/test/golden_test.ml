@@ -45,7 +45,6 @@ op origin(): point
                 {
                   backing = `String;
                   values = [ ("north", None); ("south", None) ];
-                  open_ = false;
                 };
             traits = [];
           };
@@ -81,7 +80,6 @@ let rich_roundtrip () =
   note: string?
 }
 
-@open
 enum currency { usd, eur }
 
 enum http_code { ok = 200, error = 500 }

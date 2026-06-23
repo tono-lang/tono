@@ -289,8 +289,6 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
         traits = bag rest;
       }
   | Ast.DEnum { cases } ->
-      let open_traits, rest = take_trait "open" d.dtraits in
-      let open_ = open_traits <> [] in
       let int_backed =
         List.exists (fun (c : Ast.enum_case) -> c.cint <> None) cases
       in
@@ -313,8 +311,8 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
       in
       {
         Ir.id = d.dname;
-        kind = Ir.Enum { backing; values; open_ };
-        traits = bag rest;
+        kind = Ir.Enum { backing; values };
+        traits = bag d.dtraits;
       }
   | Ast.DOp { input; output } ->
       let lower_opt = Option.map (lower_type ~params:[] ~diags) in

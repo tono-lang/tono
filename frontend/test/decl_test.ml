@@ -27,7 +27,7 @@ let enum_string_backed () =
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   Alcotest.(check string)
     "string enum"
-    {|{"backing":"string","id":"status","kind":"enum","open":false,"traits":[],"values":[["active",null],["closed",null]]}|}
+    {|{"backing":"string","id":"status","kind":"enum","traits":[],"values":[["active",null],["closed",null]]}|}
     (shape_json shape)
 
 let enum_int_backed () =
@@ -37,19 +37,7 @@ let enum_int_backed () =
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   Alcotest.(check string)
     "int enum"
-    {|{"backing":"int","id":"http_code","kind":"enum","open":false,"traits":[],"values":[["ok",200],["fail",500]]}|}
-    (shape_json shape)
-
-let enum_open () =
-  let shape, ds =
-    run
-      ~dtraits:[ one_trait "@open" ]
-      Parser.parse_enum "enum currency { usd, eur }"
-  in
-  Alcotest.(check int) "no diagnostics" 0 (List.length ds);
-  Alcotest.(check string)
-    "open enum"
-    {|{"backing":"string","id":"currency","kind":"enum","open":true,"traits":[],"values":[["usd",null],["eur",null]]}|}
+    {|{"backing":"int","id":"http_code","kind":"enum","traits":[],"values":[["ok",200],["fail",500]]}|}
     (shape_json shape)
 
 let enum_negative () =
@@ -57,7 +45,7 @@ let enum_negative () =
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   Alcotest.(check string)
     "negative int-backed enum"
-    {|{"backing":"int","id":"sign","kind":"enum","open":false,"traits":[],"values":[["neg",-1],["zero",0]]}|}
+    {|{"backing":"int","id":"sign","kind":"enum","traits":[],"values":[["neg",-1],["zero",0]]}|}
     (shape_json shape)
 
 let enum_int_missing_value () =
@@ -212,7 +200,6 @@ let () =
           Alcotest.test_case "string backed" `Quick enum_string_backed;
           Alcotest.test_case "int backed" `Quick enum_int_backed;
           Alcotest.test_case "negative values" `Quick enum_negative;
-          Alcotest.test_case "open" `Quick enum_open;
           Alcotest.test_case "int missing value" `Quick enum_int_missing_value;
           Alcotest.test_case "case snake_case" `Quick enum_case_snake;
           Alcotest.test_case "case traits rejected" `Quick

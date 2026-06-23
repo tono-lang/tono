@@ -75,10 +75,9 @@ and shape_kind =
   | Enum of {
       backing : [ `String | `Int ];
       values : (string * int option) list;
-      open_ : bool;
     }
-    (* open enums record the flag only; the Unknown
-                                 variant is a backend decode-time concern *)
+    (* every enum is open; the Unknown(raw) variant is a backend decode-time
+       concern and is not materialized here *)
   | Service of { operations : shape_id list }
   | Operation of {
       input : tref option;
