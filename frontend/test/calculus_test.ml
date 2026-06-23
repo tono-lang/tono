@@ -406,6 +406,60 @@ let check_errors () =
   chk "lookup wrong key" [ "CA0003" ]
     "fn f(c: cart) -> i64 = get_or(c.tags, 1, 0)"
 
+(* ── Reference numeric semantics (golden vectors) ──────────────────────── *)
+
+let i64 n = Int64.of_int n
+let eqi label exp got = Alcotest.(check int64) label (i64 exp) got
+
+let num_wrap () =
+  let open Calc_eval.Num in
+  eqi "i8 127+1" (-128) (add ~bits:8 ~signed:true (i64 127) 1L);
+  eqi "u8 255+1" 0 (add ~bits:8 ~signed:false (i64 255) 1L);
+  eqi "i8 -128-1" 127 (sub ~bits:8 ~signed:true (i64 (-128)) 1L);
+  eqi "u8 0-1" 255 (sub ~bits:8 ~signed:false 0L 1L);
+  eqi "i16 mul wraps" (-2) (mul ~bits:16 ~signed:true (i64 32767) 2L);
+  eqi "u16 wrap" 0 (mul ~bits:16 ~signed:false (i64 65536) 1L);
+  eqi "i64 add" 3 (add ~bits:64 ~signed:true 1L 2L)
+
+let num_div () =
+  let open Calc_eval.Num in
+  let d a b = div ~bits:32 ~signed:true (i64 a) (i64 b) in
+  let m a b = rem ~bits:32 ~signed:true (i64 a) (i64 b) in
+  eqi "7/3" 2 (d 7 3);
+  eqi "7%3" 1 (m 7 3);
+  eqi "-7/3" (-2) (d (-7) 3);
+  eqi "-7%3" (-1) (m (-7) 3);
+  eqi "7/-3" (-2) (d 7 (-3));
+  eqi "7%-3" 1 (m 7 (-3));
+  eqi "-7/-3" 2 (d (-7) (-3));
+  eqi "-7%-3" (-1) (m (-7) (-3));
+  Alcotest.(check int64)
+    "identity (a/b)*b+a%b" (i64 (-7))
+    (Int64.add (Int64.mul (d (-7) 3) 3L) (m (-7) 3));
+  eqi "INT_MIN / -1 wraps" (-2147483648)
+    (div ~bits:32 ~signed:true (i64 (-2147483648)) (-1L));
+  eqi "div by zero is defensive 0" 0 (d 5 0);
+  eqi "rem by zero is defensive 0" 0 (m 5 0);
+  (* unsigned division differs from signed on the high bit *)
+  eqi "u8 200/3" 66 (div ~bits:8 ~signed:false (i64 200) 3L)
+
+let num_coerce () =
+  let open Calc_eval.Num in
+  let oi = Alcotest.(check (option int64)) in
+  oi "to_int 3.9" (Some 3L) (to_int 3.9);
+  oi "to_int -3.9" (Some (-3L)) (to_int (-3.9));
+  oi "to_int nan" None (to_int nan);
+  oi "to_int +inf" None (to_int infinity);
+  oi "to_int -inf" None (to_int neg_infinity);
+  Alcotest.(check (float 0.0)) "to_float 5" 5.0 (to_float ~signed:true 5L);
+  let big = Int64.add (Int64.shift_left 1L 53) 1L in
+  Alcotest.(check bool)
+    "lossy above 2^53" true
+    (to_float ~signed:true big = 9007199254740992.0);
+  Alcotest.(check bool)
+    "u64 to_float treats bits as unsigned" true
+    (to_float ~signed:false (-1L) > 9.0e18)
+
 (* Exercise the type system's rendering and compatibility directly. *)
 let types_unit () =
   let open Calc_types in
@@ -461,6 +515,12 @@ let () =
   Alcotest.run "calculus"
     [
       ("types", [ Alcotest.test_case "rendering and compat" `Quick types_unit ]);
+      ( "eval",
+        [
+          Alcotest.test_case "wrapping" `Quick num_wrap;
+          Alcotest.test_case "truncated div/mod" `Quick num_div;
+          Alcotest.test_case "coercions" `Quick num_coerce;
+        ] );
       ( "lexer",
         [
           Alcotest.test_case "operators" `Quick lexer_ops;
