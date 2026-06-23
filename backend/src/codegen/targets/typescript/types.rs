@@ -36,11 +36,11 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     match &shape.kind {
         ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
-            name: type_name(&shape.id, config),
+            name: type_name(shape, config),
             fields: members.iter().map(|m| field_of(m, config)).collect(),
         })],
         ShapeKind::Enum { values, .. } => vec![Decl::Enum(EnumDecl {
-            name: type_name(&shape.id, config),
+            name: type_name(shape, config),
             // Open-enum literals are wire tags, kept verbatim (not cased).
             members: values
                 .iter()
@@ -52,13 +52,16 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
             discriminator,
             ..
         } => vec![Decl::Union(UnionDecl {
-            name: type_name(&shape.id, config),
+            name: type_name(shape, config),
             discriminator: discriminator.clone(),
             variants: members.iter().map(variant_of).collect(),
         })],
         _ => vec![],
     }
 }
+
+/// The TypeScript language key for per-language traits such as `@rename`.
+const TS_LANG: &str = "typescript";
 
 /// Build a union variant: the tag is the member name (overridable by `@wire`),
 /// and the payload is the referenced type the discriminator object intersects
@@ -73,26 +76,47 @@ fn variant_of(member: &Member) -> Variant {
 }
 
 /// The PascalCase symbol for a shape's own name (defined locally, so not
-/// imported), derived from the canonical name after the `module#` prefix.
-fn type_name(id: &str, config: &CasingConfig) -> Symbol {
-    let local = id.rsplit('#').next().unwrap_or(id);
-    Symbol::builtin(casing::transform(local, SymbolKind::Type, config, None))
+/// imported), derived from the canonical name after the `module#` prefix. A
+/// `@rename` for TypeScript overrides the identifier.
+fn type_name(shape: &Shape, config: &CasingConfig) -> Symbol {
+    let local = shape.id.rsplit('#').next().unwrap_or(&shape.id);
+    let rename = rename_of(&shape.traits);
+    Symbol::builtin(casing::transform(
+        local,
+        SymbolKind::Type,
+        config,
+        rename.as_deref(),
+    ))
 }
 
-/// Build a field node: a camelCased identifier, the field's type expression,
-/// nullability from `required`, and any `@wire` serialization-key override.
+/// Build a field node: a camelCased identifier (overridable by `@rename` for
+/// TypeScript), the field's type expression, nullability from `required`, and
+/// any `@wire` serialization-key override. The `@rename` and `@wire` axes are
+/// independent: one changes the identifier, the other the wire key.
 fn field_of(member: &Member, config: &CasingConfig) -> Field {
+    let rename = rename_of(&member.traits);
     Field {
         name: Symbol::builtin(casing::transform(
             &member.name,
             SymbolKind::Field,
             config,
-            None,
+            rename.as_deref(),
         )),
         ty: type_expr_of(&member.target),
         nullable: !member.required,
         wire: wire_of(&member.traits),
     }
+}
+
+/// Read the `@rename` identifier override for TypeScript (trait id `core#rename`,
+/// a value object keyed by language) from a trait set.
+fn rename_of(traits: &[crate::ir::Trait]) -> Option<String> {
+    traits
+        .iter()
+        .find(|t| t.id == "core#rename")
+        .and_then(|t| t.value.get(TS_LANG))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 /// Read the `@wire` override (trait id `core#wire`) from a member's traits.
@@ -192,6 +216,51 @@ mod tests {
         assert!(matches!(&decls[..], [Decl::Interface(i)]
             if i.fields[0].name.name == "amountCents"
                 && i.fields[0].wire.as_deref() == Some("amount")));
+    }
+
+    #[test]
+    fn rename_overrides_the_identifier_independently_of_wire() {
+        let mut m = member("amount_cents", Tref::Prim(Prim::I64), true);
+        m.traits = vec![
+            Trait {
+                id: "core#rename".into(),
+                value: json!({ "typescript": "amountCentsV2" }),
+            },
+            Trait {
+                id: "core#wire".into(),
+                value: json!("amount"),
+            },
+        ];
+        let shape = Shape {
+            id: "billing#charge".into(),
+            kind: ShapeKind::Structure {
+                params: vec![],
+                members: vec![m],
+            },
+            traits: vec![Trait {
+                id: "core#rename".into(),
+                value: json!({ "typescript": "Invoice" }),
+            }],
+        };
+        let decls = emit_type(&shape, &ts_casing());
+        assert!(matches!(&decls[..], [Decl::Interface(i)]
+            if i.name.name == "Invoice"
+                && i.fields[0].name.name == "amountCentsV2"
+                && i.fields[0].wire.as_deref() == Some("amount")));
+    }
+
+    #[test]
+    fn rename_for_another_language_is_ignored() {
+        let mut m = member("amount_cents", Tref::Prim(Prim::I64), true);
+        m.traits = vec![Trait {
+            id: "core#rename".into(),
+            value: json!({ "rust": "amount_cents" }),
+        }];
+        let shape = structure("billing#charge", vec![m]);
+        let decls = emit_type(&shape, &ts_casing());
+        // No TypeScript rename, so the camelCase default applies.
+        assert!(matches!(&decls[..], [Decl::Interface(i)]
+            if i.fields[0].name.name == "amountCents"));
     }
 
     #[test]
