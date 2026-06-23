@@ -121,6 +121,9 @@ impl RenderRules for TsRules {
                 format!("export type {} = {};", decl.name.name, arms.join(" | "))
             }
             Decl::Function(function) => self.render_function(function),
+            Decl::Alias(alias) => {
+                format!("export type {} = {};", alias.name.name, alias.value)
+            }
             // Operation-stub methods are emitted by a later phase.
             Decl::Method(_) => String::new(),
         }

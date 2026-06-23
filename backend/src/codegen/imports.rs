@@ -78,9 +78,9 @@ fn walk_decl(
                 }
             }
         }
-        // Enum members and the enum's own name are identifiers, not type
-        // references: an enum declaration contributes no imports.
-        Decl::Enum(_) => {}
+        // Enum members and the enum's own name are identifiers, and an alias's
+        // definition is opaque text: neither contributes imports.
+        Decl::Enum(_) | Decl::Alias(_) => {}
     }
 }
 

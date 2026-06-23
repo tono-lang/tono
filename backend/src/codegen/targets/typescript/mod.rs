@@ -3,6 +3,7 @@
 //! nullable, i64-as-string, bytes-as-base64, branded well-known types).
 
 pub mod codecs;
+pub mod emit;
 pub mod render;
 pub mod symbols;
 pub mod types;

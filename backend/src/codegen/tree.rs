@@ -25,6 +25,16 @@ pub enum Decl {
     Union(UnionDecl),
     Method(Method),
     Function(Function),
+    Alias(Alias),
+}
+
+/// A named type alias whose definition is target text (e.g. a branded
+/// well-known type). The definition references no symbols the engine must
+/// import, so it carries none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alias {
+    pub name: Symbol,
+    pub value: String,
 }
 
 /// A product type: a named structure/interface with fields.

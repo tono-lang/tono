@@ -40,7 +40,8 @@ mod tests {
     use crate::codegen::symbol::{Import, Symbol};
     use crate::codegen::target::{Fragment, Target};
     use crate::codegen::tree::{
-        Decl, EnumDecl, Field, FnBody, Function, Interface, Method, TypeExpr, UnionDecl, Variant,
+        Alias, Decl, EnumDecl, Field, FnBody, Function, Interface, Method, TypeExpr, UnionDecl,
+        Variant,
     };
     use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
     use serde_json::{json, Value};
@@ -138,6 +139,9 @@ mod tests {
                     let sig = self.render_sig(&function.params, &function.ret);
                     let FnBody::Raw { text, .. } = &function.body;
                     format!("pub fn {}{sig} {{ {text} }}", function.name.name)
+                }
+                Decl::Alias(alias) => {
+                    format!("pub type {} = {};", alias.name.name, alias.value)
                 }
             }
         }
@@ -280,6 +284,15 @@ mod tests {
             out.text,
             "use alpha::A;\nuse zeta::Z;\n\npub struct Invoice {\n    a: A,\n    z: Z,\n}\n"
         );
+    }
+
+    #[test]
+    fn an_alias_renders_as_a_type_definition() {
+        let alias = Decl::Alias(Alias {
+            name: Symbol::builtin("Uuid"),
+            value: "String".into(),
+        });
+        assert_eq!(RustRules.render_decl(&alias), "pub type Uuid = String;");
     }
 
     #[test]
