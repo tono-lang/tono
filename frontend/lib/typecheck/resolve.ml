@@ -9,7 +9,11 @@ let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
    separately). [name] is a type parameter, a declared shape, or unknown. *)
 let resolve_head ~params ~(tbl : Symtab.t) name n_args span : Diagnostic.t list
     =
-  if List.mem name params then
+  if String.equal name "decimal" then
+    (* [decimal] is rejected during lowering with bespoke guidance (model money
+       as minor units, or use float); do not also flag it as a generic unknown. *)
+    []
+  else if List.mem name params then
     (* A type parameter is opaque: bare use resolves, but it has no parameters of
        its own, so applying type arguments to it is non-generic application. *)
     if n_args = 0 then []

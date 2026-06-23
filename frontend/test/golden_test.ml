@@ -84,10 +84,16 @@ enum currency { usd, eur }
 
 enum http_code { ok = 200, error = 500 }
 
+struct card { last4: string }
+
+struct bank_account { iban: string }
+
 @discriminator("kind")
 union source { card(card), bank(bank_account) }
 
 struct page[t] { items: []t, next: string? }
+
+struct not_found { message: string }
 
 op create_charge(charge): charge @errors(not_found)
 |}
@@ -96,7 +102,16 @@ op create_charge(charge): charge @errors(not_found)
   Alcotest.(check int) "compiles cleanly" 0 (List.length ds);
   Alcotest.(check (list string))
     "shape ids"
-    [ "charge"; "currency"; "http_code"; "source"; "page" ]
+    [
+      "charge";
+      "currency";
+      "http_code";
+      "card";
+      "bank_account";
+      "source";
+      "page";
+      "not_found";
+    ]
     (List.map (fun (s : Ir.shape) -> s.id) m.shapes);
   Alcotest.(check (list string))
     "operation ids" [ "create_charge" ]

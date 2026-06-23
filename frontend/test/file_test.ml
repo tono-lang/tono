@@ -26,7 +26,10 @@ let multi_decl () =
     {|
 struct charge { id: uuid, amount: i64 }
 enum status { active, closed }
+struct card { last4: string }
+struct bank_account { iban: string }
 union source { card(card), bank(bank_account) }
+struct page[t] { items: []t }
 op list_charges(): page[charge]
 |}
   in
@@ -35,7 +38,7 @@ op list_charges(): page[charge]
   Alcotest.(check string) "module name" "m" m.mod_name;
   Alcotest.(check (list string))
     "shapes in order"
-    [ "charge"; "status"; "source" ]
+    [ "charge"; "status"; "card"; "bank_account"; "source"; "page" ]
     (shape_ids m);
   Alcotest.(check (list string)) "operations" [ "list_charges" ] (op_ids m)
 

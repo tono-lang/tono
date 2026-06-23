@@ -1,7 +1,7 @@
 open Tono_frontend
 
-(* Parse + lower a snippet, then run the typecheck pass, returning its
-   diagnostics (the pass is exposed directly; it is not yet wired into compile). *)
+(* Parse + lower a snippet, then run the typecheck pass directly, returning its
+   diagnostics in isolation from lowering's own (which the helper discards). *)
 let check src =
   let file, _ = Parser.parse src in
   let diags = ref [] in
@@ -56,6 +56,11 @@ let union_payload_resolved () =
 let malformed_type_silent () =
   Alcotest.(check (list string)) "no codes" [] (codes "struct a { x: }")
 
+(* [decimal] is rejected during lowering with bespoke guidance, so resolution
+   does not add a generic unknown-type code on top. *)
+let decimal_not_double_reported () =
+  Alcotest.(check (list string)) "no codes" [] (codes "struct a { x: decimal }")
+
 (* ── Generic arity (TC0004) ────────────────────────────────────────────── *)
 
 (* A generic shape applied with exactly its arity resolves cleanly. *)
@@ -98,6 +103,39 @@ let duplicate_shape () =
   Alcotest.(check (list string))
     "duplicate" [ "TC0002" ]
     (codes "struct a { x: i64 }\nstruct a { y: i64 }")
+
+(* ── Operation error references (TC0014) ───────────────────────────────── *)
+
+(* An @errors entry naming a declared shape resolves; outputs are resolved
+   elsewhere, so a generic output applied correctly stays clean too. *)
+let operation_errors_ok () =
+  Alcotest.(check (list string))
+    "declared error and applied generic output" []
+    (codes
+       "struct not_found { msg: string }\n\
+        struct page[t] { items: []t }\n\
+        struct charge { id: string }\n\
+        @errors(not_found) op list(): page[charge]")
+
+let operation_error_unresolved () =
+  Alcotest.(check (list string))
+    "undeclared error shape" [ "TC0014" ]
+    (codes "@errors(nope) op o(): i64")
+
+(* A non-@errors trait on an operation is left for lowering's trait bag. *)
+let operation_other_trait_ok () =
+  Alcotest.(check (list string))
+    "doc trait on an operation" []
+    (codes "@doc(\"x\") op o(): i64")
+
+(* ── Accumulation (no fail-fast) ───────────────────────────────────────── *)
+
+(* Independent problems are all reported, sorted by span: an unresolved error
+   reference and an unresolved output type. *)
+let accumulates_diagnostics () =
+  Alcotest.(check (list string))
+    "two independent diagnostics" [ "TC0014"; "TC0001" ]
+    (codes "@errors(nope) op o(): also_nope")
 
 (* ── Nullability (TC0007) ──────────────────────────────────────────────── *)
 
@@ -350,6 +388,8 @@ let () =
           Alcotest.test_case "unknown in op" `Quick unknown_in_op;
           Alcotest.test_case "union payload" `Quick union_payload_resolved;
           Alcotest.test_case "malformed type" `Quick malformed_type_silent;
+          Alcotest.test_case "decimal not doubled" `Quick
+            decimal_not_double_reported;
         ] );
       ( "generics",
         [
@@ -363,6 +403,14 @@ let () =
         ] );
       ( "duplicate",
         [ Alcotest.test_case "duplicate shape" `Quick duplicate_shape ] );
+      ( "operations",
+        [
+          Alcotest.test_case "errors ok" `Quick operation_errors_ok;
+          Alcotest.test_case "error unresolved" `Quick
+            operation_error_unresolved;
+          Alcotest.test_case "other trait ok" `Quick operation_other_trait_ok;
+          Alcotest.test_case "accumulates" `Quick accumulates_diagnostics;
+        ] );
       ( "nullability",
         [
           Alcotest.test_case "nullability ok" `Quick nullability_ok;

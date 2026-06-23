@@ -17,3 +17,4 @@ val constraint_type_mismatch : string
 val constraint_malformed : string
 val default_type_mismatch : string
 val default_violates_constraint : string
+val unresolved_operation_ref : string
