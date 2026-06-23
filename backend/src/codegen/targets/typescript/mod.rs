@@ -2,6 +2,7 @@
 //! encoding for the hard cases (open enum, internally-tagged union, generics,
 //! nullable, i64-as-string, bytes-as-base64, branded well-known types).
 
+pub mod codecs;
 pub mod render;
 pub mod symbols;
 pub mod types;

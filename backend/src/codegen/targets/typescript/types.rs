@@ -75,33 +75,42 @@ fn variant_of(member: &Member) -> Variant {
     }
 }
 
-/// The PascalCase symbol for a shape's own name (defined locally, so not
-/// imported), derived from the canonical name after the `module#` prefix. A
-/// `@rename` for TypeScript overrides the identifier.
-fn type_name(shape: &Shape, config: &CasingConfig) -> Symbol {
+/// The PascalCase identifier for a shape's own name (after the `module#`
+/// prefix), honoring a TypeScript `@rename`.
+pub(crate) fn type_ident(shape: &Shape, config: &CasingConfig) -> String {
     let local = shape.id.rsplit('#').next().unwrap_or(&shape.id);
-    let rename = rename_of(&shape.traits);
-    Symbol::builtin(casing::transform(
+    casing::transform(
         local,
         SymbolKind::Type,
         config,
-        rename.as_deref(),
-    ))
+        rename_of(&shape.traits).as_deref(),
+    )
 }
 
-/// Build a field node: a camelCased identifier (overridable by `@rename` for
-/// TypeScript), the field's type expression, nullability from `required`, and
-/// any `@wire` serialization-key override. The `@rename` and `@wire` axes are
-/// independent: one changes the identifier, the other the wire key.
+/// The camelCase identifier for a member, honoring a TypeScript `@rename`. This
+/// is the in-code name, independent of the wire key.
+pub(crate) fn field_ident(member: &Member, config: &CasingConfig) -> String {
+    casing::transform(
+        &member.name,
+        SymbolKind::Field,
+        config,
+        rename_of(&member.traits).as_deref(),
+    )
+}
+
+/// The serialization key for a member: its `@wire` override, else the canonical
+/// name. Independent of the in-code identifier.
+pub(crate) fn wire_key(member: &Member) -> String {
+    wire_of(&member.traits).unwrap_or_else(|| member.name.clone())
+}
+
+fn type_name(shape: &Shape, config: &CasingConfig) -> Symbol {
+    Symbol::builtin(type_ident(shape, config))
+}
+
 fn field_of(member: &Member, config: &CasingConfig) -> Field {
-    let rename = rename_of(&member.traits);
     Field {
-        name: Symbol::builtin(casing::transform(
-            &member.name,
-            SymbolKind::Field,
-            config,
-            rename.as_deref(),
-        )),
+        name: Symbol::builtin(field_ident(member, config)),
         ty: type_expr_of(&member.target),
         nullable: !member.required,
         wire: wire_of(&member.traits),
