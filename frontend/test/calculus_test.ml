@@ -460,6 +460,144 @@ let num_coerce () =
     "u64 to_float treats bits as unsigned" true
     (to_float ~signed:false (-1L) > 9.0e18)
 
+(* ── Program evaluation ────────────────────────────────────────────────── *)
+
+let prog src = fst (Calc_parser.parse src)
+let asint = function Calc_eval.VInt (n, _, _) -> Int64.to_int n | _ -> -999
+let asstr = function Calc_eval.VStr s -> s | _ -> "?"
+
+let eval_prog () =
+  let open Calc_eval in
+  let p = prog "fn f(a: i64, b: i64) -> i64 = a + b * 2" in
+  Alcotest.(check int) "arith" 11 (asint (eval_fn p "f" [ vint 3; vint 4 ]));
+  (* width-aware wrapping flows through evaluation *)
+  let p2 = prog "fn f(a: i8) -> i8 = a + 1" in
+  Alcotest.(check int)
+    "i8 wraps" (-128)
+    (asint (eval_fn p2 "f" [ VInt (127L, 8, true) ]));
+  let p3 = prog "fn f(a: i64, b: i64) -> i64 = if b != 0 then a / b else -1" in
+  Alcotest.(check int)
+    "guarded div" 3
+    (asint (eval_fn p3 "f" [ vint 7; vint 2 ]));
+  Alcotest.(check int)
+    "div guard taken" (-1)
+    (asint (eval_fn p3 "f" [ vint 7; vint 0 ]));
+  let p4 = prog "fn f(a: i64) -> bool = let y = a in y > 0 && y < 10" in
+  Alcotest.(check bool)
+    "let, compare, logical" true
+    (match eval_fn p4 "f" [ vint 5 ] with VBool b -> b | _ -> false);
+  Alcotest.(check bool)
+    "logical short-circuit" false
+    (match eval_fn p4 "f" [ vint 50 ] with VBool b -> b | _ -> false);
+  let p5 =
+    prog
+      "fn dbl(x: i64) -> i64 = x * 2\n\
+       fn pos(x: i64) -> bool = x > 0\n\
+       fn add(a: i64, x: i64) -> i64 = a + x\n\
+       fn f(xs: []i64) -> i64 = fold(filter(map(xs, dbl), pos), 0, add)"
+  in
+  Alcotest.(check int)
+    "map/filter/fold" 12
+    (asint (eval_fn p5 "f" [ VList [ vint 1; vint 2; vint 3 ] ]));
+  let p6 =
+    prog
+      "fn lt2(x: i64) -> bool = x < 2\n\
+       fn f(xs: []i64) -> i64 = length(xs) + (head(xs) ?? 0) + (get(xs, 1) ?? \
+       0) + (find(xs, lt2) ?? -1)"
+  in
+  Alcotest.(check int)
+    "length/head/get/find" 14
+    (asint (eval_fn p6 "f" [ VList [ vint 10; vint 3 ] ]));
+  let p7 =
+    prog
+      "fn f(m: map[string]i64, k: string) -> i64 = get_or(m, k, 0) + \
+       (lookup(m, k) ?? 0)"
+  in
+  Alcotest.(check int)
+    "map builtins" 84
+    (asint (eval_fn p7 "f" [ VMap [ (VStr "a", vint 42) ]; VStr "a" ]));
+  let p8 =
+    prog
+      "fn f(p: pm) -> string = match p { card(c) => \"C\" pix(x) => \"P\" \
+       Unknown(u) => u }"
+  in
+  Alcotest.(check string)
+    "match variant" "C"
+    (asstr (eval_fn p8 "f" [ VVariant ("card", VStruct []) ]));
+  Alcotest.(check string)
+    "match unknown arm" "wire"
+    (asstr (eval_fn p8 "f" [ VVariant ("wire", VStruct []) ]));
+  let p9 = prog "fn f(x: float) -> float = to_float(to_int(x) ?? 0)" in
+  Alcotest.(check bool)
+    "coercions and coalesce" true
+    (match eval_fn p9 "f" [ VFloat 3.9 ] with
+    | VFloat f -> f = 3.0
+    | _ -> false);
+  let p10 = prog "fn f(a: i64) -> i64? = if a > 0 then Some(a) else None" in
+  Alcotest.(check bool)
+    "some/none" true
+    (match eval_fn p10 "f" [ vint 5 ] with VOpt (Some _) -> true | _ -> false);
+  let p11 = prog "fn f() -> card = card { last4: \"1234\" }" in
+  Alcotest.(check bool)
+    "struct ctor" true
+    (match eval_fn p11 "f" [] with
+    | VStruct [ ("last4", VStr "1234") ] -> true
+    | _ -> false)
+
+let eval_ops () =
+  let open Calc_eval in
+  let p =
+    prog
+      "fn sub(a: i64, b: i64) -> i64 = a - b\n\
+       fn md(a: i64, b: i64) -> i64 = if b != 0 then a % b else 0\n\
+       fn cmp(a: i64, b: i64) -> bool = a <= b && a >= b\n\
+       fn ne(a: i64, b: i64) -> bool = a != b\n\
+       fn cat(a: string, b: string) -> string = a ++ b\n\
+       fn fl(a: float, b: float) -> float = a - b * a\n\
+       fn miss(m: map[string]i64) -> i64 = get_or(m, \"z\", -1) + (lookup(m, \
+       \"z\") ?? -2)\n\
+       fn ti(x: float) -> i64 = to_int(x) ?? -1"
+  in
+  Alcotest.(check int) "sub" 3 (asint (eval_fn p "sub" [ vint 10; vint 7 ]));
+  Alcotest.(check int) "mod" 1 (asint (eval_fn p "md" [ vint 7; vint 3 ]));
+  Alcotest.(check bool)
+    "cmp <= and >=" true
+    (match eval_fn p "cmp" [ vint 5; vint 5 ] with VBool b -> b | _ -> false);
+  Alcotest.(check bool)
+    "ne" true
+    (match eval_fn p "ne" [ vint 1; vint 2 ] with VBool b -> b | _ -> false);
+  Alcotest.(check string)
+    "concat" "ab"
+    (asstr (eval_fn p "cat" [ VStr "a"; VStr "b" ]));
+  Alcotest.(check bool)
+    "float arith" true
+    (match eval_fn p "fl" [ VFloat 2.0; VFloat 3.0 ] with
+    | VFloat f -> f = -4.0
+    | _ -> false);
+  Alcotest.(check int) "map misses" (-3) (asint (eval_fn p "miss" [ VMap [] ]));
+  Alcotest.(check int) "to_int nan" (-1) (asint (eval_fn p "ti" [ VFloat nan ]))
+
+(* A well-typed program always terminates and yields a value (AC-15). *)
+let totality_test =
+  QCheck.Test.make ~count:300 ~name:"totality"
+    QCheck.(pair (list (int_range (-1000) 1000)) (int_range (-1000) 1000))
+    (fun (xs, n) ->
+      let p =
+        prog
+          "fn dbl(x: i64) -> i64 = x * 2\n\
+           fn add(a: i64, x: i64) -> i64 = a + x\n\
+           fn f(xs: []i64, n: i64) -> i64 = if n != 0 then fold(map(xs, dbl), \
+           0, add) / n else 0"
+      in
+      match
+        Calc_eval.eval_fn p "f"
+          [ Calc_eval.VList (List.map Calc_eval.vint xs); Calc_eval.vint n ]
+      with
+      | Calc_eval.VInt _ -> true
+      | _ -> false)
+
+let totality () = QCheck.Test.check_exn totality_test
+
 (* Exercise the type system's rendering and compatibility directly. *)
 let types_unit () =
   let open Calc_types in
@@ -520,6 +658,9 @@ let () =
           Alcotest.test_case "wrapping" `Quick num_wrap;
           Alcotest.test_case "truncated div/mod" `Quick num_div;
           Alcotest.test_case "coercions" `Quick num_coerce;
+          Alcotest.test_case "program evaluation" `Quick eval_prog;
+          Alcotest.test_case "more operators" `Quick eval_ops;
+          Alcotest.test_case "totality" `Quick totality;
         ] );
       ( "lexer",
         [

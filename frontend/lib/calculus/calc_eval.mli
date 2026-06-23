@@ -20,3 +20,27 @@ module Num : sig
   (* Total, lossy above 2^53. *)
   val to_float : signed:bool -> int64 -> float
 end
+
+(* A runtime value. Integers carry their width and signedness so arithmetic
+   wraps correctly. *)
+type value =
+  | VInt of int64 * int * bool
+  | VFloat of float
+  | VStr of string
+  | VBool of bool
+  | VList of value list
+  | VMap of (value * value) list
+  | VStruct of (string * value) list
+  | VVariant of string * value
+  | VOpt of value option
+
+(* Raised only on an ill-typed program (which the type checker rules out); a
+   well-typed program evaluates totally without reaching it. *)
+exception Stuck of string
+
+(* An i64 value from an OCaml int, for building test inputs. *)
+val vint : int -> value
+
+(* Evaluate a named entry function against already-evaluated argument values.
+   Total for a well-typed program: it terminates and returns a value. *)
+val eval_fn : Calc_ast.program -> string -> value list -> value
