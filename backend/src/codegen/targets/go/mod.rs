@@ -1,9 +1,11 @@
-//! The Go target: maps the IR to idiomatic Go with clean types (no json tags, no
-//! marshal methods) and a separate codec layer. Without a sum type, a union becomes
-//! a sealed interface plus one wrapper struct per variant; 64-bit integers travel
-//! as strings, `bytes` as base64, the open enum is a named string, and well-known
-//! types are named strings — all enforced by the generated `encode`/`decode`
-//! functions rather than struct tags.
+//! The Go target: maps the IR to idiomatic Go with `encoding/json` struct tags
+//! doing the wire work, plus a thin codec layer only where the standard library
+//! cannot. A 64-bit integer rides a `,string` tag, `bytes` is base64 natively, the
+//! open enum and the well-known types are named strings serialized natively, and an
+//! optional field is a pointer with `,omitempty`. Without a sum type, a union
+//! becomes an interface plus one wrapper struct per variant (each with a
+//! `MarshalJSON`) and a free `unmarshalX`; a struct holding a union field gets a
+//! thin `UnmarshalJSON`. The `@entries` map is a generic `Entries[K, V]`.
 
 pub mod codecs;
 pub mod emit;

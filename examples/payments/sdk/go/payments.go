@@ -2,9 +2,8 @@
 
 package payments
 
-import "encoding/base64"
+import "encoding/json"
 import "fmt"
-import "strconv"
 
 type Timestamp string
 
@@ -12,271 +11,52 @@ type LocalDate string
 
 type Duration string
 
-type Entry[K any, V any] struct {
-	Key   K
-	Value V
-}
-
-func encodeI64(v int64) any { return strconv.FormatInt(v, 10) }
-
-func encodeU64(v uint64) any { return strconv.FormatUint(v, 10) }
-
-func encodeBytes(b []byte) any { return base64.StdEncoding.EncodeToString(b) }
-
-func encodeSlice[T any](xs []T, elem func(T) any) any {
-	out := make([]any, 0, len(xs))
-	for _, x := range xs {
-		out = append(out, elem(x))
-	}
-	return out
-}
-
-func encodeMap[V any](m map[string]V, elem func(V) any) any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = elem(v)
-	}
-	return out
-}
-
-func encodeEntries[K any, V any](es []Entry[K, V], ek func(K) any, ev func(V) any) any {
-	out := make([]any, 0, len(es))
-	for _, e := range es {
-		out = append(out, []any{ek(e.Key), ev(e.Value)})
-	}
-	return out
-}
-
-func asObject(v any) (map[string]any, error) {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("expected object, got %T", v)
-	}
-	return m, nil
-}
-
-func decodeString(v any) (string, error) {
-	s, ok := v.(string)
-	if !ok {
-		return "", fmt.Errorf("expected string, got %T", v)
-	}
-	return s, nil
-}
-
-func decodeBool(v any) (bool, error) {
-	b, ok := v.(bool)
-	if !ok {
-		return false, fmt.Errorf("expected bool, got %T", v)
-	}
-	return b, nil
-}
-
-func decodeFloat64(v any) (float64, error) {
-	f, ok := v.(float64)
-	if !ok {
-		return 0, fmt.Errorf("expected number, got %T", v)
-	}
-	return f, nil
-}
-
-func decodeInt8(v any) (int8, error) { f, err := decodeFloat64(v); return int8(f), err }
-
-func decodeInt16(v any) (int16, error) { f, err := decodeFloat64(v); return int16(f), err }
-
-func decodeInt32(v any) (int32, error) { f, err := decodeFloat64(v); return int32(f), err }
-
-func decodeUint8(v any) (uint8, error) { f, err := decodeFloat64(v); return uint8(f), err }
-
-func decodeUint16(v any) (uint16, error) { f, err := decodeFloat64(v); return uint16(f), err }
-
-func decodeUint32(v any) (uint32, error) { f, err := decodeFloat64(v); return uint32(f), err }
-
-func decodeI64(v any) (int64, error) {
-	s, err := decodeString(v)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseInt(s, 10, 64)
-}
-
-func decodeU64(v any) (uint64, error) {
-	s, err := decodeString(v)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseUint(s, 10, 64)
-}
-
-func decodeBytes(v any) ([]byte, error) {
-	s, err := decodeString(v)
+func marshalVariant(payload any, disc, tag string) ([]byte, error) {
+	b, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	return base64.StdEncoding.DecodeString(s)
-}
-
-func decodeSlice[T any](v any, elem func(any) (T, error)) ([]T, error) {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil, fmt.Errorf("expected array, got %T", v)
-	}
-	out := make([]T, 0, len(arr))
-	for _, e := range arr {
-		x, err := elem(e)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, x)
-	}
-	return out, nil
-}
-
-func decodeMap[V any](v any, elem func(any) (V, error)) (map[string]V, error) {
-	m, err := asObject(v)
-	if err != nil {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
 		return nil, err
 	}
-	out := make(map[string]V, len(m))
-	for k, e := range m {
-		x, err := elem(e)
-		if err != nil {
-			return nil, err
-		}
-		out[k] = x
-	}
-	return out, nil
-}
-
-func decodeEntries[K comparable, V any](v any, ek func(any) (K, error), ev func(any) (V, error)) ([]Entry[K, V], error) {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil, fmt.Errorf("expected array, got %T", v)
-	}
-	out := make([]Entry[K, V], 0, len(arr))
-	for _, e := range arr {
-		pair, ok := e.([]any)
-		if !ok || len(pair) != 2 {
-			return nil, fmt.Errorf("expected [k, v] pair, got %T", e)
-		}
-		k, err := ek(pair[0])
-		if err != nil {
-			return nil, err
-		}
-		val, err := ev(pair[1])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, Entry[K, V]{Key: k, Value: val})
-	}
-	return out, nil
+	obj[disc], _ = json.Marshal(tag)
+	return json.Marshal(obj)
 }
 
 type Charge struct {
-	ID       string
-	Amount   int64
-	Fee      uint64
-	Receipt  []byte
-	Currency string
-	Note     *string
-	Tags     []string
-	Metadata map[string]string
-	Created  Timestamp
-	Status   Status
-	Method   PaymentMethod
+	ID       string            `json:"id"`
+	Amount   int64             `json:"amount,string"`
+	Fee      uint64            `json:"fee,string"`
+	Receipt  []byte            `json:"receipt"`
+	Currency string            `json:"currency"`
+	Note     *string           `json:"note,omitempty"`
+	Tags     []string          `json:"tags"`
+	Metadata map[string]string `json:"metadata"`
+	Created  Timestamp         `json:"created"`
+	Status   Status            `json:"status"`
+	Method   PaymentMethod     `json:"method"`
 }
 
-func encodeCharge(v Charge) any {
-	m := map[string]any{}
-	m["id"] = v.ID
-	m["amount"] = encodeI64(v.Amount)
-	m["fee"] = encodeU64(v.Fee)
-	m["receipt"] = encodeBytes(v.Receipt)
-	m["currency"] = v.Currency
-	if v.Note != nil {
-		m["note"] = (*v.Note)
+func (c *Charge) UnmarshalJSON(b []byte) error {
+	type alias Charge
+	var tmp struct {
+		alias
+		Method json.RawMessage `json:"method"`
 	}
-	m["tags"] = encodeSlice(v.Tags, func(x string) any { return x })
-	m["metadata"] = encodeMap(v.Metadata, func(x string) any { return x })
-	m["created"] = v.Created
-	m["status"] = encodeStatus(v.Status)
-	m["method"] = encodePaymentMethod(v.Method)
-	return m
-}
-
-func decodeCharge(raw any) (Charge, error) {
-	m, err := asObject(raw)
-	if err != nil {
-		return Charge{}, err
+	tmp.alias = alias(*c)
+	if err := json.Unmarshal(b, &tmp); err != nil {
+		return err
 	}
-	var out Charge
-	if x, ok := m["id"]; ok && x != nil {
-		out.ID, err = decodeString(x)
+	*c = Charge(tmp.alias)
+	if len(tmp.Method) > 0 {
+		m, err := unmarshalPaymentMethod(tmp.Method)
 		if err != nil {
-			return Charge{}, fmt.Errorf("id: %w", err)
+			return err
 		}
+		c.Method = m
 	}
-	if x, ok := m["amount"]; ok && x != nil {
-		out.Amount, err = decodeI64(x)
-		if err != nil {
-			return Charge{}, fmt.Errorf("amount: %w", err)
-		}
-	}
-	if x, ok := m["fee"]; ok && x != nil {
-		out.Fee, err = decodeU64(x)
-		if err != nil {
-			return Charge{}, fmt.Errorf("fee: %w", err)
-		}
-	}
-	if x, ok := m["receipt"]; ok && x != nil {
-		out.Receipt, err = decodeBytes(x)
-		if err != nil {
-			return Charge{}, fmt.Errorf("receipt: %w", err)
-		}
-	}
-	if x, ok := m["currency"]; ok && x != nil {
-		out.Currency, err = decodeString(x)
-		if err != nil {
-			return Charge{}, fmt.Errorf("currency: %w", err)
-		}
-	}
-	if x, ok := m["note"]; ok && x != nil {
-		val, err := decodeString(x)
-		if err != nil {
-			return Charge{}, fmt.Errorf("note: %w", err)
-		}
-		out.Note = &val
-	}
-	if x, ok := m["tags"]; ok && x != nil {
-		out.Tags, err = decodeSlice(x, func(e any) (string, error) { return decodeString(e) })
-		if err != nil {
-			return Charge{}, fmt.Errorf("tags: %w", err)
-		}
-	}
-	if x, ok := m["metadata"]; ok && x != nil {
-		out.Metadata, err = decodeMap(x, func(e any) (string, error) { return decodeString(e) })
-		if err != nil {
-			return Charge{}, fmt.Errorf("metadata: %w", err)
-		}
-	}
-	if x, ok := m["created"]; ok && x != nil {
-		out.Created, err = func() (Timestamp, error) { s, err := decodeString(x); return Timestamp(s), err }()
-		if err != nil {
-			return Charge{}, fmt.Errorf("created: %w", err)
-		}
-	}
-	if x, ok := m["status"]; ok && x != nil {
-		out.Status, err = decodeStatus(x)
-		if err != nil {
-			return Charge{}, fmt.Errorf("status: %w", err)
-		}
-	}
-	if x, ok := m["method"]; ok && x != nil {
-		out.Method, err = decodePaymentMethod(x)
-		if err != nil {
-			return Charge{}, fmt.Errorf("method: %w", err)
-		}
-	}
-	return out, nil
+	return nil
 }
 
 type Status string
@@ -287,18 +67,6 @@ const (
 	StatusRefunded Status = "refunded"
 )
 
-func encodeStatus(v Status) any {
-	return string(v)
-}
-
-func decodeStatus(raw any) (Status, error) {
-	s, err := decodeString(raw)
-	if err != nil {
-		return "", err
-	}
-	return Status(s), nil
-}
-
 type HTTPCode string
 
 const (
@@ -307,66 +75,12 @@ const (
 	HTTPCodeError    HTTPCode = "error"
 )
 
-func encodeHTTPCode(v HTTPCode) any {
-	return string(v)
-}
-
-func decodeHTTPCode(raw any) (HTTPCode, error) {
-	s, err := decodeString(raw)
-	if err != nil {
-		return "", err
-	}
-	return HTTPCode(s), nil
-}
-
 type Card struct {
-	Last4 string
-}
-
-func encodeCard(v Card) any {
-	m := map[string]any{}
-	m["last4"] = v.Last4
-	return m
-}
-
-func decodeCard(raw any) (Card, error) {
-	m, err := asObject(raw)
-	if err != nil {
-		return Card{}, err
-	}
-	var out Card
-	if x, ok := m["last4"]; ok && x != nil {
-		out.Last4, err = decodeString(x)
-		if err != nil {
-			return Card{}, fmt.Errorf("last4: %w", err)
-		}
-	}
-	return out, nil
+	Last4 string `json:"last4"`
 }
 
 type BankAccount struct {
-	Iban string
-}
-
-func encodeBankAccount(v BankAccount) any {
-	m := map[string]any{}
-	m["iban"] = v.Iban
-	return m
-}
-
-func decodeBankAccount(raw any) (BankAccount, error) {
-	m, err := asObject(raw)
-	if err != nil {
-		return BankAccount{}, err
-	}
-	var out BankAccount
-	if x, ok := m["iban"]; ok && x != nil {
-		out.Iban, err = decodeString(x)
-		if err != nil {
-			return BankAccount{}, fmt.Errorf("iban: %w", err)
-		}
-	}
-	return out, nil
+	Iban string `json:"iban"`
 }
 
 type PaymentMethod interface{ isPaymentMethod() }
@@ -375,43 +89,35 @@ type PaymentMethodCard struct{ Value Card }
 
 func (PaymentMethodCard) isPaymentMethod() {}
 
+func (m PaymentMethodCard) MarshalJSON() ([]byte, error) {
+	return marshalVariant(m.Value, "kind", "card")
+}
+
 type PaymentMethodBank struct{ Value BankAccount }
 
 func (PaymentMethodBank) isPaymentMethod() {}
 
-func encodePaymentMethod(v PaymentMethod) any {
-	switch x := v.(type) {
-	case PaymentMethodCard:
-		m := encodeCard(x.Value).(map[string]any)
-		m["kind"] = "card"
-		return m
-	case PaymentMethodBank:
-		m := encodeBankAccount(x.Value).(map[string]any)
-		m["kind"] = "bank"
-		return m
-	}
-	return nil
+func (m PaymentMethodBank) MarshalJSON() ([]byte, error) {
+	return marshalVariant(m.Value, "kind", "bank")
 }
 
-func decodePaymentMethod(raw any) (PaymentMethod, error) {
-	m, err := asObject(raw)
-	if err != nil {
+func unmarshalPaymentMethod(b []byte) (PaymentMethod, error) {
+	var d map[string]json.RawMessage
+	if err := json.Unmarshal(b, &d); err != nil {
 		return nil, err
 	}
-	tag, err := decodeString(m["kind"])
-	if err != nil {
-		return nil, err
-	}
+	var tag string
+	json.Unmarshal(d["kind"], &tag)
 	switch tag {
 	case "card":
-		p, err := decodeCard(raw)
-		if err != nil {
+		var p Card
+		if err := json.Unmarshal(b, &p); err != nil {
 			return nil, err
 		}
 		return PaymentMethodCard{Value: p}, nil
 	case "bank":
-		p, err := decodeBankAccount(raw)
-		if err != nil {
+		var p BankAccount
+		if err := json.Unmarshal(b, &p); err != nil {
 			return nil, err
 		}
 		return PaymentMethodBank{Value: p}, nil

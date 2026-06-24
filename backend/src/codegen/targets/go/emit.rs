@@ -1,19 +1,26 @@
 //! Assembling a whole Go module from an IR module: the branded well-known named
-//! string types and the shared codec runtime helpers once, then each shape's
-//! clean type declaration plus its codecs (the union's sealed interface rides
-//! along with its codecs). Imports are derived by the engine at render time from
-//! the symbols the declarations reference.
+//! string types and only the shared runtime helpers the module actually uses,
+//! then each shape's type declaration plus any codec it needs (a union's interface
+//! and dispatcher, or a container `UnmarshalJSON`). Imports are derived by the
+//! engine at render time from the symbols the declarations reference, so a module
+//! of plain tagged structs pulls no imports at all.
 //!
 //! The Go package clause is not part of the rendered file (the engine emits
 //! imports first); the caller prepends `package <name>` before formatting. See
 //! [`package_clause`].
 
+use std::collections::HashSet;
+
 use crate::codegen::casing::CasingConfig;
+use crate::codegen::conventions::{has_entries, type_ident};
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::go::codecs::{emit_codecs, runtime_helpers};
+use crate::codegen::targets::go::codecs::{emit_codecs, runtime_helpers, RuntimeHelpers};
 use crate::codegen::targets::go::types::emit_type;
 use crate::codegen::tree::{Alias, Decl, File};
-use crate::ir::Module;
+use crate::ir::{Module, ShapeKind};
+
+/// The Go language key for per-language traits such as `@rename`.
+const LANG: &str = "go";
 
 /// The branded well-known types: distinct named string types, so they serialize
 /// exactly as their inner value while staying distinct in code.
@@ -36,13 +43,45 @@ pub fn package_clause(name: &str) -> String {
     format!("package {name}\n")
 }
 
+/// The identifiers of every union shape in the module, used to detect a struct
+/// field whose type is a union (which then needs a container `UnmarshalJSON`).
+fn union_idents(module: &Module) -> HashSet<String> {
+    module
+        .shapes
+        .iter()
+        .filter(|s| matches!(s.kind, ShapeKind::Union { .. }))
+        .map(|s| type_ident(s, LANG))
+        .collect()
+}
+
+/// Whether any structure member in the module carries the `@entries` escape, which
+/// is the only thing that pulls the generic `Entries[K, V]` helper.
+fn uses_entries(module: &Module) -> bool {
+    module.shapes.iter().any(|s| match &s.kind {
+        ShapeKind::Structure { members, .. } => members.iter().any(|m| has_entries(&m.traits)),
+        _ => false,
+    })
+}
+
+/// Whether the module has any union, which pulls the `marshalVariant` helper.
+fn uses_union(module: &Module) -> bool {
+    module
+        .shapes
+        .iter()
+        .any(|s| matches!(s.kind, ShapeKind::Union { .. }))
+}
+
 /// Assemble a complete Go module file for an IR module.
 pub fn emit_module(module: &Module, config: &CasingConfig) -> File {
+    let unions = union_idents(module);
     let mut decls = well_known_decls();
-    decls.extend(runtime_helpers());
+    decls.extend(runtime_helpers(RuntimeHelpers {
+        entries: uses_entries(module),
+        variant: uses_union(module),
+    }));
     for shape in &module.shapes {
         decls.extend(emit_type(shape, config));
-        decls.extend(emit_codecs(shape, config));
+        decls.extend(emit_codecs(shape, config, &unions));
     }
     File {
         module: module.name.clone(),
@@ -70,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn a_module_emits_well_known_helpers_clean_types_and_codecs() {
+    fn a_module_of_plain_structs_emits_tagged_types_and_no_helpers_or_imports() {
         let module = Module {
             name: "models".into(),
             shapes: vec![structure(
@@ -85,23 +124,33 @@ mod tests {
             &passthrough(),
         )
         .text;
-        // Well-known named strings, the codec runtime helpers, a clean type, and the
-        // per-shape codecs are all present and ordered.
+        // Well-known named strings and the tagged type are present; with no union and
+        // no @entries, no runtime helper and no import is emitted.
         assert!(out.contains("type Timestamp string"));
-        assert!(out.contains("func encodeI64(v int64) any"));
         assert!(out.contains("type Charge struct {"));
-        // The clean type holds the 64-bit integer natively, no json tag.
-        assert!(out.contains("\tAmountCents int64\n"));
-        assert!(!out.contains("json:"));
-        assert!(out.contains("func encodeCharge(v Charge) any {"));
-        assert!(out.contains("m[\"amount_cents\"] = encodeI64(v.AmountCents)"));
+        // The type holds the 64-bit integer natively, tagged `,string`.
+        assert!(out.contains("\tAmountCents int64 `json:\"amount_cents,string\"`\n"));
+        assert!(!out.contains("func marshalVariant("));
+        assert!(!out.contains("type Entries["));
+        assert!(!out.contains("import "));
     }
 
     #[test]
-    fn a_module_with_a_union_emits_the_sealed_interface_and_collects_stdlib_imports() {
+    fn a_module_with_a_union_emits_the_interface_dispatcher_and_json_imports() {
         let module = Module {
             name: "models".into(),
             shapes: vec![
+                structure(
+                    "models#Account",
+                    vec![member(
+                        "method",
+                        Tref::Ref {
+                            id: "models#Method".into(),
+                            args: vec![],
+                        },
+                        true,
+                    )],
+                ),
                 union_shape(
                     "models#Method",
                     "type",
@@ -127,19 +176,21 @@ mod tests {
             &passthrough(),
         )
         .text;
-        // The sealed interface and codecs are emitted; the runtime helpers pull the
-        // stdlib imports; the same-module payload pulls no import.
+        // The interface, the dispatcher, marshalVariant, and the container method are
+        // emitted; the codecs pull encoding/json and fmt; the same-module payload
+        // pulls no import.
         assert!(out.contains("type Method interface{ isMethod() }"));
-        assert!(out.contains("func encodeMethod(v Method) any {"));
-        assert!(out.contains("import \"strconv\""));
-        assert!(out.contains("import \"encoding/base64\""));
+        assert!(out.contains("func unmarshalMethod(b []byte) (Method, error) {"));
+        assert!(out.contains("func marshalVariant("));
+        assert!(out.contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
+        assert!(out.contains("import \"encoding/json\""));
         assert!(out.contains("import \"fmt\""));
         assert!(!out.contains("import \"models\""));
         assert!(out.contains("type CardData struct {"));
     }
 
     #[test]
-    fn a_module_with_an_entries_field_codes_it_as_a_pairs_array() {
+    fn a_module_with_an_entries_field_uses_the_entries_type() {
         let mut counts = member(
             "counts",
             Tref::Map(
@@ -163,10 +214,11 @@ mod tests {
             &passthrough(),
         )
         .text;
-        // The generic Entry helper is always emitted; the field is a slice of it and
-        // its codec walks the pairs.
-        assert!(out.contains("type Entry[K any, V any] struct {"));
-        assert!(out.contains("\tCounts []Entry[int32, string]\n"));
-        assert!(out.contains("m[\"counts\"] = encodeEntries(v.Counts,"));
+        // The generic Entries helper is emitted (entries are used); the field is
+        // typed as it, with a plain tag. No marshalVariant: there is no union.
+        assert!(out.contains("type Entries[K comparable, V any] []Entry[K, V]"));
+        assert!(out.contains("\tCounts Entries[int32, string] `json:\"counts\"`\n"));
+        assert!(out.contains("import \"encoding/json\""));
+        assert!(!out.contains("func marshalVariant("));
     }
 }

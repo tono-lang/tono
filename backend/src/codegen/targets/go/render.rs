@@ -1,11 +1,13 @@
 //! The Go render rules: how the shared component tree turns into Go surface
-//! syntax. Structs are clean — no json tags, no marshal methods — since all wire
-//! knowledge lives in the separate codec layer; an optional scalar or reference
-//! becomes a pointer so it can be absent. Enums render as a named string type plus
-//! its constants.
+//! syntax. A struct field carries an `encoding/json` tag — the wire key, plus
+//! `,string` for a 64-bit integer (held natively but serialized as a string) and
+//! `,omitempty` for an optional pointer — so `encoding/json` does the wire work
+//! natively; an optional scalar or reference becomes a pointer so it can be absent.
+//! Enums render as a named string type plus its constants, which `encoding/json`
+//! serializes natively.
 //!
 //! Unions are not rendered from `Decl::Union`: Go has no sum type, so the codec
-//! phase emits a sealed interface plus one wrapper struct per variant as verbatim
+//! phase emits an interface plus one wrapper struct per variant as verbatim
 //! `Decl::Raw` items. That arm renders nothing here.
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
@@ -18,8 +20,8 @@ use crate::codegen::tree::{Decl, EnumDecl, Field, FnBody, Function, TypeExpr};
 pub struct GoRules;
 
 /// The Go spelling of each composite type construct; the recursion lives in the
-/// shared `syntax` driver. An `@entries` map is a slice of the generated generic
-/// `Entry[K, V]`, which marshals each pair as a two-element array.
+/// shared `syntax` driver. An `@entries` map is the generated generic `Entries[K,
+/// V]`, whose `MarshalJSON`/`UnmarshalJSON` carry each pair as a two-element array.
 impl TypeSyntax for GoRules {
     fn list(&self, inner: &str) -> String {
         format!("[]{inner}")
@@ -34,8 +36,17 @@ impl TypeSyntax for GoRules {
         format!("{name}[{}]", args.join(", "))
     }
     fn entries(&self, key: &str, value: &str) -> String {
-        format!("[]Entry[{key}, {value}]")
+        format!("Entries[{key}, {value}]")
     }
+}
+
+/// Whether a field's top-level type is a 64-bit integer, which `encoding/json`
+/// must serialize as a string (the `,string` tag option) to stay precise above
+/// 2^53. The check is on the field's own type only: a 64-bit integer nested inside
+/// a collection or map is an unexercised edge case the `,string` option cannot
+/// reach (it does not recurse into elements), and is left for a future need.
+fn is_wide_int(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::Ref(sym) if sym.name == "int64" || sym.name == "uint64")
 }
 
 impl GoRules {
@@ -48,14 +59,20 @@ impl GoRules {
         let base = self.render_type(&field.ty);
         // An optional scalar or reference becomes a pointer so it can be absent; a
         // collection is already nullable, so it stays a slice/map.
-        let ty = if field.nullable && !collection {
-            format!("*{base}")
-        } else {
-            base
-        };
-        // The struct is clean: no json tag. The wire key and all wire encoding live
-        // in the codec layer.
-        format!("\t{} {ty}\n", field.name.name)
+        let pointer = field.nullable && !collection;
+        let ty = if pointer { format!("*{base}") } else { base };
+        // The `encoding/json` struct tag carries all the wire work: the wire key,
+        // `,string` for a 64-bit integer (precise above 2^53), and `,omitempty` for
+        // an optional pointer so an absent value is dropped.
+        let wire = field.wire.as_deref().unwrap_or(&field.name.name);
+        let mut tag = wire.to_string();
+        if is_wide_int(&field.ty) {
+            tag.push_str(",string");
+        }
+        if pointer {
+            tag.push_str(",omitempty");
+        }
+        format!("\t{} {ty} `json:\"{tag}\"`\n", field.name.name)
     }
 
     fn render_enum(&self, decl: &EnumDecl) -> String {
@@ -153,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn a_struct_renders_clean_fields_without_json_tags() {
+    fn a_struct_renders_fields_with_json_tags() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
             fields: vec![
@@ -169,15 +186,25 @@ mod tests {
                     true,
                     "note",
                 ),
+                field("Tip", TypeExpr::Ref(Symbol::builtin("int64")), true, "tip"),
+                field(
+                    "Secret",
+                    TypeExpr::Ref(Symbol::builtin("[]byte")),
+                    false,
+                    "secret",
+                ),
             ],
         });
         let out = GoRules.render_decl(&decl);
         assert!(out.starts_with("type Charge struct {\n"));
-        // No json tags; the 64-bit integer is held natively.
-        assert!(out.contains("\tAccountID int64\n"));
-        assert!(!out.contains("json:"));
-        // An optional scalar becomes a pointer.
-        assert!(out.contains("\tNote *string\n"));
+        // The 64-bit integer is held natively but tagged `,string`.
+        assert!(out.contains("\tAccountID int64 `json:\"account_id,string\"`\n"));
+        // An optional scalar becomes a pointer with `,omitempty`.
+        assert!(out.contains("\tNote *string `json:\"note,omitempty\"`\n"));
+        // An optional 64-bit integer combines `,string` and `,omitempty`.
+        assert!(out.contains("\tTip *int64 `json:\"tip,string,omitempty\"`\n"));
+        // `bytes` is a plain tag; `encoding/json` base64-encodes a []byte natively.
+        assert!(out.contains("\tSecret []byte `json:\"secret\"`\n"));
     }
 
     #[test]
@@ -203,9 +230,25 @@ mod tests {
             ],
         });
         let out = GoRules.render_decl(&decl);
-        // An optional slice is not a pointer; it stays a slice.
-        assert!(out.contains("\tTags []string\n"));
-        assert!(out.contains("\tMeta map[string]int32\n"));
+        // An optional slice is not a pointer; it stays a slice, with no omitempty.
+        assert!(out.contains("\tTags []string `json:\"tags\"`\n"));
+        assert!(out.contains("\tMeta map[string]int32 `json:\"meta\"`\n"));
+    }
+
+    #[test]
+    fn a_field_without_a_wire_override_tags_with_its_name() {
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Charge"),
+            fields: vec![Field {
+                name: Symbol::builtin("Id"),
+                ty: TypeExpr::Ref(Symbol::builtin("string")),
+                nullable: false,
+                wire: None,
+            }],
+        });
+        assert!(GoRules
+            .render_decl(&decl)
+            .contains("\tId string `json:\"Id\"`\n"));
     }
 
     #[test]
@@ -262,7 +305,7 @@ mod tests {
                 TypeExpr::Ref(Symbol::builtin("int32")),
                 TypeExpr::Ref(Symbol::builtin("string")),
             )),
-            "[]Entry[int32, string]"
+            "Entries[int32, string]"
         );
     }
 

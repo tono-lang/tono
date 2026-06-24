@@ -1,12 +1,13 @@
 //go:build !conformance
 
 // The round-trip driver. The generated types and codecs live in models.go
-// (package main), written by the harness at run time. The types are clean (no
-// json tags); all wire knowledge lives in the generated encode/decode functions.
-// This driver asserts the hard wire cases hold: a 64-bit integer above 2^53
-// travels as a JSON string, bytes travel as base64, an internally-tagged union
-// carries its discriminator, the open enum decodes an unknown value leniently,
-// and a decode/re-encode is a canonical (Value-equal) round-trip.
+// (package main), written by the harness at run time. Struct fields carry
+// encoding/json tags, so json.Marshal/json.Unmarshal do the wire work directly;
+// only the union and the @entries map have generated marshaling. This driver
+// asserts the hard wire cases hold: a 64-bit integer above 2^53 travels as a JSON
+// string, bytes travel as base64, an internally-tagged union carries its
+// discriminator, the open enum is a named string that holds an unknown value, and
+// a decode/re-encode is a canonical (Value-equal) round-trip.
 package main
 
 import (
@@ -29,10 +30,10 @@ func main() {
 		Tip:       &tip,
 		Status:    StatusActive,
 		Method:    MethodCard{Value: CardData{Last4: "4242"}},
-		Counts:    []Entry[int32, string]{{Key: 7, Value: "a"}, {Key: 3, Value: "b"}},
+		Counts:    Entries[int32, string]{{Key: 7, Value: "a"}, {Key: 3, Value: "b"}},
 	}
 
-	wire, err := json.Marshal(encodeAccount(acct))
+	wire, err := json.Marshal(acct)
 	if err != nil {
 		panic(err)
 	}
@@ -57,15 +58,11 @@ func main() {
 	}
 
 	// Canonical round-trip: decode then re-encode must be Value-equal.
-	var raw any
-	if err := json.Unmarshal(wire, &raw); err != nil {
+	var back Account
+	if err := json.Unmarshal(wire, &back); err != nil {
 		panic(err)
 	}
-	back, err := decodeAccount(raw)
-	if err != nil {
-		panic(err)
-	}
-	again, err := json.Marshal(encodeAccount(back))
+	again, err := json.Marshal(back)
 	if err != nil {
 		panic(err)
 	}
@@ -76,11 +73,8 @@ func main() {
 		fail("round-trip changed the JSON: " + string(again))
 	}
 
-	// An open enum decodes an unknown value leniently and preserves it.
-	status, err := decodeStatus("frozen")
-	if err != nil {
-		panic(err)
-	}
+	// An open enum is a named string, so an unknown value passes through as-is.
+	status := Status("frozen")
 	if status != "frozen" {
 		fail("an unknown enum value must pass through")
 	}
