@@ -60,6 +60,9 @@ mod tests {
         assert!(out.contains("pub mod i64_string {"));
         assert!(out.contains("pub mod u64_string {"));
         assert!(out.contains("pub mod base64_bytes {"));
+        // The helpers are format-agnostic: the string/base64 form is taken only in
+        // human-readable formats, native otherwise — the type never hardcodes JSON.
+        assert!(out.contains("if s.is_human_readable() {"));
         // The shape's struct routes its 64-bit field through the string codec.
         assert!(out.contains("pub struct Charge {"));
         assert!(out.contains("#[serde(with = \"i64_string\")]"));

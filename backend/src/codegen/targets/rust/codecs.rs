@@ -181,29 +181,43 @@ pub(crate) fn runtime_helpers() -> Vec<Decl> {
 
 const INDENT: &str = "    ";
 
-/// The `{ty}_string` module: a 64-bit integer that travels as a JSON string.
+/// The `{ty}_string` module: a 64-bit integer that travels as a string only in
+/// human-readable formats (JSON), staying native in binary ones. Branching on
+/// `is_human_readable` keeps the type format-agnostic — it never hardcodes JSON.
 fn int_string_module(ty: &str) -> String {
     format!(
         "pub mod {ty}_string {{\n\
          {INDENT}pub fn serialize<S: serde::Serializer>(v: &{ty}, s: S) -> Result<S::Ok, S::Error> {{\n\
-         {INDENT}{INDENT}s.serialize_str(&v.to_string())\n\
+         {INDENT}{INDENT}if s.is_human_readable() {{\n\
+         {INDENT}{INDENT}{INDENT}s.serialize_str(&v.to_string())\n\
+         {INDENT}{INDENT}}} else {{\n\
+         {INDENT}{INDENT}{INDENT}serde::Serialize::serialize(v, s)\n\
+         {INDENT}{INDENT}}}\n\
          {INDENT}}}\n\
          {INDENT}pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<{ty}, D::Error> {{\n\
-         {INDENT}{INDENT}let s = <String as serde::Deserialize>::deserialize(d)?;\n\
-         {INDENT}{INDENT}s.parse().map_err(serde::de::Error::custom)\n\
+         {INDENT}{INDENT}if d.is_human_readable() {{\n\
+         {INDENT}{INDENT}{INDENT}let s = <String as serde::Deserialize>::deserialize(d)?;\n\
+         {INDENT}{INDENT}{INDENT}s.parse().map_err(serde::de::Error::custom)\n\
+         {INDENT}{INDENT}}} else {{\n\
+         {INDENT}{INDENT}{INDENT}<{ty} as serde::Deserialize>::deserialize(d)\n\
+         {INDENT}{INDENT}}}\n\
          {INDENT}}}\n\
          {INDENT}pub mod option {{\n\
          {INDENT}{INDENT}pub fn serialize<S: serde::Serializer>(v: &Option<{ty}>, s: S) -> Result<S::Ok, S::Error> {{\n\
          {INDENT}{INDENT}{INDENT}match v {{\n\
-         {INDENT}{INDENT}{INDENT}{INDENT}Some(n) => s.serialize_str(&n.to_string()),\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}Some(n) => super::serialize(n, s),\n\
          {INDENT}{INDENT}{INDENT}{INDENT}None => s.serialize_none(),\n\
          {INDENT}{INDENT}{INDENT}}}\n\
          {INDENT}{INDENT}}}\n\
          {INDENT}{INDENT}pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<{ty}>, D::Error> {{\n\
-         {INDENT}{INDENT}{INDENT}let o = <Option<String> as serde::Deserialize>::deserialize(d)?;\n\
-         {INDENT}{INDENT}{INDENT}match o {{\n\
-         {INDENT}{INDENT}{INDENT}{INDENT}Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),\n\
-         {INDENT}{INDENT}{INDENT}{INDENT}None => Ok(None),\n\
+         {INDENT}{INDENT}{INDENT}if d.is_human_readable() {{\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}let o = <Option<String> as serde::Deserialize>::deserialize(d)?;\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}match o {{\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}None => Ok(None),\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}}}\n\
+         {INDENT}{INDENT}{INDENT}}} else {{\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}<Option<{ty}> as serde::Deserialize>::deserialize(d)\n\
          {INDENT}{INDENT}{INDENT}}}\n\
          {INDENT}{INDENT}}}\n\
          {INDENT}}}\n\
@@ -261,24 +275,36 @@ const BASE64_BYTES_MODULE: &str = r#"pub mod base64_bytes {
     }
 
     pub fn serialize<S: serde::Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&encode(v))
+        if s.is_human_readable() {
+            s.serialize_str(&encode(v))
+        } else {
+            s.serialize_bytes(v)
+        }
     }
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-        let s = <String as serde::Deserialize>::deserialize(d)?;
-        decode(&s).map_err(serde::de::Error::custom)
+        if d.is_human_readable() {
+            let s = <String as serde::Deserialize>::deserialize(d)?;
+            decode(&s).map_err(serde::de::Error::custom)
+        } else {
+            <Vec<u8> as serde::Deserialize>::deserialize(d)
+        }
     }
     pub mod option {
         pub fn serialize<S: serde::Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
             match v {
-                Some(b) => s.serialize_str(&super::encode(b)),
+                Some(b) => super::serialize(b, s),
                 None => s.serialize_none(),
             }
         }
         pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
-            let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
-            match o {
-                Some(s) => super::decode(&s).map(Some).map_err(serde::de::Error::custom),
-                None => Ok(None),
+            if d.is_human_readable() {
+                let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
+                match o {
+                    Some(s) => super::decode(&s).map(Some).map_err(serde::de::Error::custom),
+                    None => Ok(None),
+                }
+            } else {
+                <Option<Vec<u8>> as serde::Deserialize>::deserialize(d)
             }
         }
     }
