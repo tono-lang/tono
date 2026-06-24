@@ -78,7 +78,7 @@ mod tests {
     use crate::codegen::targets::go::GoRules;
     use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
     use crate::codegen::Formatter;
-    use crate::ir::{Prim, Shape, ShapeKind, Tref};
+    use crate::ir::{Prim, Tref};
 
     fn passthrough() -> Formatter {
         Formatter::new("cat", vec![])
