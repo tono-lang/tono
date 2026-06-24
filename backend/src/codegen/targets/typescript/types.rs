@@ -107,10 +107,24 @@ fn type_name(shape: &Shape, config: &CasingConfig) -> Symbol {
 fn field_of(member: &Member, config: &CasingConfig) -> Field {
     Field {
         name: Symbol::builtin(field_ident(member, config)),
-        ty: type_expr_of(&member.target),
+        ty: entries_or_map(type_expr_of(&member.target), &member.traits),
         nullable: !member.required,
         wire: wire_of(&member.traits),
     }
+}
+
+/// Reshape a map into an `@entries` pairs-array when the member carries the
+/// `core#entries` trait; any other type is unchanged.
+fn entries_or_map(ty: TypeExpr, traits: &[crate::ir::Trait]) -> TypeExpr {
+    match ty {
+        TypeExpr::Map(key, value) if has_entries(traits) => TypeExpr::Entries(key, value),
+        other => other,
+    }
+}
+
+/// Whether a member carries the `@entries` map-escape trait (`core#entries`).
+pub(crate) fn has_entries(traits: &[crate::ir::Trait]) -> bool {
+    traits.iter().any(|t| t.id == "core#entries")
 }
 
 /// Read the `@rename` identifier override for TypeScript (trait id `core#rename`,
@@ -284,6 +298,43 @@ mod tests {
                 && d.members.len() == 2
                 && d.members[0].name == "pending"
                 && d.members[1].name == "settled"));
+    }
+
+    #[test]
+    fn an_entries_map_becomes_a_pairs_array_field() {
+        let mut m = member(
+            "counts",
+            Tref::Map(
+                Box::new(Tref::Prim(Prim::I32)),
+                Box::new(Tref::Prim(Prim::String)),
+            ),
+            true,
+        );
+        m.traits = vec![Trait {
+            id: "core#entries".into(),
+            value: json!(true),
+        }];
+        let shape = structure("billing#Doc", vec![m]);
+        let decls = emit_type(&shape, &ts_casing());
+        assert!(matches!(&decls[..], [Decl::Interface(i)]
+            if matches!(&i.fields[0].ty, TypeExpr::Entries(k, v)
+                if matches!(k.as_ref(), TypeExpr::Ref(s) if s.name == "number")
+                    && matches!(v.as_ref(), TypeExpr::Ref(s) if s.name == "string"))));
+        // A map without @entries stays a map.
+        let plain = structure(
+            "billing#Doc",
+            vec![member(
+                "meta",
+                Tref::Map(
+                    Box::new(Tref::Prim(Prim::String)),
+                    Box::new(Tref::Prim(Prim::String)),
+                ),
+                true,
+            )],
+        );
+        let plain_decls = emit_type(&plain, &ts_casing());
+        assert!(matches!(&plain_decls[..], [Decl::Interface(i)]
+            if matches!(&i.fields[0].ty, TypeExpr::Map(_, _))));
     }
 
     #[test]

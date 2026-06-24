@@ -28,6 +28,15 @@ impl GoRules {
                 let rendered: Vec<String> = args.iter().map(|a| self.render_type(a)).collect();
                 format!("{}[{}]", symbol.name, rendered.join(", "))
             }
+            // An @entries map is an ordered list of pairs; the generated generic
+            // `Entry[K, V]` marshals each as a two-element array.
+            TypeExpr::Entries(key, value) => {
+                format!(
+                    "[]Entry[{}, {}]",
+                    self.render_type(key),
+                    self.render_type(value)
+                )
+            }
         }
     }
 
@@ -271,6 +280,13 @@ mod tests {
                 vec![TypeExpr::Ref(Symbol::builtin("Charge"))],
             )),
             "Page[Charge]"
+        );
+        assert_eq!(
+            rules.render_type(&TypeExpr::entries(
+                TypeExpr::Ref(Symbol::builtin("int32")),
+                TypeExpr::Ref(Symbol::builtin("string")),
+            )),
+            "[]Entry[int32, string]"
         );
     }
 

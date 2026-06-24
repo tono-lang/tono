@@ -7,7 +7,7 @@
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::typescript::types::{field_ident, type_ident, wire_key};
+use crate::codegen::targets::typescript::types::{field_ident, has_entries, type_ident, wire_key};
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
 
@@ -110,7 +110,7 @@ fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Ve
         .iter()
         .map(|m| {
             let access = format!("value.{}", field_ident(m, config));
-            let expr = guard_null(m, &access, encode_expr(&access, &m.target));
+            let expr = guard_null(m, &access, member_encode(&access, m));
             format!("    {}: {expr},\n", wire_key(m))
         })
         .collect();
@@ -118,7 +118,7 @@ fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Ve
         .iter()
         .map(|m| {
             let access = format!("raw.{}", wire_key(m));
-            let expr = guard_null(m, &access, decode_expr(&access, &m.target));
+            let expr = guard_null(m, &access, member_decode(&access, m));
             format!("    {}: {expr},\n", field_ident(m, config))
         })
         .collect();
@@ -156,6 +156,31 @@ fn enum_codecs(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
             format!("  return raw as {ty};"),
         ),
     ]
+}
+
+/// The encode expression for a member, taking the `@entries` escape into account:
+/// an entries map is an array of `[k, v]` pairs that is encoded element-wise.
+fn member_encode(access: &str, member: &Member) -> String {
+    match (&member.target, has_entries(&member.traits)) {
+        (Tref::Map(k, v), true) => format!(
+            "{access}.map(([k, v]) => [{}, {}])",
+            encode_expr("k", k),
+            encode_expr("v", v)
+        ),
+        _ => encode_expr(access, &member.target),
+    }
+}
+
+/// The decode expression for a member, taking the `@entries` escape into account.
+fn member_decode(access: &str, member: &Member) -> String {
+    match (&member.target, has_entries(&member.traits)) {
+        (Tref::Map(k, v), true) => format!(
+            "{access}.map(([k, v]: [any, any]) => [{}, {}])",
+            decode_expr("k", k),
+            decode_expr("v", v)
+        ),
+        _ => decode_expr(access, &member.target),
+    }
 }
 
 /// Wrap an optional member's conversion so an absent value is omitted.
@@ -295,6 +320,35 @@ mod tests {
         assert!(out.contains("note: value.note == null ? undefined : value.note,"));
         assert!(out.contains("export function decodeCharge(raw: any): Charge {"));
         assert!(out.contains("amountCents: decodeI64(raw.amount_cents),"));
+    }
+
+    #[test]
+    fn an_entries_field_encodes_and_decodes_element_wise() {
+        let mut counts = member(
+            "counts",
+            Tref::Map(
+                Box::new(Tref::Prim(Prim::I32)),
+                Box::new(Tref::Prim(Prim::I64)),
+            ),
+            true,
+        );
+        counts.traits = vec![crate::ir::Trait {
+            id: "core#entries".into(),
+            value: serde_json::json!(true),
+        }];
+        let shape = Shape {
+            id: "billing#Doc".into(),
+            kind: ShapeKind::Structure {
+                params: vec![],
+                members: vec![counts],
+            },
+            traits: vec![],
+        };
+        let out = rendered(&emit_codecs(&shape, &ts_casing()));
+        // The pairs array is mapped element-wise; the i64 value routes through its
+        // codec, the i32 key passes through.
+        assert!(out.contains("counts: value.counts.map(([k, v]) => [k, encodeI64(v)]),"));
+        assert!(out.contains("counts: raw.counts.map(([k, v]: [any, any]) => [k, decodeI64(v)]),"));
     }
 
     #[test]

@@ -35,6 +35,11 @@ impl TsRules {
                 let rendered: Vec<String> = args.iter().map(|a| self.render_type(a)).collect();
                 format!("{}<{}>", symbol.name, rendered.join(", "))
             }
+            // An @entries map is an ordered list of [key, value] tuples, which is
+            // already the `[[k, v], …]` wire shape.
+            TypeExpr::Entries(key, value) => {
+                format!("[{}, {}][]", self.render_type(key), self.render_type(value))
+            }
         }
     }
 
@@ -206,6 +211,13 @@ mod tests {
                 vec![TypeExpr::Ref(Symbol::builtin("Charge"))],
             )),
             "Page<Charge>"
+        );
+        assert_eq!(
+            rules.render_type(&TypeExpr::entries(
+                TypeExpr::Ref(Symbol::builtin("number")),
+                TypeExpr::Ref(Symbol::builtin("Charge")),
+            )),
+            "[number, Charge][]"
         );
     }
 

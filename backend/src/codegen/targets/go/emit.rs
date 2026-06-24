@@ -10,10 +10,10 @@
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::go::codecs::marshal_tagged_helper;
-use crate::codegen::targets::go::types::emit_type;
+use crate::codegen::targets::go::codecs::{entry_helper, marshal_tagged_helper};
+use crate::codegen::targets::go::types::{emit_type, has_entries};
 use crate::codegen::tree::{Alias, Decl, File};
-use crate::ir::{Module, ShapeKind};
+use crate::ir::{Module, Shape, ShapeKind};
 
 /// The branded well-known types: distinct named string types, so they serialize
 /// exactly as their inner value while staying distinct in code.
@@ -47,6 +47,10 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> File {
     {
         decls.push(marshal_tagged_helper());
     }
+    // The generic Entry helper is only needed when some field uses @entries.
+    if module.shapes.iter().any(shape_has_entries) {
+        decls.push(entry_helper());
+    }
     for shape in &module.shapes {
         decls.extend(emit_type(shape, config));
     }
@@ -54,6 +58,15 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> File {
         module: module.name.clone(),
         decls,
     }
+}
+
+/// Whether any of a shape's members carries the `@entries` map escape.
+fn shape_has_entries(shape: &Shape) -> bool {
+    let members = match &shape.kind {
+        ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => members,
+        _ => return false,
+    };
+    members.iter().any(|m| has_entries(&m.traits))
 }
 
 #[cfg(test)]
@@ -161,5 +174,54 @@ mod tests {
         assert!(!out.contains("import \"models\""));
         assert!(out.contains("type Method struct {"));
         assert!(out.contains("type CardData struct {"));
+    }
+
+    #[test]
+    fn a_module_with_an_entries_field_emits_the_entry_helper() {
+        let mut counts = member(
+            "counts",
+            Tref::Map(
+                Box::new(Tref::Prim(Prim::I32)),
+                Box::new(Tref::Prim(Prim::String)),
+            ),
+            true,
+        );
+        counts.traits = vec![crate::ir::Trait {
+            id: "core#entries".into(),
+            value: serde_json::json!(true),
+        }];
+        let module = Module {
+            name: "models".into(),
+            shapes: vec![
+                // An enum exercises the non-struct/non-union path of the entries
+                // scan, which contributes no @entries field.
+                Shape {
+                    id: "models#Status".into(),
+                    kind: ShapeKind::Enum {
+                        backing: crate::ir::EnumBacking::String,
+                        values: vec![("active".into(), None)],
+                    },
+                    traits: vec![],
+                },
+                Shape {
+                    id: "models#Doc".into(),
+                    kind: ShapeKind::Structure {
+                        params: vec![],
+                        members: vec![counts],
+                    },
+                    traits: vec![],
+                },
+            ],
+            operations: vec![],
+        };
+        let out = render_file(
+            &emit_module(&module, &go_casing()),
+            &GoRules,
+            &passthrough(),
+        )
+        .text;
+        // The generic Entry helper is emitted; the field renders as its slice.
+        assert!(out.contains("type Entry[K any, V any] struct {"));
+        assert!(out.contains("\tCounts []Entry[int32, string] `json:\"counts\"`"));
     }
 }

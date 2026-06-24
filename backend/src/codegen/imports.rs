@@ -119,7 +119,7 @@ fn walk_type(
     match ty {
         TypeExpr::Ref(symbol) => collect_symbol(symbol, acc, visited),
         TypeExpr::List(inner) | TypeExpr::Nullable(inner) => walk_type(inner, acc, visited),
-        TypeExpr::Map(key, value) => {
+        TypeExpr::Map(key, value) | TypeExpr::Entries(key, value) => {
             walk_type(key, acc, visited);
             walk_type(value, acc, visited);
         }
@@ -297,6 +297,21 @@ mod tests {
                     TypeExpr::Ref(Symbol::imported("Key", "k", "Key")),
                     TypeExpr::nullable(TypeExpr::Ref(Symbol::imported("Val", "v", "Val"))),
                 )),
+            )],
+        );
+        assert_eq!(collect(&file).len(), 2);
+    }
+
+    #[test]
+    fn an_entries_type_collects_both_key_and_value_imports() {
+        let file = interface_file(
+            "billing",
+            vec![field(
+                "counts",
+                TypeExpr::entries(
+                    TypeExpr::Ref(Symbol::imported("Key", "k", "Key")),
+                    TypeExpr::Ref(Symbol::imported("Val", "v", "Val")),
+                ),
             )],
         );
         assert_eq!(collect(&file).len(), 2);

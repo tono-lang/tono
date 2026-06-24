@@ -67,6 +67,13 @@ mod tests {
                     let rendered: Vec<String> = args.iter().map(|a| self.render_type(a)).collect();
                     format!("{}<{}>", symbol.name, rendered.join(", "))
                 }
+                TypeExpr::Entries(key, value) => {
+                    format!(
+                        "Vec<({}, {})>",
+                        self.render_type(key),
+                        self.render_type(value)
+                    )
+                }
             }
         }
 
@@ -444,6 +451,15 @@ mod tests {
                             nullable: true,
                             wire: None,
                         },
+                        Field {
+                            name: Symbol::builtin("counts"),
+                            ty: TypeExpr::entries(
+                                TypeExpr::Ref(Symbol::builtin("i32")),
+                                TypeExpr::Ref(Symbol::imported("Item", "catalog", "Item")),
+                            ),
+                            nullable: false,
+                            wire: None,
+                        },
                     ],
                 }),
                 Decl::Enum(EnumDecl {
@@ -477,6 +493,7 @@ mod tests {
         assert!(out.contains("index: HashMap<String, i64>,"));
         assert!(out.contains("note: Option<String>,"));
         assert!(out.contains("page: Option<Page<Item>>,"));
+        assert!(out.contains("counts: Vec<(i32, Item)>,"));
         assert!(out.contains("pub enum Status {"));
         assert!(out.contains("pub enum Method {"));
         assert!(out.contains("pub fn create(input: String) -> String { runtime.execute() }"));

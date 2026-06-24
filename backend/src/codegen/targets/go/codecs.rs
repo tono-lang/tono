@@ -100,6 +100,38 @@ pub(crate) fn union_item(discriminator: &str, members: &[Member], name: &str) ->
     Decl::Raw(Raw { text, refs })
 }
 
+/// The generic `Entry[K, V]` helper for `@entries` maps: an ordered pair that
+/// marshals to and unmarshals from a two-element JSON array `[k, v]`. The
+/// assembler emits it once for a module that has any `@entries` field. It
+/// references `encoding/json`.
+pub(crate) fn entry_helper() -> Decl {
+    let text = "\
+type Entry[K any, V any] struct {
+\tKey   K
+\tValue V
+}
+
+func (e Entry[K, V]) MarshalJSON() ([]byte, error) {
+\treturn json.Marshal([]any{e.Key, e.Value})
+}
+
+func (e *Entry[K, V]) UnmarshalJSON(data []byte) error {
+\tvar pair [2]json.RawMessage
+\tif err := json.Unmarshal(data, &pair); err != nil {
+\t\treturn err
+\t}
+\tif err := json.Unmarshal(pair[0], &e.Key); err != nil {
+\t\treturn err
+\t}
+\treturn json.Unmarshal(pair[1], &e.Value)
+}"
+    .to_string();
+    Decl::Raw(Raw {
+        text,
+        refs: vec![Symbol::imported("json", "encoding/json", "json")],
+    })
+}
+
 /// The shared `marshalTagged` helper: flattens a payload's fields next to a
 /// discriminator key. The assembler emits it once for a module that has any
 /// union. It references `encoding/json`.
@@ -178,5 +210,17 @@ mod tests {
                 && raw.refs.iter().any(|s| s.name == "fmt")
                 && raw.refs.iter().any(|s| s.name == "CardData")
                 && raw.refs.iter().any(|s| s.name == "BankData")));
+    }
+
+    #[test]
+    fn the_entry_helper_is_a_generic_pair_marshalling_to_an_array() {
+        let decl = entry_helper();
+        assert!(matches!(&decl, Decl::Raw(raw) if
+            raw.text.contains("type Entry[K any, V any] struct {")
+                && raw.text.contains("func (e Entry[K, V]) MarshalJSON()")
+                && raw.text.contains("json.Marshal([]any{e.Key, e.Value})")
+                && raw.text.contains("func (e *Entry[K, V]) UnmarshalJSON(")
+                && raw.refs.len() == 1
+                && raw.refs[0].name == "json"));
     }
 }

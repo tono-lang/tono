@@ -136,6 +136,12 @@ pub enum TypeExpr {
     Map(Box<TypeExpr>, Box<TypeExpr>),
     Nullable(Box<TypeExpr>),
     Generic(Symbol, Vec<TypeExpr>),
+    /// An `@entries` map: an ordered sequence of `(key, value)` pairs that travels
+    /// on the wire as an array of two-element arrays `[[k, v], …]` instead of a
+    /// JSON object, the escape for a non-string-coercible map key. The in-code
+    /// shape is target-specific (a tuple list / pair list), but the wire shape is
+    /// shared, so a target renders this rather than `Map`.
+    Entries(Box<TypeExpr>, Box<TypeExpr>),
 }
 
 impl TypeExpr {
@@ -152,6 +158,11 @@ impl TypeExpr {
     /// `inner?` (nullable).
     pub fn nullable(inner: TypeExpr) -> Self {
         TypeExpr::Nullable(Box::new(inner))
+    }
+
+    /// An `@entries` pairs-array of `(key, value)`.
+    pub fn entries(key: TypeExpr, value: TypeExpr) -> Self {
+        TypeExpr::Entries(Box::new(key), Box::new(value))
     }
 }
 

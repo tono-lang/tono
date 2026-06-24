@@ -32,6 +32,11 @@ pub(crate) fn type_string(ty: &TypeExpr) -> String {
             let rendered: Vec<String> = args.iter().map(type_string).collect();
             format!("{}<{}>", symbol.name, rendered.join(", "))
         }
+        // An @entries map is an ordered list of (key, value) tuples; serde renders
+        // a `Vec<(K, V)>` directly as the `[[k, v], …]` wire array.
+        TypeExpr::Entries(key, value) => {
+            format!("Vec<({}, {})>", type_string(key), type_string(value))
+        }
     }
 }
 
@@ -275,6 +280,13 @@ mod tests {
                 vec![TypeExpr::Ref(Symbol::builtin("Charge"))],
             )),
             "Page<Charge>"
+        );
+        assert_eq!(
+            rules.render_type(&TypeExpr::entries(
+                TypeExpr::Ref(Symbol::builtin("i32")),
+                TypeExpr::Ref(Symbol::builtin("String")),
+            )),
+            "Vec<(i32, String)>"
         );
     }
 
