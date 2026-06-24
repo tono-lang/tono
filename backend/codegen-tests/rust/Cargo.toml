@@ -3,6 +3,9 @@ name = "codegen-tests-rust"
 version = "0.0.0"
 edition = "2021"
 publish = false
+# The round-trip driver is the default binary; the conformance harness selects
+# the second binary explicitly with `--bin conformance`.
+default-run = "codegen-tests-rust"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

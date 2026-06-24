@@ -1,3 +1,5 @@
+//go:build !conformance
+
 // The round-trip driver. The generated types live in models.go (package main),
 // written by the harness at run time. This driver asserts the hard wire cases
 // hold: a 64-bit integer above 2^53 travels as a JSON string, bytes travel as

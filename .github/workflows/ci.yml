@@ -107,11 +107,30 @@ jobs:
       - name: Generate, compile, and round-trip the emitted Go
         run: cargo test --test go_roundtrip
 
+  conformance:
+    name: Cross-language conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.21"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Install the TypeScript toolchain
+        run: npm ci --ignore-scripts
+        working-directory: backend/codegen-tests/typescript
+      - name: Check that all three targets agree on the wire
+        run: cargo test --test conformance
+
   # Single aggregating check - this is the one to mark "required" in branch protection.
   ci-success:
     name: CI success
     runs-on: ubuntu-latest
-    needs: [rust, ocaml, typescript, rust-codegen, go-codegen]
+    needs: [rust, ocaml, typescript, rust-codegen, go-codegen, conformance]
     if: always()
     steps:
       - name: Verify required jobs
@@ -120,7 +139,8 @@ jobs:
             || [ "${{ needs.ocaml.result }}" != "success" ] \
             || [ "${{ needs.typescript.result }}" != "success" ] \
             || [ "${{ needs.rust-codegen.result }}" != "success" ] \
-            || [ "${{ needs.go-codegen.result }}" != "success" ]; then
+            || [ "${{ needs.go-codegen.result }}" != "success" ] \
+            || [ "${{ needs.conformance.result }}" != "success" ]; then
             echo "One or more required jobs failed."
             exit 1
           fi

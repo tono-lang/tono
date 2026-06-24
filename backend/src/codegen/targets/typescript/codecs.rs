@@ -70,8 +70,10 @@ fn union_codecs(
             .map(|m| {
                 let tag = wire_key(m);
                 let payload = payload_codec_name(&m.target);
+                // The payload codec returns `unknown` on encode, so the spread is
+                // cast to an object type to remain valid under strict TypeScript.
                 format!(
-                    "    case \"{tag}\": return {{ {discriminator}: \"{tag}\", ...{op}{payload}({src}) }}{suffix};\n"
+                    "    case \"{tag}\": return {{ {discriminator}: \"{tag}\", ...({op}{payload}({src}) as object) }}{suffix};\n"
                 )
             })
             .collect()
@@ -392,11 +394,11 @@ mod tests {
         );
         assert!(out.contains("switch (value.type) {"));
         assert!(out.contains(
-            "case \"card\": return { type: \"card\", ...encodeCardData(value as any) };"
+            "case \"card\": return { type: \"card\", ...(encodeCardData(value as any) as object) };"
         ));
         assert!(out.contains("export function decodePaymentMethod(raw: any): PaymentMethod {"));
         assert!(out.contains(
-            "case \"card\": return { type: \"card\", ...decodeCardData(raw) } as PaymentMethod;"
+            "case \"card\": return { type: \"card\", ...(decodeCardData(raw) as object) } as PaymentMethod;"
         ));
         assert!(out.contains("throw new Error(\"unknown variant\");"));
     }
