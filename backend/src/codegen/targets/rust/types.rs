@@ -7,6 +7,7 @@
 
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Symbol, SymbolKind};
+use crate::codegen::targets::rust::codecs::{enum_item, union_item};
 use crate::codegen::targets::rust::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, Interface, TypeExpr};
 use crate::ir::{Member, Shape, ShapeKind, Tref};
@@ -35,16 +36,34 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
 }
 
 /// Emit the declaration(s) for a shape. Structures become struct interfaces;
-/// enums and unions are emitted by a later phase (they need custom serde
-/// plumbing) and contribute nothing here.
+/// enums and unions become verbatim items (custom serde impls) built by the
+/// codec layer. Other shape kinds contribute nothing here.
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     match &shape.kind {
         ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
             name: type_name(shape, config),
             fields: members.iter().map(|m| field_of(m, config)).collect(),
         })],
+        ShapeKind::Enum { values, .. } => {
+            vec![enum_item(values, &type_ident(shape, config))]
+        }
+        ShapeKind::Union {
+            discriminator,
+            members,
+            ..
+        } => vec![union_item(
+            discriminator,
+            members,
+            &type_ident(shape, config),
+        )],
         _ => vec![],
     }
+}
+
+/// The PascalCase Rust identifier for an open-enum or union variant, derived from
+/// its wire value / member name. Independent of the wire string the codec emits.
+pub(crate) fn variant_ident(name: &str, config: &CasingConfig) -> String {
+    casing::transform(name, SymbolKind::Variant, config, None)
 }
 
 /// The identifier for a shape's own name (after the `module#` prefix). Type names
@@ -237,8 +256,8 @@ mod tests {
     }
 
     #[test]
-    fn enums_and_unions_emit_nothing_yet() {
-        let enum_shape = Shape {
+    fn an_enum_becomes_a_verbatim_open_enum_item() {
+        let shape = Shape {
             id: "billing#Status".into(),
             kind: ShapeKind::Enum {
                 backing: crate::ir::EnumBacking::String,
@@ -246,16 +265,49 @@ mod tests {
             },
             traits: vec![],
         };
-        let union_shape = Shape {
+        let decls = emit_type(&shape, &rust_casing());
+        assert!(matches!(&decls[..], [Decl::Raw(r)]
+            if r.text.contains("pub enum Status {") && r.text.contains("Unknown(String)")));
+    }
+
+    #[test]
+    fn a_union_becomes_a_verbatim_tagged_enum_item() {
+        let shape = Shape {
             id: "billing#Method".into(),
             kind: ShapeKind::Union {
                 params: vec![],
                 discriminator: "type".into(),
-                members: vec![],
+                members: vec![member(
+                    "card",
+                    Tref::Ref {
+                        id: "billing#CardData".into(),
+                        args: vec![],
+                    },
+                    true,
+                )],
             },
             traits: vec![],
         };
-        assert!(emit_type(&enum_shape, &rust_casing()).is_empty());
-        assert!(emit_type(&union_shape, &rust_casing()).is_empty());
+        let decls = emit_type(&shape, &rust_casing());
+        assert!(matches!(&decls[..], [Decl::Raw(r)]
+            if r.text.contains("#[serde(tag = \"type\")]")
+                && r.text.contains("Card(CardData)")));
+    }
+
+    #[test]
+    fn services_and_operations_emit_nothing() {
+        let service = Shape {
+            id: "billing#Api".into(),
+            kind: ShapeKind::Service { operations: vec![] },
+            traits: vec![],
+        };
+        assert!(emit_type(&service, &rust_casing()).is_empty());
+    }
+
+    #[test]
+    fn variant_ident_pascal_cases_wire_values() {
+        let config = CasingConfig::new(CaseStyle::Pascal);
+        assert_eq!(variant_ident("pending", &config), "Pending");
+        assert_eq!(variant_ident("card_present", &config), "CardPresent");
     }
 }

@@ -10,30 +10,37 @@
 
 use crate::codegen::symbol::Import;
 use crate::codegen::target::RenderRules;
+use crate::codegen::targets::rust::codecs::serde_with;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 
 /// The standard derives every generated struct and enum carries.
 const DERIVES: &str = "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]";
+
+/// Render a component-tree type expression into Rust surface syntax. Free so the
+/// codec layer (which builds union payload types) can reuse it.
+pub(crate) fn type_string(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Ref(symbol) => symbol.name.clone(),
+        TypeExpr::List(inner) => format!("Vec<{}>", type_string(inner)),
+        TypeExpr::Map(key, value) => format!(
+            "std::collections::HashMap<{}, {}>",
+            type_string(key),
+            type_string(value)
+        ),
+        TypeExpr::Nullable(inner) => format!("Option<{}>", type_string(inner)),
+        TypeExpr::Generic(symbol, args) => {
+            let rendered: Vec<String> = args.iter().map(type_string).collect();
+            format!("{}<{}>", symbol.name, rendered.join(", "))
+        }
+    }
+}
 
 /// The Rust render rules.
 pub struct RustRules;
 
 impl RustRules {
     fn render_type(&self, ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Ref(symbol) => symbol.name.clone(),
-            TypeExpr::List(inner) => format!("Vec<{}>", self.render_type(inner)),
-            TypeExpr::Map(key, value) => format!(
-                "std::collections::HashMap<{}, {}>",
-                self.render_type(key),
-                self.render_type(value)
-            ),
-            TypeExpr::Nullable(inner) => format!("Option<{}>", self.render_type(inner)),
-            TypeExpr::Generic(symbol, args) => {
-                let rendered: Vec<String> = args.iter().map(|a| self.render_type(a)).collect();
-                format!("{}<{}>", symbol.name, rendered.join(", "))
-            }
-        }
+        type_string(ty)
     }
 
     fn render_field(&self, field: &Field) -> String {
@@ -44,7 +51,8 @@ impl RustRules {
         };
         // The wire key rides the serialization axis (#[serde(rename)]); it never
         // changes the in-code identifier. An optional field is skipped when None
-        // on serialize and defaulted when absent on deserialize.
+        // on serialize and defaulted when absent on deserialize. A 64-bit integer
+        // or bytes field additionally routes through a custom `with` codec.
         let mut args: Vec<String> = Vec::new();
         if let Some(wire) = &field.wire {
             args.push(format!("rename = \"{wire}\""));
@@ -52,6 +60,9 @@ impl RustRules {
         if field.nullable {
             args.push("default".into());
             args.push("skip_serializing_if = \"Option::is_none\"".into());
+        }
+        if let Some(with) = serde_with(field) {
+            args.push(format!("with = \"{with}\""));
         }
         let attr = if args.is_empty() {
             String::new()
@@ -161,15 +172,48 @@ mod tests {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
             fields: vec![field(
-                "amount_cents",
-                TypeExpr::Ref(Symbol::builtin("i64")),
+                "memo_text",
+                TypeExpr::Ref(Symbol::builtin("String")),
                 false,
-                Some("amount"),
+                Some("memo"),
             )],
         });
         let out = RustRules.render_decl(&decl);
-        assert!(out.contains("    #[serde(rename = \"amount\")]\n"));
+        assert!(out.contains("    #[serde(rename = \"memo\")]\n"));
+        assert!(out.contains("    pub memo_text: String,\n"));
+    }
+
+    #[test]
+    fn a_wide_integer_field_routes_through_the_string_codec() {
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Charge"),
+            fields: vec![
+                field(
+                    "amount_cents",
+                    TypeExpr::Ref(Symbol::builtin("i64")),
+                    false,
+                    Some("amount"),
+                ),
+                field(
+                    "blob",
+                    TypeExpr::Ref(Symbol::builtin("Vec<u8>")),
+                    false,
+                    None,
+                ),
+                field("tip", TypeExpr::Ref(Symbol::builtin("u64")), true, None),
+            ],
+        });
+        let out = RustRules.render_decl(&decl);
+        // The wire rename and the string codec combine into one serde attribute.
+        assert!(out.contains("    #[serde(rename = \"amount\", with = \"i64_string\")]\n"));
         assert!(out.contains("    pub amount_cents: i64,\n"));
+        // Bytes route through the base64 codec.
+        assert!(out.contains("    #[serde(with = \"base64_bytes\")]\n"));
+        // A nullable wide integer routes through the option submodule.
+        assert!(out.contains(
+            "    #[serde(default, skip_serializing_if = \"Option::is_none\", with = \"u64_string::option\")]\n"
+        ));
+        assert!(out.contains("    pub tip: Option<u64>,\n"));
     }
 
     #[test]

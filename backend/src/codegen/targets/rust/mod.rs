@@ -7,6 +7,7 @@
 //! serde cannot express idiomatically (the open-enum `Unknown` arm, the
 //! integer-as-string helpers) are emitted as verbatim items by a later phase.
 
+pub mod codecs;
 pub mod render;
 pub mod symbols;
 pub mod types;
