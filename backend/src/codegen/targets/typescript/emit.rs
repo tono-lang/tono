@@ -13,7 +13,7 @@ use crate::ir::Module;
 /// The branded well-known type aliases: zero-dependency nominal types that are a
 /// `string` underneath, distinguished only at the type level.
 pub fn well_known_decls() -> Vec<Decl> {
-    ["Timestamp", "LocalDate", "Duration", "Uuid"]
+    ["Timestamp", "LocalDate", "Duration"]
         .iter()
         .map(|name| {
             Decl::Alias(Alias {
@@ -62,7 +62,8 @@ mod tests {
         assert!(
             out.contains("export type Timestamp = string & { readonly __brand: \"Timestamp\" };")
         );
-        assert!(out.contains("export type Uuid = string & { readonly __brand: \"Uuid\" };"));
+        // uuid is not a branded type: it never appears among the aliases.
+        assert!(!out.contains("Uuid"), "uuid is no longer branded");
     }
 
     #[test]

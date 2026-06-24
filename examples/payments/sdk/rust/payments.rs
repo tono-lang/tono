@@ -12,10 +12,6 @@ pub struct LocalDate(pub String);
 #[serde(transparent)]
 pub struct Duration(pub String);
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(transparent)]
-pub struct Uuid(pub String);
-
 pub mod i64_string {
     pub fn serialize<S: serde::Serializer>(v: &i64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&v.to_string())
@@ -160,7 +156,7 @@ pub mod base64_bytes {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Charge {
-    pub id: Uuid,
+    pub id: String,
     #[serde(with = "i64_string")]
     pub amount: i64,
     #[serde(with = "u64_string")]

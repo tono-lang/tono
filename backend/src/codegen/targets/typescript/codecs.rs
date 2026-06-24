@@ -216,7 +216,6 @@ fn decode_expr(value: &str, t: &Tref) -> String {
         Tref::Prim(Prim::Timestamp) => format!("({value} as Timestamp)"),
         Tref::Prim(Prim::Date) => format!("({value} as LocalDate)"),
         Tref::Prim(Prim::Duration) => format!("({value} as Duration)"),
-        Tref::Prim(Prim::Uuid) => format!("({value} as Uuid)"),
         Tref::Prim(_) | Tref::Param(_) => value.to_string(),
         Tref::Ref { id, .. } => format!("decode{}({value})", type_suffix(id)),
         Tref::List(inner) => {
@@ -411,7 +410,8 @@ mod tests {
             decode_expr("x", &Tref::Prim(Prim::Duration)),
             "(x as Duration)"
         );
-        assert_eq!(decode_expr("x", &Tref::Prim(Prim::Uuid)), "(x as Uuid)");
+        // uuid is not branded: it decodes as a plain string, untouched.
+        assert_eq!(decode_expr("x", &Tref::Prim(Prim::Uuid)), "x");
         assert_eq!(encode_expr("x", &card()), "encodeCharge(x)");
         assert_eq!(decode_expr("x", &card()), "decodeCharge(x)");
         assert_eq!(

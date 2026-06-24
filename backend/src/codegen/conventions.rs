@@ -168,7 +168,9 @@ pub fn prim_spelling(p: &Prim) -> PrimSpelling {
         Prim::Timestamp => ("Timestamp", "Timestamp", "Timestamp"),
         Prim::Date => ("LocalDate", "LocalDate", "LocalDate"),
         Prim::Duration => ("Duration", "Duration", "Duration"),
-        Prim::Uuid => ("Uuid", "Uuid", "Uuid"),
+        // `uuid` is not a branded type: it lowers to the native string, like any
+        // other string-shaped value.
+        Prim::Uuid => ("String", "string", "string"),
     };
     PrimSpelling {
         rust,
@@ -484,7 +486,7 @@ mod tests {
             (Prim::Timestamp, "Timestamp", "Timestamp", "Timestamp"),
             (Prim::Date, "LocalDate", "LocalDate", "LocalDate"),
             (Prim::Duration, "Duration", "Duration", "Duration"),
-            (Prim::Uuid, "Uuid", "Uuid", "Uuid"),
+            (Prim::Uuid, "String", "string", "string"),
         ];
         for (prim, rust, go, typescript) in cases {
             let s = prim_spelling(&prim);

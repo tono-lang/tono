@@ -145,7 +145,7 @@ fn wire_tag(member: &Member) -> String {
 /// over `String`, so they serialize exactly as their inner value while staying
 /// distinct types in code. The assembler prepends these to a module.
 pub(crate) fn well_known_decls() -> Vec<Decl> {
-    ["Timestamp", "LocalDate", "Duration", "Uuid"]
+    ["Timestamp", "LocalDate", "Duration"]
         .iter()
         .map(|name| {
             Decl::Raw(Raw {

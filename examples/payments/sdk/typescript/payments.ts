@@ -6,8 +6,6 @@ export type LocalDate = string & { readonly __brand: "LocalDate" };
 
 export type Duration = string & { readonly __brand: "Duration" };
 
-export type Uuid = string & { readonly __brand: "Uuid" };
-
 export function encodeI64(v: bigint): string {
   return v.toString();
 }
@@ -25,7 +23,7 @@ export function decodeBytes(s: string): Uint8Array {
 }
 
 export interface Charge {
-  id: Uuid;
+  id: string;
   amount: bigint;
   fee: bigint;
   receipt: Uint8Array;
@@ -58,7 +56,7 @@ export function encodeCharge(value: Charge): unknown {
 
 export function decodeCharge(raw: any): Charge {
   return {
-    id: raw.id as Uuid,
+    id: raw.id,
     amount: decodeI64(raw.amount),
     fee: decodeI64(raw.fee),
     receipt: decodeBytes(raw.receipt),

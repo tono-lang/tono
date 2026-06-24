@@ -11,8 +11,6 @@ type LocalDate string
 
 type Duration string
 
-type Uuid string
-
 func marshalTagged(disc string, tag string, payload any) ([]byte, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -28,7 +26,7 @@ func marshalTagged(disc string, tag string, payload any) ([]byte, error) {
 }
 
 type Charge struct {
-	ID       Uuid              `json:"id"`
+	ID       string            `json:"id"`
 	Amount   int64             `json:"amount,string"`
 	Fee      uint64            `json:"fee,string"`
 	Receipt  []byte            `json:"receipt"`

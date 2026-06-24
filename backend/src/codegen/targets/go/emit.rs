@@ -19,7 +19,7 @@ use crate::ir::{Module, Shape, ShapeKind};
 /// The branded well-known types: distinct named string types, so they serialize
 /// exactly as their inner value while staying distinct in code.
 pub fn well_known_decls() -> Vec<Decl> {
-    ["Timestamp", "LocalDate", "Duration", "Uuid"]
+    ["Timestamp", "LocalDate", "Duration"]
         .iter()
         .map(|name| {
             Decl::Alias(Alias {
