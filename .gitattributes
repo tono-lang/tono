@@ -1,0 +1,3 @@
+# Syntax highlighting on GitHub: Tono is not registered in Linguist yet,
+# so highlight .tono files using Rust's grammar (closest match to Tono's syntax).
+*.tono linguist-language=Rust
