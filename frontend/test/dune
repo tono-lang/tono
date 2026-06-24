@@ -12,5 +12,6 @@
   file_test
   golden_test
   typecheck_test
-  calculus_test)
+  calculus_test
+  cli_test)
  (libraries tono_frontend alcotest qcheck-core qcheck-core.runner yojson))
