@@ -233,7 +233,7 @@ fn decode_expr(value: &str, t: &Tref) -> String {
 /// used as-is (type names are PascalCase in the IR). A referenced type's own
 /// `@rename` is not visible here.
 fn type_suffix(id: &str) -> String {
-    id.rsplit('#').next().unwrap_or(id).to_string()
+    crate::codegen::conventions::type_ident_from_id(id)
 }
 
 fn function(name: &str, params: &[(&str, &str)], ret: &str, body: &str) -> Decl {
@@ -341,12 +341,12 @@ mod tests {
     #[test]
     fn union_codec_switches_on_the_discriminator() {
         let shape = union_shape(
-            "billing#PaymentMethod",
+            "billing#payment_method",
             "type",
             vec![member(
                 "card",
                 Tref::Ref {
-                    id: "billing#CardData".into(),
+                    id: "billing#card_data".into(),
                     args: vec![],
                 },
                 true,

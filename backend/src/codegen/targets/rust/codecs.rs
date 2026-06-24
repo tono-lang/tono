@@ -372,11 +372,11 @@ mod tests {
     #[test]
     fn a_union_emits_a_tagged_enum_and_declares_payload_refs() {
         let members = vec![
-            wire_member("card", "cards#CardData", Some("CARD")),
-            wire_member("bank", "billing#BankData", None),
+            wire_member("card", "cards#card_data", Some("CARD")),
+            wire_member("bank", "billing#bank_data", None),
             // A wire override that already equals the PascalCase identifier needs
             // no rename, exercising the no-rename path.
-            wire_member("wire", "billing#WireData", Some("Wire")),
+            wire_member("wire", "billing#wire_data", Some("Wire")),
         ];
         let decl = union_item("type", &members, "Method");
         assert!(matches!(&decl, Decl::Raw(raw) if

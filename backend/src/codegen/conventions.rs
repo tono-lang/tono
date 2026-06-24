@@ -8,7 +8,7 @@
 //! it in one place is what stops every new language from re-deriving the same
 //! trait plumbing.
 
-use crate::codegen::casing::{self, CasingConfig};
+use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr};
 use crate::ir::{Member, Prim, Shape, ShapeKind, Trait, Tref};
@@ -55,17 +55,36 @@ pub fn entries_or_map(ty: TypeExpr, traits: &[Trait]) -> TypeExpr {
     }
 }
 
-/// The identifier for a shape's own name (after the `module#` prefix). Type names
-/// are PascalCase in the IR, so they are used as-is (casing them would corrupt
-/// multi-word names like `KitchenSink`); only a `@rename(lang)` overrides it.
+/// Case a snake_case type name to PascalCase — the spelling every current target
+/// uses for type identifiers — honoring the default initialism set. The IR carries
+/// type names in snake_case (the frontend requires it), exactly like field and
+/// member names, so they ride the same casing engine.
+fn type_case(name: &str) -> String {
+    casing::transform(
+        name,
+        SymbolKind::Type,
+        &CasingConfig::new(CaseStyle::Pascal),
+        None,
+    )
+}
+
+/// The identifier for a shape's own name (after the `module#` prefix), cased to
+/// PascalCase; a `@rename(lang)` overrides it verbatim.
 pub fn type_ident(shape: &Shape, lang: &str) -> String {
     let local = shape.id.rsplit('#').next().unwrap_or(&shape.id);
-    rename_of(&shape.traits, lang).unwrap_or_else(|| local.to_string())
+    rename_of(&shape.traits, lang).unwrap_or_else(|| type_case(local))
 }
 
 /// A symbol for a shape's own name.
 pub fn type_name(shape: &Shape, lang: &str) -> Symbol {
     Symbol::builtin(type_ident(shape, lang))
+}
+
+/// The PascalCase in-code identifier for a type id (`module#name`, or a bare
+/// name), matching how the type is defined and referenced. Used where only the id
+/// is in hand (e.g. naming a payload's codec).
+pub fn type_ident_from_id(id: &str) -> String {
+    type_case(id.rsplit('#').next().unwrap_or(id))
 }
 
 /// The cased identifier for a member, honoring a `@rename(lang)`. This is the
@@ -80,12 +99,16 @@ pub fn field_ident(member: &Member, config: &CasingConfig, lang: &str) -> String
     )
 }
 
-/// A nominal reference `module#Name` becomes a symbol imported from `module`; an
-/// id without a module separator is treated as an in-scope name.
+/// A nominal reference `module#name` becomes a symbol imported from `module`; an
+/// id without a module separator is treated as an in-scope name. The name is cased
+/// to PascalCase so a reference matches the type's own (also cased) definition.
 pub fn ref_symbol(id: &str) -> Symbol {
     match id.split_once('#') {
-        Some((module, name)) => Symbol::imported(name, module, name),
-        None => Symbol::builtin(id),
+        Some((module, name)) => {
+            let cased = type_case(name);
+            Symbol::imported(cased.clone(), module, cased)
+        }
+        None => Symbol::builtin(type_case(id)),
     }
 }
 
@@ -288,7 +311,7 @@ mod tests {
     #[test]
     fn type_ident_uses_the_local_name_unless_renamed() {
         let shape = |traits: Vec<Trait>| Shape {
-            id: "billing#KitchenSink".into(),
+            id: "billing#kitchen_sink".into(),
             kind: ShapeKind::Structure {
                 params: vec![],
                 members: vec![],
@@ -333,18 +356,32 @@ mod tests {
 
     #[test]
     fn ref_symbol_imports_nominal_refs_and_keeps_bare_names_local() {
-        let imported = ref_symbol("payments#Charge");
-        assert_eq!(imported.name, "Charge");
+        // The snake_case id is cased to PascalCase, so a reference matches the
+        // type's own definition; the imported name is cased too.
+        let imported = ref_symbol("payments#card_data");
+        assert_eq!(imported.name, "CardData");
         assert_eq!(
             imported.import,
             Some(Import {
                 module: "payments".into(),
-                imported: "Charge".into(),
+                imported: "CardData".into(),
             })
         );
-        let bare = ref_symbol("Bare");
-        assert_eq!(bare.name, "Bare");
+        let bare = ref_symbol("bare_thing");
+        assert_eq!(bare.name, "BareThing");
         assert_eq!(bare.import, None);
+    }
+
+    #[test]
+    fn type_ident_casing_handles_multiword_and_acronyms() {
+        // The shared casing the definition and every reference go through: a
+        // snake_case id to PascalCase, with the initialism set re-upcasing `http`.
+        assert_eq!(
+            type_ident_from_id("billing#payment_method"),
+            "PaymentMethod"
+        );
+        assert_eq!(type_ident_from_id("billing#http_code"), "HTTPCode");
+        assert_eq!(type_ident_from_id("charge"), "Charge");
     }
 
     #[test]

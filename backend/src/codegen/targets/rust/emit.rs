@@ -89,7 +89,7 @@ mod tests {
                     vec![member(
                         "card",
                         Tref::Ref {
-                            id: "billing#CardData".into(),
+                            id: "billing#card_data".into(),
                             args: vec![],
                         },
                         true,
