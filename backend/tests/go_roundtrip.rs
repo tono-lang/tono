@@ -14,7 +14,9 @@ use tono_backend::codegen::targets::go::emit::{emit_module, package_clause};
 use tono_backend::codegen::targets::go::types::go_casing;
 use tono_backend::codegen::targets::go::GoRules;
 use tono_backend::codegen::Formatter;
-use tono_backend::ir::{EnumBacking, Member, Module, Prim, Shape, ShapeKind, Tref};
+
+mod common;
+use common::matrix_module as demo_module;
 
 fn module_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests/go")
@@ -26,82 +28,6 @@ fn have(tool: &str, probe: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-fn member(name: &str, target: Tref, required: bool) -> Member {
-    Member {
-        name: name.into(),
-        target,
-        required,
-        default: None,
-        constraints: vec![],
-        traits: vec![],
-    }
-}
-
-fn reference(id: &str) -> Tref {
-    Tref::Ref {
-        id: id.into(),
-        args: vec![],
-    }
-}
-
-fn structure(id: &str, members: Vec<Member>) -> Shape {
-    Shape {
-        id: id.into(),
-        kind: ShapeKind::Structure {
-            params: vec![],
-            members,
-        },
-        traits: vec![],
-    }
-}
-
-fn demo_module() -> Module {
-    Module {
-        name: "models".into(),
-        shapes: vec![
-            structure(
-                "models#Account",
-                vec![
-                    member("account_id", Tref::Prim(Prim::I64), true),
-                    member("secret", Tref::Prim(Prim::Bytes), true),
-                    member("tip", Tref::Prim(Prim::I64), false),
-                    member("status", reference("models#Status"), true),
-                    member("method", reference("models#Method"), true),
-                ],
-            ),
-            Shape {
-                id: "models#Status".into(),
-                kind: ShapeKind::Enum {
-                    backing: EnumBacking::String,
-                    values: vec![("active".into(), None), ("closed".into(), None)],
-                },
-                traits: vec![],
-            },
-            Shape {
-                id: "models#Method".into(),
-                kind: ShapeKind::Union {
-                    params: vec![],
-                    discriminator: "type".into(),
-                    members: vec![
-                        member("card", reference("models#CardData"), true),
-                        member("bank", reference("models#BankData"), true),
-                    ],
-                },
-                traits: vec![],
-            },
-            structure(
-                "models#CardData",
-                vec![member("last4", Tref::Prim(Prim::String), true)],
-            ),
-            structure(
-                "models#BankData",
-                vec![member("iban", Tref::Prim(Prim::String), true)],
-            ),
-        ],
-        operations: vec![],
-    }
 }
 
 #[test]

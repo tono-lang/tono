@@ -1,5 +1,6 @@
 //! The Go Symbol table: maps an IR type reference to its Go symbol.
 
+use crate::codegen::conventions::ref_symbol;
 use crate::codegen::symbol::Symbol;
 use crate::ir::{Prim, Tref};
 
@@ -46,21 +47,9 @@ fn prim_symbol(p: &Prim) -> Symbol {
     Symbol::builtin(name)
 }
 
-/// A nominal reference `module#Name` becomes a symbol imported from `module`; an
-/// id without a module separator is treated as an in-scope name. (Cross-package
-/// qualification is a later, multi-package concern; the in-code name is the bare
-/// type, which is correct within a single package.)
-fn ref_symbol(id: &str) -> Symbol {
-    match id.split_once('#') {
-        Some((module, name)) => Symbol::imported(name, module, name),
-        None => Symbol::builtin(id),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::symbol::Import;
 
     #[test]
     fn primitives_map_to_their_go_types() {
@@ -97,32 +86,6 @@ mod tests {
         // Go holds int64/uint64 natively; the string-on-wire form is a tag option.
         assert_eq!(symbol_of(&Tref::Prim(Prim::I64)).name, "int64");
         assert_eq!(symbol_of(&Tref::Prim(Prim::U64)).name, "uint64");
-    }
-
-    #[test]
-    fn a_nominal_ref_is_imported_from_its_module() {
-        let symbol = symbol_of(&Tref::Ref {
-            id: "payments#Charge".into(),
-            args: vec![],
-        });
-        assert_eq!(symbol.name, "Charge");
-        assert_eq!(
-            symbol.import,
-            Some(Import {
-                module: "payments".into(),
-                imported: "Charge".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn a_ref_without_a_module_is_an_in_scope_name() {
-        let symbol = symbol_of(&Tref::Ref {
-            id: "Bare".into(),
-            args: vec![],
-        });
-        assert_eq!(symbol.name, "Bare");
-        assert_eq!(symbol.import, None);
     }
 
     #[test]

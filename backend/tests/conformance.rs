@@ -16,21 +16,9 @@ use serde_json::Value;
 use tono_backend::codegen::render::render_file;
 use tono_backend::codegen::targets::{go, rust, typescript};
 use tono_backend::codegen::Formatter;
-use tono_backend::ir::{EnumBacking, Member, Module, Prim, Shape, ShapeKind, Trait, Tref};
 
-/// The canonical wire document exercised across every language: a 64-bit integer
-/// as a string, bytes as base64, an optional 64-bit integer, an open-enum value,
-/// an internally-tagged union, and an `@entries` pairs-array map.
-const CANONICAL: &str = concat!(
-    "{",
-    "\"account_id\":\"9007199254740993\",",
-    "\"secret\":\"AQID/g==\",",
-    "\"tip\":\"500\",",
-    "\"status\":\"active\",",
-    "\"method\":{\"type\":\"card\",\"last4\":\"4242\"},",
-    "\"counts\":[[7,\"a\"],[3,\"b\"]]",
-    "}"
-);
+mod common;
+use common::{matrix_module as shared_module, CANONICAL_WIRE as CANONICAL};
 
 fn tests_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests")
@@ -42,96 +30,6 @@ fn have(tool: &str, probe: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-fn member(name: &str, target: Tref, required: bool, traits: Vec<Trait>) -> Member {
-    Member {
-        name: name.into(),
-        target,
-        required,
-        default: None,
-        constraints: vec![],
-        traits,
-    }
-}
-
-fn reference(id: &str) -> Tref {
-    Tref::Ref {
-        id: id.into(),
-        args: vec![],
-    }
-}
-
-fn structure(id: &str, members: Vec<Member>) -> Shape {
-    Shape {
-        id: id.into(),
-        kind: ShapeKind::Structure {
-            params: vec![],
-            members,
-        },
-        traits: vec![],
-    }
-}
-
-/// The shared module: the full wire matrix in one shape set.
-fn shared_module() -> Module {
-    let entries = vec![Trait {
-        id: "core#entries".into(),
-        value: serde_json::json!(true),
-    }];
-    Module {
-        name: "models".into(),
-        shapes: vec![
-            structure(
-                "models#Account",
-                vec![
-                    member("account_id", Tref::Prim(Prim::I64), true, vec![]),
-                    member("secret", Tref::Prim(Prim::Bytes), true, vec![]),
-                    member("tip", Tref::Prim(Prim::I64), false, vec![]),
-                    member("status", reference("models#Status"), true, vec![]),
-                    member("method", reference("models#Method"), true, vec![]),
-                    member(
-                        "counts",
-                        Tref::Map(
-                            Box::new(Tref::Prim(Prim::I32)),
-                            Box::new(Tref::Prim(Prim::String)),
-                        ),
-                        true,
-                        entries,
-                    ),
-                ],
-            ),
-            Shape {
-                id: "models#Status".into(),
-                kind: ShapeKind::Enum {
-                    backing: EnumBacking::String,
-                    values: vec![("active".into(), None), ("closed".into(), None)],
-                },
-                traits: vec![],
-            },
-            Shape {
-                id: "models#Method".into(),
-                kind: ShapeKind::Union {
-                    params: vec![],
-                    discriminator: "type".into(),
-                    members: vec![
-                        member("card", reference("models#CardData"), true, vec![]),
-                        member("bank", reference("models#BankData"), true, vec![]),
-                    ],
-                },
-                traits: vec![],
-            },
-            structure(
-                "models#CardData",
-                vec![member("last4", Tref::Prim(Prim::String), true, vec![])],
-            ),
-            structure(
-                "models#BankData",
-                vec![member("iban", Tref::Prim(Prim::String), true, vec![])],
-            ),
-        ],
-        operations: vec![],
-    }
 }
 
 /// Run a command in `dir`, optionally piping `input` to its stdin, and return its

@@ -6,8 +6,9 @@
 //! is where the identifier/wire-key split materializes.
 
 use crate::codegen::casing::CasingConfig;
+use crate::codegen::conventions::{field_ident, has_entries, type_ident, wire_key};
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::typescript::types::{field_ident, has_entries, type_ident, wire_key};
+use crate::codegen::targets::typescript::types::LANG;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
 
@@ -47,23 +48,18 @@ pub fn runtime_helpers() -> Vec<Decl> {
 pub fn emit_codecs(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     match &shape.kind {
         ShapeKind::Structure { members, .. } => struct_codecs(shape, members, config),
-        ShapeKind::Enum { .. } => enum_codecs(shape, config),
+        ShapeKind::Enum { .. } => enum_codecs(shape),
         ShapeKind::Union {
             members,
             discriminator,
             ..
-        } => union_codecs(shape, members, discriminator, config),
+        } => union_codecs(shape, members, discriminator),
         _ => Vec::new(),
     }
 }
 
-fn union_codecs(
-    shape: &Shape,
-    members: &[Member],
-    discriminator: &str,
-    config: &CasingConfig,
-) -> Vec<Decl> {
-    let ty = type_ident(shape, config);
+fn union_codecs(shape: &Shape, members: &[Member], discriminator: &str) -> Vec<Decl> {
+    let ty = type_ident(shape, LANG);
     let case = |op: &str, src: &str, suffix: &str| -> String {
         members
             .iter()
@@ -107,11 +103,11 @@ fn payload_codec_name(target: &Tref) -> String {
 }
 
 fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Vec<Decl> {
-    let ty = type_ident(shape, config);
+    let ty = type_ident(shape, LANG);
     let encode_fields: String = members
         .iter()
         .map(|m| {
-            let access = format!("value.{}", field_ident(m, config));
+            let access = format!("value.{}", field_ident(m, config, LANG));
             let expr = guard_null(m, &access, member_encode(&access, m));
             format!("    {}: {expr},\n", wire_key(m))
         })
@@ -121,7 +117,7 @@ fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Ve
         .map(|m| {
             let access = format!("raw.{}", wire_key(m));
             let expr = guard_null(m, &access, member_decode(&access, m));
-            format!("    {}: {expr},\n", field_ident(m, config))
+            format!("    {}: {expr},\n", field_ident(m, config, LANG))
         })
         .collect();
     vec![
@@ -140,10 +136,10 @@ fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Ve
     ]
 }
 
-fn enum_codecs(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
+fn enum_codecs(shape: &Shape) -> Vec<Decl> {
     // An open enum is a string on the wire; encode is identity and decode is a
     // lenient cast that lets an unknown value pass through.
-    let ty = type_ident(shape, config);
+    let ty = type_ident(shape, LANG);
     vec![
         function_owned(
             &format!("encode{ty}"),

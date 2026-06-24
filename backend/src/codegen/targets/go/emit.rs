@@ -9,9 +9,10 @@
 //! [`package_clause`].
 
 use crate::codegen::casing::CasingConfig;
+use crate::codegen::conventions::has_entries;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::codecs::{entry_helper, marshal_tagged_helper};
-use crate::codegen::targets::go::types::{emit_type, has_entries};
+use crate::codegen::targets::go::types::emit_type;
 use crate::codegen::tree::{Alias, Decl, File};
 use crate::ir::{Module, Shape, ShapeKind};
 
@@ -75,33 +76,12 @@ mod tests {
     use crate::codegen::render::render_file;
     use crate::codegen::targets::go::types::go_casing;
     use crate::codegen::targets::go::GoRules;
+    use crate::codegen::test_support::{member, structure};
     use crate::codegen::Formatter;
-    use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
+    use crate::ir::{Prim, Shape, ShapeKind, Tref};
 
     fn passthrough() -> Formatter {
         Formatter::new("cat", vec![])
-    }
-
-    fn member(name: &str, target: Tref, required: bool) -> Member {
-        Member {
-            name: name.into(),
-            target,
-            required,
-            default: None,
-            constraints: vec![],
-            traits: vec![],
-        }
-    }
-
-    fn structure(id: &str, members: Vec<Member>) -> Shape {
-        Shape {
-            id: id.into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members,
-            },
-            traits: vec![],
-        }
     }
 
     #[test]

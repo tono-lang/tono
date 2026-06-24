@@ -49,15 +49,8 @@ impl Target for GoTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::render::render_file;
-    use crate::codegen::tree::File;
-    use crate::codegen::Formatter;
-    use crate::ir::{Member, Prim, ShapeKind};
+    use crate::ir::{Prim, ShapeKind};
     use serde_json::json;
-
-    fn passthrough() -> Formatter {
-        Formatter::new("cat", vec![])
-    }
 
     #[test]
     fn target_identity_and_runtime() {
@@ -84,46 +77,5 @@ mod tests {
         assert!(GoTarget
             .emit_op_stub(&op, &json!({"http_method": "POST"}))
             .is_empty());
-    }
-
-    #[test]
-    fn a_structure_renders_to_a_go_struct_end_to_end() {
-        let shape = Shape {
-            id: "billing#Charge".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![
-                    Member {
-                        name: "amount_cents".into(),
-                        target: Tref::Prim(Prim::I64),
-                        required: true,
-                        default: None,
-                        constraints: vec![],
-                        traits: vec![],
-                    },
-                    Member {
-                        name: "customer".into(),
-                        target: Tref::Ref {
-                            id: "crm#Customer".into(),
-                            args: vec![],
-                        },
-                        required: false,
-                        default: None,
-                        constraints: vec![],
-                        traits: vec![],
-                    },
-                ],
-            },
-            traits: vec![],
-        };
-        let file = File {
-            module: "billing".into(),
-            decls: GoTarget.emit_type(&shape),
-        };
-        let out = render_file(&file, &GoRules, &passthrough()).text;
-        assert!(out.contains("import \"crm\""));
-        assert!(out.contains("type Charge struct {"));
-        assert!(out.contains("\tAmountCents int64 `json:\"amount_cents,string\"`"));
-        assert!(out.contains("\tCustomer *Customer `json:\"customer,omitempty\"`"));
     }
 }

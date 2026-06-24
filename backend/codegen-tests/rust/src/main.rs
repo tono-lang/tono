@@ -20,6 +20,7 @@ fn main() {
         method: Method::Card(CardData {
             last4: "4242".into(),
         }),
+        counts: vec![(7, "a".into()), (3, "b".into())],
     };
 
     let wire: Value = serde_json::to_value(&account).expect("encode");
@@ -35,6 +36,8 @@ fn main() {
     );
     assert_eq!(wire["method"]["type"], Value::String("card".into()));
     assert_eq!(wire["tip"], Value::String("500".into()));
+    // An @entries map travels as an array of [key, value] pairs.
+    assert_eq!(wire["counts"], json!([[7, "a"], [3, "b"]]));
 
     // Canonical round-trip: decode then re-encode must equal the first wire JSON.
     let back: Account = serde_json::from_value(wire.clone()).expect("decode");
@@ -46,7 +49,8 @@ fn main() {
         "account_id": "1",
         "secret": "AAEC/g==",
         "status": "frozen",
-        "method": { "type": "card", "last4": "0000" }
+        "method": { "type": "card", "last4": "0000" },
+        "counts": []
     });
     let unknown: Account = serde_json::from_value(unknown_json).expect("decode unknown");
     assert!(

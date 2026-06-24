@@ -8,12 +8,15 @@
 //! rules are supplied by target backends.
 
 pub mod casing;
+pub mod conventions;
 pub mod format;
 pub mod imports;
 pub mod render;
 pub mod symbol;
 pub mod target;
 pub mod targets;
+#[cfg(test)]
+pub mod test_support;
 pub mod tree;
 
 pub use casing::{CaseStyle, CasingConfig};

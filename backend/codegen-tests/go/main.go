@@ -28,6 +28,7 @@ func main() {
 		Tip:       &tip,
 		Status:    StatusActive,
 		Method:    Method{Card: &CardData{Last4: "4242"}},
+		Counts:    []Entry[int32, string]{{Key: 7, Value: "a"}, {Key: 3, Value: "b"}},
 	}
 
 	wire, err := json.Marshal(acct)
@@ -49,6 +50,9 @@ func main() {
 	method, ok := m["method"].(map[string]any)
 	if !ok || method["type"] != "card" {
 		fail("union must carry its discriminator")
+	}
+	if counts, ok := m["counts"].([]any); !ok || len(counts) != 2 {
+		fail("@entries map must encode as an array of pairs")
 	}
 
 	// Canonical round-trip: decode then re-encode must be Value-equal.

@@ -1,11 +1,15 @@
 //! Building the component tree from IR shapes for the TypeScript target:
 //! `emit_type` plus the IR-to-`TypeExpr` conversion and the idiomatic casing.
 
-use crate::codegen::casing::{self, CaseStyle, CasingConfig};
-use crate::codegen::symbol::{Symbol, SymbolKind};
+use crate::codegen::casing::{CaseStyle, CasingConfig};
+use crate::codegen::conventions::{self, field_ident, type_name, wire_of};
+use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::symbols::symbol_of;
 use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr, UnionDecl, Variant};
 use crate::ir::{Member, Shape, ShapeKind, Tref};
+
+/// The TypeScript language key for per-language traits such as `@rename`.
+pub(crate) const LANG: &str = "typescript";
 
 /// The idiomatic TypeScript casing: camelCase fields and methods. Type names are
 /// PascalCase in the IR and used as-is (not cased), and enum members and variant
@@ -14,18 +18,10 @@ pub fn ts_casing() -> CasingConfig {
     CasingConfig::new(CaseStyle::Camel)
 }
 
-/// Convert an IR type reference into a component-tree type expression, resolving
-/// leaf types through the TypeScript symbol table. Collections and generic
-/// applications become structural `TypeExpr` nodes.
+/// Convert an IR type reference into a component-tree type expression through the
+/// TypeScript symbol table.
 pub fn type_expr_of(t: &Tref) -> TypeExpr {
-    match t {
-        Tref::List(inner) => TypeExpr::list(type_expr_of(inner)),
-        Tref::Map(key, value) => TypeExpr::map(type_expr_of(key), type_expr_of(value)),
-        Tref::Ref { args, .. } if !args.is_empty() => {
-            TypeExpr::Generic(symbol_of(t), args.iter().map(type_expr_of).collect())
-        }
-        Tref::Prim(_) | Tref::Param(_) | Tref::Ref { .. } => TypeExpr::Ref(symbol_of(t)),
-    }
+    conventions::type_expr_of(t, &symbol_of)
 }
 
 /// Emit the declaration(s) for a shape. Structures become interfaces; enums
@@ -34,11 +30,11 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     match &shape.kind {
         ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
-            name: type_name(shape, config),
+            name: type_name(shape, LANG),
             fields: members.iter().map(|m| field_of(m, config)).collect(),
         })],
         ShapeKind::Enum { values, .. } => vec![Decl::Enum(EnumDecl {
-            name: type_name(shape, config),
+            name: type_name(shape, LANG),
             // Open-enum literals are wire tags, kept verbatim (not cased).
             members: values
                 .iter()
@@ -50,16 +46,13 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
             discriminator,
             ..
         } => vec![Decl::Union(UnionDecl {
-            name: type_name(shape, config),
+            name: type_name(shape, LANG),
             discriminator: discriminator.clone(),
             variants: members.iter().map(variant_of).collect(),
         })],
         _ => vec![],
     }
 }
-
-/// The TypeScript language key for per-language traits such as `@rename`.
-const TS_LANG: &str = "typescript";
 
 /// Build a union variant: the tag is the member name (overridable by `@wire`),
 /// and the payload is the referenced type the discriminator object intersects
@@ -73,136 +66,20 @@ fn variant_of(member: &Member) -> Variant {
     }
 }
 
-/// The identifier for a shape's own name (after the `module#` prefix). Type
-/// names are PascalCase in the IR, so they are used as-is (casing them would
-/// corrupt multi-word names like `KitchenSink`); only a TypeScript `@rename`
-/// overrides the identifier. The casing config is unused for types but kept for
-/// signature symmetry with the field path.
-pub(crate) fn type_ident(shape: &Shape, _config: &CasingConfig) -> String {
-    let local = shape.id.rsplit('#').next().unwrap_or(&shape.id);
-    rename_of(&shape.traits).unwrap_or_else(|| local.to_string())
-}
-
-/// The camelCase identifier for a member, honoring a TypeScript `@rename`. This
-/// is the in-code name, independent of the wire key.
-pub(crate) fn field_ident(member: &Member, config: &CasingConfig) -> String {
-    casing::transform(
-        &member.name,
-        SymbolKind::Field,
-        config,
-        rename_of(&member.traits).as_deref(),
-    )
-}
-
-/// The serialization key for a member: its `@wire` override, else the canonical
-/// name. Independent of the in-code identifier.
-pub(crate) fn wire_key(member: &Member) -> String {
-    wire_of(&member.traits).unwrap_or_else(|| member.name.clone())
-}
-
-fn type_name(shape: &Shape, config: &CasingConfig) -> Symbol {
-    Symbol::builtin(type_ident(shape, config))
-}
-
 fn field_of(member: &Member, config: &CasingConfig) -> Field {
     Field {
-        name: Symbol::builtin(field_ident(member, config)),
-        ty: entries_or_map(type_expr_of(&member.target), &member.traits),
+        name: Symbol::builtin(field_ident(member, config, LANG)),
+        ty: conventions::entries_or_map(type_expr_of(&member.target), &member.traits),
         nullable: !member.required,
         wire: wire_of(&member.traits),
     }
 }
 
-/// Reshape a map into an `@entries` pairs-array when the member carries the
-/// `core#entries` trait; any other type is unchanged.
-fn entries_or_map(ty: TypeExpr, traits: &[crate::ir::Trait]) -> TypeExpr {
-    match ty {
-        TypeExpr::Map(key, value) if has_entries(traits) => TypeExpr::Entries(key, value),
-        other => other,
-    }
-}
-
-/// Whether a member carries the `@entries` map-escape trait (`core#entries`).
-pub(crate) fn has_entries(traits: &[crate::ir::Trait]) -> bool {
-    traits.iter().any(|t| t.id == "core#entries")
-}
-
-/// Read the `@rename` identifier override for TypeScript (trait id `core#rename`,
-/// a value object keyed by language) from a trait set.
-fn rename_of(traits: &[crate::ir::Trait]) -> Option<String> {
-    traits
-        .iter()
-        .find(|t| t.id == "core#rename")
-        .and_then(|t| t.value.get(TS_LANG))
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-}
-
-/// Read the `@wire` override (trait id `core#wire`) from a member's traits.
-fn wire_of(traits: &[crate::ir::Trait]) -> Option<String> {
-    traits
-        .iter()
-        .find(|t| t.id == "core#wire")
-        .and_then(|t| t.value.as_str())
-        .map(str::to_string)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Prim, Trait};
-    use serde_json::json;
-
-    fn structure(id: &str, members: Vec<Member>) -> Shape {
-        Shape {
-            id: id.into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members,
-            },
-            traits: vec![],
-        }
-    }
-
-    fn member(name: &str, target: Tref, required: bool) -> Member {
-        Member {
-            name: name.into(),
-            target,
-            required,
-            default: None,
-            constraints: vec![],
-            traits: vec![],
-        }
-    }
-
-    #[test]
-    fn type_expr_resolves_collections_and_generics() {
-        assert_eq!(
-            type_expr_of(&Tref::List(Box::new(Tref::Prim(Prim::String)))),
-            TypeExpr::list(TypeExpr::Ref(Symbol::builtin("string")))
-        );
-        assert_eq!(
-            type_expr_of(&Tref::Map(
-                Box::new(Tref::Prim(Prim::String)),
-                Box::new(Tref::Prim(Prim::I64)),
-            )),
-            TypeExpr::map(
-                TypeExpr::Ref(Symbol::builtin("string")),
-                TypeExpr::Ref(Symbol::builtin("bigint")),
-            )
-        );
-        let generic = type_expr_of(&Tref::Ref {
-            id: "core#Page".into(),
-            args: vec![Tref::Ref {
-                id: "p#Charge".into(),
-                args: vec![],
-            }],
-        });
-        assert!(
-            matches!(&generic, TypeExpr::Generic(head, args) if head.name == "Page" && args.len() == 1),
-            "expected Page<_>, got {generic:?}"
-        );
-    }
+    use crate::codegen::test_support::{member, structure};
+    use crate::ir::Prim;
 
     #[test]
     fn a_structure_becomes_an_interface_with_cased_fields() {
@@ -223,66 +100,6 @@ mod tests {
     }
 
     #[test]
-    fn a_member_wire_override_is_carried_on_the_field() {
-        let mut m = member("amount_cents", Tref::Prim(Prim::I64), true);
-        m.traits = vec![Trait {
-            id: "core#wire".into(),
-            value: json!("amount"),
-        }];
-        let shape = structure("billing#Charge", vec![m]);
-        let decls = emit_type(&shape, &ts_casing());
-        // The identifier is cased; the wire key is the override, independently.
-        assert!(matches!(&decls[..], [Decl::Interface(i)]
-            if i.fields[0].name.name == "amountCents"
-                && i.fields[0].wire.as_deref() == Some("amount")));
-    }
-
-    #[test]
-    fn rename_overrides_the_identifier_independently_of_wire() {
-        let mut m = member("amount_cents", Tref::Prim(Prim::I64), true);
-        m.traits = vec![
-            Trait {
-                id: "core#rename".into(),
-                value: json!({ "typescript": "amountCentsV2" }),
-            },
-            Trait {
-                id: "core#wire".into(),
-                value: json!("amount"),
-            },
-        ];
-        let shape = Shape {
-            id: "billing#Charge".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![m],
-            },
-            traits: vec![Trait {
-                id: "core#rename".into(),
-                value: json!({ "typescript": "Invoice" }),
-            }],
-        };
-        let decls = emit_type(&shape, &ts_casing());
-        assert!(matches!(&decls[..], [Decl::Interface(i)]
-            if i.name.name == "Invoice"
-                && i.fields[0].name.name == "amountCentsV2"
-                && i.fields[0].wire.as_deref() == Some("amount")));
-    }
-
-    #[test]
-    fn rename_for_another_language_is_ignored() {
-        let mut m = member("amount_cents", Tref::Prim(Prim::I64), true);
-        m.traits = vec![Trait {
-            id: "core#rename".into(),
-            value: json!({ "rust": "amount_cents" }),
-        }];
-        let shape = structure("billing#Charge", vec![m]);
-        let decls = emit_type(&shape, &ts_casing());
-        // No TypeScript rename, so the camelCase default applies.
-        assert!(matches!(&decls[..], [Decl::Interface(i)]
-            if i.fields[0].name.name == "amountCents"));
-    }
-
-    #[test]
     fn an_enum_becomes_a_literal_union_of_verbatim_tags() {
         let shape = Shape {
             id: "billing#Status".into(),
@@ -298,43 +115,6 @@ mod tests {
                 && d.members.len() == 2
                 && d.members[0].name == "pending"
                 && d.members[1].name == "settled"));
-    }
-
-    #[test]
-    fn an_entries_map_becomes_a_pairs_array_field() {
-        let mut m = member(
-            "counts",
-            Tref::Map(
-                Box::new(Tref::Prim(Prim::I32)),
-                Box::new(Tref::Prim(Prim::String)),
-            ),
-            true,
-        );
-        m.traits = vec![Trait {
-            id: "core#entries".into(),
-            value: json!(true),
-        }];
-        let shape = structure("billing#Doc", vec![m]);
-        let decls = emit_type(&shape, &ts_casing());
-        assert!(matches!(&decls[..], [Decl::Interface(i)]
-            if matches!(&i.fields[0].ty, TypeExpr::Entries(k, v)
-                if matches!(k.as_ref(), TypeExpr::Ref(s) if s.name == "number")
-                    && matches!(v.as_ref(), TypeExpr::Ref(s) if s.name == "string"))));
-        // A map without @entries stays a map.
-        let plain = structure(
-            "billing#Doc",
-            vec![member(
-                "meta",
-                Tref::Map(
-                    Box::new(Tref::Prim(Prim::String)),
-                    Box::new(Tref::Prim(Prim::String)),
-                ),
-                true,
-            )],
-        );
-        let plain_decls = emit_type(&plain, &ts_casing());
-        assert!(matches!(&plain_decls[..], [Decl::Interface(i)]
-            if matches!(&i.fields[0].ty, TypeExpr::Map(_, _))));
     }
 
     #[test]

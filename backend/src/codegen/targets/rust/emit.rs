@@ -29,33 +29,12 @@ mod tests {
     use crate::codegen::render::render_file;
     use crate::codegen::targets::rust::types::rust_casing;
     use crate::codegen::targets::rust::RustRules;
+    use crate::codegen::test_support::{member, structure};
     use crate::codegen::Formatter;
-    use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Tref};
+    use crate::ir::{EnumBacking, Prim, Shape, ShapeKind, Tref};
 
     fn passthrough() -> Formatter {
         Formatter::new("cat", vec![])
-    }
-
-    fn structure(id: &str, members: Vec<Member>) -> Shape {
-        Shape {
-            id: id.into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members,
-            },
-            traits: vec![],
-        }
-    }
-
-    fn member(name: &str, target: Tref, required: bool) -> Member {
-        Member {
-            name: name.into(),
-            target,
-            required,
-            default: None,
-            constraints: vec![],
-            traits: vec![],
-        }
     }
 
     #[test]

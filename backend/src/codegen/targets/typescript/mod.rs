@@ -48,17 +48,8 @@ impl Target for TsTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::render::render_file;
-    use crate::codegen::tree::File;
-    use crate::codegen::Formatter;
-    use crate::ir::{Member, Prim, ShapeKind};
+    use crate::ir::{Prim, ShapeKind};
     use serde_json::json;
-
-    fn passthrough() -> Formatter {
-        // `cat` echoes the rough text unchanged, so tests assert the engine's
-        // assembled output without depending on prettier being installed.
-        Formatter::new("cat", vec![])
-    }
 
     #[test]
     fn target_identity_and_runtime() {
@@ -85,46 +76,5 @@ mod tests {
         assert!(TsTarget
             .emit_op_stub(&op, &json!({"http_method": "POST"}))
             .is_empty());
-    }
-
-    #[test]
-    fn a_structure_renders_to_a_typescript_interface_end_to_end() {
-        let shape = Shape {
-            id: "billing#Charge".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![
-                    Member {
-                        name: "amount_cents".into(),
-                        target: Tref::Prim(Prim::I64),
-                        required: true,
-                        default: None,
-                        constraints: vec![],
-                        traits: vec![],
-                    },
-                    Member {
-                        name: "customer".into(),
-                        target: Tref::Ref {
-                            id: "crm#Customer".into(),
-                            args: vec![],
-                        },
-                        required: false,
-                        default: None,
-                        constraints: vec![],
-                        traits: vec![],
-                    },
-                ],
-            },
-            traits: vec![],
-        };
-        let file = File {
-            module: "billing".into(),
-            decls: TsTarget.emit_type(&shape),
-        };
-        let out = render_file(&file, &TsRules, &passthrough()).text;
-        assert!(out.contains("import { Customer } from \"./crm\";"));
-        assert!(out.contains("export interface Charge {"));
-        assert!(out.contains("  amountCents: bigint;"));
-        assert!(out.contains("  customer?: Customer | null;"));
     }
 }
