@@ -124,6 +124,7 @@ impl RenderRules for TsRules {
             Decl::Alias(alias) => {
                 format!("export type {} = {};", alias.name.name, alias.value)
             }
+            Decl::Raw(raw) => raw.text.clone(),
             // Operation-stub methods are emitted by a later phase.
             Decl::Method(_) => String::new(),
         }
@@ -134,7 +135,9 @@ impl RenderRules for TsRules {
 mod tests {
     use super::*;
     use crate::codegen::symbol::Symbol;
-    use crate::codegen::tree::{EnumDecl, FnBody, Function, Interface, Method, UnionDecl, Variant};
+    use crate::codegen::tree::{
+        EnumDecl, FnBody, Function, Interface, Method, Raw, UnionDecl, Variant,
+    };
 
     fn field(name: &str, ty: TypeExpr, nullable: bool) -> Field {
         Field {
@@ -273,6 +276,15 @@ mod tests {
             TsRules.render_decl(&function),
             "export function decodeI64(s: string): bigint {\n  return BigInt(s);\n}"
         );
+    }
+
+    #[test]
+    fn a_raw_decl_renders_its_text_verbatim() {
+        let raw = Decl::Raw(Raw {
+            text: "export const VERSION = \"1\";".into(),
+            refs: vec![],
+        });
+        assert_eq!(TsRules.render_decl(&raw), "export const VERSION = \"1\";");
     }
 
     #[test]

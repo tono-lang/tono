@@ -40,8 +40,8 @@ mod tests {
     use crate::codegen::symbol::{Import, Symbol};
     use crate::codegen::target::{Fragment, Target};
     use crate::codegen::tree::{
-        Alias, Decl, EnumDecl, Field, FnBody, Function, Interface, Method, TypeExpr, UnionDecl,
-        Variant,
+        Alias, Decl, EnumDecl, Field, FnBody, Function, Interface, Method, Raw, TypeExpr,
+        UnionDecl, Variant,
     };
     use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
     use serde_json::{json, Value};
@@ -143,6 +143,7 @@ mod tests {
                 Decl::Alias(alias) => {
                     format!("pub type {} = {};", alias.name.name, alias.value)
                 }
+                Decl::Raw(raw) => raw.text.clone(),
             }
         }
     }
@@ -323,6 +324,23 @@ mod tests {
         // The return type and a body-referenced symbol are both imported.
         assert!(out.contains("use model::Charge;"));
         assert!(out.contains("use codecs::decodeUuid;"));
+    }
+
+    #[test]
+    fn a_raw_decl_renders_verbatim_and_still_pulls_its_refs() {
+        // A receiver-bearing impl block the shared node set cannot model: its
+        // text is emitted untouched, yet the symbols it declares as refs still
+        // feed import collection, exactly like a function body.
+        let file = File {
+            module: "billing".into(),
+            decls: vec![Decl::Raw(Raw {
+                text: "impl Charge {\n    fn pay(&self) -> Receipt { todo!() }\n}".into(),
+                refs: vec![Symbol::imported("Receipt", "billing_receipts", "Receipt")],
+            })],
+        };
+        let out = render_file(&file, &RustRules, &passthrough()).text;
+        assert!(out.contains("impl Charge {\n    fn pay(&self) -> Receipt { todo!() }\n}"));
+        assert!(out.contains("use billing_receipts::Receipt;"));
     }
 
     #[test]

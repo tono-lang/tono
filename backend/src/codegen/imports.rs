@@ -50,9 +50,22 @@ fn walk_decl(
             walk_signature(&function.params, function.ret.as_ref(), acc, visited);
             walk_body(&function.body, acc, visited);
         }
+        // A raw item's text is opaque, but its declared refs are collected so
+        // anything it references is still imported.
+        Decl::Raw(raw) => walk_refs(&raw.refs, acc, visited),
         // Enum members and the enum's own name are identifiers, and an alias's
         // definition is opaque text: neither contributes imports.
         Decl::Enum(_) | Decl::Alias(_) => {}
+    }
+}
+
+fn walk_refs(
+    refs: &[Symbol],
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    for symbol in refs {
+        collect_symbol(symbol, acc, visited);
     }
 }
 
@@ -94,11 +107,7 @@ fn walk_body(
     visited: &mut HashSet<(String, Option<Import>)>,
 ) {
     match body {
-        FnBody::Raw { refs, .. } => {
-            for symbol in refs {
-                collect_symbol(symbol, acc, visited);
-            }
-        }
+        FnBody::Raw { refs, .. } => walk_refs(refs, acc, visited),
     }
 }
 
@@ -145,7 +154,7 @@ fn collect_symbol(
 mod tests {
     use super::*;
     use crate::codegen::tree::{
-        Decl, EnumDecl, Field, FnBody, Function, Interface, Method, UnionDecl, Variant,
+        Decl, EnumDecl, Field, FnBody, Function, Interface, Method, Raw, UnionDecl, Variant,
     };
 
     fn field(name: &str, ty: TypeExpr) -> Field {
@@ -350,6 +359,25 @@ mod tests {
         };
         // param type, return type, and the body-referenced symbol.
         assert_eq!(collect(&file).len(), 3);
+    }
+
+    #[test]
+    fn a_raw_decls_refs_contribute_imports_while_its_text_stays_opaque() {
+        let file = File {
+            module: "billing".into(),
+            decls: vec![Decl::Raw(Raw {
+                // The text mentions a type, but only the declared refs are walked.
+                text: "impl Charge { fn touch(&self) -> Helper { Helper } }".into(),
+                refs: vec![Symbol::imported("Helper", "helpers", "Helper")],
+            })],
+        };
+        assert_eq!(
+            collect(&file),
+            vec![Import {
+                module: "helpers".into(),
+                imported: "Helper".into(),
+            }]
+        );
     }
 
     #[test]

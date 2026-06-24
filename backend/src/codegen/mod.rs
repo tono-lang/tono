@@ -22,6 +22,6 @@ pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};
 pub use target::{Fragment, RenderRules, Target};
 pub use tree::{
-    Alias, Decl, EnumDecl, Field, File, FnBody, Function, Interface, Method, TypeExpr, UnionDecl,
-    Variant,
+    Alias, Decl, EnumDecl, Field, File, FnBody, Function, Interface, Method, Raw, TypeExpr,
+    UnionDecl, Variant,
 };

@@ -26,6 +26,7 @@ pub enum Decl {
     Method(Method),
     Function(Function),
     Alias(Alias),
+    Raw(Raw),
 }
 
 /// A named type alias whose definition is target text (e.g. a branded
@@ -35,6 +36,16 @@ pub enum Decl {
 pub struct Alias {
     pub name: Symbol,
     pub value: String,
+}
+
+/// A fully-formed top-level item rendered verbatim, for constructs the shared
+/// node set does not model (an `impl` block, a helper module, a method with a
+/// receiver). Its `refs` declare the symbols the text references so import
+/// collection still reaches them, exactly like a function body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Raw {
+    pub text: String,
+    pub refs: Vec<Symbol>,
 }
 
 /// A product type: a named structure/interface with fields.
