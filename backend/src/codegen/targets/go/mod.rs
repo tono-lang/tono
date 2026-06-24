@@ -4,6 +4,7 @@
 //! `encoding/json`), the open enum is a named string, and well-known types are
 //! named strings.
 
+pub mod codecs;
 pub mod render;
 pub mod symbols;
 pub mod types;

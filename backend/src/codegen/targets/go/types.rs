@@ -7,6 +7,7 @@
 
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Symbol, SymbolKind};
+use crate::codegen::targets::go::codecs::union_item;
 use crate::codegen::targets::go::symbols::symbol_of;
 use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr};
 use crate::ir::{Member, Shape, ShapeKind, Tref};
@@ -52,6 +53,15 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
                 .map(|(value, _)| Symbol::builtin(value.clone()))
                 .collect(),
         })],
+        ShapeKind::Union {
+            discriminator,
+            members,
+            ..
+        } => vec![union_item(
+            discriminator,
+            members,
+            &type_ident(shape, config),
+        )],
         _ => vec![],
     }
 }
@@ -242,22 +252,37 @@ mod tests {
     }
 
     #[test]
-    fn unions_and_services_emit_nothing_yet() {
+    fn a_union_becomes_a_verbatim_pointer_struct_item() {
         let union = Shape {
             id: "billing#Method".into(),
             kind: ShapeKind::Union {
                 params: vec![],
                 discriminator: "type".into(),
-                members: vec![],
+                members: vec![member(
+                    "card",
+                    Tref::Ref {
+                        id: "billing#CardData".into(),
+                        args: vec![],
+                    },
+                    true,
+                )],
             },
             traits: vec![],
         };
+        let decls = emit_type(&union, &go_casing());
+        assert!(matches!(&decls[..], [Decl::Raw(r)]
+            if r.text.contains("type Method struct {")
+                && r.text.contains("MarshalJSON")
+                && r.text.contains("\tCard *CardData")));
+    }
+
+    #[test]
+    fn services_emit_nothing() {
         let service = Shape {
             id: "billing#Api".into(),
             kind: ShapeKind::Service { operations: vec![] },
             traits: vec![],
         };
-        assert!(emit_type(&union, &go_casing()).is_empty());
         assert!(emit_type(&service, &go_casing()).is_empty());
     }
 }
