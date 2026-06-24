@@ -165,8 +165,8 @@ mod tests {
     #[test]
     fn a_union_emits_a_pointer_struct_with_json_methods_and_refs() {
         let members = vec![
-            wire_member("card", "models#CardData", Some("CARD")),
-            wire_member("bank", "models#BankData", None),
+            wire_member("card", "models#card_data", Some("CARD")),
+            wire_member("bank", "models#bank_data", None),
         ];
         let decl = union_item("type", &members, "Method");
         assert!(matches!(&decl, Decl::Raw(raw) if

@@ -84,18 +84,18 @@ pub fn matrix_module() -> Module {
                     params: vec![],
                     discriminator: "type".into(),
                     members: vec![
-                        member("card", reference("models#CardData"), true, vec![]),
-                        member("bank", reference("models#BankData"), true, vec![]),
+                        member("card", reference("models#card_data"), true, vec![]),
+                        member("bank", reference("models#bank_data"), true, vec![]),
                     ],
                 },
                 traits: vec![],
             },
             structure(
-                "models#CardData",
+                "models#card_data",
                 vec![member("last4", Tref::Prim(Prim::String), true, vec![])],
             ),
             structure(
-                "models#BankData",
+                "models#bank_data",
                 vec![member("iban", Tref::Prim(Prim::String), true, vec![])],
             ),
         ],

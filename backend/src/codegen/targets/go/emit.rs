@@ -123,14 +123,14 @@ mod tests {
                     vec![member(
                         "card",
                         Tref::Ref {
-                            id: "models#CardData".into(),
+                            id: "models#card_data".into(),
                             args: vec![],
                         },
                         true,
                     )],
                 ),
                 structure(
-                    "models#CardData",
+                    "models#card_data",
                     vec![member("last4", Tref::Prim(Prim::String), true)],
                 ),
             ],

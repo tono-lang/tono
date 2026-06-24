@@ -1,7 +1,7 @@
 //! End-to-end checks of the `tono` binary: IR JSON in, SDK files out.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const IR: &str = r#"{"tono_ir_version":2,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
@@ -17,7 +17,7 @@ fn tmpdir(name: &str) -> PathBuf {
 }
 
 /// Run `tono gen` feeding `IR` on stdin; returns whether it succeeded.
-fn gen_via_stdin(out: &PathBuf, target: &str) -> bool {
+fn gen_via_stdin(out: &Path, target: &str) -> bool {
     let mut child = tono()
         .args(["gen", "--target", target, "--out", out.to_str().unwrap()])
         .stdin(Stdio::piped())
