@@ -1,6 +1,6 @@
 //! The Go Symbol table: maps an IR type reference to its Go symbol.
 
-use crate::codegen::conventions::leaf_symbol_of;
+use crate::codegen::conventions::{leaf_symbol_of, prim_spelling};
 use crate::codegen::symbol::Symbol;
 use crate::ir::{Prim, Tref};
 
@@ -10,31 +10,9 @@ pub fn symbol_of(t: &Tref) -> Symbol {
     leaf_symbol_of(t, prim_symbol, "[]", "map")
 }
 
-/// The Go representation of a primitive. Integers map to their exact-width Go
-/// type both signs; 64-bit integers stay native (`int64`/`uint64`) and the
-/// string-on-wire encoding rides the json `,string` tag option. `bytes` is
-/// `[]byte`, which `encoding/json` base64-encodes automatically. The well-known
-/// types are named string wrappers.
+/// The Go spelling of a primitive (the `go` column of the shared table).
 fn prim_symbol(p: &Prim) -> Symbol {
-    let name = match p {
-        Prim::Bool => "bool",
-        Prim::String => "string",
-        Prim::Bytes => "[]byte",
-        Prim::I8 => "int8",
-        Prim::I16 => "int16",
-        Prim::I32 => "int32",
-        Prim::I64 => "int64",
-        Prim::U8 => "uint8",
-        Prim::U16 => "uint16",
-        Prim::U32 => "uint32",
-        Prim::U64 => "uint64",
-        Prim::Float => "float64",
-        Prim::Timestamp => "Timestamp",
-        Prim::Date => "LocalDate",
-        Prim::Duration => "Duration",
-        Prim::Uuid => "Uuid",
-    };
-    Symbol::builtin(name)
+    Symbol::builtin(prim_spelling(p).go)
 }
 
 #[cfg(test)]
@@ -44,34 +22,20 @@ mod tests {
 
     #[test]
     fn primitives_map_to_their_go_types() {
+        // The full prim table is exercised in the conventions tests; here we only
+        // confirm `symbol_of` reads the Go column, including the native 64-bit ints
+        // (the string-on-wire form is a json tag option), bytes, and a branded
+        // well-known type.
         assert_prim_symbols(
             symbol_of,
             &[
                 (Prim::Bool, "bool"),
-                (Prim::String, "string"),
                 (Prim::Bytes, "[]byte"),
-                (Prim::I8, "int8"),
-                (Prim::I16, "int16"),
-                (Prim::I32, "int32"),
                 (Prim::I64, "int64"),
-                (Prim::U8, "uint8"),
-                (Prim::U16, "uint16"),
-                (Prim::U32, "uint32"),
                 (Prim::U64, "uint64"),
-                (Prim::Float, "float64"),
                 (Prim::Timestamp, "Timestamp"),
-                (Prim::Date, "LocalDate"),
-                (Prim::Duration, "Duration"),
-                (Prim::Uuid, "Uuid"),
             ],
         );
-    }
-
-    #[test]
-    fn sixty_four_bit_ints_stay_native_both_signs() {
-        // Go holds int64/uint64 natively; the string-on-wire form is a tag option.
-        assert_eq!(symbol_of(&Tref::Prim(Prim::I64)).name, "int64");
-        assert_eq!(symbol_of(&Tref::Prim(Prim::U64)).name, "uint64");
     }
 
     #[test]

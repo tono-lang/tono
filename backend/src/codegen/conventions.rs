@@ -111,6 +111,49 @@ pub fn leaf_symbol_of(
     }
 }
 
+/// The in-code spelling of a primitive in each target. Kept as one table because
+/// the mapping is data, not structure: the well-known types are identical across
+/// languages, and the integer/float/bytes spellings differ only by token, so a
+/// single source of truth is clearer than three parallel match arms — and a target
+/// selects only its own field. Wire encoding (64-bit ints as strings, bytes as
+/// base64) is a codec concern handled elsewhere; this is purely the type name.
+pub struct PrimSpelling {
+    pub rust: &'static str,
+    pub go: &'static str,
+    pub typescript: &'static str,
+}
+
+/// The per-language spelling of a primitive. Integers map to their exact-width
+/// type in Rust and Go (64-bit included, held natively); TypeScript has only
+/// `number` (precise to 2^53) and `bigint`, so the wide integers become `bigint`
+/// and the rest `number`. `bytes` is the language's byte buffer, and the
+/// well-known types are branded wrappers named for their kind.
+pub fn prim_spelling(p: &Prim) -> PrimSpelling {
+    let (rust, go, typescript) = match p {
+        Prim::Bool => ("bool", "bool", "boolean"),
+        Prim::String => ("String", "string", "string"),
+        Prim::Bytes => ("Vec<u8>", "[]byte", "Uint8Array"),
+        Prim::I8 => ("i8", "int8", "number"),
+        Prim::I16 => ("i16", "int16", "number"),
+        Prim::I32 => ("i32", "int32", "number"),
+        Prim::I64 => ("i64", "int64", "bigint"),
+        Prim::U8 => ("u8", "uint8", "number"),
+        Prim::U16 => ("u16", "uint16", "number"),
+        Prim::U32 => ("u32", "uint32", "number"),
+        Prim::U64 => ("u64", "uint64", "bigint"),
+        Prim::Float => ("f64", "float64", "number"),
+        Prim::Timestamp => ("Timestamp", "Timestamp", "Timestamp"),
+        Prim::Date => ("LocalDate", "LocalDate", "LocalDate"),
+        Prim::Duration => ("Duration", "Duration", "Duration"),
+        Prim::Uuid => ("Uuid", "Uuid", "Uuid"),
+    };
+    PrimSpelling {
+        rust,
+        go,
+        typescript,
+    }
+}
+
 /// Emit the declaration(s) for a shape. The dispatch over shape kinds is the same
 /// for every target — a structure is always an interface of fields, an enum and a
 /// union are always built from the shape's name, and other kinds emit nothing — so
@@ -381,6 +424,37 @@ mod tests {
             .name,
             "Map"
         );
+    }
+
+    #[test]
+    fn prim_spelling_maps_every_primitive_in_each_language() {
+        // (prim, rust, go, typescript) — the single source of truth, verified
+        // exhaustively here so each target's symbol table only needs to confirm it
+        // reads its own column.
+        let cases = [
+            (Prim::Bool, "bool", "bool", "boolean"),
+            (Prim::String, "String", "string", "string"),
+            (Prim::Bytes, "Vec<u8>", "[]byte", "Uint8Array"),
+            (Prim::I8, "i8", "int8", "number"),
+            (Prim::I16, "i16", "int16", "number"),
+            (Prim::I32, "i32", "int32", "number"),
+            (Prim::I64, "i64", "int64", "bigint"),
+            (Prim::U8, "u8", "uint8", "number"),
+            (Prim::U16, "u16", "uint16", "number"),
+            (Prim::U32, "u32", "uint32", "number"),
+            (Prim::U64, "u64", "uint64", "bigint"),
+            (Prim::Float, "f64", "float64", "number"),
+            (Prim::Timestamp, "Timestamp", "Timestamp", "Timestamp"),
+            (Prim::Date, "LocalDate", "LocalDate", "LocalDate"),
+            (Prim::Duration, "Duration", "Duration", "Duration"),
+            (Prim::Uuid, "Uuid", "Uuid", "Uuid"),
+        ];
+        for (prim, rust, go, typescript) in cases {
+            let s = prim_spelling(&prim);
+            assert_eq!(s.rust, rust, "rust {prim:?}");
+            assert_eq!(s.go, go, "go {prim:?}");
+            assert_eq!(s.typescript, typescript, "typescript {prim:?}");
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! The TypeScript Symbol table: maps an IR type reference to its TS symbol.
 
-use crate::codegen::conventions::leaf_symbol_of;
+use crate::codegen::conventions::{leaf_symbol_of, prim_spelling};
 use crate::codegen::symbol::Symbol;
 use crate::ir::{Prim, Tref};
 
@@ -11,25 +11,10 @@ pub fn symbol_of(t: &Tref) -> Symbol {
     leaf_symbol_of(t, prim_symbol, "Array", "Record")
 }
 
-/// The TS representation of a primitive. 64-bit integers are `bigint` (they go on
-/// the wire as strings, since JS `number` loses precision above 2^53); narrower
-/// integers and `float` are `number`. Well-known types are branded strings named
-/// for their kind.
+/// The TypeScript spelling of a primitive (the `typescript` column of the shared
+/// table).
 fn prim_symbol(p: &Prim) -> Symbol {
-    let name = match p {
-        Prim::Bool => "boolean",
-        Prim::String => "string",
-        Prim::Bytes => "Uint8Array",
-        Prim::I8 | Prim::I16 | Prim::I32 | Prim::U8 | Prim::U16 | Prim::U32 | Prim::Float => {
-            "number"
-        }
-        Prim::I64 | Prim::U64 => "bigint",
-        Prim::Timestamp => "Timestamp",
-        Prim::Date => "LocalDate",
-        Prim::Duration => "Duration",
-        Prim::Uuid => "Uuid",
-    };
-    Symbol::builtin(name)
+    Symbol::builtin(prim_spelling(p).typescript)
 }
 
 #[cfg(test)]
@@ -39,33 +24,22 @@ mod tests {
 
     #[test]
     fn primitives_map_to_their_ts_types() {
+        // The full prim table is exercised in the conventions tests; here we only
+        // confirm `symbol_of` reads the TypeScript column: a narrow int and float
+        // are `number`, the 64-bit ints are `bigint` (precision past 2^53 rides the
+        // wire as a string), bytes is `Uint8Array`, and a well-known type is
+        // branded.
         assert_prim_symbols(
             symbol_of,
             &[
-                (Prim::Bool, "boolean"),
-                (Prim::String, "string"),
-                (Prim::Bytes, "Uint8Array"),
-                (Prim::I8, "number"),
-                (Prim::I16, "number"),
                 (Prim::I32, "number"),
-                (Prim::U8, "number"),
-                (Prim::U16, "number"),
-                (Prim::U32, "number"),
                 (Prim::Float, "number"),
                 (Prim::I64, "bigint"),
                 (Prim::U64, "bigint"),
+                (Prim::Bytes, "Uint8Array"),
                 (Prim::Timestamp, "Timestamp"),
-                (Prim::Date, "LocalDate"),
-                (Prim::Duration, "Duration"),
-                (Prim::Uuid, "Uuid"),
             ],
         );
-    }
-
-    #[test]
-    fn sixty_four_bit_ints_are_bigint_both_signs() {
-        assert_eq!(symbol_of(&Tref::Prim(Prim::I64)).name, "bigint");
-        assert_eq!(symbol_of(&Tref::Prim(Prim::U64)).name, "bigint");
     }
 
     #[test]
