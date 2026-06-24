@@ -100,6 +100,31 @@ pub(crate) fn union_item(discriminator: &str, members: &[Member], name: &str) ->
     Decl::Raw(Raw { text, refs })
 }
 
+/// The shared `marshalTagged` helper: flattens a payload's fields next to a
+/// discriminator key. The assembler emits it once for a module that has any
+/// union. It references `encoding/json`.
+pub(crate) fn marshal_tagged_helper() -> Decl {
+    let text = "\
+func marshalTagged(disc string, tag string, payload any) ([]byte, error) {
+\traw, err := json.Marshal(payload)
+\tif err != nil {
+\t\treturn nil, err
+\t}
+\tvar fields map[string]json.RawMessage
+\tif err := json.Unmarshal(raw, &fields); err != nil {
+\t\treturn nil, err
+\t}
+\ttagJSON, _ := json.Marshal(tag)
+\tfields[disc] = tagJSON
+\treturn json.Marshal(fields)
+}"
+    .to_string();
+    Decl::Raw(Raw {
+        text,
+        refs: vec![Symbol::imported("json", "encoding/json", "json")],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

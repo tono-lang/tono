@@ -5,6 +5,7 @@
 //! named strings.
 
 pub mod codecs;
+pub mod emit;
 pub mod render;
 pub mod symbols;
 pub mod types;
