@@ -7,6 +7,7 @@
 //! serde cannot express idiomatically (the open-enum `Unknown` arm, the
 //! integer-as-string helpers) are emitted as verbatim items by a later phase.
 
+pub mod render;
 pub mod symbols;
 pub mod types;
 
@@ -15,6 +16,8 @@ use serde_json::Value;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::target::{Fragment, Target};
 use crate::ir::{Shape, Tref};
+
+pub use render::RustRules;
 
 /// The Rust target: the Symbol table and emitters. Render rules and codec helpers
 /// live in later modules; the engine supplies the tree, import collection,
@@ -100,5 +103,53 @@ mod tests {
             matches!(&decls[..], [crate::codegen::tree::Decl::Interface(i)]
             if i.name.name == "Charge" && i.fields[0].name.name == "amount_cents")
         );
+    }
+
+    #[test]
+    fn a_structure_renders_to_a_rust_struct_end_to_end() {
+        use crate::codegen::render::render_file;
+        use crate::codegen::tree::File;
+        use crate::codegen::Formatter;
+
+        let shape = Shape {
+            id: "billing#Charge".into(),
+            kind: ShapeKind::Structure {
+                params: vec![],
+                members: vec![
+                    Member {
+                        name: "amount_cents".into(),
+                        target: Tref::Prim(Prim::I64),
+                        required: true,
+                        default: None,
+                        constraints: vec![],
+                        traits: vec![],
+                    },
+                    Member {
+                        name: "customer".into(),
+                        target: Tref::Ref {
+                            id: "crm#Customer".into(),
+                            args: vec![],
+                        },
+                        required: false,
+                        default: None,
+                        constraints: vec![],
+                        traits: vec![],
+                    },
+                ],
+            },
+            traits: vec![],
+        };
+        let file = File {
+            module: "billing".into(),
+            decls: RustTarget.emit_type(&shape),
+        };
+        // `cat` echoes the rough text unchanged, so the assertion does not depend
+        // on rustfmt being installed.
+        let out = render_file(&file, &RustRules, &Formatter::new("cat", vec![])).text;
+        assert!(out.contains("use crate::crm::Customer;"));
+        assert!(out.contains("pub struct Charge {"));
+        assert!(out.contains("    pub amount_cents: i64,"));
+        assert!(out.contains("    #[serde(default, skip_serializing_if = \"Option::is_none\")]"));
+        assert!(out.contains("    pub customer: Option<Customer>,"));
     }
 }
