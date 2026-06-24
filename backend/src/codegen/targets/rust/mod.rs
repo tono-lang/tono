@@ -8,6 +8,7 @@
 //! integer-as-string helpers) are emitted as verbatim items by a later phase.
 
 pub mod codecs;
+pub mod emit;
 pub mod render;
 pub mod symbols;
 pub mod types;

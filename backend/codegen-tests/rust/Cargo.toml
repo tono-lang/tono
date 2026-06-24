@@ -1,0 +1,13 @@
+[package]
+name = "codegen-tests-rust"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Detach from the backend workspace: this crate exists only so the round-trip
+# harness can compile and run generated Rust, and its coverage must not count.
+[workspace]

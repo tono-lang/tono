@@ -141,6 +141,149 @@ fn wire_tag(member: &Member) -> String {
         .unwrap_or_else(|| member.name.clone())
 }
 
+/// The branded well-known newtypes. They are `#[serde(transparent)]` wrappers
+/// over `String`, so they serialize exactly as their inner value while staying
+/// distinct types in code. The assembler prepends these to a module.
+pub(crate) fn well_known_decls() -> Vec<Decl> {
+    ["Timestamp", "LocalDate", "Duration", "Uuid"]
+        .iter()
+        .map(|name| {
+            Decl::Raw(Raw {
+                text: format!(
+                    "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]\n\
+                     #[serde(transparent)]\n\
+                     pub struct {name}(pub String);"
+                ),
+                refs: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+/// The hand-written `#[serde(with)]` helper modules: a 64-bit integer travels as
+/// a JSON string and `bytes` as base64, each with an `option` submodule for the
+/// nullable field path. The assembler prepends these to a module.
+pub(crate) fn runtime_helpers() -> Vec<Decl> {
+    [
+        int_string_module("i64"),
+        int_string_module("u64"),
+        BASE64_BYTES_MODULE.to_string(),
+    ]
+    .into_iter()
+    .map(|text| {
+        Decl::Raw(Raw {
+            text,
+            refs: Vec::new(),
+        })
+    })
+    .collect()
+}
+
+const INDENT: &str = "    ";
+
+/// The `{ty}_string` module: a 64-bit integer that travels as a JSON string.
+fn int_string_module(ty: &str) -> String {
+    format!(
+        "pub mod {ty}_string {{\n\
+         {INDENT}pub fn serialize<S: serde::Serializer>(v: &{ty}, s: S) -> Result<S::Ok, S::Error> {{\n\
+         {INDENT}{INDENT}s.serialize_str(&v.to_string())\n\
+         {INDENT}}}\n\
+         {INDENT}pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<{ty}, D::Error> {{\n\
+         {INDENT}{INDENT}let s = <String as serde::Deserialize>::deserialize(d)?;\n\
+         {INDENT}{INDENT}s.parse().map_err(serde::de::Error::custom)\n\
+         {INDENT}}}\n\
+         {INDENT}pub mod option {{\n\
+         {INDENT}{INDENT}pub fn serialize<S: serde::Serializer>(v: &Option<{ty}>, s: S) -> Result<S::Ok, S::Error> {{\n\
+         {INDENT}{INDENT}{INDENT}match v {{\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}Some(n) => s.serialize_str(&n.to_string()),\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}None => s.serialize_none(),\n\
+         {INDENT}{INDENT}{INDENT}}}\n\
+         {INDENT}{INDENT}}}\n\
+         {INDENT}{INDENT}pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<{ty}>, D::Error> {{\n\
+         {INDENT}{INDENT}{INDENT}let o = <Option<String> as serde::Deserialize>::deserialize(d)?;\n\
+         {INDENT}{INDENT}{INDENT}match o {{\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),\n\
+         {INDENT}{INDENT}{INDENT}{INDENT}None => Ok(None),\n\
+         {INDENT}{INDENT}{INDENT}}}\n\
+         {INDENT}{INDENT}}}\n\
+         {INDENT}}}\n\
+         }}"
+    )
+}
+
+/// The base64 helper module: `bytes` travels as a base64 JSON string. The
+/// encoder/decoder are hand-rolled (no external crate), standard alphabet with
+/// padding.
+const BASE64_BYTES_MODULE: &str = r#"pub mod base64_bytes {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn encode(bytes: &[u8]) -> String {
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
+            out.push(if chunk.len() > 1 { ALPHABET[((n >> 6) & 63) as usize] as char } else { '=' });
+            out.push(if chunk.len() > 2 { ALPHABET[(n & 63) as usize] as char } else { '=' });
+        }
+        out
+    }
+
+    pub fn decode(s: &str) -> Result<Vec<u8>, String> {
+        fn val(c: u8) -> Result<u32, String> {
+            match c {
+                b'A'..=b'Z' => Ok(u32::from(c - b'A')),
+                b'a'..=b'z' => Ok(u32::from(c - b'a' + 26)),
+                b'0'..=b'9' => Ok(u32::from(c - b'0' + 52)),
+                b'+' => Ok(62),
+                b'/' => Ok(63),
+                _ => Err("invalid base64".to_string()),
+            }
+        }
+        let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'=').collect();
+        let mut out = Vec::new();
+        for chunk in bytes.chunks(4) {
+            let mut n = 0u32;
+            for (i, &c) in chunk.iter().enumerate() {
+                n |= val(c)? << (18 - 6 * i);
+            }
+            out.push((n >> 16) as u8);
+            if chunk.len() > 2 {
+                out.push((n >> 8) as u8);
+            }
+            if chunk.len() > 3 {
+                out.push(n as u8);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn serialize<S: serde::Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&encode(v))
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let s = <String as serde::Deserialize>::deserialize(d)?;
+        decode(&s).map_err(serde::de::Error::custom)
+    }
+    pub mod option {
+        pub fn serialize<S: serde::Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+            match v {
+                Some(b) => s.serialize_str(&super::encode(b)),
+                None => s.serialize_none(),
+            }
+        }
+        pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+            let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
+            match o {
+                Some(s) => super::decode(&s).map(Some).map_err(serde::de::Error::custom),
+                None => Ok(None),
+            }
+        }
+    }
+}"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
