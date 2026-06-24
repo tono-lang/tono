@@ -49,35 +49,31 @@ fn prim_symbol(p: &Prim) -> Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::test_support::{assert_param_and_collections, assert_prim_symbols};
 
     #[test]
     fn primitives_map_to_their_rust_types() {
-        let cases = [
-            (Prim::Bool, "bool"),
-            (Prim::String, "String"),
-            (Prim::Bytes, "Vec<u8>"),
-            (Prim::I8, "i8"),
-            (Prim::I16, "i16"),
-            (Prim::I32, "i32"),
-            (Prim::I64, "i64"),
-            (Prim::U8, "u8"),
-            (Prim::U16, "u16"),
-            (Prim::U32, "u32"),
-            (Prim::U64, "u64"),
-            (Prim::Float, "f64"),
-            (Prim::Timestamp, "Timestamp"),
-            (Prim::Date, "LocalDate"),
-            (Prim::Duration, "Duration"),
-            (Prim::Uuid, "Uuid"),
-        ];
-        for (prim, expected) in cases {
-            let symbol = symbol_of(&Tref::Prim(prim.clone()));
-            assert_eq!(symbol.name, expected, "{prim:?}");
-            assert_eq!(
-                symbol.import, None,
-                "primitives are not imported ({prim:?})"
-            );
-        }
+        assert_prim_symbols(
+            symbol_of,
+            &[
+                (Prim::Bool, "bool"),
+                (Prim::String, "String"),
+                (Prim::Bytes, "Vec<u8>"),
+                (Prim::I8, "i8"),
+                (Prim::I16, "i16"),
+                (Prim::I32, "i32"),
+                (Prim::I64, "i64"),
+                (Prim::U8, "u8"),
+                (Prim::U16, "u16"),
+                (Prim::U32, "u32"),
+                (Prim::U64, "u64"),
+                (Prim::Float, "f64"),
+                (Prim::Timestamp, "Timestamp"),
+                (Prim::Date, "LocalDate"),
+                (Prim::Duration, "Duration"),
+                (Prim::Uuid, "Uuid"),
+            ],
+        );
     }
 
     #[test]
@@ -88,25 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn a_type_param_is_a_local_name() {
-        let symbol = symbol_of(&Tref::Param("T".into()));
-        assert_eq!(symbol.name, "T");
-        assert_eq!(symbol.import, None);
-    }
-
-    #[test]
-    fn collections_have_structural_fallback_symbols() {
-        assert_eq!(
-            symbol_of(&Tref::List(Box::new(Tref::Prim(Prim::Bool)))).name,
-            "Vec"
-        );
-        assert_eq!(
-            symbol_of(&Tref::Map(
-                Box::new(Tref::Prim(Prim::String)),
-                Box::new(Tref::Prim(Prim::Bool)),
-            ))
-            .name,
-            "HashMap"
-        );
+    fn param_and_collection_fallbacks() {
+        assert_param_and_collections(symbol_of, "Vec", "HashMap");
     }
 }

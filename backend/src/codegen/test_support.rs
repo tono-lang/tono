@@ -1,8 +1,11 @@
-//! Shared builders for codegen unit tests, so every target's tests construct IR
-//! shapes the same way instead of re-declaring the same helpers.
+//! Shared builders and assertions for codegen unit tests, so every target's
+//! tests construct IR shapes and check their symbol table the same way instead
+//! of re-declaring the same helpers.
 #![cfg(test)]
 
-use crate::ir::{Member, Shape, ShapeKind, Trait, Tref};
+use crate::codegen::symbol::Symbol;
+use crate::codegen::target::Target;
+use crate::ir::{Member, Prim, Shape, ShapeKind, Trait, Tref};
 
 /// A required member with no traits.
 pub fn member(name: &str, target: Tref, required: bool) -> Member {
@@ -31,4 +34,58 @@ pub fn structure(id: &str, members: Vec<Member>) -> Shape {
         },
         traits: vec![],
     }
+}
+
+/// Assert a symbol table maps each primitive to the expected in-code name and
+/// imports none of them.
+pub fn assert_prim_symbols(symbol_of: impl Fn(&Tref) -> Symbol, cases: &[(Prim, &str)]) {
+    for (prim, expected) in cases {
+        let symbol = symbol_of(&Tref::Prim(prim.clone()));
+        assert_eq!(&symbol.name, expected, "{prim:?}");
+        assert_eq!(
+            symbol.import, None,
+            "primitives are not imported ({prim:?})"
+        );
+    }
+}
+
+/// Assert a type parameter is an unimported local name and the collection
+/// fallbacks carry the given structural names.
+pub fn assert_param_and_collections(
+    symbol_of: impl Fn(&Tref) -> Symbol,
+    list_name: &str,
+    map_name: &str,
+) {
+    let param = symbol_of(&Tref::Param("T".into()));
+    assert_eq!(param.name, "T");
+    assert_eq!(param.import, None);
+    assert_eq!(
+        symbol_of(&Tref::List(Box::new(Tref::Prim(Prim::Bool)))).name,
+        list_name
+    );
+    assert_eq!(
+        symbol_of(&Tref::Map(
+            Box::new(Tref::Prim(Prim::String)),
+            Box::new(Tref::Prim(Prim::Bool)),
+        ))
+        .name,
+        map_name
+    );
+}
+
+/// Assert a target emits nothing for an operation stub and ignores the opaque
+/// wire descriptor.
+pub fn assert_emits_no_op_stub(target: &impl Target) {
+    let op = Shape {
+        id: "billing#Create".into(),
+        kind: ShapeKind::Operation {
+            input: None,
+            output: None,
+            errors: vec![],
+        },
+        traits: vec![],
+    };
+    assert!(target
+        .emit_op_stub(&op, &serde_json::json!({"http_method": "POST"}))
+        .is_empty());
 }

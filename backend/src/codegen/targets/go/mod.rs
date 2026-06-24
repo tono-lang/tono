@@ -49,8 +49,8 @@ impl Target for GoTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Prim, ShapeKind};
-    use serde_json::json;
+    use crate::codegen::test_support::assert_emits_no_op_stub;
+    use crate::ir::Prim;
 
     #[test]
     fn target_identity_and_runtime() {
@@ -65,17 +65,6 @@ mod tests {
 
     #[test]
     fn emit_op_stub_emits_nothing_and_ignores_the_descriptor() {
-        let op = Shape {
-            id: "billing#Create".into(),
-            kind: ShapeKind::Operation {
-                input: None,
-                output: None,
-                errors: vec![],
-            },
-            traits: vec![],
-        };
-        assert!(GoTarget
-            .emit_op_stub(&op, &json!({"http_method": "POST"}))
-            .is_empty());
+        assert_emits_no_op_stub(&GoTarget);
     }
 }

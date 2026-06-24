@@ -50,35 +50,31 @@ fn prim_symbol(p: &Prim) -> Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::test_support::{assert_param_and_collections, assert_prim_symbols};
 
     #[test]
     fn primitives_map_to_their_go_types() {
-        let cases = [
-            (Prim::Bool, "bool"),
-            (Prim::String, "string"),
-            (Prim::Bytes, "[]byte"),
-            (Prim::I8, "int8"),
-            (Prim::I16, "int16"),
-            (Prim::I32, "int32"),
-            (Prim::I64, "int64"),
-            (Prim::U8, "uint8"),
-            (Prim::U16, "uint16"),
-            (Prim::U32, "uint32"),
-            (Prim::U64, "uint64"),
-            (Prim::Float, "float64"),
-            (Prim::Timestamp, "Timestamp"),
-            (Prim::Date, "LocalDate"),
-            (Prim::Duration, "Duration"),
-            (Prim::Uuid, "Uuid"),
-        ];
-        for (prim, expected) in cases {
-            let symbol = symbol_of(&Tref::Prim(prim.clone()));
-            assert_eq!(symbol.name, expected, "{prim:?}");
-            assert_eq!(
-                symbol.import, None,
-                "primitives are not imported ({prim:?})"
-            );
-        }
+        assert_prim_symbols(
+            symbol_of,
+            &[
+                (Prim::Bool, "bool"),
+                (Prim::String, "string"),
+                (Prim::Bytes, "[]byte"),
+                (Prim::I8, "int8"),
+                (Prim::I16, "int16"),
+                (Prim::I32, "int32"),
+                (Prim::I64, "int64"),
+                (Prim::U8, "uint8"),
+                (Prim::U16, "uint16"),
+                (Prim::U32, "uint32"),
+                (Prim::U64, "uint64"),
+                (Prim::Float, "float64"),
+                (Prim::Timestamp, "Timestamp"),
+                (Prim::Date, "LocalDate"),
+                (Prim::Duration, "Duration"),
+                (Prim::Uuid, "Uuid"),
+            ],
+        );
     }
 
     #[test]
@@ -89,25 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn a_type_param_is_a_local_name() {
-        let symbol = symbol_of(&Tref::Param("T".into()));
-        assert_eq!(symbol.name, "T");
-        assert_eq!(symbol.import, None);
-    }
-
-    #[test]
-    fn collections_have_structural_fallback_symbols() {
-        assert_eq!(
-            symbol_of(&Tref::List(Box::new(Tref::Prim(Prim::Bool)))).name,
-            "[]"
-        );
-        assert_eq!(
-            symbol_of(&Tref::Map(
-                Box::new(Tref::Prim(Prim::String)),
-                Box::new(Tref::Prim(Prim::Bool)),
-            ))
-            .name,
-            "map"
-        );
+    fn param_and_collection_fallbacks() {
+        assert_param_and_collections(symbol_of, "[]", "map");
     }
 }
