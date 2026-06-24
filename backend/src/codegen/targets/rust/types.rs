@@ -6,12 +6,12 @@
 //! `enum` for unions) and are emitted as verbatim items by a later phase.
 
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
-use crate::codegen::conventions::{self, field_ident, type_ident, type_name};
+use crate::codegen::conventions::{self, field_ident};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::targets::rust::codecs::{enum_item, union_item};
 use crate::codegen::targets::rust::symbols::symbol_of;
-use crate::codegen::tree::{Decl, Field, Interface, TypeExpr};
-use crate::ir::{Member, Shape, ShapeKind, Tref};
+use crate::codegen::tree::{Decl, Field, TypeExpr};
+use crate::ir::{Member, Shape, Tref};
 
 /// The Rust language key for per-language traits such as `@rename`.
 const LANG: &str = "rust";
@@ -32,21 +32,15 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
 /// enums and unions become verbatim items (custom serde impls) built by the
 /// codec layer. Other shape kinds contribute nothing here.
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
-    match &shape.kind {
-        ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
-            name: type_name(shape, LANG),
-            fields: members.iter().map(|m| field_of(m, config)).collect(),
-        })],
-        ShapeKind::Enum { values, .. } => {
-            vec![enum_item(values, &type_ident(shape, LANG))]
-        }
-        ShapeKind::Union {
-            discriminator,
-            members,
-            ..
-        } => vec![union_item(discriminator, members, &type_ident(shape, LANG))],
-        _ => vec![],
-    }
+    conventions::emit_shape(
+        shape,
+        LANG,
+        |m| field_of(m, config),
+        // Rust's open enum is a hand-written data enum (custom serde), not a
+        // named-string list, so it uses the codec layer rather than `string_enum`.
+        |values, name| vec![enum_item(values, name)],
+        |discriminator, members, name| vec![union_item(discriminator, members, name)],
+    )
 }
 
 /// The PascalCase Rust identifier for an open-enum or union variant, derived from
@@ -67,8 +61,8 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::{member, structure};
-    use crate::ir::Prim;
+    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::ir::{Prim, ShapeKind};
 
     #[test]
     fn a_structure_becomes_a_struct_with_snake_fields() {
@@ -90,14 +84,7 @@ mod tests {
 
     #[test]
     fn an_enum_becomes_a_verbatim_open_enum_item() {
-        let shape = Shape {
-            id: "billing#Status".into(),
-            kind: ShapeKind::Enum {
-                backing: crate::ir::EnumBacking::String,
-                values: vec![("pending".into(), None)],
-            },
-            traits: vec![],
-        };
+        let shape = enum_shape("billing#Status", vec![("pending".into(), None)]);
         let decls = emit_type(&shape, &rust_casing());
         assert!(matches!(&decls[..], [Decl::Raw(r)]
             if r.text.contains("pub enum Status {") && r.text.contains("Unknown(String)")));
@@ -105,22 +92,18 @@ mod tests {
 
     #[test]
     fn a_union_becomes_a_verbatim_tagged_enum_item() {
-        let shape = Shape {
-            id: "billing#Method".into(),
-            kind: ShapeKind::Union {
-                params: vec![],
-                discriminator: "type".into(),
-                members: vec![member(
-                    "card",
-                    Tref::Ref {
-                        id: "billing#CardData".into(),
-                        args: vec![],
-                    },
-                    true,
-                )],
-            },
-            traits: vec![],
-        };
+        let shape = union_shape(
+            "billing#Method",
+            "type",
+            vec![member(
+                "card",
+                Tref::Ref {
+                    id: "billing#CardData".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
         let decls = emit_type(&shape, &rust_casing());
         assert!(matches!(&decls[..], [Decl::Raw(r)]
             if r.text.contains("#[serde(tag = \"type\")]")

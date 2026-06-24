@@ -288,32 +288,11 @@ const BASE64_BYTES_MODULE: &str = r#"pub mod base64_bytes {
 mod tests {
     use super::*;
     use crate::codegen::symbol::Symbol;
-    use crate::ir::{Prim, Trait, Tref};
-    use serde_json::json;
+    use crate::codegen::test_support::wire_member;
+    use crate::ir::{Prim, Tref};
 
     fn values(pairs: Vec<&str>) -> Vec<(String, Option<i64>)> {
         pairs.into_iter().map(|v| (v.to_string(), None)).collect()
-    }
-
-    fn member(name: &str, payload_id: &str, wire: Option<&str>) -> Member {
-        Member {
-            name: name.into(),
-            target: Tref::Ref {
-                id: payload_id.into(),
-                args: vec![],
-            },
-            required: true,
-            default: None,
-            constraints: vec![],
-            traits: wire
-                .map(|w| {
-                    vec![Trait {
-                        id: "core#wire".into(),
-                        value: json!(w),
-                    }]
-                })
-                .unwrap_or_default(),
-        }
     }
 
     fn field(name: &str, ty: TypeExpr, nullable: bool) -> Field {
@@ -393,11 +372,11 @@ mod tests {
     #[test]
     fn a_union_emits_a_tagged_enum_and_declares_payload_refs() {
         let members = vec![
-            member("card", "cards#CardData", Some("CARD")),
-            member("bank", "billing#BankData", None),
+            wire_member("card", "cards#CardData", Some("CARD")),
+            wire_member("bank", "billing#BankData", None),
             // A wire override that already equals the PascalCase identifier needs
             // no rename, exercising the no-rename path.
-            member("wire", "billing#WireData", Some("Wire")),
+            wire_member("wire", "billing#WireData", Some("Wire")),
         ];
         let decl = union_item("type", &members, "Method");
         assert!(matches!(&decl, Decl::Raw(raw) if

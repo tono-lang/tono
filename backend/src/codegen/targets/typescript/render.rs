@@ -4,43 +4,42 @@
 //! phases.
 
 use crate::codegen::symbol::Import;
+use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr, Variant};
 
 /// The TypeScript render rules.
 pub struct TsRules;
 
+/// The TypeScript spelling of each composite type construct; the recursion lives
+/// in the shared `syntax` driver. An `@entries` map is already the
+/// `[[k, v], …]` wire shape (a `[K, V]` tuple list).
+impl TypeSyntax for TsRules {
+    fn list(&self, inner: &str) -> String {
+        // A nullable element needs parentheses before `[]` binds.
+        if inner.ends_with(" | null") {
+            format!("({inner})[]")
+        } else {
+            format!("{inner}[]")
+        }
+    }
+    fn map(&self, key: &str, value: &str) -> String {
+        format!("Record<{key}, {value}>")
+    }
+    fn nullable(&self, inner: &str) -> String {
+        format!("{inner} | null")
+    }
+    fn generic(&self, name: &str, args: &[String]) -> String {
+        format!("{name}<{}>", args.join(", "))
+    }
+    fn entries(&self, key: &str, value: &str) -> String {
+        format!("[{key}, {value}][]")
+    }
+}
+
 impl TsRules {
     fn render_type(&self, ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Ref(symbol) => symbol.name.clone(),
-            TypeExpr::List(inner) => {
-                let rendered = self.render_type(inner);
-                // A union element needs parentheses before `[]` binds.
-                if matches!(**inner, TypeExpr::Nullable(_)) {
-                    format!("({rendered})[]")
-                } else {
-                    format!("{rendered}[]")
-                }
-            }
-            TypeExpr::Map(key, value) => {
-                format!(
-                    "Record<{}, {}>",
-                    self.render_type(key),
-                    self.render_type(value)
-                )
-            }
-            TypeExpr::Nullable(inner) => format!("{} | null", self.render_type(inner)),
-            TypeExpr::Generic(symbol, args) => {
-                let rendered: Vec<String> = args.iter().map(|a| self.render_type(a)).collect();
-                format!("{}<{}>", symbol.name, rendered.join(", "))
-            }
-            // An @entries map is an ordered list of [key, value] tuples, which is
-            // already the `[[k, v], …]` wire shape.
-            TypeExpr::Entries(key, value) => {
-                format!("[{}, {}][]", self.render_type(key), self.render_type(value))
-            }
-        }
+        syntax::render_type(ty, self)
     }
 
     fn render_field(&self, field: &Field) -> String {

@@ -76,7 +76,7 @@ mod tests {
     use crate::codegen::render::render_file;
     use crate::codegen::targets::go::types::go_casing;
     use crate::codegen::targets::go::GoRules;
-    use crate::codegen::test_support::{member, structure};
+    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
     use crate::codegen::Formatter;
     use crate::ir::{Prim, Shape, ShapeKind, Tref};
 
@@ -117,22 +117,18 @@ mod tests {
         let module = Module {
             name: "models".into(),
             shapes: vec![
-                Shape {
-                    id: "models#Method".into(),
-                    kind: ShapeKind::Union {
-                        params: vec![],
-                        discriminator: "type".into(),
-                        members: vec![member(
-                            "card",
-                            Tref::Ref {
-                                id: "models#CardData".into(),
-                                args: vec![],
-                            },
-                            true,
-                        )],
-                    },
-                    traits: vec![],
-                },
+                union_shape(
+                    "models#Method",
+                    "type",
+                    vec![member(
+                        "card",
+                        Tref::Ref {
+                            id: "models#CardData".into(),
+                            args: vec![],
+                        },
+                        true,
+                    )],
+                ),
                 structure(
                     "models#CardData",
                     vec![member("last4", Tref::Prim(Prim::String), true)],
@@ -175,22 +171,8 @@ mod tests {
             shapes: vec![
                 // An enum exercises the non-struct/non-union path of the entries
                 // scan, which contributes no @entries field.
-                Shape {
-                    id: "models#Status".into(),
-                    kind: ShapeKind::Enum {
-                        backing: crate::ir::EnumBacking::String,
-                        values: vec![("active".into(), None)],
-                    },
-                    traits: vec![],
-                },
-                Shape {
-                    id: "models#Doc".into(),
-                    kind: ShapeKind::Structure {
-                        params: vec![],
-                        members: vec![counts],
-                    },
-                    traits: vec![],
-                },
+                enum_shape("models#Status", vec![("active".into(), None)]),
+                structure("models#Doc", vec![counts]),
             ],
             operations: vec![],
         };

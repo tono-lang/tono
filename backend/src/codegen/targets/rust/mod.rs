@@ -13,48 +13,27 @@ pub mod render;
 pub mod symbols;
 pub mod types;
 
-use serde_json::Value;
-
-use crate::codegen::symbol::Symbol;
-use crate::codegen::target::{Fragment, Target};
-use crate::ir::{Shape, Tref};
-
 pub use render::RustRules;
 
-/// The Rust target: the Symbol table and emitters. Render rules and codec helpers
-/// live in later modules; the engine supplies the tree, import collection,
-/// casing, and the formatter.
-pub struct RustTarget;
-
-impl Target for RustTarget {
-    fn name(&self) -> &str {
-        "rust"
-    }
-
-    fn symbol_of(&self, t: &Tref) -> Symbol {
-        symbols::symbol_of(t)
-    }
-
-    fn emit_type(&self, shape: &Shape) -> Fragment {
-        types::emit_type(shape, &types::rust_casing())
-    }
-
-    fn emit_op_stub(&self, _op: &Shape, _descriptor: &Value) -> Fragment {
-        // Operation stubs (signature + embedded descriptor + runtime.execute) are
-        // owned by the protocol/runtime work; this target emits none yet.
-        Vec::new()
-    }
-
-    fn runtime_pkg(&self) -> &str {
-        "sdk-http-runtime-rs"
+crate::declare_target! {
+    /// The Rust target: the Symbol table and emitters. Render rules and codec
+    /// helpers live in sibling modules; the engine supplies the tree, import
+    /// collection, casing, and the formatter.
+    pub struct RustTarget => {
+        name: "rust",
+        symbol_of: symbols::symbol_of,
+        emit_type: types::emit_type,
+        casing: types::rust_casing,
+        runtime_pkg: "sdk-http-runtime-rs",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::assert_emits_no_op_stub;
-    use crate::ir::{Member, Prim, ShapeKind};
+    use crate::codegen::target::Target;
+    use crate::codegen::test_support::{assert_emits_no_op_stub, member, structure};
+    use crate::ir::{Prim, Tref};
 
     #[test]
     fn target_identity_and_runtime() {
@@ -74,21 +53,10 @@ mod tests {
 
     #[test]
     fn emit_type_maps_a_structure_to_a_struct_interface() {
-        let shape = Shape {
-            id: "billing#Charge".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![Member {
-                    name: "amount_cents".into(),
-                    target: Tref::Prim(Prim::I64),
-                    required: true,
-                    default: None,
-                    constraints: vec![],
-                    traits: vec![],
-                }],
-            },
-            traits: vec![],
-        };
+        let shape = structure(
+            "billing#Charge",
+            vec![member("amount_cents", Tref::Prim(Prim::I64), true)],
+        );
         let decls = RustTarget.emit_type(&shape);
         assert!(
             matches!(&decls[..], [crate::codegen::tree::Decl::Interface(i)]

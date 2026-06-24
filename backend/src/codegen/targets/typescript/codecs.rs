@@ -266,17 +266,7 @@ mod tests {
     use crate::codegen::target::RenderRules;
     use crate::codegen::targets::typescript::types::ts_casing;
     use crate::codegen::targets::typescript::TsRules;
-
-    fn member(name: &str, target: Tref, required: bool) -> Member {
-        Member {
-            name: name.into(),
-            target,
-            required,
-            default: None,
-            constraints: vec![],
-            traits: vec![],
-        }
-    }
+    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
 
     fn rendered(decls: &[Decl]) -> String {
         decls
@@ -299,17 +289,13 @@ mod tests {
 
     #[test]
     fn struct_codec_routes_i64_and_uses_wire_keys() {
-        let shape = Shape {
-            id: "billing#Charge".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![
-                    member("amount_cents", Tref::Prim(Prim::I64), true),
-                    member("note", Tref::Prim(Prim::String), false),
-                ],
-            },
-            traits: vec![],
-        };
+        let shape = structure(
+            "billing#Charge",
+            vec![
+                member("amount_cents", Tref::Prim(Prim::I64), true),
+                member("note", Tref::Prim(Prim::String), false),
+            ],
+        );
         let out = rendered(&emit_codecs(&shape, &ts_casing()));
         assert!(out.contains("export function encodeCharge(value: Charge): unknown {"));
         // encode: wire key out, in-code identifier read, i64 routed.
@@ -334,14 +320,7 @@ mod tests {
             id: "core#entries".into(),
             value: serde_json::json!(true),
         }];
-        let shape = Shape {
-            id: "billing#Doc".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![counts],
-            },
-            traits: vec![],
-        };
+        let shape = structure("billing#Doc", vec![counts]);
         let out = rendered(&emit_codecs(&shape, &ts_casing()));
         // The pairs array is mapped element-wise; the i64 value routes through its
         // codec, the i32 key passes through.
@@ -351,14 +330,7 @@ mod tests {
 
     #[test]
     fn open_enum_codec_is_identity_and_lenient() {
-        let shape = Shape {
-            id: "billing#Status".into(),
-            kind: ShapeKind::Enum {
-                backing: crate::ir::EnumBacking::String,
-                values: vec![("pending".into(), None)],
-            },
-            traits: vec![],
-        };
+        let shape = enum_shape("billing#Status", vec![("pending".into(), None)]);
         let out = rendered(&emit_codecs(&shape, &ts_casing()));
         assert!(out.contains("export function encodeStatus(value: Status): string {"));
         assert!(out.contains("return value;"));
@@ -368,22 +340,18 @@ mod tests {
 
     #[test]
     fn union_codec_switches_on_the_discriminator() {
-        let shape = Shape {
-            id: "billing#PaymentMethod".into(),
-            kind: ShapeKind::Union {
-                params: vec![],
-                discriminator: "type".into(),
-                members: vec![member(
-                    "card",
-                    Tref::Ref {
-                        id: "billing#CardData".into(),
-                        args: vec![],
-                    },
-                    true,
-                )],
-            },
-            traits: vec![],
-        };
+        let shape = union_shape(
+            "billing#PaymentMethod",
+            "type",
+            vec![member(
+                "card",
+                Tref::Ref {
+                    id: "billing#CardData".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
         let out = rendered(&emit_codecs(&shape, &ts_casing()));
         assert!(
             out.contains("export function encodePaymentMethod(value: PaymentMethod): unknown {")

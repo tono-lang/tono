@@ -8,48 +8,27 @@ pub mod render;
 pub mod symbols;
 pub mod types;
 
-use serde_json::Value;
-
-use crate::codegen::symbol::Symbol;
-use crate::codegen::target::{Fragment, Target};
-use crate::ir::{Shape, Tref};
-
 pub use render::TsRules;
 
-/// The TypeScript target: the Symbol table and emitters. Render rules live in
-/// [`TsRules`]; the engine supplies the tree, import collection, casing, and the
-/// formatter.
-pub struct TsTarget;
-
-impl Target for TsTarget {
-    fn name(&self) -> &str {
-        "typescript"
-    }
-
-    fn symbol_of(&self, t: &Tref) -> Symbol {
-        symbols::symbol_of(t)
-    }
-
-    fn emit_type(&self, shape: &Shape) -> Fragment {
-        types::emit_type(shape, &types::ts_casing())
-    }
-
-    fn emit_op_stub(&self, _op: &Shape, _descriptor: &Value) -> Fragment {
-        // Operation stubs (signature + embedded descriptor + runtime.execute) are
-        // owned by the protocol/runtime work; this target emits none yet.
-        Vec::new()
-    }
-
-    fn runtime_pkg(&self) -> &str {
-        "@sdk/http-runtime-ts"
+crate::declare_target! {
+    /// The TypeScript target: the Symbol table and emitters. Render rules live in
+    /// [`TsRules`]; the engine supplies the tree, import collection, casing, and
+    /// the formatter.
+    pub struct TsTarget => {
+        name: "typescript",
+        symbol_of: symbols::symbol_of,
+        emit_type: types::emit_type,
+        casing: types::ts_casing,
+        runtime_pkg: "@sdk/http-runtime-ts",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::target::Target;
     use crate::codegen::test_support::assert_emits_no_op_stub;
-    use crate::ir::Prim;
+    use crate::ir::{Prim, Tref};
 
     #[test]
     fn target_identity_and_runtime() {

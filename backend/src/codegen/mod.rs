@@ -13,6 +13,7 @@ pub mod format;
 pub mod imports;
 pub mod render;
 pub mod symbol;
+pub mod syntax;
 pub mod target;
 pub mod targets;
 #[cfg(test)]

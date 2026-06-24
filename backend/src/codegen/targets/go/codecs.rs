@@ -160,35 +160,13 @@ func marshalTagged(disc string, tag string, payload any) ([]byte, error) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Trait, Tref};
-    use serde_json::json;
-
-    fn member(name: &str, payload_id: &str, wire: Option<&str>) -> Member {
-        Member {
-            name: name.into(),
-            target: Tref::Ref {
-                id: payload_id.into(),
-                args: vec![],
-            },
-            required: true,
-            default: None,
-            constraints: vec![],
-            traits: wire
-                .map(|w| {
-                    vec![Trait {
-                        id: "core#wire".into(),
-                        value: json!(w),
-                    }]
-                })
-                .unwrap_or_default(),
-        }
-    }
+    use crate::codegen::test_support::wire_member;
 
     #[test]
     fn a_union_emits_a_pointer_struct_with_json_methods_and_refs() {
         let members = vec![
-            member("card", "models#CardData", Some("CARD")),
-            member("bank", "models#BankData", None),
+            wire_member("card", "models#CardData", Some("CARD")),
+            wire_member("bank", "models#BankData", None),
         ];
         let decl = union_item("type", &members, "Method");
         assert!(matches!(&decl, Decl::Raw(raw) if

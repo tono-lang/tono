@@ -5,7 +5,7 @@
 
 use crate::codegen::symbol::Symbol;
 use crate::codegen::target::Target;
-use crate::ir::{Member, Prim, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Trait, Tref};
 
 /// A required member with no traits.
 pub fn member(name: &str, target: Tref, required: bool) -> Member {
@@ -24,12 +24,59 @@ pub fn member_with(name: &str, target: Tref, required: bool, traits: Vec<Trait>)
     }
 }
 
+/// A union member: a named arm whose payload is a nominal reference, with an
+/// optional `@wire` tag override. Used by the union-codec tests in every target.
+pub fn wire_member(name: &str, payload_id: &str, wire: Option<&str>) -> Member {
+    let traits = wire
+        .map(|w| {
+            vec![Trait {
+                id: "core#wire".into(),
+                value: serde_json::json!(w),
+            }]
+        })
+        .unwrap_or_default();
+    member_with(
+        name,
+        Tref::Ref {
+            id: payload_id.into(),
+            args: vec![],
+        },
+        true,
+        traits,
+    )
+}
+
 /// A structure shape with the given members.
 pub fn structure(id: &str, members: Vec<Member>) -> Shape {
     Shape {
         id: id.into(),
         kind: ShapeKind::Structure {
             params: vec![],
+            members,
+        },
+        traits: vec![],
+    }
+}
+
+/// A string-backed enum shape with the given `(wire, discriminant)` values.
+pub fn enum_shape(id: &str, values: Vec<(String, Option<i64>)>) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Enum {
+            backing: EnumBacking::String,
+            values,
+        },
+        traits: vec![],
+    }
+}
+
+/// A union shape with the given discriminator and variant members.
+pub fn union_shape(id: &str, discriminator: &str, members: Vec<Member>) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Union {
+            params: vec![],
+            discriminator: discriminator.into(),
             members,
         },
         traits: vec![],

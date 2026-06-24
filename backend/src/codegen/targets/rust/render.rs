@@ -9,6 +9,7 @@
 //! verbatim `Decl::Raw` items in a later phase. Their arms here render nothing.
 
 use crate::codegen::symbol::Import;
+use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::targets::rust::codecs::serde_with;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
@@ -19,33 +20,36 @@ const DERIVES: &str = "#[derive(Clone, Debug, serde::Deserialize, serde::Seriali
 /// Render a component-tree type expression into Rust surface syntax. Free so the
 /// codec layer (which builds union payload types) can reuse it.
 pub(crate) fn type_string(ty: &TypeExpr) -> String {
-    match ty {
-        TypeExpr::Ref(symbol) => symbol.name.clone(),
-        TypeExpr::List(inner) => format!("Vec<{}>", type_string(inner)),
-        TypeExpr::Map(key, value) => format!(
-            "std::collections::HashMap<{}, {}>",
-            type_string(key),
-            type_string(value)
-        ),
-        TypeExpr::Nullable(inner) => format!("Option<{}>", type_string(inner)),
-        TypeExpr::Generic(symbol, args) => {
-            let rendered: Vec<String> = args.iter().map(type_string).collect();
-            format!("{}<{}>", symbol.name, rendered.join(", "))
-        }
-        // An @entries map is an ordered list of (key, value) tuples; serde renders
-        // a `Vec<(K, V)>` directly as the `[[k, v], …]` wire array.
-        TypeExpr::Entries(key, value) => {
-            format!("Vec<({}, {})>", type_string(key), type_string(value))
-        }
-    }
+    syntax::render_type(ty, &RustRules)
 }
 
 /// The Rust render rules.
 pub struct RustRules;
 
+/// The Rust spelling of each composite type construct; the recursion lives in the
+/// shared `syntax` driver. `@entries` is a `Vec<(K, V)>`, which serde renders
+/// directly as the `[[k, v], …]` wire array.
+impl TypeSyntax for RustRules {
+    fn list(&self, inner: &str) -> String {
+        format!("Vec<{inner}>")
+    }
+    fn map(&self, key: &str, value: &str) -> String {
+        format!("std::collections::HashMap<{key}, {value}>")
+    }
+    fn nullable(&self, inner: &str) -> String {
+        format!("Option<{inner}>")
+    }
+    fn generic(&self, name: &str, args: &[String]) -> String {
+        format!("{name}<{}>", args.join(", "))
+    }
+    fn entries(&self, key: &str, value: &str) -> String {
+        format!("Vec<({key}, {value})>")
+    }
+}
+
 impl RustRules {
     fn render_type(&self, ty: &TypeExpr) -> String {
-        type_string(ty)
+        syntax::render_type(ty, self)
     }
 
     fn render_field(&self, field: &Field) -> String {

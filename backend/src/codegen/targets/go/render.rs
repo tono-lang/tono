@@ -9,35 +9,37 @@
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Import, SymbolKind};
+use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, EnumDecl, Field, FnBody, Function, TypeExpr};
 
 /// The Go render rules.
 pub struct GoRules;
 
+/// The Go spelling of each composite type construct; the recursion lives in the
+/// shared `syntax` driver. An `@entries` map is a slice of the generated generic
+/// `Entry[K, V]`, which marshals each pair as a two-element array.
+impl TypeSyntax for GoRules {
+    fn list(&self, inner: &str) -> String {
+        format!("[]{inner}")
+    }
+    fn map(&self, key: &str, value: &str) -> String {
+        format!("map[{key}]{value}")
+    }
+    fn nullable(&self, inner: &str) -> String {
+        format!("*{inner}")
+    }
+    fn generic(&self, name: &str, args: &[String]) -> String {
+        format!("{name}[{}]", args.join(", "))
+    }
+    fn entries(&self, key: &str, value: &str) -> String {
+        format!("[]Entry[{key}, {value}]")
+    }
+}
+
 impl GoRules {
     fn render_type(&self, ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Ref(symbol) => symbol.name.clone(),
-            TypeExpr::List(inner) => format!("[]{}", self.render_type(inner)),
-            TypeExpr::Map(key, value) => {
-                format!("map[{}]{}", self.render_type(key), self.render_type(value))
-            }
-            TypeExpr::Nullable(inner) => format!("*{}", self.render_type(inner)),
-            TypeExpr::Generic(symbol, args) => {
-                let rendered: Vec<String> = args.iter().map(|a| self.render_type(a)).collect();
-                format!("{}[{}]", symbol.name, rendered.join(", "))
-            }
-            // An @entries map is an ordered list of pairs; the generated generic
-            // `Entry[K, V]` marshals each as a two-element array.
-            TypeExpr::Entries(key, value) => {
-                format!(
-                    "[]Entry[{}, {}]",
-                    self.render_type(key),
-                    self.render_type(value)
-                )
-            }
-        }
+        syntax::render_type(ty, self)
     }
 
     fn render_field(&self, field: &Field) -> String {

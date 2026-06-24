@@ -29,9 +29,9 @@ mod tests {
     use crate::codegen::render::render_file;
     use crate::codegen::targets::rust::types::rust_casing;
     use crate::codegen::targets::rust::RustRules;
-    use crate::codegen::test_support::{member, structure};
+    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
     use crate::codegen::Formatter;
-    use crate::ir::{EnumBacking, Prim, Shape, ShapeKind, Tref};
+    use crate::ir::{Prim, Tref};
 
     fn passthrough() -> Formatter {
         Formatter::new("cat", vec![])
@@ -82,30 +82,19 @@ mod tests {
                         true,
                     )],
                 ),
-                Shape {
-                    id: "billing#Status".into(),
-                    kind: ShapeKind::Enum {
-                        backing: EnumBacking::String,
-                        values: vec![("pending".into(), None)],
-                    },
-                    traits: vec![],
-                },
-                Shape {
-                    id: "billing#Method".into(),
-                    kind: ShapeKind::Union {
-                        params: vec![],
-                        discriminator: "type".into(),
-                        members: vec![member(
-                            "card",
-                            Tref::Ref {
-                                id: "billing#CardData".into(),
-                                args: vec![],
-                            },
-                            true,
-                        )],
-                    },
-                    traits: vec![],
-                },
+                enum_shape("billing#Status", vec![("pending".into(), None)]),
+                union_shape(
+                    "billing#Method",
+                    "type",
+                    vec![member(
+                        "card",
+                        Tref::Ref {
+                            id: "billing#CardData".into(),
+                            args: vec![],
+                        },
+                        true,
+                    )],
+                ),
             ],
             operations: vec![],
         };

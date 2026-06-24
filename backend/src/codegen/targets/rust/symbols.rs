@@ -1,23 +1,14 @@
 //! The Rust Symbol table: maps an IR type reference to its Rust symbol.
 
-use crate::codegen::conventions::ref_symbol;
+use crate::codegen::conventions::leaf_symbol_of;
 use crate::codegen::symbol::Symbol;
 use crate::ir::{Prim, Tref};
 
-/// Map an IR type reference to the Rust symbol that represents it.
-///
-/// Collections are structural in Rust (`Vec<T>`, `HashMap<K, V>`), so they have
-/// no single nominal symbol; a target builds those as type expressions and only
-/// reaches `symbol_of` for the leaf types. The fallbacks here keep the function
-/// total when a collection reference is passed directly.
+/// Map an IR type reference to the Rust symbol that represents it. Rust spells its
+/// structural collections `Vec<T>` and `HashMap<K, V>`; everything else is shared
+/// dispatch.
 pub fn symbol_of(t: &Tref) -> Symbol {
-    match t {
-        Tref::Prim(p) => prim_symbol(p),
-        Tref::Param(name) => Symbol::builtin(name.clone()),
-        Tref::Ref { id, .. } => ref_symbol(id),
-        Tref::List(_) => Symbol::builtin("Vec"),
-        Tref::Map(_, _) => Symbol::builtin("HashMap"),
-    }
+    leaf_symbol_of(t, prim_symbol, "Vec", "HashMap")
 }
 
 /// The Rust representation of a primitive. Integers map to their exact-width Rust

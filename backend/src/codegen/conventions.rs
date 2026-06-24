@@ -10,8 +10,8 @@
 
 use crate::codegen::casing::{self, CasingConfig};
 use crate::codegen::symbol::{Symbol, SymbolKind};
-use crate::codegen::tree::TypeExpr;
-use crate::ir::{Member, Shape, Trait, Tref};
+use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr};
+use crate::ir::{Member, Prim, Shape, ShapeKind, Trait, Tref};
 
 /// The `@rename(lang)` identifier override (trait `core#rename`, a value object
 /// keyed by language). Replaces the in-code identifier only; never the wire key.
@@ -87,6 +87,71 @@ pub fn ref_symbol(id: &str) -> Symbol {
         Some((module, name)) => Symbol::imported(name, module, name),
         None => Symbol::builtin(id),
     }
+}
+
+/// Map an IR type reference to a target's leaf symbol. The dispatch is identical
+/// across targets — a primitive goes through the target's own `prim_symbol`
+/// table, a param is a bare identifier, a nominal ref resolves through
+/// [`ref_symbol`] — so only the per-language pieces vary: the primitive table and
+/// the structural-collection names. Collections have no single nominal symbol
+/// (they are built as `TypeExpr` nodes); the `list`/`map` names are fallbacks that
+/// keep the function total when a collection ref is passed directly.
+pub fn leaf_symbol_of(
+    t: &Tref,
+    prim_symbol: impl Fn(&Prim) -> Symbol,
+    list: &str,
+    map: &str,
+) -> Symbol {
+    match t {
+        Tref::Prim(p) => prim_symbol(p),
+        Tref::Param(name) => Symbol::builtin(name.clone()),
+        Tref::Ref { id, .. } => ref_symbol(id),
+        Tref::List(_) => Symbol::builtin(list),
+        Tref::Map(_, _) => Symbol::builtin(map),
+    }
+}
+
+/// Emit the declaration(s) for a shape. The dispatch over shape kinds is the same
+/// for every target — a structure is always an interface of fields, an enum and a
+/// union are always built from the shape's name, and other kinds emit nothing — so
+/// only the per-language policies vary: how a field carries its wire key
+/// (`field_of`), and how an enum and a union are spelled (`emit_enum`,
+/// `emit_union`). The name passed to the enum/union policies is the shape's
+/// own identifier (after any `@rename`).
+pub fn emit_shape(
+    shape: &Shape,
+    lang: &str,
+    field_of: impl Fn(&Member) -> Field,
+    emit_enum: impl Fn(&[(String, Option<i64>)], &str) -> Vec<Decl>,
+    emit_union: impl Fn(&str, &[Member], &str) -> Vec<Decl>,
+) -> Vec<Decl> {
+    match &shape.kind {
+        ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
+            name: type_name(shape, lang),
+            fields: members.iter().map(&field_of).collect(),
+        })],
+        ShapeKind::Enum { values, .. } => emit_enum(values, &type_ident(shape, lang)),
+        ShapeKind::Union {
+            discriminator,
+            members,
+            ..
+        } => emit_union(discriminator, members, &type_ident(shape, lang)),
+        _ => vec![],
+    }
+}
+
+/// An open enum as a named list of its wire literals: the representation Go (a
+/// named string) and TypeScript (a literal union) share. Rust instead needs a
+/// hand-written `Deserialize` for its `Unknown` arm, so it does not use this. The
+/// literals are wire tags kept verbatim; their in-code form is a render concern.
+pub fn string_enum(values: &[(String, Option<i64>)], name: &str) -> Decl {
+    Decl::Enum(EnumDecl {
+        name: Symbol::builtin(name.to_string()),
+        members: values
+            .iter()
+            .map(|(value, _)| Symbol::builtin(value.clone()))
+            .collect(),
+    })
 }
 
 /// Convert an IR type reference into a component-tree type expression, resolving
@@ -268,5 +333,144 @@ mod tests {
         );
         assert!(matches!(&generic, TypeExpr::Generic(head, args)
             if head.name == "Page" && args.len() == 1));
+    }
+
+    #[test]
+    fn leaf_symbol_of_dispatches_each_reference_kind() {
+        let prim = |p: &Prim| Symbol::builtin(format!("{p:?}"));
+        // A primitive goes through the supplied table; a param is a bare name; a
+        // nominal ref is imported; collections fall back to the structural names.
+        assert_eq!(
+            leaf_symbol_of(&Tref::Prim(Prim::Bool), prim, "List", "Map").name,
+            "Bool"
+        );
+        let param = leaf_symbol_of(&Tref::Param("T".into()), prim, "List", "Map");
+        assert_eq!(param.name, "T");
+        assert_eq!(param.import, None);
+        let reference = leaf_symbol_of(
+            &Tref::Ref {
+                id: "pay#Charge".into(),
+                args: vec![],
+            },
+            prim,
+            "List",
+            "Map",
+        );
+        assert_eq!(reference.name, "Charge");
+        assert!(reference.import.is_some());
+        assert_eq!(
+            leaf_symbol_of(
+                &Tref::List(Box::new(Tref::Prim(Prim::Bool))),
+                prim,
+                "List",
+                "Map"
+            )
+            .name,
+            "List"
+        );
+        assert_eq!(
+            leaf_symbol_of(
+                &Tref::Map(
+                    Box::new(Tref::Prim(Prim::String)),
+                    Box::new(Tref::Prim(Prim::Bool)),
+                ),
+                prim,
+                "List",
+                "Map",
+            )
+            .name,
+            "Map"
+        );
+    }
+
+    #[test]
+    fn string_enum_names_a_list_of_verbatim_wire_literals() {
+        let decl = string_enum(
+            &[("pending".into(), None), ("settled".into(), None)],
+            "Status",
+        );
+        assert!(matches!(decl, Decl::Enum(d)
+            if d.name.name == "Status"
+                && d.members.len() == 2
+                && d.members[0].name == "pending"
+                && d.members[1].name == "settled"));
+    }
+
+    #[test]
+    fn emit_shape_dispatches_each_shape_kind_through_its_policy() {
+        let field_of = |m: &Member| Field {
+            name: Symbol::builtin(m.name.clone()),
+            ty: TypeExpr::Ref(Symbol::builtin("x")),
+            nullable: false,
+            wire: None,
+        };
+        let mark_enum = |_: &[(String, Option<i64>)], name: &str| {
+            vec![Decl::Alias(crate::codegen::tree::Alias {
+                name: Symbol::builtin(name.to_string()),
+                value: "enum".into(),
+            })]
+        };
+        let mark_union = |_: &str, _: &[Member], name: &str| {
+            vec![Decl::Alias(crate::codegen::tree::Alias {
+                name: Symbol::builtin(name.to_string()),
+                value: "union".into(),
+            })]
+        };
+
+        // A structure builds an interface of fields via `field_of`.
+        let structure = Shape {
+            id: "m#Charge".into(),
+            kind: ShapeKind::Structure {
+                params: vec![],
+                members: vec![Member {
+                    name: "amount".into(),
+                    target: Tref::Prim(Prim::I64),
+                    required: true,
+                    default: None,
+                    constraints: vec![],
+                    traits: vec![],
+                }],
+            },
+            traits: vec![],
+        };
+        assert!(matches!(
+            &emit_shape(&structure, "rust", field_of, mark_enum, mark_union)[..],
+            [Decl::Interface(i)] if i.name.name == "Charge" && i.fields[0].name.name == "amount"
+        ));
+
+        // An enum and a union route through their policies, carrying the name.
+        let enumeration = Shape {
+            id: "m#Status".into(),
+            kind: ShapeKind::Enum {
+                backing: crate::ir::EnumBacking::String,
+                values: vec![("a".into(), None)],
+            },
+            traits: vec![],
+        };
+        assert!(matches!(
+            &emit_shape(&enumeration, "rust", field_of, mark_enum, mark_union)[..],
+            [Decl::Alias(a)] if a.name.name == "Status" && a.value == "enum"
+        ));
+        let union = Shape {
+            id: "m#Method".into(),
+            kind: ShapeKind::Union {
+                params: vec![],
+                discriminator: "type".into(),
+                members: vec![],
+            },
+            traits: vec![],
+        };
+        assert!(matches!(
+            &emit_shape(&union, "rust", field_of, mark_enum, mark_union)[..],
+            [Decl::Alias(a)] if a.name.name == "Method" && a.value == "union"
+        ));
+
+        // Any other shape kind emits nothing.
+        let service = Shape {
+            id: "m#Api".into(),
+            kind: ShapeKind::Service { operations: vec![] },
+            traits: vec![],
+        };
+        assert!(emit_shape(&service, "rust", field_of, mark_enum, mark_union).is_empty());
     }
 }

@@ -6,12 +6,12 @@
 //! struct with one pointer per variant plus custom JSON methods by a later phase.
 
 use crate::codegen::casing::{CaseStyle, CasingConfig};
-use crate::codegen::conventions::{self, field_ident, type_ident, type_name};
+use crate::codegen::conventions::{self, field_ident};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::codecs::union_item;
 use crate::codegen::targets::go::symbols::symbol_of;
-use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr};
-use crate::ir::{Member, Shape, ShapeKind, Tref};
+use crate::codegen::tree::{Decl, Field, TypeExpr};
+use crate::ir::{Member, Shape, Tref};
 
 /// The Go language key for per-language traits such as `@rename`.
 const LANG: &str = "go";
@@ -32,27 +32,15 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
 /// Emit the declaration(s) for a shape. Structures become struct interfaces;
 /// enums become named-string enum decls; unions are emitted by a later phase.
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
-    match &shape.kind {
-        ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
-            name: type_name(shape, LANG),
-            fields: members.iter().map(|m| field_of(m, config)).collect(),
-        })],
-        ShapeKind::Enum { values, .. } => vec![Decl::Enum(EnumDecl {
-            name: type_name(shape, LANG),
-            // Enum values are wire strings kept verbatim; the const identifiers
-            // are derived at render time.
-            members: values
-                .iter()
-                .map(|(value, _)| Symbol::builtin(value.clone()))
-                .collect(),
-        })],
-        ShapeKind::Union {
-            discriminator,
-            members,
-            ..
-        } => vec![union_item(discriminator, members, &type_ident(shape, LANG))],
-        _ => vec![],
-    }
+    conventions::emit_shape(
+        shape,
+        LANG,
+        |m| field_of(m, config),
+        // A Go enum is a named string built from its wire literals; the const
+        // identifiers are derived at render time.
+        |values, name| vec![conventions::string_enum(values, name)],
+        |discriminator, members, name| vec![union_item(discriminator, members, name)],
+    )
 }
 
 fn field_of(member: &Member, config: &CasingConfig) -> Field {
@@ -68,8 +56,8 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::{member, structure};
-    use crate::ir::Prim;
+    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::ir::{Prim, ShapeKind};
 
     #[test]
     fn a_structure_becomes_a_struct_with_exported_fields_and_wire_keys() {
@@ -94,14 +82,10 @@ mod tests {
 
     #[test]
     fn an_enum_becomes_a_named_string_with_verbatim_values() {
-        let shape = Shape {
-            id: "billing#Status".into(),
-            kind: ShapeKind::Enum {
-                backing: crate::ir::EnumBacking::String,
-                values: vec![("pending".into(), None), ("settled".into(), None)],
-            },
-            traits: vec![],
-        };
+        let shape = enum_shape(
+            "billing#Status",
+            vec![("pending".into(), None), ("settled".into(), None)],
+        );
         let decls = emit_type(&shape, &go_casing());
         assert!(matches!(&decls[..], [Decl::Enum(d)]
             if d.name.name == "Status"
@@ -112,22 +96,18 @@ mod tests {
 
     #[test]
     fn a_union_becomes_a_verbatim_pointer_struct_item() {
-        let union = Shape {
-            id: "billing#Method".into(),
-            kind: ShapeKind::Union {
-                params: vec![],
-                discriminator: "type".into(),
-                members: vec![member(
-                    "card",
-                    Tref::Ref {
-                        id: "billing#CardData".into(),
-                        args: vec![],
-                    },
-                    true,
-                )],
-            },
-            traits: vec![],
-        };
+        let union = union_shape(
+            "billing#Method",
+            "type",
+            vec![member(
+                "card",
+                Tref::Ref {
+                    id: "billing#CardData".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
         let decls = emit_type(&union, &go_casing());
         assert!(matches!(&decls[..], [Decl::Raw(r)]
             if r.text.contains("type Method struct {")

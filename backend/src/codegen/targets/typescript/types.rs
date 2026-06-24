@@ -2,11 +2,11 @@
 //! `emit_type` plus the IR-to-`TypeExpr` conversion and the idiomatic casing.
 
 use crate::codegen::casing::{CaseStyle, CasingConfig};
-use crate::codegen::conventions::{self, field_ident, type_name, wire_of};
+use crate::codegen::conventions::{self, field_ident, wire_of};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::symbols::symbol_of;
-use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr, UnionDecl, Variant};
-use crate::ir::{Member, Shape, ShapeKind, Tref};
+use crate::codegen::tree::{Decl, Field, TypeExpr, UnionDecl, Variant};
+use crate::ir::{Member, Shape, Tref};
 
 /// The TypeScript language key for per-language traits such as `@rename`.
 pub(crate) const LANG: &str = "typescript";
@@ -28,30 +28,20 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
 /// become (open) literal-union types. Other shape kinds are handled by later
 /// phases and emit nothing here.
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
-    match &shape.kind {
-        ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
-            name: type_name(shape, LANG),
-            fields: members.iter().map(|m| field_of(m, config)).collect(),
-        })],
-        ShapeKind::Enum { values, .. } => vec![Decl::Enum(EnumDecl {
-            name: type_name(shape, LANG),
-            // Open-enum literals are wire tags, kept verbatim (not cased).
-            members: values
-                .iter()
-                .map(|(value, _)| Symbol::builtin(value.clone()))
-                .collect(),
-        })],
-        ShapeKind::Union {
-            members,
-            discriminator,
-            ..
-        } => vec![Decl::Union(UnionDecl {
-            name: type_name(shape, LANG),
-            discriminator: discriminator.clone(),
-            variants: members.iter().map(variant_of).collect(),
-        })],
-        _ => vec![],
-    }
+    conventions::emit_shape(
+        shape,
+        LANG,
+        |m| field_of(m, config),
+        // An open enum is a literal-union type built from its wire tags.
+        |values, name| vec![conventions::string_enum(values, name)],
+        |discriminator, members, name| {
+            vec![Decl::Union(UnionDecl {
+                name: Symbol::builtin(name.to_string()),
+                discriminator: discriminator.to_string(),
+                variants: members.iter().map(variant_of).collect(),
+            })]
+        },
+    )
 }
 
 /// Build a union variant: the tag is the member name (overridable by `@wire`),
@@ -78,8 +68,8 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::{member, structure};
-    use crate::ir::Prim;
+    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::ir::{Prim, ShapeKind};
 
     #[test]
     fn a_structure_becomes_an_interface_with_cased_fields() {
@@ -101,14 +91,10 @@ mod tests {
 
     #[test]
     fn an_enum_becomes_a_literal_union_of_verbatim_tags() {
-        let shape = Shape {
-            id: "billing#Status".into(),
-            kind: ShapeKind::Enum {
-                backing: crate::ir::EnumBacking::String,
-                values: vec![("pending".into(), None), ("settled".into(), None)],
-            },
-            traits: vec![],
-        };
+        let shape = enum_shape(
+            "billing#Status",
+            vec![("pending".into(), None), ("settled".into(), None)],
+        );
         let decls = emit_type(&shape, &ts_casing());
         assert!(matches!(&decls[..], [Decl::Enum(d)]
             if d.name.name == "Status"
@@ -119,22 +105,18 @@ mod tests {
 
     #[test]
     fn a_union_becomes_a_discriminated_union_decl() {
-        let shape = Shape {
-            id: "billing#PaymentMethod".into(),
-            kind: ShapeKind::Union {
-                params: vec![],
-                discriminator: "type".into(),
-                members: vec![member(
-                    "card",
-                    Tref::Ref {
-                        id: "billing#CardData".into(),
-                        args: vec![],
-                    },
-                    true,
-                )],
-            },
-            traits: vec![],
-        };
+        let shape = union_shape(
+            "billing#PaymentMethod",
+            "type",
+            vec![member(
+                "card",
+                Tref::Ref {
+                    id: "billing#CardData".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
         let decls = emit_type(&shape, &ts_casing());
         assert!(matches!(&decls[..], [Decl::Union(u)]
             if u.name.name == "PaymentMethod"
