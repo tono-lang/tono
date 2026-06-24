@@ -36,3 +36,61 @@ let compile ?(module_name = "") (src : string) : Ir.module_ * Diagnostic.t list
   let m = Lower.lower_file ~module_name ~diags file in
   let m, tc_diags = Typecheck.check_module ~file m in
   (m, Diagnostic.sort (parse_diags @ List.rev !diags @ tc_diags))
+
+(* Compile a source string straight to canonical IR JSON. Errors (not warnings)
+   abort with their messages joined; otherwise the single module is wrapped in a
+   versioned model and encoded. This is the payload behind the [compile]
+   subcommand, kept pure so it can be tested without touching the filesystem. *)
+let compile_to_json ?(module_name = "") (src : string) : (string, string) result
+    =
+  let m, diags = compile ~module_name src in
+  let errors =
+    List.filter (fun (d : Diagnostic.t) -> d.severity = Diagnostic.Error) diags
+  in
+  if errors <> [] then
+    Error (String.concat "\n" (List.map Diagnostic.to_string errors))
+  else
+    let model =
+      { Ir.tono_ir_version = Ir_json.current_ir_version; modules = [ m ] }
+    in
+    Ok (Ir_json.to_canonical_string (Ir_json.encode_model model))
+
+(* The [tono-frontend] command line. The dispatch is pure: it takes the argv and
+   a file reader, and returns what to write where plus an exit code, so the real
+   binary is a thin shell and every branch is testable. *)
+module Cli = struct
+  type outcome = { code : int; out : string; err : string }
+
+  let usage =
+    "usage: tono-frontend (compile <file.tono> [--module <name>] | version)"
+
+  (* Pull an optional [--module <name>] out of the compile arguments; the first
+     remaining bare argument is the source path. *)
+  let rec parse_compile path modname = function
+    | [] -> (path, modname)
+    | "--module" :: name :: rest -> parse_compile path (Some name) rest
+    | arg :: rest ->
+        parse_compile (if path = None then Some arg else path) modname rest
+
+  let module_name_of path = function
+    | Some name -> name
+    | None -> Filename.remove_extension (Filename.basename path)
+
+  let run ~(read_file : string -> string) (argv : string array) : outcome =
+    match Array.to_list argv with
+    | _ :: "compile" :: rest -> (
+        match parse_compile None None rest with
+        | None, _ -> { code = 2; out = ""; err = usage ^ "\n" }
+        | Some path, modname -> (
+            match read_file path with
+            | exception Sys_error msg ->
+                { code = 1; out = ""; err = msg ^ "\n" }
+            | src -> (
+                let module_name = module_name_of path modname in
+                match compile_to_json ~module_name src with
+                | Ok json -> { code = 0; out = json ^ "\n"; err = "" }
+                | Error msg -> { code = 1; out = ""; err = msg ^ "\n" })))
+    | [ _ ] | _ :: "version" :: _ ->
+        { code = 0; out = "tono " ^ version ^ "\n"; err = "" }
+    | _ -> { code = 2; out = ""; err = usage ^ "\n" }
+end
