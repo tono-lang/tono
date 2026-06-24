@@ -1,11 +1,12 @@
 //! The Go render rules: how the shared component tree turns into Go surface
-//! syntax. Structs carry json tags (the wire key, `omitempty` for optionals, and
-//! `,string` for 64-bit integers); an optional scalar or reference becomes a
-//! pointer. Enums render as a named string type plus its constants.
+//! syntax. Structs are clean — no json tags, no marshal methods — since all wire
+//! knowledge lives in the separate codec layer; an optional scalar or reference
+//! becomes a pointer so it can be absent. Enums render as a named string type plus
+//! its constants.
 //!
-//! Unions are not rendered from `Decl::Union`: Go has no sum type, so the target
-//! emits a struct with one pointer per variant plus hand-written JSON methods as
-//! a verbatim `Decl::Raw` item in a later phase. That arm renders nothing here.
+//! Unions are not rendered from `Decl::Union`: Go has no sum type, so the codec
+//! phase emits a sealed interface plus one wrapper struct per variant as verbatim
+//! `Decl::Raw` items. That arm renders nothing here.
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Import, SymbolKind};
@@ -52,17 +53,9 @@ impl GoRules {
         } else {
             base
         };
-
-        let wire = field.wire.as_deref().unwrap_or(field.name.name.as_str());
-        let mut opts = vec![wire.to_string()];
-        if field.nullable {
-            opts.push("omitempty".into());
-        }
-        if is_wide_int(&field.ty) {
-            // 64-bit integers travel as JSON strings via the `,string` tag option.
-            opts.push("string".into());
-        }
-        format!("\t{} {ty} `json:\"{}\"`\n", field.name.name, opts.join(","))
+        // The struct is clean: no json tag. The wire key and all wire encoding live
+        // in the codec layer.
+        format!("\t{} {ty}\n", field.name.name)
     }
 
     fn render_enum(&self, decl: &EnumDecl) -> String {
@@ -133,11 +126,6 @@ impl RenderRules for GoRules {
     }
 }
 
-/// Whether a type is a 64-bit integer, which must travel as a JSON string.
-fn is_wide_int(ty: &TypeExpr) -> bool {
-    matches!(ty, TypeExpr::Ref(symbol) if symbol.name == "int64" || symbol.name == "uint64")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn a_struct_renders_fields_with_json_tags() {
+    fn a_struct_renders_clean_fields_without_json_tags() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
             fields: vec![
@@ -185,25 +173,11 @@ mod tests {
         });
         let out = GoRules.render_decl(&decl);
         assert!(out.starts_with("type Charge struct {\n"));
-        // 64-bit integer travels as a string; the exported name keeps the wire key.
-        assert!(out.contains("\tAccountID int64 `json:\"account_id,string\"`\n"));
-        // An optional scalar becomes a pointer with omitempty.
-        assert!(out.contains("\tNote *string `json:\"note,omitempty\"`\n"));
-    }
-
-    #[test]
-    fn an_optional_wide_integer_is_a_pointer_that_is_omitempty_and_string() {
-        let decl = Decl::Interface(Interface {
-            name: Symbol::builtin("Charge"),
-            fields: vec![field(
-                "Tip",
-                TypeExpr::Ref(Symbol::builtin("int64")),
-                true,
-                "tip",
-            )],
-        });
-        let out = GoRules.render_decl(&decl);
-        assert!(out.contains("\tTip *int64 `json:\"tip,omitempty,string\"`\n"));
+        // No json tags; the 64-bit integer is held natively.
+        assert!(out.contains("\tAccountID int64\n"));
+        assert!(!out.contains("json:"));
+        // An optional scalar becomes a pointer.
+        assert!(out.contains("\tNote *string\n"));
     }
 
     #[test]
@@ -229,9 +203,9 @@ mod tests {
             ],
         });
         let out = GoRules.render_decl(&decl);
-        // An optional slice is not a pointer; it carries omitempty.
-        assert!(out.contains("\tTags []string `json:\"tags,omitempty\"`\n"));
-        assert!(out.contains("\tMeta map[string]int32 `json:\"meta\"`\n"));
+        // An optional slice is not a pointer; it stays a slice.
+        assert!(out.contains("\tTags []string\n"));
+        assert!(out.contains("\tMeta map[string]int32\n"));
     }
 
     #[test]

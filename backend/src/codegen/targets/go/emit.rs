@@ -1,7 +1,7 @@
 //! Assembling a whole Go module from an IR module: the branded well-known named
-//! string types, the shared `marshalTagged` helper (only when the module has a
-//! union), then each shape's declaration (a struct, the named-string enum, or the
-//! verbatim union item). Imports are derived by the engine at render time from
+//! string types and the shared codec runtime helpers once, then each shape's
+//! clean type declaration plus its codecs (the union's sealed interface rides
+//! along with its codecs). Imports are derived by the engine at render time from
 //! the symbols the declarations reference.
 //!
 //! The Go package clause is not part of the rendered file (the engine emits
@@ -9,12 +9,11 @@
 //! [`package_clause`].
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::conventions::has_entries;
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::go::codecs::{entry_helper, marshal_tagged_helper};
+use crate::codegen::targets::go::codecs::{emit_codecs, runtime_helpers};
 use crate::codegen::targets::go::types::emit_type;
 use crate::codegen::tree::{Alias, Decl, File};
-use crate::ir::{Module, Shape, ShapeKind};
+use crate::ir::Module;
 
 /// The branded well-known types: distinct named string types, so they serialize
 /// exactly as their inner value while staying distinct in code.
@@ -40,34 +39,15 @@ pub fn package_clause(name: &str) -> String {
 /// Assemble a complete Go module file for an IR module.
 pub fn emit_module(module: &Module, config: &CasingConfig) -> File {
     let mut decls = well_known_decls();
-    // The marshalTagged helper is only needed when some shape is a union.
-    if module
-        .shapes
-        .iter()
-        .any(|s| matches!(s.kind, ShapeKind::Union { .. }))
-    {
-        decls.push(marshal_tagged_helper());
-    }
-    // The generic Entry helper is only needed when some field uses @entries.
-    if module.shapes.iter().any(shape_has_entries) {
-        decls.push(entry_helper());
-    }
+    decls.extend(runtime_helpers());
     for shape in &module.shapes {
         decls.extend(emit_type(shape, config));
+        decls.extend(emit_codecs(shape, config));
     }
     File {
         module: module.name.clone(),
         decls,
     }
-}
-
-/// Whether any of a shape's members carries the `@entries` map escape.
-fn shape_has_entries(shape: &Shape) -> bool {
-    let members = match &shape.kind {
-        ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => members,
-        _ => return false,
-    };
-    members.iter().any(|m| has_entries(&m.traits))
 }
 
 #[cfg(test)]
@@ -76,7 +56,7 @@ mod tests {
     use crate::codegen::render::render_file;
     use crate::codegen::targets::go::types::go_casing;
     use crate::codegen::targets::go::GoRules;
-    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::codegen::test_support::{member, structure, union_shape};
     use crate::codegen::Formatter;
     use crate::ir::{Prim, Tref};
 
@@ -90,7 +70,7 @@ mod tests {
     }
 
     #[test]
-    fn a_module_without_unions_omits_the_marshal_helper() {
+    fn a_module_emits_well_known_helpers_clean_types_and_codecs() {
         let module = Module {
             name: "models".into(),
             shapes: vec![structure(
@@ -105,15 +85,20 @@ mod tests {
             &passthrough(),
         )
         .text;
-        // Well-known named strings are present; the union helper is not.
+        // Well-known named strings, the codec runtime helpers, a clean type, and the
+        // per-shape codecs are all present and ordered.
         assert!(out.contains("type Timestamp string"));
-        assert!(!out.contains("func marshalTagged"));
+        assert!(out.contains("func encodeI64(v int64) any"));
         assert!(out.contains("type Charge struct {"));
-        assert!(out.contains("\tAmountCents int64 `json:\"amount_cents,string\"`"));
+        // The clean type holds the 64-bit integer natively, no json tag.
+        assert!(out.contains("\tAmountCents int64\n"));
+        assert!(!out.contains("json:"));
+        assert!(out.contains("func encodeCharge(v Charge) any {"));
+        assert!(out.contains("m[\"amount_cents\"] = encodeI64(v.AmountCents)"));
     }
 
     #[test]
-    fn a_module_with_a_union_emits_the_helper_and_collects_stdlib_imports() {
+    fn a_module_with_a_union_emits_the_sealed_interface_and_collects_stdlib_imports() {
         let module = Module {
             name: "models".into(),
             shapes: vec![
@@ -142,18 +127,19 @@ mod tests {
             &passthrough(),
         )
         .text;
-        // The helper is emitted; the union's methods pull the stdlib imports; the
-        // same-module payload pulls no import.
-        assert!(out.contains("func marshalTagged"));
-        assert!(out.contains("import \"encoding/json\""));
+        // The sealed interface and codecs are emitted; the runtime helpers pull the
+        // stdlib imports; the same-module payload pulls no import.
+        assert!(out.contains("type Method interface{ isMethod() }"));
+        assert!(out.contains("func encodeMethod(v Method) any {"));
+        assert!(out.contains("import \"strconv\""));
+        assert!(out.contains("import \"encoding/base64\""));
         assert!(out.contains("import \"fmt\""));
         assert!(!out.contains("import \"models\""));
-        assert!(out.contains("type Method struct {"));
         assert!(out.contains("type CardData struct {"));
     }
 
     #[test]
-    fn a_module_with_an_entries_field_emits_the_entry_helper() {
+    fn a_module_with_an_entries_field_codes_it_as_a_pairs_array() {
         let mut counts = member(
             "counts",
             Tref::Map(
@@ -168,12 +154,7 @@ mod tests {
         }];
         let module = Module {
             name: "models".into(),
-            shapes: vec![
-                // An enum exercises the non-struct/non-union path of the entries
-                // scan, which contributes no @entries field.
-                enum_shape("models#Status", vec![("active".into(), None)]),
-                structure("models#Doc", vec![counts]),
-            ],
+            shapes: vec![structure("models#Doc", vec![counts])],
             operations: vec![],
         };
         let out = render_file(
@@ -182,8 +163,10 @@ mod tests {
             &passthrough(),
         )
         .text;
-        // The generic Entry helper is emitted; the field renders as its slice.
+        // The generic Entry helper is always emitted; the field is a slice of it and
+        // its codec walks the pairs.
         assert!(out.contains("type Entry[K any, V any] struct {"));
-        assert!(out.contains("\tCounts []Entry[int32, string] `json:\"counts\"`"));
+        assert!(out.contains("\tCounts []Entry[int32, string]\n"));
+        assert!(out.contains("m[\"counts\"] = encodeEntries(v.Counts,"));
     }
 }

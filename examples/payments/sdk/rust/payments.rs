@@ -14,26 +14,38 @@ pub struct Duration(pub String);
 
 pub mod i64_string {
     pub fn serialize<S: serde::Serializer>(v: &i64, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&v.to_string())
+        if s.is_human_readable() {
+            s.serialize_str(&v.to_string())
+        } else {
+            serde::Serialize::serialize(v, s)
+        }
     }
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
-        let s = <String as serde::Deserialize>::deserialize(d)?;
-        s.parse().map_err(serde::de::Error::custom)
+        if d.is_human_readable() {
+            let s = <String as serde::Deserialize>::deserialize(d)?;
+            s.parse().map_err(serde::de::Error::custom)
+        } else {
+            <i64 as serde::Deserialize>::deserialize(d)
+        }
     }
     pub mod option {
         pub fn serialize<S: serde::Serializer>(v: &Option<i64>, s: S) -> Result<S::Ok, S::Error> {
             match v {
-                Some(n) => s.serialize_str(&n.to_string()),
+                Some(n) => super::serialize(n, s),
                 None => s.serialize_none(),
             }
         }
         pub fn deserialize<'de, D: serde::Deserializer<'de>>(
             d: D,
         ) -> Result<Option<i64>, D::Error> {
-            let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
-            match o {
-                Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
-                None => Ok(None),
+            if d.is_human_readable() {
+                let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
+                match o {
+                    Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
+                    None => Ok(None),
+                }
+            } else {
+                <Option<i64> as serde::Deserialize>::deserialize(d)
             }
         }
     }
@@ -41,26 +53,38 @@ pub mod i64_string {
 
 pub mod u64_string {
     pub fn serialize<S: serde::Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&v.to_string())
+        if s.is_human_readable() {
+            s.serialize_str(&v.to_string())
+        } else {
+            serde::Serialize::serialize(v, s)
+        }
     }
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
-        let s = <String as serde::Deserialize>::deserialize(d)?;
-        s.parse().map_err(serde::de::Error::custom)
+        if d.is_human_readable() {
+            let s = <String as serde::Deserialize>::deserialize(d)?;
+            s.parse().map_err(serde::de::Error::custom)
+        } else {
+            <u64 as serde::Deserialize>::deserialize(d)
+        }
     }
     pub mod option {
         pub fn serialize<S: serde::Serializer>(v: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
             match v {
-                Some(n) => s.serialize_str(&n.to_string()),
+                Some(n) => super::serialize(n, s),
                 None => s.serialize_none(),
             }
         }
         pub fn deserialize<'de, D: serde::Deserializer<'de>>(
             d: D,
         ) -> Result<Option<u64>, D::Error> {
-            let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
-            match o {
-                Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
-                None => Ok(None),
+            if d.is_human_readable() {
+                let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
+                match o {
+                    Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
+                    None => Ok(None),
+                }
+            } else {
+                <Option<u64> as serde::Deserialize>::deserialize(d)
             }
         }
     }
@@ -124,11 +148,19 @@ pub mod base64_bytes {
     }
 
     pub fn serialize<S: serde::Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&encode(v))
+        if s.is_human_readable() {
+            s.serialize_str(&encode(v))
+        } else {
+            s.serialize_bytes(v)
+        }
     }
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-        let s = <String as serde::Deserialize>::deserialize(d)?;
-        decode(&s).map_err(serde::de::Error::custom)
+        if d.is_human_readable() {
+            let s = <String as serde::Deserialize>::deserialize(d)?;
+            decode(&s).map_err(serde::de::Error::custom)
+        } else {
+            <Vec<u8> as serde::Deserialize>::deserialize(d)
+        }
     }
     pub mod option {
         pub fn serialize<S: serde::Serializer>(
@@ -136,19 +168,23 @@ pub mod base64_bytes {
             s: S,
         ) -> Result<S::Ok, S::Error> {
             match v {
-                Some(b) => s.serialize_str(&super::encode(b)),
+                Some(b) => super::serialize(b, s),
                 None => s.serialize_none(),
             }
         }
         pub fn deserialize<'de, D: serde::Deserializer<'de>>(
             d: D,
         ) -> Result<Option<Vec<u8>>, D::Error> {
-            let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
-            match o {
-                Some(s) => super::decode(&s)
-                    .map(Some)
-                    .map_err(serde::de::Error::custom),
-                None => Ok(None),
+            if d.is_human_readable() {
+                let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
+                match o {
+                    Some(s) => super::decode(&s)
+                        .map(Some)
+                        .map_err(serde::de::Error::custom),
+                    None => Ok(None),
+                }
+            } else {
+                <Option<Vec<u8>> as serde::Deserialize>::deserialize(d)
             }
         }
     }

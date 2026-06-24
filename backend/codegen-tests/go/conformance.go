@@ -1,9 +1,9 @@
 //go:build conformance
 
 // The conformance driver: read a canonical wire JSON from stdin, decode it into
-// the generated types, re-encode it, and print the result. The conformance
-// harness pipes the same fixture to every language and asserts the re-encoded
-// JSON is Value-equal across all of them.
+// the generated types via decodeAccount, re-encode it via encodeAccount, and
+// print the result. The conformance harness pipes the same fixture to every
+// language and asserts the re-encoded JSON is Value-equal across all of them.
 package main
 
 import (
@@ -18,11 +18,15 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	var account Account
-	if err := json.Unmarshal(input, &account); err != nil {
+	var raw any
+	if err := json.Unmarshal(input, &raw); err != nil {
 		panic(err)
 	}
-	out, err := json.Marshal(account)
+	account, err := decodeAccount(raw)
+	if err != nil {
+		panic(err)
+	}
+	out, err := json.Marshal(encodeAccount(account))
 	if err != nil {
 		panic(err)
 	}
