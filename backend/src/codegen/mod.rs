@@ -11,6 +11,7 @@ pub mod casing;
 pub mod conventions;
 pub mod format;
 pub mod imports;
+pub mod pipeline;
 pub mod render;
 pub mod symbol;
 pub mod syntax;
@@ -22,6 +23,7 @@ pub mod tree;
 
 pub use casing::{CaseStyle, CasingConfig};
 pub use format::{Formatted, Formatter};
+pub use pipeline::{generate, parse_targets, GeneratedFile, TargetKind};
 pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};
 pub use target::{Fragment, RenderRules, Target};
