@@ -17,6 +17,15 @@ pub struct File {
     pub decls: Vec<Decl>,
 }
 
+/// One output file for a module: a basename suffix ("" for the main types file,
+/// "_serde" for the serialization file) plus the file itself. A module can emit
+/// more than one so types and serialization land in separate files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleFile {
+    pub suffix: &'static str,
+    pub file: File,
+}
+
 /// A top-level declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decl {

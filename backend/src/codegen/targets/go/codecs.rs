@@ -14,6 +14,14 @@
 //!
 //! Everything else — including the union container's marshal direction, which uses
 //! the dynamic value's own `MarshalJSON` — is left to `encoding/json`.
+//!
+//! Output is split by the nature of a declaration: a type definition lands in the
+//! module's types file, a (de)serialization method or function in its serde file.
+//! So a union's interface, wrapper structs, and `is<Union>()` markers — and the
+//! `Entry`/`Entries` definitions — are types ([`union_type_decls`],
+//! [`runtime_type_helpers`]), while their `MarshalJSON`/`UnmarshalJSON`,
+//! `unmarshalX`, and `marshalVariant` are serde ([`emit_serde_decls`],
+//! [`runtime_serde_helpers`]).
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{field_ident, type_ident, type_ident_from_id, wire_key};
@@ -35,41 +43,30 @@ pub struct RuntimeHelpers {
     pub variant: bool,
 }
 
-/// A `Decl::Raw` carrying the given Go source and the symbols it references (so the
-/// engine still collects their imports).
-fn raw(text: impl Into<String>, refs: Vec<Symbol>) -> Decl {
-    Decl::Raw(Raw {
-        text: text.into(),
-        refs,
-    })
-}
-
-/// The `encoding/json` import symbol, referenced by every generated codec.
-fn json_ref() -> Symbol {
-    Symbol::imported("json", "encoding/json", "json")
-}
-
-/// The `fmt` import symbol, referenced where a generated codec wraps an error.
-fn fmt_ref() -> Symbol {
-    Symbol::imported("fmt", "fmt", "fmt")
-}
-
-/// The shared runtime helpers a generated file relies on, emitted once per file
-/// and only for the cases the file actually uses. `Entries[K, V]` carries the
-/// pairs-array wire shape; `marshalVariant` flattens a union payload and injects
-/// its discriminator. Both reference `encoding/json`; `marshalVariant` is the only
-/// `fmt` user among them — none here, since the variant error wrapping lives in the
-/// generated `unmarshalX`.
-pub fn runtime_helpers(helpers: RuntimeHelpers) -> Vec<Decl> {
-    let mut decls = Vec::new();
-    if helpers.entries {
-        let text = "\
+/// The type-side runtime helpers: the generic `Entry`/`Entries` definitions, which
+/// belong in the types file. The `Entries` (de)serialization methods are serde and
+/// live in [`runtime_serde_helpers`]. Emitted only when some shape uses `@entries`.
+pub fn runtime_type_helpers(helpers: RuntimeHelpers) -> Vec<Decl> {
+    if !helpers.entries {
+        return Vec::new();
+    }
+    let text = "\
 type Entry[K comparable, V any] struct {
 \tKey   K
 \tValue V
 }
-type Entries[K comparable, V any] []Entry[K, V]
+type Entries[K comparable, V any] []Entry[K, V]";
+    vec![raw(text, vec![])]
+}
 
+/// The serde-side runtime helpers: the `Entries` `MarshalJSON`/`UnmarshalJSON`
+/// methods (carrying the pairs-array wire shape) and `marshalVariant` (which
+/// flattens a union payload and injects its discriminator). Both reference
+/// `encoding/json`; each is emitted only for the cases the file actually uses.
+pub fn runtime_serde_helpers(helpers: RuntimeHelpers) -> Vec<Decl> {
+    let mut decls = Vec::new();
+    if helpers.entries {
+        let text = "\
 func (e Entries[K, V]) MarshalJSON() ([]byte, error) {
 \tpairs := make([][2]any, len(e))
 \tfor i, en := range e {
@@ -119,19 +116,44 @@ func marshalVariant(payload any, disc, tag string) ([]byte, error) {
     decls
 }
 
-/// Emit the codecs for a shape: a union's interface, wrappers, and dispatcher; a
-/// struct's `UnmarshalJSON` when it holds a union field. Every other shape (enum,
-/// well-known, plain struct) is handled entirely by `encoding/json` tags and emits
-/// nothing. `unions` is the set of union type identifiers in the module, used to
-/// detect a union-typed struct field.
-pub fn emit_codecs(shape: &Shape, config: &CasingConfig, unions: &HashSet<String>) -> Vec<Decl> {
+/// A `Decl::Raw` carrying the given Go source and the symbols it references (so the
+/// engine still collects their imports).
+fn raw(text: impl Into<String>, refs: Vec<Symbol>) -> Decl {
+    Decl::Raw(Raw {
+        text: text.into(),
+        refs,
+    })
+}
+
+/// The `encoding/json` import symbol, referenced by every generated codec.
+fn json_ref() -> Symbol {
+    Symbol::imported("json", "encoding/json", "json")
+}
+
+/// The `fmt` import symbol, referenced where a generated codec wraps an error.
+fn fmt_ref() -> Symbol {
+    Symbol::imported("fmt", "fmt", "fmt")
+}
+
+/// Emit the serde declarations for a shape: a union's wrapper `MarshalJSON`s and
+/// its `unmarshalX` dispatcher; a struct's `UnmarshalJSON` when it holds a union
+/// field. The union's interface, wrappers, and marker methods are type declarations
+/// emitted by the type phase, not here. Every other shape (enum, well-known, plain
+/// struct) is handled entirely by `encoding/json` tags and emits nothing. `unions`
+/// is the set of union type identifiers in the module, used to detect a union-typed
+/// struct field.
+pub fn emit_serde_decls(
+    shape: &Shape,
+    config: &CasingConfig,
+    unions: &HashSet<String>,
+) -> Vec<Decl> {
     match &shape.kind {
         ShapeKind::Structure { members, .. } => struct_codecs(shape, members, config, unions),
         ShapeKind::Union {
             members,
             discriminator,
             ..
-        } => union_codecs(shape, members, discriminator),
+        } => union_serde(shape, members, discriminator),
         _ => Vec::new(),
     }
 }
@@ -204,33 +226,62 @@ fn struct_codecs(
     vec![raw(text, vec![json_ref()])]
 }
 
-/// Emit a union's interface, its variant wrappers (each with a `MarshalJSON` that
-/// flattens its payload and injects the discriminator), and the free `unmarshalX`
-/// that peeks the discriminator and decodes the matching payload. Marshal needs no
-/// container method: a struct field typed as the interface marshals through the
-/// dynamic value's own `MarshalJSON`.
-fn union_codecs(shape: &Shape, members: &[Member], discriminator: &str) -> Vec<Decl> {
-    let ty = type_ident(shape, LANG);
+/// The Pascal-cased identifier of a union variant, used to build its wrapper type
+/// name (`<Union><Variant>`).
+fn variant_ident(m: &Member) -> String {
     let pascal = CasingConfig::new(CaseStyle::Pascal);
-    let variant_ident = |m: &Member| transform(&m.name, SymbolKind::Variant, &pascal, None);
+    transform(&m.name, SymbolKind::Variant, &pascal, None)
+}
+
+/// Emit a union's type declarations: the marker interface and one wrapper struct
+/// per variant, each carrying its `is<Union>()` marker method. These are type
+/// definitions (no serialization), so they belong in the types file; the wrapper
+/// `MarshalJSON`s and the `unmarshalX` dispatcher are serde and live in
+/// [`union_serde`]. Used by the type phase.
+pub fn union_type_decls(shape: &Shape, members: &[Member]) -> Vec<Decl> {
+    let ty = type_ident(shape, LANG);
     let payload_ty = |m: &Member| symbol_of(&m.target).name;
     let marker = format!("is{ty}");
 
-    // The interface and one wrapper struct per variant, each with its marker method
-    // and a `MarshalJSON` that injects the discriminator.
     let mut iface = format!("type {ty} interface{{ {marker}() }}\n");
     for m in members {
         let wrapper = format!("{ty}{}", variant_ident(m));
         let payload = payload_ty(m);
-        let tag = wire_key(m);
         iface.push_str(&format!(
             "\ntype {wrapper} struct{{ Value {payload} }}\n\n\
-             func ({wrapper}) {marker}() {{}}\n\n\
-             func (m {wrapper}) MarshalJSON() ([]byte, error) {{ return marshalVariant(m.Value, \"{discriminator}\", \"{tag}\") }}\n",
+             func ({wrapper}) {marker}() {{}}\n",
         ));
     }
-    let mut iface_refs = vec![json_ref()];
-    iface_refs.extend(members.iter().map(|m| symbol_of(&m.target)));
+    // The wrapper structs reference their payload types; the interface itself pulls
+    // no import.
+    let refs = members.iter().map(|m| symbol_of(&m.target)).collect();
+    vec![raw(iface, refs)]
+}
+
+/// Emit a union's serde declarations: one `MarshalJSON` per variant wrapper (each
+/// flattens its payload and injects the discriminator) and the free `unmarshalX`
+/// that peeks the discriminator and decodes the matching payload. Marshal needs no
+/// container method: a struct field typed as the interface marshals through the
+/// dynamic value's own `MarshalJSON`. The interface, wrappers, and markers are
+/// types emitted by [`union_type_decls`].
+fn union_serde(shape: &Shape, members: &[Member], discriminator: &str) -> Vec<Decl> {
+    let ty = type_ident(shape, LANG);
+    let payload_ty = |m: &Member| symbol_of(&m.target).name;
+
+    // One `MarshalJSON` per wrapper, each injecting the discriminator via the shared
+    // `marshalVariant` helper.
+    let mut marshalers = String::new();
+    for (i, m) in members.iter().enumerate() {
+        let wrapper = format!("{ty}{}", variant_ident(m));
+        let tag = wire_key(m);
+        if i > 0 {
+            marshalers.push('\n');
+        }
+        marshalers.push_str(&format!(
+            "func (m {wrapper}) MarshalJSON() ([]byte, error) {{ return marshalVariant(m.Value, \"{discriminator}\", \"{tag}\") }}\n",
+        ));
+    }
+    let marshal_refs = vec![json_ref()];
 
     // unmarshalX: peek the discriminator, decode the matching payload into its
     // wrapper. The payload decode reuses the struct's own json tags.
@@ -257,7 +308,10 @@ fn union_codecs(shape: &Shape, members: &[Member], discriminator: &str) -> Vec<D
     let mut decode_refs = vec![json_ref(), fmt_ref()];
     decode_refs.extend(members.iter().map(|m| symbol_of(&m.target)));
 
-    vec![raw(iface, iface_refs), raw(decode, decode_refs)]
+    vec![
+        raw(marshalers.trim_end().to_string(), marshal_refs),
+        raw(decode, decode_refs),
+    ]
 }
 
 #[cfg(test)]
@@ -281,72 +335,10 @@ mod tests {
         HashSet::new()
     }
 
-    #[test]
-    fn entries_helper_carries_the_pairs_array_round_trip() {
-        let out = rendered(&runtime_helpers(RuntimeHelpers {
-            entries: true,
-            variant: false,
-        }));
-        assert!(out.contains("type Entry[K comparable, V any] struct {"));
-        assert!(out.contains("type Entries[K comparable, V any] []Entry[K, V]"));
-        assert!(out.contains("func (e Entries[K, V]) MarshalJSON() ([]byte, error) {"));
-        assert!(out.contains("func (e *Entries[K, V]) UnmarshalJSON(b []byte) error {"));
-        assert!(out.contains("pairs[i] = [2]any{en.Key, en.Value}"));
-        // No marshalVariant when only entries are requested.
-        assert!(!out.contains("func marshalVariant("));
-        let Decl::Raw(raw) = &runtime_helpers(RuntimeHelpers {
-            entries: true,
-            variant: false,
-        })[0] else {
-            panic!("the entries helper is a Raw decl");
-        };
-        assert!(raw.refs.iter().any(|s| s.name == "json"));
-    }
-
-    #[test]
-    fn variant_helper_flattens_and_injects_the_discriminator() {
-        let out = rendered(&runtime_helpers(RuntimeHelpers {
-            entries: false,
-            variant: true,
-        }));
-        assert!(
-            out.contains("func marshalVariant(payload any, disc, tag string) ([]byte, error) {")
-        );
-        assert!(out.contains("obj[disc], _ = json.Marshal(tag)"));
-        assert!(!out.contains("type Entries["));
-    }
-
-    #[test]
-    fn no_helpers_requested_emits_nothing() {
-        assert!(runtime_helpers(RuntimeHelpers {
-            entries: false,
-            variant: false,
-        })
-        .is_empty());
-    }
-
-    #[test]
-    fn a_plain_struct_emits_no_codecs() {
-        // Tags do all the work for a struct with no union field.
-        let shape = structure(
-            "billing#Charge",
-            vec![
-                member("amount_cents", Tref::Prim(Prim::I64), true),
-                member("note", Tref::Prim(Prim::String), false),
-            ],
-        );
-        assert!(emit_codecs(&shape, &go_casing(), &no_unions()).is_empty());
-    }
-
-    #[test]
-    fn an_enum_emits_no_codecs() {
-        let shape = enum_shape("billing#Status", vec![("pending".into(), None)]);
-        assert!(emit_codecs(&shape, &go_casing(), &no_unions()).is_empty());
-    }
-
-    #[test]
-    fn union_emits_interface_wrappers_marshalers_and_a_dispatcher() {
-        let shape = union_shape(
+    /// A two-member `payment_method` union over `card_data`/`bank_account`, the
+    /// fixture shared by the union type and serde tests.
+    fn payment_method_union() -> Shape {
+        union_shape(
             "billing#payment_method",
             "kind",
             vec![
@@ -367,13 +359,133 @@ mod tests {
                     true,
                 ),
             ],
+        )
+    }
+
+    fn union_members(shape: &Shape) -> &[Member] {
+        match &shape.kind {
+            ShapeKind::Union { members, .. } => members,
+            _ => panic!("expected a union shape"),
+        }
+    }
+
+    #[test]
+    fn the_entries_definition_is_a_type_with_no_serialization_and_no_import() {
+        let out = rendered(&runtime_type_helpers(RuntimeHelpers {
+            entries: true,
+            variant: false,
+        }));
+        assert!(out.contains("type Entry[K comparable, V any] struct {"));
+        assert!(out.contains("type Entries[K comparable, V any] []Entry[K, V]"));
+        // The definition carries no (de)serialization and pulls no import.
+        assert!(!out.contains("MarshalJSON"));
+        let Decl::Raw(raw) = &runtime_type_helpers(RuntimeHelpers {
+            entries: true,
+            variant: false,
+        })[0] else {
+            panic!("the entries definition is a Raw decl");
+        };
+        assert!(raw.refs.is_empty());
+    }
+
+    #[test]
+    fn the_entries_methods_are_serde_and_reference_json() {
+        let out = rendered(&runtime_serde_helpers(RuntimeHelpers {
+            entries: true,
+            variant: false,
+        }));
+        assert!(out.contains("func (e Entries[K, V]) MarshalJSON() ([]byte, error) {"));
+        assert!(out.contains("func (e *Entries[K, V]) UnmarshalJSON(b []byte) error {"));
+        assert!(out.contains("pairs[i] = [2]any{en.Key, en.Value}"));
+        // The definitions stay out of the serde helpers; no marshalVariant either.
+        assert!(!out.contains("type Entry["));
+        assert!(!out.contains("func marshalVariant("));
+        let Decl::Raw(raw) = &runtime_serde_helpers(RuntimeHelpers {
+            entries: true,
+            variant: false,
+        })[0] else {
+            panic!("the entries methods are a Raw decl");
+        };
+        assert!(raw.refs.iter().any(|s| s.name == "json"));
+    }
+
+    #[test]
+    fn the_variant_helper_is_serde_only() {
+        // marshalVariant is serde; the type helpers never emit it.
+        assert!(runtime_type_helpers(RuntimeHelpers {
+            entries: false,
+            variant: true,
+        })
+        .is_empty());
+        let out = rendered(&runtime_serde_helpers(RuntimeHelpers {
+            entries: false,
+            variant: true,
+        }));
+        assert!(
+            out.contains("func marshalVariant(payload any, disc, tag string) ([]byte, error) {")
         );
-        let out = rendered(&emit_codecs(&shape, &go_casing(), &no_unions()));
+        assert!(out.contains("obj[disc], _ = json.Marshal(tag)"));
+        assert!(!out.contains("type Entries["));
+    }
+
+    #[test]
+    fn no_helpers_requested_emits_nothing() {
+        let none = RuntimeHelpers {
+            entries: false,
+            variant: false,
+        };
+        assert!(runtime_type_helpers(none).is_empty());
+        assert!(runtime_serde_helpers(none).is_empty());
+    }
+
+    #[test]
+    fn a_plain_struct_emits_no_serde() {
+        // Tags do all the work for a struct with no union field.
+        let shape = structure(
+            "billing#Charge",
+            vec![
+                member("amount_cents", Tref::Prim(Prim::I64), true),
+                member("note", Tref::Prim(Prim::String), false),
+            ],
+        );
+        assert!(emit_serde_decls(&shape, &go_casing(), &no_unions()).is_empty());
+    }
+
+    #[test]
+    fn an_enum_emits_no_serde() {
+        let shape = enum_shape("billing#Status", vec![("pending".into(), None)]);
+        assert!(emit_serde_decls(&shape, &go_casing(), &no_unions()).is_empty());
+    }
+
+    #[test]
+    fn union_type_decls_emit_the_interface_wrappers_and_markers_only() {
+        let shape = payment_method_union();
+        let decls = union_type_decls(&shape, union_members(&shape));
+        let out = rendered(&decls);
         // The interface with one marker method and a wrapper per variant.
         assert!(out.contains("type PaymentMethod interface{ isPaymentMethod() }"));
         assert!(out.contains("type PaymentMethodCard struct{ Value CardData }"));
         assert!(out.contains("func (PaymentMethodCard) isPaymentMethod() {}"));
         assert!(out.contains("type PaymentMethodBank struct{ Value BankAccount }"));
+        assert!(out.contains("func (PaymentMethodBank) isPaymentMethod() {}"));
+        // No serialization lives here.
+        assert!(!out.contains("MarshalJSON"));
+        assert!(!out.contains("unmarshalPaymentMethod"));
+        // The interface itself pulls no import; the wrappers reference their payloads
+        // but not encoding/json.
+        let Decl::Raw(raw) = &decls[0] else {
+            panic!("union type decls are a Raw block");
+        };
+        assert!(!raw.refs.iter().any(|s| s.name == "json"));
+    }
+
+    #[test]
+    fn union_serde_emits_the_marshalers_and_a_dispatcher_only() {
+        let shape = payment_method_union();
+        let out = rendered(&emit_serde_decls(&shape, &go_casing(), &no_unions()));
+        // The interface, wrappers, and markers stay out of the serde decls.
+        assert!(!out.contains("type PaymentMethod interface"));
+        assert!(!out.contains("func (PaymentMethodCard) isPaymentMethod() {}"));
         // Each wrapper marshals by flattening its payload and injecting the tag.
         assert!(out.contains(
             "func (m PaymentMethodCard) MarshalJSON() ([]byte, error) { return marshalVariant(m.Value, \"kind\", \"card\") }"
@@ -398,11 +510,12 @@ mod tests {
                 Some("CARD"),
             )],
         );
-        let out = rendered(&emit_codecs(&shape, &go_casing(), &no_unions()));
         // The in-code wrapper keeps the variant name; the wire tag is the override.
-        assert!(out.contains("type MethodCard struct{ Value CardData }"));
-        assert!(out.contains("marshalVariant(m.Value, \"type\", \"CARD\")"));
-        assert!(out.contains("case \"CARD\":"));
+        let types = rendered(&union_type_decls(&shape, union_members(&shape)));
+        assert!(types.contains("type MethodCard struct{ Value CardData }"));
+        let serde = rendered(&emit_serde_decls(&shape, &go_casing(), &no_unions()));
+        assert!(serde.contains("marshalVariant(m.Value, \"type\", \"CARD\")"));
+        assert!(serde.contains("case \"CARD\":"));
     }
 
     #[test]
@@ -422,7 +535,7 @@ mod tests {
                 ),
             ],
         );
-        let out = rendered(&emit_codecs(&shape, &go_casing(), &unions));
+        let out = rendered(&emit_serde_decls(&shape, &go_casing(), &unions));
         // The container method decodes through an embedded alias, shadows the union
         // field as RawMessage, and dispatches it through the union's unmarshalX.
         assert!(out.contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
@@ -454,7 +567,7 @@ mod tests {
                 }],
             )],
         );
-        let out = rendered(&emit_codecs(&shape, &go_casing(), &unions));
+        let out = rendered(&emit_serde_decls(&shape, &go_casing(), &unions));
         assert!(out.contains("Method json.RawMessage `json:\"pay_method\"`"));
     }
 
@@ -465,7 +578,7 @@ mod tests {
             kind: ShapeKind::Service { operations: vec![] },
             traits: vec![],
         };
-        assert!(emit_codecs(&service, &go_casing(), &no_unions()).is_empty());
+        assert!(emit_serde_decls(&service, &go_casing(), &no_unions()).is_empty());
     }
 
     #[test]

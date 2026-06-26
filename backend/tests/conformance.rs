@@ -66,8 +66,13 @@ fn rust_output() -> Option<Value> {
         return None;
     }
     let dir = tests_dir().join("rust");
-    let file = rust::emit::emit_module(&shared_module(), &rust::types::rust_casing());
-    let text = render_file(&file, &rust::RustRules, &Formatter::new("cat", vec![])).text;
+    let files = rust::emit::emit_module(&shared_module(), &rust::types::rust_casing());
+    let file = &files
+        .iter()
+        .find(|f| f.suffix.is_empty())
+        .expect("rust emits a types file")
+        .file;
+    let text = render_file(file, &rust::RustRules, &Formatter::new("cat", vec![])).text;
     std::fs::write(dir.join("src/models.rs"), text).expect("write models.rs");
     let out = run(
         &dir,
@@ -83,11 +88,23 @@ fn go_output() -> Option<Value> {
         return None;
     }
     let dir = tests_dir().join("go");
-    let file = go::emit::emit_module(&shared_module(), &go::types::go_casing());
-    let rough = render_file(&file, &go::GoRules, &Formatter::new("cat", vec![])).text;
-    let source = format!("{}\n{}", go::emit::package_clause("main"), rough);
-    let formatted = Formatter::new("gofmt", vec![]).run(&source);
-    std::fs::write(dir.join("models.go"), formatted.text).expect("write models.go");
+    // Go emits separate types and serde files; both compile in one `package main`,
+    // so write each into the harness dir before `go run .`.
+    for module_file in go::emit::emit_module(&shared_module(), &go::types::go_casing()) {
+        let rough = render_file(
+            &module_file.file,
+            &go::GoRules,
+            &Formatter::new("cat", vec![]),
+        )
+        .text;
+        let source = format!("{}\n{}", go::emit::package_clause("main"), rough);
+        let formatted = Formatter::new("gofmt", vec![]).run(&source);
+        std::fs::write(
+            dir.join(format!("models{}.go", module_file.suffix)),
+            formatted.text,
+        )
+        .expect("write go source");
+    }
     let out = run(
         &dir,
         "go",
@@ -116,8 +133,13 @@ fn ts_output() -> Option<Value> {
     }
     let work = ws.join("work-conformance");
     std::fs::create_dir_all(&work).expect("create work-conformance");
-    let file = typescript::emit::emit_module(&shared_module(), &typescript::types::ts_casing());
-    let text = render_file(&file, &typescript::TsRules, &Formatter::new("cat", vec![])).text;
+    let files = typescript::emit::emit_module(&shared_module(), &typescript::types::ts_casing());
+    let file = &files
+        .iter()
+        .find(|f| f.suffix.is_empty())
+        .expect("typescript emits a types file")
+        .file;
+    let text = render_file(file, &typescript::TsRules, &Formatter::new("cat", vec![])).text;
     std::fs::write(work.join("models.ts"), text).expect("write models.ts");
     std::fs::write(work.join("conformance.ts"), ts_driver()).expect("write conformance.ts");
     let compile = Command::new(&tsc)

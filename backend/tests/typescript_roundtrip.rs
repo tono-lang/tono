@@ -108,12 +108,18 @@ fn generated_typescript_compiles_and_round_trips() {
     };
 
     // Generate the module and format it with the engine's formatter (prettier).
-    let file = emit_module(&demo_module(), &ts_casing());
+    // TypeScript emits a single file per module.
+    let files = emit_module(&demo_module(), &ts_casing());
+    let file = &files
+        .iter()
+        .find(|f| f.suffix.is_empty())
+        .expect("typescript emits a types file")
+        .file;
     let formatter = Formatter::new(
         prettier.to_string_lossy(),
         vec!["--parser".into(), "typescript".into()],
     );
-    let formatted = render_file(&file, &TsRules, &formatter);
+    let formatted = render_file(file, &TsRules, &formatter);
     assert!(
         formatted.warning.is_none(),
         "prettier must format cleanly: {:?}",

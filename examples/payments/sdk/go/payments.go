@@ -2,27 +2,11 @@
 
 package payments
 
-import "encoding/json"
-import "fmt"
-
 type Timestamp string
 
 type LocalDate string
 
 type Duration string
-
-func marshalVariant(payload any, disc, tag string) ([]byte, error) {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(b, &obj); err != nil {
-		return nil, err
-	}
-	obj[disc], _ = json.Marshal(tag)
-	return json.Marshal(obj)
-}
 
 type Charge struct {
 	ID       string            `json:"id"`
@@ -36,27 +20,6 @@ type Charge struct {
 	Created  Timestamp         `json:"created"`
 	Status   Status            `json:"status"`
 	Method   PaymentMethod     `json:"method"`
-}
-
-func (c *Charge) UnmarshalJSON(b []byte) error {
-	type alias Charge
-	var tmp struct {
-		alias
-		Method json.RawMessage `json:"method"`
-	}
-	tmp.alias = alias(*c)
-	if err := json.Unmarshal(b, &tmp); err != nil {
-		return err
-	}
-	*c = Charge(tmp.alias)
-	if len(tmp.Method) > 0 {
-		m, err := unmarshalPaymentMethod(tmp.Method)
-		if err != nil {
-			return err
-		}
-		c.Method = m
-	}
-	return nil
 }
 
 type Status string
@@ -89,38 +52,6 @@ type PaymentMethodCard struct{ Value Card }
 
 func (PaymentMethodCard) isPaymentMethod() {}
 
-func (m PaymentMethodCard) MarshalJSON() ([]byte, error) {
-	return marshalVariant(m.Value, "kind", "card")
-}
-
 type PaymentMethodBank struct{ Value BankAccount }
 
 func (PaymentMethodBank) isPaymentMethod() {}
-
-func (m PaymentMethodBank) MarshalJSON() ([]byte, error) {
-	return marshalVariant(m.Value, "kind", "bank")
-}
-
-func unmarshalPaymentMethod(b []byte) (PaymentMethod, error) {
-	var d map[string]json.RawMessage
-	if err := json.Unmarshal(b, &d); err != nil {
-		return nil, err
-	}
-	var tag string
-	json.Unmarshal(d["kind"], &tag)
-	switch tag {
-	case "card":
-		var p Card
-		if err := json.Unmarshal(b, &p); err != nil {
-			return nil, err
-		}
-		return PaymentMethodCard{Value: p}, nil
-	case "bank":
-		var p BankAccount
-		if err := json.Unmarshal(b, &p); err != nil {
-			return nil, err
-		}
-		return PaymentMethodBank{Value: p}, nil
-	}
-	return nil, fmt.Errorf("unknown variant %q", tag)
-}

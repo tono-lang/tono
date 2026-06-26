@@ -7,7 +7,7 @@ use crate::codegen::casing::CasingConfig;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::codecs::{emit_codecs, runtime_helpers};
 use crate::codegen::targets::typescript::types::emit_type;
-use crate::codegen::tree::{Alias, Decl, File};
+use crate::codegen::tree::{Alias, Decl, File, ModuleFile};
 use crate::ir::Module;
 
 /// The branded well-known type aliases: zero-dependency nominal types that are a
@@ -24,18 +24,22 @@ pub fn well_known_decls() -> Vec<Decl> {
         .collect()
 }
 
-/// Assemble a complete TypeScript file for an IR module.
-pub fn emit_module(module: &Module, config: &CasingConfig) -> File {
+/// Assemble a complete TypeScript file for an IR module. TypeScript keeps types and
+/// codecs together in one module file, so this is a single output file.
+pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     let mut decls = well_known_decls();
     decls.extend(runtime_helpers());
     for shape in &module.shapes {
         decls.extend(emit_type(shape, config));
         decls.extend(emit_codecs(shape, config));
     }
-    File {
-        module: module.name.clone(),
-        decls,
-    }
+    vec![ModuleFile {
+        suffix: "",
+        file: File {
+            module: module.name.clone(),
+            decls,
+        },
+    }]
 }
 
 #[cfg(test)]
@@ -87,12 +91,9 @@ mod tests {
             }],
             operations: vec![],
         };
-        let out = render_file(
-            &emit_module(&module, &ts_casing()),
-            &TsRules,
-            &passthrough(),
-        )
-        .text;
+        let files = emit_module(&module, &ts_casing());
+        assert_eq!(files.len(), 1, "TypeScript emits one file per module");
+        let out = render_file(&files[0].file, &TsRules, &passthrough()).text;
         // Branded alias, runtime helper, type, and codec all present and ordered.
         assert!(out.contains("export type Timestamp = string"));
         assert!(out.contains("export function encodeI64(v: bigint): string {"));

@@ -45,10 +45,16 @@ fn generated_rust_compiles_and_round_trips() {
     }
     let dir = crate_dir();
 
-    // Generate the module and format it with the engine's formatter (rustfmt).
-    let file = emit_module(&demo_module(), &rust_casing());
+    // Generate the module and format it with the engine's formatter (rustfmt). Rust
+    // emits a single file per module.
+    let files = emit_module(&demo_module(), &rust_casing());
+    let file = &files
+        .iter()
+        .find(|f| f.suffix.is_empty())
+        .expect("rust emits a types file")
+        .file;
     let formatter = Formatter::new("rustfmt", vec!["--edition".into(), "2021".into()]);
-    let formatted = render_file(&file, &RustRules, &formatter);
+    let formatted = render_file(file, &RustRules, &formatter);
     assert!(
         formatted.warning.is_none(),
         "rustfmt must format cleanly: {:?}",

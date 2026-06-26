@@ -5,12 +5,15 @@
 //! key, plus `,string` for a 64-bit integer and `,omitempty` for an optional
 //! pointer); enums become named-string types (their consts are a render concern).
 //! Unions have no Go sum type, so they become an interface plus one wrapper struct
-//! per variant, emitted by the codec phase. Only the union and the `@entries`
-//! escape — what `encoding/json` cannot express on its own — get custom marshaling.
+//! per variant (each with its marker method) — all type declarations, emitted here.
+//! Their serialization (the wrapper `MarshalJSON`s and the `unmarshalX` dispatcher),
+//! like the `@entries` escape, lives in the serde phase: only the union and
+//! `@entries` need custom marshaling, what `encoding/json` cannot express alone.
 
 use crate::codegen::casing::{CaseStyle, CasingConfig};
 use crate::codegen::conventions::{self, field_ident, wire_key};
 use crate::codegen::symbol::Symbol;
+use crate::codegen::targets::go::codecs::union_type_decls;
 use crate::codegen::targets::go::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr};
 use crate::ir::{Member, Shape, Tref};
@@ -31,10 +34,11 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
     conventions::type_expr_of(t, &symbol_of)
 }
 
-/// Emit the declaration(s) for a shape. Structures become struct interfaces whose
-/// fields carry their wire key; enums become named-string enum decls; the union's
-/// interface and all codecs are emitted by the codec phase, so the union emits no
-/// type here.
+/// Emit the type declaration(s) for a shape. Structures become struct interfaces
+/// whose fields carry their wire key; enums become named-string enum decls; a union
+/// becomes its marker interface plus one wrapper struct per variant (each with its
+/// `is<Union>()` marker). The union's serialization — the wrapper `MarshalJSON`s and
+/// the `unmarshalX` dispatcher — is emitted by the serde phase, not here.
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     conventions::emit_shape(
         shape,
@@ -43,8 +47,9 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         // A Go enum is a named string built from its wire literals; the const
         // identifiers are derived at render time.
         |values, name| vec![conventions::string_enum(values, name)],
-        // The union's interface is emitted alongside its codecs.
-        |_discriminator, _members, _name| vec![],
+        // The interface, wrappers, and markers are types; their serde lives in the
+        // serde phase.
+        |_discriminator, members, _name| union_type_decls(shape, members),
     )
 }
 
@@ -122,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn a_union_emits_no_type_here_the_codec_phase_emits_its_sealed_interface() {
+    fn a_union_emits_its_interface_wrappers_and_markers_but_no_serde() {
         let union = union_shape(
             "billing#Method",
             "type",
@@ -135,7 +140,24 @@ mod tests {
                 true,
             )],
         );
-        assert!(emit_type(&union, &go_casing()).is_empty());
+        let decls = emit_type(&union, &go_casing());
+        let out: String = decls
+            .iter()
+            .map(|d| {
+                crate::codegen::target::RenderRules::render_decl(
+                    &crate::codegen::targets::go::GoRules,
+                    d,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The marker interface, the wrapper struct, and the marker method are types;
+        // the serialization (MarshalJSON / unmarshalX) belongs to the serde phase.
+        assert!(out.contains("type Method interface{ isMethod() }"));
+        assert!(out.contains("type MethodCard struct{ Value CardData }"));
+        assert!(out.contains("func (MethodCard) isMethod() {}"));
+        assert!(!out.contains("MarshalJSON"));
+        assert!(!out.contains("unmarshalMethod"));
     }
 
     #[test]

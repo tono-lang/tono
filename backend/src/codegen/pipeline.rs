@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use crate::codegen::render::render_file;
 use crate::codegen::targets::{go, rust, typescript};
+use crate::codegen::tree::ModuleFile;
 use crate::codegen::Formatter;
 use crate::ir::{Model, Module};
 
@@ -66,27 +67,35 @@ pub struct GeneratedFile {
     pub text: String,
 }
 
-/// Render one module for one target into rough source text: the banner, then the
-/// emitted declarations (with the package clause prepended for Go). The `cat`
-/// passthrough keeps the engine's layout without depending on a real formatter.
-fn render_module(module: &Module, target: TargetKind) -> String {
-    let passthrough = Formatter::new("cat", vec![]);
-    let body = match target {
-        TargetKind::Rust => {
-            let file = rust::emit::emit_module(module, &rust::types::rust_casing());
-            render_file(&file, &rust::RustRules, &passthrough).text
+/// Emit every output file a module produces for a target. Most targets emit one
+/// file; Go emits its types and its serialization separately, so this returns one
+/// or more [`ModuleFile`]s.
+fn emit_module_files(module: &Module, target: TargetKind) -> Vec<ModuleFile> {
+    match target {
+        TargetKind::Rust => rust::emit::emit_module(module, &rust::types::rust_casing()),
+        TargetKind::Go => go::emit::emit_module(module, &go::types::go_casing()),
+        TargetKind::TypeScript => {
+            typescript::emit::emit_module(module, &typescript::types::ts_casing())
         }
+    }
+}
+
+/// Render one of a module's output files into rough source text: the banner, then
+/// the rendered declarations (with the package clause prepended for Go). The `cat`
+/// passthrough keeps the engine's layout without depending on a real formatter.
+fn render_module(module_file: &ModuleFile, module: &Module, target: TargetKind) -> String {
+    let passthrough = Formatter::new("cat", vec![]);
+    let rendered = match target {
+        TargetKind::Rust => render_file(&module_file.file, &rust::RustRules, &passthrough).text,
         TargetKind::Go => {
-            let file = go::emit::emit_module(module, &go::types::go_casing());
-            let rough = render_file(&file, &go::GoRules, &passthrough).text;
+            let rough = render_file(&module_file.file, &go::GoRules, &passthrough).text;
             format!("{}{}", go::emit::package_clause(&module.name), rough)
         }
         TargetKind::TypeScript => {
-            let file = typescript::emit::emit_module(module, &typescript::types::ts_casing());
-            render_file(&file, &typescript::TsRules, &passthrough).text
+            render_file(&module_file.file, &typescript::TsRules, &passthrough).text
         }
     };
-    format!("{BANNER}{body}")
+    format!("{BANNER}{rendered}")
 }
 
 /// Parse a comma-separated target list (e.g. `"rust,go,ts"`) into kinds,
@@ -107,13 +116,19 @@ pub fn generate(model: &Model, targets: &[TargetKind]) -> Vec<GeneratedFile> {
     let mut files = Vec::new();
     for &target in targets {
         for module in &model.modules {
-            let path =
-                PathBuf::from(target.dir()).join(format!("{}.{}", module.name, target.extension()));
-            files.push(GeneratedFile {
-                target,
-                path,
-                text: render_module(module, target),
-            });
+            for module_file in emit_module_files(module, target) {
+                let path = PathBuf::from(target.dir()).join(format!(
+                    "{}{}.{}",
+                    module.name,
+                    module_file.suffix,
+                    target.extension()
+                ));
+                files.push(GeneratedFile {
+                    target,
+                    path,
+                    text: render_module(&module_file, module, target),
+                });
+            }
         }
     }
     files
@@ -122,8 +137,49 @@ pub fn generate(model: &Model, targets: &[TargetKind]) -> Vec<GeneratedFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::{member, structure};
+    use crate::codegen::test_support::{member, structure, union_shape};
     use crate::ir::{Prim, Tref};
+
+    /// A model whose Go module carries a union, so Go splits into two files while
+    /// Rust and TypeScript stay single-file.
+    fn union_model() -> Model {
+        Model {
+            tono_ir_version: 2,
+            modules: vec![Module {
+                name: "payments".into(),
+                shapes: vec![
+                    structure(
+                        "payments#Account",
+                        vec![member(
+                            "method",
+                            Tref::Ref {
+                                id: "payments#Method".into(),
+                                args: vec![],
+                            },
+                            true,
+                        )],
+                    ),
+                    union_shape(
+                        "payments#Method",
+                        "type",
+                        vec![member(
+                            "card",
+                            Tref::Ref {
+                                id: "payments#Card".into(),
+                                args: vec![],
+                            },
+                            true,
+                        )],
+                    ),
+                    structure(
+                        "payments#Card",
+                        vec![member("last4", Tref::Prim(Prim::String), true)],
+                    ),
+                ],
+                operations: vec![],
+            }],
+        }
+    }
 
     fn demo_model() -> Model {
         Model {
@@ -189,6 +245,52 @@ mod tests {
         assert!(files[1].text.contains("package payments"));
         assert!(files[1].text.contains("type Charge struct"));
         assert!(files[2].text.contains("export interface Charge"));
+    }
+
+    #[test]
+    fn go_splits_a_union_module_into_types_and_serde_while_others_stay_single() {
+        let files = generate(
+            &union_model(),
+            &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
+        );
+        let paths: Vec<String> = files
+            .iter()
+            .map(|f| f.path.to_string_lossy().into_owned())
+            .collect();
+        let sep = std::path::MAIN_SEPARATOR;
+        // Go gets a types file and a _serde file; Rust and TypeScript keep one each.
+        assert_eq!(
+            paths,
+            vec![
+                format!("rust{sep}payments.rs"),
+                format!("go{sep}payments.go"),
+                format!("go{sep}payments_serde.go"),
+                format!("typescript{sep}payments.ts"),
+            ]
+        );
+        let go_types = &files[1];
+        let go_serde = &files[2];
+        // Every file keeps its banner and package clause; the split puts the interface
+        // in the types file and the (de)serialization in the serde file.
+        assert!(go_types.text.starts_with(BANNER));
+        assert!(go_types.text.contains("package payments"));
+        assert!(go_types
+            .text
+            .contains("type Method interface{ isMethod() }"));
+        assert!(!go_types.text.contains("import "));
+        assert!(!go_types.text.contains("MarshalJSON"));
+
+        assert!(go_serde.text.starts_with(BANNER));
+        assert!(go_serde.text.contains("package payments"));
+        assert!(go_serde.text.contains("func marshalVariant("));
+        assert!(go_serde
+            .text
+            .contains("func unmarshalMethod(b []byte) (Method, error) {"));
+        assert!(go_serde
+            .text
+            .contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
+        assert!(go_serde.text.contains("import \"encoding/json\""));
+        assert!(go_serde.text.contains("import \"fmt\""));
     }
 
     #[test]

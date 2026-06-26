@@ -27,7 +27,9 @@ EOF
 
 echo "go..."
 mkdir -p "$work/go"
-cp "$sdk/go/payments.go" "$work/go/"
+# The Go SDK is split into a types file and a serde file; both belong to the same
+# package, so copy every generated .go file.
+cp "$sdk"/go/*.go "$work/go/"
 (cd "$work/go" && go mod init example_go >/dev/null 2>&1 && go build ./...)
 
 echo "typescript..."

@@ -7,20 +7,25 @@
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::targets::rust::codecs::{runtime_helpers, well_known_decls};
 use crate::codegen::targets::rust::types::emit_type;
-use crate::codegen::tree::File;
+use crate::codegen::tree::{File, ModuleFile};
 use crate::ir::Module;
 
-/// Assemble a complete Rust module file for an IR module.
-pub fn emit_module(module: &Module, config: &CasingConfig) -> File {
+/// Assemble a complete Rust module file for an IR module. Rust keeps types and
+/// serialization together (serde derives ride on the type), so this is a single
+/// output file.
+pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     let mut decls = well_known_decls();
     decls.extend(runtime_helpers());
     for shape in &module.shapes {
         decls.extend(emit_type(shape, config));
     }
-    File {
-        module: module.name.clone(),
-        decls,
-    }
+    vec![ModuleFile {
+        suffix: "",
+        file: File {
+            module: module.name.clone(),
+            decls,
+        },
+    }]
 }
 
 #[cfg(test)]
@@ -37,6 +42,13 @@ mod tests {
         Formatter::new("cat", vec![])
     }
 
+    /// Render the single output file Rust emits for a module.
+    fn render_only(module: &Module) -> String {
+        let files = emit_module(module, &rust_casing());
+        assert_eq!(files.len(), 1, "Rust emits one file per module");
+        render_file(&files[0].file, &RustRules, &passthrough()).text
+    }
+
     #[test]
     fn emit_module_prepends_well_known_and_helper_modules() {
         let module = Module {
@@ -47,12 +59,7 @@ mod tests {
             )],
             operations: vec![],
         };
-        let out = render_file(
-            &emit_module(&module, &rust_casing()),
-            &RustRules,
-            &passthrough(),
-        )
-        .text;
+        let out = render_only(&module);
         // Branded newtype, both integer helper modules, and the base64 module are
         // emitted once, ahead of the shape's struct.
         assert!(out.contains("#[serde(transparent)]"));
@@ -101,12 +108,7 @@ mod tests {
             ],
             operations: vec![],
         };
-        let out = render_file(
-            &emit_module(&module, &rust_casing()),
-            &RustRules,
-            &passthrough(),
-        )
-        .text;
+        let out = render_only(&module);
         // Cross-module payloads pull their import; every shape kind is present.
         assert!(out.contains("use crate::crm::Customer;"));
         assert!(out.contains("pub struct Charge {"));
