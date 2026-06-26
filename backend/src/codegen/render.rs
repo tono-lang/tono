@@ -15,13 +15,38 @@ use crate::codegen::tree::File;
 /// by the engine), then a blank line, then the declarations separated by blank
 /// lines; the whole rough text is handed to `formatter`.
 pub fn render_file(file: &File, rules: &dyn RenderRules, formatter: &Formatter) -> Formatted {
-    let imports = imports::collect(file);
+    render_file_with_companion(file, None, rules, formatter)
+}
+
+/// Like [`render_file`], but for a file split off from its module's types: a
+/// self-module symbol is imported from the `companion` module path (the types
+/// file) instead of being dropped. With `companion` `None` this is exactly
+/// [`render_file`].
+pub fn render_file_with_companion(
+    file: &File,
+    companion: Option<&str>,
+    rules: &dyn RenderRules,
+    formatter: &Formatter,
+) -> Formatted {
+    let imports = imports::collect_with_companion(file, companion);
     let mut rough = String::new();
+    // The imports arrive ordered by (module, imported), so names of the same
+    // module are already adjacent; fold them into one statement per module.
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for import in &imports {
-        rough.push_str(&rules.render_import(import));
+        match groups.last_mut() {
+            Some((module, names)) if *module == import.module => {
+                names.push(import.imported.clone());
+            }
+            _ => groups.push((import.module.clone(), vec![import.imported.clone()])),
+        }
+    }
+    for (module, names) in &groups {
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        rough.push_str(&rules.render_import(module, &names));
         rough.push('\n');
     }
-    if !imports.is_empty() {
+    if !groups.is_empty() {
         rough.push('\n');
     }
     for (index, decl) in file.decls.iter().enumerate() {
@@ -37,7 +62,7 @@ pub fn render_file(file: &File, rules: &dyn RenderRules, formatter: &Formatter) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::symbol::{Import, Symbol};
+    use crate::codegen::symbol::Symbol;
     use crate::codegen::target::{Fragment, Target};
     use crate::codegen::tree::{
         Alias, Decl, EnumDecl, Field, FnBody, Function, Interface, Method, Raw, TypeExpr,
@@ -108,8 +133,8 @@ mod tests {
     }
 
     impl RenderRules for RustRules {
-        fn render_import(&self, import: &Import) -> String {
-            format!("use {}::{};", import.module, import.imported)
+        fn render_import(&self, module: &str, names: &[&str]) -> String {
+            format!("use {module}::{};", names.join(", "))
         }
 
         fn render_decl(&self, decl: &Decl) -> String {

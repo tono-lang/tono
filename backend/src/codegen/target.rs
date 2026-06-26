@@ -46,8 +46,11 @@ pub trait Target {
 /// engine drives the pipeline (collecting imports, ordering, formatting); these
 /// rules own only the language tokens, so the tree stays target-agnostic.
 pub trait RenderRules {
-    /// Render one collected import into an import statement.
-    fn render_import(&self, import: &crate::codegen::symbol::Import) -> String;
+    /// Render one import statement for all names brought in from a single module.
+    /// The names are deterministically ordered; a language that imports a whole
+    /// package (Go) ignores them, while one with named imports (TypeScript, Rust)
+    /// groups them into a single statement.
+    fn render_import(&self, module: &str, names: &[&str]) -> String;
 
     /// Render one declaration into rough but syntactically valid surface text.
     fn render_decl(&self, decl: &Decl) -> String;

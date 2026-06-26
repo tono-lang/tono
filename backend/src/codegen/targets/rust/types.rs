@@ -8,10 +8,10 @@
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{self, field_ident};
 use crate::codegen::symbol::{Symbol, SymbolKind};
-use crate::codegen::targets::rust::codecs::{enum_item, union_item};
+use crate::codegen::targets::rust::codecs::{enum_item, enum_serde_item, union_item};
 use crate::codegen::targets::rust::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr};
-use crate::ir::{Member, Shape, Tref};
+use crate::ir::{Member, Shape, ShapeKind, Tref};
 
 /// The Rust language key for per-language traits such as `@rename`.
 const LANG: &str = "rust";
@@ -28,19 +28,36 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
     conventions::type_expr_of(t, &symbol_of)
 }
 
-/// Emit the declaration(s) for a shape. Structures become struct interfaces;
-/// enums and unions become verbatim items (custom serde impls) built by the
-/// codec layer. Other shape kinds contribute nothing here.
+/// Emit the type declaration(s) for a shape, which belong in the types file:
+/// structures become struct interfaces; the open enum becomes its bare data-enum
+/// definition; a union becomes its `#[serde(tag)]` enum (serde derives ride on the
+/// type, so it is whole here). The open enum's hand-written serde impls are emitted
+/// separately by [`emit_serde`]. Other shape kinds contribute nothing.
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     conventions::emit_shape(
         shape,
         LANG,
         |m| field_of(m, config),
-        // Rust's open enum is a hand-written data enum (custom serde), not a
-        // named-string list, so it uses the codec layer rather than `string_enum`.
+        // Rust's open enum is a hand-written data enum (custom serde); the types
+        // file holds only its definition, not the impls.
         |values, name| vec![enum_item(values, name)],
         |discriminator, members, name| vec![union_item(discriminator, members, name)],
     )
+}
+
+/// Emit the serde declaration(s) for a shape, which belong in the serde file: an
+/// open enum's hand-written `as_wire`/`Serialize`/`Deserialize` impls. A structure
+/// or union derives its serde on the type, so it contributes nothing here.
+pub fn emit_serde(shape: &Shape) -> Vec<Decl> {
+    match &shape.kind {
+        ShapeKind::Enum { values, .. } => {
+            vec![enum_serde_item(
+                values,
+                &conventions::type_ident(shape, LANG),
+            )]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// The PascalCase Rust identifier for an open-enum or union variant, derived from

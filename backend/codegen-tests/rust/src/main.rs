@@ -6,6 +6,10 @@
 #![allow(dead_code)]
 
 mod models;
+// The generated serde file is a sibling module of the crate: it holds the
+// `#[serde(with)]` helper modules and the open enum's impls, and references the
+// types via `use crate::models::*`.
+mod models_serde;
 
 use models::{Account, CardData, Method, Status};
 use serde_json::{json, Value};

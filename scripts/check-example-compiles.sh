@@ -12,7 +12,14 @@ trap 'rm -rf "$work"' EXIT
 
 echo "rust..."
 mkdir -p "$work/rust/src"
-cp "$sdk/rust/payments.rs" "$work/rust/src/lib.rs"
+# The Rust SDK is split into a types module and a serde module of the same crate;
+# copy both and declare them from the crate root.
+cp "$sdk/rust/payments.rs" "$work/rust/src/payments.rs"
+cp "$sdk/rust/payments_serde.rs" "$work/rust/src/payments_serde.rs"
+cat >"$work/rust/src/lib.rs" <<'EOF'
+pub mod payments;
+pub mod payments_serde;
+EOF
 cat >"$work/rust/Cargo.toml" <<'EOF'
 [package]
 name = "example_rust"
@@ -34,6 +41,9 @@ cp "$sdk"/go/*.go "$work/go/"
 
 echo "typescript..."
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"
-"$tsc" --noEmit --strict --target ES2020 --lib ES2020,DOM "$sdk/typescript/payments.ts"
+# The TypeScript SDK is split into a types module and a serde module; the serde
+# file imports the types, so compile both together.
+"$tsc" --noEmit --strict --target ES2020 --lib ES2020,DOM \
+  "$sdk/typescript/payments.ts" "$sdk/typescript/payments_serde.ts"
 
 echo "all three generated SDKs compile"

@@ -49,25 +49,36 @@ fn variant_casing() -> CasingConfig {
     CasingConfig::new(CaseStyle::Pascal)
 }
 
-/// Build the open-enum item: the data enum plus its hand-written `as_wire`,
-/// `Serialize`, and `Deserialize`. The known wire values map to PascalCase
-/// variants; any other string decodes into the catch-all `Unknown(String)`. The
+/// Build the open-enum *type definition*: just the data enum with its catch-all
+/// `Unknown(String)` arm, which belongs in the types file. Its hand-written serde
+/// impls are emitted separately by [`enum_serde_item`] into the serde file. The
 /// item references no imported symbols.
 pub(crate) fn enum_item(values: &[(String, Option<i64>)], name: &str) -> Decl {
-    let config = variant_casing();
-    let variants: Vec<(String, String)> = values
-        .iter()
-        .map(|(wire, _)| (variant_ident(wire, &config), wire.clone()))
-        .collect();
-
+    let variants = enum_variants(values);
     let mut text = String::new();
     text.push_str("#[derive(Clone, Debug)]\n");
     text.push_str(&format!("pub enum {name} {{\n"));
     for (ident, _) in &variants {
         text.push_str(&format!("    {ident},\n"));
     }
-    text.push_str("    Unknown(String),\n}\n\n");
+    text.push_str("    Unknown(String),\n}");
 
+    Decl::Raw(Raw {
+        text,
+        refs: Vec::new(),
+    })
+}
+
+/// Build the open-enum *serde item*: the inherent `as_wire` plus the hand-written
+/// `Serialize`/`Deserialize`, which belong in the serde file. The known wire values
+/// map to PascalCase variants; any other string decodes into the catch-all
+/// `Unknown(String)`. The orphan rule permits these impls in a sibling module
+/// because the enum type is local to the crate; the serde file's `use crate::<module>::*`
+/// brings it into scope. The item references no imported symbols.
+pub(crate) fn enum_serde_item(values: &[(String, Option<i64>)], name: &str) -> Decl {
+    let variants = enum_variants(values);
+
+    let mut text = String::new();
     text.push_str(&format!("impl {name} {{\n"));
     text.push_str("    fn as_wire(&self) -> &str {\n        match self {\n");
     for (ident, wire) in &variants {
@@ -102,6 +113,15 @@ pub(crate) fn enum_item(values: &[(String, Option<i64>)], name: &str) -> Decl {
         text,
         refs: Vec::new(),
     })
+}
+
+/// The (PascalCase identifier, wire value) pairs of an open enum's known variants.
+fn enum_variants(values: &[(String, Option<i64>)]) -> Vec<(String, String)> {
+    let config = variant_casing();
+    values
+        .iter()
+        .map(|(wire, _)| (variant_ident(wire, &config), wire.clone()))
+        .collect()
 }
 
 /// Build the internally-tagged union item: a `#[serde(tag = ...)]` enum whose
@@ -160,23 +180,76 @@ pub(crate) fn well_known_decls() -> Vec<Decl> {
         .collect()
 }
 
-/// The hand-written `#[serde(with)]` helper modules: a 64-bit integer travels as
-/// a JSON string and `bytes` as base64, each with an `option` submodule for the
-/// nullable field path. The assembler prepends these to a module.
-pub(crate) fn runtime_helpers() -> Vec<Decl> {
-    [
-        int_string_module("i64"),
-        int_string_module("u64"),
-        BASE64_BYTES_MODULE.to_string(),
-    ]
-    .into_iter()
-    .map(|text| {
-        Decl::Raw(Raw {
-            text,
-            refs: Vec::new(),
+/// Which `#[serde(with)]` helper modules a module's fields need. Each is emitted
+/// into the serde file only when some field routes through it, and the types file
+/// imports exactly this set from the serde file (the `with = "..."` paths resolve
+/// through that `use`). A module with no wide integer and no bytes needs none.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct HelperSet {
+    pub i64_string: bool,
+    pub u64_string: bool,
+    pub base64_bytes: bool,
+}
+
+impl HelperSet {
+    /// Fold the helper a single field routes through (if any) into the set.
+    pub(crate) fn add_field(&mut self, field: &Field) {
+        if let TypeExpr::Ref(symbol) = &field.ty {
+            match symbol.name.as_str() {
+                "i64" => self.i64_string = true,
+                "u64" => self.u64_string = true,
+                "Vec<u8>" => self.base64_bytes = true,
+                _ => {}
+            }
+        }
+    }
+
+    /// The helper module names this set contains, in deterministic order. These are
+    /// the items the types file imports from the serde file.
+    pub(crate) fn names(self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.i64_string {
+            names.push("i64_string");
+        }
+        if self.u64_string {
+            names.push("u64_string");
+        }
+        if self.base64_bytes {
+            names.push("base64_bytes");
+        }
+        names
+    }
+
+    /// Whether the set is empty (no helper needed).
+    pub(crate) fn is_empty(self) -> bool {
+        self.names().is_empty()
+    }
+}
+
+/// The hand-written `#[serde(with)]` helper modules the set selects: a 64-bit
+/// integer travels as a JSON string and `bytes` as base64, each with an `option`
+/// submodule for the nullable field path. Only the ones some field uses are
+/// emitted, into the serde file.
+pub(crate) fn runtime_helpers(helpers: HelperSet) -> Vec<Decl> {
+    let mut texts: Vec<String> = Vec::new();
+    if helpers.i64_string {
+        texts.push(int_string_module("i64"));
+    }
+    if helpers.u64_string {
+        texts.push(int_string_module("u64"));
+    }
+    if helpers.base64_bytes {
+        texts.push(BASE64_BYTES_MODULE.to_string());
+    }
+    texts
+        .into_iter()
+        .map(|text| {
+            Decl::Raw(Raw {
+                text,
+                refs: Vec::new(),
+            })
         })
-    })
-    .collect()
+        .collect()
 }
 
 const INDENT: &str = "    ";
@@ -370,16 +443,29 @@ mod tests {
     }
 
     #[test]
-    fn an_open_enum_emits_a_data_enum_with_an_unknown_arm_and_custom_impls() {
+    fn the_open_enum_definition_holds_the_data_enum_and_no_impls() {
         let decl = enum_item(&values(vec!["pending", "card_present"]), "Status");
-        // Wire values map to PascalCase variants; the catch-all is Unknown(String);
-        // the custom impls carry the wire strings verbatim.
+        // The definition is just the data enum with its catch-all; the serde impls
+        // live in a separate item, so they are absent here.
         assert!(matches!(&decl, Decl::Raw(raw) if
             raw.refs.is_empty()
                 && raw.text.contains("pub enum Status {")
                 && raw.text.contains("    Pending,")
                 && raw.text.contains("    CardPresent,")
                 && raw.text.contains("    Unknown(String),")
+                && !raw.text.contains("impl serde::Serialize for Status")
+                && !raw.text.contains("as_wire")));
+    }
+
+    #[test]
+    fn the_open_enum_serde_item_holds_the_impls_and_no_definition() {
+        let decl = enum_serde_item(&values(vec!["pending", "card_present"]), "Status");
+        // The serde item carries as_wire and the hand-written impls keyed on the wire
+        // strings; the enum definition itself stays in the types item.
+        assert!(matches!(&decl, Decl::Raw(raw) if
+            raw.refs.is_empty()
+                && !raw.text.contains("pub enum Status {")
+                && raw.text.contains("impl Status {")
                 && raw.text.contains("Status::Pending => \"pending\",")
                 && raw.text.contains("\"card_present\" => Status::CardPresent,")
                 && raw.text.contains("_ => Status::Unknown(s),")
@@ -388,11 +474,14 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_enum_is_just_the_unknown_arm() {
-        let decl = enum_item(&[], "Empty");
-        assert!(matches!(&decl, Decl::Raw(raw) if
+    fn an_empty_enum_definition_is_just_the_unknown_arm() {
+        let def = enum_item(&[], "Empty");
+        assert!(matches!(&def, Decl::Raw(raw) if
             raw.text.contains("    Unknown(String),")
-                && raw.text.contains("Empty::Unknown(s) => s.as_str(),")));
+                && raw.text.contains("pub enum Empty {")));
+        let serde = enum_serde_item(&[], "Empty");
+        assert!(matches!(&serde, Decl::Raw(raw) if
+            raw.text.contains("Empty::Unknown(s) => s.as_str(),")));
     }
 
     #[test]

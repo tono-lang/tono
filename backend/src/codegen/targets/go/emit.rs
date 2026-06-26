@@ -108,6 +108,9 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
             module: module.name.clone(),
             decls: type_decls,
         },
+        // Go's split files share one package, so the serde file references the
+        // types with no import: there is no companion to import from.
+        imports_companion: None,
     }];
     // A pure-types module (no union, no @entries, no union-bearing container) emits
     // no serde file at all.
@@ -118,6 +121,7 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
                 module: module.name.clone(),
                 decls: serde_decls,
             },
+            imports_companion: None,
         });
     }
     files

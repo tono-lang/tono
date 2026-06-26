@@ -11,7 +11,7 @@
 //! `Decl::Raw` items. That arm renders nothing here.
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
-use crate::codegen::symbol::{Import, SymbolKind};
+use crate::codegen::symbol::SymbolKind;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, EnumDecl, Field, FnBody, Function, TypeExpr};
@@ -116,8 +116,9 @@ impl GoRules {
 }
 
 impl RenderRules for GoRules {
-    fn render_import(&self, import: &Import) -> String {
-        format!("import \"{}\"", import.module)
+    fn render_import(&self, module: &str, _names: &[&str]) -> String {
+        // Go imports the whole package, so the per-symbol names play no part.
+        format!("import \"{module}\"")
     }
 
     fn render_decl(&self, decl: &Decl) -> String {
@@ -160,11 +161,9 @@ mod tests {
 
     #[test]
     fn imports_render_as_go_import_lines() {
+        // Go imports the whole package, so the per-symbol names are ignored.
         assert_eq!(
-            GoRules.render_import(&Import {
-                module: "payments".into(),
-                imported: "Charge".into(),
-            }),
+            GoRules.render_import("payments", &["Charge", "Card"]),
             "import \"payments\""
         );
     }

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use crate::codegen::render::render_file;
+use crate::codegen::render::render_file_with_companion;
 use crate::codegen::targets::{go, rust, typescript};
 use crate::codegen::tree::ModuleFile;
 use crate::codegen::Formatter;
@@ -85,14 +85,30 @@ fn emit_module_files(module: &Module, target: TargetKind) -> Vec<ModuleFile> {
 /// passthrough keeps the engine's layout without depending on a real formatter.
 fn render_module(module_file: &ModuleFile, module: &Module, target: TargetKind) -> String {
     let passthrough = Formatter::new("cat", vec![]);
+    let companion = module_file.imports_companion.as_deref();
     let rendered = match target {
-        TargetKind::Rust => render_file(&module_file.file, &rust::RustRules, &passthrough).text,
+        TargetKind::Rust => {
+            render_file_with_companion(&module_file.file, companion, &rust::RustRules, &passthrough)
+                .text
+        }
         TargetKind::Go => {
-            let rough = render_file(&module_file.file, &go::GoRules, &passthrough).text;
+            let rough = render_file_with_companion(
+                &module_file.file,
+                companion,
+                &go::GoRules,
+                &passthrough,
+            )
+            .text;
             format!("{}{}", go::emit::package_clause(&module.name), rough)
         }
         TargetKind::TypeScript => {
-            render_file(&module_file.file, &typescript::TsRules, &passthrough).text
+            render_file_with_companion(
+                &module_file.file,
+                companion,
+                &typescript::TsRules,
+                &passthrough,
+            )
+            .text
         }
     };
     format!("{BANNER}{rendered}")
@@ -220,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_emits_one_file_per_target_and_module() {
+    fn generate_splits_each_target_that_has_serialization_to_emit() {
         let model = demo_model();
         let files = generate(
             &model,
@@ -230,25 +246,36 @@ mod tests {
             .iter()
             .map(|f| f.path.to_string_lossy().into_owned())
             .collect();
+        let sep = std::path::MAIN_SEPARATOR;
+        // The single i64 field gives Rust a helper module and TypeScript codecs, so
+        // both split; Go's plain tagged struct needs no custom serde, so it stays one
+        // file.
         assert_eq!(
             paths,
             vec![
-                format!("rust{}payments.rs", std::path::MAIN_SEPARATOR),
-                format!("go{}payments.go", std::path::MAIN_SEPARATOR),
-                format!("typescript{}payments.ts", std::path::MAIN_SEPARATOR),
+                format!("rust{sep}payments.rs"),
+                format!("rust{sep}payments_serde.rs"),
+                format!("go{sep}payments.go"),
+                format!("typescript{sep}payments.ts"),
+                format!("typescript{sep}payments_serde.ts"),
             ]
         );
         // Every file carries the banner; each target spells the struct its own way
-        // and Go carries its package clause.
+        // in its types file and Go carries its package clause.
         assert!(files.iter().all(|f| f.text.starts_with(BANNER)));
         assert!(files[0].text.contains("pub struct Charge"));
-        assert!(files[1].text.contains("package payments"));
-        assert!(files[1].text.contains("type Charge struct"));
-        assert!(files[2].text.contains("export interface Charge"));
+        assert!(files[1].text.contains("pub mod i64_string"));
+        assert!(files[2].text.contains("package payments"));
+        assert!(files[2].text.contains("type Charge struct"));
+        assert!(files[3].text.contains("export interface Charge"));
+        assert!(files[4].text.contains("export function encodeCharge"));
+        assert!(files[4]
+            .text
+            .contains("import { Charge } from \"./payments\";"));
     }
 
     #[test]
-    fn go_splits_a_union_module_into_types_and_serde_while_others_stay_single() {
+    fn a_union_module_splits_go_and_typescript_but_rusts_derive_keeps_it_single() {
         let files = generate(
             &union_model(),
             &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
@@ -258,7 +285,10 @@ mod tests {
             .map(|f| f.path.to_string_lossy().into_owned())
             .collect();
         let sep = std::path::MAIN_SEPARATOR;
-        // Go gets a types file and a _serde file; Rust and TypeScript keep one each.
+        // Go needs hand-written union marshaling and TypeScript needs codecs, so both
+        // split. Rust's tagged-union enum derives its serde on the type with no wide
+        // integer, bytes, or open enum in the module, so there is nothing for a serde
+        // file to hold and Rust stays single.
         assert_eq!(
             paths,
             vec![
@@ -266,6 +296,7 @@ mod tests {
                 format!("go{sep}payments.go"),
                 format!("go{sep}payments_serde.go"),
                 format!("typescript{sep}payments.ts"),
+                format!("typescript{sep}payments_serde.ts"),
             ]
         );
         let go_types = &files[1];
