@@ -18,7 +18,7 @@ jobs:
       - name: Note when token is absent
         if: env.SONAR_TOKEN == ''
         run: echo "SONAR_TOKEN secret not set; skipping analysis until the Sonar account is connected."
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.SONAR_TOKEN != ''
         with:
           fetch-depth: 0
