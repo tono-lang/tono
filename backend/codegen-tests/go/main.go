@@ -29,6 +29,7 @@ func main() {
 		Secret:    []byte{1, 2, 3, 254},
 		Tip:       &tip,
 		Status:    StatusActive,
+		Code:      HTTPCodeOk,
 		Method:    MethodCard{Value: CardData{Last4: "4242"}},
 		Counts:    Entries[int32, string]{{Key: 7, Value: "a"}, {Key: 3, Value: "b"}},
 	}
@@ -48,6 +49,10 @@ func main() {
 	}
 	if _, ok := m["secret"].(string); !ok {
 		fail("bytes must encode as a base64 string")
+	}
+	// An int-backed enum travels as a bare JSON number, not a string.
+	if code, ok := m["code"].(float64); !ok || code != 200 {
+		fail("int-backed enum must encode as a JSON number")
 	}
 	method, ok := m["method"].(map[string]any)
 	if !ok || method["type"] != "card" {
@@ -77,6 +82,12 @@ func main() {
 	status := Status("frozen")
 	if status != "frozen" {
 		fail("an unknown enum value must pass through")
+	}
+
+	// An int-backed enum is a named int, so an unknown integer passes through too.
+	code := HTTPCode(418)
+	if code != 418 {
+		fail("an unknown int-backed enum value must pass through")
 	}
 
 	fmt.Println("ROUNDTRIP_OK")

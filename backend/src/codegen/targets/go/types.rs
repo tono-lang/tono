@@ -44,9 +44,9 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         shape,
         LANG,
         |m| field_of(m, config),
-        // A Go enum is a named string built from its wire literals; the const
+        // A Go enum is a named string or int built from its wire values; the const
         // identifiers are derived at render time.
-        |values, name| vec![conventions::string_enum(values, name)],
+        |backing, values, name| vec![conventions::open_enum(backing, values, name)],
         // The interface, wrappers, and markers are types; their serde lives in the
         // serde phase.
         |_discriminator, members, _name| union_type_decls(shape, members),
@@ -67,7 +67,10 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::{enum_shape, member, member_with, structure, union_shape};
+    use crate::codegen::test_support::{
+        enum_shape, int_enum_shape, member, member_with, structure, union_shape,
+    };
+    use crate::codegen::tree::EnumRepr;
     use crate::ir::{Prim, ShapeKind};
 
     #[test]
@@ -123,7 +126,22 @@ mod tests {
             if d.name.name == "Status"
                 && d.members.len() == 2
                 && d.members[0].name == "pending"
-                && d.members[1].name == "settled"));
+                && d.members[1].name == "settled"
+                && d.backing == EnumRepr::String));
+    }
+
+    #[test]
+    fn an_int_backed_enum_becomes_a_named_int_carrying_its_integers() {
+        let shape = int_enum_shape(
+            "billing#http_code",
+            vec![("ok".into(), Some(200)), ("error".into(), Some(500))],
+        );
+        let decls = emit_type(&shape, &go_casing());
+        assert!(matches!(&decls[..], [Decl::Enum(d)]
+            if d.name.name == "HTTPCode"
+                && d.members[0].name == "ok"
+                && d.members[1].name == "error"
+                && d.backing == EnumRepr::Int(vec![200, 500])));
     }
 
     #[test]

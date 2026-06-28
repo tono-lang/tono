@@ -30,12 +30,12 @@ const (
 	StatusRefunded Status = "refunded"
 )
 
-type HTTPCode string
+type HTTPCode int
 
 const (
-	HTTPCodeOk       HTTPCode = "ok"
-	HTTPCodeNotFound HTTPCode = "not_found"
-	HTTPCodeError    HTTPCode = "error"
+	HTTPCodeOk       HTTPCode = 200
+	HTTPCodeNotFound HTTPCode = 404
+	HTTPCodeError    HTTPCode = 500
 )
 
 type Card struct {

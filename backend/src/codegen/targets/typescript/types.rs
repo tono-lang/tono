@@ -32,8 +32,9 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         shape,
         LANG,
         |m| field_of(m, config),
-        // An open enum is a literal-union type built from its wire tags.
-        |values, name| vec![conventions::string_enum(values, name)],
+        // An open enum is a literal-union type built from its wire values: string
+        // tags for a string-backed enum, integer literals for an int-backed one.
+        |backing, values, name| vec![conventions::open_enum(backing, values, name)],
         |discriminator, members, name| {
             vec![Decl::Union(UnionDecl {
                 name: Symbol::builtin(name.to_string()),
@@ -68,7 +69,10 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::codegen::test_support::{
+        enum_shape, int_enum_shape, member, structure, union_shape,
+    };
+    use crate::codegen::tree::EnumRepr;
     use crate::ir::{Prim, ShapeKind};
 
     #[test]
@@ -100,7 +104,20 @@ mod tests {
             if d.name.name == "Status"
                 && d.members.len() == 2
                 && d.members[0].name == "pending"
-                && d.members[1].name == "settled"));
+                && d.members[1].name == "settled"
+                && d.backing == EnumRepr::String));
+    }
+
+    #[test]
+    fn an_int_backed_enum_becomes_a_numeric_literal_union() {
+        let shape = int_enum_shape(
+            "billing#http_code",
+            vec![("ok".into(), Some(200)), ("error".into(), Some(500))],
+        );
+        let decls = emit_type(&shape, &ts_casing());
+        assert!(matches!(&decls[..], [Decl::Enum(d)]
+            if d.name.name == "HTTPCode"
+                && d.backing == EnumRepr::Int(vec![200, 500])));
     }
 
     #[test]

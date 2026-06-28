@@ -10,7 +10,7 @@ use crate::codegen::conventions::{field_ident, has_entries, type_ident, wire_key
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::types::LANG;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
-use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
+use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Tref};
 
 /// The shared runtime helpers a generated file relies on, emitted once per file
 /// with zero dependencies.
@@ -203,19 +203,27 @@ fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Ve
 }
 
 fn enum_codecs(shape: &Shape) -> Vec<Decl> {
-    // An open enum is a string on the wire; encode is identity and decode is a
-    // lenient cast that lets an unknown value pass through.
+    // An open enum travels as its backing scalar (a string tag, or an integer);
+    // encode is identity and decode is a lenient cast that lets an unknown value
+    // pass through.
     let ty = type_ident(shape, LANG);
+    let wire = match &shape.kind {
+        ShapeKind::Enum {
+            backing: EnumBacking::Int,
+            ..
+        } => "number",
+        _ => "string",
+    };
     vec![
         function_owned(
             &format!("encode{ty}"),
             &[("value", &ty)],
-            "string",
+            wire,
             "  return value;".into(),
         ),
         function_owned(
             &format!("decode{ty}"),
-            &[("raw", "string")],
+            &[("raw", wire)],
             &ty,
             format!("  return raw as {ty};"),
         ),
@@ -331,7 +339,9 @@ mod tests {
     use crate::codegen::target::RenderRules;
     use crate::codegen::targets::typescript::types::ts_casing;
     use crate::codegen::targets::typescript::TsRules;
-    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::codegen::test_support::{
+        enum_shape, int_enum_shape, member, structure, union_shape,
+    };
 
     fn rendered(decls: &[Decl]) -> String {
         decls
@@ -401,6 +411,17 @@ mod tests {
         assert!(out.contains("return value;"));
         assert!(out.contains("export function decodeStatus(raw: string): Status {"));
         assert!(out.contains("return raw as Status;"));
+    }
+
+    #[test]
+    fn int_backed_enum_codec_is_identity_over_number() {
+        let shape = int_enum_shape("billing#http_code", vec![("ok".into(), Some(200))]);
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
+        // The wire scalar is a number, not a string; encode/decode stay identity.
+        assert!(out.contains("export function encodeHTTPCode(value: HTTPCode): number {"));
+        assert!(out.contains("return value;"));
+        assert!(out.contains("export function decodeHTTPCode(raw: number): HTTPCode {"));
+        assert!(out.contains("return raw as HTTPCode;"));
     }
 
     #[test]

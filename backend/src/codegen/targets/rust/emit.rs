@@ -10,7 +10,9 @@
 //! Imports of cross-*module* types are still derived by the engine.
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::targets::rust::codecs::{runtime_helpers, well_known_decls, HelperSet};
+use crate::codegen::targets::rust::codecs::{
+    open_enum_macro, runtime_helpers, well_known_decls, HelperSet,
+};
 use crate::codegen::targets::rust::types::{emit_serde, emit_type};
 use crate::codegen::tree::{Decl, File, ModuleFile, Raw};
 use crate::ir::Module;
@@ -64,8 +66,12 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         let mut serde_decls = runtime_helpers(helpers);
         // The enum impls reference the module's types, so the serde file pulls them
         // in; with no enum impl there is nothing referencing the types, so the glob
-        // would be unused.
+        // would be unused. The `open_enum!` macro is defined once, before the
+        // per-enum invocations that expand it, so each open enum is one invocation
+        // rather than a repeated impl block. `emit_serde` emits only for open enums,
+        // so a non-empty `serde_shape_decls` is exactly the has-an-open-enum case.
         if !serde_shape_decls.is_empty() {
+            serde_decls.insert(0, open_enum_macro());
             serde_decls.insert(0, types_glob_use(module));
         }
         serde_decls.extend(serde_shape_decls);
@@ -237,12 +243,15 @@ mod tests {
         // No helper module is used here, so the types file imports nothing from serde.
         assert!(!types.contains("use crate::billing_serde"));
 
-        // The serde file pulls the module's types in and holds the enum impls.
+        // The serde file pulls the module's types in, defines the shared codec macro
+        // once, and expands it per enum through an invocation.
         let serde = rendered(&module, "_serde");
         assert!(serde.contains("use crate::billing::*;"));
-        assert!(serde.contains("impl Status {"));
-        assert!(serde.contains("impl serde::Serialize for Status"));
-        assert!(serde.contains("impl<'de> serde::Deserialize<'de> for Status"));
+        assert!(serde.contains("macro_rules! open_enum {"));
+        assert!(serde.contains("impl serde::Serialize for $name"));
+        assert!(serde.contains("open_enum!(Status: String {"));
+        // The macro is defined a single time even with the enum present.
+        assert_eq!(serde.matches("macro_rules! open_enum {").count(), 1);
         // The struct, union, and enum definitions stay out of the serde file.
         assert!(!serde.contains("pub struct Charge"));
         assert!(!serde.contains("pub enum Status {"));

@@ -5,7 +5,7 @@
 
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
-use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr, Variant};
+use crate::codegen::tree::{Decl, EnumRepr, Field, FnBody, Function, TypeExpr, Variant};
 
 /// The TypeScript render rules.
 pub struct TsRules;
@@ -101,15 +101,24 @@ impl RenderRules for TsRules {
                 format!("export interface {} {{\n{fields}}}", interface.name.name)
             }
             Decl::Enum(decl) => {
-                // Open enum: known literals plus `(string & {})`, which keeps
-                // autocomplete for the literals while still accepting any string
-                // on decode.
-                let mut arms: Vec<String> = decl
-                    .members
-                    .iter()
-                    .map(|m| format!("\"{}\"", m.name))
-                    .collect();
-                arms.push("(string & {})".into());
+                // Open enum: known literals plus an open arm that keeps autocomplete
+                // for the literals while still accepting any value of the backing
+                // type on decode. String-backed members are quoted wire tags;
+                // int-backed members are bare integer literals.
+                let (mut arms, open): (Vec<String>, &str) = match &decl.backing {
+                    EnumRepr::String => (
+                        decl.members
+                            .iter()
+                            .map(|m| format!("\"{}\"", m.name))
+                            .collect(),
+                        "(string & {})",
+                    ),
+                    EnumRepr::Int(ints) => (
+                        ints.iter().map(|n| n.to_string()).collect(),
+                        "(number & {})",
+                    ),
+                };
+                arms.push(open.into());
                 format!("export type {} = {};", decl.name.name, arms.join(" | "))
             }
             Decl::Union(decl) => {
@@ -136,7 +145,7 @@ mod tests {
     use super::*;
     use crate::codegen::symbol::Symbol;
     use crate::codegen::tree::{
-        EnumDecl, FnBody, Function, Interface, Method, Raw, UnionDecl, Variant,
+        EnumDecl, EnumRepr, FnBody, Function, Interface, Method, Raw, UnionDecl, Variant,
     };
 
     fn field(name: &str, ty: TypeExpr, nullable: bool) -> Field {
@@ -223,6 +232,7 @@ mod tests {
         let decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("pending"), Symbol::builtin("settled")],
+            backing: EnumRepr::String,
         });
         assert_eq!(
             TsRules.render_decl(&decl),
@@ -231,10 +241,28 @@ mod tests {
     }
 
     #[test]
+    fn an_int_backed_enum_renders_a_numeric_literal_union_with_an_open_number_arm() {
+        let decl = Decl::Enum(EnumDecl {
+            name: Symbol::builtin("HTTPCode"),
+            members: vec![
+                Symbol::builtin("ok"),
+                Symbol::builtin("not_found"),
+                Symbol::builtin("error"),
+            ],
+            backing: EnumRepr::Int(vec![200, 404, 500]),
+        });
+        assert_eq!(
+            TsRules.render_decl(&decl),
+            "export type HTTPCode = 200 | 404 | 500 | (number & {});"
+        );
+    }
+
+    #[test]
     fn an_empty_enum_is_just_the_open_arm() {
         let decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Empty"),
             members: vec![],
+            backing: EnumRepr::String,
         });
         assert_eq!(
             TsRules.render_decl(&decl),

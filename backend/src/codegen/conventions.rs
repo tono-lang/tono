@@ -10,8 +10,8 @@
 
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Symbol, SymbolKind};
-use crate::codegen::tree::{Decl, EnumDecl, Field, Interface, TypeExpr};
-use crate::ir::{Member, Prim, Shape, ShapeKind, Trait, Tref};
+use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, Interface, TypeExpr};
+use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Trait, Tref};
 
 /// The `@rename(lang)` identifier override (trait `core#rename`, a value object
 /// keyed by language). Replaces the in-code identifier only; never the wire key.
@@ -190,7 +190,7 @@ pub fn emit_shape(
     shape: &Shape,
     lang: &str,
     field_of: impl Fn(&Member) -> Field,
-    emit_enum: impl Fn(&[(String, Option<i64>)], &str) -> Vec<Decl>,
+    emit_enum: impl Fn(&EnumBacking, &[(String, Option<i64>)], &str) -> Vec<Decl>,
     emit_union: impl Fn(&str, &[Member], &str) -> Vec<Decl>,
 ) -> Vec<Decl> {
     match &shape.kind {
@@ -198,7 +198,7 @@ pub fn emit_shape(
             name: type_name(shape, lang),
             fields: members.iter().map(&field_of).collect(),
         })],
-        ShapeKind::Enum { values, .. } => emit_enum(values, &type_ident(shape, lang)),
+        ShapeKind::Enum { backing, values } => emit_enum(backing, values, &type_ident(shape, lang)),
         ShapeKind::Union {
             discriminator,
             members,
@@ -208,17 +208,25 @@ pub fn emit_shape(
     }
 }
 
-/// An open enum as a named list of its wire literals: the representation Go (a
-/// named string) and TypeScript (a literal union) share. Rust instead needs a
-/// hand-written `Deserialize` for its `Unknown` arm, so it does not use this. The
-/// literals are wire tags kept verbatim; their in-code form is a render concern.
-pub fn string_enum(values: &[(String, Option<i64>)], name: &str) -> Decl {
+/// An open enum as a named list of its members, carrying the backing
+/// representation (string literals or parallel wire integers): the form Go (a
+/// named string/int) and TypeScript (a literal union) share. Rust instead
+/// hand-writes a `Deserialize` for its `Unknown` arm, so it does not use this. The
+/// member names supply the in-code identifiers; their wire form rides the backing.
+/// An int-backed value missing a discriminant falls back to zero rather than
+/// panicking (the frontend guarantees one is present).
+pub fn open_enum(backing: &EnumBacking, values: &[(String, Option<i64>)], name: &str) -> Decl {
+    let repr = match backing {
+        EnumBacking::String => EnumRepr::String,
+        EnumBacking::Int => EnumRepr::Int(values.iter().map(|(_, n)| n.unwrap_or(0)).collect()),
+    };
     Decl::Enum(EnumDecl {
         name: Symbol::builtin(name.to_string()),
         members: values
             .iter()
             .map(|(value, _)| Symbol::builtin(value.clone()))
             .collect(),
+        backing: repr,
     })
 }
 
@@ -497,8 +505,9 @@ mod tests {
     }
 
     #[test]
-    fn string_enum_names_a_list_of_verbatim_wire_literals() {
-        let decl = string_enum(
+    fn open_enum_names_a_string_backed_list_of_verbatim_wire_literals() {
+        let decl = open_enum(
+            &EnumBacking::String,
             &[("pending".into(), None), ("settled".into(), None)],
             "Status",
         );
@@ -506,7 +515,26 @@ mod tests {
             if d.name.name == "Status"
                 && d.members.len() == 2
                 && d.members[0].name == "pending"
-                && d.members[1].name == "settled"));
+                && d.members[1].name == "settled"
+                && d.backing == EnumRepr::String));
+    }
+
+    #[test]
+    fn open_enum_carries_int_wire_integers_parallel_to_members() {
+        let decl = open_enum(
+            &EnumBacking::Int,
+            &[("ok".into(), Some(200)), ("error".into(), Some(500))],
+            "HTTPCode",
+        );
+        assert!(matches!(decl, Decl::Enum(d)
+            if d.name.name == "HTTPCode"
+                && d.members[0].name == "ok"
+                && d.members[1].name == "error"
+                && d.backing == EnumRepr::Int(vec![200, 500])));
+        // A missing discriminant falls back to zero rather than panicking.
+        let lenient = open_enum(&EnumBacking::Int, &[("ok".into(), None)], "HTTPCode");
+        assert!(matches!(lenient, Decl::Enum(d)
+            if d.backing == EnumRepr::Int(vec![0])));
     }
 
     #[test]
@@ -517,7 +545,7 @@ mod tests {
             nullable: false,
             wire: None,
         };
-        let mark_enum = |_: &[(String, Option<i64>)], name: &str| {
+        let mark_enum = |_: &EnumBacking, _: &[(String, Option<i64>)], name: &str| {
             vec![Decl::Alias(crate::codegen::tree::Alias {
                 name: Symbol::builtin(name.to_string()),
                 value: "enum".into(),

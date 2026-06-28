@@ -3,8 +3,8 @@
 //! `,string` for a 64-bit integer (held natively but serialized as a string) and
 //! `,omitempty` for an optional pointer — so `encoding/json` does the wire work
 //! natively; an optional scalar or reference becomes a pointer so it can be absent.
-//! Enums render as a named string type plus its constants, which `encoding/json`
-//! serializes natively.
+//! Enums render as a named string or int type plus its constants, which
+//! `encoding/json` serializes natively.
 //!
 //! Unions are not rendered from `Decl::Union`: Go has no sum type, so the codec
 //! phase emits an interface plus one wrapper struct per variant as verbatim
@@ -14,7 +14,7 @@ use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::symbol::SymbolKind;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
-use crate::codegen::tree::{Decl, EnumDecl, Field, FnBody, Function, TypeExpr};
+use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, FnBody, Function, TypeExpr};
 
 /// The Go render rules.
 pub struct GoRules;
@@ -76,20 +76,29 @@ impl GoRules {
     }
 
     fn render_enum(&self, decl: &EnumDecl) -> String {
+        // A string-backed enum is a named `string`; an int-backed one a named
+        // `int`, both serialized natively by `encoding/json`.
         let name = &decl.name.name;
-        let mut out = format!("type {name} string\n");
+        let base = match decl.backing {
+            EnumRepr::String => "string",
+            EnumRepr::Int(_) => "int",
+        };
+        let mut out = format!("type {name} {base}\n");
         if decl.members.is_empty() {
             return out;
         }
         out.push_str("\nconst (\n");
         let pascal = CasingConfig::new(CaseStyle::Pascal);
-        for member in &decl.members {
+        for (i, member) in decl.members.iter().enumerate() {
             let value = &member.name;
             let ident = format!(
                 "{name}{}",
                 transform(value, SymbolKind::Variant, &pascal, None)
             );
-            out.push_str(&format!("\t{ident} {name} = \"{value}\"\n"));
+            match &decl.backing {
+                EnumRepr::String => out.push_str(&format!("\t{ident} {name} = \"{value}\"\n")),
+                EnumRepr::Int(ints) => out.push_str(&format!("\t{ident} {name} = {}\n", ints[i])),
+            }
         }
         out.push(')');
         out
@@ -255,6 +264,7 @@ mod tests {
         let decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("pending"), Symbol::builtin("in_review")],
+            backing: EnumRepr::String,
         });
         assert_eq!(
             GoRules.render_decl(&decl),
@@ -264,10 +274,29 @@ mod tests {
     }
 
     #[test]
+    fn an_int_backed_enum_renders_a_named_int_and_its_integer_constants() {
+        let decl = Decl::Enum(EnumDecl {
+            name: Symbol::builtin("HTTPCode"),
+            members: vec![
+                Symbol::builtin("ok"),
+                Symbol::builtin("not_found"),
+                Symbol::builtin("error"),
+            ],
+            backing: EnumRepr::Int(vec![200, 404, 500]),
+        });
+        assert_eq!(
+            GoRules.render_decl(&decl),
+            "type HTTPCode int\n\nconst (\n\tHTTPCodeOk HTTPCode = 200\n\t\
+             HTTPCodeNotFound HTTPCode = 404\n\tHTTPCodeError HTTPCode = 500\n)"
+        );
+    }
+
+    #[test]
     fn an_empty_enum_is_just_the_named_string() {
         let decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Empty"),
             members: vec![],
+            backing: EnumRepr::String,
         });
         assert_eq!(GoRules.render_decl(&decl), "type Empty string\n");
     }

@@ -46,7 +46,7 @@ pub enum HTTPCode {
     Ok,
     NotFound,
     Error,
-    Unknown(String),
+    Unknown(i64),
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

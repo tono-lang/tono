@@ -2,6 +2,28 @@
 
 use crate::payments::*;
 
+macro_rules! open_enum {
+    ($name:ident : $wire:ty { $($variant:ident => $repr:expr),* $(,)? }) => {
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                match self {
+                    $($name::$variant => serde::Serialize::serialize(&$repr, s),)*
+                    $name::Unknown(v) => serde::Serialize::serialize(v, s),
+                }
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let v = <$wire as serde::Deserialize>::deserialize(d)?;
+                $(if v == $repr {
+                    return Ok($name::$variant);
+                })*
+                Ok($name::Unknown(v))
+            }
+        }
+    };
+}
+
 pub mod i64_string {
     pub fn serialize<S: serde::Serializer>(v: &i64, s: S) -> Result<S::Ok, S::Error> {
         if s.is_human_readable() {
@@ -180,60 +202,14 @@ pub mod base64_bytes {
     }
 }
 
-impl Status {
-    fn as_wire(&self) -> &str {
-        match self {
-            Status::Active => "active",
-            Status::Settled => "settled",
-            Status::Refunded => "refunded",
-            Status::Unknown(s) => s.as_str(),
-        }
-    }
-}
+open_enum!(Status: String {
+    Active => "active",
+    Settled => "settled",
+    Refunded => "refunded",
+});
 
-impl serde::Serialize for Status {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_wire())
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Status {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = <String as serde::Deserialize>::deserialize(d)?;
-        Ok(match s.as_str() {
-            "active" => Status::Active,
-            "settled" => Status::Settled,
-            "refunded" => Status::Refunded,
-            _ => Status::Unknown(s),
-        })
-    }
-}
-
-impl HTTPCode {
-    fn as_wire(&self) -> &str {
-        match self {
-            HTTPCode::Ok => "ok",
-            HTTPCode::NotFound => "not_found",
-            HTTPCode::Error => "error",
-            HTTPCode::Unknown(s) => s.as_str(),
-        }
-    }
-}
-
-impl serde::Serialize for HTTPCode {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_wire())
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for HTTPCode {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = <String as serde::Deserialize>::deserialize(d)?;
-        Ok(match s.as_str() {
-            "ok" => HTTPCode::Ok,
-            "not_found" => HTTPCode::NotFound,
-            "error" => HTTPCode::Error,
-            _ => HTTPCode::Unknown(s),
-        })
-    }
-}
+open_enum!(HTTPCode: i64 {
+    Ok => 200i64,
+    NotFound => 404i64,
+    Error => 500i64,
+});
