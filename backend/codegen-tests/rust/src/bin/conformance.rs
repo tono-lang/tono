@@ -6,6 +6,10 @@
 
 #[path = "../models.rs"]
 mod models;
+// The generated serde file: the helper modules and the open enum's impls, which
+// reference the types through `use crate::models::*`.
+#[path = "../models_serde.rs"]
+mod models_serde;
 
 use models::Account;
 use std::io::Read;

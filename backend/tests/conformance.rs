@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
-use tono_backend::codegen::render::render_file;
+use tono_backend::codegen::render::render_file_with_companion;
 use tono_backend::codegen::targets::{go, rust, typescript};
 use tono_backend::codegen::Formatter;
 
@@ -66,9 +66,22 @@ fn rust_output() -> Option<Value> {
         return None;
     }
     let dir = tests_dir().join("rust");
-    let file = rust::emit::emit_module(&shared_module(), &rust::types::rust_casing());
-    let text = render_file(&file, &rust::RustRules, &Formatter::new("cat", vec![])).text;
-    std::fs::write(dir.join("src/models.rs"), text).expect("write models.rs");
+    // Rust splits the module into types and serde files; write both as the
+    // `models`/`models_serde` modules the harness crate declares.
+    for module_file in rust::emit::emit_module(&shared_module(), &rust::types::rust_casing()) {
+        let text = render_file_with_companion(
+            &module_file.file,
+            module_file.imports_companion.as_deref(),
+            &rust::RustRules,
+            &Formatter::new("cat", vec![]),
+        )
+        .text;
+        std::fs::write(
+            dir.join(format!("src/models{}.rs", module_file.suffix)),
+            text,
+        )
+        .expect("write rust models source");
+    }
     let out = run(
         &dir,
         "cargo",
@@ -83,11 +96,24 @@ fn go_output() -> Option<Value> {
         return None;
     }
     let dir = tests_dir().join("go");
-    let file = go::emit::emit_module(&shared_module(), &go::types::go_casing());
-    let rough = render_file(&file, &go::GoRules, &Formatter::new("cat", vec![])).text;
-    let source = format!("{}\n{}", go::emit::package_clause("main"), rough);
-    let formatted = Formatter::new("gofmt", vec![]).run(&source);
-    std::fs::write(dir.join("models.go"), formatted.text).expect("write models.go");
+    // Go emits separate types and serde files; both compile in one `package main`,
+    // so write each into the harness dir before `go run .`.
+    for module_file in go::emit::emit_module(&shared_module(), &go::types::go_casing()) {
+        let rough = render_file_with_companion(
+            &module_file.file,
+            module_file.imports_companion.as_deref(),
+            &go::GoRules,
+            &Formatter::new("cat", vec![]),
+        )
+        .text;
+        let source = format!("{}\n{}", go::emit::package_clause("main"), rough);
+        let formatted = Formatter::new("gofmt", vec![]).run(&source);
+        std::fs::write(
+            dir.join(format!("models{}.go", module_file.suffix)),
+            formatted.text,
+        )
+        .expect("write go source");
+    }
     let out = run(
         &dir,
         "go",
@@ -102,7 +128,7 @@ fn go_output() -> Option<Value> {
 /// re-encodes and prints the wire JSON.
 fn ts_driver() -> String {
     format!(
-        "import {{ decodeAccount, encodeAccount }} from \"./models\";\n\
+        "import {{ decodeAccount, encodeAccount }} from \"./models_serde\";\n\
          const input: any = {CANONICAL};\n\
          console.log(JSON.stringify(encodeAccount(decodeAccount(input))));\n"
     )
@@ -116,13 +142,26 @@ fn ts_output() -> Option<Value> {
     }
     let work = ws.join("work-conformance");
     std::fs::create_dir_all(&work).expect("create work-conformance");
-    let file = typescript::emit::emit_module(&shared_module(), &typescript::types::ts_casing());
-    let text = render_file(&file, &typescript::TsRules, &Formatter::new("cat", vec![])).text;
-    std::fs::write(work.join("models.ts"), text).expect("write models.ts");
+    // TypeScript splits the module into a types file and a serde file; write both,
+    // then compile both alongside the driver.
+    for module_file in
+        typescript::emit::emit_module(&shared_module(), &typescript::types::ts_casing())
+    {
+        let text = render_file_with_companion(
+            &module_file.file,
+            module_file.imports_companion.as_deref(),
+            &typescript::TsRules,
+            &Formatter::new("cat", vec![]),
+        )
+        .text;
+        std::fs::write(work.join(format!("models{}.ts", module_file.suffix)), text)
+            .expect("write ts models source");
+    }
     std::fs::write(work.join("conformance.ts"), ts_driver()).expect("write conformance.ts");
     let compile = Command::new(&tsc)
         .args([
             "work-conformance/models.ts",
+            "work-conformance/models_serde.ts",
             "work-conformance/conformance.ts",
             "--outDir",
             "work-conformance/dist",

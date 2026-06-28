@@ -19,6 +19,14 @@ use crate::codegen::tree::{Decl, Field, File, FnBody, TypeExpr};
 /// imported)` regardless of discovery order; the self-module imports are
 /// filtered out on the way to the returned `Vec`.
 pub fn collect(file: &File) -> Vec<Import> {
+    collect_with_companion(file, None)
+}
+
+/// Like [`collect`], but for a split-out file whose companion holds the module's
+/// types. A self-module symbol is then not dropped but re-pointed at `companion`
+/// (a module path), so the serde file imports each type it references from the
+/// types file. With `companion` `None` this is exactly [`collect`].
+pub fn collect_with_companion(file: &File, companion: Option<&str>) -> Vec<Import> {
     let mut acc: BTreeSet<Import> = BTreeSet::new();
     // Guards against reference cycles and skips re-walking a symbol already
     // seen. Keyed on (name, import) so two distinct same-named symbols from
@@ -28,7 +36,17 @@ pub fn collect(file: &File) -> Vec<Import> {
         walk_decl(decl, &mut acc, &mut visited);
     }
     acc.into_iter()
-        .filter(|import| import.module != file.module)
+        .filter_map(|import| {
+            if import.module != file.module {
+                return Some(import);
+            }
+            // A self-module symbol: redirected to the companion when this file is
+            // split off from its types, otherwise dropped.
+            companion.map(|module| Import {
+                module: module.to_string(),
+                imported: import.imported,
+            })
+        })
         .collect()
 }
 

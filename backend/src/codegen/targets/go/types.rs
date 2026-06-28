@@ -1,14 +1,19 @@
 //! Building the component tree from IR shapes for the Go target: `emit_type` plus
 //! the IR-to-`TypeExpr` conversion and the idiomatic casing.
 //!
-//! Structures become structs and enums become named-string types (their consts
-//! are a render concern). Unions have no Go sum type, so they are emitted as a
-//! struct with one pointer per variant plus custom JSON methods by a later phase.
+//! Structures become structs whose fields carry `encoding/json` tags (the wire
+//! key, plus `,string` for a 64-bit integer and `,omitempty` for an optional
+//! pointer); enums become named-string types (their consts are a render concern).
+//! Unions have no Go sum type, so they become an interface plus one wrapper struct
+//! per variant (each with its marker method) — all type declarations, emitted here.
+//! Their serialization (the wrapper `MarshalJSON`s and the `unmarshalX` dispatcher),
+//! like the `@entries` escape, lives in the serde phase: only the union and
+//! `@entries` need custom marshaling, what `encoding/json` cannot express alone.
 
 use crate::codegen::casing::{CaseStyle, CasingConfig};
-use crate::codegen::conventions::{self, field_ident};
+use crate::codegen::conventions::{self, field_ident, wire_key};
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::go::codecs::union_item;
+use crate::codegen::targets::go::codecs::union_type_decls;
 use crate::codegen::targets::go::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr};
 use crate::ir::{Member, Shape, Tref};
@@ -29,8 +34,11 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
     conventions::type_expr_of(t, &symbol_of)
 }
 
-/// Emit the declaration(s) for a shape. Structures become struct interfaces;
-/// enums become named-string enum decls; unions are emitted by a later phase.
+/// Emit the type declaration(s) for a shape. Structures become struct interfaces
+/// whose fields carry their wire key; enums become named-string enum decls; a union
+/// becomes its marker interface plus one wrapper struct per variant (each with its
+/// `is<Union>()` marker). The union's serialization — the wrapper `MarshalJSON`s and
+/// the `unmarshalX` dispatcher — is emitted by the serde phase, not here.
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     conventions::emit_shape(
         shape,
@@ -39,7 +47,9 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         // A Go enum is a named string built from its wire literals; the const
         // identifiers are derived at render time.
         |values, name| vec![conventions::string_enum(values, name)],
-        |discriminator, members, name| vec![union_item(discriminator, members, name)],
+        // The interface, wrappers, and markers are types; their serde lives in the
+        // serde phase.
+        |_discriminator, members, _name| union_type_decls(shape, members),
     )
 }
 
@@ -48,19 +58,20 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
         name: Symbol::builtin(field_ident(member, config, LANG)),
         ty: conventions::entries_or_map(type_expr_of(&member.target), &member.traits),
         nullable: !member.required,
-        // Go always carries the wire key in the json tag.
-        wire: Some(conventions::wire_key(member)),
+        // The wire key rides on the `encoding/json` struct tag; `render_field`
+        // turns it into `json:"<wire>..."` with the right wire-encoding options.
+        wire: Some(wire_key(member)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::codegen::test_support::{enum_shape, member, member_with, structure, union_shape};
     use crate::ir::{Prim, ShapeKind};
 
     #[test]
-    fn a_structure_becomes_a_struct_with_exported_fields_and_wire_keys() {
+    fn a_structure_becomes_a_struct_with_exported_fields_carrying_their_wire_key() {
         let shape = structure(
             "billing#Charge",
             vec![
@@ -69,15 +80,36 @@ mod tests {
             ],
         );
         let decls = emit_type(&shape, &go_casing());
-        // Exported PascalCase identifiers (with acronym), the wire key carried on
-        // every field, and nullability preserved.
+        // Exported PascalCase identifiers (with acronym); the field carries its wire
+        // key on the tag. Nullability is preserved.
         assert!(matches!(&decls[..], [Decl::Interface(i)]
             if i.name.name == "Charge"
                 && i.fields[0].name.name == "AccountID"
                 && i.fields[0].wire.as_deref() == Some("account_id")
                 && !i.fields[0].nullable
                 && i.fields[1].name.name == "Note"
+                && i.fields[1].wire.as_deref() == Some("note")
                 && i.fields[1].nullable));
+    }
+
+    #[test]
+    fn a_wire_override_rides_on_the_field_tag() {
+        let shape = structure(
+            "billing#Charge",
+            vec![member_with(
+                "amount_cents",
+                Tref::Prim(Prim::I64),
+                true,
+                vec![crate::ir::Trait {
+                    id: "core#wire".into(),
+                    value: serde_json::json!("amount"),
+                }],
+            )],
+        );
+        let decls = emit_type(&shape, &go_casing());
+        assert!(matches!(&decls[..], [Decl::Interface(i)]
+            if i.fields[0].name.name == "AmountCents"
+                && i.fields[0].wire.as_deref() == Some("amount")));
     }
 
     #[test]
@@ -95,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn a_union_becomes_a_verbatim_pointer_struct_item() {
+    fn a_union_emits_its_interface_wrappers_and_markers_but_no_serde() {
         let union = union_shape(
             "billing#Method",
             "type",
@@ -109,10 +141,23 @@ mod tests {
             )],
         );
         let decls = emit_type(&union, &go_casing());
-        assert!(matches!(&decls[..], [Decl::Raw(r)]
-            if r.text.contains("type Method struct {")
-                && r.text.contains("MarshalJSON")
-                && r.text.contains("\tCard *CardData")));
+        let out: String = decls
+            .iter()
+            .map(|d| {
+                crate::codegen::target::RenderRules::render_decl(
+                    &crate::codegen::targets::go::GoRules,
+                    d,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The marker interface, the wrapper struct, and the marker method are types;
+        // the serialization (MarshalJSON / unmarshalX) belongs to the serde phase.
+        assert!(out.contains("type Method interface{ isMethod() }"));
+        assert!(out.contains("type MethodCard struct{ Value CardData }"));
+        assert!(out.contains("func (MethodCard) isMethod() {}"));
+        assert!(!out.contains("MarshalJSON"));
+        assert!(!out.contains("unmarshalMethod"));
     }
 
     #[test]

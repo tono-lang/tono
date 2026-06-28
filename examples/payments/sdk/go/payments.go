@@ -2,33 +2,14 @@
 
 package payments
 
-import "encoding/json"
-import "fmt"
-
 type Timestamp string
 
 type LocalDate string
 
 type Duration string
 
-type Uuid string
-
-func marshalTagged(disc string, tag string, payload any) ([]byte, error) {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return nil, err
-	}
-	tagJSON, _ := json.Marshal(tag)
-	fields[disc] = tagJSON
-	return json.Marshal(fields)
-}
-
 type Charge struct {
-	ID       Uuid              `json:"id"`
+	ID       string            `json:"id"`
 	Amount   int64             `json:"amount,string"`
 	Fee      uint64            `json:"fee,string"`
 	Receipt  []byte            `json:"receipt"`
@@ -65,35 +46,12 @@ type BankAccount struct {
 	Iban string `json:"iban"`
 }
 
-type PaymentMethod struct {
-	Card *Card
-	Bank *BankAccount
-}
+type PaymentMethod interface{ isPaymentMethod() }
 
-func (m PaymentMethod) MarshalJSON() ([]byte, error) {
-	switch {
-	case m.Card != nil:
-		return marshalTagged("kind", "card", m.Card)
-	case m.Bank != nil:
-		return marshalTagged("kind", "bank", m.Bank)
-	}
-	return nil, fmt.Errorf("PaymentMethod: no variant set")
-}
+type PaymentMethodCard struct{ Value Card }
 
-func (m *PaymentMethod) UnmarshalJSON(data []byte) error {
-	var head struct {
-		Tag string `json:"kind"`
-	}
-	if err := json.Unmarshal(data, &head); err != nil {
-		return err
-	}
-	switch head.Tag {
-	case "card":
-		m.Card = new(Card)
-		return json.Unmarshal(data, m.Card)
-	case "bank":
-		m.Bank = new(BankAccount)
-		return json.Unmarshal(data, m.Bank)
-	}
-	return fmt.Errorf("PaymentMethod: unknown variant %q", head.Tag)
-}
+func (PaymentMethodCard) isPaymentMethod() {}
+
+type PaymentMethodBank struct{ Value BankAccount }
+
+func (PaymentMethodBank) isPaymentMethod() {}

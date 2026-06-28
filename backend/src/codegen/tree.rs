@@ -17,6 +17,23 @@ pub struct File {
     pub decls: Vec<Decl>,
 }
 
+/// One output file for a module: a basename suffix ("" for the main types file,
+/// "_serde" for the serialization file) plus the file itself. A module can emit
+/// more than one so types and serialization land in separate files.
+///
+/// In Go the split files share one package, so a self-module symbol still needs no
+/// import (`imports_companion` is `None`). In TypeScript and Rust the split files
+/// are separate modules, so the serde file references types that live in the types
+/// file: when `imports_companion` names the companion module path, the import
+/// engine redirects self-module symbols to an import of that companion instead of
+/// dropping them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleFile {
+    pub suffix: &'static str,
+    pub file: File,
+    pub imports_companion: Option<String>,
+}
+
 /// A top-level declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decl {

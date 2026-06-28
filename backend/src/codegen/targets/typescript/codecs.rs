@@ -43,10 +43,13 @@ pub fn runtime_helpers() -> Vec<Decl> {
     ]
 }
 
-/// Emit the encode/decode codecs for a shape. Unions are handled by a later
-/// phase.
-pub fn emit_codecs(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
-    match &shape.kind {
+/// Emit the encode/decode codecs for a shape. The codecs live in the serde file,
+/// a separate module from the types, so each carries the self-module type symbols
+/// it names (its own type, plus any branded well-known type a decode `as`-cast
+/// mentions) as references imported from `module`; the engine then redirects those
+/// to an import of the types file.
+pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str) -> Vec<Decl> {
+    let decls = match &shape.kind {
         ShapeKind::Structure { members, .. } => struct_codecs(shape, members, config),
         ShapeKind::Enum { .. } => enum_codecs(shape),
         ShapeKind::Union {
@@ -55,6 +58,69 @@ pub fn emit_codecs(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
             ..
         } => union_codecs(shape, members, discriminator),
         _ => Vec::new(),
+    };
+    attach_type_refs(decls, shape, module)
+}
+
+/// Attach to every codec function the self-module types it references, so the serde
+/// file imports them from the types file: the shape's own type and, for a structure
+/// or union, any branded well-known type a member decode mentions.
+fn attach_type_refs(decls: Vec<Decl>, shape: &Shape, module: &str) -> Vec<Decl> {
+    let mut names: Vec<String> = vec![type_ident(shape, LANG)];
+    if let ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } = &shape.kind {
+        for member in members {
+            names.extend(branded_types(&member.target));
+        }
+    }
+    let refs: Vec<Symbol> = names
+        .into_iter()
+        .map(|name| Symbol::imported(name.clone(), module.to_string(), name))
+        .collect();
+    decls
+        .into_iter()
+        .map(|decl| with_refs(decl, &refs))
+        .collect()
+}
+
+/// The branded well-known type names a value of IR type `t` decodes into via an
+/// `as`-cast, recursing through collections (its keys excluded — map keys stay
+/// strings). Only these need importing for the decode annotations.
+fn branded_types(t: &Tref) -> Vec<String> {
+    match t {
+        Tref::Prim(Prim::Timestamp) => vec!["Timestamp".into()],
+        Tref::Prim(Prim::Date) => vec!["LocalDate".into()],
+        Tref::Prim(Prim::Duration) => vec!["Duration".into()],
+        Tref::List(inner) | Tref::Map(_, inner) => branded_types(inner),
+        _ => Vec::new(),
+    }
+}
+
+/// Add `refs` to a codec function's body so import collection reaches them. Only
+/// functions carry a body; any other decl is returned unchanged.
+fn with_refs(decl: Decl, refs: &[Symbol]) -> Decl {
+    match decl {
+        Decl::Function(Function {
+            name,
+            params,
+            ret,
+            body:
+                FnBody::Raw {
+                    text,
+                    refs: mut existing,
+                },
+        }) => {
+            existing.extend(refs.iter().cloned());
+            Decl::Function(Function {
+                name,
+                params,
+                ret,
+                body: FnBody::Raw {
+                    text,
+                    refs: existing,
+                },
+            })
+        }
+        other => other,
     }
 }
 
@@ -216,7 +282,6 @@ fn decode_expr(value: &str, t: &Tref) -> String {
         Tref::Prim(Prim::Timestamp) => format!("({value} as Timestamp)"),
         Tref::Prim(Prim::Date) => format!("({value} as LocalDate)"),
         Tref::Prim(Prim::Duration) => format!("({value} as Duration)"),
-        Tref::Prim(Prim::Uuid) => format!("({value} as Uuid)"),
         Tref::Prim(_) | Tref::Param(_) => value.to_string(),
         Tref::Ref { id, .. } => format!("decode{}({value})", type_suffix(id)),
         Tref::List(inner) => {
@@ -296,7 +361,7 @@ mod tests {
                 member("note", Tref::Prim(Prim::String), false),
             ],
         );
-        let out = rendered(&emit_codecs(&shape, &ts_casing()));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
         assert!(out.contains("export function encodeCharge(value: Charge): unknown {"));
         // encode: wire key out, in-code identifier read, i64 routed.
         assert!(out.contains("amount_cents: encodeI64(value.amountCents),"));
@@ -321,7 +386,7 @@ mod tests {
             value: serde_json::json!(true),
         }];
         let shape = structure("billing#Doc", vec![counts]);
-        let out = rendered(&emit_codecs(&shape, &ts_casing()));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
         // The pairs array is mapped element-wise; the i64 value routes through its
         // codec, the i32 key passes through.
         assert!(out.contains("counts: value.counts.map(([k, v]) => [k, encodeI64(v)]),"));
@@ -331,7 +396,7 @@ mod tests {
     #[test]
     fn open_enum_codec_is_identity_and_lenient() {
         let shape = enum_shape("billing#Status", vec![("pending".into(), None)]);
-        let out = rendered(&emit_codecs(&shape, &ts_casing()));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
         assert!(out.contains("export function encodeStatus(value: Status): string {"));
         assert!(out.contains("return value;"));
         assert!(out.contains("export function decodeStatus(raw: string): Status {"));
@@ -352,7 +417,7 @@ mod tests {
                 true,
             )],
         );
-        let out = rendered(&emit_codecs(&shape, &ts_casing()));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
         assert!(
             out.contains("export function encodePaymentMethod(value: PaymentMethod): unknown {")
         );
@@ -380,7 +445,7 @@ mod tests {
             kind: ShapeKind::Service { operations: vec![] },
             traits: vec![],
         };
-        assert!(emit_codecs(&service, &ts_casing()).is_empty());
+        assert!(emit_codecs(&service, &ts_casing(), "billing").is_empty());
     }
 
     #[test]
@@ -411,7 +476,8 @@ mod tests {
             decode_expr("x", &Tref::Prim(Prim::Duration)),
             "(x as Duration)"
         );
-        assert_eq!(decode_expr("x", &Tref::Prim(Prim::Uuid)), "(x as Uuid)");
+        // uuid is not branded: it decodes as a plain string, untouched.
+        assert_eq!(decode_expr("x", &Tref::Prim(Prim::Uuid)), "x");
         assert_eq!(encode_expr("x", &card()), "encodeCharge(x)");
         assert_eq!(decode_expr("x", &card()), "decodeCharge(x)");
         assert_eq!(

@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tono_backend::codegen::render::render_file;
+use tono_backend::codegen::render::render_file_with_companion;
 use tono_backend::codegen::targets::rust::emit::emit_module;
 use tono_backend::codegen::targets::rust::types::rust_casing;
 use tono_backend::codegen::targets::rust::RustRules;
@@ -45,17 +45,28 @@ fn generated_rust_compiles_and_round_trips() {
     }
     let dir = crate_dir();
 
-    // Generate the module and format it with the engine's formatter (rustfmt).
-    let file = emit_module(&demo_module(), &rust_casing());
+    // Generate the module and format it with the engine's formatter (rustfmt). Rust
+    // splits each module into a types file and a serde file; write both as the
+    // `models`/`models_serde` modules the harness crate declares.
     let formatter = Formatter::new("rustfmt", vec!["--edition".into(), "2021".into()]);
-    let formatted = render_file(&file, &RustRules, &formatter);
-    assert!(
-        formatted.warning.is_none(),
-        "rustfmt must format cleanly: {:?}",
-        formatted.warning
-    );
-
-    std::fs::write(dir.join("src/models.rs"), &formatted.text).expect("write models.rs");
+    for module_file in emit_module(&demo_module(), &rust_casing()) {
+        let formatted = render_file_with_companion(
+            &module_file.file,
+            module_file.imports_companion.as_deref(),
+            &RustRules,
+            &formatter,
+        );
+        assert!(
+            formatted.warning.is_none(),
+            "rustfmt must format cleanly: {:?}",
+            formatted.warning
+        );
+        std::fs::write(
+            dir.join(format!("src/models{}.rs", module_file.suffix)),
+            &formatted.text,
+        )
+        .expect("write models source");
+    }
 
     // A compile error here is a generation bug; the driver asserts the wire cases.
     let run = Command::new("cargo")

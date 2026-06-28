@@ -44,21 +44,25 @@ fn generated_go_compiles_and_round_trips() {
     }
     let dir = module_dir();
 
-    // Render the module (the package clause is prepended, since the rendered file
-    // begins with imports), then format the whole with gofmt.
-    let file = emit_module(&demo_module(), &go_casing());
-    let rough = render_file(&file, &GoRules, &Formatter::new("cat", vec![])).text;
-    // The harness compiles the generated file together with the driver in one
+    // Render each module file (Go splits types from serde); the package clause is
+    // prepended since the rendered file begins with imports, then gofmt formats the
+    // whole. The harness compiles the generated files together with the driver in one
     // `package main`, so the clause names `main`, not the IR module.
-    let source = format!("{}\n{}", package_clause("main"), rough);
-    let formatted = Formatter::new("gofmt", vec![]).run(&source);
-    assert!(
-        formatted.warning.is_none(),
-        "gofmt must format cleanly: {:?}",
-        formatted.warning
-    );
-
-    std::fs::write(dir.join("models.go"), &formatted.text).expect("write models.go");
+    for module_file in emit_module(&demo_module(), &go_casing()) {
+        let rough = render_file(&module_file.file, &GoRules, &Formatter::new("cat", vec![])).text;
+        let source = format!("{}\n{}", package_clause("main"), rough);
+        let formatted = Formatter::new("gofmt", vec![]).run(&source);
+        assert!(
+            formatted.warning.is_none(),
+            "gofmt must format cleanly: {:?}",
+            formatted.warning
+        );
+        std::fs::write(
+            dir.join(format!("models{}.go", module_file.suffix)),
+            &formatted.text,
+        )
+        .expect("write go source");
+    }
 
     let run = Command::new("go")
         .arg("run")

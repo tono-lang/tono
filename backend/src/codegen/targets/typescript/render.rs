@@ -3,7 +3,6 @@
 //! rendered here; unions, methods, and generated functions are added by later
 //! phases.
 
-use crate::codegen::symbol::Import;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr, Variant};
@@ -87,11 +86,8 @@ impl TsRules {
 }
 
 impl RenderRules for TsRules {
-    fn render_import(&self, import: &Import) -> String {
-        format!(
-            "import {{ {} }} from \"./{}\";",
-            import.imported, import.module
-        )
+    fn render_import(&self, module: &str, names: &[&str]) -> String {
+        format!("import {{ {} }} from \"./{module}\";", names.join(", "))
     }
 
     fn render_decl(&self, decl: &Decl) -> String {
@@ -155,11 +151,13 @@ mod tests {
     #[test]
     fn imports_render_as_named_imports() {
         assert_eq!(
-            TsRules.render_import(&Import {
-                module: "payments".into(),
-                imported: "Charge".into(),
-            }),
+            TsRules.render_import("payments", &["Charge"]),
             "import { Charge } from \"./payments\";"
+        );
+        // Several names from one module group into one import statement.
+        assert_eq!(
+            TsRules.render_import("payments", &["BankAccount", "Card", "Charge"]),
+            "import { BankAccount, Card, Charge } from \"./payments\";"
         );
     }
 

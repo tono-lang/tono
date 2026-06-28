@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tono_backend::codegen::render::render_file;
+use tono_backend::codegen::render::render_file_with_companion;
 use tono_backend::codegen::targets::typescript::emit::emit_module;
 use tono_backend::codegen::targets::typescript::types::ts_casing;
 use tono_backend::codegen::targets::typescript::TsRules;
@@ -73,7 +73,8 @@ fn demo_module() -> Module {
 }
 
 const DRIVER: &str = r#"
-import { encodeAccount, decodeAccount, Account } from "./models";
+import { Account } from "./models";
+import { encodeAccount, decodeAccount } from "./models_serde";
 
 const big = 9007199254740993n; // 2^53 + 1, not representable as a JS number
 
@@ -108,22 +109,32 @@ fn generated_typescript_compiles_and_round_trips() {
     };
 
     // Generate the module and format it with the engine's formatter (prettier).
-    let file = emit_module(&demo_module(), &ts_casing());
+    // TypeScript splits each module into a types file and a serde file; write both
+    // as `models`/`models_serde` plus the driver into the workspace.
     let formatter = Formatter::new(
         prettier.to_string_lossy(),
         vec!["--parser".into(), "typescript".into()],
     );
-    let formatted = render_file(&file, &TsRules, &formatter);
-    assert!(
-        formatted.warning.is_none(),
-        "prettier must format cleanly: {:?}",
-        formatted.warning
-    );
-
-    // Write the generated module and the driver into the workspace.
     let work = ws.join("work");
     std::fs::create_dir_all(&work).expect("create work dir");
-    std::fs::write(work.join("models.ts"), &formatted.text).expect("write models.ts");
+    for module_file in emit_module(&demo_module(), &ts_casing()) {
+        let formatted = render_file_with_companion(
+            &module_file.file,
+            module_file.imports_companion.as_deref(),
+            &TsRules,
+            &formatter,
+        );
+        assert!(
+            formatted.warning.is_none(),
+            "prettier must format cleanly: {:?}",
+            formatted.warning
+        );
+        std::fs::write(
+            work.join(format!("models{}.ts", module_file.suffix)),
+            &formatted.text,
+        )
+        .expect("write models source");
+    }
     std::fs::write(work.join("driver.ts"), DRIVER).expect("write driver.ts");
 
     // Compile with tsc (a compile error is a generation bug), then run the driver.

@@ -8,7 +8,6 @@
 //! a tagged union needs custom plumbing, so the Rust target emits both as
 //! verbatim `Decl::Raw` items in a later phase. Their arms here render nothing.
 
-use crate::codegen::symbol::Import;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::targets::rust::codecs::serde_with;
@@ -102,8 +101,13 @@ impl RustRules {
 }
 
 impl RenderRules for RustRules {
-    fn render_import(&self, import: &Import) -> String {
-        format!("use crate::{}::{};", import.module, import.imported)
+    fn render_import(&self, module: &str, names: &[&str]) -> String {
+        // A single name needs no braces; several group into one `use`.
+        if let [name] = names {
+            format!("use crate::{module}::{name};")
+        } else {
+            format!("use crate::{module}::{{{}}};", names.join(", "))
+        }
     }
 
     fn render_decl(&self, decl: &Decl) -> String {
@@ -150,11 +154,13 @@ mod tests {
     #[test]
     fn imports_render_as_crate_paths() {
         assert_eq!(
-            RustRules.render_import(&Import {
-                module: "payments".into(),
-                imported: "Charge".into(),
-            }),
+            RustRules.render_import("payments", &["Charge"]),
             "use crate::payments::Charge;"
+        );
+        // Several names from one module group into a single braced use.
+        assert_eq!(
+            RustRules.render_import("payments", &["Card", "Charge"]),
+            "use crate::payments::{Card, Charge};"
         );
     }
 
