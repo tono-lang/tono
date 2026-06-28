@@ -106,12 +106,12 @@ mod tests {
     #[test]
     fn a_union_becomes_a_discriminated_union_decl() {
         let shape = union_shape(
-            "billing#PaymentMethod",
+            "billing#payment_method",
             "type",
             vec![member(
                 "card",
                 Tref::Ref {
-                    id: "billing#CardData".into(),
+                    id: "billing#card_data".into(),
                     args: vec![],
                 },
                 true,

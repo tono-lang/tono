@@ -630,7 +630,7 @@ mod tests {
         );
         // emit_op_stub embeds nothing it interprets; the descriptor is ignored.
         let op = Shape {
-            id: "billing#CreateInvoice".into(),
+            id: "billing#create_invoice".into(),
             kind: ShapeKind::Operation {
                 input: None,
                 output: None,
