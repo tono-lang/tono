@@ -79,125 +79,103 @@ pub(crate) fn enum_item(
     })
 }
 
-/// Build the open-enum *serde item*: the inherent `as_wire` plus the hand-written
-/// `Serialize`/`Deserialize`, which belong in the serde file. The known wire values
-/// map to PascalCase variants; any other value decodes into the catch-all
-/// `Unknown`. A string-backed enum travels as a JSON string (`serialize_str`); an
-/// int-backed one as a JSON integer (`serialize_i64`). The orphan rule permits these
-/// impls in a sibling module because the enum type is local to the crate; the serde
-/// file's `use crate::<module>::*` brings it into scope. The item references no
-/// imported symbols.
+/// Build the open-enum *serde item*: a single `open_enum!` invocation that expands
+/// to the hand-written `Serialize`/`Deserialize`, which belong in the serde file.
+/// The macro is defined once per file by [`open_enum_macro`]; each enum reduces to
+/// its name, its backing wire type, and the known (variant, wire-literal) pairs, so
+/// the string and int paths share one emitter and the boilerplate is written once.
+/// A string-backed enum travels as a JSON string and decodes from `String`; an
+/// int-backed one as a JSON integer and decodes from `i64`. The orphan rule permits
+/// the expanded impls in a sibling module because the enum type is local to the
+/// crate; the serde file's `use crate::<module>::*` brings it into scope. The item
+/// references no imported symbols.
 pub(crate) fn enum_serde_item(
     backing: &EnumBacking,
     values: &[(String, Option<i64>)],
     name: &str,
 ) -> Decl {
-    let text = match backing {
-        EnumBacking::String => string_enum_serde(values, name),
-        EnumBacking::Int => int_enum_serde(values, name),
+    let config = variant_casing();
+    // The only per-backing difference is data: the decode wire type and how each
+    // known value is spelled as a Rust literal (a quoted string vs an `i64`).
+    let (wire_ty, arms): (&str, Vec<(String, String)>) = match backing {
+        EnumBacking::String => (
+            "String",
+            values
+                .iter()
+                .map(|(wire, _)| (variant_ident(wire, &config), format!("\"{wire}\"")))
+                .collect(),
+        ),
+        EnumBacking::Int => (
+            "i64",
+            values
+                .iter()
+                .map(|(wire, n)| {
+                    (
+                        variant_ident(wire, &config),
+                        format!("{}i64", n.unwrap_or(0)),
+                    )
+                })
+                .collect(),
+        ),
     };
+
+    let mut text = format!("open_enum!({name}: {wire_ty} {{\n");
+    for (ident, repr) in &arms {
+        text.push_str(&format!("    {ident} => {repr},\n"));
+    }
+    text.push_str("});");
+
     Decl::Raw(Raw {
         text,
         refs: Vec::new(),
     })
 }
 
-/// The serde impls for a string-backed open enum: `as_wire -> &str`, a
-/// `serialize_str`, and a `Deserialize` that matches the wire string, falling back
-/// to `Unknown(String)`.
-fn string_enum_serde(values: &[(String, Option<i64>)], name: &str) -> String {
-    let variants = enum_variants(values);
-
-    let mut text = String::new();
-    text.push_str(&format!("impl {name} {{\n"));
-    text.push_str("    fn as_wire(&self) -> &str {\n        match self {\n");
-    for (ident, wire) in &variants {
-        text.push_str(&format!("            {name}::{ident} => \"{wire}\",\n"));
-    }
-    text.push_str(&format!(
-        "            {name}::Unknown(s) => s.as_str(),\n        }}\n    }}\n}}\n\n"
-    ));
-
-    text.push_str(&format!("impl serde::Serialize for {name} {{\n"));
-    text.push_str(
-        "    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {\n",
-    );
-    text.push_str("        s.serialize_str(self.as_wire())\n    }\n}\n\n");
-
-    text.push_str(&format!(
-        "impl<'de> serde::Deserialize<'de> for {name} {{\n"
-    ));
-    text.push_str(
-        "    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {\n",
-    );
-    text.push_str("        let s = <String as serde::Deserialize>::deserialize(d)?;\n");
-    text.push_str("        Ok(match s.as_str() {\n");
-    for (ident, wire) in &variants {
-        text.push_str(&format!("            \"{wire}\" => {name}::{ident},\n"));
-    }
-    text.push_str(&format!(
-        "            _ => {name}::Unknown(s),\n        }})\n    }}\n}}"
-    ));
-    text
+/// The `open_enum!` declarative macro, emitted once into any serde file that holds
+/// an open enum. It expands a name, a backing wire type, and the known
+/// (variant, wire-literal) pairs into the hand-written `Serialize`/`Deserialize`
+/// serde derive cannot model — the catch-all `Unknown` arm that lets an
+/// unrecognized wire value survive a round-trip. Defining it once and invoking it
+/// per enum is what keeps each enum's codec a few non-duplicated lines instead of a
+/// repeated impl block. Serializing through the wire value's own `Serialize` picks
+/// `serialize_str`/`serialize_i64` by its type, so the macro needs no per-backing
+/// branch; decoding compares the deserialized wire value against each known literal.
+pub(crate) fn open_enum_macro() -> Decl {
+    Decl::Raw(Raw {
+        text: OPEN_ENUM_MACRO.to_string(),
+        refs: Vec::new(),
+    })
 }
 
-/// The serde impls for an int-backed open enum: `as_wire -> i64`, a
-/// `serialize_i64`, and a `Deserialize` that matches the wire integer, falling back
-/// to `Unknown(i64)`.
-fn int_enum_serde(values: &[(String, Option<i64>)], name: &str) -> String {
-    let variants = int_enum_variants(values);
+const OPEN_ENUM_MACRO: &str = r#"macro_rules! open_enum {
+    ($name:ident : $wire:ty { $($variant:ident => $repr:expr),* $(,)? }) => {
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                match self {
+                    $($name::$variant => serde::Serialize::serialize(&$repr, s),)*
+                    $name::Unknown(v) => serde::Serialize::serialize(v, s),
+                }
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let v = <$wire as serde::Deserialize>::deserialize(d)?;
+                $(if v == $repr {
+                    return Ok($name::$variant);
+                })*
+                Ok($name::Unknown(v))
+            }
+        }
+    };
+}"#;
 
-    let mut text = String::new();
-    text.push_str(&format!("impl {name} {{\n"));
-    text.push_str("    fn as_wire(&self) -> i64 {\n        match self {\n");
-    for (ident, wire) in &variants {
-        text.push_str(&format!("            {name}::{ident} => {wire},\n"));
-    }
-    text.push_str(&format!(
-        "            {name}::Unknown(n) => *n,\n        }}\n    }}\n}}\n\n"
-    ));
-
-    text.push_str(&format!("impl serde::Serialize for {name} {{\n"));
-    text.push_str(
-        "    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {\n",
-    );
-    text.push_str("        s.serialize_i64(self.as_wire())\n    }\n}\n\n");
-
-    text.push_str(&format!(
-        "impl<'de> serde::Deserialize<'de> for {name} {{\n"
-    ));
-    text.push_str(
-        "    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {\n",
-    );
-    text.push_str("        let n = <i64 as serde::Deserialize>::deserialize(d)?;\n");
-    text.push_str("        Ok(match n {\n");
-    for (ident, wire) in &variants {
-        text.push_str(&format!("            {wire} => {name}::{ident},\n"));
-    }
-    text.push_str(&format!(
-        "            _ => {name}::Unknown(n),\n        }})\n    }}\n}}"
-    ));
-    text
-}
-
-/// The (PascalCase identifier, wire value) pairs of a string-backed enum's known
-/// variants.
+/// The (PascalCase identifier, wire value) pairs of an open enum's known variants,
+/// used by the data-enum definition.
 fn enum_variants(values: &[(String, Option<i64>)]) -> Vec<(String, String)> {
     let config = variant_casing();
     values
         .iter()
         .map(|(wire, _)| (variant_ident(wire, &config), wire.clone()))
-        .collect()
-}
-
-/// The (PascalCase identifier, wire integer) pairs of an int-backed enum's known
-/// variants. A missing discriminant falls back to zero (the frontend guarantees one
-/// is present).
-fn int_enum_variants(values: &[(String, Option<i64>)]) -> Vec<(String, i64)> {
-    let config = variant_casing();
-    values
-        .iter()
-        .map(|(wire, n)| (variant_ident(wire, &config), n.unwrap_or(0)))
         .collect()
 }
 
@@ -546,23 +524,37 @@ mod tests {
     }
 
     #[test]
-    fn the_open_enum_serde_item_holds_the_impls_and_no_definition() {
+    fn the_open_enum_serde_item_is_a_string_backed_macro_invocation() {
         let decl = enum_serde_item(
             &EnumBacking::String,
             &values(vec!["pending", "card_present"]),
             "Status",
         );
-        // The serde item carries as_wire and the hand-written impls keyed on the wire
-        // strings; the enum definition itself stays in the types item.
+        // The serde item is a single `open_enum!` invocation keyed on the wire
+        // strings; the impl boilerplate lives in the macro, emitted once per file.
         assert!(matches!(&decl, Decl::Raw(raw) if
             raw.refs.is_empty()
                 && !raw.text.contains("pub enum Status {")
-                && raw.text.contains("impl Status {")
-                && raw.text.contains("Status::Pending => \"pending\",")
-                && raw.text.contains("\"card_present\" => Status::CardPresent,")
-                && raw.text.contains("_ => Status::Unknown(s),")
-                && raw.text.contains("impl serde::Serialize for Status")
-                && raw.text.contains("impl<'de> serde::Deserialize<'de> for Status")));
+                && raw.text.contains("open_enum!(Status: String {")
+                && raw.text.contains("Pending => \"pending\",")
+                && raw.text.contains("CardPresent => \"card_present\",")
+                && raw.text.contains("});")));
+    }
+
+    #[test]
+    fn the_open_enum_macro_expands_the_serde_impls_once() {
+        let decl = open_enum_macro();
+        // The macro carries the hand-written impls serde derive cannot model; each
+        // enum reduces to an invocation, so the boilerplate is written one time.
+        assert!(matches!(&decl, Decl::Raw(raw) if
+            raw.refs.is_empty()
+                && raw.text.contains("macro_rules! open_enum {")
+                && raw.text.contains("impl serde::Serialize for $name")
+                && raw.text.contains("impl<'de> serde::Deserialize<'de> for $name")
+                && raw.text.contains("serde::Serialize::serialize(&$repr, s)")
+                && raw.text.contains("let v = <$wire as serde::Deserialize>::deserialize(d)?;")
+                && raw.text.contains("if v == $repr {")
+                && raw.text.contains("Ok($name::Unknown(v))")));
     }
 
     #[test]
@@ -582,25 +574,20 @@ mod tests {
     }
 
     #[test]
-    fn an_int_backed_enum_serde_item_codes_through_i64() {
+    fn an_int_backed_enum_serde_item_codes_through_i64_literals() {
         let decl = enum_serde_item(
             &EnumBacking::Int,
             &int_values(vec![("ok", 200), ("not_found", 404)]),
             "HTTPCode",
         );
-        // as_wire returns i64, Serialize uses serialize_i64, Deserialize matches the
-        // wire integer and falls back to Unknown(i64).
+        // The invocation declares the `i64` wire type and spells each known value as
+        // an `i64` literal, so the shared macro decodes and encodes it as an integer.
         assert!(matches!(&decl, Decl::Raw(raw) if
             raw.refs.is_empty()
-                && raw.text.contains("fn as_wire(&self) -> i64 {")
-                && raw.text.contains("HTTPCode::Ok => 200,")
-                && raw.text.contains("HTTPCode::NotFound => 404,")
-                && raw.text.contains("HTTPCode::Unknown(n) => *n,")
-                && raw.text.contains("s.serialize_i64(self.as_wire())")
-                && raw.text.contains("let n = <i64 as serde::Deserialize>::deserialize(d)?;")
-                && raw.text.contains("200 => HTTPCode::Ok,")
-                && raw.text.contains("404 => HTTPCode::NotFound,")
-                && raw.text.contains("_ => HTTPCode::Unknown(n),")));
+                && raw.text.contains("open_enum!(HTTPCode: i64 {")
+                && raw.text.contains("Ok => 200i64,")
+                && raw.text.contains("NotFound => 404i64,")
+                && raw.text.contains("});")));
     }
 
     #[test]
@@ -609,9 +596,12 @@ mod tests {
         assert!(matches!(&def, Decl::Raw(raw) if
             raw.text.contains("    Unknown(String),")
                 && raw.text.contains("pub enum Empty {")));
+        // The serde item is still a well-formed invocation with no known arms; the
+        // macro's `Unknown` fallback handles every value.
         let serde = enum_serde_item(&EnumBacking::String, &[], "Empty");
         assert!(matches!(&serde, Decl::Raw(raw) if
-            raw.text.contains("Empty::Unknown(s) => s.as_str(),")));
+            raw.text.contains("open_enum!(Empty: String {")
+                && raw.text.contains("});")));
     }
 
     #[test]

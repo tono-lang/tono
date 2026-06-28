@@ -6,7 +6,7 @@ use crate::codegen::conventions::{self, field_ident, wire_of};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr, UnionDecl, Variant};
-use crate::ir::{EnumBacking, Member, Shape, Tref};
+use crate::ir::{Member, Shape, Tref};
 
 /// The TypeScript language key for per-language traits such as `@rename`.
 pub(crate) const LANG: &str = "typescript";
@@ -34,10 +34,7 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         |m| field_of(m, config),
         // An open enum is a literal-union type built from its wire values: string
         // tags for a string-backed enum, integer literals for an int-backed one.
-        |backing, values, name| match backing {
-            EnumBacking::String => vec![conventions::string_enum(values, name)],
-            EnumBacking::Int => vec![conventions::int_enum(values, name)],
-        },
+        |backing, values, name| vec![conventions::open_enum(backing, values, name)],
         |discriminator, members, name| {
             vec![Decl::Union(UnionDecl {
                 name: Symbol::builtin(name.to_string()),

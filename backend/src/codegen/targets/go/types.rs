@@ -16,7 +16,7 @@ use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::codecs::union_type_decls;
 use crate::codegen::targets::go::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr};
-use crate::ir::{EnumBacking, Member, Shape, Tref};
+use crate::ir::{Member, Shape, Tref};
 
 /// The Go language key for per-language traits such as `@rename`.
 const LANG: &str = "go";
@@ -46,10 +46,7 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         |m| field_of(m, config),
         // A Go enum is a named string or int built from its wire values; the const
         // identifiers are derived at render time.
-        |backing, values, name| match backing {
-            EnumBacking::String => vec![conventions::string_enum(values, name)],
-            EnumBacking::Int => vec![conventions::int_enum(values, name)],
-        },
+        |backing, values, name| vec![conventions::open_enum(backing, values, name)],
         // The interface, wrappers, and markers are types; their serde lives in the
         // serde phase.
         |_discriminator, members, _name| union_type_decls(shape, members),

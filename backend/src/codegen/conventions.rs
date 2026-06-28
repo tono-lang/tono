@@ -208,35 +208,25 @@ pub fn emit_shape(
     }
 }
 
-/// An open string-backed enum as a named list of its wire literals: the
-/// representation Go (a named string) and TypeScript (a literal union) share. Rust
-/// instead needs a hand-written `Deserialize` for its `Unknown` arm, so it does not
-/// use this. The literals are wire tags kept verbatim; their in-code form is a
-/// render concern.
-pub fn string_enum(values: &[(String, Option<i64>)], name: &str) -> Decl {
+/// An open enum as a named list of its members, carrying the backing
+/// representation (string literals or parallel wire integers): the form Go (a
+/// named string/int) and TypeScript (a literal union) share. Rust instead
+/// hand-writes a `Deserialize` for its `Unknown` arm, so it does not use this. The
+/// member names supply the in-code identifiers; their wire form rides the backing.
+/// An int-backed value missing a discriminant falls back to zero rather than
+/// panicking (the frontend guarantees one is present).
+pub fn open_enum(backing: &EnumBacking, values: &[(String, Option<i64>)], name: &str) -> Decl {
+    let repr = match backing {
+        EnumBacking::String => EnumRepr::String,
+        EnumBacking::Int => EnumRepr::Int(values.iter().map(|(_, n)| n.unwrap_or(0)).collect()),
+    };
     Decl::Enum(EnumDecl {
         name: Symbol::builtin(name.to_string()),
         members: values
             .iter()
             .map(|(value, _)| Symbol::builtin(value.clone()))
             .collect(),
-        backing: EnumRepr::String,
-    })
-}
-
-/// An open int-backed enum: the member names supply the in-code identifiers, and
-/// the wire integers travel parallel to them. Go (a named int) and TypeScript (a
-/// numeric literal union) share this; Rust hand-writes its own `Unknown(i64)`
-/// codec. The frontend guarantees every int-backed value carries a discriminant;
-/// a missing one falls back to zero rather than panicking.
-pub fn int_enum(values: &[(String, Option<i64>)], name: &str) -> Decl {
-    Decl::Enum(EnumDecl {
-        name: Symbol::builtin(name.to_string()),
-        members: values
-            .iter()
-            .map(|(value, _)| Symbol::builtin(value.clone()))
-            .collect(),
-        backing: EnumRepr::Int(values.iter().map(|(_, n)| n.unwrap_or(0)).collect()),
+        backing: repr,
     })
 }
 
@@ -515,8 +505,9 @@ mod tests {
     }
 
     #[test]
-    fn string_enum_names_a_list_of_verbatim_wire_literals() {
-        let decl = string_enum(
+    fn open_enum_names_a_string_backed_list_of_verbatim_wire_literals() {
+        let decl = open_enum(
+            &EnumBacking::String,
             &[("pending".into(), None), ("settled".into(), None)],
             "Status",
         );
@@ -529,8 +520,9 @@ mod tests {
     }
 
     #[test]
-    fn int_enum_carries_its_wire_integers_parallel_to_members() {
-        let decl = int_enum(
+    fn open_enum_carries_int_wire_integers_parallel_to_members() {
+        let decl = open_enum(
+            &EnumBacking::Int,
             &[("ok".into(), Some(200)), ("error".into(), Some(500))],
             "HTTPCode",
         );
@@ -540,7 +532,7 @@ mod tests {
                 && d.members[1].name == "error"
                 && d.backing == EnumRepr::Int(vec![200, 500])));
         // A missing discriminant falls back to zero rather than panicking.
-        let lenient = int_enum(&[("ok".into(), None)], "HTTPCode");
+        let lenient = open_enum(&EnumBacking::Int, &[("ok".into(), None)], "HTTPCode");
         assert!(matches!(lenient, Decl::Enum(d)
             if d.backing == EnumRepr::Int(vec![0])));
     }

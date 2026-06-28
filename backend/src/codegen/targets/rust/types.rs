@@ -46,8 +46,9 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
 }
 
 /// Emit the serde declaration(s) for a shape, which belong in the serde file: an
-/// open enum's hand-written `as_wire`/`Serialize`/`Deserialize` impls. A structure
-/// or union derives its serde on the type, so it contributes nothing here.
+/// open enum's `open_enum!` invocation, which expands to the hand-written
+/// `Serialize`/`Deserialize`. A structure or union derives its serde on the type,
+/// so it contributes nothing here.
 pub fn emit_serde(shape: &Shape) -> Vec<Decl> {
     match &shape.kind {
         ShapeKind::Enum { backing, values } => {
@@ -120,12 +121,12 @@ mod tests {
         let types = emit_type(&shape, &rust_casing());
         assert!(matches!(&types[..], [Decl::Raw(r)]
             if r.text.contains("pub enum HTTPCode {") && r.text.contains("Unknown(i64)")));
-        // The serde file holds the i64 codec.
+        // The serde file holds the i64 codec as an `open_enum!` invocation spelling
+        // each known value as an i64 literal.
         let serde = emit_serde(&shape);
         assert!(matches!(&serde[..], [Decl::Raw(r)]
-            if r.text.contains("fn as_wire(&self) -> i64")
-                && r.text.contains("HTTPCode::Ok => 200,")
-                && r.text.contains("s.serialize_i64(self.as_wire())")));
+            if r.text.contains("open_enum!(HTTPCode: i64 {")
+                && r.text.contains("Ok => 200i64,")));
     }
 
     #[test]
