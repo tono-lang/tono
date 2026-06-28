@@ -58,6 +58,7 @@ pub fn matrix_module() -> Module {
                     member("secret", Tref::Prim(Prim::Bytes), true, vec![]),
                     member("tip", Tref::Prim(Prim::I64), false, vec![]),
                     member("status", reference("models#Status"), true, vec![]),
+                    member("code", reference("models#http_code"), true, vec![]),
                     member("method", reference("models#Method"), true, vec![]),
                     member(
                         "counts",
@@ -75,6 +76,18 @@ pub fn matrix_module() -> Module {
                 kind: ShapeKind::Enum {
                     backing: EnumBacking::String,
                     values: vec![("active".into(), None), ("closed".into(), None)],
+                },
+                traits: vec![],
+            },
+            Shape {
+                id: "models#http_code".into(),
+                kind: ShapeKind::Enum {
+                    backing: EnumBacking::Int,
+                    values: vec![
+                        ("ok".into(), Some(200)),
+                        ("not_found".into(), Some(404)),
+                        ("error".into(), Some(500)),
+                    ],
                 },
                 traits: vec![],
             },
@@ -104,7 +117,8 @@ pub fn matrix_module() -> Module {
 }
 
 /// The canonical wire document for the shared module: exercises i64-as-string,
-/// bytes-as-base64, an optional i64, an open-enum value, an internally-tagged
+/// bytes-as-base64, an optional i64, a string-backed open-enum value, an
+/// int-backed open-enum value (the bare integer `200`), an internally-tagged
 /// union, and the `@entries` pairs array.
 pub const CANONICAL_WIRE: &str = concat!(
     "{",
@@ -112,6 +126,7 @@ pub const CANONICAL_WIRE: &str = concat!(
     "\"secret\":\"AQID/g==\",",
     "\"tip\":\"500\",",
     "\"status\":\"active\",",
+    "\"code\":200,",
     "\"method\":{\"type\":\"card\",\"last4\":\"4242\"},",
     "\"counts\":[[7,\"a\"],[3,\"b\"]]",
     "}"

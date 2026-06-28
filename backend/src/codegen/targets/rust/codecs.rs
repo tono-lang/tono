@@ -20,7 +20,7 @@ use crate::codegen::targets::rust::render::type_string;
 use crate::codegen::targets::rust::symbols::symbol_of;
 use crate::codegen::targets::rust::types::variant_ident;
 use crate::codegen::tree::{Decl, Field, Raw, TypeExpr};
-use crate::ir::Member;
+use crate::ir::{EnumBacking, Member};
 
 /// The `#[serde(with = "...")]` module path a field needs for its wire encoding,
 /// or `None` when serde's native handling is correct. 64-bit integers and bytes
@@ -50,18 +50,28 @@ fn variant_casing() -> CasingConfig {
 }
 
 /// Build the open-enum *type definition*: just the data enum with its catch-all
-/// `Unknown(String)` arm, which belongs in the types file. Its hand-written serde
-/// impls are emitted separately by [`enum_serde_item`] into the serde file. The
-/// item references no imported symbols.
-pub(crate) fn enum_item(values: &[(String, Option<i64>)], name: &str) -> Decl {
+/// `Unknown` arm, which belongs in the types file. Its hand-written serde impls are
+/// emitted separately by [`enum_serde_item`] into the serde file. The catch-all
+/// carries the backing scalar — a `String` for a string-backed enum, an `i64` for
+/// an int-backed one — so an unknown wire value survives a round-trip. The item
+/// references no imported symbols.
+pub(crate) fn enum_item(
+    backing: &EnumBacking,
+    values: &[(String, Option<i64>)],
+    name: &str,
+) -> Decl {
     let variants = enum_variants(values);
+    let unknown = match backing {
+        EnumBacking::String => "    Unknown(String),\n}",
+        EnumBacking::Int => "    Unknown(i64),\n}",
+    };
     let mut text = String::new();
     text.push_str("#[derive(Clone, Debug)]\n");
     text.push_str(&format!("pub enum {name} {{\n"));
     for (ident, _) in &variants {
         text.push_str(&format!("    {ident},\n"));
     }
-    text.push_str("    Unknown(String),\n}");
+    text.push_str(unknown);
 
     Decl::Raw(Raw {
         text,
@@ -71,11 +81,31 @@ pub(crate) fn enum_item(values: &[(String, Option<i64>)], name: &str) -> Decl {
 
 /// Build the open-enum *serde item*: the inherent `as_wire` plus the hand-written
 /// `Serialize`/`Deserialize`, which belong in the serde file. The known wire values
-/// map to PascalCase variants; any other string decodes into the catch-all
-/// `Unknown(String)`. The orphan rule permits these impls in a sibling module
-/// because the enum type is local to the crate; the serde file's `use crate::<module>::*`
-/// brings it into scope. The item references no imported symbols.
-pub(crate) fn enum_serde_item(values: &[(String, Option<i64>)], name: &str) -> Decl {
+/// map to PascalCase variants; any other value decodes into the catch-all
+/// `Unknown`. A string-backed enum travels as a JSON string (`serialize_str`); an
+/// int-backed one as a JSON integer (`serialize_i64`). The orphan rule permits these
+/// impls in a sibling module because the enum type is local to the crate; the serde
+/// file's `use crate::<module>::*` brings it into scope. The item references no
+/// imported symbols.
+pub(crate) fn enum_serde_item(
+    backing: &EnumBacking,
+    values: &[(String, Option<i64>)],
+    name: &str,
+) -> Decl {
+    let text = match backing {
+        EnumBacking::String => string_enum_serde(values, name),
+        EnumBacking::Int => int_enum_serde(values, name),
+    };
+    Decl::Raw(Raw {
+        text,
+        refs: Vec::new(),
+    })
+}
+
+/// The serde impls for a string-backed open enum: `as_wire -> &str`, a
+/// `serialize_str`, and a `Deserialize` that matches the wire string, falling back
+/// to `Unknown(String)`.
+fn string_enum_serde(values: &[(String, Option<i64>)], name: &str) -> String {
     let variants = enum_variants(values);
 
     let mut text = String::new();
@@ -108,19 +138,66 @@ pub(crate) fn enum_serde_item(values: &[(String, Option<i64>)], name: &str) -> D
     text.push_str(&format!(
         "            _ => {name}::Unknown(s),\n        }})\n    }}\n}}"
     ));
-
-    Decl::Raw(Raw {
-        text,
-        refs: Vec::new(),
-    })
+    text
 }
 
-/// The (PascalCase identifier, wire value) pairs of an open enum's known variants.
+/// The serde impls for an int-backed open enum: `as_wire -> i64`, a
+/// `serialize_i64`, and a `Deserialize` that matches the wire integer, falling back
+/// to `Unknown(i64)`.
+fn int_enum_serde(values: &[(String, Option<i64>)], name: &str) -> String {
+    let variants = int_enum_variants(values);
+
+    let mut text = String::new();
+    text.push_str(&format!("impl {name} {{\n"));
+    text.push_str("    fn as_wire(&self) -> i64 {\n        match self {\n");
+    for (ident, wire) in &variants {
+        text.push_str(&format!("            {name}::{ident} => {wire},\n"));
+    }
+    text.push_str(&format!(
+        "            {name}::Unknown(n) => *n,\n        }}\n    }}\n}}\n\n"
+    ));
+
+    text.push_str(&format!("impl serde::Serialize for {name} {{\n"));
+    text.push_str(
+        "    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {\n",
+    );
+    text.push_str("        s.serialize_i64(self.as_wire())\n    }\n}\n\n");
+
+    text.push_str(&format!(
+        "impl<'de> serde::Deserialize<'de> for {name} {{\n"
+    ));
+    text.push_str(
+        "    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {\n",
+    );
+    text.push_str("        let n = <i64 as serde::Deserialize>::deserialize(d)?;\n");
+    text.push_str("        Ok(match n {\n");
+    for (ident, wire) in &variants {
+        text.push_str(&format!("            {wire} => {name}::{ident},\n"));
+    }
+    text.push_str(&format!(
+        "            _ => {name}::Unknown(n),\n        }})\n    }}\n}}"
+    ));
+    text
+}
+
+/// The (PascalCase identifier, wire value) pairs of a string-backed enum's known
+/// variants.
 fn enum_variants(values: &[(String, Option<i64>)]) -> Vec<(String, String)> {
     let config = variant_casing();
     values
         .iter()
         .map(|(wire, _)| (variant_ident(wire, &config), wire.clone()))
+        .collect()
+}
+
+/// The (PascalCase identifier, wire integer) pairs of an int-backed enum's known
+/// variants. A missing discriminant falls back to zero (the frontend guarantees one
+/// is present).
+fn int_enum_variants(values: &[(String, Option<i64>)]) -> Vec<(String, i64)> {
+    let config = variant_casing();
+    values
+        .iter()
+        .map(|(wire, n)| (variant_ident(wire, &config), n.unwrap_or(0)))
         .collect()
 }
 
@@ -394,6 +471,13 @@ mod tests {
         pairs.into_iter().map(|v| (v.to_string(), None)).collect()
     }
 
+    fn int_values(pairs: Vec<(&str, i64)>) -> Vec<(String, Option<i64>)> {
+        pairs
+            .into_iter()
+            .map(|(v, n)| (v.to_string(), Some(n)))
+            .collect()
+    }
+
     fn field(name: &str, ty: TypeExpr, nullable: bool) -> Field {
         Field {
             name: Symbol::builtin(name),
@@ -444,7 +528,11 @@ mod tests {
 
     #[test]
     fn the_open_enum_definition_holds_the_data_enum_and_no_impls() {
-        let decl = enum_item(&values(vec!["pending", "card_present"]), "Status");
+        let decl = enum_item(
+            &EnumBacking::String,
+            &values(vec!["pending", "card_present"]),
+            "Status",
+        );
         // The definition is just the data enum with its catch-all; the serde impls
         // live in a separate item, so they are absent here.
         assert!(matches!(&decl, Decl::Raw(raw) if
@@ -459,7 +547,11 @@ mod tests {
 
     #[test]
     fn the_open_enum_serde_item_holds_the_impls_and_no_definition() {
-        let decl = enum_serde_item(&values(vec!["pending", "card_present"]), "Status");
+        let decl = enum_serde_item(
+            &EnumBacking::String,
+            &values(vec!["pending", "card_present"]),
+            "Status",
+        );
         // The serde item carries as_wire and the hand-written impls keyed on the wire
         // strings; the enum definition itself stays in the types item.
         assert!(matches!(&decl, Decl::Raw(raw) if
@@ -474,12 +566,50 @@ mod tests {
     }
 
     #[test]
+    fn an_int_backed_enum_definition_has_an_i64_unknown_arm() {
+        let decl = enum_item(
+            &EnumBacking::Int,
+            &int_values(vec![("ok", 200), ("not_found", 404)]),
+            "HTTPCode",
+        );
+        // The variants are bare; the catch-all carries the backing i64.
+        assert!(matches!(&decl, Decl::Raw(raw) if
+            raw.text.contains("pub enum HTTPCode {")
+                && raw.text.contains("    Ok,")
+                && raw.text.contains("    NotFound,")
+                && raw.text.contains("    Unknown(i64),")
+                && !raw.text.contains("Unknown(String)")));
+    }
+
+    #[test]
+    fn an_int_backed_enum_serde_item_codes_through_i64() {
+        let decl = enum_serde_item(
+            &EnumBacking::Int,
+            &int_values(vec![("ok", 200), ("not_found", 404)]),
+            "HTTPCode",
+        );
+        // as_wire returns i64, Serialize uses serialize_i64, Deserialize matches the
+        // wire integer and falls back to Unknown(i64).
+        assert!(matches!(&decl, Decl::Raw(raw) if
+            raw.refs.is_empty()
+                && raw.text.contains("fn as_wire(&self) -> i64 {")
+                && raw.text.contains("HTTPCode::Ok => 200,")
+                && raw.text.contains("HTTPCode::NotFound => 404,")
+                && raw.text.contains("HTTPCode::Unknown(n) => *n,")
+                && raw.text.contains("s.serialize_i64(self.as_wire())")
+                && raw.text.contains("let n = <i64 as serde::Deserialize>::deserialize(d)?;")
+                && raw.text.contains("200 => HTTPCode::Ok,")
+                && raw.text.contains("404 => HTTPCode::NotFound,")
+                && raw.text.contains("_ => HTTPCode::Unknown(n),")));
+    }
+
+    #[test]
     fn an_empty_enum_definition_is_just_the_unknown_arm() {
-        let def = enum_item(&[], "Empty");
+        let def = enum_item(&EnumBacking::String, &[], "Empty");
         assert!(matches!(&def, Decl::Raw(raw) if
             raw.text.contains("    Unknown(String),")
                 && raw.text.contains("pub enum Empty {")));
-        let serde = enum_serde_item(&[], "Empty");
+        let serde = enum_serde_item(&EnumBacking::String, &[], "Empty");
         assert!(matches!(&serde, Decl::Raw(raw) if
             raw.text.contains("Empty::Unknown(s) => s.as_str(),")));
     }

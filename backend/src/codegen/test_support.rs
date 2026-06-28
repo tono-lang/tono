@@ -70,6 +70,18 @@ pub fn enum_shape(id: &str, values: Vec<(String, Option<i64>)>) -> Shape {
     }
 }
 
+/// An int-backed enum shape with the given `(wire, discriminant)` values.
+pub fn int_enum_shape(id: &str, values: Vec<(String, Option<i64>)>) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Enum {
+            backing: EnumBacking::Int,
+            values,
+        },
+        traits: vec![],
+    }
+}
+
 /// A union shape with the given discriminator and variant members.
 pub fn union_shape(id: &str, discriminator: &str, members: Vec<Member>) -> Shape {
     Shape {

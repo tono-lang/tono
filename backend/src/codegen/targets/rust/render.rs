@@ -348,6 +348,7 @@ mod tests {
         let enum_decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("pending")],
+            backing: crate::codegen::tree::EnumRepr::String,
         });
         let union_decl = Decl::Union(UnionDecl {
             name: Symbol::builtin("Method"),

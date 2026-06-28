@@ -210,30 +210,30 @@ impl<'de> serde::Deserialize<'de> for Status {
 }
 
 impl HTTPCode {
-    fn as_wire(&self) -> &str {
+    fn as_wire(&self) -> i64 {
         match self {
-            HTTPCode::Ok => "ok",
-            HTTPCode::NotFound => "not_found",
-            HTTPCode::Error => "error",
-            HTTPCode::Unknown(s) => s.as_str(),
+            HTTPCode::Ok => 200,
+            HTTPCode::NotFound => 404,
+            HTTPCode::Error => 500,
+            HTTPCode::Unknown(n) => *n,
         }
     }
 }
 
 impl serde::Serialize for HTTPCode {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_wire())
+        s.serialize_i64(self.as_wire())
     }
 }
 
 impl<'de> serde::Deserialize<'de> for HTTPCode {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = <String as serde::Deserialize>::deserialize(d)?;
-        Ok(match s.as_str() {
-            "ok" => HTTPCode::Ok,
-            "not_found" => HTTPCode::NotFound,
-            "error" => HTTPCode::Error,
-            _ => HTTPCode::Unknown(s),
+        let n = <i64 as serde::Deserialize>::deserialize(d)?;
+        Ok(match n {
+            200 => HTTPCode::Ok,
+            404 => HTTPCode::NotFound,
+            500 => HTTPCode::Error,
+            _ => HTTPCode::Unknown(n),
         })
     }
 }

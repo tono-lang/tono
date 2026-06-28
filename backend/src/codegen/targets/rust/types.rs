@@ -40,7 +40,7 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         |m| field_of(m, config),
         // Rust's open enum is a hand-written data enum (custom serde); the types
         // file holds only its definition, not the impls.
-        |values, name| vec![enum_item(values, name)],
+        |backing, values, name| vec![enum_item(backing, values, name)],
         |discriminator, members, name| vec![union_item(discriminator, members, name)],
     )
 }
@@ -50,8 +50,9 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
 /// or union derives its serde on the type, so it contributes nothing here.
 pub fn emit_serde(shape: &Shape) -> Vec<Decl> {
     match &shape.kind {
-        ShapeKind::Enum { values, .. } => {
+        ShapeKind::Enum { backing, values } => {
             vec![enum_serde_item(
+                backing,
                 values,
                 &conventions::type_ident(shape, LANG),
             )]
@@ -78,7 +79,9 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::codegen::test_support::{
+        enum_shape, int_enum_shape, member, structure, union_shape,
+    };
     use crate::ir::{Prim, ShapeKind};
 
     #[test]
@@ -105,6 +108,24 @@ mod tests {
         let decls = emit_type(&shape, &rust_casing());
         assert!(matches!(&decls[..], [Decl::Raw(r)]
             if r.text.contains("pub enum Status {") && r.text.contains("Unknown(String)")));
+    }
+
+    #[test]
+    fn an_int_backed_enum_has_an_i64_definition_and_i64_serde() {
+        let shape = int_enum_shape(
+            "billing#http_code",
+            vec![("ok".into(), Some(200)), ("error".into(), Some(500))],
+        );
+        // The types file holds the data enum with the i64 catch-all.
+        let types = emit_type(&shape, &rust_casing());
+        assert!(matches!(&types[..], [Decl::Raw(r)]
+            if r.text.contains("pub enum HTTPCode {") && r.text.contains("Unknown(i64)")));
+        // The serde file holds the i64 codec.
+        let serde = emit_serde(&shape);
+        assert!(matches!(&serde[..], [Decl::Raw(r)]
+            if r.text.contains("fn as_wire(&self) -> i64")
+                && r.text.contains("HTTPCode::Ok => 200,")
+                && r.text.contains("s.serialize_i64(self.as_wire())")));
     }
 
     #[test]

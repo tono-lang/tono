@@ -490,6 +490,7 @@ mod tests {
                 Decl::Enum(EnumDecl {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active"), Symbol::builtin("Closed")],
+                    backing: crate::codegen::tree::EnumRepr::String,
                 }),
                 Decl::Union(UnionDecl {
                     name: Symbol::builtin("Method"),

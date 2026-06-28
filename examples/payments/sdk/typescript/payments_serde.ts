@@ -70,11 +70,11 @@ export function decodeStatus(raw: string): Status {
   return raw as Status;
 }
 
-export function encodeHTTPCode(value: HTTPCode): string {
+export function encodeHTTPCode(value: HTTPCode): number {
   return value;
 }
 
-export function decodeHTTPCode(raw: string): HTTPCode {
+export function decodeHTTPCode(raw: number): HTTPCode {
   return raw as HTTPCode;
 }
 

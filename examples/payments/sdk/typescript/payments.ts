@@ -22,7 +22,7 @@ export interface Charge {
 
 export type Status = "active" | "settled" | "refunded" | (string & {});
 
-export type HTTPCode = "ok" | "not_found" | "error" | (string & {});
+export type HTTPCode = 200 | 404 | 500 | (number & {});
 
 export interface Card {
   last4: string;

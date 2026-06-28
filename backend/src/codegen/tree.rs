@@ -115,12 +115,24 @@ pub enum FnBody {
     Raw { text: String, refs: Vec<Symbol> },
 }
 
-/// An enumeration: a name and its members, each an idiomatic-cased symbol. The
-/// open-enum `Unknown` arm is a target render concern, not stored here.
+/// How an enum's members travel on the wire. A string-backed enum sends each
+/// member as its verbatim wire name; an int-backed enum sends an explicit integer
+/// per member, carried here parallel to the decl's `members`. Whether the enum is
+/// open (its lenient `Unknown` arm) is a target render concern, not stored here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnumRepr {
+    String,
+    Int(Vec<i64>),
+}
+
+/// An enumeration: a name, its members (each an idiomatic-cased symbol), and how
+/// they are backed on the wire. The open-enum `Unknown` arm is a target render
+/// concern, not stored here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumDecl {
     pub name: Symbol,
     pub members: Vec<Symbol>,
+    pub backing: EnumRepr,
 }
 
 /// An internally-tagged union: a discriminator field name (default `type`) and
@@ -244,6 +256,7 @@ mod tests {
                 Decl::Enum(EnumDecl {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active"), Symbol::builtin("Closed")],
+                    backing: EnumRepr::String,
                 }),
                 Decl::Union(UnionDecl {
                     name: Symbol::builtin("Method"),

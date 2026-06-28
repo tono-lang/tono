@@ -354,6 +354,7 @@ mod tests {
                 Decl::Enum(EnumDecl {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active")],
+                    backing: crate::codegen::tree::EnumRepr::String,
                 }),
                 Decl::Method(Method {
                     name: Symbol::builtin("create"),

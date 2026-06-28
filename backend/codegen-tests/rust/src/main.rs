@@ -11,7 +11,7 @@ mod models;
 // types via `use crate::models::*`.
 mod models_serde;
 
-use models::{Account, CardData, Method, Status};
+use models::{Account, CardData, HTTPCode, Method, Status};
 use serde_json::{json, Value};
 
 fn main() {
@@ -21,6 +21,7 @@ fn main() {
         secret: vec![1, 2, 3, 254],
         tip: Some(500),
         status: Status::Active,
+        code: HTTPCode::Ok,
         method: Method::Card(CardData {
             last4: "4242".into(),
         }),
@@ -40,6 +41,8 @@ fn main() {
     );
     assert_eq!(wire["method"]["type"], Value::String("card".into()));
     assert_eq!(wire["tip"], Value::String("500".into()));
+    // An int-backed enum travels as a bare integer, not a string.
+    assert_eq!(wire["code"], json!(200));
     // An @entries map travels as an array of [key, value] pairs.
     assert_eq!(wire["counts"], json!([[7, "a"], [3, "b"]]));
 
@@ -48,11 +51,13 @@ fn main() {
     let again: Value = serde_json::to_value(&back).expect("re-encode");
     assert_eq!(wire, again, "round-trip changed the JSON");
 
-    // An open enum decodes an unknown tag leniently and preserves it.
+    // An open enum decodes an unknown tag leniently and preserves it: a string for
+    // the string-backed enum, an integer for the int-backed one.
     let unknown_json = json!({
         "account_id": "1",
         "secret": "AAEC/g==",
         "status": "frozen",
+        "code": 418,
         "method": { "type": "card", "last4": "0000" },
         "counts": []
     });
@@ -60,6 +65,10 @@ fn main() {
     assert!(
         matches!(unknown.status, Status::Unknown(ref s) if s == "frozen"),
         "an unknown enum value must pass through"
+    );
+    assert!(
+        matches!(unknown.code, HTTPCode::Unknown(418)),
+        "an unknown int-backed enum value must pass through as i64"
     );
 
     println!("ROUNDTRIP_OK");
