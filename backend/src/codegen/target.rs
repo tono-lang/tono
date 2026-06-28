@@ -52,3 +52,51 @@ pub trait RenderRules {
     /// Render one declaration into rough but syntactically valid surface text.
     fn render_decl(&self, decl: &Decl) -> String;
 }
+
+/// Declare a target's zero-sized struct and its [`Target`] impl from the
+/// per-language pieces: the language name, its symbol table, its type emitter and
+/// casing, and the runtime package. The `Target` surface is otherwise identical
+/// across languages — `symbol_of`/`emit_type` delegate, operation stubs are
+/// uniformly empty (owned by the runtime phase) — so this keeps that boilerplate
+/// in one place, and adding a language is one invocation rather than a copied
+/// impl.
+#[macro_export]
+macro_rules! declare_target {
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $target:ident => {
+            name: $name:expr,
+            symbol_of: $symbol_of:path,
+            emit_type: $emit_type:path,
+            casing: $casing:path,
+            runtime_pkg: $runtime:expr $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        $vis struct $target;
+
+        impl $crate::codegen::target::Target for $target {
+            fn name(&self) -> &str {
+                $name
+            }
+            fn symbol_of(&self, t: &$crate::ir::Tref) -> $crate::codegen::symbol::Symbol {
+                $symbol_of(t)
+            }
+            fn emit_type(&self, shape: &$crate::ir::Shape) -> $crate::codegen::target::Fragment {
+                $emit_type(shape, &$casing())
+            }
+            // The opaque wire descriptor is never interpreted; stubs are owned by
+            // the protocol/runtime work, so a target emits none here.
+            fn emit_op_stub(
+                &self,
+                _op: &$crate::ir::Shape,
+                _descriptor: &::serde_json::Value,
+            ) -> $crate::codegen::target::Fragment {
+                ::std::vec::Vec::new()
+            }
+            fn runtime_pkg(&self) -> &str {
+                $runtime
+            }
+        }
+    };
+}

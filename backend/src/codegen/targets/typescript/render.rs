@@ -4,38 +4,42 @@
 //! phases.
 
 use crate::codegen::symbol::Import;
+use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr, Variant};
 
 /// The TypeScript render rules.
 pub struct TsRules;
 
+/// The TypeScript spelling of each composite type construct; the recursion lives
+/// in the shared `syntax` driver. An `@entries` map is already the
+/// `[[k, v], …]` wire shape (a `[K, V]` tuple list).
+impl TypeSyntax for TsRules {
+    fn list(&self, inner: &str) -> String {
+        // A nullable element needs parentheses before `[]` binds.
+        if inner.ends_with(" | null") {
+            format!("({inner})[]")
+        } else {
+            format!("{inner}[]")
+        }
+    }
+    fn map(&self, key: &str, value: &str) -> String {
+        format!("Record<{key}, {value}>")
+    }
+    fn nullable(&self, inner: &str) -> String {
+        format!("{inner} | null")
+    }
+    fn generic(&self, name: &str, args: &[String]) -> String {
+        format!("{name}<{}>", args.join(", "))
+    }
+    fn entries(&self, key: &str, value: &str) -> String {
+        format!("[{key}, {value}][]")
+    }
+}
+
 impl TsRules {
     fn render_type(&self, ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Ref(symbol) => symbol.name.clone(),
-            TypeExpr::List(inner) => {
-                let rendered = self.render_type(inner);
-                // A union element needs parentheses before `[]` binds.
-                if matches!(**inner, TypeExpr::Nullable(_)) {
-                    format!("({rendered})[]")
-                } else {
-                    format!("{rendered}[]")
-                }
-            }
-            TypeExpr::Map(key, value) => {
-                format!(
-                    "Record<{}, {}>",
-                    self.render_type(key),
-                    self.render_type(value)
-                )
-            }
-            TypeExpr::Nullable(inner) => format!("{} | null", self.render_type(inner)),
-            TypeExpr::Generic(symbol, args) => {
-                let rendered: Vec<String> = args.iter().map(|a| self.render_type(a)).collect();
-                format!("{}<{}>", symbol.name, rendered.join(", "))
-            }
-        }
+        syntax::render_type(ty, self)
     }
 
     fn render_field(&self, field: &Field) -> String {
@@ -124,6 +128,7 @@ impl RenderRules for TsRules {
             Decl::Alias(alias) => {
                 format!("export type {} = {};", alias.name.name, alias.value)
             }
+            Decl::Raw(raw) => raw.text.clone(),
             // Operation-stub methods are emitted by a later phase.
             Decl::Method(_) => String::new(),
         }
@@ -134,7 +139,9 @@ impl RenderRules for TsRules {
 mod tests {
     use super::*;
     use crate::codegen::symbol::Symbol;
-    use crate::codegen::tree::{EnumDecl, FnBody, Function, Interface, Method, UnionDecl, Variant};
+    use crate::codegen::tree::{
+        EnumDecl, FnBody, Function, Interface, Method, Raw, UnionDecl, Variant,
+    };
 
     fn field(name: &str, ty: TypeExpr, nullable: bool) -> Field {
         Field {
@@ -203,6 +210,13 @@ mod tests {
                 vec![TypeExpr::Ref(Symbol::builtin("Charge"))],
             )),
             "Page<Charge>"
+        );
+        assert_eq!(
+            rules.render_type(&TypeExpr::entries(
+                TypeExpr::Ref(Symbol::builtin("number")),
+                TypeExpr::Ref(Symbol::builtin("Charge")),
+            )),
+            "[number, Charge][]"
         );
     }
 
@@ -273,6 +287,15 @@ mod tests {
             TsRules.render_decl(&function),
             "export function decodeI64(s: string): bigint {\n  return BigInt(s);\n}"
         );
+    }
+
+    #[test]
+    fn a_raw_decl_renders_its_text_verbatim() {
+        let raw = Decl::Raw(Raw {
+            text: "export const VERSION = \"1\";".into(),
+            refs: vec![],
+        });
+        assert_eq!(TsRules.render_decl(&raw), "export const VERSION = \"1\";");
     }
 
     #[test]

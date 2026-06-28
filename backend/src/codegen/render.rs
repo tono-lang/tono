@@ -40,8 +40,8 @@ mod tests {
     use crate::codegen::symbol::{Import, Symbol};
     use crate::codegen::target::{Fragment, Target};
     use crate::codegen::tree::{
-        Alias, Decl, EnumDecl, Field, FnBody, Function, Interface, Method, TypeExpr, UnionDecl,
-        Variant,
+        Alias, Decl, EnumDecl, Field, FnBody, Function, Interface, Method, Raw, TypeExpr,
+        UnionDecl, Variant,
     };
     use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
     use serde_json::{json, Value};
@@ -66,6 +66,13 @@ mod tests {
                 TypeExpr::Generic(symbol, args) => {
                     let rendered: Vec<String> = args.iter().map(|a| self.render_type(a)).collect();
                     format!("{}<{}>", symbol.name, rendered.join(", "))
+                }
+                TypeExpr::Entries(key, value) => {
+                    format!(
+                        "Vec<({}, {})>",
+                        self.render_type(key),
+                        self.render_type(value)
+                    )
                 }
             }
         }
@@ -143,6 +150,7 @@ mod tests {
                 Decl::Alias(alias) => {
                     format!("pub type {} = {};", alias.name.name, alias.value)
                 }
+                Decl::Raw(raw) => raw.text.clone(),
             }
         }
     }
@@ -326,6 +334,23 @@ mod tests {
     }
 
     #[test]
+    fn a_raw_decl_renders_verbatim_and_still_pulls_its_refs() {
+        // A receiver-bearing impl block the shared node set cannot model: its
+        // text is emitted untouched, yet the symbols it declares as refs still
+        // feed import collection, exactly like a function body.
+        let file = File {
+            module: "billing".into(),
+            decls: vec![Decl::Raw(Raw {
+                text: "impl Charge {\n    fn pay(&self) -> Receipt { todo!() }\n}".into(),
+                refs: vec![Symbol::imported("Receipt", "billing_receipts", "Receipt")],
+            })],
+        };
+        let out = render_file(&file, &RustRules, &passthrough()).text;
+        assert!(out.contains("impl Charge {\n    fn pay(&self) -> Receipt { todo!() }\n}"));
+        assert!(out.contains("use billing_receipts::Receipt;"));
+    }
+
+    #[test]
     fn a_file_with_only_builtins_has_no_import_block() {
         let file = File {
             module: "billing".into(),
@@ -426,6 +451,15 @@ mod tests {
                             nullable: true,
                             wire: None,
                         },
+                        Field {
+                            name: Symbol::builtin("counts"),
+                            ty: TypeExpr::entries(
+                                TypeExpr::Ref(Symbol::builtin("i32")),
+                                TypeExpr::Ref(Symbol::imported("Item", "catalog", "Item")),
+                            ),
+                            nullable: false,
+                            wire: None,
+                        },
                     ],
                 }),
                 Decl::Enum(EnumDecl {
@@ -459,6 +493,7 @@ mod tests {
         assert!(out.contains("index: HashMap<String, i64>,"));
         assert!(out.contains("note: Option<String>,"));
         assert!(out.contains("page: Option<Page<Item>>,"));
+        assert!(out.contains("counts: Vec<(i32, Item)>,"));
         assert!(out.contains("pub enum Status {"));
         assert!(out.contains("pub enum Method {"));
         assert!(out.contains("pub fn create(input: String) -> String { runtime.execute() }"));

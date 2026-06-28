@@ -8,12 +8,16 @@
 //! rules are supplied by target backends.
 
 pub mod casing;
+pub mod conventions;
 pub mod format;
 pub mod imports;
 pub mod render;
 pub mod symbol;
+pub mod syntax;
 pub mod target;
 pub mod targets;
+#[cfg(test)]
+pub mod test_support;
 pub mod tree;
 
 pub use casing::{CaseStyle, CasingConfig};
@@ -22,6 +26,6 @@ pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};
 pub use target::{Fragment, RenderRules, Target};
 pub use tree::{
-    Alias, Decl, EnumDecl, Field, File, FnBody, Function, Interface, Method, TypeExpr, UnionDecl,
-    Variant,
+    Alias, Decl, EnumDecl, Field, File, FnBody, Function, Interface, Method, Raw, TypeExpr,
+    UnionDecl, Variant,
 };

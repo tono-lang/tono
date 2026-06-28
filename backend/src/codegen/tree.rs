@@ -26,6 +26,7 @@ pub enum Decl {
     Method(Method),
     Function(Function),
     Alias(Alias),
+    Raw(Raw),
 }
 
 /// A named type alias whose definition is target text (e.g. a branded
@@ -35,6 +36,16 @@ pub enum Decl {
 pub struct Alias {
     pub name: Symbol,
     pub value: String,
+}
+
+/// A fully-formed top-level item rendered verbatim, for constructs the shared
+/// node set does not model (an `impl` block, a helper module, a method with a
+/// receiver). Its `refs` declare the symbols the text references so import
+/// collection still reaches them, exactly like a function body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Raw {
+    pub text: String,
+    pub refs: Vec<Symbol>,
 }
 
 /// A product type: a named structure/interface with fields.
@@ -125,6 +136,12 @@ pub enum TypeExpr {
     Map(Box<TypeExpr>, Box<TypeExpr>),
     Nullable(Box<TypeExpr>),
     Generic(Symbol, Vec<TypeExpr>),
+    /// An `@entries` map: an ordered sequence of `(key, value)` pairs that travels
+    /// on the wire as an array of two-element arrays `[[k, v], …]` instead of a
+    /// JSON object, the escape for a non-string-coercible map key. The in-code
+    /// shape is target-specific (a tuple list / pair list), but the wire shape is
+    /// shared, so a target renders this rather than `Map`.
+    Entries(Box<TypeExpr>, Box<TypeExpr>),
 }
 
 impl TypeExpr {
@@ -141,6 +158,11 @@ impl TypeExpr {
     /// `inner?` (nullable).
     pub fn nullable(inner: TypeExpr) -> Self {
         TypeExpr::Nullable(Box::new(inner))
+    }
+
+    /// An `@entries` pairs-array of `(key, value)`.
+    pub fn entries(key: TypeExpr, value: TypeExpr) -> Self {
+        TypeExpr::Entries(Box::new(key), Box::new(value))
     }
 }
 

@@ -6,8 +6,9 @@
 //! is where the identifier/wire-key split materializes.
 
 use crate::codegen::casing::CasingConfig;
+use crate::codegen::conventions::{field_ident, has_entries, type_ident, wire_key};
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::typescript::types::{field_ident, type_ident, wire_key};
+use crate::codegen::targets::typescript::types::LANG;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
 
@@ -47,31 +48,28 @@ pub fn runtime_helpers() -> Vec<Decl> {
 pub fn emit_codecs(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     match &shape.kind {
         ShapeKind::Structure { members, .. } => struct_codecs(shape, members, config),
-        ShapeKind::Enum { .. } => enum_codecs(shape, config),
+        ShapeKind::Enum { .. } => enum_codecs(shape),
         ShapeKind::Union {
             members,
             discriminator,
             ..
-        } => union_codecs(shape, members, discriminator, config),
+        } => union_codecs(shape, members, discriminator),
         _ => Vec::new(),
     }
 }
 
-fn union_codecs(
-    shape: &Shape,
-    members: &[Member],
-    discriminator: &str,
-    config: &CasingConfig,
-) -> Vec<Decl> {
-    let ty = type_ident(shape, config);
+fn union_codecs(shape: &Shape, members: &[Member], discriminator: &str) -> Vec<Decl> {
+    let ty = type_ident(shape, LANG);
     let case = |op: &str, src: &str, suffix: &str| -> String {
         members
             .iter()
             .map(|m| {
                 let tag = wire_key(m);
                 let payload = payload_codec_name(&m.target);
+                // The payload codec returns `unknown` on encode, so the spread is
+                // cast to an object type to remain valid under strict TypeScript.
                 format!(
-                    "    case \"{tag}\": return {{ {discriminator}: \"{tag}\", ...{op}{payload}({src}) }}{suffix};\n"
+                    "    case \"{tag}\": return {{ {discriminator}: \"{tag}\", ...({op}{payload}({src}) as object) }}{suffix};\n"
                 )
             })
             .collect()
@@ -105,12 +103,12 @@ fn payload_codec_name(target: &Tref) -> String {
 }
 
 fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Vec<Decl> {
-    let ty = type_ident(shape, config);
+    let ty = type_ident(shape, LANG);
     let encode_fields: String = members
         .iter()
         .map(|m| {
-            let access = format!("value.{}", field_ident(m, config));
-            let expr = guard_null(m, &access, encode_expr(&access, &m.target));
+            let access = format!("value.{}", field_ident(m, config, LANG));
+            let expr = guard_null(m, &access, member_encode(&access, m));
             format!("    {}: {expr},\n", wire_key(m))
         })
         .collect();
@@ -118,8 +116,8 @@ fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Ve
         .iter()
         .map(|m| {
             let access = format!("raw.{}", wire_key(m));
-            let expr = guard_null(m, &access, decode_expr(&access, &m.target));
-            format!("    {}: {expr},\n", field_ident(m, config))
+            let expr = guard_null(m, &access, member_decode(&access, m));
+            format!("    {}: {expr},\n", field_ident(m, config, LANG))
         })
         .collect();
     vec![
@@ -138,10 +136,10 @@ fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Ve
     ]
 }
 
-fn enum_codecs(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
+fn enum_codecs(shape: &Shape) -> Vec<Decl> {
     // An open enum is a string on the wire; encode is identity and decode is a
     // lenient cast that lets an unknown value pass through.
-    let ty = type_ident(shape, config);
+    let ty = type_ident(shape, LANG);
     vec![
         function_owned(
             &format!("encode{ty}"),
@@ -156,6 +154,31 @@ fn enum_codecs(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
             format!("  return raw as {ty};"),
         ),
     ]
+}
+
+/// The encode expression for a member, taking the `@entries` escape into account:
+/// an entries map is an array of `[k, v]` pairs that is encoded element-wise.
+fn member_encode(access: &str, member: &Member) -> String {
+    match (&member.target, has_entries(&member.traits)) {
+        (Tref::Map(k, v), true) => format!(
+            "{access}.map(([k, v]) => [{}, {}])",
+            encode_expr("k", k),
+            encode_expr("v", v)
+        ),
+        _ => encode_expr(access, &member.target),
+    }
+}
+
+/// The decode expression for a member, taking the `@entries` escape into account.
+fn member_decode(access: &str, member: &Member) -> String {
+    match (&member.target, has_entries(&member.traits)) {
+        (Tref::Map(k, v), true) => format!(
+            "{access}.map(([k, v]: [any, any]) => [{}, {}])",
+            decode_expr("k", k),
+            decode_expr("v", v)
+        ),
+        _ => decode_expr(access, &member.target),
+    }
 }
 
 /// Wrap an optional member's conversion so an absent value is omitted.
@@ -243,17 +266,7 @@ mod tests {
     use crate::codegen::target::RenderRules;
     use crate::codegen::targets::typescript::types::ts_casing;
     use crate::codegen::targets::typescript::TsRules;
-
-    fn member(name: &str, target: Tref, required: bool) -> Member {
-        Member {
-            name: name.into(),
-            target,
-            required,
-            default: None,
-            constraints: vec![],
-            traits: vec![],
-        }
-    }
+    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
 
     fn rendered(decls: &[Decl]) -> String {
         decls
@@ -276,17 +289,13 @@ mod tests {
 
     #[test]
     fn struct_codec_routes_i64_and_uses_wire_keys() {
-        let shape = Shape {
-            id: "billing#Charge".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![
-                    member("amount_cents", Tref::Prim(Prim::I64), true),
-                    member("note", Tref::Prim(Prim::String), false),
-                ],
-            },
-            traits: vec![],
-        };
+        let shape = structure(
+            "billing#Charge",
+            vec![
+                member("amount_cents", Tref::Prim(Prim::I64), true),
+                member("note", Tref::Prim(Prim::String), false),
+            ],
+        );
         let out = rendered(&emit_codecs(&shape, &ts_casing()));
         assert!(out.contains("export function encodeCharge(value: Charge): unknown {"));
         // encode: wire key out, in-code identifier read, i64 routed.
@@ -298,15 +307,30 @@ mod tests {
     }
 
     #[test]
+    fn an_entries_field_encodes_and_decodes_element_wise() {
+        let mut counts = member(
+            "counts",
+            Tref::Map(
+                Box::new(Tref::Prim(Prim::I32)),
+                Box::new(Tref::Prim(Prim::I64)),
+            ),
+            true,
+        );
+        counts.traits = vec![crate::ir::Trait {
+            id: "core#entries".into(),
+            value: serde_json::json!(true),
+        }];
+        let shape = structure("billing#Doc", vec![counts]);
+        let out = rendered(&emit_codecs(&shape, &ts_casing()));
+        // The pairs array is mapped element-wise; the i64 value routes through its
+        // codec, the i32 key passes through.
+        assert!(out.contains("counts: value.counts.map(([k, v]) => [k, encodeI64(v)]),"));
+        assert!(out.contains("counts: raw.counts.map(([k, v]: [any, any]) => [k, decodeI64(v)]),"));
+    }
+
+    #[test]
     fn open_enum_codec_is_identity_and_lenient() {
-        let shape = Shape {
-            id: "billing#Status".into(),
-            kind: ShapeKind::Enum {
-                backing: crate::ir::EnumBacking::String,
-                values: vec![("pending".into(), None)],
-            },
-            traits: vec![],
-        };
+        let shape = enum_shape("billing#Status", vec![("pending".into(), None)]);
         let out = rendered(&emit_codecs(&shape, &ts_casing()));
         assert!(out.contains("export function encodeStatus(value: Status): string {"));
         assert!(out.contains("return value;"));
@@ -316,33 +340,29 @@ mod tests {
 
     #[test]
     fn union_codec_switches_on_the_discriminator() {
-        let shape = Shape {
-            id: "billing#PaymentMethod".into(),
-            kind: ShapeKind::Union {
-                params: vec![],
-                discriminator: "type".into(),
-                members: vec![member(
-                    "card",
-                    Tref::Ref {
-                        id: "billing#CardData".into(),
-                        args: vec![],
-                    },
-                    true,
-                )],
-            },
-            traits: vec![],
-        };
+        let shape = union_shape(
+            "billing#PaymentMethod",
+            "type",
+            vec![member(
+                "card",
+                Tref::Ref {
+                    id: "billing#CardData".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
         let out = rendered(&emit_codecs(&shape, &ts_casing()));
         assert!(
             out.contains("export function encodePaymentMethod(value: PaymentMethod): unknown {")
         );
         assert!(out.contains("switch (value.type) {"));
         assert!(out.contains(
-            "case \"card\": return { type: \"card\", ...encodeCardData(value as any) };"
+            "case \"card\": return { type: \"card\", ...(encodeCardData(value as any) as object) };"
         ));
         assert!(out.contains("export function decodePaymentMethod(raw: any): PaymentMethod {"));
         assert!(out.contains(
-            "case \"card\": return { type: \"card\", ...decodeCardData(raw) } as PaymentMethod;"
+            "case \"card\": return { type: \"card\", ...(decodeCardData(raw) as object) } as PaymentMethod;"
         ));
         assert!(out.contains("throw new Error(\"unknown variant\");"));
     }

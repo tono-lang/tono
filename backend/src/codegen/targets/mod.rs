@@ -3,4 +3,6 @@
 //! shared component tree, import collection, casing, and formatter come from the
 //! engine.
 
+pub mod go;
+pub mod rust;
 pub mod typescript;
