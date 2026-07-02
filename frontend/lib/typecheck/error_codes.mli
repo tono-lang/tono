@@ -18,3 +18,7 @@ val constraint_malformed : string
 val default_type_mismatch : string
 val default_violates_constraint : string
 val unresolved_operation_ref : string
+val error_status_missing : string
+val error_code_invalid : string
+val error_discrimination_ambiguous : string
+val async_takes_no_arguments : string
