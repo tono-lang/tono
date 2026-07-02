@@ -5,7 +5,7 @@
 
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
-use crate::codegen::tree::{Decl, EnumRepr, Field, FnBody, Function, TypeExpr, Variant};
+use crate::codegen::tree::{Decl, EnumRepr, Field, FnBody, Function, Method, TypeExpr, Variant};
 
 /// The TypeScript render rules.
 pub struct TsRules;
@@ -66,6 +66,32 @@ impl TsRules {
         format!(
             "export function {}({}){ret} {{\n{text}\n}}",
             function.name.name,
+            params.join(", ")
+        )
+    }
+
+    /// One client method signature. An async operation returns a `Promise` (the
+    /// caller awaits it); a sync one returns the plain type. Errors are thrown,
+    /// so the method's error channel does not appear in the signature.
+    fn render_method(&self, method: &Method) -> String {
+        let params: Vec<String> = method
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name.name, self.render_type(&p.ty)))
+            .collect();
+        let ret = method
+            .ret
+            .as_ref()
+            .map(|r| self.render_type(r))
+            .unwrap_or_else(|| "void".into());
+        let ret = if method.is_async {
+            format!("Promise<{ret}>")
+        } else {
+            ret
+        };
+        format!(
+            "  {}({}): {ret};\n",
+            method.name.name,
             params.join(", ")
         )
     }
@@ -134,6 +160,14 @@ impl RenderRules for TsRules {
                 format!("export type {} = {};", alias.name.name, alias.value)
             }
             Decl::Raw(raw) => raw.text.clone(),
+            Decl::Client(client) => {
+                let methods: String = client
+                    .methods
+                    .iter()
+                    .map(|m| self.render_method(m))
+                    .collect();
+                format!("export interface {} {{\n{methods}}}", client.name.name)
+            }
             // Operation-stub methods are emitted by a later phase.
             Decl::Method(_) => String::new(),
         }
@@ -330,7 +364,42 @@ mod tests {
             name: Symbol::builtin("ping"),
             params: vec![],
             ret: None,
+            err: None,
+            is_async: false,
         });
         assert_eq!(TsRules.render_decl(&method), "");
+    }
+
+    #[test]
+    fn a_client_renders_method_signatures_with_the_effect_lowered() {
+        let decl = Decl::Client(crate::codegen::tree::ClientDecl {
+            name: Symbol::builtin("Client"),
+            methods: vec![
+                Method {
+                    name: Symbol::builtin("createCharge"),
+                    params: vec![field(
+                        "input",
+                        TypeExpr::Ref(Symbol::builtin("CreateChargeInput")),
+                        false,
+                    )],
+                    ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
+                    // Errors are thrown in TS, so the channel stays out of the signature.
+                    err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
+                    is_async: true,
+                },
+                Method {
+                    name: Symbol::builtin("localOp"),
+                    params: vec![],
+                    ret: None,
+                    err: None,
+                    is_async: false,
+                },
+            ],
+        });
+        assert_eq!(
+            TsRules.render_decl(&decl),
+            "export interface Client {\n  createCharge(input: CreateChargeInput): \
+             Promise<Charge>;\n  localOp(): void;\n}"
+        );
     }
 }

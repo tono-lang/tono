@@ -11,7 +11,7 @@
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::targets::rust::codecs::serde_with;
-use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
+use crate::codegen::tree::{Decl, Field, FnBody, Function, Method, TypeExpr};
 
 /// The standard derives every generated struct and enum carries.
 const DERIVES: &str = "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]";
@@ -80,6 +80,34 @@ impl RustRules {
         format!("{attr}    pub {}: {ty},\n", field.name.name)
     }
 
+    /// One client method signature. An async operation is an `async fn` (the
+    /// caller `.await`s it); a sync one is a plain fn. The error channel rides
+    /// the return type as `Result<T, E>`, the native error idiom.
+    fn render_method(&self, method: &Method) -> String {
+        let mut params: Vec<String> = vec!["&self".into()];
+        params.extend(
+            method
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name.name, self.render_type(&p.ty))),
+        );
+        let ok = method
+            .ret
+            .as_ref()
+            .map(|r| self.render_type(r))
+            .unwrap_or_else(|| "()".into());
+        let ret = match &method.err {
+            Some(err) => format!("Result<{ok}, {}>", self.render_type(err)),
+            None => ok,
+        };
+        let effect = if method.is_async { "async " } else { "" };
+        format!(
+            "    {effect}fn {}({}) -> {ret};\n",
+            method.name.name,
+            params.join(", ")
+        )
+    }
+
     fn render_function(&self, function: &Function) -> String {
         let params: Vec<String> = function
             .params
@@ -128,6 +156,26 @@ impl RenderRules for RustRules {
                 format!("pub type {} = {};", alias.name.name, alias.value)
             }
             Decl::Raw(raw) => raw.text.clone(),
+            Decl::Client(client) => {
+                let methods: String = client
+                    .methods
+                    .iter()
+                    .map(|m| self.render_method(m))
+                    .collect();
+                // `async fn` in a public trait lints by default (the returned
+                // future's auto-trait bounds are unnamed); the allow is
+                // deliberate, since refining the bounds is the implementor's
+                // concern, not the generated signature's.
+                let allow = if client.methods.iter().any(|m| m.is_async) {
+                    "#[allow(async_fn_in_trait)]\n"
+                } else {
+                    ""
+                };
+                format!(
+                    "{allow}pub trait {} {{\n{methods}}}",
+                    client.name.name
+                )
+            }
             // The open enum and the tagged union are emitted as verbatim Raw items
             // (they need hand-written serde impls), and the operation stub belongs
             // to the runtime phase; none reach render through these arms.
@@ -359,9 +407,60 @@ mod tests {
             name: Symbol::builtin("ping"),
             params: vec![],
             ret: None,
+            err: None,
+            is_async: false,
         });
         assert_eq!(RustRules.render_decl(&enum_decl), "");
         assert_eq!(RustRules.render_decl(&union_decl), "");
         assert_eq!(RustRules.render_decl(&method), "");
+    }
+
+    #[test]
+    fn a_client_renders_a_trait_with_async_and_result_signatures() {
+        let decl = Decl::Client(crate::codegen::tree::ClientDecl {
+            name: Symbol::builtin("Client"),
+            methods: vec![
+                Method {
+                    name: Symbol::builtin("create_charge"),
+                    params: vec![field(
+                        "input",
+                        TypeExpr::Ref(Symbol::builtin("CreateChargeInput")),
+                        false,
+                        None,
+                    )],
+                    ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
+                    err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
+                    is_async: true,
+                },
+                Method {
+                    name: Symbol::builtin("local_op"),
+                    params: vec![],
+                    ret: None,
+                    err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
+                    is_async: false,
+                },
+            ],
+        });
+        assert_eq!(
+            RustRules.render_decl(&decl),
+            "#[allow(async_fn_in_trait)]\npub trait Client {\n    async fn \
+             create_charge(&self, input: CreateChargeInput) -> Result<Charge, \
+             TonoError>;\n    fn local_op(&self) -> Result<(), TonoError>;\n}"
+        );
+    }
+
+    #[test]
+    fn a_client_with_no_async_method_needs_no_allow_attribute() {
+        let decl = Decl::Client(crate::codegen::tree::ClientDecl {
+            name: Symbol::builtin("Client"),
+            methods: vec![Method {
+                name: Symbol::builtin("local_op"),
+                params: vec![],
+                ret: None,
+                err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
+                is_async: false,
+            }],
+        });
+        assert!(!RustRules.render_decl(&decl).contains("async_fn_in_trait"));
     }
 }

@@ -176,6 +176,14 @@ mod tests {
                     format!("pub type {} = {};", alias.name.name, alias.value)
                 }
                 Decl::Raw(raw) => raw.text.clone(),
+                Decl::Client(client) => {
+                    let methods: String = client
+                        .methods
+                        .iter()
+                        .map(|m| format!("    fn {}{};\n", m.name.name, self.render_sig(&m.params, &m.ret)))
+                        .collect();
+                    format!("pub trait {} {{\n{methods}}}", client.name.name)
+                }
             }
         }
     }
@@ -275,6 +283,8 @@ mod tests {
                 name: Symbol::builtin(Self::local_name(&op.id)),
                 params: vec![],
                 ret: None,
+                err: None,
+                is_async: false,
             })]
         }
 
@@ -511,6 +521,8 @@ mod tests {
                         wire: None,
                     }],
                     ret: Some(TypeExpr::Ref(Symbol::builtin("String"))),
+                    err: None,
+                    is_async: false,
                 }),
             ],
         };

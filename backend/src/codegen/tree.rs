@@ -44,6 +44,7 @@ pub enum Decl {
     Function(Function),
     Alias(Alias),
     Raw(Raw),
+    Client(ClientDecl),
 }
 
 /// A named type alias whose definition is target text (e.g. a branded
@@ -87,12 +88,27 @@ pub struct Field {
 
 /// An operation stub: a typed signature. The opaque wire descriptor and the
 /// `runtime.execute` call are emitted by the target; this node carries only the
-/// shape the engine needs to collect imports and render the signature.
+/// shape the engine needs to collect imports and render the signature. The
+/// effect (`is_async`) is classified once in the shared model; how the wait
+/// lowers is a render concern (a `Promise`/`async fn` or a blocking call). The
+/// error channel (`err`) likewise renders per idiom: a `Result` error type, a
+/// `(T, error)` pair, or nothing where errors are thrown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Method {
     pub name: Symbol,
     pub params: Vec<Field>,
     pub ret: Option<TypeExpr>,
+    pub err: Option<TypeExpr>,
+    pub is_async: bool,
+}
+
+/// The generated client surface of a module: one method signature per
+/// operation. Emitted as an interface/trait so the transport implementation
+/// (hand-written or a later runtime) can satisfy it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientDecl {
+    pub name: Symbol,
+    pub methods: Vec<Method>,
 }
 
 /// A free function with a real body, used for generated codecs and helpers. Its
@@ -277,10 +293,22 @@ mod tests {
                         wire: None,
                     }],
                     ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
+                    err: None,
+                    is_async: false,
+                }),
+                Decl::Client(ClientDecl {
+                    name: Symbol::builtin("Client"),
+                    methods: vec![Method {
+                        name: Symbol::builtin("create_charge"),
+                        params: vec![],
+                        ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
+                        err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
+                        is_async: true,
+                    }],
                 }),
             ],
         };
         assert_eq!(file.module, "payments");
-        assert_eq!(file.decls.len(), 4);
+        assert_eq!(file.decls.len(), 5);
     }
 }
