@@ -11,159 +11,111 @@
 //! `instanceof` while still receiving the concrete fallback type when a
 //! response matches no declared error.
 
-use crate::codegen::casing::{transform, CasingConfig};
+use crate::codegen::casing::CasingConfig;
 use crate::codegen::conventions::type_ident_from_id;
 use crate::codegen::ops::{
-    declared_errors, discrimination_order, effect_of, module_declared_errors, DeclaredError, Effect,
+    self, error_names, error_type_name, module_declared_errors, DeclaredError, ErrorNames,
 };
-use crate::codegen::symbol::{Symbol, SymbolKind};
+use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::types::{type_expr_of, LANG};
-use crate::codegen::tree::{ClientDecl, Decl, Field, FnBody, Function, Method, Raw, TypeExpr};
+use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{Module, Shape};
 
-/// The canonical taxonomy type names, derived through the same casing engine
-/// as every other type identifier (so `api_error` follows the initialism set).
-struct Names {
-    root: String,
-    api: String,
-    validation: String,
-    transport: String,
-    decode: String,
-    contract: String,
-    violation: String,
+/// The declarations for the types file: the taxonomy, the declared-error
+/// classes, and the client interface.
+pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
+    let mut decls = taxonomy_decls();
+    decls.extend(declared_error_decls(module));
+    // Errors are thrown in TypeScript, so the client's error channel stays out
+    // of the signatures (`None`).
+    decls.push(ops::client_decl(module, config, LANG, &type_expr_of, None));
+    decls
 }
 
-fn names() -> Names {
-    Names {
-        root: type_ident_from_id("tono_error"),
-        api: type_ident_from_id("api_error"),
-        validation: type_ident_from_id("validation_error"),
-        transport: type_ident_from_id("transport_error"),
-        decode: type_ident_from_id("decode_error"),
-        contract: type_ident_from_id("contract_error"),
-        violation: type_ident_from_id("violation"),
-    }
+/// The declarations for the serde file: one discrimination function per
+/// operation that declares errors.
+pub fn serde_decls(module: &Module) -> Vec<Decl> {
+    let n = error_names();
+    ops::discriminator_decls(module, |op, ordered| {
+        discriminator_fn(op, ordered, module, &n)
+    })
 }
 
 /// The class name of a declared error: its type name plus an `Error` suffix,
 /// so the class never collides with the shape's own data interface in the
 /// types file.
 fn declared_class_name(err: &DeclaredError) -> String {
-    format!("{}Error", type_ident_from_id(&err.shape_id))
-}
-
-fn raw(text: String) -> Decl {
-    Decl::Raw(Raw {
-        text,
-        refs: Vec::new(),
-    })
+    format!("{}Error", error_type_name(err))
 }
 
 /// The closed error taxonomy: the abstract root, the `Violation` record, and
-/// the five category classes. Emitted once per module that has operations.
-pub fn taxonomy_decls() -> Vec<Decl> {
-    let n = names();
+/// the five category classes.
+fn taxonomy_decls() -> Vec<Decl> {
+    let n = error_names();
     let root = &n.root;
+    let category = |name: &str, ctor_params: &str, message: &str| {
+        Decl::raw(format!(
+            "export class {name} extends {root} {{\n  constructor({ctor_params}) {{\n    super({message});\n    this.name = \"{name}\";\n  }}\n}}"
+        ))
+    };
     vec![
-        raw(format!(
+        Decl::raw(format!(
             "export abstract class {root} extends Error {{\n  retryable(): boolean {{\n    return false;\n  }}\n}}"
         )),
-        raw(format!(
+        Decl::raw(format!(
             "export interface {} {{\n  field: string;\n  constraint: string;\n  message: string;\n}}",
             n.violation
         )),
-        raw(format!(
-            "export class {} extends {root} {{\n  constructor(readonly violations: {}[]) {{\n    super(\"validation failed\");\n    this.name = \"{}\";\n  }}\n}}",
-            n.validation, n.violation, n.validation
-        )),
-        raw(format!(
-            "export class {} extends {root} {{\n  constructor(readonly cause: unknown) {{\n    super(\"transport failure\");\n    this.name = \"{}\";\n  }}\n}}",
-            n.transport, n.transport
-        )),
-        raw(format!(
-            "export class {} extends {root} {{\n  constructor(readonly path: string, readonly expected: string, readonly raw: string) {{\n    super(\"response body did not match the declared schema\");\n    this.name = \"{}\";\n  }}\n}}",
-            n.decode, n.decode
-        )),
-        raw(format!(
-            "export class {} extends {root} {{\n  constructor(readonly contractName: string, readonly cause: unknown) {{\n    super(\"contract hook failed\");\n    this.name = \"{}\";\n  }}\n}}",
-            n.contract, n.contract
-        )),
-        raw(format!(
-            "export class {} extends {root} {{\n  constructor(readonly status: number, readonly body: string) {{\n    super(`api error ${{status}}`);\n    this.name = \"{}\";\n  }}\n}}",
-            n.api, n.api
-        )),
+        category(
+            &n.validation,
+            &format!("readonly violations: {}[]", n.violation),
+            "\"validation failed\"",
+        ),
+        category(
+            &n.transport,
+            "readonly cause: unknown",
+            "\"transport failure\"",
+        ),
+        category(
+            &n.decode,
+            "readonly path: string, readonly expected: string, readonly raw: string",
+            "\"response body did not match the declared schema\"",
+        ),
+        category(
+            &n.contract,
+            "readonly contractName: string, readonly cause: unknown",
+            "\"contract hook failed\"",
+        ),
+        category(
+            &n.api,
+            "readonly status: number, readonly body: string",
+            "`api error ${status}`",
+        ),
     ]
 }
 
 /// One class per declared operation error, under the `Api` category. The
 /// decoded body rides a `data` field (never spread into the class) so a shape
 /// field can never collide with the inherited `status`/`body`/`message`.
-pub fn declared_error_decls(module: &Module) -> Vec<Decl> {
-    let n = names();
+fn declared_error_decls(module: &Module) -> Vec<Decl> {
+    let n = error_names();
     module_declared_errors(module)
         .iter()
         .map(|err| {
             let class = declared_class_name(err);
-            let data = type_ident_from_id(&err.shape_id);
+            let data = error_type_name(err);
             let status = err.status.unwrap_or(0);
             let retryable = if err.retryable {
                 "\n  retryable(): boolean {\n    return true;\n  }"
             } else {
                 ""
             };
-            raw(format!(
+            Decl::raw(format!(
                 "export class {class} extends {} {{\n  constructor(readonly data: {data}, body: string) {{\n    super({status}, body);\n    this.name = \"{class}\";\n  }}{retryable}\n}}",
                 n.api
             ))
         })
         .collect()
-}
-
-/// The generated method identifier for an operation.
-fn method_ident(op: &Shape, config: &CasingConfig) -> String {
-    let local = op.id.rsplit('#').next().unwrap_or(&op.id);
-    let rename = crate::codegen::conventions::rename_of(&op.traits, LANG);
-    transform(local, SymbolKind::Method, config, rename.as_deref())
-}
-
-fn op_io(op: &Shape) -> (Option<&crate::ir::Tref>, Option<&crate::ir::Tref>) {
-    match &op.kind {
-        crate::ir::ShapeKind::Operation { input, output, .. } => (input.as_ref(), output.as_ref()),
-        _ => (None, None),
-    }
-}
-
-/// The client interface: one method per operation. An async operation returns
-/// a `Promise`; errors are thrown, so the error channel stays out of the
-/// signature.
-pub fn client_decl(module: &Module, config: &CasingConfig) -> Decl {
-    let methods = module
-        .operations
-        .iter()
-        .map(|op| {
-            let (input, output) = op_io(op);
-            Method {
-                name: Symbol::builtin(method_ident(op, config)),
-                params: input
-                    .map(|t| {
-                        vec![Field {
-                            name: Symbol::builtin("input"),
-                            ty: type_expr_of(t),
-                            nullable: false,
-                            wire: None,
-                        }]
-                    })
-                    .unwrap_or_default(),
-                ret: output.map(type_expr_of),
-                err: None,
-                is_async: effect_of(op) == Effect::Async,
-            }
-        })
-        .collect();
-    Decl::Client(ClientDecl {
-        name: Symbol::builtin(type_ident_from_id("client")),
-        methods,
-    })
 }
 
 /// A self-module type symbol, imported from the types file via the serde
@@ -172,23 +124,15 @@ fn module_symbol(name: &str, module: &Module) -> Symbol {
     Symbol::imported(name.to_string(), module.name.clone(), name.to_string())
 }
 
-/// The per-operation discrimination functions, one per operation that declares
-/// errors: `(status, raw body) -> TonoError`. The mapping tries the declared
-/// errors (coded entries before a codeless catch-all on the same status) and
-/// resolves everything else to the concrete fallback type, never the whole
-/// `Api` category.
-pub fn discriminator_decls(module: &Module) -> Vec<Decl> {
-    let n = names();
-    module
-        .operations
-        .iter()
-        .filter(|op| !declared_errors(op, module).is_empty())
-        .map(|op| discriminator_fn(op, module, &n))
-        .collect()
-}
-
-fn discriminator_fn(op: &Shape, module: &Module, n: &Names) -> Decl {
-    let ordered = discrimination_order(op, module);
+/// One discrimination function: `(status, raw body) -> TonoError`. The mapping
+/// tries the declared errors and resolves everything else to the concrete
+/// fallback type, never the whole `Api` category.
+fn discriminator_fn(
+    op: &Shape,
+    ordered: &[DeclaredError],
+    module: &Module,
+    n: &ErrorNames,
+) -> Decl {
     let fallback = format!("new {}(status, body)", n.api);
     let mut body = String::new();
     body.push_str("  let parsed: any;\n");
@@ -205,9 +149,9 @@ fn discriminator_fn(op: &Shape, module: &Module, n: &Names) -> Decl {
         module_symbol(&n.root, module),
         module_symbol(&n.api, module),
     ];
-    for err in &ordered {
+    for err in ordered {
         let class = declared_class_name(err);
-        let data = type_ident_from_id(&err.shape_id);
+        let data = error_type_name(err);
         let status = err.status.unwrap_or(0);
         let guard = match &err.code {
             Some(code) => format!("status === {status} && code === \"{code}\""),
@@ -249,95 +193,17 @@ fn discriminator_fn(op: &Shape, module: &Module, n: &Names) -> Decl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::target::RenderRules;
     use crate::codegen::targets::typescript::types::ts_casing;
     use crate::codegen::targets::typescript::TsRules;
-    use crate::codegen::test_support::{member, structure};
-    use crate::ir::{Prim, ShapeKind, Trait, Tref};
-    use serde_json::json;
+    use crate::codegen::test_support::{error_demo_module, error_shape, operation, rendered};
 
-    fn trait_of(id: &str, value: serde_json::Value) -> Trait {
-        Trait {
-            id: id.into(),
-            value,
-        }
-    }
-
-    fn op(id: &str, traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
-        Shape {
-            id: id.into(),
-            kind: ShapeKind::Operation {
-                input: Some(Tref::Ref {
-                    id: "m#charge_input".into(),
-                    args: vec![],
-                }),
-                output: Some(Tref::Ref {
-                    id: "m#charge".into(),
-                    args: vec![],
-                }),
-                errors: errors
-                    .into_iter()
-                    .map(|id| Tref::Ref {
-                        id: id.into(),
-                        args: vec![],
-                    })
-                    .collect(),
-            },
-            traits,
-        }
-    }
-
-    fn demo_module() -> Module {
-        let mut declined = structure(
-            "m#payment_declined",
-            vec![member("message", Tref::Prim(Prim::String), true)],
-        );
-        declined.traits = vec![
-            trait_of("status", json!([402])),
-            trait_of("errorCode", json!(["payment_declined"])),
-            trait_of("retryable", json!(null)),
-        ];
-        let mut limited = structure(
-            "m#rate_limited",
-            vec![member("retry_after_seconds", Tref::Prim(Prim::I64), true)],
-        );
-        limited.traits = vec![trait_of("status", json!([429]))];
-        Module {
-            name: "m".into(),
-            shapes: vec![
-                structure(
-                    "m#charge",
-                    vec![member("id", Tref::Prim(Prim::String), true)],
-                ),
-                structure(
-                    "m#charge_input",
-                    vec![member("amount", Tref::Prim(Prim::I64), true)],
-                ),
-                declined,
-                limited,
-            ],
-            operations: vec![op(
-                "m#create_charge",
-                vec![trait_of(
-                    "http",
-                    json!({"method": "POST", "path": "/charges"}),
-                )],
-                vec!["m#payment_declined", "m#rate_limited"],
-            )],
-        }
-    }
-
-    fn rendered(decls: &[Decl]) -> String {
-        decls
-            .iter()
-            .map(|d| TsRules.render_decl(d))
-            .collect::<Vec<_>>()
-            .join("\n")
+    fn types_text(module: &Module) -> String {
+        rendered(&type_decls(module, &ts_casing()), &TsRules)
     }
 
     #[test]
     fn the_taxonomy_is_five_categories_rooted_at_tono_error() {
-        let out = rendered(&taxonomy_decls());
+        let out = types_text(&error_demo_module());
         assert!(out.contains("export abstract class TonoError extends Error {"));
         for category in [
             "ValidationError",
@@ -359,7 +225,7 @@ mod tests {
 
     #[test]
     fn declared_errors_become_classes_under_the_api_category() {
-        let out = rendered(&declared_error_decls(&demo_module()));
+        let out = types_text(&error_demo_module());
         assert!(out.contains("export class PaymentDeclinedError extends APIError {"));
         assert!(out.contains("constructor(readonly data: PaymentDeclined, body: string) {"));
         assert!(out.contains("super(402, body);"));
@@ -371,27 +237,24 @@ mod tests {
 
     #[test]
     fn the_client_interface_lowers_the_effect_to_promise() {
-        let module = demo_module();
-        let out = TsRules.render_decl(&client_decl(&module, &ts_casing()));
-        assert_eq!(
-            out,
+        let out = types_text(&error_demo_module());
+        assert!(out.contains(
             "export interface Client {\n  createCharge(input: ChargeInput): Promise<Charge>;\n}"
-        );
+        ));
     }
 
     #[test]
     fn a_sync_operation_keeps_a_plain_signature() {
-        let mut module = demo_module();
-        module.operations = vec![op("m#local_sum", vec![], vec![])];
-        let out = TsRules.render_decl(&client_decl(&module, &ts_casing()));
+        let mut module = error_demo_module();
+        module.operations = vec![operation("m#local_sum", vec![], vec![])];
+        let out = types_text(&module);
         assert!(out.contains("localSum(input: ChargeInput): Charge;"));
         assert!(!out.contains("Promise"));
     }
 
     #[test]
     fn the_discriminator_maps_status_and_code_and_falls_back_to_api_error() {
-        let module = demo_module();
-        let out = rendered(&discriminator_decls(&module));
+        let out = rendered(&serde_decls(&error_demo_module()), &TsRules);
         assert!(out.contains(
             "export function decodeCreateChargeError(status: number, body: string): TonoError {"
         ));
@@ -408,31 +271,25 @@ mod tests {
 
     #[test]
     fn coded_entries_are_tried_before_a_codeless_error_on_the_same_status() {
-        let mut module = demo_module();
-        let mut coded = structure("m#coded_bad", vec![]);
-        coded.traits = vec![
-            trait_of("status", json!([400])),
-            trait_of("errorCode", json!(["specific"])),
-        ];
-        let mut catch_all = structure("m#generic_bad", vec![]);
-        catch_all.traits = vec![trait_of("status", json!([400]))];
-        module.shapes.push(coded);
-        module.shapes.push(catch_all);
-        module.operations = vec![op(
+        let mut module = error_demo_module();
+        module.shapes.push(error_shape(
+            "m#coded_bad",
+            vec![],
+            400,
+            Some("specific"),
+            false,
+        ));
+        module
+            .shapes
+            .push(error_shape("m#generic_bad", vec![], 400, None, false));
+        module.operations = vec![operation(
             "m#do_thing",
             vec![],
             vec!["m#generic_bad", "m#coded_bad"],
         )];
-        let out = rendered(&discriminator_decls(&module));
+        let out = rendered(&serde_decls(&module), &TsRules);
         let coded_at = out.find("code === \"specific\"").expect("coded guard");
         let catch_all_at = out.find("if (status === 400) {").expect("catch-all guard");
         assert!(coded_at < catch_all_at, "the coded guard must run first");
-    }
-
-    #[test]
-    fn an_operation_with_no_declared_errors_gets_no_discriminator() {
-        let mut module = demo_module();
-        module.operations = vec![op("m#ping", vec![], vec![])];
-        assert!(discriminator_decls(&module).is_empty());
     }
 }

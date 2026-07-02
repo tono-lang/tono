@@ -200,6 +200,25 @@ mod tests {
         }
     }
 
+    fn method(
+        name: &str,
+        params: Vec<Field>,
+        ret: Option<TypeExpr>,
+        err: Option<TypeExpr>,
+    ) -> Method {
+        Method {
+            name: Symbol::builtin(name),
+            params,
+            ret,
+            err,
+            is_async: false,
+        }
+    }
+
+    fn imported_ref(name: &str, module: &str) -> TypeExpr {
+        TypeExpr::Ref(Symbol::imported(name, module, name))
+    }
+
     fn interface_file(module: &str, fields: Vec<Field>) -> File {
         File {
             module: module.into(),
@@ -372,23 +391,13 @@ mod tests {
                     members: vec![Symbol::builtin("Active")],
                     backing: crate::codegen::tree::EnumRepr::String,
                 }),
-                Decl::Method(Method {
-                    name: Symbol::builtin("create"),
-                    params: vec![field(
-                        "input",
-                        TypeExpr::Ref(Symbol::imported("In", "req", "In")),
-                    )],
-                    ret: Some(TypeExpr::Ref(Symbol::imported("Out", "resp", "Out"))),
-                    err: None,
-                    is_async: false,
-                }),
-                Decl::Method(Method {
-                    name: Symbol::builtin("ping"),
-                    params: vec![],
-                    ret: None,
-                    err: None,
-                    is_async: false,
-                }),
+                Decl::Method(method(
+                    "create",
+                    vec![field("input", imported_ref("In", "req"))],
+                    Some(imported_ref("Out", "resp")),
+                    None,
+                )),
+                Decl::Method(method("ping", vec![], None, None)),
             ],
         };
         assert_eq!(collect(&file).len(), 2);
@@ -400,16 +409,12 @@ mod tests {
             module: "billing".into(),
             decls: vec![Decl::Client(crate::codegen::tree::ClientDecl {
                 name: Symbol::builtin("Client"),
-                methods: vec![Method {
-                    name: Symbol::builtin("create"),
-                    params: vec![field(
-                        "input",
-                        TypeExpr::Ref(Symbol::imported("In", "req", "In")),
-                    )],
-                    ret: Some(TypeExpr::Ref(Symbol::imported("Out", "resp", "Out"))),
-                    err: Some(TypeExpr::Ref(Symbol::imported("Err", "errs", "Err"))),
-                    is_async: true,
-                }],
+                methods: vec![method(
+                    "create",
+                    vec![field("input", imported_ref("In", "req"))],
+                    Some(imported_ref("Out", "resp")),
+                    Some(imported_ref("Err", "errs")),
+                )],
             })],
         };
         // The param type, the return type, and the error-channel type.

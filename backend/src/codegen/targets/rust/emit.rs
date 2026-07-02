@@ -43,14 +43,13 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         serde_shape_decls.extend(emit_serde(shape));
     }
 
-    // The error surface and the client exist only for a module that has
-    // operations: the taxonomy, the Api payload enum, and the client trait land
-    // in the types file; the per-operation discriminators in the serde file.
+    // Operations bring the taxonomy (with the Api payload enum) and the
+    // client trait into the types file; the discriminators parse JSON, so they
+    // belong to the serde file, whose emission below they also trigger.
     let mut discriminators = Vec::new();
     if !module.operations.is_empty() {
-        type_decls.extend(errors::taxonomy_decls(module));
-        type_decls.push(errors::client_decl(module, config));
-        discriminators = errors::discriminator_decls(module);
+        type_decls.extend(errors::type_decls(module, config));
+        discriminators = errors::serde_decls(module);
     }
 
     // The serde file holds the used helper modules, the open enums' impls, and

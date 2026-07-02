@@ -15,7 +15,9 @@ use tono_backend::codegen::targets::typescript::emit::emit_module;
 use tono_backend::codegen::targets::typescript::types::ts_casing;
 use tono_backend::codegen::targets::typescript::TsRules;
 use tono_backend::codegen::Formatter;
-use tono_backend::ir::{EnumBacking, Member, Module, Prim, Shape, ShapeKind, Tref};
+
+mod common;
+use common::matrix_module as demo_module;
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests/typescript")
@@ -24,122 +26,6 @@ fn workspace() -> PathBuf {
 fn tool(ws: &Path, name: &str) -> Option<PathBuf> {
     let bin = ws.join("node_modules/.bin").join(name);
     bin.exists().then_some(bin)
-}
-
-fn member(name: &str, target: Tref) -> Member {
-    Member {
-        name: name.into(),
-        target,
-        required: true,
-        default: None,
-        constraints: vec![],
-        traits: vec![],
-    }
-}
-
-fn demo_module() -> Module {
-    Module {
-        name: "models".into(),
-        shapes: vec![
-            Shape {
-                id: "models#Account".into(),
-                kind: ShapeKind::Structure {
-                    params: vec![],
-                    members: vec![
-                        member("account_id", Tref::Prim(Prim::I64)),
-                        member("secret", Tref::Prim(Prim::Bytes)),
-                        member(
-                            "status",
-                            Tref::Ref {
-                                id: "models#Status".into(),
-                                args: vec![],
-                            },
-                        ),
-                    ],
-                },
-                traits: vec![],
-            },
-            Shape {
-                id: "models#Status".into(),
-                kind: ShapeKind::Enum {
-                    backing: EnumBacking::String,
-                    values: vec![("active".into(), None), ("closed".into(), None)],
-                },
-                traits: vec![],
-            },
-            error_shape(
-                "models#payment_declined",
-                vec![member("message", Tref::Prim(Prim::String))],
-                402,
-                Some("payment_declined"),
-                true,
-            ),
-            error_shape("models#rate_limited", vec![], 429, None, false),
-        ],
-        // One async operation carrying both declared errors, so the driver can
-        // exercise the generated taxonomy and discriminator end to end.
-        operations: vec![Shape {
-            id: "models#create_charge".into(),
-            kind: ShapeKind::Operation {
-                input: Some(Tref::Ref {
-                    id: "models#Account".into(),
-                    args: vec![],
-                }),
-                output: Some(Tref::Ref {
-                    id: "models#Account".into(),
-                    args: vec![],
-                }),
-                errors: vec![
-                    Tref::Ref {
-                        id: "models#payment_declined".into(),
-                        args: vec![],
-                    },
-                    Tref::Ref {
-                        id: "models#rate_limited".into(),
-                        args: vec![],
-                    },
-                ],
-            },
-            traits: vec![tono_backend::ir::Trait {
-                id: "core#http".into(),
-                value: serde_json::json!({"method": "POST", "path": "/charges"}),
-            }],
-        }],
-    }
-}
-
-/// An error shape carrying its discrimination traits.
-fn error_shape(
-    id: &str,
-    members: Vec<Member>,
-    status: i64,
-    code: Option<&str>,
-    retryable: bool,
-) -> Shape {
-    let mut traits = vec![tono_backend::ir::Trait {
-        id: "core#status".into(),
-        value: serde_json::json!([status]),
-    }];
-    if let Some(code) = code {
-        traits.push(tono_backend::ir::Trait {
-            id: "core#errorCode".into(),
-            value: serde_json::json!([code]),
-        });
-    }
-    if retryable {
-        traits.push(tono_backend::ir::Trait {
-            id: "core#retryable".into(),
-            value: serde_json::Value::Null,
-        });
-    }
-    Shape {
-        id: id.into(),
-        kind: ShapeKind::Structure {
-            params: vec![],
-            members,
-        },
-        traits,
-    }
 }
 
 const DRIVER: &str = r#"
@@ -151,21 +37,39 @@ const big = 9007199254740993n; // 2^53 + 1, not representable as a JS number
 const account: Account = {
   accountID: big,
   secret: new Uint8Array([1, 2, 3, 254]),
+  tip: 500n,
   status: "active",
+  code: 200,
+  method: { type: "card", last4: "4242" },
+  counts: [[7, "a"], [3, "b"]],
 };
 
 const wire: any = encodeAccount(account);
 if (typeof wire.account_id !== "string") throw new Error("i64 must encode to a string");
 if (wire.account_id !== big.toString()) throw new Error("i64 wire value wrong");
+if (wire.tip !== "500") throw new Error("an optional i64 must encode to a string");
+if (wire.code !== 200) throw new Error("an int-backed enum must encode as a bare number");
+if (wire.method.type !== "card") throw new Error("a union must carry its discriminator");
+if (JSON.stringify(wire.counts) !== JSON.stringify([[7, "a"], [3, "b"]])) throw new Error("an @entries map must encode as a pairs array");
 
 const back = decodeAccount(JSON.parse(JSON.stringify(wire)));
 if (back.accountID !== big) throw new Error("i64 lost precision: " + back.accountID);
 if (back.secret.length !== 4 || back.secret[3] !== 254) throw new Error("bytes round-trip failed");
 if (back.status !== "active") throw new Error("status round-trip failed");
+if (back.tip !== 500n) throw new Error("optional i64 round-trip failed");
 
-// An open enum decodes an unknown tag leniently and preserves it.
-const unknown = decodeAccount({ account_id: "1", secret: "AAEC/g==", status: "frozen" });
+// An open enum decodes an unknown tag leniently and preserves it: a string for
+// the string-backed enum, an integer for the int-backed one.
+const unknown = decodeAccount({
+  account_id: "1",
+  secret: "AAEC/g==",
+  status: "frozen",
+  code: 418,
+  method: { type: "card", last4: "0000" },
+  counts: [],
+});
 if (unknown.status !== "frozen") throw new Error("unknown enum value must pass through");
+if (unknown.code !== 418) throw new Error("unknown int-backed enum value must pass through");
 
 // Error discrimination: (status, body code) maps to the declared type, rooted
 // in the taxonomy, with the @retryable predicate lowered.

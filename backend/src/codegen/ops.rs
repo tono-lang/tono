@@ -8,7 +8,11 @@
 //! discrimination key (HTTP status plus an optional body code) and its
 //! retryability read off the referenced error shape.
 
-use crate::ir::{Module, Shape, Trait, Tref};
+use crate::codegen::casing::{transform, CasingConfig};
+use crate::codegen::conventions::{rename_of, type_ident_from_id};
+use crate::codegen::symbol::{Symbol, SymbolKind};
+use crate::codegen::tree::{ClientDecl, Decl, Field, Method, TypeExpr};
+use crate::ir::{Module, Shape, ShapeKind, Trait, Tref};
 
 /// Whether an operation performs I/O and therefore waits. How the wait lowers
 /// (suspension vs blocking) is a per-language concern; the classification is
@@ -160,6 +164,111 @@ pub fn discrimination_order(op: &Shape, module: &Module) -> Vec<DeclaredError> {
     errors
 }
 
+/// The declared-error type name: the shape's PascalCase local name, matching
+/// how every target names the shape's own declaration.
+pub fn error_type_name(err: &DeclaredError) -> String {
+    type_ident_from_id(&err.shape_id)
+}
+
+/// The canonical error-surface type names, derived through the same casing
+/// engine as every other type identifier (so `api_error` follows the
+/// initialism set). Each target consumes the subset its idiom needs: Go has no
+/// root, Rust alone has the Api payload enum.
+pub struct ErrorNames {
+    pub root: String,
+    pub api: String,
+    pub api_failure: String,
+    pub validation: String,
+    pub transport: String,
+    pub decode: String,
+    pub contract: String,
+    pub violation: String,
+}
+
+pub fn error_names() -> ErrorNames {
+    ErrorNames {
+        root: type_ident_from_id("tono_error"),
+        api: type_ident_from_id("api_error"),
+        api_failure: type_ident_from_id("api_failure"),
+        validation: type_ident_from_id("validation_error"),
+        transport: type_ident_from_id("transport_error"),
+        decode: type_ident_from_id("decode_error"),
+        contract: type_ident_from_id("contract_error"),
+        violation: type_ident_from_id("violation"),
+    }
+}
+
+/// The generated method identifier for an operation, honoring `@rename(lang)`.
+fn method_ident(op: &Shape, config: &CasingConfig, lang: &str) -> String {
+    let local = op.id.rsplit('#').next().unwrap_or(&op.id);
+    let rename = rename_of(&op.traits, lang);
+    transform(local, SymbolKind::Method, config, rename.as_deref())
+}
+
+fn op_io(op: &Shape) -> (Option<&Tref>, Option<&Tref>) {
+    match &op.kind {
+        ShapeKind::Operation { input, output, .. } => (input.as_ref(), output.as_ref()),
+        _ => (None, None),
+    }
+}
+
+/// Build the client declaration: one method signature per operation, the
+/// effect classified here and lowered by the target's render rules. The
+/// per-language pieces ride the parameters, exactly like `emit_shape`: the
+/// target's `type_expr_of` resolves the input/output types, and `err` names
+/// its error-channel type (`None` where errors are thrown).
+pub fn client_decl(
+    module: &Module,
+    config: &CasingConfig,
+    lang: &str,
+    type_expr_of: &impl Fn(&Tref) -> TypeExpr,
+    err: Option<&str>,
+) -> Decl {
+    let err = err.map(|name| TypeExpr::Ref(Symbol::builtin(name)));
+    let methods = module
+        .operations
+        .iter()
+        .map(|op| {
+            let (input, output) = op_io(op);
+            Method {
+                name: Symbol::builtin(method_ident(op, config, lang)),
+                params: input
+                    .map(|t| {
+                        vec![Field {
+                            name: Symbol::builtin("input"),
+                            ty: type_expr_of(t),
+                            nullable: false,
+                            wire: None,
+                        }]
+                    })
+                    .unwrap_or_default(),
+                ret: output.map(type_expr_of),
+                err: err.clone(),
+                is_async: effect_of(op) == Effect::Async,
+            }
+        })
+        .collect();
+    Decl::Client(ClientDecl {
+        name: Symbol::builtin(type_ident_from_id("client")),
+        methods,
+    })
+}
+
+/// Build one discrimination declaration per operation that declares errors,
+/// handing the target's builder the errors already in discrimination order
+/// (coded entries before a codeless catch-all on the same status).
+pub fn discriminator_decls(
+    module: &Module,
+    build: impl Fn(&Shape, &[DeclaredError]) -> Decl,
+) -> Vec<Decl> {
+    module
+        .operations
+        .iter()
+        .filter(|op| !declared_errors(op, module).is_empty())
+        .map(|op| build(op, &discrimination_order(op, module)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +409,19 @@ mod tests {
             .map(|e| e.shape_id)
             .collect();
         assert_eq!(ids, vec!["m#b".to_string(), "m#a".to_string()]);
+    }
+
+    #[test]
+    fn the_discriminator_driver_skips_operations_with_no_declared_errors() {
+        let shapes = vec![error_shape("m#nf", vec![trait_of("status", json!([404]))])];
+        let with_errors = op(vec![], vec!["m#nf"]);
+        let without = op(vec![], vec![]);
+        let module = module(shapes, vec![without, with_errors]);
+        let decls = discriminator_decls(&module, |_, ordered| {
+            crate::codegen::tree::Decl::raw(format!("{} entries", ordered.len()))
+        });
+        // Only the error-declaring operation gets a declaration.
+        assert_eq!(decls.len(), 1);
     }
 
     #[test]

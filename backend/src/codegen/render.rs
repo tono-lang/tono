@@ -176,19 +176,14 @@ mod tests {
                     format!("pub type {} = {};", alias.name.name, alias.value)
                 }
                 Decl::Raw(raw) => raw.text.clone(),
+                // A stand-in spelling; the real client renderings live in the
+                // target rules and are exercised by their own tests.
                 Decl::Client(client) => {
-                    let methods: String = client
-                        .methods
-                        .iter()
-                        .map(|m| {
-                            format!(
-                                "    fn {}{};\n",
-                                m.name.name,
-                                self.render_sig(&m.params, &m.ret)
-                            )
-                        })
-                        .collect();
-                    format!("pub trait {} {{\n{methods}}}", client.name.name)
+                    format!(
+                        "pub trait {} /* {} methods */;",
+                        client.name.name,
+                        client.methods.len()
+                    )
                 }
             }
         }

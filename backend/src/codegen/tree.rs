@@ -66,6 +66,25 @@ pub struct Raw {
     pub refs: Vec<Symbol>,
 }
 
+impl Decl {
+    /// A verbatim item referencing no symbols the engine must import.
+    pub fn raw(text: impl Into<String>) -> Decl {
+        Decl::Raw(Raw {
+            text: text.into(),
+            refs: Vec::new(),
+        })
+    }
+
+    /// A verbatim item declaring the symbols its text references, so import
+    /// collection still reaches them.
+    pub fn raw_with(text: impl Into<String>, refs: Vec<Symbol>) -> Decl {
+        Decl::Raw(Raw {
+            text: text.into(),
+            refs,
+        })
+    }
+}
+
 /// A product type: a named structure/interface with fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interface {

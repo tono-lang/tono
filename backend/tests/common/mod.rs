@@ -123,27 +123,33 @@ pub fn matrix_module() -> Module {
         // One async operation carrying both declared errors, so every harness
         // exercises the generated error surface, the client, and the
         // per-operation discriminator alongside the wire matrix.
-        operations: vec![Shape {
-            id: "models#create_charge".into(),
-            kind: ShapeKind::Operation {
-                input: Some(reference("models#Account")),
-                output: Some(reference("models#Account")),
-                errors: vec![
-                    reference("models#payment_declined"),
-                    reference("models#rate_limited"),
-                ],
-            },
-            traits: vec![Trait {
-                id: "core#http".into(),
-                value: serde_json::json!({"method": "POST", "path": "/charges"}),
-            }],
+        operations: vec![create_charge_operation()],
+    }
+}
+
+/// The async operation the harnesses exercise: `Account` to `Account` with a
+/// transport binding and both declared errors.
+pub fn create_charge_operation() -> Shape {
+    Shape {
+        id: "models#create_charge".into(),
+        kind: ShapeKind::Operation {
+            input: Some(reference("models#Account")),
+            output: Some(reference("models#Account")),
+            errors: vec![
+                reference("models#payment_declined"),
+                reference("models#rate_limited"),
+            ],
+        },
+        traits: vec![Trait {
+            id: "core#http".into(),
+            value: serde_json::json!({"method": "POST", "path": "/charges"}),
         }],
     }
 }
 
 /// An error shape carrying its discrimination traits: the HTTP status, an
 /// optional body code, and retryability.
-fn declared_error(
+pub fn declared_error(
     id: &str,
     members: Vec<Member>,
     status: i64,

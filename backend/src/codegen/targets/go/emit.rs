@@ -102,15 +102,12 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         type_decls.extend(emit_type(shape, config));
         serde_decls.extend(emit_serde_decls(shape, config, &unions));
     }
-    // The error surface and the client exist only for a module that has
-    // operations: the taxonomy error values, the declared errors' methods, and
-    // the client interface land in the types file; the per-operation
-    // discriminators with the serialization.
+    // Operations bring the error values and the blocking client interface
+    // into the types file; the discriminators unmarshal, so they land with
+    // the serialization.
     if !module.operations.is_empty() {
-        type_decls.extend(errors::taxonomy_decls());
-        type_decls.extend(errors::declared_error_decls(module));
-        type_decls.push(errors::client_decl(module, config));
-        serde_decls.extend(errors::discriminator_decls(module));
+        type_decls.extend(errors::type_decls(module, config));
+        serde_decls.extend(errors::serde_decls(module));
     }
 
     let mut files = vec![ModuleFile {
