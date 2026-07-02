@@ -14,8 +14,7 @@
 use crate::codegen::casing::{transform, CasingConfig};
 use crate::codegen::conventions::type_ident_from_id;
 use crate::codegen::ops::{
-    declared_errors, discrimination_order, effect_of, module_declared_errors, DeclaredError,
-    Effect,
+    declared_errors, discrimination_order, effect_of, module_declared_errors, DeclaredError, Effect,
 };
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::targets::typescript::types::{type_expr_of, LANG};
@@ -108,9 +107,9 @@ pub fn declared_error_decls(module: &Module) -> Vec<Decl> {
             let data = type_ident_from_id(&err.shape_id);
             let status = err.status.unwrap_or(0);
             let retryable = if err.retryable {
-                format!("\n  retryable(): boolean {{\n    return true;\n  }}")
+                "\n  retryable(): boolean {\n    return true;\n  }"
             } else {
-                String::new()
+                ""
             };
             raw(format!(
                 "export class {class} extends {} {{\n  constructor(readonly data: {data}, body: string) {{\n    super({status}, body);\n    this.name = \"{class}\";\n  }}{retryable}\n}}",
@@ -129,9 +128,7 @@ fn method_ident(op: &Shape, config: &CasingConfig) -> String {
 
 fn op_io(op: &Shape) -> (Option<&crate::ir::Tref>, Option<&crate::ir::Tref>) {
     match &op.kind {
-        crate::ir::ShapeKind::Operation { input, output, .. } => {
-            (input.as_ref(), output.as_ref())
-        }
+        crate::ir::ShapeKind::Operation { input, output, .. } => (input.as_ref(), output.as_ref()),
         _ => (None, None),
     }
 }
@@ -308,7 +305,10 @@ mod tests {
         Module {
             name: "m".into(),
             shapes: vec![
-                structure("m#charge", vec![member("id", Tref::Prim(Prim::String), true)]),
+                structure(
+                    "m#charge",
+                    vec![member("id", Tref::Prim(Prim::String), true)],
+                ),
                 structure(
                     "m#charge_input",
                     vec![member("amount", Tref::Prim(Prim::I64), true)],
@@ -318,7 +318,10 @@ mod tests {
             ],
             operations: vec![op(
                 "m#create_charge",
-                vec![trait_of("http", json!({"method": "POST", "path": "/charges"}))],
+                vec![trait_of(
+                    "http",
+                    json!({"method": "POST", "path": "/charges"}),
+                )],
                 vec!["m#payment_declined", "m#rate_limited"],
             )],
         }
@@ -395,7 +398,9 @@ mod tests {
         // The coded entry consults the body's code field; the codeless one
         // matches on status alone; anything else is the concrete fallback.
         assert!(out.contains("if (status === 402 && code === \"payment_declined\") {"));
-        assert!(out.contains("return new PaymentDeclinedError(decodePaymentDeclined(parsed), body);"));
+        assert!(
+            out.contains("return new PaymentDeclinedError(decodePaymentDeclined(parsed), body);")
+        );
         assert!(out.contains("if (status === 429) {"));
         assert!(out.contains("return new RateLimitedError(decodeRateLimited(parsed), body);"));
         assert!(out.contains("return new APIError(status, body);"));

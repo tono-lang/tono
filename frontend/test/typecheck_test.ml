@@ -135,8 +135,7 @@ let operation_other_trait_ok () =
 let declared_error_missing_status () =
   Alcotest.(check (list string))
     "declared error without @status" [ "TC0015" ]
-    (codes
-       "struct not_found { msg: string }\n@errors(not_found) op o(): i64")
+    (codes "struct not_found { msg: string }\n@errors(not_found) op o(): i64")
 
 (* A @status whose argument is not a bare integer is malformed. *)
 let declared_error_bad_status () =
@@ -211,7 +210,8 @@ let ambiguity_is_per_operation () =
 
 let async_marker_ok () =
   Alcotest.(check (list string))
-    "bare @async on an operation" [] (codes "@async op o(): i64")
+    "bare @async on an operation" []
+    (codes "@async op o(): i64")
 
 let async_with_arguments () =
   Alcotest.(check (list string))
@@ -514,7 +514,8 @@ let () =
             discrimination_ambiguous_same_code;
           Alcotest.test_case "repeated name collapses" `Quick
             repeated_error_name_not_ambiguous;
-          Alcotest.test_case "ambiguity per op" `Quick ambiguity_is_per_operation;
+          Alcotest.test_case "ambiguity per op" `Quick
+            ambiguity_is_per_operation;
           Alcotest.test_case "async marker ok" `Quick async_marker_ok;
           Alcotest.test_case "async with args" `Quick async_with_arguments;
         ] );

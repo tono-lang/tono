@@ -180,7 +180,13 @@ mod tests {
                     let methods: String = client
                         .methods
                         .iter()
-                        .map(|m| format!("    fn {}{};\n", m.name.name, self.render_sig(&m.params, &m.ret)))
+                        .map(|m| {
+                            format!(
+                                "    fn {}{};\n",
+                                m.name.name,
+                                self.render_sig(&m.params, &m.ret)
+                            )
+                        })
                         .collect();
                     format!("pub trait {} {{\n{methods}}}", client.name.name)
                 }

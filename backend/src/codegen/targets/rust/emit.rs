@@ -56,7 +56,8 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     // The serde file holds the used helper modules, the open enums' impls, and
     // the operation discriminators. When all are empty there is nothing to
     // serialize beyond serde's derives.
-    let has_serde = !helpers.is_empty() || !serde_shape_decls.is_empty() || !discriminators.is_empty();
+    let has_serde =
+        !helpers.is_empty() || !serde_shape_decls.is_empty() || !discriminators.is_empty();
     if has_serde {
         // The types file routes fields through the helper modules, so it imports
         // exactly the ones it uses from the serde file.

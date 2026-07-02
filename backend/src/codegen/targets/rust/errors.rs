@@ -13,8 +13,7 @@
 use crate::codegen::casing::{transform, CasingConfig};
 use crate::codegen::conventions::type_ident_from_id;
 use crate::codegen::ops::{
-    declared_errors, discrimination_order, effect_of, module_declared_errors, DeclaredError,
-    Effect,
+    declared_errors, discrimination_order, effect_of, module_declared_errors, DeclaredError, Effect,
 };
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::targets::rust::types::type_expr_of;
@@ -106,14 +105,18 @@ pub fn taxonomy_decls(module: &Module) -> Vec<Decl> {
     let retryable_arms: String = declared
         .iter()
         .filter(|err| err.retryable)
-        .map(|err| format!("            {}::{}(_) => true,\n", n.api_failure, variant_name(err)))
+        .map(|err| {
+            format!(
+                "            {}::{}(_) => true,\n",
+                n.api_failure,
+                variant_name(err)
+            )
+        })
         .collect();
     let failure_retryable_body = if retryable_arms.is_empty() {
         "        false".to_string()
     } else {
-        format!(
-            "        match self {{\n{retryable_arms}            _ => false,\n        }}"
-        )
+        format!("        match self {{\n{retryable_arms}            _ => false,\n        }}")
     };
     decls.push(raw(format!(
         "impl {} {{\n    pub fn retryable(&self) -> bool {{\n{failure_retryable_body}\n    }}\n}}",
@@ -309,14 +312,20 @@ mod tests {
         Module {
             name: "m".into(),
             shapes: vec![
-                structure("m#charge", vec![member("id", Tref::Prim(Prim::String), true)]),
+                structure(
+                    "m#charge",
+                    vec![member("id", Tref::Prim(Prim::String), true)],
+                ),
                 structure("m#charge_input", vec![]),
                 declined,
                 limited,
             ],
             operations: vec![op(
                 "m#create_charge",
-                vec![trait_of("http", json!({"method": "POST", "path": "/charges"}))],
+                vec![trait_of(
+                    "http",
+                    json!({"method": "POST", "path": "/charges"}),
+                )],
                 vec!["m#payment_declined", "m#rate_limited"],
             )],
         }
@@ -344,7 +353,9 @@ mod tests {
             assert!(out.contains(arm), "missing category arm {arm}");
         }
         // The category structs carry the canonical fields.
-        assert!(out.contains("pub struct APIError {\n    pub status: u16,\n    pub body: String,\n}"));
+        assert!(
+            out.contains("pub struct APIError {\n    pub status: u16,\n    pub body: String,\n}")
+        );
         assert!(out.contains("pub violations: Vec<Violation>,"));
         assert!(out.contains("pub cause: Box<dyn std::error::Error + Send + Sync>,"));
         assert!(out.contains("pub path: String,"));
@@ -391,14 +402,16 @@ mod tests {
         let mut module = demo_module();
         module.operations = vec![op("m#local_sum", vec![], vec![])];
         let out = rendered(&[client_decl(&module, &rust_casing())]);
-        assert!(out.contains("    fn local_sum(&self, input: ChargeInput) -> Result<Charge, TonoError>;"));
+        assert!(out
+            .contains("    fn local_sum(&self, input: ChargeInput) -> Result<Charge, TonoError>;"));
         assert!(!out.contains("async fn"));
     }
 
     #[test]
     fn the_discriminator_matches_status_and_code_then_falls_back() {
         let out = rendered(&discriminator_decls(&demo_module()));
-        assert!(out.contains("pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {"));
+        assert!(out
+            .contains("pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {"));
         assert!(out.contains("if status == 402 && code == Some(\"payment_declined\") {"));
         assert!(out.contains("serde_json::from_value::<PaymentDeclined>(value.clone())"));
         assert!(out.contains("return TonoError::Api(APIFailure::PaymentDeclined(data));"));

@@ -48,10 +48,9 @@ fn int_arg(t: &Trait) -> Option<i64> {
 fn string_arg(t: &Trait) -> Option<String> {
     match &t.value {
         serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(items) => items
-            .first()
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        serde_json::Value::Array(items) => {
+            items.first().and_then(|v| v.as_str()).map(str::to_string)
+        }
         _ => None,
     }
 }
@@ -214,10 +213,16 @@ mod tests {
     #[test]
     fn the_async_trait_is_authoritative_and_transport_infers_async() {
         // Explicit @async, with or without a transport, is async.
-        assert_eq!(effect_of(&op(vec![trait_of("async", json!(null))], vec![])), Effect::Async);
+        assert_eq!(
+            effect_of(&op(vec![trait_of("async", json!(null))], vec![])),
+            Effect::Async
+        );
         // A transport binding alone infers async.
         assert_eq!(
-            effect_of(&op(vec![trait_of("http", json!({"method": "POST"}))], vec![])),
+            effect_of(&op(
+                vec![trait_of("http", json!({"method": "POST"}))],
+                vec![]
+            )),
             Effect::Async
         );
         // A purely local operation is sync.
@@ -269,7 +274,10 @@ mod tests {
     #[test]
     fn unresolved_and_repeated_references_are_skipped() {
         let module = module(
-            vec![error_shape("m#not_found", vec![trait_of("status", json!([404]))])],
+            vec![error_shape(
+                "m#not_found",
+                vec![trait_of("status", json!([404]))],
+            )],
             vec![],
         );
         let op = op(vec![], vec!["m#not_found", "m#nope", "m#not_found"]);
@@ -315,6 +323,9 @@ mod tests {
             .into_iter()
             .map(|e| e.shape_id)
             .collect();
-        assert_eq!(ordered, vec!["m#coded_bad".to_string(), "m#generic_bad".to_string()]);
+        assert_eq!(
+            ordered,
+            vec!["m#coded_bad".to_string(), "m#generic_bad".to_string()]
+        );
     }
 }

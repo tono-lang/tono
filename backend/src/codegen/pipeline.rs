@@ -380,7 +380,8 @@ mod tests {
         assert!(rust_types.contains("Undeclared(APIError),"));
         assert!(rust_types.contains("async fn get_charge(&self) -> Result<Charge, TonoError>;"));
         let rust_serde = text_of("rust/payments_serde.rs");
-        assert!(rust_serde.contains("pub fn decode_get_charge_error(status: u16, body: &str) -> TonoError {"));
+        assert!(rust_serde
+            .contains("pub fn decode_get_charge_error(status: u16, body: &str) -> TonoError {"));
 
         // Go: error values with no root, the blocking interface, and the
         // discriminator in the serde file.
@@ -399,7 +400,9 @@ mod tests {
         assert!(ts_types.contains("export class NotFoundError extends APIError {"));
         assert!(ts_types.contains("getCharge(): Promise<Charge>;"));
         let ts_serde = text_of("typescript/payments_serde.ts");
-        assert!(ts_serde.contains("export function decodeGetChargeError(status: number, body: string): TonoError {"));
+        assert!(ts_serde.contains(
+            "export function decodeGetChargeError(status: number, body: string): TonoError {"
+        ));
         assert!(ts_serde.contains(
             "import { APIError, Charge, NotFound, NotFoundError, TonoError } from \"./payments\";"
         ));

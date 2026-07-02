@@ -12,8 +12,7 @@
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::type_ident_from_id;
 use crate::codegen::ops::{
-    declared_errors, discrimination_order, effect_of, module_declared_errors, DeclaredError,
-    Effect,
+    declared_errors, discrimination_order, effect_of, module_declared_errors, DeclaredError, Effect,
 };
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::targets::go::types::type_expr_of;
@@ -315,14 +314,20 @@ mod tests {
         Module {
             name: "m".into(),
             shapes: vec![
-                structure("m#charge", vec![member("id", Tref::Prim(Prim::String), true)]),
+                structure(
+                    "m#charge",
+                    vec![member("id", Tref::Prim(Prim::String), true)],
+                ),
                 structure("m#charge_input", vec![]),
                 declined,
                 limited,
             ],
             operations: vec![op(
                 "m#create_charge",
-                vec![trait_of("http", json!({"method": "POST", "path": "/charges"}))],
+                vec![trait_of(
+                    "http",
+                    json!({"method": "POST", "path": "/charges"}),
+                )],
                 vec!["m#payment_declined", "m#rate_limited"],
             )],
         }
@@ -363,9 +368,8 @@ mod tests {
     #[test]
     fn declared_errors_gain_error_and_retryable_methods() {
         let out = rendered(&declared_error_decls(&demo_module()));
-        assert!(out.contains(
-            "func (e *PaymentDeclined) Error() string { return \"payment_declined\" }"
-        ));
+        assert!(out
+            .contains("func (e *PaymentDeclined) Error() string { return \"payment_declined\" }"));
         assert!(out.contains("func (e *PaymentDeclined) Retryable() bool { return true }"));
         // Without a code the message falls back to the canonical name; without
         // @retryable the predicate reports false.

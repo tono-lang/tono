@@ -89,11 +89,7 @@ impl TsRules {
         } else {
             ret
         };
-        format!(
-            "  {}({}): {ret};\n",
-            method.name.name,
-            params.join(", ")
-        )
+        format!("  {}({}): {ret};\n", method.name.name, params.join(", "))
     }
 
     fn render_variant(&self, discriminator: &str, variant: &Variant) -> String {

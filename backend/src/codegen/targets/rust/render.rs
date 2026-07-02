@@ -171,10 +171,7 @@ impl RenderRules for RustRules {
                 } else {
                     ""
                 };
-                format!(
-                    "{allow}pub trait {} {{\n{methods}}}",
-                    client.name.name
-                )
+                format!("{allow}pub trait {} {{\n{methods}}}", client.name.name)
             }
             // The open enum and the tagged union are emitted as verbatim Raw items
             // (they need hand-written serde impls), and the operation stub belongs
