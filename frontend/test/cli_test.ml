@@ -98,6 +98,37 @@ let run_extra_bare_arg () =
     "the first path's basename wins" true
     (contains o.Cli.out "demo")
 
+let run_fmt () =
+  let o =
+    Cli.run
+      ~read_file:(always "struct point { x: i64, y: i64 }")
+      [| "x"; "fmt"; "demo.tono" |]
+  in
+  Alcotest.(check int) "exit 0" 0 o.Cli.code;
+  Alcotest.(check string) "no stderr" "" o.Cli.err;
+  Alcotest.(check string)
+    "canonical form on stdout" "struct point {\n  x: i64\n  y: i64\n}\n"
+    o.Cli.out
+
+let run_fmt_invalid_source () =
+  let o = Cli.run ~read_file:(always "struct {") [| "x"; "fmt"; "bad.tono" |] in
+  Alcotest.(check int) "parse error exit code" 1 o.Cli.code;
+  Alcotest.(check string) "no stdout" "" o.Cli.out;
+  Alcotest.(check bool) "diagnostic on stderr" true (o.Cli.err <> "")
+
+let run_fmt_missing_path () =
+  let o = Cli.run ~read_file:(always "") [| "x"; "fmt" |] in
+  Alcotest.(check int) "usage exit code" 2 o.Cli.code;
+  Alcotest.(check bool) "usage on stderr" true (contains o.Cli.err "usage")
+
+let run_fmt_file_not_found () =
+  let raising p = raise (Sys_error (p ^ ": No such file")) in
+  let o = Cli.run ~read_file:raising [| "x"; "fmt"; "nope.tono" |] in
+  Alcotest.(check int) "io error exit code" 1 o.Cli.code;
+  Alcotest.(check bool)
+    "reports the io error" true
+    (contains o.Cli.err "nope.tono")
+
 let () =
   Alcotest.run "cli"
     [
@@ -118,5 +149,9 @@ let () =
           Alcotest.test_case "no args" `Quick run_no_args;
           Alcotest.test_case "unknown command" `Quick run_unknown;
           Alcotest.test_case "extra bare arg" `Quick run_extra_bare_arg;
+          Alcotest.test_case "fmt" `Quick run_fmt;
+          Alcotest.test_case "fmt invalid source" `Quick run_fmt_invalid_source;
+          Alcotest.test_case "fmt missing path" `Quick run_fmt_missing_path;
+          Alcotest.test_case "fmt file not found" `Quick run_fmt_file_not_found;
         ] );
     ]
