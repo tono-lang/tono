@@ -70,3 +70,23 @@ func unmarshalPaymentMethod(b []byte) (PaymentMethod, error) {
 	}
 	return nil, fmt.Errorf("unknown variant %q", tag)
 }
+
+func DecodeCreateChargeError(status int, body []byte) error {
+	var probe struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	if status == 402 && probe.Code == "card_declined" {
+		var data CardDeclined
+		if json.Unmarshal(body, &data) == nil {
+			return &data
+		}
+	}
+	if status == 404 {
+		var data NotFound
+		if json.Unmarshal(body, &data) == nil {
+			return &data
+		}
+	}
+	return &APIError{Status: status, Body: string(body)}
+}

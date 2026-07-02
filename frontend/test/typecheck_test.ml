@@ -106,13 +106,14 @@ let duplicate_shape () =
 
 (* ── Operation error references (TC0014) ───────────────────────────────── *)
 
-(* An @errors entry naming a declared shape resolves; outputs are resolved
-   elsewhere, so a generic output applied correctly stays clean too. *)
+(* An @errors entry naming a declared shape (with its @status) resolves;
+   outputs are resolved elsewhere, so a generic output applied correctly stays
+   clean too. *)
 let operation_errors_ok () =
   Alcotest.(check (list string))
     "declared error and applied generic output" []
     (codes
-       "struct not_found { msg: string }\n\
+       "@status(404) struct not_found { msg: string }\n\
         struct page[t] { items: []t }\n\
         struct charge { id: string }\n\
         @errors(not_found) op list(): page[charge]")
@@ -127,6 +128,95 @@ let operation_other_trait_ok () =
   Alcotest.(check (list string))
     "doc trait on an operation" []
     (codes "@doc(\"x\") op o(): i64")
+
+(* ── Declared-error discrimination (TC0015-TC0017) ─────────────────────── *)
+
+(* A declared error without @status cannot be discriminated by the response. *)
+let declared_error_missing_status () =
+  Alcotest.(check (list string))
+    "declared error without @status" [ "TC0015" ]
+    (codes "struct not_found { msg: string }\n@errors(not_found) op o(): i64")
+
+(* A @status whose argument is not a bare integer is malformed. *)
+let declared_error_bad_status () =
+  Alcotest.(check (list string))
+    "@status with a string argument" [ "TC0015" ]
+    (codes
+       "@status(\"x\") struct not_found { msg: string }\n\
+        @errors(not_found) op o(): i64")
+
+(* A well-formed @errorCode string rides along with no diagnostic. *)
+let declared_error_code_ok () =
+  Alcotest.(check (list string))
+    "status plus string errorCode" []
+    (codes
+       "@status(402) @errorCode(\"declined\") struct declined { m: string }\n\
+        @errors(declined) op o(): i64")
+
+let declared_error_code_invalid () =
+  Alcotest.(check (list string))
+    "@errorCode with an int argument" [ "TC0016" ]
+    (codes
+       "@status(402) @errorCode(42) struct declined { m: string }\n\
+        @errors(declined) op o(): i64")
+
+(* Two declared errors sharing a status with no code cannot be told apart. *)
+let discrimination_ambiguous_no_code () =
+  Alcotest.(check (list string))
+    "two errors on one status, both codeless" [ "TC0017" ]
+    (codes
+       "@status(400) struct bad_a { m: string }\n\
+        @status(400) struct bad_b { m: string }\n\
+        @errors(bad_a, bad_b) op o(): i64")
+
+(* Distinct @errorCode values disambiguate a shared status. *)
+let discrimination_by_code_ok () =
+  Alcotest.(check (list string))
+    "shared status split by codes" []
+    (codes
+       "@status(400) @errorCode(\"a\") struct bad_a { m: string }\n\
+        @status(400) @errorCode(\"b\") struct bad_b { m: string }\n\
+        @errors(bad_a, bad_b) op o(): i64")
+
+let discrimination_ambiguous_same_code () =
+  Alcotest.(check (list string))
+    "shared status and shared code" [ "TC0017" ]
+    (codes
+       "@status(400) @errorCode(\"a\") struct bad_a { m: string }\n\
+        @status(400) @errorCode(\"a\") struct bad_b { m: string }\n\
+        @errors(bad_a, bad_b) op o(): i64")
+
+(* Listing the same error twice is collapsed, not reported as ambiguous. *)
+let repeated_error_name_not_ambiguous () =
+  Alcotest.(check (list string))
+    "one error listed twice" []
+    (codes
+       "@status(404) struct not_found { m: string }\n\
+        @errors(not_found) @errors(not_found) op o(): i64")
+
+(* Different operations may reuse a status freely; uniqueness is per op. The
+   trailing trait form keeps each @errors attached to its own op (a leading
+   trait after an op would attach to the previous op instead). *)
+let ambiguity_is_per_operation () =
+  Alcotest.(check (list string))
+    "two ops each declaring one 400 error" []
+    (codes
+       "@status(400) struct bad_a { m: string }\n\
+        @status(400) struct bad_b { m: string }\n\
+        op oa(): i64 @errors(bad_a)\n\
+        op ob(): i64 @errors(bad_b)")
+
+(* ── @async (TC0018) ───────────────────────────────────────────────────── *)
+
+let async_marker_ok () =
+  Alcotest.(check (list string))
+    "bare @async on an operation" []
+    (codes "@async op o(): i64")
+
+let async_with_arguments () =
+  Alcotest.(check (list string))
+    "@async with an argument" [ "TC0018" ]
+    (codes "@async(true) op o(): i64")
 
 (* ── Accumulation (no fail-fast) ───────────────────────────────────────── *)
 
@@ -410,6 +500,24 @@ let () =
             operation_error_unresolved;
           Alcotest.test_case "other trait ok" `Quick operation_other_trait_ok;
           Alcotest.test_case "accumulates" `Quick accumulates_diagnostics;
+          Alcotest.test_case "missing status" `Quick
+            declared_error_missing_status;
+          Alcotest.test_case "bad status" `Quick declared_error_bad_status;
+          Alcotest.test_case "errorCode ok" `Quick declared_error_code_ok;
+          Alcotest.test_case "errorCode invalid" `Quick
+            declared_error_code_invalid;
+          Alcotest.test_case "ambiguous no code" `Quick
+            discrimination_ambiguous_no_code;
+          Alcotest.test_case "code disambiguates" `Quick
+            discrimination_by_code_ok;
+          Alcotest.test_case "ambiguous same code" `Quick
+            discrimination_ambiguous_same_code;
+          Alcotest.test_case "repeated name collapses" `Quick
+            repeated_error_name_not_ambiguous;
+          Alcotest.test_case "ambiguity per op" `Quick
+            ambiguity_is_per_operation;
+          Alcotest.test_case "async marker ok" `Quick async_marker_ok;
+          Alcotest.test_case "async with args" `Quick async_with_arguments;
         ] );
       ( "nullability",
         [

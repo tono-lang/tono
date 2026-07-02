@@ -13,6 +13,7 @@ use crate::codegen::casing::CasingConfig;
 use crate::codegen::targets::rust::codecs::{
     open_enum_macro, runtime_helpers, well_known_decls, HelperSet,
 };
+use crate::codegen::targets::rust::errors;
 use crate::codegen::targets::rust::types::{emit_serde, emit_type};
 use crate::codegen::tree::{Decl, File, ModuleFile, Raw};
 use crate::ir::Module;
@@ -42,9 +43,20 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         serde_shape_decls.extend(emit_serde(shape));
     }
 
-    // The serde file holds the used helper modules and the open enums' impls. When
-    // both are empty there is nothing to serialize beyond serde's derives.
-    let has_serde = !helpers.is_empty() || !serde_shape_decls.is_empty();
+    // Operations bring the taxonomy (with the Api payload enum) and the
+    // client trait into the types file; the discriminators parse JSON, so they
+    // belong to the serde file, whose emission below they also trigger.
+    let mut discriminators = Vec::new();
+    if !module.operations.is_empty() {
+        type_decls.extend(errors::type_decls(module, config));
+        discriminators = errors::serde_decls(module);
+    }
+
+    // The serde file holds the used helper modules, the open enums' impls, and
+    // the operation discriminators. When all are empty there is nothing to
+    // serialize beyond serde's derives.
+    let has_serde =
+        !helpers.is_empty() || !serde_shape_decls.is_empty() || !discriminators.is_empty();
     if has_serde {
         // The types file routes fields through the helper modules, so it imports
         // exactly the ones it uses from the serde file.
@@ -64,17 +76,21 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
 
     if has_serde {
         let mut serde_decls = runtime_helpers(helpers);
-        // The enum impls reference the module's types, so the serde file pulls them
-        // in; with no enum impl there is nothing referencing the types, so the glob
-        // would be unused. The `open_enum!` macro is defined once, before the
-        // per-enum invocations that expand it, so each open enum is one invocation
-        // rather than a repeated impl block. `emit_serde` emits only for open enums,
-        // so a non-empty `serde_shape_decls` is exactly the has-an-open-enum case.
-        if !serde_shape_decls.is_empty() {
-            serde_decls.insert(0, open_enum_macro());
+        // The enum impls and the discriminators reference the module's types, so
+        // the serde file pulls them in; with neither there is nothing referencing
+        // the types, so the glob would be unused. The `open_enum!` macro is
+        // defined once, before the per-enum invocations that expand it, so each
+        // open enum is one invocation rather than a repeated impl block.
+        // `emit_serde` emits only for open enums, so a non-empty
+        // `serde_shape_decls` is exactly the has-an-open-enum case.
+        if !serde_shape_decls.is_empty() || !discriminators.is_empty() {
             serde_decls.insert(0, types_glob_use(module));
         }
+        if !serde_shape_decls.is_empty() {
+            serde_decls.insert(1, open_enum_macro());
+        }
         serde_decls.extend(serde_shape_decls);
+        serde_decls.extend(discriminators);
         files.push(ModuleFile {
             suffix: "_serde",
             file: File {

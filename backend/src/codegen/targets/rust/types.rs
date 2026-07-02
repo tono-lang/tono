@@ -14,7 +14,7 @@ use crate::codegen::tree::{Decl, Field, TypeExpr};
 use crate::ir::{Member, Shape, ShapeKind, Tref};
 
 /// The Rust language key for per-language traits such as `@rename`.
-const LANG: &str = "rust";
+pub(crate) const LANG: &str = "rust";
 
 /// The idiomatic Rust casing: snake_case fields. Type names are PascalCase in the
 /// IR and used as-is (not cased); only the field default matters here.

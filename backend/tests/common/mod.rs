@@ -111,9 +111,69 @@ pub fn matrix_module() -> Module {
                 "models#bank_data",
                 vec![member("iban", Tref::Prim(Prim::String), true, vec![])],
             ),
+            declared_error(
+                "models#payment_declined",
+                vec![member("message", Tref::Prim(Prim::String), true, vec![])],
+                402,
+                Some("payment_declined"),
+                true,
+            ),
+            declared_error("models#rate_limited", vec![], 429, None, false),
         ],
-        operations: vec![],
+        // One async operation carrying both declared errors, so every harness
+        // exercises the generated error surface, the client, and the
+        // per-operation discriminator alongside the wire matrix.
+        operations: vec![create_charge_operation()],
     }
+}
+
+/// The async operation the harnesses exercise: `Account` to `Account` with a
+/// transport binding and both declared errors.
+pub fn create_charge_operation() -> Shape {
+    Shape {
+        id: "models#create_charge".into(),
+        kind: ShapeKind::Operation {
+            input: Some(reference("models#Account")),
+            output: Some(reference("models#Account")),
+            errors: vec![
+                reference("models#payment_declined"),
+                reference("models#rate_limited"),
+            ],
+        },
+        traits: vec![Trait {
+            id: "core#http".into(),
+            value: serde_json::json!({"method": "POST", "path": "/charges"}),
+        }],
+    }
+}
+
+/// An error shape carrying its discrimination traits: the HTTP status, an
+/// optional body code, and retryability.
+pub fn declared_error(
+    id: &str,
+    members: Vec<Member>,
+    status: i64,
+    code: Option<&str>,
+    retryable: bool,
+) -> Shape {
+    let mut shape = structure(id, members);
+    shape.traits.push(Trait {
+        id: "core#status".into(),
+        value: serde_json::json!([status]),
+    });
+    if let Some(code) = code {
+        shape.traits.push(Trait {
+            id: "core#errorCode".into(),
+            value: serde_json::json!([code]),
+        });
+    }
+    if retryable {
+        shape.traits.push(Trait {
+            id: "core#retryable".into(),
+            value: serde_json::Value::Null,
+        });
+    }
+    shape
 }
 
 /// The canonical wire document for the shared module: exercises i64-as-string,

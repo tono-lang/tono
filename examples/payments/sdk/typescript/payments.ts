@@ -35,3 +35,95 @@ export interface BankAccount {
 export type PaymentMethod =
   | ({ kind: "card" } & Card)
   | ({ kind: "bank" } & BankAccount);
+
+export interface CardDeclined {
+  message: string;
+}
+
+export interface NotFound {
+  message: string;
+}
+
+export abstract class TonoError extends Error {
+  retryable(): boolean {
+    return false;
+  }
+}
+
+export interface Violation {
+  field: string;
+  constraint: string;
+  message: string;
+}
+
+export class ValidationError extends TonoError {
+  constructor(readonly violations: Violation[]) {
+    super("validation failed");
+    this.name = "ValidationError";
+  }
+}
+
+export class TransportError extends TonoError {
+  constructor(readonly cause: unknown) {
+    super("transport failure");
+    this.name = "TransportError";
+  }
+}
+
+export class DecodeError extends TonoError {
+  constructor(
+    readonly path: string,
+    readonly expected: string,
+    readonly raw: string,
+  ) {
+    super("response body did not match the declared schema");
+    this.name = "DecodeError";
+  }
+}
+
+export class ContractError extends TonoError {
+  constructor(
+    readonly contractName: string,
+    readonly cause: unknown,
+  ) {
+    super("contract hook failed");
+    this.name = "ContractError";
+  }
+}
+
+export class APIError extends TonoError {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(`api error ${status}`);
+    this.name = "APIError";
+  }
+}
+
+export class CardDeclinedError extends APIError {
+  constructor(
+    readonly data: CardDeclined,
+    body: string,
+  ) {
+    super(402, body);
+    this.name = "CardDeclinedError";
+  }
+  retryable(): boolean {
+    return true;
+  }
+}
+
+export class NotFoundError extends APIError {
+  constructor(
+    readonly data: NotFound,
+    body: string,
+  ) {
+    super(404, body);
+    this.name = "NotFoundError";
+  }
+}
+
+export interface Client {
+  createCharge(input: Charge): Promise<Charge>;
+}

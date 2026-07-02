@@ -15,7 +15,9 @@ use tono_backend::codegen::targets::typescript::emit::emit_module;
 use tono_backend::codegen::targets::typescript::types::ts_casing;
 use tono_backend::codegen::targets::typescript::TsRules;
 use tono_backend::codegen::Formatter;
-use tono_backend::ir::{EnumBacking, Member, Module, Prim, Shape, ShapeKind, Tref};
+
+mod common;
+use common::matrix_module as demo_module;
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests/typescript")
@@ -26,76 +28,69 @@ fn tool(ws: &Path, name: &str) -> Option<PathBuf> {
     bin.exists().then_some(bin)
 }
 
-fn member(name: &str, target: Tref) -> Member {
-    Member {
-        name: name.into(),
-        target,
-        required: true,
-        default: None,
-        constraints: vec![],
-        traits: vec![],
-    }
-}
-
-fn demo_module() -> Module {
-    Module {
-        name: "models".into(),
-        shapes: vec![
-            Shape {
-                id: "models#Account".into(),
-                kind: ShapeKind::Structure {
-                    params: vec![],
-                    members: vec![
-                        member("account_id", Tref::Prim(Prim::I64)),
-                        member("secret", Tref::Prim(Prim::Bytes)),
-                        member(
-                            "status",
-                            Tref::Ref {
-                                id: "models#Status".into(),
-                                args: vec![],
-                            },
-                        ),
-                    ],
-                },
-                traits: vec![],
-            },
-            Shape {
-                id: "models#Status".into(),
-                kind: ShapeKind::Enum {
-                    backing: EnumBacking::String,
-                    values: vec![("active".into(), None), ("closed".into(), None)],
-                },
-                traits: vec![],
-            },
-        ],
-        operations: vec![],
-    }
-}
-
 const DRIVER: &str = r#"
-import { Account } from "./models";
-import { encodeAccount, decodeAccount } from "./models_serde";
+import { Account, APIError, PaymentDeclinedError, RateLimitedError, TonoError } from "./models";
+import { encodeAccount, decodeAccount, decodeCreateChargeError } from "./models_serde";
 
 const big = 9007199254740993n; // 2^53 + 1, not representable as a JS number
 
 const account: Account = {
   accountID: big,
   secret: new Uint8Array([1, 2, 3, 254]),
+  tip: 500n,
   status: "active",
+  code: 200,
+  method: { type: "card", last4: "4242" },
+  counts: [[7, "a"], [3, "b"]],
 };
 
 const wire: any = encodeAccount(account);
 if (typeof wire.account_id !== "string") throw new Error("i64 must encode to a string");
 if (wire.account_id !== big.toString()) throw new Error("i64 wire value wrong");
+if (wire.tip !== "500") throw new Error("an optional i64 must encode to a string");
+if (wire.code !== 200) throw new Error("an int-backed enum must encode as a bare number");
+if (wire.method.type !== "card") throw new Error("a union must carry its discriminator");
+if (JSON.stringify(wire.counts) !== JSON.stringify([[7, "a"], [3, "b"]])) throw new Error("an @entries map must encode as a pairs array");
 
 const back = decodeAccount(JSON.parse(JSON.stringify(wire)));
 if (back.accountID !== big) throw new Error("i64 lost precision: " + back.accountID);
 if (back.secret.length !== 4 || back.secret[3] !== 254) throw new Error("bytes round-trip failed");
 if (back.status !== "active") throw new Error("status round-trip failed");
+if (back.tip !== 500n) throw new Error("optional i64 round-trip failed");
 
-// An open enum decodes an unknown tag leniently and preserves it.
-const unknown = decodeAccount({ account_id: "1", secret: "AAEC/g==", status: "frozen" });
+// An open enum decodes an unknown tag leniently and preserves it: a string for
+// the string-backed enum, an integer for the int-backed one.
+const unknown = decodeAccount({
+  account_id: "1",
+  secret: "AAEC/g==",
+  status: "frozen",
+  code: 418,
+  method: { type: "card", last4: "0000" },
+  counts: [],
+});
 if (unknown.status !== "frozen") throw new Error("unknown enum value must pass through");
+if (unknown.code !== 418) throw new Error("unknown int-backed enum value must pass through");
+
+// Error discrimination: (status, body code) maps to the declared type, rooted
+// in the taxonomy, with the @retryable predicate lowered.
+const declined = decodeCreateChargeError(402, JSON.stringify({ code: "payment_declined", message: "no funds" }));
+if (!(declined instanceof PaymentDeclinedError)) throw new Error("(402, code) must map to the declared error type");
+if (!(declined instanceof APIError && declined instanceof TonoError)) throw new Error("a declared error must be rooted in the taxonomy");
+if (!declined.retryable()) throw new Error("@retryable must lower to retryable() === true");
+if (declined.data.message !== "no funds") throw new Error("the declared error body must decode");
+
+// A status alone discriminates when unambiguous; without @retryable the
+// predicate reports false.
+const limited = decodeCreateChargeError(429, "{}");
+if (!(limited instanceof RateLimitedError)) throw new Error("a bare status must discriminate when unambiguous");
+if (limited.retryable()) throw new Error("a non-retryable error must report false");
+
+// No match resolves to the concrete fallback type, never a declared one.
+const wrongCode = decodeCreateChargeError(402, JSON.stringify({ code: "other" }));
+if (wrongCode instanceof PaymentDeclinedError || !(wrongCode instanceof APIError)) throw new Error("an unmatched code must fall back to APIError");
+const undeclared = decodeCreateChargeError(500, "not json");
+if (!(undeclared instanceof APIError)) throw new Error("an undeclared response must fall back to APIError");
+if (undeclared.status !== 500 || undeclared.body !== "not json") throw new Error("the fallback must keep the status and raw body");
 
 console.log("ROUNDTRIP_OK");
 "#;
