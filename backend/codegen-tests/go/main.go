@@ -12,6 +12,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -88,6 +89,47 @@ func main() {
 	code := HTTPCode(418)
 	if code != 418 {
 		fail("an unknown int-backed enum value must pass through")
+	}
+
+	// Error discrimination: (status, body code) picks the declared error value
+	// via errors.As, with the @retryable predicate lowered.
+	declined := DecodeCreateChargeError(402, []byte(`{"code":"payment_declined","message":"no funds"}`))
+	var pd *PaymentDeclined
+	if !errors.As(declined, &pd) {
+		fail("(402, code) must map to the declared error type")
+	}
+	if pd.Message != "no funds" {
+		fail("the declared error body must decode")
+	}
+	if !pd.Retryable() {
+		fail("@retryable must lower to Retryable() == true")
+	}
+
+	// A status alone discriminates when unambiguous; without @retryable the
+	// predicate reports false.
+	limited := DecodeCreateChargeError(429, []byte(`{}`))
+	var rl *RateLimited
+	if !errors.As(limited, &rl) {
+		fail("a bare status must discriminate when unambiguous")
+	}
+	if rl.Retryable() {
+		fail("a non-retryable error must report false")
+	}
+
+	// No match resolves to the concrete fallback type, never a declared one.
+	fallback := DecodeCreateChargeError(402, []byte(`{"code":"other"}`))
+	var apiErr *APIError
+	if !errors.As(fallback, &apiErr) || apiErr.Status != 402 {
+		fail("an unmatched code must fall back to APIError")
+	}
+	var stillDeclined *PaymentDeclined
+	if errors.As(fallback, &stillDeclined) {
+		fail("the fallback must not be a declared type")
+	}
+	undeclared := DecodeCreateChargeError(500, []byte("not json"))
+	var undeclaredAPI *APIError
+	if !errors.As(undeclared, &undeclaredAPI) || undeclaredAPI.Status != 500 || undeclaredAPI.Body != "not json" {
+		fail("the fallback must keep the status and raw body")
 	}
 
 	fmt.Println("ROUNDTRIP_OK")

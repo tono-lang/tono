@@ -11,7 +11,8 @@ mod models;
 // types via `use crate::models::*`.
 mod models_serde;
 
-use models::{Account, CardData, HTTPCode, Method, Status};
+use models::{APIError, APIFailure, Account, CardData, HTTPCode, Method, Status, TonoError};
+use models_serde::decode_create_charge_error;
 use serde_json::{json, Value};
 
 fn main() {
@@ -69,6 +70,41 @@ fn main() {
     assert!(
         matches!(unknown.code, HTTPCode::Unknown(418)),
         "an unknown int-backed enum value must pass through as i64"
+    );
+
+    // Error discrimination: (status, body code) maps to the declared variant of
+    // the Api category, with the @retryable predicate lowered.
+    let declined = decode_create_charge_error(402, r#"{"code":"payment_declined","message":"no funds"}"#);
+    assert!(declined.retryable(), "@retryable must lower into the predicate");
+    match declined {
+        TonoError::Api(APIFailure::PaymentDeclined(data)) => assert_eq!(data.message, "no funds"),
+        other => panic!("(402, code) must map to the declared variant, got {other:?}"),
+    }
+
+    // A status alone discriminates when unambiguous; without @retryable the
+    // predicate reports false.
+    let limited = decode_create_charge_error(429, "{}");
+    assert!(!limited.retryable(), "a non-retryable error must report false");
+    assert!(
+        matches!(limited, TonoError::Api(APIFailure::RateLimited(_))),
+        "a bare status must discriminate when unambiguous"
+    );
+
+    // No match resolves to the concrete fallback type carrying the raw body.
+    let fallback = decode_create_charge_error(402, r#"{"code":"other"}"#);
+    match fallback {
+        TonoError::Api(APIFailure::Undeclared(APIError { status: 402, body })) => {
+            assert_eq!(body, r#"{"code":"other"}"#);
+        }
+        other => panic!("an unmatched code must fall back to APIError, got {other:?}"),
+    }
+    let undeclared = decode_create_charge_error(500, "not json");
+    assert!(
+        matches!(
+            undeclared,
+            TonoError::Api(APIFailure::Undeclared(APIError { status: 500, .. }))
+        ),
+        "an undeclared response must fall back to APIError"
     );
 
     println!("ROUNDTRIP_OK");

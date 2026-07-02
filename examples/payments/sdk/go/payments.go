@@ -2,6 +2,8 @@
 
 package payments
 
+import "strconv"
+
 type Timestamp string
 
 type LocalDate string
@@ -55,3 +57,67 @@ func (PaymentMethodCard) isPaymentMethod() {}
 type PaymentMethodBank struct{ Value BankAccount }
 
 func (PaymentMethodBank) isPaymentMethod() {}
+
+type CardDeclined struct {
+	Message string `json:"message"`
+}
+
+type NotFound struct {
+	Message string `json:"message"`
+}
+
+type Violation struct {
+	Field      string `json:"field"`
+	Constraint string `json:"constraint"`
+	Message    string `json:"message"`
+}
+
+type ValidationError struct {
+	Violations []Violation `json:"violations"`
+}
+
+func (e *ValidationError) Error() string { return "validation failed" }
+
+type TransportError struct {
+	Cause error
+}
+
+func (e *TransportError) Error() string { return "transport failure" }
+
+func (e *TransportError) Unwrap() error { return e.Cause }
+
+type DecodeError struct {
+	Path     string
+	Expected string
+	Raw      string
+}
+
+func (e *DecodeError) Error() string { return "response body did not match the declared schema" }
+
+type ContractError struct {
+	ContractName string
+	Cause        error
+}
+
+func (e *ContractError) Error() string { return "contract hook '" + e.ContractName + "' failed" }
+
+func (e *ContractError) Unwrap() error { return e.Cause }
+
+type APIError struct {
+	Status int
+	Body   string
+}
+
+func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status) }
+
+func (e *CardDeclined) Error() string { return "card_declined" }
+
+func (e *CardDeclined) Retryable() bool { return true }
+
+func (e *NotFound) Error() string { return "not_found" }
+
+func (e *NotFound) Retryable() bool { return false }
+
+type Client interface {
+	CreateCharge(input Charge) (Charge, error)
+}

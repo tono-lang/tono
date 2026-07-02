@@ -67,14 +67,84 @@ fn demo_module() -> Module {
                 },
                 traits: vec![],
             },
+            error_shape(
+                "models#payment_declined",
+                vec![member("message", Tref::Prim(Prim::String))],
+                402,
+                Some("payment_declined"),
+                true,
+            ),
+            error_shape("models#rate_limited", vec![], 429, None, false),
         ],
-        operations: vec![],
+        // One async operation carrying both declared errors, so the driver can
+        // exercise the generated taxonomy and discriminator end to end.
+        operations: vec![Shape {
+            id: "models#create_charge".into(),
+            kind: ShapeKind::Operation {
+                input: Some(Tref::Ref {
+                    id: "models#Account".into(),
+                    args: vec![],
+                }),
+                output: Some(Tref::Ref {
+                    id: "models#Account".into(),
+                    args: vec![],
+                }),
+                errors: vec![
+                    Tref::Ref {
+                        id: "models#payment_declined".into(),
+                        args: vec![],
+                    },
+                    Tref::Ref {
+                        id: "models#rate_limited".into(),
+                        args: vec![],
+                    },
+                ],
+            },
+            traits: vec![tono_backend::ir::Trait {
+                id: "core#http".into(),
+                value: serde_json::json!({"method": "POST", "path": "/charges"}),
+            }],
+        }],
+    }
+}
+
+/// An error shape carrying its discrimination traits.
+fn error_shape(
+    id: &str,
+    members: Vec<Member>,
+    status: i64,
+    code: Option<&str>,
+    retryable: bool,
+) -> Shape {
+    let mut traits = vec![tono_backend::ir::Trait {
+        id: "core#status".into(),
+        value: serde_json::json!([status]),
+    }];
+    if let Some(code) = code {
+        traits.push(tono_backend::ir::Trait {
+            id: "core#errorCode".into(),
+            value: serde_json::json!([code]),
+        });
+    }
+    if retryable {
+        traits.push(tono_backend::ir::Trait {
+            id: "core#retryable".into(),
+            value: serde_json::Value::Null,
+        });
+    }
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members,
+        },
+        traits,
     }
 }
 
 const DRIVER: &str = r#"
-import { Account } from "./models";
-import { encodeAccount, decodeAccount } from "./models_serde";
+import { Account, APIError, PaymentDeclinedError, RateLimitedError, TonoError } from "./models";
+import { encodeAccount, decodeAccount, decodeCreateChargeError } from "./models_serde";
 
 const big = 9007199254740993n; // 2^53 + 1, not representable as a JS number
 
@@ -96,6 +166,27 @@ if (back.status !== "active") throw new Error("status round-trip failed");
 // An open enum decodes an unknown tag leniently and preserves it.
 const unknown = decodeAccount({ account_id: "1", secret: "AAEC/g==", status: "frozen" });
 if (unknown.status !== "frozen") throw new Error("unknown enum value must pass through");
+
+// Error discrimination: (status, body code) maps to the declared type, rooted
+// in the taxonomy, with the @retryable predicate lowered.
+const declined = decodeCreateChargeError(402, JSON.stringify({ code: "payment_declined", message: "no funds" }));
+if (!(declined instanceof PaymentDeclinedError)) throw new Error("(402, code) must map to the declared error type");
+if (!(declined instanceof APIError && declined instanceof TonoError)) throw new Error("a declared error must be rooted in the taxonomy");
+if (!declined.retryable()) throw new Error("@retryable must lower to retryable() === true");
+if (declined.data.message !== "no funds") throw new Error("the declared error body must decode");
+
+// A status alone discriminates when unambiguous; without @retryable the
+// predicate reports false.
+const limited = decodeCreateChargeError(429, "{}");
+if (!(limited instanceof RateLimitedError)) throw new Error("a bare status must discriminate when unambiguous");
+if (limited.retryable()) throw new Error("a non-retryable error must report false");
+
+// No match resolves to the concrete fallback type, never a declared one.
+const wrongCode = decodeCreateChargeError(402, JSON.stringify({ code: "other" }));
+if (wrongCode instanceof PaymentDeclinedError || !(wrongCode instanceof APIError)) throw new Error("an unmatched code must fall back to APIError");
+const undeclared = decodeCreateChargeError(500, "not json");
+if (!(undeclared instanceof APIError)) throw new Error("an undeclared response must fall back to APIError");
+if (undeclared.status !== 500 || undeclared.body !== "not json") throw new Error("the fallback must keep the status and raw body");
 
 console.log("ROUNDTRIP_OK");
 "#;

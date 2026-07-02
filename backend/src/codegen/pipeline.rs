@@ -154,7 +154,7 @@ pub fn generate(model: &Model, targets: &[TargetKind]) -> Vec<GeneratedFile> {
 mod tests {
     use super::*;
     use crate::codegen::test_support::{member, structure, union_shape};
-    use crate::ir::{Prim, Tref};
+    use crate::ir::{Prim, Shape, ShapeKind, Tref};
 
     /// A model whose Go module carries a union, so Go splits into two files while
     /// Rust and TypeScript stay single-file.
@@ -322,6 +322,87 @@ mod tests {
             .contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
         assert!(go_serde.text.contains("import \"encoding/json\""));
         assert!(go_serde.text.contains("import \"fmt\""));
+    }
+
+    /// A model with one async operation declaring one error, so every target
+    /// emits the error surface, the client, and the discriminator.
+    fn ops_model() -> Model {
+        let mut not_found = structure(
+            "payments#not_found",
+            vec![member("message", Tref::Prim(Prim::String), true)],
+        );
+        not_found.traits = vec![crate::ir::Trait {
+            id: "core#status".into(),
+            value: serde_json::json!([404]),
+        }];
+        let mut model = demo_model();
+        model.modules[0].shapes.push(not_found);
+        model.modules[0].operations = vec![Shape {
+            id: "payments#get_charge".into(),
+            kind: ShapeKind::Operation {
+                input: None,
+                output: Some(Tref::Ref {
+                    id: "payments#Charge".into(),
+                    args: vec![],
+                }),
+                errors: vec![Tref::Ref {
+                    id: "payments#not_found".into(),
+                    args: vec![],
+                }],
+            },
+            traits: vec![crate::ir::Trait {
+                id: "core#http".into(),
+                value: serde_json::json!({"method": "GET", "path": "/charges/{id}"}),
+            }],
+        }];
+        model
+    }
+
+    #[test]
+    fn a_module_with_operations_generates_the_error_surface_in_every_target() {
+        let files = generate(
+            &ops_model(),
+            &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
+        );
+        let text_of = |path: &str| {
+            files
+                .iter()
+                .find(|f| f.path.to_string_lossy().replace('\\', "/") == path)
+                .unwrap_or_else(|| panic!("missing {path}"))
+                .text
+                .clone()
+        };
+
+        // Rust: the enum root, the Api payload enum, the async client trait, and
+        // the discriminator next to the serde helpers.
+        let rust_types = text_of("rust/payments.rs");
+        assert!(rust_types.contains("pub enum TonoError {"));
+        assert!(rust_types.contains("Undeclared(APIError),"));
+        assert!(rust_types.contains("async fn get_charge(&self) -> Result<Charge, TonoError>;"));
+        let rust_serde = text_of("rust/payments_serde.rs");
+        assert!(rust_serde.contains("pub fn decode_get_charge_error(status: u16, body: &str) -> TonoError {"));
+
+        // Go: error values with no root, the blocking interface, and the
+        // discriminator in the serde file.
+        let go_types = text_of("go/payments.go");
+        assert!(go_types.contains("type APIError struct {"));
+        assert!(!go_types.contains("TonoError"));
+        assert!(go_types.contains("GetCharge() (Charge, error)"));
+        assert!(go_types.contains("func (e *NotFound) Retryable() bool { return false }"));
+        let go_serde = text_of("go/payments_serde.go");
+        assert!(go_serde.contains("func DecodeGetChargeError(status int, body []byte) error {"));
+
+        // TypeScript: the class hierarchy, the Promise-returning client, and the
+        // discriminator with the codecs.
+        let ts_types = text_of("typescript/payments.ts");
+        assert!(ts_types.contains("export abstract class TonoError extends Error {"));
+        assert!(ts_types.contains("export class NotFoundError extends APIError {"));
+        assert!(ts_types.contains("getCharge(): Promise<Charge>;"));
+        let ts_serde = text_of("typescript/payments_serde.ts");
+        assert!(ts_serde.contains("export function decodeGetChargeError(status: number, body: string): TonoError {"));
+        assert!(ts_serde.contains(
+            "import { APIError, Charge, NotFound, NotFoundError, TonoError } from \"./payments\";"
+        ));
     }
 
     #[test]
