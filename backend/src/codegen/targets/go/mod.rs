@@ -9,6 +9,7 @@
 
 pub mod codecs;
 pub mod emit;
+pub mod errors;
 pub mod render;
 pub mod symbols;
 pub mod types;
