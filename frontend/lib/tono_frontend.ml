@@ -12,6 +12,7 @@ module Lexer = Lexer
 module Ast = Ast
 module Parser_state = Parser_state
 module Parser = Parser
+module Printer = Printer
 module Lower = Lower
 
 (* The frontend pipeline: lex and parse source text, then lower it to an IR
