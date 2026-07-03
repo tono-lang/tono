@@ -12,6 +12,7 @@ module Lexer = Lexer
 module Ast = Ast
 module Parser_state = Parser_state
 module Parser = Parser
+module Printer = Printer
 module Lower = Lower
 module Typecheck = Typecheck
 
@@ -55,6 +56,20 @@ let compile_to_json ?(module_name = "") (src : string) : (string, string) result
     in
     Ok (Ir_json.to_canonical_string (Ir_json.encode_model model))
 
+(* Re-emit source text in the printer's canonical layout. Formatting is
+   parse-level only (no lowering or typecheck), but parse errors abort: a file
+   the parser had to recover on would be rewritten with the recovered guesses.
+   This is the payload behind the [fmt] subcommand, pure for the same reason as
+   [compile_to_json]. *)
+let format_source (src : string) : (string, string) result =
+  let file, diags = Parser.parse src in
+  let errors =
+    List.filter (fun (d : Diagnostic.t) -> d.severity = Diagnostic.Error) diags
+  in
+  if errors <> [] then
+    Error (String.concat "\n" (List.map Diagnostic.to_string errors))
+  else Ok (Printer.print_file file)
+
 (* The [tono-frontend] command line. The dispatch is pure: it takes the argv and
    a file reader, and returns what to write where plus an exit code, so the real
    binary is a thin shell and every branch is testable. *)
@@ -62,7 +77,8 @@ module Cli = struct
   type outcome = { code : int; out : string; err : string }
 
   let usage =
-    "usage: tono-frontend (compile <file.tono> [--module <name>] | version)"
+    "usage: tono-frontend (compile <file.tono> [--module <name>] | fmt \
+     <file.tono> | version)"
 
   (* Pull an optional [--module <name>] out of the compile arguments; the first
      remaining bare argument is the source path. *)
@@ -90,6 +106,14 @@ module Cli = struct
                 match compile_to_json ~module_name src with
                 | Ok json -> { code = 0; out = json ^ "\n"; err = "" }
                 | Error msg -> { code = 1; out = ""; err = msg ^ "\n" })))
+    | _ :: "fmt" :: path :: _ -> (
+        match read_file path with
+        | exception Sys_error msg -> { code = 1; out = ""; err = msg ^ "\n" }
+        | src -> (
+            match format_source src with
+            | Ok formatted -> { code = 0; out = formatted; err = "" }
+            | Error msg -> { code = 1; out = ""; err = msg ^ "\n" }))
+    | [ _; "fmt" ] -> { code = 2; out = ""; err = usage ^ "\n" }
     | [ _ ] | _ :: "version" :: _ ->
         { code = 0; out = "tono " ^ version ^ "\n"; err = "" }
     | _ -> { code = 2; out = ""; err = usage ^ "\n" }
