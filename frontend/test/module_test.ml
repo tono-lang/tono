@@ -239,6 +239,40 @@ let single_file_qualified_ref_is_unknown_import () =
          d.Diagnostic.code = Some Error_codes.unknown_import)
        ds)
 
+(* Two imports that resolve to the same qualifier collide; the later one is
+   flagged rather than silently shadowing the first in the import map. *)
+let colliding_import_qualifiers () =
+  let a_common = "pub struct money { amount: i64 }" in
+  let b_common = "pub struct rate { pct: i64 }" in
+  let charge =
+    {|
+import a.common
+import b.common
+
+pub struct charge { m: common.money }
+|}
+  in
+  Alcotest.(check bool)
+    "duplicate qualifier reported" true
+    (List.mem Error_codes.duplicate_import
+       (codes
+          [
+            ("a.common", a_common);
+            ("b.common", b_common);
+            ("proj.charge", charge);
+          ]))
+
+(* A duplicate shape name surfaces exactly once: the project index no longer
+   re-reports what the per-module typecheck already flags. *)
+let duplicate_shape_reported_once () =
+  let src = "pub struct dup { x: i64 }\nstruct dup { y: i64 }" in
+  let dups =
+    List.filter
+      (fun c -> c = Error_codes.duplicate_shape)
+      (codes [ ("proj.m", src) ])
+  in
+  Alcotest.(check int) "reported exactly once" 1 (List.length dups)
+
 (* ── Cycle detection (the import graph must be a DAG) ───────────────────── *)
 
 (* Two modules importing each other form a cycle: TC0025. *)
@@ -337,6 +371,10 @@ let () =
             qualified_ref_to_missing_module;
           Alcotest.test_case "single-file qualified ref" `Quick
             single_file_qualified_ref_is_unknown_import;
+          Alcotest.test_case "colliding import qualifiers" `Quick
+            colliding_import_qualifiers;
+          Alcotest.test_case "duplicate shape reported once" `Quick
+            duplicate_shape_reported_once;
         ] );
       ( "cycles",
         [

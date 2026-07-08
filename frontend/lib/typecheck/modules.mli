@@ -10,9 +10,10 @@ type index
 val qualifier_of : Ast.import -> string
 val target_of : Ast.import -> string
 
-(* Build the index from every module's parsed file. Collects per-module
-   duplicate-shape diagnostics, flags imports whose target module does not exist
-   (TC0019), and detects import cycles (TC0021). *)
+(* Build the index from every module's parsed file. Flags imports whose target
+   module does not exist (TC0023), colliding import qualifiers (TC0026), and
+   import cycles (TC0025). Duplicate-shape names are left to the typechecker's own
+   per-module pass, so they are not double-reported. *)
 val build : (string * Ast.file) list -> index * Diagnostic.t list
 
 (* The reference resolver lowering uses to qualify a module's ids and references
@@ -20,6 +21,6 @@ val build : (string * Ast.file) list -> index * Diagnostic.t list
 val resolver : index -> this_module:string -> Lower.ref_resolver
 
 (* The cross-module reference check the typechecker plugs into [Resolve]: an
-   unknown qualifier is TC0019, a non-[pub] target is TC0020, and generic arity
+   unknown qualifier is TC0023, a non-[pub] target is TC0024, and generic arity
    is verified against the target module's declaration. *)
 val qualified : index -> this_module:string -> Resolve.qualified

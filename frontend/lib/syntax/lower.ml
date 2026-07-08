@@ -332,7 +332,11 @@ let lower_decl ~module_name ~resolve ~diags (d : Ast.decl) : Ir.shape =
       let lower_opt = Option.map (lower_type ~params:[] ~resolve ~diags) in
       (* @errors(A, B) lists the operation's error types by name; repeated
          @errors traits accumulate. A non-name argument has no type to point
-         at, so it is diagnosed rather than silently dropped. *)
+         at, so it is diagnosed rather than silently dropped. Only same-module
+         names resolve here (qualifier:None): a trait argument is a bare identifier
+         in the grammar, so a qualified [common.NotFound] does not parse as one
+         token; cross-module error references need a qualified trait-argument form,
+         left to a focused follow-up. *)
       let errs, rest = take_trait "errors" d.dtraits in
       let errors =
         List.concat_map

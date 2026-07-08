@@ -11,7 +11,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use tono_backend::codegen::{generate, parse_targets, CodegenConfig, Formatter, TargetKind};
+use tono_backend::codegen::{
+    check_go_layout, generate, parse_targets, CodegenConfig, Formatter, TargetKind,
+};
 use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::ir::decode_model;
 
@@ -78,6 +80,10 @@ fn run_gen(args: &[String]) -> Result<(), String> {
         None => read_stdin()?,
     };
     let model = decode_model(&json)?;
+    // Fail loud on a Go layout that could not compile (a multi-module SDK with no
+    // module path, or two modules mapping to the same package) instead of writing
+    // silently-broken source.
+    check_go_layout(&model, &targets, &config)?;
 
     for file in generate(&model, &targets, &config) {
         let formatted = formatter_for(file.target).run(&file.text).text;

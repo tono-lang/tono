@@ -184,3 +184,32 @@ fn gen_module_remap_rewrites_the_prefix() {
     assert!(out.join("rust").join("billing").join("common.rs").exists());
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// Two modules where one references the other across the boundary.
+const TWO_MODULE_IR: &str = r#"{"tono_ir_version":2,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]},{"name":"payments.charge","shapes":[{"id":"payments.charge#Charge","kind":"structure","params":[],"members":[{"name":"total","required":true,"target":{"ref":"payments.common#Money","args":[]},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+
+/// Run `tono gen --target go` with the given extra args, feeding `TWO_MODULE_IR`.
+fn gen_two_module_go(out: &Path, extra: &[&str]) -> bool {
+    let mut args = vec!["gen", "--target", "go", "--out", out.to_str().unwrap()];
+    args.extend_from_slice(extra);
+    let mut child = tono().args(&args).stdin(Stdio::piped()).spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(TWO_MODULE_IR.as_bytes())
+        .unwrap();
+    child.wait().unwrap().success()
+}
+
+#[test]
+fn gen_multi_module_go_needs_a_module_path() {
+    // Without --go-module the Go output could not compile, so it is rejected.
+    let out = tmpdir("go-no-module");
+    assert!(!gen_two_module_go(&out, &[]));
+    // With the module path it succeeds.
+    let ok = tmpdir("go-with-module");
+    assert!(gen_two_module_go(&ok, &["--go-module", "example.com/sdk"]));
+    let _ = std::fs::remove_dir_all(&out);
+    let _ = std::fs::remove_dir_all(&ok);
+}

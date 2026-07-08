@@ -6,7 +6,7 @@
 (* Resolution of a cross-module reference [qualifier.Name] applied to [n_args]
    type arguments; returns the diagnostics for that reference (empty if it
    resolves). The project pipeline supplies one backed by the import map; the
-   default treats every qualified reference as an unknown import (TC0019). *)
+   default treats every qualified reference as an unknown import (TC0023). *)
 type qualified =
   qualifier:string ->
   name:string ->

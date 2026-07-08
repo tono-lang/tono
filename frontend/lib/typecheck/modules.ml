@@ -34,7 +34,8 @@ type index = {
 }
 
 (* The qualifier -> target-module map for one module (last import of a qualifier
-   wins). *)
+   wins). A qualifier bound by two imports is a collision [build] reports (TC0026),
+   so the last-wins here only picks one of an already-diagnosed pair. *)
 let import_map (index : index) (this_module : string) : string SMap.t =
   match SMap.find_opt this_module index.imports with
   | None -> SMap.empty
@@ -99,19 +100,43 @@ let detect_cycles (index : index) : Diagnostic.t list =
 
 (* ── Building the index ────────────────────────────────────────────────── *)
 
-(* Build the index from every module's parsed file, collecting per-module
-   duplicate-shape diagnostics, flagging imports whose target module does not
-   exist (TC0023), and detecting import cycles (TC0025). *)
+(* Two imports in a module that resolve to the same qualifier (a shared last path
+   segment, or an alias colliding with another import's segment) would let one
+   silently shadow the other in the [import_map]. Flag the later import so the
+   collision is made explicit with an [as] alias instead of resolving silently. *)
+let qualifier_collisions (index : index) : Diagnostic.t list =
+  SMap.fold
+    (fun name imports acc ->
+      let seen : (string, string) Hashtbl.t = Hashtbl.create 8 in
+      List.fold_left
+        (fun acc (i : Ast.import) ->
+          let q = qualifier_of i in
+          match Hashtbl.find_opt seen q with
+          | Some prev ->
+              label name
+                (err Error_codes.duplicate_import i.Ast.ispan
+                   "import qualifier '%s' is already bound to '%s'; add an \
+                    'as' alias to reference '%s'"
+                   q prev (target_of i))
+              :: acc
+          | None ->
+              Hashtbl.add seen q (target_of i);
+              acc)
+        acc imports)
+    index.imports []
+
+(* Build the index from every module's parsed file, flagging imports whose target
+   module does not exist (TC0023), colliding import qualifiers (TC0026), and import
+   cycles (TC0025). Duplicate-shape names are not reported here: the typechecker
+   re-runs [Symtab.build] per module, so reporting them here too would surface each
+   one twice. *)
 let build (files : (string * Ast.file) list) : index * Diagnostic.t list =
-  let symbols, imports, dup_diags =
+  let symbols, imports =
     List.fold_left
-      (fun (symbols, imports, diags) (name, (file : Ast.file)) ->
-        let tbl, dups = Symtab.build file.Ast.decls in
-        ( SMap.add name tbl symbols,
-          SMap.add name file.Ast.imports imports,
-          diags @ List.map (label name) dups ))
-      (SMap.empty, SMap.empty, [])
-      files
+      (fun (symbols, imports) (name, (file : Ast.file)) ->
+        let tbl, _dups = Symtab.build file.Ast.decls in
+        (SMap.add name tbl symbols, SMap.add name file.Ast.imports imports))
+      (SMap.empty, SMap.empty) files
   in
   let index = { symbols; imports } in
   let import_diags =
@@ -129,7 +154,7 @@ let build (files : (string * Ast.file) list) : index * Diagnostic.t list =
           acc imports)
       index.imports []
   in
-  (index, dup_diags @ import_diags @ detect_cycles index)
+  (index, qualifier_collisions index @ import_diags @ detect_cycles index)
 
 (* ── Resolution used by lowering and the typechecker ───────────────────── *)
 

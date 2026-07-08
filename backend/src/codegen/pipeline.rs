@@ -169,6 +169,47 @@ fn output_path(target: TargetKind, module: &str, suffix: &str, ext: &str) -> Pat
     }
 }
 
+/// Reject a Go layout that would emit source Go cannot compile, so the failure is
+/// a clear error rather than silently-broken output. Go has no relative imports,
+/// so a multi-module SDK's cross-package imports need the module path
+/// (`--go-module`); and a package is named for its module's last segment, so two
+/// modules sharing that segment would render colliding `pkg.` selectors. Config is
+/// applied first, so `--flatten` (which joins the whole path into one segment)
+/// clears both conditions. A no-op when Go is not a requested target.
+pub fn check_go_layout(
+    model: &Model,
+    targets: &[TargetKind],
+    config: &CodegenConfig,
+) -> Result<(), String> {
+    if !targets.contains(&TargetKind::Go) {
+        return Ok(());
+    }
+    let model = modules::apply(config, model);
+    let names: Vec<&str> = model.modules.iter().map(|m| m.name.as_str()).collect();
+    if names.len() > 1 && config.go_module.is_none() {
+        return Err(
+            "Go multi-module output needs --go-module <path>: Go has no relative \
+             imports, so the cross-package imports need the SDK's module path"
+                .into(),
+        );
+    }
+    let mut by_pkg: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for name in &names {
+        by_pkg
+            .entry(name.rsplit('.').next().unwrap_or(name))
+            .or_default()
+            .push(name);
+    }
+    if let Some((pkg, mods)) = by_pkg.iter().find(|(_, v)| v.len() > 1) {
+        return Err(format!(
+            "Go package name collision: modules {} both map to package '{pkg}'; \
+             rename a module so its last segment is unique, or --flatten",
+            mods.join(" and ")
+        ));
+    }
+    Ok(())
+}
+
 /// Generate the SDK source for every `(target, module)` pair, mapping each module
 /// to its idiomatic sub-package (steered by `config`). Each file's text is rough
 /// (unformatted) so callers run the real formatter when they write it out.
@@ -614,13 +655,12 @@ mod tests {
         assert!(paths.contains(&"typescript/payments/charge.ts".to_string()));
 
         // The cross-package reference imports through each language's idiomatic
-        // module path: Rust an absolute crate path, TypeScript a path relative to
-        // the importing file, Go the package sub-path.
+        // module path: Rust an absolute crate path and TypeScript a path relative
+        // to the importing file. The Go cross-package import needs the module path
+        // and is covered by [`go_module_prefix_makes_cross_package_imports_absolute`];
+        // emitting it without a module path is rejected by [`check_go_layout`].
         assert!(text_at(&files, "rust/payments/charge.rs")
             .contains("use crate::payments::common::Money;"));
-        assert!(
-            text_at(&files, "go/payments/charge/charge.go").contains("import \"payments/common\"")
-        );
         assert!(text_at(&files, "typescript/payments/charge.ts").contains("from \"./common\""));
         // The Go package is named for the last segment, not the dotted path.
         assert!(text_at(&files, "go/payments/common/common.go").contains("package common"));
@@ -679,5 +719,69 @@ mod tests {
         let files = generate(&demo_model(), &[TargetKind::Go], &CodegenConfig::default());
         let paths = paths_of(&files);
         assert!(paths.contains(&"go/payments.go".to_string()));
+    }
+
+    #[test]
+    fn go_multi_module_without_a_module_path_is_rejected() {
+        // Multi-module Go with no module path would emit unresolvable bare imports.
+        let err = check_go_layout(
+            &sub_package_model(),
+            &[TargetKind::Go],
+            &CodegenConfig::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("--go-module"));
+        // The module path makes the cross-package imports resolve.
+        let config = CodegenConfig {
+            go_module: Some("example.com/sdk".into()),
+            ..CodegenConfig::default()
+        };
+        assert!(check_go_layout(&sub_package_model(), &[TargetKind::Go], &config).is_ok());
+        // Rust and TypeScript have relative imports, so the same layout is fine.
+        assert!(check_go_layout(
+            &sub_package_model(),
+            &[TargetKind::Rust, TargetKind::TypeScript],
+            &CodegenConfig::default()
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn go_modules_sharing_a_last_segment_are_rejected() {
+        // `a.common` and `b.common` both map to package `common` and would collide.
+        let model = Model {
+            tono_ir_version: 2,
+            modules: vec![
+                Module {
+                    name: "a.common".into(),
+                    shapes: vec![structure(
+                        "a.common#Money",
+                        vec![member("amount", Tref::Prim(Prim::I64), true)],
+                    )],
+                    operations: vec![],
+                },
+                Module {
+                    name: "b.common".into(),
+                    shapes: vec![structure(
+                        "b.common#Rate",
+                        vec![member("pct", Tref::Prim(Prim::I64), true)],
+                    )],
+                    operations: vec![],
+                },
+            ],
+        };
+        let config = CodegenConfig {
+            go_module: Some("example.com/sdk".into()),
+            ..CodegenConfig::default()
+        };
+        let err = check_go_layout(&model, &[TargetKind::Go], &config).unwrap_err();
+        assert!(err.contains("package name collision"));
+        // Flatten joins the whole path into one segment, so the packages differ.
+        let flat = CodegenConfig {
+            flatten: true,
+            go_module: Some("example.com/sdk".into()),
+            ..CodegenConfig::default()
+        };
+        assert!(check_go_layout(&model, &[TargetKind::Go], &flat).is_ok());
     }
 }

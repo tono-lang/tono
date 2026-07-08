@@ -178,7 +178,11 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
   qualified (`common.money`). Imports steer name resolution in the frontend and
   leave no node in the IR: by the time a reference reaches the wire it is already
   a fully-qualified `module#local` id. The module import graph must be a DAG;
-  a cycle is a compile error.
+  a cycle is a compile error. Two imports in one file that resolve to the same
+  qualifier (a shared last segment, or an alias colliding with one) are a compile
+  error, not a silent last-wins; disambiguate with an `as` alias.
+  `import` and `as` are reserved words: a pre-existing model that used either as a
+  shape or member name must rename it (or the reference will fail to parse).
 - **Visibility.** `pub` on a top-level declaration makes it visible to other
   modules and rides the IR as a `pub` trait on the shape. A private (non-`pub`)
   shape is visible only within its own module; referencing it across a module
@@ -210,7 +214,10 @@ consumed by codegen (`tono gen`), steer the mapping:
   `--module-remap payments=billing` turns `payments.common` into `billing.common`.
 - `--go-module <path>` sets the generated Go SDK's module path, prefixed onto
   cross-package imports (Go has no relative imports), e.g.
-  `example.com/sdk/payments/common`.
+  `example.com/sdk/payments/common`. It is required for a multi-module Go SDK;
+  generating one without it is rejected rather than emitting unresolvable imports.
+  Two modules that share a last segment (both `*.common`) would map to the same Go
+  package name and are likewise rejected (rename one, or `--flatten`).
 
 Visibility governs cross-module *references* (a non-`pub` shape cannot be named
 from another module), not whether a shape is emitted: a private shape that a

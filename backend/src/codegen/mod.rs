@@ -26,7 +26,7 @@ pub mod tree;
 pub use casing::{CaseStyle, CasingConfig};
 pub use format::{Formatted, Formatter};
 pub use modules::CodegenConfig;
-pub use pipeline::{generate, parse_targets, GeneratedFile, TargetKind};
+pub use pipeline::{check_go_layout, generate, parse_targets, GeneratedFile, TargetKind};
 pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};
 pub use target::{Fragment, RenderRules, Target};

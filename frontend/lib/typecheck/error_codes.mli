@@ -27,8 +27,10 @@ val http_payload_conflict : string
 val http_map_binding : string
 val http_label_nullable : string
 
-(* Module system: unknown import qualifier, non-[pub] reference, and a cycle in
-   the module import graph (which must be a DAG). *)
+(* Module system: unknown import qualifier, non-[pub] reference, a cycle in the
+   module import graph (which must be a DAG), and two imports colliding on one
+   qualifier. *)
 val unknown_import : string
 val not_exported : string
 val module_cycle : string
+val duplicate_import : string
