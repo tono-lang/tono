@@ -7,6 +7,8 @@ type kind =
   | KwOp
   | KwMap
   | KwPub
+  | KwImport
+  | KwAs
   | Ident of string
   | Prim of string
   | Str of string

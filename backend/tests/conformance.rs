@@ -98,11 +98,18 @@ fn go_output() -> Option<Value> {
     let dir = tests_dir().join("go");
     // Go emits separate types and serde files; both compile in one `package main`,
     // so write each into the harness dir before `go run .`.
-    for module_file in go::emit::emit_module(&shared_module(), &go::types::go_casing()) {
+    let module = shared_module();
+    let union_ids: std::collections::HashSet<String> = module
+        .shapes
+        .iter()
+        .filter(|s| matches!(s.kind, tono_backend::ir::ShapeKind::Union { .. }))
+        .map(|s| s.id.clone())
+        .collect();
+    for module_file in go::emit::emit_module(&module, &go::types::go_casing(), &union_ids) {
         let rough = render_file_with_companion(
             &module_file.file,
             module_file.imports_companion.as_deref(),
-            &go::GoRules,
+            &go::GoRules::default(),
             &Formatter::new("cat", vec![]),
         )
         .text;

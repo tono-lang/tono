@@ -28,3 +28,12 @@ let http_label_unmatched = "TC0019"
 let http_payload_conflict = "TC0020"
 let http_map_binding = "TC0021"
 let http_label_nullable = "TC0022"
+
+(* Module system: a qualified reference names a module not brought into scope by
+   an import; a reference resolves to a shape that is not [pub] in its module; the
+   module import graph contains a cycle (it must be a DAG); two imports in one
+   module resolve to the same qualifier, so one would silently shadow the other. *)
+let unknown_import = "TC0023"
+let not_exported = "TC0024"
+let module_cycle = "TC0025"
+let duplicate_import = "TC0026"

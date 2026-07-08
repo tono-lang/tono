@@ -23,6 +23,8 @@ let rec resolve (ty : Ast.ty) : t =
   match ty with
   | Ast.TPrim (kw, _) -> Prim (Lower.Internal.prim_of_keyword kw)
   | Ast.TName (name, args, _) -> Ref (name, List.map resolve args)
+  | Ast.TQName (qualifier, name, args, _) ->
+      Ref (qualifier ^ "." ^ name, List.map resolve args)
   | Ast.TList (elem, _) -> List (resolve elem)
   | Ast.TMap (k, v, _) -> Map (resolve k, resolve v)
   | Ast.TNullable (inner, _) -> Opt (resolve inner)

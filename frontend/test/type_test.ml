@@ -5,7 +5,10 @@ let lower_ty ?(params = []) src =
   let st = Parser_state.create toks in
   let ast = Parser.parse_type st in
   let diags = ref [] in
-  let tref = Lower.lower_type ~params ~diags ast in
+  (* Bare ids (empty module name) keep the type tests focused on the type
+     algebra rather than module qualification. *)
+  let resolve = Lower.default_resolver ~module_name:"" in
+  let tref = Lower.lower_type ~params ~resolve ~diags ast in
   (ast, tref, ld @ Parser_state.diagnostics st @ List.rev !diags)
 
 let show ?(params = []) src =
@@ -93,7 +96,8 @@ let error_type_lowers () =
   | Ast.TError _ -> ()
   | _ -> Alcotest.fail "expected TError from a non-type token");
   let diags = ref [] in
-  let tref = Lower.lower_type ~params:[] ~diags ast in
+  let resolve = Lower.default_resolver ~module_name:"" in
+  let tref = Lower.lower_type ~params:[] ~resolve ~diags ast in
   Alcotest.(check string)
     "error type lowers to empty ref" {|{"args":[],"ref":""}|}
     (Ir_json.to_canonical_string (Ir_json.encode_tref tref))

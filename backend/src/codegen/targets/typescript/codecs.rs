@@ -59,7 +59,64 @@ pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str) -> Vec<De
         } => union_codecs(shape, members, discriminator),
         _ => Vec::new(),
     };
-    attach_type_refs(decls, shape, module)
+    let decls = attach_type_refs(decls, shape, module);
+    // A member typed by another module calls that module's codec (encodeStatus,
+    // decodeStatus), which lives in its serde file; collect those so the engine
+    // imports them from the right module.
+    let cross = codec_refs(shape, module);
+    decls
+        .into_iter()
+        .map(|decl| with_refs(decl, &cross))
+        .collect()
+}
+
+/// Cross-module codec references: for each member (or union payload) whose type
+/// points to another module, the `encode`/`decode` functions live in that
+/// module's serde file, so the codecs here import them from `<module>_serde`.
+fn codec_refs(shape: &Shape, self_module: &str) -> Vec<Symbol> {
+    let members: &[Member] = match &shape.kind {
+        ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => members,
+        _ => &[],
+    };
+    let mut refs = Vec::new();
+    for member in members {
+        for id in ref_ids(&member.target) {
+            let Some((module, _)) = id.split_once('#') else {
+                continue;
+            };
+            if module == self_module {
+                continue; // a same-module codec is in this very file
+            }
+            let suffix = type_suffix(&id);
+            let serde = format!("{module}_serde");
+            for op in ["encode", "decode"] {
+                let name = format!("{op}{suffix}");
+                refs.push(Symbol::imported(name.clone(), serde.clone(), name));
+            }
+        }
+    }
+    refs
+}
+
+/// Every nominal reference id inside a type, recursing through collections and
+/// generic arguments; these are the types a codec dispatches to.
+fn ref_ids(t: &Tref) -> Vec<String> {
+    match t {
+        Tref::Ref { id, args } => {
+            let mut ids = vec![id.clone()];
+            for arg in args {
+                ids.extend(ref_ids(arg));
+            }
+            ids
+        }
+        Tref::List(inner) => ref_ids(inner),
+        Tref::Map(key, value) => {
+            let mut ids = ref_ids(key);
+            ids.extend(ref_ids(value));
+            ids
+        }
+        Tref::Prim(_) | Tref::Param(_) => Vec::new(),
+    }
 }
 
 /// Attach to every codec function the self-module types it references, so the serde
@@ -412,6 +469,45 @@ mod tests {
         assert!(out.contains("return value;"));
         assert!(out.contains("export function decodeStatus(raw: string): Status {"));
         assert!(out.contains("return raw as Status;"));
+    }
+
+    #[test]
+    fn a_cross_module_member_imports_the_other_modules_codecs() {
+        // A member typed by another module routes through that module's codec, so
+        // the serde file must import encode/decode from the other module's serde
+        // file; a same-module reference stays local and pulls in nothing.
+        let shape = structure(
+            "payments.charge#Charge",
+            vec![member(
+                "status",
+                Tref::Ref {
+                    id: "payments.common#Status".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
+        let refs = codec_refs(&shape, "payments.charge");
+        let names: Vec<&str> = refs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"encodeStatus"));
+        assert!(names.contains(&"decodeStatus"));
+        // Both are imported from the referenced module's serde file.
+        assert!(refs
+            .iter()
+            .all(|s| s.import.as_ref().unwrap().module == "payments.common_serde"));
+        // A same-module reference is in this very file, so it contributes no import.
+        let local = structure(
+            "payments.charge#Line",
+            vec![member(
+                "item",
+                Tref::Ref {
+                    id: "payments.charge#Item".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
+        assert!(codec_refs(&local, "payments.charge").is_empty());
     }
 
     #[test]

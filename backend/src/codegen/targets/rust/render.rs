@@ -166,12 +166,16 @@ impl RustRules {
 }
 
 impl RenderRules for RustRules {
-    fn render_import(&self, module: &str, names: &[&str]) -> String {
+    fn render_import(&self, _from_module: &str, module: &str, names: &[&str]) -> String {
+        // Rust paths are absolute from the crate root, so the importer is
+        // irrelevant. A dotted module name is a Rust module path: payments.common
+        // -> payments::common.
+        let path = module.replace('.', "::");
         // A single name needs no braces; several group into one `use`.
         if let [name] = names {
-            format!("use crate::{module}::{name};")
+            format!("use crate::{path}::{name};")
         } else {
-            format!("use crate::{module}::{{{}}};", names.join(", "))
+            format!("use crate::{path}::{{{}}};", names.join(", "))
         }
     }
 
@@ -238,13 +242,18 @@ mod tests {
     #[test]
     fn imports_render_as_crate_paths() {
         assert_eq!(
-            RustRules.render_import("payments", &["Charge"]),
+            RustRules.render_import("billing", "payments", &["Charge"]),
             "use crate::payments::Charge;"
         );
         // Several names from one module group into a single braced use.
         assert_eq!(
-            RustRules.render_import("payments", &["Card", "Charge"]),
+            RustRules.render_import("billing", "payments", &["Card", "Charge"]),
             "use crate::payments::{Card, Charge};"
+        );
+        // A dotted module becomes a nested crate path.
+        assert_eq!(
+            RustRules.render_import("payments.charges", "payments.common", &["Money"]),
+            "use crate::payments::common::Money;"
         );
     }
 

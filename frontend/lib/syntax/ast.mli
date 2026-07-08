@@ -3,6 +3,7 @@
 type ty =
   | TPrim of string * Span.span
   | TName of string * ty list * Span.span
+  | TQName of string * string * ty list * Span.span
   | TList of ty * Span.span
   | TMap of ty * ty * Span.span
   | TNullable of ty * Span.span
@@ -52,6 +53,12 @@ type decl = {
   dkind : decl_kind;
 }
 
-type file = decl list
+type import = {
+  imported_path : string list;
+  alias : string option;
+  ispan : Span.span;
+}
+
+type file = { imports : import list; decls : decl list }
 
 val ty_span : ty -> Span.span

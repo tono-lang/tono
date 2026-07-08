@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 1, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 2, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,13 +19,19 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **1**.
+The current version is **2**.
 
 ## Modules
 
 ```json
-{ "name": "payments", "shapes": [ /* shapes */ ], "operations": [ /* shapes */ ] }
+{ "name": "payments.common", "shapes": [ /* shapes */ ], "operations": [ /* shapes */ ] }
 ```
+
+A module's `name` is its qualified path: one `.tono` file is one module, named
+by its path from the project root with the extension dropped and the separators
+turned into dots (`payments/charge.tono` -> `payments.charge`). Every shape id and
+every nominal reference is namespaced as `module#local` (see
+[Module identity](#module-identity-imports-and-visibility)).
 
 ## Primitives
 
@@ -121,7 +127,7 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
 
 { "id": "payments#Status", "kind": "enum",
   "backing": "string", "values": [ ["active", null], ["closed", null] ],
-  "open": true, "traits": [] }
+  "traits": [] }
 
 { "id": "payments#Payments", "kind": "service",
   "operations": [ "payments#ListCharges" ], "traits": [] }
@@ -132,9 +138,10 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
 ```
 
 - `union` always emits an explicit `discriminator` (default `"type"`).
-- `enum` carries `backing` (`"string"` or `"int"`), `values` as `[name, intOrNull]`
-  pairs, and the `open` flag. The implicit unknown variant of an open enum is a
-  decode-time concern of the backend and is not materialized here.
+- `enum` carries `backing` (`"string"` or `"int"`) and `values` as
+  `[name, intOrNull]` pairs. Every enum is open; the implicit unknown variant is a
+  decode-time concern of the backend and is not materialized here, so there is no
+  `open` flag.
 - `operation` carries `input`/`output` as a type reference or `null`, and
   `errors` as an array of type references. They are type references (not bare
   ids) so an operation can return an applied generic directly.
@@ -155,6 +162,69 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
 - **Meta-schema vs runtime wire.** Integer `default`/trait values are plain JSON
   numbers *in the IR*. How a generated SDK serializes an `i64` on its own runtime
   wire (e.g. as a string) is a separate concern and does not affect this encoding.
+
+## Module identity, imports, and visibility
+
+- **Identity by path.** A module is one `.tono` file; its qualified name is the
+  file path from the project root, dotted (`payments/charge.tono` ->
+  `payments.charge`). There is no `package` declaration: the path is the identity.
+- **Qualified ids.** Every top-level shape id and every nominal `ref` is
+  `module#local`, where `module` is the dotted module name and `local` is the
+  snake_case declared name (`payments.common#money`). A reference to a type in the
+  same module carries that module's own prefix; the backend drops the prefix when
+  it equals the file's module, so no self-import is generated.
+- **Imports are a resolution concept, not IR.** Between modules, a `.tono` file
+  imports another (`import payments.common [as c]`) and references its types
+  qualified (`common.money`). Imports steer name resolution in the frontend and
+  leave no node in the IR: by the time a reference reaches the wire it is already
+  a fully-qualified `module#local` id. The module import graph must be a DAG;
+  a cycle is a compile error. Two imports in one file that resolve to the same
+  qualifier (a shared last segment, or an alias colliding with one) are a compile
+  error, not a silent last-wins; disambiguate with an `as` alias.
+  `import` and `as` are reserved words: a pre-existing model that used either as a
+  shape or member name must rename it (or the reference will fail to parse).
+- **Visibility.** `pub` on a top-level declaration makes it visible to other
+  modules and rides the IR as a `pub` trait on the shape. A private (non-`pub`)
+  shape is visible only within its own module; referencing it across a module
+  boundary is a compile error. Within a module everything is visible without `pub`
+  or an import. Visibility gates references, not emission: a private shape a public
+  one folds in is still generated in its own module.
+
+## Generated package mapping
+
+The backend maps each module to an idiomatic sub-package per target, derived from
+the dotted name:
+
+| Module | Rust | Go | TypeScript |
+|---|---|---|---|
+| `payments.common` | `crate::payments::common` (`rust/payments/common.rs`) | package `common` (`go/payments/common/common.go`) | `./payments/common` (`typescript/payments/common.ts`) |
+
+The generated output is compilable as a tree: Rust emits a `mod.rs` per directory
+so `use crate::a::b` resolves; Go names each package for the module's last segment
+and package-qualifies a cross-package reference (`common.Status`); TypeScript
+imports each module by a path relative to the importing file (`./common`).
+
+A single-segment module keeps the flat layout (`rust/payments.rs`). Config hooks,
+consumed by codegen (`tono gen`), steer the mapping:
+
+- `--flatten` collapses the dotted hierarchy into one flat segment (dots become
+  underscores), so no sub-packages are produced (`payments.common` ->
+  `payments_common`).
+- `--module-remap <from>=<to>` rewrites a matching dotted prefix (repeatable);
+  `--module-remap payments=billing` turns `payments.common` into `billing.common`.
+- `--go-module <path>` sets the generated Go SDK's module path, prefixed onto
+  cross-package imports (Go has no relative imports), e.g.
+  `example.com/sdk/payments/common`. It is required for a multi-module Go SDK;
+  generating one without it is rejected rather than emitting unresolvable imports.
+  Two modules that share a last segment (both `*.common`) would map to the same Go
+  package name and are likewise rejected (rename one, or `--flatten`).
+
+Visibility governs cross-module *references* (a non-`pub` shape cannot be named
+from another module), not whether a shape is emitted: a private shape that a
+public one folds in (a union over private variant structs) is still emitted, as an
+ordinary type in its own module, because the public type needs it to compile. The
+mapping is purely structural; in-code identifiers are always the local (last)
+name, so qualifying a module never changes a generated type or field name.
 
 ## Regenerating the fixtures
 

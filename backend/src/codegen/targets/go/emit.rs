@@ -4,7 +4,7 @@
 //! each shape's type declarations — structs, enums, and a union's interface,
 //! wrappers, and markers) and, when there is anything to serialize, a serde file
 //! (`marshalVariant`, the `Entries` (de)serialization methods, each union's wrapper
-//! `MarshalJSON`s and `unmarshalX`, and each container's `UnmarshalJSON`). Imports
+//! `MarshalJSON`s and `UnmarshalX`, and each container's `UnmarshalJSON`). Imports
 //! are derived per file from the symbols its declarations reference, so the types
 //! file pulls nothing while the serde file pulls `encoding/json` (plus `fmt` for a
 //! union); a module of plain tagged structs emits only the types file.
@@ -16,7 +16,7 @@
 use std::collections::HashSet;
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::conventions::{has_entries, type_ident};
+use crate::codegen::conventions::has_entries;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::codecs::{
     emit_serde_decls, runtime_serde_helpers, runtime_type_helpers, RuntimeHelpers,
@@ -25,9 +25,6 @@ use crate::codegen::targets::go::errors;
 use crate::codegen::targets::go::types::emit_type;
 use crate::codegen::tree::{Alias, Decl, File, ModuleFile};
 use crate::ir::{Module, ShapeKind};
-
-/// The Go language key for per-language traits such as `@rename`.
-const LANG: &str = "go";
 
 /// The branded well-known types: distinct named string types, so they serialize
 /// exactly as their inner value while staying distinct in code.
@@ -48,17 +45,6 @@ pub fn well_known_decls() -> Vec<Decl> {
 /// declaration).
 pub fn package_clause(name: &str) -> String {
     format!("package {name}\n")
-}
-
-/// The identifiers of every union shape in the module, used to detect a struct
-/// field whose type is a union (which then needs a container `UnmarshalJSON`).
-fn union_idents(module: &Module) -> HashSet<String> {
-    module
-        .shapes
-        .iter()
-        .filter(|s| matches!(s.kind, ShapeKind::Union { .. }))
-        .map(|s| type_ident(s, LANG))
-        .collect()
 }
 
 /// Whether any structure member in the module carries the `@entries` escape, which
@@ -82,14 +68,17 @@ fn uses_union(module: &Module) -> bool {
 /// named strings, the `Entry`/`Entries` definitions when `@entries` is used, and
 /// each shape's type declarations) and, when there is any serialization to emit,
 /// the serde file (`marshalVariant`, the `Entries` (de)serialization methods, each
-/// union's wrapper `MarshalJSON`s and `unmarshalX`, and each container's
+/// union's wrapper `MarshalJSON`s and `UnmarshalX`, and each container's
 /// `UnmarshalJSON`). A module of plain tagged structs emits only the types file:
 /// `encoding/json` does all its work, so there is nothing for the serde file to
 /// hold. Imports are derived per file from the symbols its declarations reference,
 /// so the types file pulls nothing while the serde file pulls `encoding/json`
 /// (plus `fmt` when a union is present).
-pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
-    let unions = union_idents(module);
+pub fn emit_module(
+    module: &Module,
+    config: &CasingConfig,
+    union_ids: &HashSet<String>,
+) -> Vec<ModuleFile> {
     let helpers = RuntimeHelpers {
         entries: uses_entries(module),
         variant: uses_union(module),
@@ -100,7 +89,7 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     let mut serde_decls = runtime_serde_helpers(helpers);
     for shape in &module.shapes {
         type_decls.extend(emit_type(shape, config));
-        serde_decls.extend(emit_serde_decls(shape, config, &unions));
+        serde_decls.extend(emit_serde_decls(shape, config, union_ids, &module.name));
     }
     // Operations bring the error values and the blocking client interface
     // into the types file; the discriminators unmarshal, so they land with
@@ -149,6 +138,16 @@ mod tests {
         Formatter::new("cat", vec![])
     }
 
+    /// A single module's own union ids, the set the pipeline builds model-wide.
+    fn union_ids(module: &Module) -> HashSet<String> {
+        module
+            .shapes
+            .iter()
+            .filter(|s| matches!(s.kind, ShapeKind::Union { .. }))
+            .map(|s| s.id.clone())
+            .collect()
+    }
+
     /// Render the text of the file with the given basename suffix ("" types,
     /// "_serde" serialization), panicking if the module did not emit it.
     fn rendered(files: &[ModuleFile], suffix: &str) -> String {
@@ -156,7 +155,7 @@ mod tests {
             .iter()
             .find(|f| f.suffix == suffix)
             .unwrap_or_else(|| panic!("module did not emit a {suffix:?} file"));
-        render_file(&mf.file, &GoRules, &passthrough()).text
+        render_file(&mf.file, &GoRules::default(), &passthrough()).text
     }
 
     #[test]
@@ -174,7 +173,7 @@ mod tests {
             )],
             operations: vec![],
         };
-        let files = emit_module(&module, &go_casing());
+        let files = emit_module(&module, &go_casing(), &union_ids(&module));
         // A pure-types module emits a single file: there is no serialization to hold.
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].suffix, "");
@@ -225,7 +224,7 @@ mod tests {
             ],
             operations: vec![],
         };
-        let files = emit_module(&module, &go_casing());
+        let files = emit_module(&module, &go_casing(), &union_ids(&module));
         assert_eq!(files.len(), 2);
 
         // The types file holds the interface, wrappers, markers, and the struct types,
@@ -249,7 +248,7 @@ mod tests {
         assert!(serde.contains(
             "func (m MethodCard) MarshalJSON() ([]byte, error) { return marshalVariant("
         ));
-        assert!(serde.contains("func unmarshalMethod(b []byte) (Method, error) {"));
+        assert!(serde.contains("func UnmarshalMethod(b []byte) (Method, error) {"));
         assert!(serde.contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
         assert!(serde.contains("import \"encoding/json\""));
         assert!(serde.contains("import \"fmt\""));
@@ -278,7 +277,7 @@ mod tests {
             shapes: vec![structure("models#Doc", vec![counts])],
             operations: vec![],
         };
-        let files = emit_module(&module, &go_casing());
+        let files = emit_module(&module, &go_casing(), &union_ids(&module));
         assert_eq!(files.len(), 2);
 
         // The Entry/Entries definitions and the typed field live in the types file,

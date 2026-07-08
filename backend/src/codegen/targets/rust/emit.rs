@@ -111,9 +111,11 @@ fn helpers_use(module: &Module, helpers: HelperSet) -> Option<Decl> {
     if names.is_empty() {
         return None;
     }
+    // A dotted module is a nested crate path, so the companion serde module is
+    // `crate::payments::common_serde`, not `crate::payments.common_serde`.
     Some(raw_use(format!(
         "use crate::{}_serde::{{{}}};",
-        module.name,
+        module.name.replace('.', "::"),
         names.join(", ")
     )))
 }
@@ -121,7 +123,7 @@ fn helpers_use(module: &Module, helpers: HelperSet) -> Option<Decl> {
 /// The serde file's `use crate::<module>::*;`, which brings the module's types into
 /// scope so the open enums' impls (and the orphan-rule local-type requirement) resolve.
 fn types_glob_use(module: &Module) -> Decl {
-    raw_use(format!("use crate::{}::*;", module.name))
+    raw_use(format!("use crate::{}::*;", module.name.replace('.', "::")))
 }
 
 /// A verbatim `use` item carrying no symbol references (the engine must not treat

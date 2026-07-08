@@ -5,7 +5,10 @@ let run ?(dtraits = []) ?(pub = false) parse src =
   let st = Parser_state.create toks in
   let decl = parse st ~pub ~dtraits in
   let diags = ref [] in
-  let shape = Lower.lower_decl ~diags decl in
+  (* An empty module name keeps ids bare so these single-decl tests stay focused
+     on lowering, not on module qualification. *)
+  let resolve = Lower.default_resolver ~module_name:"" in
+  let shape = Lower.lower_decl ~module_name:"" ~resolve ~diags decl in
   (shape, ld @ Parser_state.diagnostics st @ List.rev !diags)
 
 let shape_json shape = Ir_json.to_canonical_string (Ir_json.encode_shape shape)

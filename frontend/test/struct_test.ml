@@ -5,7 +5,10 @@ let parse_struct_src ?(pub = false) src =
   let st = Parser_state.create toks in
   let decl = Parser.parse_struct st ~pub ~dtraits:[] in
   let diags = ref [] in
-  let shape = Lower.lower_decl ~diags decl in
+  (* Bare ids (empty module name) keep these struct tests independent of module
+     qualification. *)
+  let resolve = Lower.default_resolver ~module_name:"" in
+  let shape = Lower.lower_decl ~module_name:"" ~resolve ~diags decl in
   (shape, ld @ Parser_state.diagnostics st @ List.rev !diags)
 
 let shape_of ?(pub = false) src = fst (parse_struct_src ~pub src)

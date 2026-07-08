@@ -49,19 +49,43 @@ and parse_map st kw =
   let v = parse_base st in
   Ast.TMap (k, v, Span.merge kw.span (Ast.ty_span v))
 
-(* name, or name '[' type (',' type)* ']' (generic application) *)
+(* name, name '[' args ']', or a qualified 'qualifier.Name' (optionally applied).
+   A '.' after the first identifier marks a cross-module reference: the first
+   segment is the import qualifier and the second is the shape name. *)
 and parse_named st t name =
   ignore (P.advance st);
-  (* name *)
+  (* name (the first identifier) *)
+  match (P.peek st).kind with
+  | Token.Dot -> (
+      ignore (P.advance st);
+      (* '.' *)
+      match (P.peek st).kind with
+      | Token.Ident tyname ->
+          let nt = P.advance st in
+          let args, finish =
+            parse_opt_generics st (Span.merge t.span nt.span)
+          in
+          Ast.TQName (name, tyname, args, finish)
+      | _ ->
+          P.error st (P.peek st).span
+            "expected a type name after the '.' module qualifier";
+          Ast.TError (Span.merge t.span (P.peek st).span))
+  | _ ->
+      let args, finish = parse_opt_generics st t.span in
+      Ast.TName (name, args, finish)
+
+(* An optional '[' type (',' type)* ']' generic application after a type head;
+   returns the argument types and the span extended to the closing bracket. *)
+and parse_opt_generics st base_span : Ast.ty list * Span.span =
   match (P.peek st).kind with
   | Token.LBracket ->
       ignore (P.advance st);
       (* '[' *)
       let args = parse_type_list st in
       let close = P.expect st Token.RBracket "']' to close generic arguments" in
-      let finish = match close with Some c -> c.span | None -> t.span in
-      Ast.TName (name, args, Span.merge t.span finish)
-  | _ -> Ast.TName (name, [], t.span)
+      let finish = match close with Some c -> c.span | None -> base_span in
+      (args, Span.merge base_span finish)
+  | _ -> ([], base_span)
 
 and parse_type_list st =
   let first = parse_type st in
@@ -471,30 +495,76 @@ let parse_decl st : Ast.decl option =
            (Token.describe (P.peek st).kind));
       None
 
-(* A declaration can start with a trait, [pub], or one of the shape keywords;
-   resynchronization skips to the next such token. *)
+(* import ::= "import" segment ("." segment)* ("as" alias)?  — the dotted path
+   names the target module; the qualifier used in references is the alias when
+   present, otherwise the last segment. *)
+let parse_import st : Ast.import =
+  let kw = P.advance st in
+  (* 'import' *)
+  let segment () =
+    match (P.peek st).kind with
+    | Token.Ident s ->
+        let t = P.advance st in
+        (s, t.span)
+    | _ ->
+        P.error st (P.peek st).span "expected a module path segment";
+        ("", (P.peek st).span)
+  in
+  let first, fspan = segment () in
+  let rec more acc last_span =
+    match (P.peek st).kind with
+    | Token.Dot ->
+        ignore (P.advance st);
+        let s, sp = segment () in
+        more (s :: acc) sp
+    | _ -> (List.rev acc, last_span)
+  in
+  let path, path_end = more [ first ] fspan in
+  let alias, alias_end =
+    match (P.peek st).kind with
+    | Token.KwAs -> (
+        ignore (P.advance st);
+        match (P.peek st).kind with
+        | Token.Ident a ->
+            let t = P.advance st in
+            (Some a, t.span)
+        | _ ->
+            P.error st (P.peek st).span "expected an alias name after 'as'";
+            (None, path_end))
+    | _ -> (None, path_end)
+  in
+  { Ast.imported_path = path; alias; ispan = Span.merge kw.span alias_end }
+
+(* A top-level item can start with an import, a trait, [pub], or one of the shape
+   keywords; resynchronization skips to the next such token. *)
 let is_decl_start = function
-  | Token.At | Token.KwPub | Token.KwStruct | Token.KwUnion | Token.KwEnum
-  | Token.KwOp ->
+  | Token.At | Token.KwImport | Token.KwPub | Token.KwStruct | Token.KwUnion
+  | Token.KwEnum | Token.KwOp ->
       true
   | _ -> false
 
 let parse_file st : Ast.file =
-  let rec go acc =
-    if P.at_eof st then List.rev acc
+  let rec go imports decls =
+    if P.at_eof st then
+      { Ast.imports = List.rev imports; decls = List.rev decls }
     else
-      match parse_decl st with
-      | Some d -> go (d :: acc)
-      | None ->
-          (* parse_decl already diagnosed; ensure progress, then skip to the
-             next declaration boundary. *)
-          if not (P.at_eof st) then ignore (P.advance st);
-          while (not (P.at_eof st)) && not (is_decl_start (P.peek st).kind) do
-            ignore (P.advance st)
-          done;
-          go acc
+      match (P.peek st).kind with
+      | Token.KwImport -> go (parse_import st :: imports) decls
+      | _ -> (
+          match parse_decl st with
+          | Some d -> go imports (d :: decls)
+          | None ->
+              (* parse_decl already diagnosed; ensure progress, then skip to the
+                 next top-level boundary. *)
+              if not (P.at_eof st) then ignore (P.advance st);
+              while
+                (not (P.at_eof st)) && not (is_decl_start (P.peek st).kind)
+              do
+                ignore (P.advance st)
+              done;
+              go imports decls)
   in
-  go []
+  go [] []
 
 let parse (src : string) : Ast.file * Diagnostic.t list =
   let toks, lex_diags = Lexer.tokenize src in

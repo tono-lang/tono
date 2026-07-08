@@ -5,10 +5,11 @@
 //!
 //! - A union is an interface with one wrapper struct per variant. Each wrapper has
 //!   a `MarshalJSON` that flattens its payload and injects the discriminator (via
-//!   the shared `marshalVariant` helper); a free `unmarshalX` peeks the
-//!   discriminator and dispatches. A struct that holds a union field gets a thin
-//!   `UnmarshalJSON` that decodes that one field through `unmarshalX`, leaving the
-//!   rest to `encoding/json` via an embedded alias.
+//!   the shared `marshalVariant` helper); a free, exported `UnmarshalX` peeks the
+//!   discriminator and dispatches (exported so a container in another package can
+//!   reach it). A struct that holds a union field gets a thin `UnmarshalJSON` that
+//!   decodes that one field through `UnmarshalX`, leaving the rest to
+//!   `encoding/json` via an embedded alias.
 //! - An `@entries` map is the generic `Entries[K, V]`, whose `MarshalJSON` /
 //!   `UnmarshalJSON` carry the pairs-array wire shape.
 //!
@@ -20,7 +21,7 @@
 //! So a union's interface, wrapper structs, and `is<Union>()` markers — and the
 //! `Entry`/`Entries` definitions — are types ([`union_type_decls`],
 //! [`runtime_type_helpers`]), while their `MarshalJSON`/`UnmarshalJSON`,
-//! `unmarshalX`, and `marshalVariant` are serde ([`emit_serde_decls`],
+//! `UnmarshalX`, and `marshalVariant` are serde ([`emit_serde_decls`],
 //! [`runtime_serde_helpers`]).
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
@@ -146,10 +147,13 @@ fn fmt_ref() -> Symbol {
 pub fn emit_serde_decls(
     shape: &Shape,
     config: &CasingConfig,
-    unions: &HashSet<String>,
+    union_ids: &HashSet<String>,
+    current_module: &str,
 ) -> Vec<Decl> {
     match &shape.kind {
-        ShapeKind::Structure { members, .. } => struct_codecs(shape, members, config, unions),
+        ShapeKind::Structure { members, .. } => {
+            struct_codecs(shape, members, config, union_ids, current_module)
+        }
         ShapeKind::Union {
             members,
             discriminator,
@@ -159,13 +163,18 @@ pub fn emit_serde_decls(
     }
 }
 
-/// The union type identifier a member's type refers to, if any. A union field is a
-/// nominal reference whose target type is one of the module's unions.
-fn union_of(target: &Tref, unions: &HashSet<String>) -> Option<String> {
+/// The union a member's type refers to, if any, as its type identifier and the
+/// module it lives in. A union field is a nominal reference whose target id is one
+/// of the model's unions (`union_ids` holds the fully-qualified `module#name` ids,
+/// so a cross-module union resolves too).
+fn union_of(target: &Tref, union_ids: &HashSet<String>) -> Option<(String, String)> {
     match target {
-        Tref::Ref { id, .. } => {
-            let ident = type_ident_from_id(id);
-            unions.contains(&ident).then_some(ident)
+        Tref::Ref { id, .. } if union_ids.contains(id) => {
+            let module = id
+                .split_once('#')
+                .map(|(m, _)| m.to_string())
+                .unwrap_or_default();
+            Some((type_ident_from_id(id), module))
         }
         _ => None,
     }
@@ -175,20 +184,24 @@ fn union_of(target: &Tref, unions: &HashSet<String>) -> Option<String> {
 /// cannot decode into an interface, so the method decodes the whole struct through
 /// an embedded alias (so every other field rides the standard library) and
 /// re-reads each union field as a `json.RawMessage`, dispatching it through the
-/// union's `unmarshalX`. A struct with no union field needs no method.
+/// union's `UnmarshalX`. A union that lives in another module is dispatched through
+/// that package's exported `UnmarshalX`. A struct with no union field needs no
+/// method.
 fn struct_codecs(
     shape: &Shape,
     members: &[Member],
     config: &CasingConfig,
-    unions: &HashSet<String>,
+    union_ids: &HashSet<String>,
+    current_module: &str,
 ) -> Vec<Decl> {
     // Each union field carries its in-code identifier, its wire key (so the alias
-    // override shadows the same json tag), and the union it dispatches through.
-    let union_fields: Vec<(String, String, String)> = members
+    // override shadows the same json tag), the union it dispatches through, and the
+    // module that union lives in.
+    let union_fields: Vec<(String, String, String, String)> = members
         .iter()
         .filter_map(|m| {
-            union_of(&m.target, unions)
-                .map(|union| (field_ident(m, config, LANG), wire_key(m), union))
+            union_of(&m.target, union_ids)
+                .map(|(union, module)| (field_ident(m, config, LANG), wire_key(m), union, module))
         })
         .collect();
     if union_fields.is_empty() {
@@ -200,12 +213,22 @@ fn struct_codecs(
     // The embedded alias decodes every non-union field; each union field is shadowed
     // by a `json.RawMessage` so it can be dispatched after.
     let mut overrides = String::new();
-    for (field, wire, _) in &union_fields {
+    for (field, wire, _, _) in &union_fields {
         overrides.push_str(&format!("\t\t{field} json.RawMessage `json:\"{wire}\"`\n",));
     }
     let mut dispatch = String::new();
-    for (field, _, union) in &union_fields {
-        let unmarshal = format!("unmarshal{union}");
+    let mut refs = vec![json_ref()];
+    for (field, _, union, module) in &union_fields {
+        // A same-module union calls its bare `UnmarshalX`; a cross-module one calls
+        // that package's exported `UnmarshalX` and pulls its import.
+        let unmarshal = if module == current_module || module.is_empty() {
+            format!("Unmarshal{union}")
+        } else {
+            let pkg = module.rsplit('.').next().unwrap_or(module);
+            let name = format!("Unmarshal{union}");
+            refs.push(Symbol::imported(name.clone(), module.clone(), name.clone()));
+            format!("{pkg}.{name}")
+        };
         dispatch.push_str(&format!(
             "\tif len(tmp.{field}) > 0 {{\n\t\tm, err := {unmarshal}(tmp.{field})\n\t\tif err != nil {{\n\t\t\treturn err\n\t\t}}\n\t\t{recv}.{field} = m\n\t}}\n",
         ));
@@ -224,7 +247,7 @@ fn struct_codecs(
          {dispatch}\treturn nil\n\
          }}",
     );
-    vec![raw(text, vec![json_ref()])]
+    vec![raw(text, refs)]
 }
 
 /// The Pascal-cased identifier of a union variant, used to build its wrapper type
@@ -290,10 +313,11 @@ fn union_serde(shape: &Shape, members: &[Member], discriminator: &str) -> Vec<De
     }
     let marshal_refs = vec![json_ref()];
 
-    // unmarshalX: peek the discriminator, decode the matching payload into its
-    // wrapper. The payload decode reuses the struct's own json tags.
+    // UnmarshalX: peek the discriminator, decode the matching payload into its
+    // wrapper. Exported so a container in another package can dispatch this union.
+    // The payload decode reuses the struct's own json tags.
     let mut decode = format!(
-        "func unmarshal{ty}(b []byte) ({ty}, error) {{\n\
+        "func Unmarshal{ty}(b []byte) ({ty}, error) {{\n\
          \tvar d map[string]json.RawMessage\n\
          \tif err := json.Unmarshal(b, &d); err != nil {{\n\
          \t\treturn nil, err\n\
@@ -333,7 +357,7 @@ mod tests {
     fn rendered(decls: &[Decl]) -> String {
         decls
             .iter()
-            .map(|d| GoRules.render_decl(d))
+            .map(|d| GoRules::default().render_decl(d))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -455,13 +479,13 @@ mod tests {
                 member("note", Tref::Prim(Prim::String), false),
             ],
         );
-        assert!(emit_serde_decls(&shape, &go_casing(), &no_unions()).is_empty());
+        assert!(emit_serde_decls(&shape, &go_casing(), &no_unions(), "billing").is_empty());
     }
 
     #[test]
     fn an_enum_emits_no_serde() {
         let shape = enum_shape("billing#Status", vec![("pending".into(), None)]);
-        assert!(emit_serde_decls(&shape, &go_casing(), &no_unions()).is_empty());
+        assert!(emit_serde_decls(&shape, &go_casing(), &no_unions(), "billing").is_empty());
     }
 
     #[test]
@@ -502,7 +526,12 @@ mod tests {
     #[test]
     fn union_serde_emits_the_marshalers_and_a_dispatcher_only() {
         let shape = payment_method_union();
-        let out = rendered(&emit_serde_decls(&shape, &go_casing(), &no_unions()));
+        let out = rendered(&emit_serde_decls(
+            &shape,
+            &go_casing(),
+            &no_unions(),
+            "billing",
+        ));
         // The interface, wrappers, and markers stay out of the serde decls.
         assert!(!out.contains("type PaymentMethod interface"));
         assert!(!out.contains("func (PaymentMethodCard) isPaymentMethod() {}"));
@@ -511,7 +540,7 @@ mod tests {
             "func (m PaymentMethodCard) MarshalJSON() ([]byte, error) { return marshalVariant(m.Value, \"kind\", \"card\") }"
         ));
         // The dispatcher peeks the discriminator and decodes the matching payload.
-        assert!(out.contains("func unmarshalPaymentMethod(b []byte) (PaymentMethod, error) {"));
+        assert!(out.contains("func UnmarshalPaymentMethod(b []byte) (PaymentMethod, error) {"));
         assert!(out.contains("json.Unmarshal(d[\"kind\"], &tag)"));
         assert!(out.contains("case \"card\":"));
         assert!(out.contains("var p CardData"));
@@ -533,14 +562,19 @@ mod tests {
         // The in-code wrapper keeps the variant name; the wire tag is the override.
         let types = rendered(&union_type_decls(&shape, union_members(&shape), None));
         assert!(types.contains("type MethodCard struct{ Value CardData }"));
-        let serde = rendered(&emit_serde_decls(&shape, &go_casing(), &no_unions()));
+        let serde = rendered(&emit_serde_decls(
+            &shape,
+            &go_casing(),
+            &no_unions(),
+            "billing",
+        ));
         assert!(serde.contains("marshalVariant(m.Value, \"type\", \"CARD\")"));
         assert!(serde.contains("case \"CARD\":"));
     }
 
     #[test]
     fn a_struct_with_a_union_field_gets_an_unmarshal_method() {
-        let unions: HashSet<String> = ["Method".to_string()].into_iter().collect();
+        let unions: HashSet<String> = ["billing#method".to_string()].into_iter().collect();
         let shape = structure(
             "billing#Account",
             vec![
@@ -555,7 +589,7 @@ mod tests {
                 ),
             ],
         );
-        let out = rendered(&emit_serde_decls(&shape, &go_casing(), &unions));
+        let out = rendered(&emit_serde_decls(&shape, &go_casing(), &unions, "billing"));
         // The container method decodes through an embedded alias, shadows the union
         // field as RawMessage, and dispatches it through the union's unmarshalX.
         assert!(out.contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
@@ -563,7 +597,7 @@ mod tests {
         assert!(out.contains("Method json.RawMessage `json:\"method\"`"));
         assert!(out.contains("tmp.alias = alias(*a)"));
         assert!(out.contains("*a = Account(tmp.alias)"));
-        assert!(out.contains("m, err := unmarshalMethod(tmp.Method)"));
+        assert!(out.contains("m, err := UnmarshalMethod(tmp.Method)"));
         assert!(out.contains("a.Method = m"));
         // No custom Marshal: the interface field marshals through its dynamic value.
         assert!(!out.contains("func (a Account) MarshalJSON"));
@@ -571,7 +605,7 @@ mod tests {
 
     #[test]
     fn a_union_field_with_a_wire_override_shadows_the_right_key() {
-        let unions: HashSet<String> = ["Method".to_string()].into_iter().collect();
+        let unions: HashSet<String> = ["billing#method".to_string()].into_iter().collect();
         let shape = structure(
             "billing#Account",
             vec![crate::codegen::test_support::member_with(
@@ -587,7 +621,7 @@ mod tests {
                 }],
             )],
         );
-        let out = rendered(&emit_serde_decls(&shape, &go_casing(), &unions));
+        let out = rendered(&emit_serde_decls(&shape, &go_casing(), &unions, "billing"));
         assert!(out.contains("Method json.RawMessage `json:\"pay_method\"`"));
     }
 
@@ -598,22 +632,58 @@ mod tests {
             kind: ShapeKind::Service { operations: vec![] },
             traits: vec![],
         };
-        assert!(emit_serde_decls(&service, &go_casing(), &no_unions()).is_empty());
+        assert!(emit_serde_decls(&service, &go_casing(), &no_unions(), "billing").is_empty());
     }
 
     #[test]
     fn union_of_resolves_only_known_unions() {
-        let unions: HashSet<String> = ["Method".to_string()].into_iter().collect();
+        let unions: HashSet<String> = ["billing#method".to_string()].into_iter().collect();
         let method = Tref::Ref {
             id: "billing#method".into(),
             args: vec![],
         };
-        assert_eq!(union_of(&method, &unions).as_deref(), Some("Method"));
+        assert_eq!(
+            union_of(&method, &unions),
+            Some(("Method".to_string(), "billing".to_string()))
+        );
         let other = Tref::Ref {
             id: "billing#charge".into(),
             args: vec![],
         };
         assert_eq!(union_of(&other, &unions), None);
         assert_eq!(union_of(&Tref::Prim(Prim::Bool), &unions), None);
+    }
+
+    /// A container whose union field lives in another module dispatches through
+    /// that package's exported `UnmarshalX` and imports the package.
+    #[test]
+    fn a_cross_module_union_field_dispatches_through_the_other_package() {
+        let unions: HashSet<String> = ["payments.common#payment_method".to_string()]
+            .into_iter()
+            .collect();
+        let shape = structure(
+            "payments.charges#charge",
+            vec![member(
+                "method",
+                Tref::Ref {
+                    id: "payments.common#payment_method".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
+        let decls = emit_serde_decls(&shape, &go_casing(), &unions, "payments.charges");
+        let out = rendered(&decls);
+        assert!(out.contains("func (c *Charge) UnmarshalJSON(b []byte) error {"));
+        // The dispatch goes through the other package's exported UnmarshalX.
+        assert!(out.contains("m, err := common.UnmarshalPaymentMethod(tmp.Method)"));
+        // The codec references the other module so the engine imports it.
+        let Decl::Raw(raw) = &decls[0] else {
+            panic!("the container codec is a Raw decl");
+        };
+        assert!(raw.refs.iter().any(|s| s
+            .import
+            .as_ref()
+            .is_some_and(|i| i.module == "payments.common")));
     }
 }

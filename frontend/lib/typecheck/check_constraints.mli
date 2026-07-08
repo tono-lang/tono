@@ -4,4 +4,4 @@
    constraints (TC0013). *)
 
 (* Check every struct member's constraints and default. *)
-val check : file:Ast.file -> Ir.module_ -> Diagnostic.t list
+val check : decls:Ast.decl list -> Ir.module_ -> Diagnostic.t list

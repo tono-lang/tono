@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-expression: out
+expression: "render_files(files, &go::GoRules::default(), \"go\", Some(&header))"
 ---
 // ==== models.go ====
 package models
@@ -186,7 +186,7 @@ func (a *Account) UnmarshalJSON(b []byte) error {
 	}
 	*a = Account(tmp.alias)
 	if len(tmp.Method) > 0 {
-		m, err := unmarshalMethod(tmp.Method)
+		m, err := UnmarshalMethod(tmp.Method)
 		if err != nil {
 			return err
 		}
@@ -199,7 +199,7 @@ func (m MethodCard) MarshalJSON() ([]byte, error) { return marshalVariant(m.Valu
 
 func (m MethodBank) MarshalJSON() ([]byte, error) { return marshalVariant(m.Value, "type", "bank") }
 
-func unmarshalMethod(b []byte) (Method, error) {
+func UnmarshalMethod(b []byte) (Method, error) {
 	var d map[string]json.RawMessage
 	if err := json.Unmarshal(b, &d); err != nil {
 		return nil, err

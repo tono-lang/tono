@@ -10,6 +10,8 @@ let show_kind : Token.kind -> string = function
   | KwOp -> "op"
   | KwMap -> "map"
   | KwPub -> "pub"
+  | KwImport -> "import"
+  | KwAs -> "as"
   | Ident s -> "id:" ^ s
   | Prim s -> "prim:" ^ s
   | Str s -> "str:" ^ s

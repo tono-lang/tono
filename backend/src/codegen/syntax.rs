@@ -7,11 +7,20 @@
 //! adding a language means writing those formatters, not re-deriving the
 //! recursion.
 
+use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::TypeExpr;
 
 /// How a target spells each composite type construct. A leaf reference renders as
-/// its symbol name, so only the composites need a method.
+/// its symbol name by default; a target where a cross-package reference must be
+/// package-qualified (Go's `pkg.Type`) overrides [`TypeSyntax::leaf`].
 pub trait TypeSyntax {
+    /// A leaf reference's surface spelling. Defaults to the bare symbol name,
+    /// which suits targets that bring imported names into scope (Rust `use`,
+    /// TypeScript named imports); Go overrides it to package-qualify a
+    /// cross-package reference.
+    fn leaf(&self, symbol: &Symbol) -> String {
+        symbol.name.clone()
+    }
     /// `Vec<inner>` / `[]inner` / `inner[]`.
     fn list(&self, inner: &str) -> String;
     /// `HashMap<k, v>` / `map[k]v` / `Record<k, v>`.
@@ -28,7 +37,7 @@ pub trait TypeSyntax {
 /// expressions and delegating each construct's spelling to `syntax`.
 pub fn render_type(ty: &TypeExpr, syntax: &impl TypeSyntax) -> String {
     match ty {
-        TypeExpr::Ref(symbol) => symbol.name.clone(),
+        TypeExpr::Ref(symbol) => syntax.leaf(symbol),
         TypeExpr::List(inner) => syntax.list(&render_type(inner, syntax)),
         TypeExpr::Map(key, value) => {
             syntax.map(&render_type(key, syntax), &render_type(value, syntax))
@@ -36,7 +45,7 @@ pub fn render_type(ty: &TypeExpr, syntax: &impl TypeSyntax) -> String {
         TypeExpr::Nullable(inner) => syntax.nullable(&render_type(inner, syntax)),
         TypeExpr::Generic(symbol, args) => {
             let rendered: Vec<String> = args.iter().map(|a| render_type(a, syntax)).collect();
-            syntax.generic(&symbol.name, &rendered)
+            syntax.generic(&syntax.leaf(symbol), &rendered)
         }
         TypeExpr::Entries(key, value) => {
             syntax.entries(&render_type(key, syntax), &render_type(value, syntax))

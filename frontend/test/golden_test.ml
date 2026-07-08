@@ -32,14 +32,14 @@ op origin(): point
       shapes =
         [
           {
-            id = "point";
+            id = "geo#point";
             kind =
               Ir.Structure
                 { params = []; members = [ member "x" i64; member "y" i64 ] };
             traits = [];
           };
           {
-            id = "dir";
+            id = "geo#dir";
             kind =
               Ir.Enum
                 {
@@ -52,12 +52,12 @@ op origin(): point
       operations =
         [
           {
-            id = "origin";
+            id = "geo#origin";
             kind =
               Ir.Operation
                 {
                   input = None;
-                  output = Some (Ir.Ref ("point", []));
+                  output = Some (Ir.Ref ("geo#point", []));
                   errors = [];
                 };
             traits = [];
@@ -103,18 +103,19 @@ op create_charge(charge): charge @errors(not_found) @async
   Alcotest.(check (list string))
     "shape ids"
     [
-      "charge";
-      "currency";
-      "http_code";
-      "card";
-      "bank_account";
-      "source";
-      "page";
-      "not_found";
+      "payments#charge";
+      "payments#currency";
+      "payments#http_code";
+      "payments#card";
+      "payments#bank_account";
+      "payments#source";
+      "payments#page";
+      "payments#not_found";
     ]
     (List.map (fun (s : Ir.shape) -> s.id) m.shapes);
   Alcotest.(check (list string))
-    "operation ids" [ "create_charge" ]
+    "operation ids"
+    [ "payments#create_charge" ]
     (List.map (fun (s : Ir.shape) -> s.id) m.operations);
   let json = Ir_json.encode_module m in
   match Ir_json.decode_module json with

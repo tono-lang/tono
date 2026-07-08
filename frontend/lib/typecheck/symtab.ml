@@ -1,9 +1,10 @@
-(* Global symbol table over a single file's declarations. Cross-module resolution
-   is a later concern; here every shape lives in one flat namespace. *)
+(* Symbol table over one module's declarations. Cross-module resolution builds on
+   top of this per-module table (see [Modules]); within a module every shape
+   lives in one flat namespace. *)
 
 module SMap = Map.Make (String)
 
-type entry = { arity : int; decl_span : Span.span }
+type entry = { arity : int; pub : bool; decl_span : Span.span }
 type t = entry SMap.t
 
 let arity_of (d : Ast.decl) : int =
@@ -14,7 +15,7 @@ let arity_of (d : Ast.decl) : int =
 (* Build the table, reporting a duplicate-shape diagnostic (pointing at the
    redefinition, naming the first definition) for any repeated name. The first
    definition wins so later lookups resolve to it. *)
-let build (file : Ast.file) : t * Diagnostic.t list =
+let build (decls : Ast.decl list) : t * Diagnostic.t list =
   List.fold_left
     (fun (tbl, diags) (d : Ast.decl) ->
       match SMap.find_opt d.dname tbl with
@@ -27,8 +28,10 @@ let build (file : Ast.file) : t * Diagnostic.t list =
             Diagnostic.error ~code:Error_codes.duplicate_shape d.dname_span msg
             :: diags )
       | None ->
-          ( SMap.add d.dname { arity = arity_of d; decl_span = d.dname_span } tbl,
+          ( SMap.add d.dname
+              { arity = arity_of d; pub = d.pub; decl_span = d.dname_span }
+              tbl,
             diags ))
-    (SMap.empty, []) file
+    (SMap.empty, []) decls
 
 let find name (t : t) = SMap.find_opt name t

@@ -47,10 +47,13 @@ pub trait Target {
 /// rules own only the language tokens, so the tree stays target-agnostic.
 pub trait RenderRules {
     /// Render one import statement for all names brought in from a single module.
-    /// The names are deterministically ordered; a language that imports a whole
-    /// package (Go) ignores them, while one with named imports (TypeScript, Rust)
-    /// groups them into a single statement.
-    fn render_import(&self, module: &str, names: &[&str]) -> String;
+    /// `from_module` is the importing file's own module, so a target that forms a
+    /// path relative to the importer (TypeScript) can resolve it; absolute-path
+    /// targets (Rust `crate::`, Go module paths) ignore it. The names are
+    /// deterministically ordered; a language that imports a whole package (Go)
+    /// ignores them, while one with named imports (TypeScript, Rust) groups them
+    /// into a single statement.
+    fn render_import(&self, from_module: &str, module: &str, names: &[&str]) -> String;
 
     /// Render one declaration into rough but syntactically valid surface text.
     fn render_decl(&self, decl: &Decl) -> String;
