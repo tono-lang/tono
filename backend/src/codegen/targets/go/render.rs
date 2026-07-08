@@ -14,7 +14,7 @@ use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::symbol::SymbolKind;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
-use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, FnBody, Function, TypeExpr};
+use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, FnBody, Function, Method, TypeExpr};
 
 /// The Go render rules.
 pub struct GoRules;
@@ -104,6 +104,25 @@ impl GoRules {
         out
     }
 
+    /// One client method signature. Go has no suspension marker, so an async
+    /// operation lowers to the same blocking signature as a sync one (the
+    /// accepted caveat: the wait point is invisible at the call site). The
+    /// error channel is the native `(T, error)` pair.
+    fn render_method(&self, method: &Method) -> String {
+        let params: Vec<String> = method
+            .params
+            .iter()
+            .map(|p| format!("{} {}", p.name.name, self.render_type(&p.ty)))
+            .collect();
+        let ret = match (&method.ret, &method.err) {
+            (Some(ok), Some(_)) => format!(" ({}, error)", self.render_type(ok)),
+            (Some(ok), None) => format!(" {}", self.render_type(ok)),
+            (None, Some(_)) => " error".into(),
+            (None, None) => String::new(),
+        };
+        format!("\t{}({}){ret}\n", method.name.name, params.join(", "))
+    }
+
     fn render_function(&self, function: &Function) -> String {
         let params: Vec<String> = function
             .params
@@ -145,6 +164,14 @@ impl RenderRules for GoRules {
             // A branded well-known type is a named string.
             Decl::Alias(alias) => format!("type {} {}", alias.name.name, alias.value),
             Decl::Raw(raw) => raw.text.clone(),
+            Decl::Client(client) => {
+                let methods: String = client
+                    .methods
+                    .iter()
+                    .map(|m| self.render_method(m))
+                    .collect();
+                format!("type {} interface {{\n{methods}}}", client.name.name)
+            }
             // The union (a struct + hand-written JSON methods) is emitted as a Raw
             // item, and the operation stub belongs to the runtime phase; neither
             // reaches render through these arms.
@@ -388,8 +415,46 @@ mod tests {
             name: Symbol::builtin("Ping"),
             params: vec![],
             ret: None,
+            err: None,
+            is_async: false,
         });
         assert_eq!(GoRules.render_decl(&union), "");
         assert_eq!(GoRules.render_decl(&method), "");
+    }
+
+    #[test]
+    fn a_client_renders_a_blocking_interface_with_the_error_pair() {
+        // Go lowers async and sync operations to the same blocking signature;
+        // the error channel is the (T, error) pair, or a bare error with no
+        // output.
+        let decl = Decl::Client(crate::codegen::tree::ClientDecl {
+            name: Symbol::builtin("Client"),
+            methods: vec![
+                Method {
+                    name: Symbol::builtin("CreateCharge"),
+                    params: vec![field(
+                        "input",
+                        TypeExpr::Ref(Symbol::builtin("CreateChargeInput")),
+                        false,
+                        "input",
+                    )],
+                    ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
+                    err: Some(TypeExpr::Ref(Symbol::builtin("error"))),
+                    is_async: true,
+                },
+                Method {
+                    name: Symbol::builtin("Ping"),
+                    params: vec![],
+                    ret: None,
+                    err: Some(TypeExpr::Ref(Symbol::builtin("error"))),
+                    is_async: false,
+                },
+            ],
+        });
+        assert_eq!(
+            GoRules.render_decl(&decl),
+            "type Client interface {\n\tCreateCharge(input CreateChargeInput) \
+             (Charge, error)\n\tPing() error\n}"
+        );
     }
 }

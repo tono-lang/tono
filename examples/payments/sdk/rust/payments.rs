@@ -67,3 +67,110 @@ pub enum PaymentMethod {
     #[serde(rename = "bank")]
     Bank(BankAccount),
 }
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct CardDeclined {
+    pub message: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct NotFound {
+    pub message: String,
+}
+
+#[derive(Debug)]
+pub struct Violation {
+    pub field: String,
+    pub constraint: String,
+    pub message: String,
+}
+
+#[derive(Debug)]
+pub struct ValidationError {
+    pub violations: Vec<Violation>,
+}
+
+#[derive(Debug)]
+pub struct TransportError {
+    pub cause: Box<dyn std::error::Error + Send + Sync>,
+}
+
+#[derive(Debug)]
+pub struct DecodeError {
+    pub path: String,
+    pub expected: String,
+    pub raw: String,
+}
+
+#[derive(Debug)]
+pub struct ContractError {
+    pub contract_name: String,
+    pub cause: Box<dyn std::error::Error + Send + Sync>,
+}
+
+#[derive(Debug)]
+pub struct APIError {
+    pub status: u16,
+    pub body: String,
+}
+
+#[derive(Debug)]
+pub enum APIFailure {
+    CardDeclined(CardDeclined),
+    NotFound(NotFound),
+    Undeclared(APIError),
+}
+
+impl APIFailure {
+    pub fn retryable(&self) -> bool {
+        match self {
+            APIFailure::CardDeclined(_) => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum TonoError {
+    Validation(ValidationError),
+    Transport(TransportError),
+    Api(APIFailure),
+    Decode(DecodeError),
+    Contract(ContractError),
+}
+
+impl TonoError {
+    pub fn retryable(&self) -> bool {
+        match self {
+            TonoError::Api(failure) => failure.retryable(),
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for TonoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TonoError::Validation(_) => write!(f, "validation failed"),
+            TonoError::Transport(_) => write!(f, "transport failure"),
+            TonoError::Api(_) => write!(f, "api error"),
+            TonoError::Decode(_) => write!(f, "response body did not match the declared schema"),
+            TonoError::Contract(e) => write!(f, "contract hook '{}' failed", e.contract_name),
+        }
+    }
+}
+
+impl std::error::Error for TonoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TonoError::Transport(e) => Some(e.cause.as_ref()),
+            TonoError::Contract(e) => Some(e.cause.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait Client {
+    async fn create_charge(&self, input: Charge) -> Result<Charge, TonoError>;
+}

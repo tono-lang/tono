@@ -176,6 +176,15 @@ mod tests {
                     format!("pub type {} = {};", alias.name.name, alias.value)
                 }
                 Decl::Raw(raw) => raw.text.clone(),
+                // A stand-in spelling; the real client renderings live in the
+                // target rules and are exercised by their own tests.
+                Decl::Client(client) => {
+                    format!(
+                        "pub trait {} /* {} methods */;",
+                        client.name.name,
+                        client.methods.len()
+                    )
+                }
             }
         }
     }
@@ -275,6 +284,8 @@ mod tests {
                 name: Symbol::builtin(Self::local_name(&op.id)),
                 params: vec![],
                 ret: None,
+                err: None,
+                is_async: false,
             })]
         }
 
@@ -511,6 +522,8 @@ mod tests {
                         wire: None,
                     }],
                     ret: Some(TypeExpr::Ref(Symbol::builtin("String"))),
+                    err: None,
+                    is_async: false,
                 }),
             ],
         };

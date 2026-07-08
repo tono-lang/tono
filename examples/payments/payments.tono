@@ -23,3 +23,23 @@ struct bank_account { iban: string }
 
 @discriminator("kind")
 union payment_method { card(card), bank(bank_account) }
+
+@doc("The card issuer declined the charge.")
+@status(402)
+@errorCode("card_declined")
+@retryable
+struct card_declined {
+  message: string
+}
+
+@doc("No charge exists for the requested id.")
+@status(404)
+struct not_found {
+  message: string
+}
+
+@doc("Creates a charge.")
+op create_charge(charge): charge
+  @http(method: "POST", path: "/charges")
+  @errors(card_declined, not_found)
+  @async

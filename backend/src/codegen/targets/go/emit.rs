@@ -21,6 +21,7 @@ use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::codecs::{
     emit_serde_decls, runtime_serde_helpers, runtime_type_helpers, RuntimeHelpers,
 };
+use crate::codegen::targets::go::errors;
 use crate::codegen::targets::go::types::emit_type;
 use crate::codegen::tree::{Alias, Decl, File, ModuleFile};
 use crate::ir::{Module, ShapeKind};
@@ -100,6 +101,13 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     for shape in &module.shapes {
         type_decls.extend(emit_type(shape, config));
         serde_decls.extend(emit_serde_decls(shape, config, &unions));
+    }
+    // Operations bring the error values and the blocking client interface
+    // into the types file; the discriminators unmarshal, so they land with
+    // the serialization.
+    if !module.operations.is_empty() {
+        type_decls.extend(errors::type_decls(module, config));
+        serde_decls.extend(errors::serde_decls(module));
     }
 
     let mut files = vec![ModuleFile {

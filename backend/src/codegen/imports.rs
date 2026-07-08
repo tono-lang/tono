@@ -63,7 +63,12 @@ fn walk_decl(
                 walk_opt_type(variant.payload.as_ref(), acc, visited);
             }
         }
-        Decl::Method(method) => walk_signature(&method.params, method.ret.as_ref(), acc, visited),
+        Decl::Method(method) => walk_method(method, acc, visited),
+        Decl::Client(client) => {
+            for method in &client.methods {
+                walk_method(method, acc, visited);
+            }
+        }
         Decl::Function(function) => {
             walk_signature(&function.params, function.ret.as_ref(), acc, visited);
             walk_body(&function.body, acc, visited);
@@ -105,6 +110,17 @@ fn walk_signature(
 ) {
     walk_fields(params, acc, visited);
     walk_opt_type(ret, acc, visited);
+}
+
+// A method's error channel carries a type of its own (a `Result` error, say),
+// so it contributes imports exactly like the return type.
+fn walk_method(
+    method: &crate::codegen::tree::Method,
+    acc: &mut BTreeSet<Import>,
+    visited: &mut HashSet<(String, Option<Import>)>,
+) {
+    walk_signature(&method.params, method.ret.as_ref(), acc, visited);
+    walk_opt_type(method.err.as_ref(), acc, visited);
 }
 
 fn walk_opt_type(
@@ -182,6 +198,25 @@ mod tests {
             nullable: false,
             wire: None,
         }
+    }
+
+    fn method(
+        name: &str,
+        params: Vec<Field>,
+        ret: Option<TypeExpr>,
+        err: Option<TypeExpr>,
+    ) -> Method {
+        Method {
+            name: Symbol::builtin(name),
+            params,
+            ret,
+            err,
+            is_async: false,
+        }
+    }
+
+    fn imported_ref(name: &str, module: &str) -> TypeExpr {
+        TypeExpr::Ref(Symbol::imported(name, module, name))
     }
 
     fn interface_file(module: &str, fields: Vec<Field>) -> File {
@@ -356,22 +391,34 @@ mod tests {
                     members: vec![Symbol::builtin("Active")],
                     backing: crate::codegen::tree::EnumRepr::String,
                 }),
-                Decl::Method(Method {
-                    name: Symbol::builtin("create"),
-                    params: vec![field(
-                        "input",
-                        TypeExpr::Ref(Symbol::imported("In", "req", "In")),
-                    )],
-                    ret: Some(TypeExpr::Ref(Symbol::imported("Out", "resp", "Out"))),
-                }),
-                Decl::Method(Method {
-                    name: Symbol::builtin("ping"),
-                    params: vec![],
-                    ret: None,
-                }),
+                Decl::Method(method(
+                    "create",
+                    vec![field("input", imported_ref("In", "req"))],
+                    Some(imported_ref("Out", "resp")),
+                    None,
+                )),
+                Decl::Method(method("ping", vec![], None, None)),
             ],
         };
         assert_eq!(collect(&file).len(), 2);
+    }
+
+    #[test]
+    fn a_client_collects_params_returns_and_error_channels() {
+        let file = File {
+            module: "billing".into(),
+            decls: vec![Decl::Client(crate::codegen::tree::ClientDecl {
+                name: Symbol::builtin("Client"),
+                methods: vec![method(
+                    "create",
+                    vec![field("input", imported_ref("In", "req"))],
+                    Some(imported_ref("Out", "resp")),
+                    Some(imported_ref("Err", "errs")),
+                )],
+            })],
+        };
+        // The param type, the return type, and the error-channel type.
+        assert_eq!(collect(&file).len(), 3);
     }
 
     #[test]

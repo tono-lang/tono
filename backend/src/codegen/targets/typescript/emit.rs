@@ -10,6 +10,7 @@
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::codecs::{emit_codecs, runtime_helpers};
+use crate::codegen::targets::typescript::errors;
 use crate::codegen::targets::typescript::types::emit_type;
 use crate::codegen::tree::{Alias, Decl, File, ModuleFile};
 use crate::ir::Module;
@@ -41,6 +42,12 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     for shape in &module.shapes {
         type_decls.extend(emit_type(shape, config));
         serde_decls.extend(emit_codecs(shape, config, &module.name));
+    }
+    // Operations bring the error classes and the client interface into the
+    // types file and the discriminators in with the codecs they call.
+    if !module.operations.is_empty() {
+        type_decls.extend(errors::type_decls(module, config));
+        serde_decls.extend(errors::serde_decls(module));
     }
 
     let mut files = vec![ModuleFile {

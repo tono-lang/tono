@@ -11,6 +11,7 @@ pub mod casing;
 pub mod conventions;
 pub mod format;
 pub mod imports;
+pub mod ops;
 pub mod pipeline;
 pub mod render;
 pub mod symbol;

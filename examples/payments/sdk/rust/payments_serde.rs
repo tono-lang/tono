@@ -213,3 +213,30 @@ open_enum!(HTTPCode: i64 {
     NotFound => 404i64,
     Error => 500i64,
 });
+
+pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {
+    let value: serde_json::Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => {
+            return TonoError::Api(APIFailure::Undeclared(APIError {
+                status,
+                body: body.to_string(),
+            }))
+        }
+    };
+    let code = value.get("code").and_then(|v| v.as_str());
+    if status == 402 && code == Some("card_declined") {
+        if let Ok(data) = serde_json::from_value::<CardDeclined>(value.clone()) {
+            return TonoError::Api(APIFailure::CardDeclined(data));
+        }
+    }
+    if status == 404 {
+        if let Ok(data) = serde_json::from_value::<NotFound>(value.clone()) {
+            return TonoError::Api(APIFailure::NotFound(data));
+        }
+    }
+    TonoError::Api(APIFailure::Undeclared(APIError {
+        status,
+        body: body.to_string(),
+    }))
+}

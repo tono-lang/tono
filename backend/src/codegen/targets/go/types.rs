@@ -19,7 +19,7 @@ use crate::codegen::tree::{Decl, Field, TypeExpr};
 use crate::ir::{Member, Shape, Tref};
 
 /// The Go language key for per-language traits such as `@rename`.
-const LANG: &str = "go";
+pub(crate) const LANG: &str = "go";
 
 /// The idiomatic Go casing: exported PascalCase fields (so `encoding/json` can
 /// see them). Type names are PascalCase in the IR and used as-is; enum values are

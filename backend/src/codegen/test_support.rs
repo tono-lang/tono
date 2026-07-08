@@ -4,8 +4,9 @@
 #![cfg(test)]
 
 use crate::codegen::symbol::Symbol;
-use crate::codegen::target::Target;
-use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Trait, Tref};
+use crate::codegen::target::{RenderRules, Target};
+use crate::codegen::tree::Decl;
+use crate::ir::{EnumBacking, Member, Module, Prim, Shape, ShapeKind, Trait, Tref};
 
 /// A required member with no traits.
 pub fn member(name: &str, target: Tref, required: bool) -> Member {
@@ -93,6 +94,102 @@ pub fn union_shape(id: &str, discriminator: &str, members: Vec<Member>) -> Shape
         },
         traits: vec![],
     }
+}
+
+/// A bare trait with the given id and JSON value.
+pub fn trait_of(id: &str, value: serde_json::Value) -> Trait {
+    Trait {
+        id: id.into(),
+        value,
+    }
+}
+
+/// An error shape carrying its discrimination traits: the HTTP status, an
+/// optional body code, and retryability.
+pub fn error_shape(
+    id: &str,
+    members: Vec<Member>,
+    status: i64,
+    code: Option<&str>,
+    retryable: bool,
+) -> Shape {
+    let mut shape = structure(id, members);
+    shape
+        .traits
+        .push(trait_of("status", serde_json::json!([status])));
+    if let Some(code) = code {
+        shape
+            .traits
+            .push(trait_of("errorCode", serde_json::json!([code])));
+    }
+    if retryable {
+        shape
+            .traits
+            .push(trait_of("retryable", serde_json::Value::Null));
+    }
+    shape
+}
+
+/// An operation from `m#charge_input` to `m#charge` with the given traits and
+/// declared-error references.
+pub fn operation(id: &str, traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
+    let reference = |id: &str| Tref::Ref {
+        id: id.into(),
+        args: vec![],
+    };
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Operation {
+            input: Some(reference("m#charge_input")),
+            output: Some(reference("m#charge")),
+            errors: errors.into_iter().map(reference).collect(),
+        },
+        traits,
+    }
+}
+
+/// The shared error-surface fixture: one async transport operation declaring a
+/// retryable, coded 402 error and a codeless 429 error, so every target's
+/// tests exercise the same taxonomy, client, and discrimination inputs.
+pub fn error_demo_module() -> Module {
+    Module {
+        name: "m".into(),
+        shapes: vec![
+            structure(
+                "m#charge",
+                vec![member("id", Tref::Prim(Prim::String), true)],
+            ),
+            structure(
+                "m#charge_input",
+                vec![member("amount", Tref::Prim(Prim::I64), true)],
+            ),
+            error_shape(
+                "m#payment_declined",
+                vec![member("message", Tref::Prim(Prim::String), true)],
+                402,
+                Some("payment_declined"),
+                true,
+            ),
+            error_shape("m#rate_limited", vec![], 429, None, false),
+        ],
+        operations: vec![operation(
+            "m#create_charge",
+            vec![trait_of(
+                "http",
+                serde_json::json!({"method": "POST", "path": "/charges"}),
+            )],
+            vec!["m#payment_declined", "m#rate_limited"],
+        )],
+    }
+}
+
+/// Render declarations through a target's render rules, joined by newlines.
+pub fn rendered(decls: &[Decl], rules: &impl RenderRules) -> String {
+    decls
+        .iter()
+        .map(|d| rules.render_decl(d))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Assert a symbol table maps each primitive to the expected in-code name and
