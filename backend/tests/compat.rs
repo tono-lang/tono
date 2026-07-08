@@ -361,7 +361,9 @@ fn union_variants_use_variant_keys_not_member_keys() {
         find(&removed, "remove-variant billing#Source::bank").category,
         Category::WireBreaking
     );
-    assert!(!keys(&removed).iter().any(|k| k.starts_with("remove-member")));
+    assert!(!keys(&removed)
+        .iter()
+        .any(|k| k.starts_with("remove-member")));
 }
 
 #[test]
