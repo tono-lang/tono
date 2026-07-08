@@ -212,12 +212,14 @@ pub fn check_go_layout(
 
 /// Generate the SDK source for every `(target, module)` pair, mapping each module
 /// to its idiomatic sub-package (steered by `config`). Each file's text is rough
-/// (unformatted) so callers run the real formatter when they write it out.
+/// (unformatted) so callers run the real formatter when they write it out. Fails
+/// if the bespoke gate ([`extensions::validate_extensions`]) rejects the model.
 pub fn generate(
     model: &Model,
     targets: &[TargetKind],
     config: &CodegenConfig,
-) -> Vec<GeneratedFile> {
+) -> Result<Vec<GeneratedFile>, String> {
+    crate::codegen::extensions::validate_extensions(model)?;
     // Apply the module remap/flatten hooks once, up front, so the render rules and
     // output paths below see only the effective (post-config) module names.
     let model = modules::apply(config, model);
@@ -254,7 +256,7 @@ pub fn generate(
     if targets.contains(&TargetKind::Rust) {
         files.extend(rust_mod_tree(&files));
     }
-    files
+    Ok(files)
 }
 
 /// Synthesize the Rust module tree: for every directory below the `rust/` root
@@ -316,7 +318,7 @@ mod tests {
     /// Rust and TypeScript stay single-file.
     fn union_model() -> Model {
         Model {
-            tono_ir_version: 2,
+            tono_ir_version: 3,
             modules: vec![Module {
                 name: "payments".into(),
                 shapes: vec![
@@ -349,13 +351,14 @@ mod tests {
                     ),
                 ],
                 operations: vec![],
+                extensions: vec![],
             }],
         }
     }
 
     fn demo_model() -> Model {
         Model {
-            tono_ir_version: 2,
+            tono_ir_version: 3,
             modules: vec![Module {
                 name: "payments".into(),
                 shapes: vec![structure(
@@ -363,6 +366,7 @@ mod tests {
                     vec![member("amount", Tref::Prim(Prim::I64), true)],
                 )],
                 operations: vec![],
+                extensions: vec![],
             }],
         }
     }
@@ -398,7 +402,8 @@ mod tests {
             &model,
             &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
             &CodegenConfig::default(),
-        );
+        )
+        .unwrap();
         let paths: Vec<String> = files
             .iter()
             .map(|f| f.path.to_string_lossy().into_owned())
@@ -437,7 +442,8 @@ mod tests {
             &union_model(),
             &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
             &CodegenConfig::default(),
-        );
+        )
+        .unwrap();
         let paths: Vec<String> = files
             .iter()
             .map(|f| f.path.to_string_lossy().into_owned())
@@ -522,7 +528,8 @@ mod tests {
             &ops_model(),
             &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
             &CodegenConfig::default(),
-        );
+        )
+        .unwrap();
         let text_of = |path: &str| {
             files
                 .iter()
@@ -569,7 +576,8 @@ mod tests {
 
     #[test]
     fn generate_with_no_targets_is_empty() {
-        assert!(generate(&demo_model(), &[], &CodegenConfig::default()).is_empty());
+        let files = generate(&demo_model(), &[], &CodegenConfig::default()).unwrap();
+        assert!(files.is_empty());
     }
 
     #[test]
@@ -597,6 +605,7 @@ mod tests {
                         vec![member("amount", Tref::Prim(Prim::I64), true)],
                     )],
                     operations: vec![],
+                    extensions: vec![],
                 },
                 Module {
                     name: "payments.charge".into(),
@@ -612,6 +621,7 @@ mod tests {
                         )],
                     )],
                     operations: vec![],
+                    extensions: vec![],
                 },
             ],
         }
@@ -644,7 +654,8 @@ mod tests {
             &sub_package_model(),
             &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
             &CodegenConfig::default(),
-        );
+        )
+        .unwrap();
         let paths = paths_of(&files);
         // Rust and TypeScript use the dotted path as a file path; Go nests the
         // file inside a package directory named for the last segment.
@@ -678,7 +689,7 @@ mod tests {
             go_module: Some("example.com/sdk".into()),
             ..CodegenConfig::default()
         };
-        let files = generate(&sub_package_model(), &[TargetKind::Go], &config);
+        let files = generate(&sub_package_model(), &[TargetKind::Go], &config).unwrap();
         assert!(text_at(&files, "go/payments/charge/charge.go")
             .contains("import \"example.com/sdk/payments/common\""));
     }
@@ -690,7 +701,7 @@ mod tests {
             remap: vec![],
             go_module: None,
         };
-        let files = generate(&sub_package_model(), &[TargetKind::Rust], &config);
+        let files = generate(&sub_package_model(), &[TargetKind::Rust], &config).unwrap();
         let paths = paths_of(&files);
         assert!(paths.contains(&"rust/payments_common.rs".to_string()));
         assert!(paths.contains(&"rust/payments_charge.rs".to_string()));
@@ -705,7 +716,7 @@ mod tests {
             remap: vec![("payments".into(), "billing".into())],
             go_module: None,
         };
-        let files = generate(&sub_package_model(), &[TargetKind::Rust], &config);
+        let files = generate(&sub_package_model(), &[TargetKind::Rust], &config).unwrap();
         let paths = paths_of(&files);
         assert!(paths.contains(&"rust/billing/common.rs".to_string()));
         assert!(paths.contains(&"rust/billing/charge.rs".to_string()));
@@ -716,7 +727,7 @@ mod tests {
     #[test]
     fn single_segment_modules_keep_the_flat_layout() {
         // The common single-module case is unchanged by the sub-package mapping.
-        let files = generate(&demo_model(), &[TargetKind::Go], &CodegenConfig::default());
+        let files = generate(&demo_model(), &[TargetKind::Go], &CodegenConfig::default()).unwrap();
         let paths = paths_of(&files);
         assert!(paths.contains(&"go/payments.go".to_string()));
     }
@@ -759,6 +770,7 @@ mod tests {
                         vec![member("amount", Tref::Prim(Prim::I64), true)],
                     )],
                     operations: vec![],
+                    extensions: vec![],
                 },
                 Module {
                     name: "b.common".into(),
@@ -767,6 +779,7 @@ mod tests {
                         vec![member("pct", Tref::Prim(Prim::I64), true)],
                     )],
                     operations: vec![],
+                    extensions: vec![],
                 },
             ],
         };

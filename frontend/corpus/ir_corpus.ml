@@ -71,6 +71,7 @@ let list_charges : Ir.model =
           mod_name = "payments";
           shapes = [ page; charge ];
           operations = [ list_charges_op ];
+          extensions = [];
         };
       ];
   }
@@ -99,7 +100,14 @@ let nullable_charge : Ir.model =
   {
     tono_ir_version = Ir_json.current_ir_version;
     modules =
-      [ { mod_name = "payments"; shapes = [ charge ]; operations = [] } ];
+      [
+        {
+          mod_name = "payments";
+          shapes = [ charge ];
+          operations = [];
+          extensions = [];
+        };
+      ];
   }
 
 (* Example: an enum (every enum is open) and a union whose variant wire tags are
@@ -136,7 +144,12 @@ let open_enum_union : Ir.model =
     tono_ir_version = Ir_json.current_ir_version;
     modules =
       [
-        { mod_name = "payments"; shapes = [ status; source ]; operations = [] };
+        {
+          mod_name = "payments";
+          shapes = [ status; source ];
+          operations = [];
+          extensions = [];
+        };
       ];
   }
 
@@ -222,6 +235,7 @@ let primitives : Ir.model =
           mod_name = "lab";
           shapes = [ kitchen_sink; priority ];
           operations = [];
+          extensions = [];
         };
       ];
   }
@@ -275,6 +289,59 @@ let service_api : Ir.model =
           mod_name = "payments";
           shapes = [ request; not_found; service ];
           operations = [ list_charges_op ];
+          extensions = [];
+        };
+      ];
+  }
+
+(* Example: the bespoke extension table. A lifecycle hook (no signature), a
+   signing contract (typed signature plus a mandatory conformance reference), and
+   a custom constraint, each bound to per-language source files. *)
+let extension_model : Ir.model =
+  let before_request : Ir.extension =
+    {
+      ext_name = "before_request";
+      ext_kind = Ir.Hook;
+      ext_sig = None;
+      ext_bindings =
+        [
+          ("ts", "ext/ts/auth.ts#addBearer");
+          ("rust", "ext/rust/auth.rs#add_bearer");
+        ];
+      ext_conformance = None;
+    }
+  in
+  let sign_request : Ir.extension =
+    {
+      ext_name = "sign_request";
+      ext_kind = Ir.Contract;
+      ext_sig = Some { input = ref_ "canonical_request" []; output = string_t };
+      ext_bindings =
+        [
+          ("ts", "ext/ts/sign.ts#signRequest");
+          ("go", "ext/go/sign.go#SignRequest");
+        ];
+      ext_conformance = Some "vectors/sign_request.json";
+    }
+  in
+  let luhn : Ir.extension =
+    {
+      ext_name = "luhn";
+      ext_kind = Ir.Constraint;
+      ext_sig = Some { input = string_t; output = prim Ir.Bool };
+      ext_bindings = [ ("ts", "ext/ts/luhn.ts#isLuhn") ];
+      ext_conformance = None;
+    }
+  in
+  {
+    tono_ir_version = Ir_json.current_ir_version;
+    modules =
+      [
+        {
+          mod_name = "payments";
+          shapes = [];
+          operations = [];
+          extensions = [ before_request; sign_request; luhn ];
         };
       ];
   }
@@ -287,4 +354,5 @@ let examples : (string * Ir.model) list =
     ("open_enum_union", open_enum_union);
     ("primitives", primitives);
     ("service_api", service_api);
+    ("extension_model", extension_model);
   ]

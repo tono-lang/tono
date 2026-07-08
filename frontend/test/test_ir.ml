@@ -35,6 +35,10 @@ let roundtrip_trait name (value : Ir.json) =
 let roundtrip_shape name s =
   roundtrip name ~encode:Ir_json.encode_shape ~decode:Ir_json.decode_shape s
 
+let roundtrip_extension name e =
+  roundtrip name ~encode:Ir_json.encode_extension
+    ~decode:Ir_json.decode_extension e
+
 let roundtrip_member name m =
   roundtrip name ~encode:Ir_json.encode_member ~decode:Ir_json.decode_member m
 
@@ -135,7 +139,14 @@ let index_resolves () =
     {
       tono_ir_version = Ir_json.current_ir_version;
       modules =
-        [ { mod_name = "payments"; shapes = [ s ]; operations = [ op ] } ];
+        [
+          {
+            mod_name = "payments";
+            shapes = [ s ];
+            operations = [ op ];
+            extensions = [];
+          };
+        ];
     }
   in
   let idx = Ir.index_model m in
@@ -492,6 +503,50 @@ let shape_suite =
       operation_nulls_absent_io;
   ]
 
+(* ── Extensions ────────────────────────────────────────────────────────── *)
+
+let hook_ext : Ir.extension =
+  {
+    ext_name = "before_request";
+    ext_kind = Ir.Hook;
+    ext_sig = None;
+    ext_bindings = [ ("ts", "ext/ts/auth.ts#addBearer") ];
+    ext_conformance = None;
+  }
+
+let contract_ext : Ir.extension =
+  {
+    ext_name = "sign_request";
+    ext_kind = Ir.Contract;
+    ext_sig =
+      Some
+        {
+          input = Ir.Ref ("core#CanonicalRequest", []);
+          output = Ir.Prim Ir.String;
+        };
+    ext_bindings =
+      [
+        ("ts", "ext/ts/sign.ts#signRequest"); ("rust", "ext/rust/sign.rs#sign");
+      ];
+    ext_conformance = Some "vectors/sign_request.json";
+  }
+
+let constraint_ext : Ir.extension =
+  {
+    ext_name = "luhn";
+    ext_kind = Ir.Constraint;
+    ext_sig = Some { input = Ir.Prim Ir.String; output = Ir.Prim Ir.Bool };
+    ext_bindings = [ ("go", "ext/go/luhn.go#IsLuhn") ];
+    ext_conformance = None;
+  }
+
+let extension_suite =
+  [
+    roundtrip_extension "hook (no signature)" hook_ext;
+    roundtrip_extension "contract (signature + conformance)" contract_ext;
+    roundtrip_extension "constraint" constraint_ext;
+  ]
+
 (* ── Model / envelope ──────────────────────────────────────────────────── *)
 
 let sample_model : Ir.model =
@@ -510,6 +565,7 @@ let sample_model : Ir.model =
               service_shape;
             ];
           operations = [ operation_shape ];
+          extensions = [ hook_ext; contract_ext; constraint_ext ];
         };
       ];
   }
@@ -548,7 +604,27 @@ let negative_suite =
       (`Assoc [ ("tono_ir_version", `Int 999); ("modules", `List []) ]);
     decode_fails "model missing version" ~decode:Ir_json.decode_model
       (`Assoc [ ("modules", `List []) ]);
+    decode_fails "extension unknown kind" ~decode:Ir_json.decode_extension
+      (`Assoc [ ("name", `String "x"); ("kind", `String "bogus") ]);
+    decode_fails "extension missing name" ~decode:Ir_json.decode_extension
+      (`Assoc [ ("kind", `String "hook") ]);
+    decode_fails "extension missing kind" ~decode:Ir_json.decode_extension
+      (`Assoc [ ("name", `String "x") ]);
   ]
+
+(* A minimal hook decodes with the optional fields defaulted: no signature, no
+   bindings, no conformance. *)
+let extension_decode_defaults () =
+  match
+    Ir_json.decode_extension
+      (`Assoc [ ("name", `String "before_request"); ("kind", `String "hook") ])
+  with
+  | Error e -> Alcotest.failf "minimal extension should decode: %s" e
+  | Ok e ->
+      Alcotest.(check string) "name" "before_request" e.ext_name;
+      Alcotest.(check bool) "no signature" true (e.ext_sig = None);
+      Alcotest.(check bool) "no bindings" true (e.ext_bindings = []);
+      Alcotest.(check bool) "no conformance" true (e.ext_conformance = None)
 
 let version_gate_accepts_current () =
   match
@@ -581,6 +657,12 @@ let () =
       ("member", member_suite);
       ("trait", trait_suite);
       ("shape", shape_suite);
+      ( "extension",
+        extension_suite
+        @ [
+            Alcotest.test_case "decode defaults" `Quick
+              extension_decode_defaults;
+          ] );
       ("model", model_suite);
       ("version", version_suite);
       ("negative", negative_suite);

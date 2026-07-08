@@ -22,6 +22,7 @@ val parse_enum :
   Parser_state.t -> pub:bool -> dtraits:Ast.trait list -> Ast.decl
 
 val parse_op : Parser_state.t -> pub:bool -> dtraits:Ast.trait list -> Ast.decl
+val parse_ext : Parser_state.t -> pub:bool -> dtraits:Ast.trait list -> Ast.decl
 
 (* Parse one declaration, reading any leading traits and [pub]; [None] when no
    shape keyword follows (already diagnosed). *)

@@ -192,6 +192,7 @@ fn module() -> impl Strategy<Value = Module> {
             name,
             shapes,
             operations,
+            extensions: vec![],
         }
     })
 }

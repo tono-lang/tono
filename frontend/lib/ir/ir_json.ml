@@ -13,8 +13,9 @@
 
 (* The IR schema revision this build understands. Bumped by one on every
    incompatible change to the wire format; there is no negotiation.
-   v2 removed the enum [open] field (every enum is open). *)
-let current_ir_version = 2
+   v2 removed the enum [open] field (every enum is open).
+   v3 added the module [extensions] table (bespoke hooks/contracts/constraints). *)
+let current_ir_version = 3
 
 (* ── Encoding ──────────────────────────────────────────────────────────── *)
 
@@ -136,12 +137,39 @@ and encode_shape (s : Ir.shape) : Ir.json =
     ((("id", `String s.id) :: encode_shape_kind_fields s.kind)
     @ [ ("traits", `List (List.map encode_trait s.traits)) ])
 
+let encode_ext_kind = function
+  | Ir.Hook -> "hook"
+  | Ir.Contract -> "contract"
+  | Ir.Constraint -> "constraint"
+
+let encode_ext_sig (s : Ir.ext_sig) : Ir.json =
+  `Assoc [ ("input", encode_tref s.input); ("output", encode_tref s.output) ]
+
+let encode_binding (b : Ir.binding) : Ir.json =
+  `Assoc (List.map (fun (lang, target) -> (lang, `String target)) b)
+
+let encode_extension (e : Ir.extension) : Ir.json =
+  `Assoc
+    ([
+       ("name", `String e.ext_name);
+       ("kind", `String (encode_ext_kind e.ext_kind));
+     ]
+    @ (match e.ext_sig with
+      | None -> []
+      | Some s -> [ ("signature", encode_ext_sig s) ])
+    @ [ ("bindings", encode_binding e.ext_bindings) ]
+    @
+    match e.ext_conformance with
+    | None -> []
+    | Some c -> [ ("conformance", `String c) ])
+
 let encode_module (m : Ir.module_) : Ir.json =
   `Assoc
     [
       ("name", `String m.mod_name);
       ("shapes", `List (List.map encode_shape m.shapes));
       ("operations", `List (List.map encode_shape m.operations));
+      ("extensions", `List (List.map encode_extension m.extensions));
     ]
 
 let encode_model (m : Ir.model) : Ir.json =
@@ -478,6 +506,67 @@ let decode_shape j =
   in
   Ok ({ id; kind; traits } : Ir.shape)
 
+let decode_ext_kind j =
+  let* s = as_string j in
+  match s with
+  | "hook" -> Ok Ir.Hook
+  | "contract" -> Ok Ir.Contract
+  | "constraint" -> Ok Ir.Constraint
+  | other -> err "unknown extension kind %S" other
+
+let decode_ext_sig j =
+  let* kvs = as_assoc j in
+  let field k =
+    match List.assoc_opt k kvs with
+    | Some v -> decode_tref v
+    | None -> err "extension signature is missing %s" k
+  in
+  let* input = field "input" in
+  let* output = field "output" in
+  Ok ({ input; output } : Ir.ext_sig)
+
+let decode_binding j =
+  let* kvs = as_assoc j in
+  map_result
+    (fun (lang, v) ->
+      let* target = as_string v in
+      Ok (lang, target))
+    kvs
+
+let decode_extension j =
+  let* kvs = as_assoc j in
+  let get k = List.assoc_opt k kvs in
+  let* ext_name =
+    match get "name" with
+    | Some v -> as_string v
+    | None -> err "extension is missing name"
+  in
+  let* ext_kind =
+    match get "kind" with
+    | Some v -> decode_ext_kind v
+    | None -> err "extension is missing kind"
+  in
+  let* ext_sig =
+    match get "signature" with
+    | None -> Ok None
+    | Some v ->
+        let* s = decode_ext_sig v in
+        Ok (Some s)
+  in
+  let* ext_bindings =
+    match get "bindings" with None -> Ok [] | Some v -> decode_binding v
+  in
+  let* ext_conformance =
+    match get "conformance" with
+    | None -> Ok None
+    | Some v ->
+        let* s = as_string v in
+        Ok (Some s)
+  in
+  Ok
+    ({ ext_name; ext_kind; ext_sig; ext_bindings; ext_conformance }
+      : Ir.extension)
+
 let decode_module j =
   let* kvs = as_assoc j in
   let* mod_name =
@@ -494,7 +583,14 @@ let decode_module j =
   in
   let* shapes = shapes_of "shapes" in
   let* operations = shapes_of "operations" in
-  Ok ({ mod_name; shapes; operations } : Ir.module_)
+  let* extensions =
+    match List.assoc_opt "extensions" kvs with
+    | None -> Ok []
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_extension xs
+  in
+  Ok ({ mod_name; shapes; operations; extensions } : Ir.module_)
 
 let decode_model j =
   let* kvs = as_assoc j in

@@ -47,11 +47,28 @@ type union_variant = {
   vtraits : trait list;
 }
 
+(* The three bespoke extension flavours. [EHook] fills a fixed lifecycle slot;
+   [EContract]/[EConstraint] are named with a typed signature. *)
+type ext_kind = EHook | EContract | EConstraint
+
+(* One "lang: file#symbol" entry in an extension body. *)
+type ext_binding = { lang : string; lang_span : Span.span; target : string }
+
+(* A contract/constraint signature: (input) -> output. Hooks omit it. *)
+type ext_sig = { esig_in : ty; esig_out : ty }
+
 type decl_kind =
   | DStruct of { params : string list; members : member list }
   | DEnum of { cases : enum_case list }
   | DUnion of { params : string list; variants : union_variant list }
   | DOp of { input : ty option; output : ty option }
+  | DExt of {
+      ekind : ext_kind;
+      ekind_span : Span.span;
+      esig : ext_sig option;
+      ebindings : ext_binding list;
+      econformance : string option;
+    }
 
 type decl = {
   dname : string;

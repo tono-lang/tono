@@ -36,6 +36,39 @@ export interface ClientOptions {
   readonly headers?: Readonly<Record<string, string>>;
 }
 
+// The request the runtime builds from a descriptor before sending it. A
+// `before_request` hook receives this and may return a mutated copy (set an auth
+// header, sign the body). Exposed so a bespoke hook can read and rewrite the
+// request without reaching into protocol internals.
+export interface CanonicalRequest {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string | undefined;
+}
+
+// The response the runtime reads before classifying it. An `after_response` hook
+// may return a mutated copy.
+export interface CanonicalResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+// The lifecycle slots the runtime invokes around the transport. `client_init`
+// and `on_error` are applied by the generated client (they touch client
+// construction and the error taxonomy), so they are not part of this interface.
+// The runtime never wraps a throw: a hook that throws propagates raw, and the
+// generated wrapper is what turns it into a ContractError.
+export interface Hooks {
+  readonly before_request?: (
+    req: CanonicalRequest,
+  ) => CanonicalRequest | Promise<CanonicalRequest>;
+  readonly after_response?: (
+    res: CanonicalResponse,
+  ) => CanonicalResponse | Promise<CanonicalResponse>;
+}
+
 // The raw result of one call. Deliberately free of any error class: the
 // generated SDK maps each variant onto its own idiomatic taxonomy (throw a typed
 // error in TypeScript, a `Result` in Rust, an `error` return in Go), so the

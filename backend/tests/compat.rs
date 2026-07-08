@@ -11,9 +11,10 @@ use tono_backend::ir::{
 
 fn model(shapes: Vec<Shape>) -> Model {
     Model {
-        tono_ir_version: 2,
+        tono_ir_version: 3,
         modules: vec![Module {
             name: "billing".into(),
+            extensions: vec![],
             shapes,
             operations: vec![],
         }],
@@ -417,9 +418,10 @@ fn removing_a_referenced_shape_is_wire_breaking_but_an_orphan_is_source_breaking
 #[test]
 fn an_operation_signature_change_is_source_breaking() {
     let op = |input: &str| Model {
-        tono_ir_version: 2,
+        tono_ir_version: 3,
         modules: vec![Module {
             name: "billing".into(),
+            extensions: vec![],
             shapes: vec![],
             operations: vec![Shape {
                 id: "billing#Create".into(),
@@ -508,9 +510,10 @@ fn service_with_op(op_ids: Vec<&str>, keep_op_shape: bool) -> Model {
         vec![]
     };
     Model {
-        tono_ir_version: 2,
+        tono_ir_version: 3,
         modules: vec![Module {
             name: "billing".into(),
+            extensions: vec![],
             shapes: vec![service],
             operations,
         }],

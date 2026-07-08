@@ -192,6 +192,7 @@ pub fn error_demo_module() -> Module {
             )],
             vec!["m#payment_declined", "m#rate_limited"],
         )],
+        extensions: vec![],
     }
 }
 

@@ -39,13 +39,23 @@ val lower_member :
   Ir.member
 
 (* Lower a surface declaration to an IR shape; its own id is qualified with
-   [module_name] and its references through [resolve]. *)
+   [module_name] and its references through [resolve]. Raises on a [DExt]
+   declaration, which has no shape; [lower_file] routes those to [lower_ext]. *)
 val lower_decl :
   module_name:string ->
   resolve:ref_resolver ->
   diags:Diagnostic.t list ref ->
   Ast.decl ->
   Ir.shape
+
+(* Lower a surface [DExt] declaration to an IR extension. [resolve] namespaces
+   the signature type refs (their existence is not checked: binding-vs-signature
+   validation is deferred). *)
+val lower_ext :
+  resolve:ref_resolver ->
+  diags:Diagnostic.t list ref ->
+  Ast.decl ->
+  Ir.extension
 
 (* Lower a file of declarations into a module; [module_name] becomes its name and
    operations are separated from the other shapes. [resolve] defaults to

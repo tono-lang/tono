@@ -85,7 +85,7 @@ fn run_gen(args: &[String]) -> Result<(), String> {
     // silently-broken source.
     check_go_layout(&model, &targets, &config)?;
 
-    for file in generate(&model, &targets, &config) {
+    for file in generate(&model, &targets, &config)? {
         let formatted = formatter_for(file.target).run(&file.text).text;
         write_file(&out_root.join(&file.path), &formatted)?;
     }

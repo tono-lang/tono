@@ -18,6 +18,8 @@ val encode_member : Ir.member -> Ir.json
 val decode_member : Ir.json -> (Ir.member, string) result
 val encode_shape : Ir.shape -> Ir.json
 val decode_shape : Ir.json -> (Ir.shape, string) result
+val encode_extension : Ir.extension -> Ir.json
+val decode_extension : Ir.json -> (Ir.extension, string) result
 val encode_module : Ir.module_ -> Ir.json
 val decode_module : Ir.json -> (Ir.module_, string) result
 val encode_model : Ir.model -> Ir.json

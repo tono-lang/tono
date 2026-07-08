@@ -53,6 +53,12 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     if !module.operations.is_empty() {
         type_decls.extend(errors::type_decls(module, config));
         discriminators = errors::serde_decls(module);
+        // Bespoke boundary wrappers sit in the types file next to the error
+        // taxonomy they map to, so they ride the operation surface: a module with
+        // no operations has no ContractError to wrap a failure into. A pure-contract
+        // module still trips the conformance gate, it just emits no wrapper until an
+        // operation gives it the error surface (or the concrete client lands).
+        type_decls.extend(crate::codegen::targets::rust::client::wrapper_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the `Violation` record a
         // validator references, which the taxonomy would otherwise have carried.
@@ -176,6 +182,7 @@ mod tests {
                 vec![member("amount_cents", Tref::Prim(Prim::I64), true)],
             )],
             operations: vec![],
+            extensions: vec![],
         };
         assert_eq!(emit_module(&module, &rust_casing()).len(), 2);
 
@@ -213,6 +220,7 @@ mod tests {
                 vec![member("text", Tref::Prim(Prim::String), true)],
             )],
             operations: vec![],
+            extensions: vec![],
         };
         let files = emit_module(&module, &rust_casing());
         // No wide integer, no bytes, no open enum: nothing to serialize beyond derives.
@@ -254,6 +262,7 @@ mod tests {
                 ),
             ],
             operations: vec![],
+            extensions: vec![],
         };
         let types = rendered(&module, "");
         // Cross-module payloads pull their import; the open enum's definition and the

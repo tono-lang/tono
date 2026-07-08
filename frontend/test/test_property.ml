@@ -153,11 +153,40 @@ let gen_shape : Ir.shape G.t =
   and+ traits = G.list_size (G.int_range 0 2) gen_trait in
   ({ id; kind; traits } : Ir.shape)
 
+let gen_ext_kind : Ir.ext_kind G.t =
+  G.oneof_list [ Ir.Hook; Ir.Contract; Ir.Constraint ]
+
+let gen_ext_sig : Ir.ext_sig G.t =
+  let+ input = gen_tref and+ output = gen_tref in
+  ({ input; output } : Ir.ext_sig)
+
+(* Distinct language keys by construction (each target included at most once), so
+   the binding object never carries a duplicate key. *)
+let gen_bindings : Ir.binding G.t =
+  let+ ts = gen_opt gen_ident
+  and+ rust = gen_opt gen_ident
+  and+ go = gen_opt gen_ident in
+  List.filter_map
+    (fun (lang, target) -> Option.map (fun t -> (lang, t)) target)
+    [ ("ts", ts); ("rust", rust); ("go", go) ]
+
+let gen_extension : Ir.extension G.t =
+  let+ ext_name = gen_name
+  and+ ext_kind = gen_ext_kind
+  and+ ext_sig = gen_opt gen_ext_sig
+  and+ ext_bindings = gen_bindings
+  and+ ext_conformance =
+    gen_opt (G.oneof_list [ "vec.json"; "vectors/x.json" ])
+  in
+  ({ ext_name; ext_kind; ext_sig; ext_bindings; ext_conformance }
+    : Ir.extension)
+
 let gen_module : Ir.module_ G.t =
   let+ mod_name = gen_modname
   and+ shapes = G.list_size (G.int_range 0 3) gen_shape
-  and+ operations = G.list_size (G.int_range 0 2) gen_shape in
-  ({ mod_name; shapes; operations } : Ir.module_)
+  and+ operations = G.list_size (G.int_range 0 2) gen_shape
+  and+ extensions = G.list_size (G.int_range 0 2) gen_extension in
+  ({ mod_name; shapes; operations; extensions } : Ir.module_)
 
 let gen_model : Ir.model G.t =
   let+ modules = G.list_size (G.int_range 0 2) gen_module in

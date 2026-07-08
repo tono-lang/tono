@@ -56,6 +56,25 @@ let erase_kind = function
           input = Option.map erase_ty input;
           output = Option.map erase_ty output;
         }
+  | Ast.DExt { ekind; esig; ebindings; econformance; _ } ->
+      Ast.DExt
+        {
+          ekind;
+          ekind_span = dspan;
+          esig =
+            Option.map
+              (fun (s : Ast.ext_sig) ->
+                {
+                  Ast.esig_in = erase_ty s.esig_in;
+                  esig_out = erase_ty s.esig_out;
+                })
+              esig;
+          ebindings =
+            List.map
+              (fun (b : Ast.ext_binding) -> { b with Ast.lang_span = dspan })
+              ebindings;
+          econformance;
+        }
 
 let erase_decl (d : Ast.decl) =
   {

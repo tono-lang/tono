@@ -12,7 +12,7 @@
 //! the model ([`apply`]); the render rules and output paths then see only the
 //! effective names and never need to know about the config.
 
-use crate::ir::{Member, Model, Module, Shape, ShapeKind, Tref};
+use crate::ir::{Extension, Member, Model, Module, Shape, ShapeKind, Signature, Tref};
 
 /// Config hooks consumed by codegen when mapping modules to packages. The default
 /// (no flatten, no remap) is the idiomatic sub-package mapping.
@@ -75,6 +75,19 @@ fn module(config: &CodegenConfig, m: &Module) -> Module {
         name: canonicalize(config, &m.name),
         shapes: m.shapes.iter().map(|s| shape(config, s)).collect(),
         operations: m.operations.iter().map(|s| shape(config, s)).collect(),
+        extensions: m.extensions.iter().map(|e| extension(config, e)).collect(),
+    }
+}
+
+/// Remap the shape ids a contract's signature references; bindings are
+/// file#symbol paths and conformance is an external reference, both left alone.
+fn extension(config: &CodegenConfig, e: &Extension) -> Extension {
+    Extension {
+        signature: e.signature.as_ref().map(|s| Signature {
+            input: tref(config, &s.input),
+            output: tref(config, &s.output),
+        }),
+        ..e.clone()
     }
 }
 
@@ -219,6 +232,7 @@ mod tests {
                     }],
                 }],
                 operations: vec![],
+                extensions: vec![],
             }],
         };
         let c = CodegenConfig {

@@ -9,6 +9,7 @@
 
 pub mod casing;
 pub mod conventions;
+pub mod extensions;
 pub mod format;
 pub mod imports;
 pub mod modules;

@@ -466,6 +466,63 @@ let default_numeric_with_length () =
     "int default under a misapplied @length" [ "TC0010" ]
     (codes "struct s { x: i64 @length(min: 1) @default(5) }")
 
+(* ── Extensions (TC0027-TC0032) ────────────────────────────────────────── *)
+
+(* A hook on a real slot, a contract with a signature and conformance, and a
+   constraint all pass the structural checks. *)
+let ext_clean () =
+  Alcotest.(check (list string))
+    "no codes" []
+    (codes
+       "ext hook before_request { ts: \"ext/ts/a.ts#f\" }\n\
+        ext contract sign (string) -> string { rust: \"ext/rust/s.rs#g\", \
+        conformance: \"v.json\" }\n\
+        ext constraint luhn (string) -> bool { go: \"ext/go/l.go#H\" }")
+
+let ext_unknown_hook_slot () =
+  Alcotest.(check (list string))
+    "unknown slot" [ "TC0027" ]
+    (codes "ext hook on_startup { ts: \"ext/ts/a.ts#f\" }")
+
+let ext_contract_without_signature () =
+  Alcotest.(check (list string))
+    "contract needs a signature" [ "TC0029" ]
+    (codes "ext contract sign { ts: \"ext/ts/s.ts#g\" }")
+
+let ext_hook_with_signature () =
+  Alcotest.(check (list string))
+    "hook declares no signature" [ "TC0029" ]
+    (codes
+       "ext hook before_request (string) -> string { ts: \"ext/ts/a.ts#f\" }")
+
+let ext_bad_language () =
+  Alcotest.(check (list string))
+    "unsupported binding language" [ "TC0028" ]
+    (codes "ext hook before_request { cobol: \"ext/cobol/a#f\" }")
+
+let ext_no_binding () =
+  Alcotest.(check (list string))
+    "extension with no binding" [ "TC0030" ]
+    (codes "ext hook before_request {}")
+
+let ext_malformed_binding () =
+  Alcotest.(check (list string))
+    "binding is not file#symbol" [ "TC0031" ]
+    (codes "ext hook before_request { ts: \"ext/ts/auth.ts\" }")
+
+let ext_duplicate_slot () =
+  Alcotest.(check (list string))
+    "duplicate hook slot" [ "TC0032" ]
+    (codes
+       "ext hook before_request { ts: \"ext/ts/a.ts#f\" }\n\
+        ext hook before_request { rust: \"ext/rust/b.rs#g\" }")
+
+let ext_duplicate_language () =
+  Alcotest.(check (list string))
+    "language bound twice" [ "TC0033" ]
+    (codes
+       "ext hook before_request { ts: \"ext/ts/a.ts#f\" ts: \"ext/ts/b.ts#g\" }")
+
 let () =
   Alcotest.run "typecheck"
     [
@@ -584,5 +641,19 @@ let () =
             default_non_numeric_with_range;
           Alcotest.test_case "int default with length" `Quick
             default_numeric_with_length;
+        ] );
+      ( "extensions",
+        [
+          Alcotest.test_case "clean" `Quick ext_clean;
+          Alcotest.test_case "unknown hook slot" `Quick ext_unknown_hook_slot;
+          Alcotest.test_case "contract without signature" `Quick
+            ext_contract_without_signature;
+          Alcotest.test_case "hook with signature" `Quick
+            ext_hook_with_signature;
+          Alcotest.test_case "bad language" `Quick ext_bad_language;
+          Alcotest.test_case "no binding" `Quick ext_no_binding;
+          Alcotest.test_case "malformed binding" `Quick ext_malformed_binding;
+          Alcotest.test_case "duplicate slot" `Quick ext_duplicate_slot;
+          Alcotest.test_case "duplicate language" `Quick ext_duplicate_language;
         ] );
     ]

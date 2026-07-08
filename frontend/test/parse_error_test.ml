@@ -146,6 +146,21 @@ let op_errors () =
   nonempty "missing op name" (decl_diags Parser.parse_op "op (): charge");
   nonempty "missing paren" (decl_diags Parser.parse_op "op create: charge")
 
+let ext_errors () =
+  nonempty "unknown kind word"
+    (decl_diags Parser.parse_ext "ext bogus x { ts: \"a#b\" }");
+  nonempty "missing extension name"
+    (decl_diags Parser.parse_ext "ext hook { ts: \"a#b\" }");
+  nonempty "non-string binding value"
+    (decl_diags Parser.parse_ext "ext hook h { ts: 5 }");
+  nonempty "junk in body" (decl_diags Parser.parse_ext "ext hook h { @ }");
+  (* A stray ',' in the body is skipped and the well-formed binding still parses. *)
+  let st, _ = state "ext hook before_request { , ts: \"a#b\" }" in
+  let decl = Parser.parse_ext st ~pub:false ~dtraits:[] in
+  match decl.dkind with
+  | Ast.DExt { ebindings = [ { lang = "ts"; _ } ]; _ } -> ()
+  | _ -> Alcotest.fail "expected the binding to survive recovery"
+
 (* Diagnostics point at the offending token, not the start of input. *)
 let diagnostic_span_and_message () =
   let st, _ = state "struct s { x i64 }" in
@@ -232,6 +247,7 @@ let () =
           Alcotest.test_case "enum errors" `Quick enum_errors;
           Alcotest.test_case "union errors" `Quick union_errors;
           Alcotest.test_case "op errors" `Quick op_errors;
+          Alcotest.test_case "ext errors" `Quick ext_errors;
           Alcotest.test_case "diagnostic span and message" `Quick
             diagnostic_span_and_message;
         ] );

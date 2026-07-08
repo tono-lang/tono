@@ -154,6 +154,30 @@ let print_decl (d : Ast.decl) : string =
             braced
               (pub ^ "union " ^ d.Ast.dname ^ print_params params)
               (List.map print_variant variants)
+        | Ast.DExt { ekind; esig; ebindings; econformance; _ } ->
+            let kw =
+              match ekind with
+              | Ast.EHook -> "hook"
+              | Ast.EContract -> "contract"
+              | Ast.EConstraint -> "constraint"
+            in
+            let signature =
+              match esig with
+              | Some { Ast.esig_in; esig_out } ->
+                  " (" ^ print_ty esig_in ^ ") -> " ^ print_ty esig_out
+              | None -> ""
+            in
+            let entry key value = "  " ^ key ^ ": \"" ^ value ^ "\"" in
+            let lines =
+              List.map
+                (fun (b : Ast.ext_binding) -> entry b.lang b.target)
+                ebindings
+              @
+              match econformance with
+              | Some c -> [ entry "conformance" c ]
+              | None -> []
+            in
+            braced (pub ^ "ext " ^ kw ^ " " ^ d.Ast.dname ^ signature) lines
         | Ast.DOp _ -> assert false
       in
       above ^ body

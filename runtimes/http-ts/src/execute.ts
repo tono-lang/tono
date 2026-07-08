@@ -8,7 +8,14 @@
 // entry). The runtime raises no typed error; the generated SDK maps the Outcome
 // onto its taxonomy.
 
-import type { ClientOptions, Outcome, WireDescriptor } from "./descriptor";
+import type {
+  CanonicalRequest,
+  CanonicalResponse,
+  ClientOptions,
+  Hooks,
+  Outcome,
+  WireDescriptor,
+} from "./descriptor";
 
 // The encoded wire record the generated SDK passes in: member wire-name -> value.
 type Input = Record<string, unknown>;
@@ -83,31 +90,38 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
   return Object.keys(headers).some((key) => key.toLowerCase() === lower);
 }
 
-// Read the response-bound members off the response (a header value, or the
-// status code) and fold them into the decoded body so the generated decoder sees
-// them as ordinary fields. Applied only on success; interpreting the descriptor
-// is the runtime's job, which keeps the generated client blind to it.
-function applyResponseBindings(
-  descriptor: WireDescriptor,
-  response: Response,
-  text: string,
-): string {
-  if (descriptor.response_bindings.length === 0) return text;
+// Collect a response's headers into a plain record so a hook can read and
+// rewrite them without a live `Headers` object.
+function headerRecord(headers: Headers): Record<string, string> {
+  const record: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    record[key] = value;
+  });
+  return record;
+}
+
+// Read the response-bound members off the (canonical) response (a header value,
+// or the status code) and fold them into the decoded body so the generated
+// decoder sees them as ordinary fields. Applied only on success; interpreting
+// the descriptor is the runtime's job, which keeps the generated client blind.
+function applyResponseBindings(descriptor: WireDescriptor, res: CanonicalResponse): string {
+  if (descriptor.response_bindings.length === 0) return res.body;
   let object: Record<string, unknown> = {};
-  // Equivalent-mutant guard: the empty-text check only skips a JSON.parse("")
+  // Equivalent-mutant guard: the empty-body check only skips a JSON.parse("")
   // that the catch below would swallow anyway, so mutating it cannot change the
   // resulting `{}`. It stays for intent (do not parse an empty body).
   // Stryker disable next-line ConditionalExpression,StringLiteral
-  if (text !== "") {
+  if (res.body !== "") {
     try {
-      object = JSON.parse(text) as Record<string, unknown>;
+      object = JSON.parse(res.body) as Record<string, unknown>;
     } catch {
       // A non-object body leaves the response-bound fields to stand on their own.
     }
   }
   for (const [member, part] of descriptor.response_bindings) {
+    // Header names are case-insensitive; `headerRecord` lowercases every key.
     object[member] =
-      part.kind === "statusCode" ? response.status : response.headers.get(part.name);
+      part.kind === "statusCode" ? res.status : (res.headers[part.name.toLowerCase()] ?? null);
   }
   return JSON.stringify(object);
 }
@@ -124,6 +138,7 @@ export async function execute(
   descriptor: WireDescriptor,
   input: unknown,
   options: ClientOptions,
+  hooks?: Hooks,
 ): Promise<Outcome> {
   const record = asRecord(input);
 
@@ -135,23 +150,41 @@ export async function execute(
   const qs = buildQuery(descriptor, record);
   const url = options.baseUrl + buildPath(descriptor, record) + (qs ? `?${qs}` : "");
 
+  // The bespoke `before_request` hook runs outside the transport try/catch: a
+  // hook that throws must surface as its own error (the generated wrapper turns
+  // it into a ContractError), not be misreported as a transport failure.
+  let request: CanonicalRequest = { method: descriptor.http_method, url, headers, body };
+  if (hooks?.before_request) request = await hooks.before_request(request);
+
   const transport = options.fetch ?? fetch;
   let response: Response;
   let text: string;
   try {
-    response = await transport(url, { method: descriptor.http_method, headers, body });
+    response = await transport(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+    });
     // The body read can fail mid-stream too, so it shares the transport catch.
     text = await response.text();
   } catch (cause) {
     return { outcome: "transport", cause };
   }
 
-  if (isSuccessStatus(descriptor, response.status)) {
+  // `after_response` likewise runs outside the catch so its throw propagates.
+  let canonical: CanonicalResponse = {
+    status: response.status,
+    headers: headerRecord(response.headers),
+    body: text,
+  };
+  if (hooks?.after_response) canonical = await hooks.after_response(canonical);
+
+  if (isSuccessStatus(descriptor, canonical.status)) {
     return {
       outcome: "success",
-      status: response.status,
-      body: applyResponseBindings(descriptor, response, text),
+      status: canonical.status,
+      body: applyResponseBindings(descriptor, canonical),
     };
   }
-  return { outcome: "error", status: response.status, body: text };
+  return { outcome: "error", status: canonical.status, body: canonical.body };
 }

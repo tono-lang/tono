@@ -12,6 +12,7 @@ let show_kind : Token.kind -> string = function
   | KwPub -> "pub"
   | KwImport -> "import"
   | KwAs -> "as"
+  | KwExt -> "ext"
   | Ident s -> "id:" ^ s
   | Prim s -> "prim:" ^ s
   | Str s -> "str:" ^ s
@@ -29,6 +30,7 @@ let show_kind : Token.kind -> string = function
   | Comma -> ","
   | Dot -> "."
   | Eq -> "="
+  | Arrow -> "->"
   | Eof -> "eof"
 
 let kinds src = List.map (fun (t : Token.t) -> show_kind t.kind) (toks_of src)
@@ -205,6 +207,16 @@ let lone_dash () =
   let _, ds = Lexer.tokenize "a - b" in
   Alcotest.(check bool) "lone dash diagnosed" true (List.length ds >= 1)
 
+(* 'ext' keyword and the '->' arrow, and '->' does not disturb a negative
+   number ('-5') or a lone dash. *)
+let ext_and_arrow () =
+  Alcotest.(check (list string))
+    "ext and arrow"
+    [ "ext"; "("; "prim:string"; ")"; "->"; "prim:bool"; "eof" ]
+    (kinds "ext (string) -> bool");
+  Alcotest.(check (list string))
+    "negative still a number" [ "int:-5"; "eof" ] (kinds "-5")
+
 let () =
   Alcotest.run "lexer"
     [
@@ -216,6 +228,7 @@ let () =
           Alcotest.test_case "comments discarded" `Quick comments_discarded;
           Alcotest.test_case "empty source" `Quick empty_source;
           Alcotest.test_case "lone dash" `Quick lone_dash;
+          Alcotest.test_case "ext and arrow" `Quick ext_and_arrow;
         ] );
       ( "strings",
         [

@@ -7,6 +7,7 @@
 //! `MarshalJSON`) and a free `unmarshalX`; a struct holding a union field gets a
 //! thin `UnmarshalJSON`. The `@entries` map is a generic `Entries[K, V]`.
 
+pub mod client;
 pub mod codecs;
 pub mod emit;
 pub mod errors;

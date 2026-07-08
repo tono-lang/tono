@@ -470,10 +470,110 @@ let parse_op st ~pub ~dtraits : Ast.decl =
     dkind = Ast.DOp { input; output };
   }
 
+(* ── Extensions ────────────────────────────────────────────────────────── *)
+
+(* The kind word after "ext": hook | contract | constraint. An unrecognized word
+   is diagnosed and defaults to a hook so the rest of the body still parses. *)
+let parse_ext_kind st : Ast.ext_kind * Span.span =
+  let t = P.peek st in
+  match t.kind with
+  | Token.Ident "hook" ->
+      ignore (P.advance st);
+      (Ast.EHook, t.span)
+  | Token.Ident "contract" ->
+      ignore (P.advance st);
+      (Ast.EContract, t.span)
+  | Token.Ident "constraint" ->
+      ignore (P.advance st);
+      (Ast.EConstraint, t.span)
+  | _ ->
+      P.error st t.span
+        "expected an extension kind: 'hook', 'contract', or 'constraint'";
+      (Ast.EHook, t.span)
+
+(* signature ::= "(" type ")" "->" type *)
+let parse_ext_sig st : Ast.ext_sig =
+  ignore (P.advance st);
+  (* '(' *)
+  let input = parse_type st in
+  ignore (P.expect st Token.RParen "')' to close the signature input");
+  ignore (P.expect st Token.Arrow "'->' between the signature input and output");
+  let output = parse_type st in
+  { Ast.esig_in = input; esig_out = output }
+
+(* ext_body ::= ( lang ":" string | "conformance" ":" string )*  — a language
+   tag binds to a "file#symbol" reference; the reserved key "conformance" binds
+   the conformance vector reference. *)
+let parse_ext_body st : Ast.ext_binding list * string option =
+  let rec go bindings conformance =
+    let t = P.peek st in
+    match t.kind with
+    | Token.RBrace | Token.Eof -> (List.rev bindings, conformance)
+    | Token.Comma ->
+        ignore (P.advance st);
+        go bindings conformance
+    | Token.Ident key ->
+        ignore (P.advance st);
+        ignore (P.expect st Token.Colon "':' after an extension body key");
+        let value =
+          match (P.peek st).kind with
+          | Token.Str s ->
+              ignore (P.advance st);
+              s
+          | _ ->
+              P.error st (P.peek st).span
+                "expected a \"file#symbol\" string in the extension body";
+              ""
+        in
+        if key = "conformance" then go bindings (Some value)
+        else
+          go
+            ({ Ast.lang = key; lang_span = t.span; target = value } :: bindings)
+            conformance
+    | _ ->
+        P.error st t.span
+          (Printf.sprintf "unexpected %s in the extension body"
+             (Token.describe t.kind));
+        ignore (P.advance st);
+        go bindings conformance
+  in
+  go [] None
+
+(* ext ::= "ext" ext_kind name signature? "{" ext_body "}" *)
+let parse_ext st ~pub ~dtraits : Ast.decl =
+  ignore (P.advance st);
+  (* 'ext' *)
+  let ekind, ekind_span = parse_ext_kind st in
+  let nt = P.peek st in
+  let name =
+    match nt.kind with
+    | Token.Ident n ->
+        ignore (P.advance st);
+        n
+    | _ ->
+        P.error st nt.span "expected an extension name";
+        ""
+  in
+  let esig =
+    match (P.peek st).kind with
+    | Token.LParen -> Some (parse_ext_sig st)
+    | _ -> None
+  in
+  ignore (P.expect st Token.LBrace "'{' to open the extension body");
+  let ebindings, econformance = parse_ext_body st in
+  ignore (P.expect st Token.RBrace "'}' to close the extension body");
+  {
+    Ast.dname = name;
+    dname_span = nt.span;
+    pub;
+    dtraits;
+    dkind = Ast.DExt { ekind; ekind_span; esig; ebindings; econformance };
+  }
+
 (* ── Declarations and files ────────────────────────────────────────────── *)
 
-(* decl ::= trait* "pub"? (struct | union | enum | op). Returns [None] when the
-   keyword is missing so the file loop can resynchronize. *)
+(* decl ::= trait* "pub"? (struct | union | enum | op | ext). Returns [None] when
+   the keyword is missing so the file loop can resynchronize. *)
 let parse_decl st : Ast.decl option =
   let dtraits = parse_trailing_traits st in
   let pub =
@@ -488,10 +588,11 @@ let parse_decl st : Ast.decl option =
   | Token.KwUnion -> Some (parse_union st ~pub ~dtraits)
   | Token.KwEnum -> Some (parse_enum st ~pub ~dtraits)
   | Token.KwOp -> Some (parse_op st ~pub ~dtraits)
+  | Token.KwExt -> Some (parse_ext st ~pub ~dtraits)
   | _ ->
       P.error st (P.peek st).span
         (Printf.sprintf
-           "expected a declaration (struct, enum, union, or op), found %s"
+           "expected a declaration (struct, enum, union, op, or ext), found %s"
            (Token.describe (P.peek st).kind));
       None
 
@@ -539,7 +640,7 @@ let parse_import st : Ast.import =
    keywords; resynchronization skips to the next such token. *)
 let is_decl_start = function
   | Token.At | Token.KwImport | Token.KwPub | Token.KwStruct | Token.KwUnion
-  | Token.KwEnum | Token.KwOp ->
+  | Token.KwEnum | Token.KwOp | Token.KwExt ->
       true
   | _ -> false
 

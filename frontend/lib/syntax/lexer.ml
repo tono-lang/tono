@@ -77,6 +77,7 @@ let classify (text : string) : Token.kind =
   | "pub" -> KwPub
   | "import" -> KwImport
   | "as" -> KwAs
+  | "ext" -> KwExt
   | _ -> if List.mem text prims then Prim text else Ident text
 
 (* A double-quoted single-line string with escapes. Unterminated at end of line
@@ -278,6 +279,10 @@ let tokenize (src : string) : Token.t list * Diagnostic.t list =
       | '=' ->
           bump st;
           add_tok st Token.Eq ~start
+      | '-' when char_at st (st.off + 1) = Some '>' ->
+          bump st;
+          bump st;
+          add_tok st Token.Arrow ~start
       | '-'
         when match char_at st (st.off + 1) with
              | Some d -> is_digit d
