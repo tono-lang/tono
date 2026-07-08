@@ -1,14 +1,16 @@
 (* HTTP binding validation. The Protocol resolver ([Protocol_http]) materializes
    an operation's HTTP annotations into a wire descriptor but assumes they are
    well-formed; the malformed cases are reported here, at the AST level, where
-   source spans still exist (the IR carries none). Three failures:
+   source spans still exist (the IR carries none). Four failures:
 
    - a {placeholder} in the @http path with no matching @httpLabel member, or an
      @httpLabel member with no matching placeholder (TC0019);
    - @httpPayload (the member is the whole body) together with an unmarked body
      member, or more than one @httpPayload (TC0020);
    - a map-typed member bound to the query string or a header, which has no
-     defined multi-value serialization (TC0021).
+     defined multi-value serialization (TC0021);
+   - a nullable @httpLabel member, which could leave its {placeholder} empty
+     (TC0022).
 
    Only operations carrying @http are checked; a purely local operation has no
    HTTP surface. *)
@@ -137,6 +139,24 @@ let check_payload (members : Ast.member list) : Diagnostic.t list =
       in
       extra @ body_conflicts
 
+let is_nullable_type : Ast.ty -> bool = function
+  | Ast.TNullable _ -> true
+  | _ -> false
+
+(* A path parameter must be present to fill its {placeholder}: a nullable
+   @httpLabel member would leave a hole in the uri when absent. *)
+let check_label_presence (members : Ast.member list) : Diagnostic.t list =
+  List.filter_map
+    (fun (m : Ast.member) ->
+      if has_trait "httpLabel" m.mtraits && is_nullable_type m.mtype then
+        Some
+          (err Error_codes.http_label_nullable m.mname_span
+             "@httpLabel member '%s' must not be nullable; a path parameter is \
+              always required"
+             m.mname)
+      else None)
+    members
+
 let check_maps (members : Ast.member list) : Diagnostic.t list =
   List.filter_map
     (fun (m : Ast.member) ->
@@ -157,6 +177,7 @@ let check_op (file : Ast.file) (op : Ast.decl) : Diagnostic.t list =
   | Some path ->
       let members = input_members file op in
       check_labels op members (placeholders path)
+      @ check_label_presence members
       @ check_payload members @ check_maps members
 
 let check_decls (file : Ast.file) : Diagnostic.t list =

@@ -360,6 +360,14 @@ let nullable_map_in_query_rejected () =
        "struct req { m: map[string]string? @httpQuery(\"m\") }\n\
         op get(req): req @http(method: \"get\", path: \"/x\")")
 
+(* A nullable @httpLabel member is rejected: a path parameter is always present. *)
+let nullable_label_rejected () =
+  Alcotest.(check bool)
+    "nullable label" true
+    (has "TC0022"
+       "struct req { id: string? @httpLabel }\n\
+        op get(req): req @http(method: \"get\", path: \"/x/{id}\")")
+
 (* A placeholder with no struct input to match against is still unmatched. *)
 let placeholder_without_struct_input () =
   Alcotest.(check bool)
@@ -411,6 +419,8 @@ let () =
           Alcotest.test_case "map in header" `Quick map_in_header_rejected;
           Alcotest.test_case "nullable map in query" `Quick
             nullable_map_in_query_rejected;
+          Alcotest.test_case "nullable label rejected" `Quick
+            nullable_label_rejected;
           Alcotest.test_case "placeholder without struct input" `Quick
             placeholder_without_struct_input;
           Alcotest.test_case "no http no checks" `Quick

@@ -92,7 +92,7 @@ fn op_method(op: &Shape, module: &Module, config: &CasingConfig, refs: &mut Vec<
         Some(out_name) => {
             refs.push(module_symbol(&n.decode, module));
             format!(
-                "    try {{\n      return decode{out}(JSON.parse(outcome.body));\n    }} catch (cause) {{\n      throw new {decode}(\"$\", \"{out}\", outcome.body);\n    }}",
+                "    try {{\n      return decode{out}(JSON.parse(outcome.body));\n    }} catch {{\n      throw new {decode}(\"$\", \"{out}\", outcome.body);\n    }}",
                 out = out_name,
                 decode = n.decode
             )

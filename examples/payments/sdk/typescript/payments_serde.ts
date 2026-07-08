@@ -202,7 +202,7 @@ export class HttpClient implements Client {
     }
     try {
       return decodeCharge(JSON.parse(outcome.body));
-    } catch (cause) {
+    } catch {
       throw new DecodeError("$", "Charge", outcome.body);
     }
   }

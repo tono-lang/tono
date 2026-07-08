@@ -29,6 +29,46 @@ function appendQuery(query: URLSearchParams, name: string, value: unknown): void
   }
 }
 
+// HTTP header names are case-insensitive, so a caller-supplied "Content-Type"
+// must suppress the default rather than sit beside a second "content-type".
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const lower = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === lower);
+}
+
+// Read the response-bound members off the response (a header value, or the
+// status code) and fold them into the decoded body so the generated decoder
+// sees them as ordinary fields. Applied only on success; interpreting the
+// descriptor is the runtime's job, which keeps the generated client blind to it.
+function applyResponseBindings(
+  descriptor: WireDescriptor,
+  response: Response,
+  text: string,
+): string {
+  if (descriptor.response_bindings.length === 0) return text;
+  let object: Record<string, unknown> = {};
+  if (text !== "") {
+    try {
+      object = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      object = {};
+    }
+  }
+  for (const [member, part] of descriptor.response_bindings) {
+    object[member] =
+      part.kind === "statusCode" ? response.status : response.headers.get(part.name);
+  }
+  return JSON.stringify(object);
+}
+
+// A 2xx is a success even when its exact code was not the one declared (a server
+// may answer 200 where 201 was declared, or 204 with no body); a declared
+// success code outside the 2xx range still counts.
+function isSuccessStatus(descriptor: WireDescriptor, status: number): boolean {
+  if (status >= 200 && status < 300) return true;
+  return descriptor.success.some(([declared]) => declared === status);
+}
+
 export async function execute(
   descriptor: WireDescriptor,
   input: unknown,
@@ -47,7 +87,12 @@ export async function execute(
     const value = record[name];
     switch (part.kind) {
       case "label":
-        path = path.replace(`{${name}}`, encodeURIComponent(String(value)));
+        // A path parameter must be present; a missing one substitutes empty
+        // rather than the literal "undefined"/"null".
+        path = path.replace(
+          `{${name}}`,
+          value === undefined || value === null ? "" : encodeURIComponent(String(value)),
+        );
         break;
       case "query":
         appendQuery(query, part.name, value);
@@ -74,21 +119,27 @@ export async function execute(
   } else if (Object.keys(bodyFields).length > 0) {
     body = JSON.stringify(bodyFields);
   }
-  if (body !== undefined && headers["content-type"] === undefined) {
+  if (body !== undefined && !hasHeader(headers, "content-type")) {
     headers["content-type"] = "application/json";
   }
 
   const transport = options.fetch ?? fetch;
   let response: Response;
+  let text: string;
   try {
     response = await transport(url, { method: descriptor.http_method, headers, body });
+    // The body read can fail mid-stream too, so it shares the transport catch.
+    text = await response.text();
   } catch (cause) {
     return { outcome: "transport", cause };
   }
 
-  const text = await response.text();
-  const isSuccess = descriptor.success.some(([status]) => status === response.status);
-  return isSuccess
-    ? { outcome: "success", status: response.status, body: text }
-    : { outcome: "error", status: response.status, body: text };
+  if (isSuccessStatus(descriptor, response.status)) {
+    return {
+      outcome: "success",
+      status: response.status,
+      body: applyResponseBindings(descriptor, response, text),
+    };
+  }
+  return { outcome: "error", status: response.status, body: text };
 }

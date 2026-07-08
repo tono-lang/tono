@@ -29,7 +29,7 @@ export interface WireDescriptor {
 }
 
 // What the caller supplies once, shared across every operation. The runtime
-// ships no auth (ADR-0028); a bespoke hook sets an auth header through `headers`.
+// ships no auth of its own; a bespoke hook sets an auth header through `headers`.
 export interface ClientOptions {
   readonly baseUrl: string;
   readonly fetch?: typeof fetch;

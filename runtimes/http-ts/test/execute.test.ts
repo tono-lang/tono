@@ -5,11 +5,11 @@ import type { Part, WireDescriptor } from "../src/descriptor";
 
 // A recording transport: captures the one request it is given and returns a
 // canned response, so a test can assert exactly what the runtime built.
-function recorder(status = 200, body = "{}") {
+function recorder(status = 200, body = "{}", headers: Record<string, string> = {}) {
   const calls: { url: string; init: RequestInit }[] = [];
   const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(url), init: init ?? {} });
-    return new Response(body, { status });
+    return new Response(body, { status, headers });
   }) as unknown as typeof fetch;
   return { calls, fetchImpl };
 }
@@ -37,6 +37,16 @@ describe("request building across the five part variants", () => {
       { baseUrl: "https://api.test", fetch: fetchImpl },
     );
     expect(calls[0].url).toBe("https://api.test/things/abc");
+  });
+
+  it("substitutes an absent label as empty, never the literal undefined", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ http_method: "GET", uri: "/things/{id}", bindings: [binding("id", { kind: "label" })] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].url).toBe("https://api.test/things/");
   });
 
   it("appends query members, repeating a list", async () => {
@@ -81,6 +91,7 @@ describe("request building across the five part variants", () => {
       { baseUrl: "https://api.test", fetch: fetchImpl },
     );
     expect(calls[0].init.body).toBe(JSON.stringify({ a: 1, b: "two" }));
+    expect((calls[0].init.headers as Record<string, string>)["content-type"]).toBe("application/json");
   });
 
   it("sends the single payload member as the whole body, no envelope", async () => {
@@ -91,6 +102,18 @@ describe("request building across the five part variants", () => {
       { baseUrl: "https://api.test", fetch: fetchImpl },
     );
     expect(calls[0].init.body).toBe(JSON.stringify({ nested: true }));
+  });
+
+  it("does not add a second content-type when the caller set one under a different case", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ bindings: [binding("a", { kind: "body" })] }),
+      { a: 1 },
+      { baseUrl: "https://api.test", fetch: fetchImpl, headers: { "Content-Type": "application/vnd.api+json" } },
+    );
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/vnd.api+json");
+    expect(headers["content-type"]).toBeUndefined();
   });
 });
 
@@ -114,6 +137,17 @@ describe("response classification", () => {
     expect(outcome).toEqual({ outcome: "success", status: 200, body: '{"id":"x"}' });
   });
 
+  it("treats any 2xx as success even when its code was not the declared one", async () => {
+    // The descriptor declares 201, the server answers 200: still a success.
+    const { fetchImpl } = recorder(200, '{"ok":true}');
+    const outcome = await execute(
+      descriptor({ success: [[201, null]] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome).toEqual({ outcome: "success", status: 200, body: '{"ok":true}' });
+  });
+
   it("maps a non-success status to an error outcome for the SDK to discriminate", async () => {
     const { fetchImpl } = recorder(404, '{"code":"not_found"}');
     const outcome = await execute(descriptor(), {}, { baseUrl: "https://api.test", fetch: fetchImpl });
@@ -127,6 +161,50 @@ describe("response classification", () => {
     }) as unknown as typeof fetch;
     const outcome = await execute(descriptor(), {}, { baseUrl: "https://api.test", fetch: fetchImpl });
     expect(outcome).toEqual({ outcome: "transport", cause: boom });
+  });
+
+  it("reports a body-read failure as a transport outcome", async () => {
+    const boom = new Error("stream aborted");
+    const fetchImpl = (async () =>
+      ({
+        status: 200,
+        text: async () => {
+          throw boom;
+        },
+        headers: new Headers(),
+      }) as unknown as Response) as unknown as typeof fetch;
+    const outcome = await execute(descriptor(), {}, { baseUrl: "https://api.test", fetch: fetchImpl });
+    expect(outcome).toEqual({ outcome: "transport", cause: boom });
+  });
+});
+
+describe("response bindings", () => {
+  it("folds a response header into the decoded body under its member name", async () => {
+    const { fetchImpl } = recorder(200, '{"id":"x"}', { "X-Request-Id": "req-1" });
+    const outcome = await execute(
+      descriptor({ response_bindings: [["requestId", { kind: "header", name: "X-Request-Id" }]] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome).toEqual({
+      outcome: "success",
+      status: 200,
+      body: JSON.stringify({ id: "x", requestId: "req-1" }),
+    });
+  });
+
+  it("folds the response status code into the decoded body", async () => {
+    const { fetchImpl } = recorder(200, '{"id":"x"}');
+    const outcome = await execute(
+      descriptor({ response_bindings: [["httpStatus", { kind: "statusCode" }]] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome).toEqual({
+      outcome: "success",
+      status: 200,
+      body: JSON.stringify({ id: "x", httpStatus: 200 }),
+    });
   });
 });
 

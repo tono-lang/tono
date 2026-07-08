@@ -25,3 +25,4 @@ val async_takes_no_arguments : string
 val http_label_unmatched : string
 val http_payload_conflict : string
 val http_map_binding : string
+val http_label_nullable : string
