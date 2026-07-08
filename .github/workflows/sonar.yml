@@ -53,6 +53,6 @@ jobs:
         run: sed -i 's#^SF:src/#SF:runtimes/http-ts/src/#' runtimes/http-ts/coverage/lcov.info
       - name: SonarQube Scan
         if: env.SONAR_TOKEN != ''
-        uses: SonarSource/sonarqube-scan-action@v6
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
