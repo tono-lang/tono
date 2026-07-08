@@ -675,4 +675,24 @@ mod tests {
         // serde_with keys on the symbol name the symbol table produces for bytes.
         assert_eq!(symbol_of(&Tref::Prim(Prim::Bytes)).name, "Vec<u8>");
     }
+
+    #[test]
+    fn helper_set_folds_each_wide_field_and_orders_names() {
+        let mut set = HelperSet::default();
+        set.add_field(&field("a", TypeExpr::Ref(Symbol::builtin("i64")), false));
+        set.add_field(&field("b", TypeExpr::Ref(Symbol::builtin("u64")), false));
+        set.add_field(&field(
+            "c",
+            TypeExpr::Ref(Symbol::builtin("Vec<u8>")),
+            false,
+        ));
+        // A narrow integer folds into nothing.
+        set.add_field(&field("d", TypeExpr::Ref(Symbol::builtin("i32")), false));
+        assert!(set.i64_string && set.u64_string && set.base64_bytes);
+        // Emitted in this fixed order so the types file's import is byte-stable.
+        assert_eq!(
+            set.names(),
+            vec!["i64_string", "u64_string", "base64_bytes"]
+        );
+    }
 }

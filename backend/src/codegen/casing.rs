@@ -225,3 +225,70 @@ mod tests {
         assert_eq!(capitalize("aBC"), "Abc");
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // snake_case canonical names over a small word pool (including acronyms and
+    // empty segments) so word-boundary handling is exercised.
+    fn canonical() -> impl Strategy<Value = String> {
+        proptest::collection::vec(
+            proptest::sample::select(vec![
+                "http", "url", "id", "payment", "method", "v2", "x", "",
+            ]),
+            0..4,
+        )
+        .prop_map(|words| words.join("_"))
+    }
+
+    fn style() -> impl Strategy<Value = CaseStyle> {
+        prop_oneof![
+            Just(CaseStyle::Pascal),
+            Just(CaseStyle::Camel),
+            Just(CaseStyle::Snake),
+            Just(CaseStyle::ScreamingSnake),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(500))]
+
+        /// The `@rename` literal is emitted verbatim regardless of canonical name,
+        /// kind, or style.
+        #[test]
+        fn rename_always_wins(
+            canonical in canonical(),
+            s in style(),
+            lit in "[A-Za-z][A-Za-z0-9]{0,8}",
+        ) {
+            let cfg = CasingConfig::new(s);
+            prop_assert_eq!(
+                transform(&canonical, SymbolKind::Field, &cfg, Some(&lit)),
+                lit
+            );
+        }
+
+        /// Word-joined styles fuse the snake_case words: no underscore survives.
+        #[test]
+        fn pascal_and_camel_drop_underscores(canonical in canonical()) {
+            let pascal =
+                transform(&canonical, SymbolKind::Type, &CasingConfig::new(CaseStyle::Pascal), None);
+            let camel =
+                transform(&canonical, SymbolKind::Field, &CasingConfig::new(CaseStyle::Camel), None);
+            prop_assert!(!pascal.contains('_'));
+            prop_assert!(!camel.contains('_'));
+        }
+
+        /// Snake casing is a fixed point: re-casing snake output is a no-op, since
+        /// the canonical form is already snake_case.
+        #[test]
+        fn snake_is_a_fixed_point(canonical in canonical()) {
+            let cfg = CasingConfig::new(CaseStyle::Snake);
+            let once = transform(&canonical, SymbolKind::Field, &cfg, None);
+            let twice = transform(&once, SymbolKind::Field, &cfg, None);
+            prop_assert_eq!(once, twice);
+        }
+    }
+}

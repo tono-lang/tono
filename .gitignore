@@ -8,5 +8,8 @@ _coverage/
 # Rust
 /target
 Cargo.lock
+# Mutation testing output
+mutants.out/
+mutants.out.old/
 # OS
 .DS_Store

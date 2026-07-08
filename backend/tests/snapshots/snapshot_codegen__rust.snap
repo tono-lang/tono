@@ -1,0 +1,346 @@
+---
+source: backend/tests/snapshot_codegen.rs
+expression: out
+---
+// ==== models.rs ====
+use crate::models_serde::{i64_string, base64_bytes};
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
+pub struct Timestamp(pub String);
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
+pub struct LocalDate(pub String);
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
+pub struct Duration(pub String);
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct Account {
+    #[serde(with = "i64_string")]
+    pub account_id: i64,
+    #[serde(with = "base64_bytes")]
+    pub secret: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "i64_string::option")]
+    pub tip: Option<i64>,
+    pub status: Status,
+    pub code: HTTPCode,
+    pub method: Method,
+    pub counts: Vec<(i32, String)>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Status {
+    Active,
+    Closed,
+    Unknown(String),
+}
+
+#[derive(Clone, Debug)]
+pub enum HTTPCode {
+    Ok,
+    NotFound,
+    Error,
+    Unknown(i64),
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "type")]
+pub enum Method {
+    #[serde(rename = "card")]
+    Card(CardData),
+    #[serde(rename = "bank")]
+    Bank(BankData),
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct CardData {
+    pub last4: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct BankData {
+    pub iban: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct PaymentDeclined {
+    pub message: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct RateLimited {
+}
+
+#[derive(Debug)]
+pub struct Violation {
+    pub field: String,
+    pub constraint: String,
+    pub message: String,
+}
+
+#[derive(Debug)]
+pub struct ValidationError {
+    pub violations: Vec<Violation>,
+}
+
+#[derive(Debug)]
+pub struct TransportError {
+    pub cause: Box<dyn std::error::Error + Send + Sync>,
+}
+
+#[derive(Debug)]
+pub struct DecodeError {
+    pub path: String,
+    pub expected: String,
+    pub raw: String,
+}
+
+#[derive(Debug)]
+pub struct ContractError {
+    pub contract_name: String,
+    pub cause: Box<dyn std::error::Error + Send + Sync>,
+}
+
+#[derive(Debug)]
+pub struct APIError {
+    pub status: u16,
+    pub body: String,
+}
+
+#[derive(Debug)]
+pub enum APIFailure {
+    PaymentDeclined(PaymentDeclined),
+    RateLimited(RateLimited),
+    Undeclared(APIError),
+}
+
+impl APIFailure {
+    pub fn retryable(&self) -> bool {
+        match self {
+            APIFailure::PaymentDeclined(_) => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum TonoError {
+    Validation(ValidationError),
+    Transport(TransportError),
+    Api(APIFailure),
+    Decode(DecodeError),
+    Contract(ContractError),
+}
+
+impl TonoError {
+    pub fn retryable(&self) -> bool {
+        match self {
+            TonoError::Api(failure) => failure.retryable(),
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for TonoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TonoError::Validation(_) => write!(f, "validation failed"),
+            TonoError::Transport(_) => write!(f, "transport failure"),
+            TonoError::Api(_) => write!(f, "api error"),
+            TonoError::Decode(_) => write!(f, "response body did not match the declared schema"),
+            TonoError::Contract(e) => write!(f, "contract hook '{}' failed", e.contract_name),
+        }
+    }
+}
+
+impl std::error::Error for TonoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TonoError::Transport(e) => Some(e.cause.as_ref()),
+            TonoError::Contract(e) => Some(e.cause.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait Client {
+    async fn create_charge(&self, input: Account) -> Result<Account, TonoError>;
+}
+
+// ==== models_serde.rs ====
+use crate::models::*;
+
+macro_rules! open_enum {
+    ($name:ident : $wire:ty { $($variant:ident => $repr:expr),* $(,)? }) => {
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                match self {
+                    $($name::$variant => serde::Serialize::serialize(&$repr, s),)*
+                    $name::Unknown(v) => serde::Serialize::serialize(v, s),
+                }
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let v = <$wire as serde::Deserialize>::deserialize(d)?;
+                $(if v == $repr {
+                    return Ok($name::$variant);
+                })*
+                Ok($name::Unknown(v))
+            }
+        }
+    };
+}
+
+pub mod i64_string {
+    pub fn serialize<S: serde::Serializer>(v: &i64, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            s.serialize_str(&v.to_string())
+        } else {
+            serde::Serialize::serialize(v, s)
+        }
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+        if d.is_human_readable() {
+            let s = <String as serde::Deserialize>::deserialize(d)?;
+            s.parse().map_err(serde::de::Error::custom)
+        } else {
+            <i64 as serde::Deserialize>::deserialize(d)
+        }
+    }
+    pub mod option {
+        pub fn serialize<S: serde::Serializer>(v: &Option<i64>, s: S) -> Result<S::Ok, S::Error> {
+            match v {
+                Some(n) => super::serialize(n, s),
+                None => s.serialize_none(),
+            }
+        }
+        pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+            if d.is_human_readable() {
+                let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
+                match o {
+                    Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
+                    None => Ok(None),
+                }
+            } else {
+                <Option<i64> as serde::Deserialize>::deserialize(d)
+            }
+        }
+    }
+}
+
+pub mod base64_bytes {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn encode(bytes: &[u8]) -> String {
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
+            out.push(if chunk.len() > 1 { ALPHABET[((n >> 6) & 63) as usize] as char } else { '=' });
+            out.push(if chunk.len() > 2 { ALPHABET[(n & 63) as usize] as char } else { '=' });
+        }
+        out
+    }
+
+    pub fn decode(s: &str) -> Result<Vec<u8>, String> {
+        fn val(c: u8) -> Result<u32, String> {
+            match c {
+                b'A'..=b'Z' => Ok(u32::from(c - b'A')),
+                b'a'..=b'z' => Ok(u32::from(c - b'a' + 26)),
+                b'0'..=b'9' => Ok(u32::from(c - b'0' + 52)),
+                b'+' => Ok(62),
+                b'/' => Ok(63),
+                _ => Err("invalid base64".to_string()),
+            }
+        }
+        let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'=').collect();
+        let mut out = Vec::new();
+        for chunk in bytes.chunks(4) {
+            let mut n = 0u32;
+            for (i, &c) in chunk.iter().enumerate() {
+                n |= val(c)? << (18 - 6 * i);
+            }
+            out.push((n >> 16) as u8);
+            if chunk.len() > 2 {
+                out.push((n >> 8) as u8);
+            }
+            if chunk.len() > 3 {
+                out.push(n as u8);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn serialize<S: serde::Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            s.serialize_str(&encode(v))
+        } else {
+            s.serialize_bytes(v)
+        }
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        if d.is_human_readable() {
+            let s = <String as serde::Deserialize>::deserialize(d)?;
+            decode(&s).map_err(serde::de::Error::custom)
+        } else {
+            <Vec<u8> as serde::Deserialize>::deserialize(d)
+        }
+    }
+    pub mod option {
+        pub fn serialize<S: serde::Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+            match v {
+                Some(b) => super::serialize(b, s),
+                None => s.serialize_none(),
+            }
+        }
+        pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+            if d.is_human_readable() {
+                let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
+                match o {
+                    Some(s) => super::decode(&s).map(Some).map_err(serde::de::Error::custom),
+                    None => Ok(None),
+                }
+            } else {
+                <Option<Vec<u8>> as serde::Deserialize>::deserialize(d)
+            }
+        }
+    }
+}
+
+open_enum!(Status: String {
+    Active => "active",
+    Closed => "closed",
+});
+
+open_enum!(HTTPCode: i64 {
+    Ok => 200i64,
+    NotFound => 404i64,
+    Error => 500i64,
+});
+
+pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {
+    let value: serde_json::Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return TonoError::Api(APIFailure::Undeclared(APIError { status, body: body.to_string() })),
+    };
+    let code = value.get("code").and_then(|v| v.as_str());
+    if status == 402 && code == Some("payment_declined") {
+        if let Ok(data) = serde_json::from_value::<PaymentDeclined>(value.clone()) {
+            return TonoError::Api(APIFailure::PaymentDeclined(data));
+        }
+    }
+    if status == 429 {
+        if let Ok(data) = serde_json::from_value::<RateLimited>(value.clone()) {
+            return TonoError::Api(APIFailure::RateLimited(data));
+        }
+    }
+    TonoError::Api(APIFailure::Undeclared(APIError { status, body: body.to_string() }))
+}

@@ -1,0 +1,32 @@
+# Mutation testing scope: the strong gate is proportional to risk, so it targets
+# only the hand-written (bespoke) seam that carries real logic, not the mechanical
+# lowering (which the codegen snapshot gate covers). A surviving mutant here means
+# a behavior no test pins down, and it fails the build.
+#
+# In scope:
+#   - ops.rs                : effect classification, error-taxonomy derivation,
+#                             discrimination ordering
+#   - targets/*/codecs.rs   : hand-written serialization the native serde cannot
+#                             express (i64-as-string, base64 bytes, open enums,
+#                             internally-tagged unions)
+#   - targets/*/errors.rs   : per-target error surface lowering
+examine_globs = [
+    "backend/src/codegen/ops.rs",
+    "backend/src/codegen/targets/*/codecs.rs",
+    "backend/src/codegen/targets/*/errors.rs",
+]
+
+# Run only the hermetic tests as the mutation oracle: the library unit tests plus
+# the snapshot gate (any change to emitted codecs/errors flips a snapshot) and the
+# IR round-trip. The per-language codegen round-trips and the conformance check
+# need Go/Node/tsc toolchains, so they are left out to keep the gate fast and
+# reproducible; the snapshot of the emitted source already pins the same output.
+additional_cargo_test_args = [
+    "--lib",
+    "--test",
+    "snapshot_codegen",
+    "--test",
+    "property_ir",
+    "--test",
+    "ir_roundtrip",
+]
