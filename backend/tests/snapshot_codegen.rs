@@ -57,9 +57,22 @@ fn rust_codegen_snapshot() {
 
 #[test]
 fn go_codegen_snapshot() {
-    let files = go::emit::emit_module(&matrix_module(), &go::types::go_casing());
+    let module = matrix_module();
+    // The Go emitter needs the model's union ids so a struct field whose type is a
+    // union gets a container UnmarshalJSON; for a single module it is the module's
+    // own unions.
+    let union_ids: std::collections::HashSet<String> = module
+        .shapes
+        .iter()
+        .filter(|s| matches!(s.kind, tono_backend::ir::ShapeKind::Union { .. }))
+        .map(|s| s.id.clone())
+        .collect();
+    let files = go::emit::emit_module(&module, &go::types::go_casing(), &union_ids);
     let header = go::emit::package_clause("models");
-    assert_snapshot!("go", render_files(files, &go::GoRules, "go", Some(&header)));
+    assert_snapshot!(
+        "go",
+        render_files(files, &go::GoRules::default(), "go", Some(&header))
+    );
 }
 
 #[test]
