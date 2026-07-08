@@ -137,12 +137,13 @@ impl TsRules {
 
 impl RenderRules for TsRules {
     fn render_import(&self, module: &str, names: &[&str]) -> String {
-        // A sibling generated module is a relative path; a bare package specifier
-        // (the hand-written runtime, scoped `@scope/name`) is imported as-is.
+        // A bare package specifier (the hand-written runtime, a scoped
+        // `@scope/name`) or an already-relative path is imported as-is; a dotted
+        // module name is a relative sub-path: payments.common -> ./payments/common.
         let specifier = if module.starts_with('@') || module.starts_with('.') {
             module.to_string()
         } else {
-            format!("./{module}")
+            format!("./{}", module.replace('.', "/"))
         };
         format!("import {{ {} }} from \"{specifier}\";", names.join(", "))
     }

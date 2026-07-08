@@ -46,16 +46,16 @@ let placeholders (path : string) : string list =
   in
   go 0 []
 
-let decl_by_name (file : Ast.file) (name : string) : Ast.decl option =
-  List.find_opt (fun (d : Ast.decl) -> String.equal d.dname name) file
+let decl_by_name (decls : Ast.decl list) (name : string) : Ast.decl option =
+  List.find_opt (fun (d : Ast.decl) -> String.equal d.dname name) decls
 
 (* The members of the operation's input structure, or [] when the input is
    absent or is not a plain struct reference (a primitive input has no members;
    an unresolved name is reported elsewhere). *)
-let input_members (file : Ast.file) (op : Ast.decl) : Ast.member list =
+let input_members (decls : Ast.decl list) (op : Ast.decl) : Ast.member list =
   match op.dkind with
   | Ast.DOp { input = Some (Ast.TName (name, [], _)); _ } -> (
-      match decl_by_name file name with
+      match decl_by_name decls name with
       | Some { dkind = Ast.DStruct { members; _ }; _ } -> members
       | _ -> [])
   | _ -> []
@@ -171,17 +171,17 @@ let check_maps (members : Ast.member list) : Diagnostic.t list =
       else None)
     members
 
-let check_op (file : Ast.file) (op : Ast.decl) : Diagnostic.t list =
+let check_op (decls : Ast.decl list) (op : Ast.decl) : Diagnostic.t list =
   match http_path op with
   | None -> []
   | Some path ->
-      let members = input_members file op in
+      let members = input_members decls op in
       check_labels op members (placeholders path)
       @ check_label_presence members
       @ check_payload members @ check_maps members
 
-let check_decls (file : Ast.file) : Diagnostic.t list =
+let check_decls (decls : Ast.decl list) : Diagnostic.t list =
   List.concat_map
     (fun (d : Ast.decl) ->
-      match d.dkind with Ast.DOp _ -> check_op file d | _ -> [])
-    file
+      match d.dkind with Ast.DOp _ -> check_op decls d | _ -> [])
+    decls

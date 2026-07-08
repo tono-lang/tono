@@ -3,4 +3,8 @@
    (the IR carries none). It returns the module unchanged plus any diagnostics;
    it never raises and accumulates all findings (no fail-fast). *)
 
-val check_module : file:Ast.file -> Ir.module_ -> Ir.module_ * Diagnostic.t list
+val check_module :
+  ?qualified:Resolve.qualified ->
+  file:Ast.file ->
+  Ir.module_ ->
+  Ir.module_ * Diagnostic.t list

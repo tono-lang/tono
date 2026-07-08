@@ -4,5 +4,5 @@
 (* Validate one enum's value list. *)
 val check_enum : Ast.enum_case list -> Diagnostic.t list
 
-(* Validate every enum in the file. *)
-val check_decls : Ast.file -> Diagnostic.t list
+(* Validate every enum in the module. *)
+val check_decls : Ast.decl list -> Diagnostic.t list

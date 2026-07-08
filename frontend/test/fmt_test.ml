@@ -90,8 +90,7 @@ struct bank_account { iban: string }
 @discriminator("kind")
 union source { card(card), bank(bank_account) }
 struct page[t] { items: []t, next: string? }
-@status(404)
-struct not_found { message: string }
+@status(404) struct not_found { message: string }
 op create_charge(charge): charge @errors(not_found)
 |}
   in
@@ -160,7 +159,7 @@ op ping()
 |}
   in
   Alcotest.(check int) "parses cleanly" 0 (List.length (errors_of ds));
-  match file with
+  match file.Ast.decls with
   | [
    { Ast.dkind = Ast.DOp _; dtraits = [ { Ast.tname = "doc"; _ } ]; _ };
    { Ast.dkind = Ast.DStruct _; dtraits = []; _ };

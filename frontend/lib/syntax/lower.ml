@@ -27,10 +27,21 @@ let prim_of_keyword : string -> Ir.prim = function
 
 let report diags (d : Diagnostic.t) = diags := d :: !diags
 
+(* Map a surface type reference to its fully-qualified IR shape id. [qualifier] is
+   the import qualifier for a cross-module reference ([common.Money]), or [None]
+   for an in-module name. Lowering is purely syntactic: it names the id it is
+   told to; existence and visibility are the resolve pass's concern. *)
+type ref_resolver = qualifier:string option -> name:string -> Ir.shape_id
+
+(* [module#name], the canonical namespaced id. An empty module name (the
+   single-file default) leaves the name bare so a lone module stays unqualified. *)
+let qualify (module_name : string) (name : string) : Ir.shape_id =
+  if String.equal module_name "" then name else module_name ^ "#" ^ name
+
 (* [params] are the type-parameter names in scope (a shape's generic header), so
    a bare name that matches one lowers to [Param] rather than a named [Ref]. *)
-let rec lower_type ~(params : string list) ~(diags : Diagnostic.t list ref)
-    (t : Ast.ty) : Ir.tref =
+let rec lower_type ~(params : string list) ~(resolve : ref_resolver)
+    ~(diags : Diagnostic.t list ref) (t : Ast.ty) : Ir.tref =
   match t with
   | Ast.TPrim (kw, _) -> Ir.Prim (prim_of_keyword kw)
   | Ast.TName (name, [], span) ->
@@ -39,18 +50,26 @@ let rec lower_type ~(params : string list) ~(diags : Diagnostic.t list ref)
           (Diagnostic.error span
              "there is no 'decimal' type; model money as an integer of minor \
               units, or use 'float'");
-        Ir.Ref (name, []))
+        Ir.Ref (resolve ~qualifier:None ~name, []))
       else if List.mem name params then Ir.Param name
-      else Ir.Ref (name, [])
+      else Ir.Ref (resolve ~qualifier:None ~name, [])
   | Ast.TName (name, args, _) ->
-      Ir.Ref (name, List.map (lower_type ~params ~diags) args)
-  | Ast.TList (inner, _) -> Ir.List (lower_type ~params ~diags inner)
+      Ir.Ref
+        ( resolve ~qualifier:None ~name,
+          List.map (lower_type ~params ~resolve ~diags) args )
+  | Ast.TQName (qualifier, name, args, _) ->
+      Ir.Ref
+        ( resolve ~qualifier:(Some qualifier) ~name,
+          List.map (lower_type ~params ~resolve ~diags) args )
+  | Ast.TList (inner, _) -> Ir.List (lower_type ~params ~resolve ~diags inner)
   | Ast.TMap (k, v, _) ->
-      Ir.Map (lower_type ~params ~diags k, lower_type ~params ~diags v)
+      Ir.Map
+        ( lower_type ~params ~resolve ~diags k,
+          lower_type ~params ~resolve ~diags v )
   | Ast.TNullable (inner, _) ->
       (* Nullability is a member-level flag; at the type level the inner type is
          what reaches the IR. The member lowering reads the [?] separately. *)
-      lower_type ~params ~diags inner
+      lower_type ~params ~resolve ~diags inner
   | Ast.TError _ -> Ir.Ref ("", [])
 
 (* ── Names ─────────────────────────────────────────────────────────────── *)
@@ -184,12 +203,12 @@ let constraint_of_trait diags (tr : Ast.trait) : Ir.constraint_ option =
 
 (* ── Members ───────────────────────────────────────────────────────────── *)
 
-let lower_member ~params ~diags (m : Ast.member) : Ir.member =
+let lower_member ~params ~resolve ~diags (m : Ast.member) : Ir.member =
   check_snake diags m.mname_span "member name" m.mname;
   let base, nullable =
     match m.mtype with Ast.TNullable (t, _) -> (t, true) | t -> (t, false)
   in
-  let target = lower_type ~params ~diags base in
+  let target = lower_type ~params ~resolve ~diags base in
   let required = ref (not nullable) in
   let default = ref None in
   let constraints = ref [] in
@@ -227,7 +246,7 @@ let lower_member ~params ~diags (m : Ast.member) : Ir.member =
 let take_trait name (traits : Ast.trait list) =
   List.partition (fun (t : Ast.trait) -> String.equal t.tname name) traits
 
-let lower_decl ~diags (d : Ast.decl) : Ir.shape =
+let lower_decl ~module_name ~resolve ~diags (d : Ast.decl) : Ir.shape =
   check_snake diags d.dname_span "shape name" d.dname;
   let pub_trait =
     if d.pub then [ { Ir.trait_id = "pub"; value = `Null } ] else []
@@ -236,10 +255,13 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
   match d.dkind with
   | Ast.DStruct { params; members } ->
       {
-        Ir.id = d.dname;
+        Ir.id = qualify module_name d.dname;
         kind =
           Ir.Structure
-            { params; members = List.map (lower_member ~params ~diags) members };
+            {
+              params;
+              members = List.map (lower_member ~params ~resolve ~diags) members;
+            };
         traits = bag d.dtraits;
       }
   | Ast.DUnion { params; variants } ->
@@ -257,7 +279,7 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
         check_snake diags v.vname_span "variant" v.vname;
         let target =
           match v.vpayload with
-          | Some t -> lower_type ~params ~diags t
+          | Some t -> lower_type ~params ~resolve ~diags t
           | None ->
               report diags
                 (Diagnostic.error v.vname_span
@@ -276,7 +298,7 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
         }
       in
       {
-        Ir.id = d.dname;
+        Ir.id = qualify module_name d.dname;
         kind =
           Ir.union ?discriminator ~params
             ~members:(List.map variant variants)
@@ -302,12 +324,12 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
           cases
       in
       {
-        Ir.id = d.dname;
+        Ir.id = qualify module_name d.dname;
         kind = Ir.Enum { backing; values };
         traits = bag d.dtraits;
       }
   | Ast.DOp { input; output } ->
-      let lower_opt = Option.map (lower_type ~params:[] ~diags) in
+      let lower_opt = Option.map (lower_type ~params:[] ~resolve ~diags) in
       (* @errors(A, B) lists the operation's error types by name; repeated
          @errors traits accumulate. A non-name argument has no type to point
          at, so it is diagnosed rather than silently dropped. *)
@@ -317,7 +339,8 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
           (fun (tr : Ast.trait) ->
             List.filter_map
               (function
-                | Ast.AName n -> Some (Ir.Ref (n, []))
+                | Ast.AName n ->
+                    Some (Ir.Ref (resolve ~qualifier:None ~name:n, []))
                 | _ ->
                     report diags
                       (Diagnostic.error tr.tspan "@errors expects type names");
@@ -326,7 +349,7 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
           errs
       in
       {
-        Ir.id = d.dname;
+        Ir.id = qualify module_name d.dname;
         kind =
           Ir.Operation
             { input = lower_opt input; output = lower_opt output; errors };
@@ -334,18 +357,31 @@ let lower_decl ~diags (d : Ast.decl) : Ir.shape =
       }
 
 (* Lower a whole file into a module: operations land in [operations], every other
-   shape in [shapes], preserving declaration order. Names are emitted bare; the
-   module/core namespacing is a later name-resolution pass (separate PRD). *)
-let lower_file ~module_name ~diags (file : Ast.file) : Ir.module_ =
+   shape in [shapes], preserving declaration order. Shape ids and references are
+   namespaced through [resolve]; the default (used when a file is compiled on its
+   own) qualifies own names with [module_name] and treats a qualifier as if it
+   were a module directly, which the resolve pass then flags as an unknown import.
+   The project pipeline supplies a [resolve] backed by the import map. Imports
+   themselves carry no runtime IR: they only steer reference resolution. *)
+let default_resolver ~module_name : ref_resolver =
+ fun ~qualifier ~name ->
+  match qualifier with
+  | None -> qualify module_name name
+  | Some q -> qualify q name
+
+let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
+  let resolve =
+    match resolve with Some r -> r | None -> default_resolver ~module_name
+  in
   let shapes_rev = ref [] in
   let ops_rev = ref [] in
   List.iter
     (fun d ->
-      let shape = lower_decl ~diags d in
+      let shape = lower_decl ~module_name ~resolve ~diags d in
       match shape.Ir.kind with
       | Ir.Operation _ -> ops_rev := shape :: !ops_rev
       | _ -> shapes_rev := shape :: !shapes_rev)
-    file;
+    file.Ast.decls;
   {
     Ir.mod_name = module_name;
     shapes = List.rev !shapes_rev;

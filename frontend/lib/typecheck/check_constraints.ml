@@ -207,22 +207,28 @@ let check_member span (m : Ir.member) : Diagnostic.t list =
   @ check_default span m.target m.constraints m.default
 
 (* Surface struct members, in declaration order, so an IR member can borrow its
-   name span. *)
-let struct_members (file : Ast.file) : (string * Ast.member list) list =
+   name span. Keyed by the bare declared name; a shape's IR id is
+   module-qualified ("module#name"), so the lookup drops that prefix. *)
+let struct_members (decls : Ast.decl list) : (string * Ast.member list) list =
   List.filter_map
     (fun (d : Ast.decl) ->
       match d.dkind with
       | Ast.DStruct { members; _ } -> Some (d.dname, members)
       | _ -> None)
-    file
+    decls
 
-let check ~(file : Ast.file) (m : Ir.module_) : Diagnostic.t list =
-  let ast = struct_members file in
+let local_name (id : Ir.shape_id) : string =
+  match String.rindex_opt id '#' with
+  | Some i -> String.sub id (i + 1) (String.length id - i - 1)
+  | None -> id
+
+let check ~(decls : Ast.decl list) (m : Ir.module_) : Diagnostic.t list =
+  let ast = struct_members decls in
   List.concat_map
     (fun (sh : Ir.shape) ->
       match sh.kind with
       | Ir.Structure { members = ir_members; _ } -> (
-          match List.assoc_opt sh.id ast with
+          match List.assoc_opt (local_name sh.id) ast with
           | Some ast_members
             when List.length ast_members = List.length ir_members ->
               List.concat_map

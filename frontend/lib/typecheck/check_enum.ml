@@ -50,5 +50,5 @@ let check_decl (d : Ast.decl) : Diagnostic.t list =
   | Ast.DEnum { cases } -> check_enum cases
   | Ast.DStruct _ | Ast.DUnion _ | Ast.DOp _ -> []
 
-let check_decls (file : Ast.file) : Diagnostic.t list =
-  List.concat_map check_decl file
+let check_decls (decls : Ast.decl list) : Diagnostic.t list =
+  List.concat_map check_decl decls

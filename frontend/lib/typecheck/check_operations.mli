@@ -5,4 +5,4 @@
    arguments (TC0018). Inputs and outputs are resolved as ordinary references. *)
 
 (* Check every operation's @errors entries and effect trait. *)
-val check_decls : Symtab.t -> Ast.file -> Diagnostic.t list
+val check_decls : Symtab.t -> Ast.decl list -> Diagnostic.t list

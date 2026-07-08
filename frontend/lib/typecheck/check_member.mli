@@ -4,5 +4,5 @@
 (* Check a single struct member for nullability conflicts. *)
 val check_member : Ast.member -> Diagnostic.t list
 
-(* Check every struct member in the file. *)
-val check_decls : Ast.file -> Diagnostic.t list
+(* Check every struct member in the module. *)
+val check_decls : Ast.decl list -> Diagnostic.t list

@@ -167,11 +167,14 @@ impl RustRules {
 
 impl RenderRules for RustRules {
     fn render_import(&self, module: &str, names: &[&str]) -> String {
+        // A dotted module name is a Rust module path: payments.common ->
+        // payments::common.
+        let path = module.replace('.', "::");
         // A single name needs no braces; several group into one `use`.
         if let [name] = names {
-            format!("use crate::{module}::{name};")
+            format!("use crate::{path}::{name};")
         } else {
-            format!("use crate::{module}::{{{}}};", names.join(", "))
+            format!("use crate::{path}::{{{}}};", names.join(", "))
         }
     }
 

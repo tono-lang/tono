@@ -38,9 +38,9 @@ op list_charges(): page[charge]
   Alcotest.(check string) "module name" "m" m.mod_name;
   Alcotest.(check (list string))
     "shapes in order"
-    [ "charge"; "status"; "card"; "bank_account"; "source"; "page" ]
+    [ "m#charge"; "m#status"; "m#card"; "m#bank_account"; "m#source"; "m#page" ]
     (shape_ids m);
-  Alcotest.(check (list string)) "operations" [ "list_charges" ] (op_ids m)
+  Alcotest.(check (list string)) "operations" [ "m#list_charges" ] (op_ids m)
 
 (* The shape-level pub and traits flow end to end through the file parser. *)
 let pub_and_traits () =
@@ -59,7 +59,7 @@ let recovers_between_decls () =
   let m, ds = run src in
   Alcotest.(check bool) "stray token diagnosed" true (List.length ds >= 1);
   Alcotest.(check (list string))
-    "both structs parsed" [ "ok1"; "ok2" ] (shape_ids m)
+    "both structs parsed" [ "m#ok1"; "m#ok2" ] (shape_ids m)
 
 (* Runs of stray tokens exercise the skip loop, and resynchronization lands on
    each kind of declaration start (keyword, trait, or pub). *)
@@ -74,13 +74,16 @@ let recovers_runs_of_garbage () =
   let m, ds = run src in
   Alcotest.(check bool) "garbage diagnosed" true (List.length ds >= 1);
   Alcotest.(check (list string))
-    "shapes recovered" [ "s"; "e"; "u"; "s2" ] (shape_ids m);
-  Alcotest.(check (list string)) "operation recovered" [ "o" ] (op_ids m)
+    "shapes recovered"
+    [ "m#s"; "m#e"; "m#u"; "m#s2" ]
+    (shape_ids m);
+  Alcotest.(check (list string)) "operation recovered" [ "m#o" ] (op_ids m)
 
 let resync_to_pub () =
   let m, ds = run "? pub struct paid { a: i64 }" in
   Alcotest.(check bool) "stray diagnosed" true (List.length ds >= 1);
-  Alcotest.(check (list string)) "recovered after pub" [ "paid" ] (shape_ids m)
+  Alcotest.(check (list string))
+    "recovered after pub" [ "m#paid" ] (shape_ids m)
 
 let empty_file () =
   let m, ds = run "  \n // just a comment\n" in

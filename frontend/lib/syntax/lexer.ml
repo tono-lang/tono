@@ -75,6 +75,8 @@ let classify (text : string) : Token.kind =
   | "op" -> KwOp
   | "map" -> KwMap
   | "pub" -> KwPub
+  | "import" -> KwImport
+  | "as" -> KwAs
   | _ -> if List.mem text prims then Prim text else Ident text
 
 (* A double-quoted single-line string with escapes. Unterminated at end of line

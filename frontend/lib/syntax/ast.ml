@@ -5,6 +5,9 @@
 type ty =
   | TPrim of string * Span.span (* a primitive keyword as written, e.g. "i64" *)
   | TName of string * ty list * Span.span (* Name, or Name[args] application *)
+  | TQName of string * string * ty list * Span.span
+    (* qualifier.Name, or qualifier.Name[args] — a reference to another module's
+       shape through an import qualifier (its alias or last path segment) *)
   | TList of ty * Span.span (* []T *)
   | TMap of ty * ty * Span.span (* map[K]V *)
   | TNullable of ty * Span.span (* T? *)
@@ -58,11 +61,22 @@ type decl = {
   dkind : decl_kind;
 }
 
-type file = decl list
+(* An import brings another module into scope under a qualifier. The qualified
+   path names the target module (["payments"; "common"] for [import
+   payments.common]); the qualifier used in references is the alias, when given,
+   otherwise the last path segment. *)
+type import = {
+  imported_path : string list;
+  alias : string option;
+  ispan : Span.span;
+}
+
+type file = { imports : import list; decls : decl list }
 
 let ty_span : ty -> Span.span = function
   | TPrim (_, s)
   | TName (_, _, s)
+  | TQName (_, _, _, s)
   | TList (_, s)
   | TMap (_, _, s)
   | TNullable (_, s)

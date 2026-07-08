@@ -12,6 +12,8 @@ let dspan : Span.span = { start = dpos; finish = dpos }
 let rec erase_ty = function
   | Ast.TPrim (p, _) -> Ast.TPrim (p, dspan)
   | Ast.TName (n, args, _) -> Ast.TName (n, List.map erase_ty args, dspan)
+  | Ast.TQName (q, n, args, _) ->
+      Ast.TQName (q, n, List.map erase_ty args, dspan)
   | Ast.TList (e, _) -> Ast.TList (erase_ty e, dspan)
   | Ast.TMap (k, v, _) -> Ast.TMap (erase_ty k, erase_ty v, dspan)
   | Ast.TNullable (t, _) -> Ast.TNullable (erase_ty t, dspan)
@@ -63,7 +65,13 @@ let erase_decl (d : Ast.decl) =
     dkind = erase_kind d.Ast.dkind;
   }
 
-let erase_file = List.map erase_decl
+let erase_import (i : Ast.import) = { i with Ast.ispan = dspan }
+
+let erase_file (f : Ast.file) =
+  {
+    Ast.imports = List.map erase_import f.Ast.imports;
+    decls = List.map erase_decl f.Ast.decls;
+  }
 
 (* ── Generators: small pools keep files well-formed and readable ────────── *)
 
@@ -71,6 +79,7 @@ let gen_lname = G.oneof_list [ "id"; "amount_cents"; "note"; "items"; "kind" ]
 let gen_tname = G.oneof_list [ "charge"; "card"; "page"; "bank_account" ]
 let gen_prim = G.oneof_list [ "bool"; "string"; "i64"; "u32"; "uuid" ]
 let gen_params = G.oneof_list [ []; [ "t" ]; [ "t"; "u" ] ]
+let gen_qual = G.oneof_list [ "common"; "core"; "c" ]
 
 (* Only parser-reachable shapes: '?' applies to a whole type (never a list
    element or map value), and generic applications carry at least one argument. *)
@@ -82,6 +91,8 @@ let rec gen_base n =
          Ast.TPrim (p, dspan));
         (let+ nm = gen_tname in
          Ast.TName (nm, [], dspan));
+        (let+ q = gen_qual and+ nm = gen_tname in
+         Ast.TQName (q, nm, [], dspan));
       ]
   in
   if n <= 0 then leaf
@@ -92,6 +103,10 @@ let rec gen_base n =
         (let+ nm = gen_tname
          and+ args = G.list_size (G.int_range 1 2) (gen_ty (n - 1)) in
          Ast.TName (nm, args, dspan));
+        (let+ q = gen_qual
+         and+ nm = gen_tname
+         and+ args = G.list_size (G.int_range 1 2) (gen_ty (n - 1)) in
+         Ast.TQName (q, nm, args, dspan));
         (let+ e = gen_base (n - 1) in
          Ast.TList (e, dspan));
         (let+ k = gen_ty (n - 1) and+ v = gen_base (n - 1) in
@@ -197,9 +212,19 @@ let fix_adjacency (ds : Ast.decl list) : Ast.decl list =
   in
   go ds
 
+let gen_import =
+  let+ path =
+    G.list_size (G.int_range 1 2)
+      (G.oneof_list [ "payments"; "common"; "core" ])
+  and+ alias =
+    G.oneof [ G.return None; G.map Option.some (G.oneof_list [ "c"; "p" ]) ]
+  in
+  { Ast.imported_path = path; alias; ispan = dspan }
+
 let gen_file =
-  let+ ds = G.list_size (G.int_range 0 5) gen_decl in
-  fix_adjacency ds
+  let+ imports = G.list_size (G.int_range 0 2) gen_import
+  and+ ds = G.list_size (G.int_range 0 5) gen_decl in
+  { Ast.imports; decls = fix_adjacency ds }
 
 let roundtrip =
   QCheck.Test.make ~count:500 ~name:"parse (print ast) = ast, spans aside"

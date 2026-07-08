@@ -11,12 +11,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use tono_backend::codegen::{generate, parse_targets, Formatter, TargetKind};
+use tono_backend::codegen::{generate, parse_targets, CodegenConfig, Formatter, TargetKind};
 use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::ir::decode_model;
 
 const USAGE: &str = "usage: tono (\n  \
-    gen --target <list> --out <dir> [<ir.json>]\n  \
+    gen --target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [<ir.json>]\n  \
     breaking [<ir.json>] --baseline <ref> [--baseline-path <path>] [--config <cfg.json>] [--level <cat>=<sev>]... [--allow <key>]...\n  \
     version)";
 
@@ -47,12 +47,21 @@ fn run_gen(args: &[String]) -> Result<(), String> {
     let mut targets_csv: Option<String> = None;
     let mut out: Option<String> = None;
     let mut ir_path: Option<String> = None;
+    let mut config = CodegenConfig::default();
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--target" => targets_csv = Some(flag_value(args, &mut i, "--target")?),
             "--out" => out = Some(flag_value(args, &mut i, "--out")?),
+            // Collapse the module hierarchy into flat single-segment packages.
+            "--flatten" => config.flatten = true,
+            // Rewrite a module prefix, e.g. --module-remap payments=billing.
+            "--module-remap" => {
+                config
+                    .remap
+                    .push(parse_remap(&flag_value(args, &mut i, "--module-remap")?)?)
+            }
             path => ir_path = Some(path.to_string()),
         }
         i += 1;
@@ -67,11 +76,19 @@ fn run_gen(args: &[String]) -> Result<(), String> {
     };
     let model = decode_model(&json)?;
 
-    for file in generate(&model, &targets) {
+    for file in generate(&model, &targets, &config) {
         let formatted = formatter_for(file.target).run(&file.text).text;
         write_file(&out_root.join(&file.path), &formatted)?;
     }
     Ok(())
+}
+
+/// Parse a `--module-remap from=to` value into its `(from, to)` pair.
+fn parse_remap(value: &str) -> Result<(String, String), String> {
+    value
+        .split_once('=')
+        .map(|(from, to)| (from.to_string(), to.to_string()))
+        .ok_or_else(|| format!("--module-remap expects <from>=<to>, got: {value}"))
 }
 
 /// Consume the value that follows a flag, advancing the cursor past it.

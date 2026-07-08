@@ -75,6 +75,9 @@ let rec print_ty (t : Ast.ty) : string =
   | Ast.TName (n, [], _) -> n
   | Ast.TName (n, args, _) ->
       n ^ "[" ^ String.concat ", " (List.map print_ty args) ^ "]"
+  | Ast.TQName (q, n, [], _) -> q ^ "." ^ n
+  | Ast.TQName (q, n, args, _) ->
+      q ^ "." ^ n ^ "[" ^ String.concat ", " (List.map print_ty args) ^ "]"
   | Ast.TList (elem, _) -> "[]" ^ print_ty elem
   | Ast.TMap (k, v, _) -> "map[" ^ print_ty k ^ "]" ^ print_ty v
   | Ast.TNullable (inner, _) -> print_ty inner ^ "?"
@@ -155,7 +158,25 @@ let print_decl (d : Ast.decl) : string =
       in
       above ^ body
 
+let print_import (i : Ast.import) : string =
+  "import "
+  ^ String.concat "." i.Ast.imported_path
+  ^ match i.Ast.alias with Some a -> " as " ^ a | None -> ""
+
+(* Imports print first as a block (one per line), then a blank line, then the
+   declarations. An import-only or declaration-only file omits the separator. *)
 let print_file (f : Ast.file) : string =
-  match f with
-  | [] -> ""
-  | ds -> String.concat "\n\n" (List.map print_decl ds) ^ "\n"
+  let imports =
+    match f.Ast.imports with
+    | [] -> ""
+    | is -> String.concat "\n" (List.map print_import is) ^ "\n"
+  in
+  let decls =
+    match f.Ast.decls with
+    | [] -> ""
+    | ds -> String.concat "\n\n" (List.map print_decl ds) ^ "\n"
+  in
+  match (f.Ast.imports, f.Ast.decls) with
+  | [], _ -> decls
+  | _, [] -> imports
+  | _ -> imports ^ "\n" ^ decls

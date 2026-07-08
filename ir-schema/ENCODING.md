@@ -24,8 +24,14 @@ The current version is **1**.
 ## Modules
 
 ```json
-{ "name": "payments", "shapes": [ /* shapes */ ], "operations": [ /* shapes */ ] }
+{ "name": "payments.common", "shapes": [ /* shapes */ ], "operations": [ /* shapes */ ] }
 ```
+
+A module's `name` is its qualified path: one `.tono` file is one module, named
+by its path from the project root with the extension dropped and the separators
+turned into dots (`payments/charge.tono` -> `payments.charge`). Every shape id and
+every nominal reference is namespaced as `module#local` (see
+[Module identity](#module-identity-imports-and-visibility)).
 
 ## Primitives
 
@@ -155,6 +161,51 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
 - **Meta-schema vs runtime wire.** Integer `default`/trait values are plain JSON
   numbers *in the IR*. How a generated SDK serializes an `i64` on its own runtime
   wire (e.g. as a string) is a separate concern and does not affect this encoding.
+
+## Module identity, imports, and visibility
+
+- **Identity by path.** A module is one `.tono` file; its qualified name is the
+  file path from the project root, dotted (`payments/charge.tono` ->
+  `payments.charge`). There is no `package` declaration: the path is the identity.
+- **Qualified ids.** Every top-level shape id and every nominal `ref` is
+  `module#local`, where `module` is the dotted module name and `local` is the
+  snake_case declared name (`payments.common#money`). A reference to a type in the
+  same module carries that module's own prefix; the backend drops the prefix when
+  it equals the file's module, so no self-import is generated.
+- **Imports are a resolution concept, not IR.** Between modules, a `.tono` file
+  imports another (`import payments.common [as c]`) and references its types
+  qualified (`common.money`). Imports steer name resolution in the frontend and
+  leave no node in the IR: by the time a reference reaches the wire it is already
+  a fully-qualified `module#local` id. The module import graph must be a DAG;
+  a cycle is a compile error.
+- **Visibility.** `pub` on a top-level declaration exports it (it becomes visible
+  to other modules and is emitted in the SDK) and rides the IR as a `pub` trait
+  on the shape. A private (non-`pub`) shape is visible only within its own module;
+  referencing it across a module boundary is a compile error. Within a module
+  everything is visible without `pub` or an import.
+
+## Generated package mapping
+
+The backend maps each module to an idiomatic sub-package per target, derived from
+the dotted name:
+
+| Module | Rust | Go | TypeScript |
+|---|---|---|---|
+| `payments.common` | `crate::payments::common` (`rust/payments/common.rs`) | package `common` (`go/payments/common/common.go`) | `./payments/common` (`typescript/payments/common.ts`) |
+
+A single-segment module keeps the flat layout (`rust/payments.rs`). Two config
+hooks, consumed by codegen (`tono gen`), rewrite the canonical module name before
+this mapping:
+
+- `--flatten` collapses the dotted hierarchy into one flat segment (dots become
+  underscores), so no sub-packages are produced (`payments.common` ->
+  `payments_common`).
+- `--module-remap <from>=<to>` rewrites a matching dotted prefix (repeatable);
+  `--module-remap payments=billing` turns `payments.common` into `billing.common`.
+
+Private items are never part of a package's public export surface. The mapping is
+purely structural; in-code identifiers are always the local (last) name, so
+qualifying a module never changes a generated type or field name.
 
 ## Regenerating the fixtures
 

@@ -172,8 +172,11 @@ impl GoRules {
 
 impl RenderRules for GoRules {
     fn render_import(&self, module: &str, _names: &[&str]) -> String {
-        // Go imports the whole package, so the per-symbol names play no part.
-        format!("import \"{module}\"")
+        // Go imports the whole package, so the per-symbol names play no part. A
+        // dotted module name is a package sub-path: payments.common ->
+        // payments/common.
+        let path = module.replace('.', "/");
+        format!("import \"{path}\"")
     }
 
     fn render_decl(&self, decl: &Decl) -> String {

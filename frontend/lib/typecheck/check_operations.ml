@@ -10,9 +10,9 @@
 
 let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 
-let decl_by_name (file : Ast.file) (name : string) : Ast.decl option =
+let decl_by_name (decls : Ast.decl list) (name : string) : Ast.decl option =
   (* The first definition wins, matching [Symtab.build]. *)
-  List.find_opt (fun (d : Ast.decl) -> String.equal d.dname name) file
+  List.find_opt (fun (d : Ast.decl) -> String.equal d.dname name) decls
 
 let find_trait name (traits : Ast.trait list) : Ast.trait option =
   List.find_opt (fun (t : Ast.trait) -> String.equal t.tname name) traits
@@ -54,9 +54,9 @@ let declared_error_names (d : Ast.decl) : string list =
 
 (* Check one resolved declared error's discrimination traits, returning the
    diagnostics plus its (status, code) key when both are well-formed. *)
-let check_declared_error (file : Ast.file) (op : Ast.decl) (name : string) :
-    Diagnostic.t list * (int * string option) option =
-  match decl_by_name file name with
+let check_declared_error (decls : Ast.decl list) (op : Ast.decl) (name : string)
+    : Diagnostic.t list * (int * string option) option =
+  match decl_by_name decls name with
   | None -> ([], None) (* unresolved: already reported as TC0014 *)
   | Some target -> (
       let status_diags, status =
@@ -115,7 +115,7 @@ let check_ambiguity (op : Ast.decl)
   in
   dups [] keys
 
-let check_op (tbl : Symtab.t) (file : Ast.file) (op : Ast.decl) :
+let check_op (tbl : Symtab.t) (decls : Ast.decl list) (op : Ast.decl) :
     Diagnostic.t list =
   let unresolved =
     List.concat_map
@@ -144,7 +144,7 @@ let check_op (tbl : Symtab.t) (file : Ast.file) (op : Ast.decl) :
   let checked =
     List.map
       (fun name ->
-        let diags, key = check_declared_error file op name in
+        let diags, key = check_declared_error decls op name in
         (diags, Option.map (fun k -> (name, k)) key))
       (declared_error_names op)
   in
@@ -152,11 +152,11 @@ let check_op (tbl : Symtab.t) (file : Ast.file) (op : Ast.decl) :
   let keys = List.filter_map snd checked in
   unresolved @ async_diags @ error_diags @ check_ambiguity op keys
 
-let check_decl (tbl : Symtab.t) (file : Ast.file) (d : Ast.decl) :
+let check_decl (tbl : Symtab.t) (decls : Ast.decl list) (d : Ast.decl) :
     Diagnostic.t list =
   match d.dkind with
-  | Ast.DOp _ -> check_op tbl file d
+  | Ast.DOp _ -> check_op tbl decls d
   | Ast.DStruct _ | Ast.DEnum _ | Ast.DUnion _ -> []
 
-let check_decls (tbl : Symtab.t) (file : Ast.file) : Diagnostic.t list =
-  List.concat_map (check_decl tbl file) file
+let check_decls (tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
+  List.concat_map (check_decl tbl decls) decls

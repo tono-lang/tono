@@ -142,3 +142,45 @@ fn unknown_command_fails() {
     let status = tono().arg("wat").stdin(Stdio::null()).status().unwrap();
     assert!(!status.success());
 }
+
+/// A single dotted module, so the sub-package mapping and the config hooks have
+/// something to place under a directory.
+const DOTTED_IR: &str = r#"{"tono_ir_version":2,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+
+/// Run `tono gen` with the given extra args, feeding `DOTTED_IR` on stdin.
+fn gen_dotted(out: &Path, extra: &[&str]) {
+    let mut args = vec!["gen", "--target", "rust", "--out", out.to_str().unwrap()];
+    args.extend_from_slice(extra);
+    let mut child = tono().args(&args).stdin(Stdio::piped()).spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(DOTTED_IR.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn gen_maps_a_dotted_module_to_a_sub_package_path() {
+    let out = tmpdir("subpkg");
+    gen_dotted(&out, &[]);
+    assert!(out.join("rust").join("payments").join("common.rs").exists());
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn gen_flatten_writes_a_flat_package_file() {
+    let out = tmpdir("flatten");
+    gen_dotted(&out, &["--flatten"]);
+    assert!(out.join("rust").join("payments_common.rs").exists());
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn gen_module_remap_rewrites_the_prefix() {
+    let out = tmpdir("remap");
+    gen_dotted(&out, &["--module-remap", "payments=billing"]);
+    assert!(out.join("rust").join("billing").join("common.rs").exists());
+    let _ = std::fs::remove_dir_all(&out);
+}

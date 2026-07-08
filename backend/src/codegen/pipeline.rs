@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use crate::codegen::modules::{self, CodegenConfig};
 use crate::codegen::render::render_file_with_companion;
 use crate::codegen::targets::{go, rust, typescript};
 use crate::codegen::tree::ModuleFile;
@@ -99,7 +100,13 @@ fn render_module(module_file: &ModuleFile, module: &Module, target: TargetKind) 
                 &passthrough,
             )
             .text;
-            format!("{}{}", go::emit::package_clause(&module.name), rough)
+            // The Go package is named for the module's last segment; a dotted
+            // module nests in a directory of that name (see [`output_path`]).
+            format!(
+                "{}{}",
+                go::emit::package_clause(package_name(&module.name)),
+                rough
+            )
         }
         TargetKind::TypeScript => {
             render_file_with_companion(
@@ -125,20 +132,49 @@ pub fn parse_targets(csv: &str) -> Result<Vec<TargetKind>, String> {
         .collect()
 }
 
-/// Generate the SDK source for every `(target, module)` pair. Each file lands at
-/// `<target-dir>/<module-name>.<ext>`; the text is rough (unformatted) so callers
-/// run the real formatter when they write it out.
-pub fn generate(model: &Model, targets: &[TargetKind]) -> Vec<GeneratedFile> {
+/// The Go package name / Rust module leaf for a dotted module: its last segment.
+fn package_name(module: &str) -> &str {
+    module.rsplit('.').next().unwrap_or(module)
+}
+
+/// Where a module's file lands. A single-segment module stays flat
+/// (`rust/payments.rs`); a dotted module maps to an idiomatic sub-package: Rust
+/// and TypeScript use the dotted path as a file path (`rust/payments/common.rs`),
+/// while Go nests the file inside a package directory named for the last segment
+/// (`go/payments/common/common.go`), matching Go's dir-is-package rule.
+fn output_path(target: TargetKind, module: &str, suffix: &str, ext: &str) -> PathBuf {
+    let dir = PathBuf::from(target.dir());
+    let segments: Vec<&str> = module.split('.').collect();
+    if segments.len() == 1 {
+        return dir.join(format!("{module}{suffix}.{ext}"));
+    }
+    match target {
+        TargetKind::Go => dir
+            .join(segments.join("/"))
+            .join(format!("{}{suffix}.{ext}", package_name(module))),
+        TargetKind::Rust | TargetKind::TypeScript => {
+            dir.join(format!("{}{suffix}.{ext}", segments.join("/")))
+        }
+    }
+}
+
+/// Generate the SDK source for every `(target, module)` pair, mapping each module
+/// to its idiomatic sub-package (steered by `config`). Each file's text is rough
+/// (unformatted) so callers run the real formatter when they write it out.
+pub fn generate(
+    model: &Model,
+    targets: &[TargetKind],
+    config: &CodegenConfig,
+) -> Vec<GeneratedFile> {
+    // Apply the module remap/flatten hooks once, up front, so the render rules and
+    // output paths below see only the effective (post-config) module names.
+    let model = modules::apply(config, model);
     let mut files = Vec::new();
     for &target in targets {
         for module in &model.modules {
             for module_file in emit_module_files(module, target) {
-                let path = PathBuf::from(target.dir()).join(format!(
-                    "{}{}.{}",
-                    module.name,
-                    module_file.suffix,
-                    target.extension()
-                ));
+                let path =
+                    output_path(target, &module.name, module_file.suffix, target.extension());
                 files.push(GeneratedFile {
                     target,
                     path,
@@ -241,6 +277,7 @@ mod tests {
         let files = generate(
             &model,
             &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
+            &CodegenConfig::default(),
         );
         let paths: Vec<String> = files
             .iter()
@@ -279,6 +316,7 @@ mod tests {
         let files = generate(
             &union_model(),
             &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
+            &CodegenConfig::default(),
         );
         let paths: Vec<String> = files
             .iter()
@@ -363,6 +401,7 @@ mod tests {
         let files = generate(
             &ops_model(),
             &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
+            &CodegenConfig::default(),
         );
         let text_of = |path: &str| {
             files
@@ -410,7 +449,7 @@ mod tests {
 
     #[test]
     fn generate_with_no_targets_is_empty() {
-        assert!(generate(&demo_model(), &[]).is_empty());
+        assert!(generate(&demo_model(), &[], &CodegenConfig::default()).is_empty());
     }
 
     #[test]
@@ -420,5 +459,128 @@ mod tests {
             vec![TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript]
         );
         assert!(parse_targets("rust,java").is_err());
+    }
+
+    // ── Sub-package mapping and config hooks ────────────────────────────
+
+    /// A two-module project: `payments.common` defines a type, `payments.charge`
+    /// references it across the module boundary, exercising the dotted-module ->
+    /// sub-package mapping and the cross-package import.
+    fn sub_package_model() -> Model {
+        Model {
+            tono_ir_version: 2,
+            modules: vec![
+                Module {
+                    name: "payments.common".into(),
+                    shapes: vec![structure(
+                        "payments.common#Money",
+                        vec![member("amount", Tref::Prim(Prim::I64), true)],
+                    )],
+                    operations: vec![],
+                },
+                Module {
+                    name: "payments.charge".into(),
+                    shapes: vec![structure(
+                        "payments.charge#Charge",
+                        vec![member(
+                            "total",
+                            Tref::Ref {
+                                id: "payments.common#Money".into(),
+                                args: vec![],
+                            },
+                            true,
+                        )],
+                    )],
+                    operations: vec![],
+                },
+            ],
+        }
+    }
+
+    fn paths_of(files: &[GeneratedFile]) -> Vec<String> {
+        files
+            .iter()
+            .map(|f| {
+                f.path
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/")
+            })
+            .collect()
+    }
+
+    fn text_at<'a>(files: &'a [GeneratedFile], path: &str) -> &'a str {
+        let sep = std::path::MAIN_SEPARATOR_STR;
+        let want = path.replace('/', sep);
+        &files
+            .iter()
+            .find(|f| f.path.to_string_lossy() == want)
+            .unwrap_or_else(|| panic!("no file at {path}"))
+            .text
+    }
+
+    #[test]
+    fn dotted_modules_map_to_idiomatic_sub_packages() {
+        let files = generate(
+            &sub_package_model(),
+            &[TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
+            &CodegenConfig::default(),
+        );
+        let paths = paths_of(&files);
+        // Rust and TypeScript use the dotted path as a file path; Go nests the
+        // file inside a package directory named for the last segment.
+        assert!(paths.contains(&"rust/payments/common.rs".to_string()));
+        assert!(paths.contains(&"rust/payments/charge.rs".to_string()));
+        assert!(paths.contains(&"go/payments/common/common.go".to_string()));
+        assert!(paths.contains(&"typescript/payments/common.ts".to_string()));
+        assert!(paths.contains(&"typescript/payments/charge.ts".to_string()));
+
+        // The cross-package reference imports through each language's idiomatic
+        // module path.
+        assert!(text_at(&files, "rust/payments/charge.rs")
+            .contains("use crate::payments::common::Money;"));
+        assert!(
+            text_at(&files, "go/payments/charge/charge.go").contains("import \"payments/common\"")
+        );
+        assert!(
+            text_at(&files, "typescript/payments/charge.ts").contains("from \"./payments/common\"")
+        );
+        // The Go package is named for the last segment, not the dotted path.
+        assert!(text_at(&files, "go/payments/common/common.go").contains("package common"));
+    }
+
+    #[test]
+    fn flatten_collapses_modules_into_flat_packages() {
+        let config = CodegenConfig {
+            flatten: true,
+            remap: vec![],
+        };
+        let files = generate(&sub_package_model(), &[TargetKind::Rust], &config);
+        let paths = paths_of(&files);
+        assert!(paths.contains(&"rust/payments_common.rs".to_string()));
+        assert!(paths.contains(&"rust/payments_charge.rs".to_string()));
+        assert!(text_at(&files, "rust/payments_charge.rs")
+            .contains("use crate::payments_common::Money;"));
+    }
+
+    #[test]
+    fn remap_rewrites_the_module_prefix_in_paths_and_imports() {
+        let config = CodegenConfig {
+            flatten: false,
+            remap: vec![("payments".into(), "billing".into())],
+        };
+        let files = generate(&sub_package_model(), &[TargetKind::Rust], &config);
+        let paths = paths_of(&files);
+        assert!(paths.contains(&"rust/billing/common.rs".to_string()));
+        assert!(paths.contains(&"rust/billing/charge.rs".to_string()));
+        assert!(text_at(&files, "rust/billing/charge.rs")
+            .contains("use crate::billing::common::Money;"));
+    }
+
+    #[test]
+    fn single_segment_modules_keep_the_flat_layout() {
+        // The common single-module case is unchanged by the sub-package mapping.
+        let files = generate(&demo_model(), &[TargetKind::Go], &CodegenConfig::default());
+        let paths = paths_of(&files);
+        assert!(paths.contains(&"go/payments.go".to_string()));
     }
 }

@@ -16,6 +16,8 @@ module Printer = Printer
 module Lower = Lower
 module Typecheck = Typecheck
 module Protocol_http = Protocol_http
+module Modules = Modules
+module Error_codes = Error_codes
 
 (* The pure calculus: a self-contained, total expression sub-language. Its
    modules carry a [Calc_] prefix because the library namespace is flat. *)
@@ -62,6 +64,60 @@ let compile_to_json ?(module_name = "") (src : string) : (string, string) result
     in
     Ok (Ir_json.to_canonical_string (Ir_json.encode_model model))
 
+(* Compile a whole project: a set of (qualified module name, source) pairs, where
+   the name is derived from the file path (payments/charge.tono ->
+   payments.charge). Every module is parsed, then the project index resolves
+   cross-module references, enforces two-level visibility, and rejects import
+   cycles; finally each module is lowered with namespaced ids and typechecked.
+   Diagnostics are prefixed with their module name for attribution across files. *)
+let compile_project (files : (string * string) list) :
+    Ir.model * Diagnostic.t list =
+  let parsed =
+    List.map
+      (fun (name, src) ->
+        let file, pdiags = Parser.parse src in
+        (name, file, pdiags))
+      files
+  in
+  let index, mod_diags =
+    Modules.build (List.map (fun (n, f, _) -> (n, f)) parsed)
+  in
+  let label name (d : Diagnostic.t) =
+    { d with Diagnostic.message = name ^ ": " ^ d.message }
+  in
+  let modules, per_diags =
+    List.fold_right
+      (fun (name, file, pdiags) (mods, diags) ->
+        let resolve = Modules.resolver index ~this_module:name in
+        let qualified = Modules.qualified index ~this_module:name in
+        let ldiags = ref [] in
+        let m =
+          Lower.lower_file ~module_name:name ~resolve ~diags:ldiags file
+        in
+        let m, tdiags = Typecheck.check_module ~qualified ~file m in
+        (* Materialize each operation's HTTP annotations into its wire descriptor,
+           mirroring the single-module path; the step is protocol-agnostic and a
+           no-op for operations without @http. *)
+        let m = Protocol_http.resolve_module m in
+        let here = List.map (label name) (pdiags @ List.rev !ldiags @ tdiags) in
+        (m :: mods, here @ diags))
+      parsed ([], [])
+  in
+  let model = { Ir.tono_ir_version = Ir_json.current_ir_version; modules } in
+  (model, Diagnostic.sort (mod_diags @ per_diags))
+
+(* Compile a project straight to canonical IR JSON, or the joined error messages
+   when any module has an error. *)
+let compile_project_to_json (files : (string * string) list) :
+    (string, string) result =
+  let model, diags = compile_project files in
+  let errors =
+    List.filter (fun (d : Diagnostic.t) -> d.severity = Diagnostic.Error) diags
+  in
+  if errors <> [] then
+    Error (String.concat "\n" (List.map Diagnostic.to_string errors))
+  else Ok (Ir_json.to_canonical_string (Ir_json.encode_model model))
+
 (* Re-emit source text in the printer's canonical layout. Formatting is
    parse-level only (no lowering or typecheck), but parse errors abort: a file
    the parser had to recover on would be rewritten with the recovered guesses.
@@ -83,8 +139,8 @@ module Cli = struct
   type outcome = { code : int; out : string; err : string }
 
   let usage =
-    "usage: tono-frontend (compile <file.tono> [--module <name>] | fmt \
-     <file.tono> | version)"
+    "usage: tono-frontend (compile <file.tono> [--module <name>] | compile-dir \
+     <root> | fmt <file.tono> | version)"
 
   (* Pull an optional [--module <name>] out of the compile arguments; the first
      remaining bare argument is the source path. *)
@@ -98,7 +154,44 @@ module Cli = struct
     | Some name -> name
     | None -> Filename.remove_extension (Filename.basename path)
 
-  let run ~(read_file : string -> string) (argv : string array) : outcome =
+  (* The qualified module name for a file path relative to the project root: drop
+     the [.tono] extension and turn path separators into dots
+     (payments/charge.tono -> payments.charge). *)
+  let module_name_of_rel (rel : string) : string =
+    String.map
+      (fun c -> if c = '/' || c = '\\' then '.' else c)
+      (Filename.remove_extension rel)
+
+  (* Compile every [.tono] file under [root] into one versioned model. [list_files]
+     yields the project's file paths relative to the root; each is read through
+     [read_file] rooted at [root]. Paths are sorted so module order is stable. *)
+  let compile_dir ~list_files ~read_file root : outcome =
+    match list_files root with
+    | exception Sys_error msg -> { code = 1; out = ""; err = msg ^ "\n" }
+    | rels -> (
+        let tono =
+          List.sort compare
+            (List.filter (fun p -> Filename.check_suffix p ".tono") rels)
+        in
+        match tono with
+        | [] ->
+            { code = 1; out = ""; err = "no .tono files under " ^ root ^ "\n" }
+        | tono -> (
+            match
+              List.map
+                (fun rel ->
+                  (module_name_of_rel rel, read_file (Filename.concat root rel)))
+                tono
+            with
+            | exception Sys_error msg ->
+                { code = 1; out = ""; err = msg ^ "\n" }
+            | files -> (
+                match compile_project_to_json files with
+                | Ok json -> { code = 0; out = json ^ "\n"; err = "" }
+                | Error msg -> { code = 1; out = ""; err = msg ^ "\n" })))
+
+  let run ?(list_files = fun _ -> []) ~(read_file : string -> string)
+      (argv : string array) : outcome =
     match Array.to_list argv with
     | _ :: "compile" :: rest -> (
         match parse_compile None None rest with
@@ -112,6 +205,8 @@ module Cli = struct
                 match compile_to_json ~module_name src with
                 | Ok json -> { code = 0; out = json ^ "\n"; err = "" }
                 | Error msg -> { code = 1; out = ""; err = msg ^ "\n" })))
+    | _ :: "compile-dir" :: root :: _ -> compile_dir ~list_files ~read_file root
+    | [ _; "compile-dir" ] -> { code = 2; out = ""; err = usage ^ "\n" }
     | _ :: "fmt" :: path :: _ -> (
         match read_file path with
         | exception Sys_error msg -> { code = 1; out = ""; err = msg ^ "\n" }

@@ -129,6 +129,98 @@ let run_fmt_file_not_found () =
     "reports the io error" true
     (contains o.Cli.err "nope.tono")
 
+(* Drive [compile-dir] with an in-memory project: [listing] are the paths a
+   walker would return relative to the root, [files] maps each full path to its
+   source. *)
+let dir_run ~files ~listing argv =
+  let list_files _ = listing in
+  let read_file path =
+    match List.assoc_opt path files with
+    | Some s -> s
+    | None -> raise (Sys_error (path ^ ": No such file"))
+  in
+  Cli.run ~list_files ~read_file argv
+
+let proj_files root =
+  [
+    (root ^ "/payments/common.tono", "pub struct money { amount: i64 }");
+    ( root ^ "/payments/charge.tono",
+      "import payments.common\n\npub struct charge { total: common.money }" );
+  ]
+
+let run_compile_dir_ok () =
+  let root = "/proj" in
+  let o =
+    dir_run ~files:(proj_files root)
+      ~listing:[ "payments/charge.tono"; "payments/common.tono" ]
+      [| "x"; "compile-dir"; root |]
+  in
+  Alcotest.(check int) "exit 0" 0 o.Cli.code;
+  Alcotest.(check string) "no stderr" "" o.Cli.err;
+  Alcotest.(check bool)
+    "derives dotted module names" true
+    (contains o.Cli.out "payments.common");
+  Alcotest.(check bool)
+    "cross-module reference is qualified" true
+    (contains o.Cli.out "payments.common#money")
+
+let run_compile_dir_visibility () =
+  let root = "/proj" in
+  let files =
+    [
+      (root ^ "/payments/common.tono", "struct money { amount: i64 }");
+      (* not pub *)
+      ( root ^ "/payments/charge.tono",
+        "import payments.common\n\npub struct charge { total: common.money }" );
+    ]
+  in
+  let o =
+    dir_run ~files
+      ~listing:[ "payments/charge.tono"; "payments/common.tono" ]
+      [| "x"; "compile-dir"; root |]
+  in
+  Alcotest.(check int) "visibility violation fails" 1 o.Cli.code;
+  Alcotest.(check bool)
+    "reports the non-pub reference" true
+    (contains o.Cli.err "not exported")
+
+let run_compile_dir_cycle () =
+  let root = "/proj" in
+  let files =
+    [
+      (root ^ "/a.tono", "import b\n\npub struct ta { x: i64 }");
+      (root ^ "/b.tono", "import a\n\npub struct tb { x: i64 }");
+    ]
+  in
+  let o =
+    dir_run ~files ~listing:[ "a.tono"; "b.tono" ]
+      [| "x"; "compile-dir"; root |]
+  in
+  Alcotest.(check int) "cycle fails" 1 o.Cli.code;
+  Alcotest.(check bool) "reports the cycle" true (contains o.Cli.err "cycle")
+
+let run_compile_dir_empty () =
+  let o =
+    dir_run ~files:[] ~listing:[ "readme.md" ] [| "x"; "compile-dir"; "/proj" |]
+  in
+  Alcotest.(check int) "no sources is an error" 1 o.Cli.code;
+  Alcotest.(check bool)
+    "explains the empty project" true
+    (contains o.Cli.err "no .tono")
+
+let run_compile_dir_missing_root () =
+  let list_files _ = raise (Sys_error "/nope: No such file or directory") in
+  let o =
+    Cli.run ~list_files ~read_file:(always "") [| "x"; "compile-dir"; "/nope" |]
+  in
+  Alcotest.(check int) "io error exit code" 1 o.Cli.code;
+  Alcotest.(check bool) "reports the io error" true (contains o.Cli.err "/nope")
+
+let run_compile_dir_missing_arg () =
+  let o = Cli.run ~read_file:(always "") [| "x"; "compile-dir" |] in
+  Alcotest.(check int) "usage exit code" 2 o.Cli.code;
+  Alcotest.(check bool) "usage on stderr" true (contains o.Cli.err "usage")
+
 let () =
   Alcotest.run "cli"
     [
@@ -153,5 +245,14 @@ let () =
           Alcotest.test_case "fmt invalid source" `Quick run_fmt_invalid_source;
           Alcotest.test_case "fmt missing path" `Quick run_fmt_missing_path;
           Alcotest.test_case "fmt file not found" `Quick run_fmt_file_not_found;
+          Alcotest.test_case "compile-dir happy path" `Quick run_compile_dir_ok;
+          Alcotest.test_case "compile-dir visibility" `Quick
+            run_compile_dir_visibility;
+          Alcotest.test_case "compile-dir cycle" `Quick run_compile_dir_cycle;
+          Alcotest.test_case "compile-dir empty" `Quick run_compile_dir_empty;
+          Alcotest.test_case "compile-dir missing root" `Quick
+            run_compile_dir_missing_root;
+          Alcotest.test_case "compile-dir missing arg" `Quick
+            run_compile_dir_missing_arg;
         ] );
     ]

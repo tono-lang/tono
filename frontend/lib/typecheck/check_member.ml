@@ -21,5 +21,5 @@ let check_decl (d : Ast.decl) : Diagnostic.t list =
   | Ast.DStruct { members; _ } -> List.concat_map check_member members
   | Ast.DEnum _ | Ast.DUnion _ | Ast.DOp _ -> []
 
-let check_decls (file : Ast.file) : Diagnostic.t list =
-  List.concat_map check_decl file
+let check_decls (decls : Ast.decl list) : Diagnostic.t list =
+  List.concat_map check_decl decls
