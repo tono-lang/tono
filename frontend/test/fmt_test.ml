@@ -181,6 +181,36 @@ let format_source_error () =
   | Ok _ -> Alcotest.fail "expected an error for malformed source"
   | Error msg -> Alcotest.(check bool) "non-empty message" true (msg <> "")
 
+(* Imports (with and without an alias) and a qualified type reference print in the
+   canonical layout: the import block first, then a blank line, then the
+   declarations. This pins the module-syntax formatting deterministically,
+   independent of the property test's random files. *)
+let format_imports_and_qualified_refs () =
+  let src =
+    "import payments.common\n\
+     import billing.tax as t\n\n\
+     pub struct charge { total: common.money, vat: t.rate }\n"
+  in
+  let expected =
+    "import payments.common\n\
+     import billing.tax as t\n\n\
+     pub struct charge {\n\
+    \  total: common.money\n\
+    \  vat: t.rate\n\
+     }\n"
+  in
+  match format_source src with
+  | Ok out -> Alcotest.(check string) "canonical layout" expected out
+  | Error msg -> Alcotest.failf "expected Ok, got: %s" msg
+
+(* An import-only file keeps just the import block (no trailing declaration
+   separator). *)
+let format_imports_only () =
+  match format_source "import payments.common\n" with
+  | Ok out ->
+      Alcotest.(check string) "imports only" "import payments.common\n" out
+  | Error msg -> Alcotest.failf "expected Ok, got: %s" msg
+
 let () =
   Alcotest.run "fmt"
     [
@@ -199,5 +229,8 @@ let () =
         [
           Alcotest.test_case "happy path" `Quick format_source_ok;
           Alcotest.test_case "parse errors abort" `Quick format_source_error;
+          Alcotest.test_case "imports and qualified refs" `Quick
+            format_imports_and_qualified_refs;
+          Alcotest.test_case "imports only" `Quick format_imports_only;
         ] );
     ]

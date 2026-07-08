@@ -158,6 +158,24 @@ let diagnostic_span_and_message () =
       Alcotest.(check int) "span column at i64" 14 d.span.start.col
   | [] -> Alcotest.fail "expected a diagnostic"
 
+(* ── Imports and qualified references ──────────────────────────────────── *)
+
+let file_diags src = snd (Parser.parse src)
+
+let import_missing_segment () =
+  nonempty "segment not an identifier" (file_diags "import @")
+
+let import_missing_segment_after_dot () =
+  nonempty "segment missing after '.'" (file_diags "import payments.")
+
+let import_missing_alias () =
+  nonempty "alias missing after 'as'" (file_diags "import payments.common as")
+
+let qualified_missing_type_name () =
+  (* A '.' with no type name after the qualifier lowers the reference to TError
+     and reports. *)
+  nonempty "type name missing after '.'" (file_diags "struct s { x: common. }")
+
 (* ── Well-formed repetition (fills the comma loops) ─────────────────────── *)
 
 let repetition_paths () =
@@ -199,6 +217,15 @@ let () =
           Alcotest.test_case "body recovery" `Quick struct_body_recovery;
           Alcotest.test_case "generics errors" `Quick generics_errors;
           Alcotest.test_case "repetition paths" `Quick repetition_paths;
+        ] );
+      ( "imports",
+        [
+          Alcotest.test_case "segment missing" `Quick import_missing_segment;
+          Alcotest.test_case "segment after dot" `Quick
+            import_missing_segment_after_dot;
+          Alcotest.test_case "alias missing" `Quick import_missing_alias;
+          Alcotest.test_case "qualified type name missing" `Quick
+            qualified_missing_type_name;
         ] );
       ( "decls",
         [

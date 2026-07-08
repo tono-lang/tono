@@ -221,6 +221,16 @@ let run_compile_dir_missing_arg () =
   Alcotest.(check int) "usage exit code" 2 o.Cli.code;
   Alcotest.(check bool) "usage on stderr" true (contains o.Cli.err "usage")
 
+let run_compile_dir_read_failure () =
+  (* A file that lists but fails to read aborts with the io error. *)
+  let list_files _ = [ "a.tono" ] in
+  let read_file p = raise (Sys_error (p ^ ": permission denied")) in
+  let o = Cli.run ~list_files ~read_file [| "x"; "compile-dir"; "/proj" |] in
+  Alcotest.(check int) "io error exit code" 1 o.Cli.code;
+  Alcotest.(check bool)
+    "reports the io error" true
+    (contains o.Cli.err "permission denied")
+
 let () =
   Alcotest.run "cli"
     [
@@ -254,5 +264,7 @@ let () =
             run_compile_dir_missing_root;
           Alcotest.test_case "compile-dir missing arg" `Quick
             run_compile_dir_missing_arg;
+          Alcotest.test_case "compile-dir read failure" `Quick
+            run_compile_dir_read_failure;
         ] );
     ]

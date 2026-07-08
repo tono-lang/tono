@@ -27,6 +27,34 @@ let contains ~sub s =
   let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
   n = 0 || go 0
 
+let dpos : Span.pos = { line = 0; col = 0; offset = 0 }
+let dspan : Span.span = { start = dpos; finish = dpos }
+
+(* ── Import helpers (the qualifier and target derivation) ───────────────── *)
+
+let import ?alias path : Ast.import =
+  { Ast.imported_path = path; alias; ispan = dspan }
+
+let qualifier_and_target () =
+  (* The qualifier is the alias when present, else the last path segment; the
+     target is the dotted path. *)
+  Alcotest.(check string)
+    "last segment" "common"
+    (Modules.qualifier_of (import [ "payments"; "common" ]));
+  Alcotest.(check string)
+    "alias wins" "c"
+    (Modules.qualifier_of (import ~alias:"c" [ "payments"; "common" ]));
+  (* A degenerate empty path yields an empty qualifier rather than raising. *)
+  Alcotest.(check string) "empty path" "" (Modules.qualifier_of (import []));
+  Alcotest.(check string)
+    "dotted target" "payments.common"
+    (Modules.target_of (import [ "payments"; "common" ]))
+
+(* A qualified type in the calculus resolves to a dotted nominal reference. *)
+let calculus_qualified_type () =
+  let t = Calc_types.resolve (Ast.TQName ("common", "money", [], dspan)) in
+  Alcotest.(check string) "dotted ref" "common.money" (Calc_types.to_string t)
+
 (* ── Qualified resolution across modules ───────────────────────────────── *)
 
 (* A pub struct in one module, referenced qualified from another, resolves to a
@@ -142,6 +170,75 @@ pub struct charge { total: common.nonesuch }
     "unknown type reported" true
     (List.mem Error_codes.unknown_type cs)
 
+(* A generic shape is referenced across a module boundary with the right arity. *)
+let cross_module_generic_ok () =
+  let common =
+    "pub struct money { amount: i64 }\npub struct page[t] { items: []t }"
+  in
+  let charge =
+    {|
+import payments.common
+
+pub struct charges { list: common.page[common.money] }
+|}
+  in
+  Alcotest.(check int)
+    "generic cross-module resolves" 0
+    (error_count [ ("payments.common", common); ("payments.charge", charge) ])
+
+(* A cross-module generic applied with the wrong number of arguments. *)
+let cross_module_generic_arity () =
+  let common = "pub struct page[t] { items: []t }" in
+  let charge = {|
+import payments.common
+
+pub struct c { p: common.page }
+|} in
+  Alcotest.(check bool)
+    "arity mismatch reported" true
+    (List.mem Error_codes.generic_arity_mismatch
+       (codes [ ("payments.common", common); ("payments.charge", charge) ]))
+
+(* Type arguments on a non-generic cross-module shape. *)
+let cross_module_non_generic_applied () =
+  let common = "pub struct money { amount: i64 }" in
+  let charge =
+    {|
+import payments.common
+
+pub struct c { m: common.money[i64] }
+|}
+  in
+  Alcotest.(check bool)
+    "non-generic applied reported" true
+    (List.mem Error_codes.non_generic_applied
+       (codes [ ("payments.common", common); ("payments.charge", charge) ]))
+
+(* Importing a missing module and referencing through it: the import is reported,
+   and the reference itself stays quiet (the root cause is the bad import). *)
+let qualified_ref_to_missing_module () =
+  let charge = {|
+import gone.thing
+
+pub struct c { x: thing.widget }
+|} in
+  Alcotest.(check bool)
+    "missing module import reported" true
+    (List.mem Error_codes.unknown_import (codes [ ("proj.charge", charge) ]))
+
+(* The single-file compile path carries no imports, so a qualified reference is an
+   unknown import (the default resolver). *)
+let single_file_qualified_ref_is_unknown_import () =
+  let _, ds =
+    Tono_frontend.compile ~module_name:"m" "struct c { x: other.thing }"
+  in
+  Alcotest.(check bool)
+    "no-imports default fires" true
+    (List.exists
+       (fun (d : Diagnostic.t) ->
+         d.Diagnostic.code = Some Error_codes.unknown_import)
+       ds)
+
 (* ── Cycle detection (the import graph must be a DAG) ───────────────────── *)
 
 (* Two modules importing each other form a cycle: TC0025. *)
@@ -202,6 +299,12 @@ let diagnostics_labelled_by_module () =
 let () =
   Alcotest.run "modules"
     [
+      ( "helpers",
+        [
+          Alcotest.test_case "qualifier and target" `Quick qualifier_and_target;
+          Alcotest.test_case "calculus qualified type" `Quick
+            calculus_qualified_type;
+        ] );
       ( "resolution",
         [
           Alcotest.test_case "cross-module reference" `Quick
@@ -224,6 +327,16 @@ let () =
             import_of_missing_module;
           Alcotest.test_case "labelled by module" `Quick
             diagnostics_labelled_by_module;
+          Alcotest.test_case "generic cross-module ok" `Quick
+            cross_module_generic_ok;
+          Alcotest.test_case "cross-module arity mismatch" `Quick
+            cross_module_generic_arity;
+          Alcotest.test_case "cross-module non-generic applied" `Quick
+            cross_module_non_generic_applied;
+          Alcotest.test_case "qualified ref to missing module" `Quick
+            qualified_ref_to_missing_module;
+          Alcotest.test_case "single-file qualified ref" `Quick
+            single_file_qualified_ref_is_unknown_import;
         ] );
       ( "cycles",
         [
