@@ -139,6 +139,47 @@ fn a_missing_baseline_ref_fails_cleanly() {
 }
 
 #[test]
+fn manifest_compat_severities_seed_the_policy() {
+    let dir = repo("manifest-sev");
+    // The manifest downgrades wire breaks to a warning (and sets the other levels
+    // to exercise every severity mapping); no --level flag is passed.
+    std::fs::write(
+        dir.join("tono.toml"),
+        "[compat]\nwire_breaking = \"warn\"\nsource_breaking = \"off\"\nbehavioral = \"error\"\n",
+    )
+    .unwrap();
+    let (ok, stdout) = breaking(&dir, &[]);
+    assert!(
+        ok,
+        "the manifest downgrades the wire break to a warning: {stdout}"
+    );
+    assert!(
+        stdout.contains("warn: retype demo#Charge.amount"),
+        "{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn manifest_baseline_is_used_when_the_flag_is_absent() {
+    let dir = repo("manifest-baseline");
+    // The manifest names the baseline ref (with the optional git: prefix), so the
+    // check runs without --baseline and still catches the wire break.
+    std::fs::write(dir.join("tono.toml"), "[compat]\nbaseline = \"git:HEAD\"\n").unwrap();
+    std::fs::write(dir.join("current.json"), RETYPED).unwrap();
+    let out = tono()
+        .current_dir(&dir)
+        .args(["breaking", "current.json", "--baseline-path", "ir.json"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "the wire break against the manifest baseline fails the gate"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_mistyped_flag_is_rejected_not_swallowed_as_the_ir_path() {
     let dir = repo("badflag");
     std::fs::write(dir.join("current.json"), RETYPED).unwrap();

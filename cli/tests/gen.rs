@@ -244,3 +244,183 @@ fn gen_multi_module_go_needs_a_module_path() {
     let _ = std::fs::remove_dir_all(&out);
     let _ = std::fs::remove_dir_all(&ok);
 }
+
+// --- manifest mode ----------------------------------------------------------
+
+/// A module with a multi-word field, so a casing override is observable.
+const CASING_IR: &str = r#"{"tono_ir_version":3,"modules":[{"name":"demo","shapes":[{"id":"demo#Event","kind":"structure","params":[],"members":[{"name":"created_at","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+
+/// Run `tono gen <extra>` from `cwd`, feeding `ir` on stdin; returns the output.
+/// The write ignores a broken pipe: a manifest error makes the CLI exit before it
+/// reads stdin, and the assertion under test is the exit status, not the write.
+fn gen_stdin_in(cwd: &Path, extra: &[&str], ir: &str) -> std::process::Output {
+    let mut child = tono()
+        .arg("gen")
+        .args(extra)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let _ = child.stdin.take().unwrap().write_all(ir.as_bytes());
+    child.wait_with_output().unwrap()
+}
+
+/// Write `body` to `<dir>/tono.toml` and return its path.
+fn write_manifest(dir: &Path, body: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join("tono.toml");
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+fn ok_or_stderr(out: &std::process::Output) {
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn manifest_drives_enabled_targets_and_out_dirs() {
+    let base = tmpdir("m-config");
+    let manifest = write_manifest(
+        &base,
+        "[target.rust]\nout = \"gen/rust\"\n\n[target.typescript]\nout = \"gen/ts\"\n\n[target.python]\nenabled = false\n",
+    );
+    let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], IR);
+    ok_or_stderr(&out);
+    // Each enabled target lands under its own configured out (no shared root, no
+    // `<target>/` prefix); the disabled python target emits nothing.
+    assert!(base.join("gen/rust/demo.rs").is_file());
+    assert!(base.join("gen/ts/demo.ts").is_file());
+    assert!(!base.join("gen/python").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn manifest_is_auto_discovered_from_a_subdirectory() {
+    let base = tmpdir("m-discover");
+    write_manifest(&base, "[target.go]\nout = \"out/go\"\n");
+    let nested = base.join("sub");
+    std::fs::create_dir_all(&nested).unwrap();
+    let out = gen_stdin_in(&nested, &[], IR);
+    ok_or_stderr(&out);
+    // out resolves against the manifest's directory, not the working directory.
+    assert!(base.join("out/go/demo.go").is_file());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn manifest_module_mapping_flat_flattens_the_layout() {
+    let base = tmpdir("m-flat");
+    let manifest = write_manifest(
+        &base,
+        "[target.rust]\nout = \"r\"\nmodule_mapping = \"flat\"\n",
+    );
+    let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], DOTTED_IR);
+    ok_or_stderr(&out);
+    // flat collapses payments.common into one segment; nested would be r/payments/common.rs.
+    assert!(base.join("r/payments_common.rs").is_file());
+    assert!(!base.join("r/payments/common.rs").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn manifest_module_remap_rewrites_the_prefix() {
+    let base = tmpdir("m-remap");
+    let manifest = write_manifest(
+        &base,
+        "[target.rust]\nout = \"r\"\n\n[target.rust.module_remap]\n\"payments\" = \"billing\"\n",
+    );
+    let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], DOTTED_IR);
+    ok_or_stderr(&out);
+    assert!(base.join("r/billing/common.rs").is_file());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn manifest_go_package_supplies_the_go_module_path() {
+    // A multi-module Go SDK needs a module path; the manifest's package provides it.
+    let ok = tmpdir("m-go-ok");
+    let manifest = write_manifest(
+        &ok,
+        "[target.go]\nout = \"g\"\npackage = \"example.com/sdk\"\n",
+    );
+    let out = gen_stdin_in(
+        &ok,
+        &["--config", manifest.to_str().unwrap()],
+        TWO_MODULE_IR,
+    );
+    ok_or_stderr(&out);
+    assert!(ok.join("g/payments/common/common.go").is_file());
+
+    // Without a package the Go layout check rejects the multi-module output.
+    let bad = tmpdir("m-go-bad");
+    let manifest = write_manifest(&bad, "[target.go]\nout = \"g\"\n");
+    let out = gen_stdin_in(
+        &bad,
+        &["--config", manifest.to_str().unwrap()],
+        TWO_MODULE_IR,
+    );
+    assert!(!out.status.success());
+    let _ = std::fs::remove_dir_all(&ok);
+    let _ = std::fs::remove_dir_all(&bad);
+}
+
+#[test]
+fn manifest_casing_override_changes_the_emitted_field() {
+    let base = tmpdir("m-casing");
+    let manifest = write_manifest(
+        &base,
+        "[target.typescript]\nout = \"t\"\n\n[target.typescript.casing]\nfields = \"snake\"\n",
+    );
+    let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], CASING_IR);
+    ok_or_stderr(&out);
+    let text = std::fs::read_to_string(base.join("t/demo.ts")).unwrap();
+    // TypeScript fields are camelCase by default; the override renders them snake.
+    assert!(text.contains("created_at"), "{text}");
+    assert!(!text.contains("createdAt"), "{text}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn manifest_enabling_an_unsupported_target_fails() {
+    let base = tmpdir("m-unsupported");
+    let manifest = write_manifest(&base, "[target.python]\nenabled = true\n");
+    let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], IR);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("python"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn manifest_with_malformed_toml_fails() {
+    let base = tmpdir("m-malformed");
+    let manifest = write_manifest(&base, "not = = valid");
+    let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], IR);
+    assert!(!out.status.success());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn manifest_with_no_enabled_targets_fails() {
+    let base = tmpdir("m-empty");
+    let manifest = write_manifest(&base, "[target.rust]\nenabled = false\n");
+    let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], IR);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no enabled targets"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn gen_without_flags_or_manifest_fails() {
+    let base = tmpdir("m-none");
+    std::fs::create_dir_all(&base).unwrap();
+    // No tono.toml up the tree and no flags: nothing to generate from.
+    let out = gen_stdin_in(&base, &[], IR);
+    assert!(!out.status.success());
+    let _ = std::fs::remove_dir_all(&base);
+}
