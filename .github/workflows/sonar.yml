@@ -35,7 +35,7 @@ jobs:
       - name: Generate Rust coverage for Sonar
         if: env.SONAR_TOKEN != ''
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: env.SONAR_TOKEN != ''
         with:
           node-version: 20
