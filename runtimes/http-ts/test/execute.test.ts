@@ -231,3 +231,253 @@ describe("verbatim execution", () => {
     expect(calls[0].init.body).toBe(JSON.stringify({ field: "4" }));
   });
 });
+
+describe("edge cases pinned by the mutation gate", () => {
+  it("normalizes a null input to an empty record instead of dereferencing it", async () => {
+    // A null input with a body binding must not be indexed into; it yields no body.
+    const { calls, fetchImpl } = recorder();
+    const outcome = await execute(
+      descriptor({ bindings: [binding("a", { kind: "body" })] }),
+      null,
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome.outcome).toBe("success");
+    expect(calls[0].init.body).toBeUndefined();
+  });
+
+  it("normalizes a non-object input to an empty record", async () => {
+    // A string input has no members: a query binding named after a string
+    // property ("length") must not leak the string's own length.
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({
+        http_method: "GET",
+        uri: "/things",
+        bindings: [binding("length", { kind: "query", name: "length" })],
+      }),
+      "hello",
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].url).toBe("https://api.test/things");
+  });
+
+  it("leaves a non-label binding out of path substitution", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({
+        http_method: "GET",
+        uri: "/things/{id}",
+        bindings: [binding("id", { kind: "label" }), binding("q", { kind: "query", name: "q" })],
+      }),
+      { id: "7", q: "x" },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].url).toBe("https://api.test/things/7?q=x");
+  });
+
+  it("substitutes a present label rather than emptying it", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ http_method: "GET", uri: "/things/{id}", bindings: [binding("id", { kind: "label" })] }),
+      { id: "present" },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].url).toBe("https://api.test/things/present");
+  });
+
+  it("omits an absent query member and keeps a present one", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({
+        http_method: "GET",
+        uri: "/things",
+        bindings: [binding("q", { kind: "query", name: "q" }), binding("r", { kind: "query", name: "r" })],
+      }),
+      { q: "kept" },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].url).toBe("https://api.test/things?q=kept");
+  });
+
+  it("omits a null header and keeps a present one", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({
+        bindings: [
+          binding("keep", { kind: "header", name: "X-Keep" }),
+          binding("drop", { kind: "header", name: "X-Drop" }),
+        ],
+      }),
+      { keep: "yes", drop: null },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["X-Keep"]).toBe("yes");
+    expect(headers["X-Drop"]).toBeUndefined();
+  });
+
+  it("drops an absent body member from the assembled object", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ bindings: [binding("a", { kind: "body" }), binding("b", { kind: "body" })] }),
+      { a: 1 },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].init.body).toBe(JSON.stringify({ a: 1 }));
+  });
+
+  it("sends no body and no content-type when every body member is absent", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ bindings: [binding("a", { kind: "body" })] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].init.body).toBeUndefined();
+    expect((calls[0].init.headers as Record<string, string>)["content-type"]).toBeUndefined();
+  });
+
+  it("adds the default content-type when a body is present and none was set", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ bindings: [binding("a", { kind: "body" })] }),
+      { a: 1 },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect((calls[0].init.headers as Record<string, string>)["content-type"]).toBe("application/json");
+  });
+
+  it("suppresses the default content-type when the caller set it in exact lower case", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ bindings: [binding("a", { kind: "body" })] }),
+      { a: 1 },
+      { baseUrl: "https://api.test", fetch: fetchImpl, headers: { "content-type": "text/plain" } },
+    );
+    expect((calls[0].init.headers as Record<string, string>)["content-type"]).toBe("text/plain");
+  });
+
+  it("classifies the 2xx boundary: 299 succeeds, 300 errors", async () => {
+    const ok = recorder(299, "{}");
+    expect(
+      (await execute(descriptor(), {}, { baseUrl: "https://api.test", fetch: ok.fetchImpl })).outcome,
+    ).toBe("success");
+    const bad = recorder(300, "{}");
+    expect(
+      (await execute(descriptor(), {}, { baseUrl: "https://api.test", fetch: bad.fetchImpl })).outcome,
+    ).toBe("error");
+  });
+
+  it("honors a declared success code outside the 2xx range", async () => {
+    const { fetchImpl } = recorder(302, "{}");
+    const outcome = await execute(
+      descriptor({ success: [[302, null]] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome.outcome).toBe("success");
+  });
+
+  it("does not treat an undeclared non-2xx code as success", async () => {
+    const { fetchImpl } = recorder(418, "{}");
+    const outcome = await execute(
+      descriptor({ success: [[302, null]] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome.outcome).toBe("error");
+  });
+
+  it("returns the body verbatim when there are no response bindings", async () => {
+    // A spaced body proves the text is passed through, not re-serialized: the
+    // early return must fire when there is nothing to fold in.
+    const { fetchImpl } = recorder(200, '{"id": "x"}');
+    const outcome = await execute(descriptor(), {}, { baseUrl: "https://api.test", fetch: fetchImpl });
+    expect(outcome).toEqual({ outcome: "success", status: 200, body: '{"id": "x"}' });
+  });
+
+  it("only substitutes label bindings into the path, not query bindings", async () => {
+    // A query binding whose name matches a path placeholder must be left as a
+    // literal: only labels feed path substitution.
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ http_method: "GET", uri: "/things/{q}", bindings: [binding("q", { kind: "query", name: "q" })] }),
+      { q: "v" },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].url).toBe("https://api.test/things/{q}?q=v");
+  });
+
+  it("substitutes a null label as empty rather than the literal null", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ http_method: "GET", uri: "/things/{id}", bindings: [binding("id", { kind: "label" })] }),
+      { id: null },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(calls[0].url).toBe("https://api.test/things/");
+  });
+
+  it("only reads header bindings into headers, not query bindings", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ http_method: "GET", uri: "/things", bindings: [binding("q", { kind: "query", name: "q" })] }),
+      { q: "v" },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect((calls[0].init.headers as Record<string, string>)["q"]).toBeUndefined();
+  });
+
+  it("omits an absent header member rather than sending the literal undefined", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ bindings: [binding("trace", { kind: "header", name: "X-Trace" })] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect((calls[0].init.headers as Record<string, string>)["X-Trace"]).toBeUndefined();
+  });
+
+  it("adds the default content-type even when another header is already present", async () => {
+    // hasHeader must match the content-type name specifically, not just report
+    // that some header exists.
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({ bindings: [binding("a", { kind: "body" }), binding("trace", { kind: "header", name: "X-Trace" })] }),
+      { a: 1, trace: "t" },
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["X-Trace"]).toBe("t");
+    expect(headers["content-type"]).toBe("application/json");
+  });
+
+  it("requires a 2xx floor: a sub-200 status is not a success on its own", async () => {
+    // The Response constructor forbids a sub-200 status, so a bare stub stands in
+    // to exercise the lower bound of the 2xx check.
+    const fetchImpl = (async () =>
+      ({ status: 150, text: async () => "{}", headers: new Headers() }) as unknown as Response) as unknown as typeof fetch;
+    const outcome = await execute(descriptor(), {}, { baseUrl: "https://api.test", fetch: fetchImpl });
+    expect(outcome.outcome).toBe("error");
+  });
+
+  it("accepts a status matching any one declared success code, not all of them", async () => {
+    const { fetchImpl } = recorder(302, "{}");
+    const outcome = await execute(
+      descriptor({ success: [[301, null], [302, null]] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome.outcome).toBe("success");
+  });
+
+  it("stands a response-bound field on its own when the body is empty", async () => {
+    const { fetchImpl } = recorder(200, "", { "X-Id": "r1" });
+    const outcome = await execute(
+      descriptor({ response_bindings: [["id", { kind: "header", name: "X-Id" }]] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome).toEqual({ outcome: "success", status: 200, body: JSON.stringify({ id: "r1" }) });
+  });
+});

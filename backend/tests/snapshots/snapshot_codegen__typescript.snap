@@ -1,0 +1,249 @@
+---
+source: backend/tests/snapshot_codegen.rs
+expression: out
+---
+// ==== models.ts ====
+export type Timestamp = string & { readonly __brand: "Timestamp" };
+
+export type LocalDate = string & { readonly __brand: "LocalDate" };
+
+export type Duration = string & { readonly __brand: "Duration" };
+
+export interface Account {
+  accountID: bigint;
+  secret: Uint8Array;
+  tip?: bigint | null;
+  status: Status;
+  code: HTTPCode;
+  method: Method;
+  counts: [number, string][];
+}
+
+export type Status = "active" | "closed" | (string & {});
+
+export type HTTPCode = 200 | 404 | 500 | (number & {});
+
+export type Method = ({ type: "card" } & CardData) | ({ type: "bank" } & BankData);
+
+export interface CardData {
+  last4: string;
+}
+
+export interface BankData {
+  iban: string;
+}
+
+export interface PaymentDeclined {
+  message: string;
+}
+
+export interface RateLimited {
+}
+
+export abstract class TonoError extends Error {
+  retryable(): boolean {
+    return false;
+  }
+}
+
+export interface Violation {
+  field: string;
+  constraint: string;
+  message: string;
+}
+
+export class ValidationError extends TonoError {
+  constructor(readonly violations: Violation[]) {
+    super("validation failed");
+    this.name = "ValidationError";
+  }
+}
+
+export class TransportError extends TonoError {
+  constructor(readonly cause: unknown) {
+    super("transport failure");
+    this.name = "TransportError";
+  }
+}
+
+export class DecodeError extends TonoError {
+  constructor(readonly path: string, readonly expected: string, readonly raw: string) {
+    super("response body did not match the declared schema");
+    this.name = "DecodeError";
+  }
+}
+
+export class ContractError extends TonoError {
+  constructor(readonly contractName: string, readonly cause: unknown) {
+    super("contract hook failed");
+    this.name = "ContractError";
+  }
+}
+
+export class APIError extends TonoError {
+  constructor(readonly status: number, readonly body: string) {
+    super(`api error ${status}`);
+    this.name = "APIError";
+  }
+}
+
+export class PaymentDeclinedError extends APIError {
+  constructor(readonly data: PaymentDeclined, body: string) {
+    super(402, body);
+    this.name = "PaymentDeclinedError";
+  }
+  retryable(): boolean {
+    return true;
+  }
+}
+
+export class RateLimitedError extends APIError {
+  constructor(readonly data: RateLimited, body: string) {
+    super(429, body);
+    this.name = "RateLimitedError";
+  }
+}
+
+export interface Client {
+  createCharge(input: Account): Promise<Account>;
+}
+
+// ==== models_serde.ts ====
+import { APIError, Account, BankData, CardData, HTTPCode, Method, PaymentDeclined, PaymentDeclinedError, RateLimited, RateLimitedError, Status, TonoError } from "./models";
+
+export function encodeI64(v: bigint): string {
+  return v.toString();
+}
+
+export function decodeI64(s: string): bigint {
+  return BigInt(s);
+}
+
+export function encodeBytes(b: Uint8Array): string {
+  return btoa(String.fromCharCode(...b));
+}
+
+export function decodeBytes(s: string): Uint8Array {
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+
+export function encodeAccount(value: Account): unknown {
+  return {
+    account_id: encodeI64(value.accountID),
+    secret: encodeBytes(value.secret),
+    tip: value.tip == null ? undefined : encodeI64(value.tip),
+    status: encodeStatus(value.status),
+    code: encodeHTTPCode(value.code),
+    method: encodeMethod(value.method),
+    counts: value.counts.map(([k, v]) => [k, v]),
+  };
+}
+
+export function decodeAccount(raw: any): Account {
+  return {
+    accountID: decodeI64(raw.account_id),
+    secret: decodeBytes(raw.secret),
+    tip: raw.tip == null ? undefined : decodeI64(raw.tip),
+    status: decodeStatus(raw.status),
+    code: decodeHTTPCode(raw.code),
+    method: decodeMethod(raw.method),
+    counts: raw.counts.map(([k, v]: [any, any]) => [k, v]),
+  };
+}
+
+export function encodeStatus(value: Status): string {
+  return value;
+}
+
+export function decodeStatus(raw: string): Status {
+  return raw as Status;
+}
+
+export function encodeHTTPCode(value: HTTPCode): number {
+  return value;
+}
+
+export function decodeHTTPCode(raw: number): HTTPCode {
+  return raw as HTTPCode;
+}
+
+export function encodeMethod(value: Method): unknown {
+  switch (value.type) {
+    case "card": return { type: "card", ...(encodeCardData(value as any) as object) };
+    case "bank": return { type: "bank", ...(encodeBankData(value as any) as object) };
+  }
+  throw new Error("unknown variant");
+}
+
+export function decodeMethod(raw: any): Method {
+  switch (raw.type) {
+    case "card": return { type: "card", ...(decodeCardData(raw) as object) } as Method;
+    case "bank": return { type: "bank", ...(decodeBankData(raw) as object) } as Method;
+  }
+  throw new Error("unknown variant");
+}
+
+export function encodeCardData(value: CardData): unknown {
+  return {
+    last4: value.last4,
+  };
+}
+
+export function decodeCardData(raw: any): CardData {
+  return {
+    last4: raw.last4,
+  };
+}
+
+export function encodeBankData(value: BankData): unknown {
+  return {
+    iban: value.iban,
+  };
+}
+
+export function decodeBankData(raw: any): BankData {
+  return {
+    iban: raw.iban,
+  };
+}
+
+export function encodePaymentDeclined(value: PaymentDeclined): unknown {
+  return {
+    message: value.message,
+  };
+}
+
+export function decodePaymentDeclined(raw: any): PaymentDeclined {
+  return {
+    message: raw.message,
+  };
+}
+
+export function encodeRateLimited(value: RateLimited): unknown {
+  return {
+  };
+}
+
+export function decodeRateLimited(raw: any): RateLimited {
+  return {
+  };
+}
+
+export function decodeCreateChargeError(status: number, body: string): TonoError {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return new APIError(status, body);
+  }
+  const code = typeof parsed === "object" && parsed !== null ? parsed["code"] : undefined;
+  try {
+    if (status === 402 && code === "payment_declined") {
+      return new PaymentDeclinedError(decodePaymentDeclined(parsed), body);
+    }
+    if (status === 429) {
+      return new RateLimitedError(decodeRateLimited(parsed), body);
+    }
+  } catch {}
+  return new APIError(status, body);
+}

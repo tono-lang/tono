@@ -489,3 +489,76 @@ mod tests {
         assert_eq!(collect(&file).len(), 2);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use crate::codegen::tree::Interface;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::sample::select;
+
+    // An imported (module, name) drawn from a small pool; the pool includes the
+    // file's own module so the self-module filter is exercised.
+    fn imported_pair() -> impl Strategy<Value = (String, String)> {
+        (
+            select(vec!["alpha", "zeta", "billing", "payments"]).prop_map(String::from),
+            select(vec!["A", "B", "C", "Charge"]).prop_map(String::from),
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(500))]
+
+        /// For any set of referenced symbols, the collected imports are strictly
+        /// ordered by (module, imported), carry no duplicates, and drop the file's
+        /// own module.
+        #[test]
+        fn imports_are_sorted_deduped_and_exclude_self_module(
+            refs in vec(imported_pair(), 0..8)
+        ) {
+            let module = "billing";
+            let fields: Vec<Field> = refs
+                .iter()
+                .enumerate()
+                .map(|(i, (m, n))| Field {
+                    name: Symbol::builtin(format!("f{i}")),
+                    ty: TypeExpr::Ref(Symbol::imported(n, m, n)),
+                    nullable: false,
+                    wire: None,
+                    deprecated: None,
+                })
+                .collect();
+            let file = File {
+                module: module.into(),
+                decls: vec![Decl::Interface(Interface {
+                    name: Symbol::builtin("Subject"),
+                    fields,
+                    deprecated: None,
+                })],
+            };
+
+            let got = collect(&file);
+            // Strictly ascending by (module, imported): both sorted and deduped.
+            for w in got.windows(2) {
+                prop_assert!(
+                    (w[0].module.as_str(), w[0].imported.as_str())
+                        < (w[1].module.as_str(), w[1].imported.as_str())
+                );
+            }
+            // The result is exactly the sorted-unique set of non-self imports.
+            let mut expected: Vec<(String, String)> = refs
+                .iter()
+                .filter(|(m, _)| m != module)
+                .cloned()
+                .collect();
+            expected.sort();
+            expected.dedup();
+            let got_pairs: Vec<(String, String)> = got
+                .iter()
+                .map(|i| (i.module.clone(), i.imported.clone()))
+                .collect();
+            prop_assert_eq!(got_pairs, expected);
+        }
+    }
+}

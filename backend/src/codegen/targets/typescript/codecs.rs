@@ -513,4 +513,29 @@ mod tests {
         assert!(encode_expr("m", &bytes_map()).contains("encodeBytes(v)"));
         assert!(decode_expr("m", &bytes_map()).contains("decodeBytes(v)"));
     }
+
+    #[test]
+    fn branded_types_names_each_well_known_type_and_recurses() {
+        // The import set for the decode `as`-casts: each branded prim by name,
+        // reached through collections (map keys stay plain strings, excluded).
+        assert_eq!(
+            branded_types(&Tref::Prim(Prim::Timestamp)),
+            vec!["Timestamp"]
+        );
+        assert_eq!(branded_types(&Tref::Prim(Prim::Date)), vec!["LocalDate"]);
+        assert_eq!(branded_types(&Tref::Prim(Prim::Duration)), vec!["Duration"]);
+        assert_eq!(
+            branded_types(&Tref::List(Box::new(Tref::Prim(Prim::Timestamp)))),
+            vec!["Timestamp"]
+        );
+        assert_eq!(
+            branded_types(&Tref::Map(
+                Box::new(Tref::Prim(Prim::String)),
+                Box::new(Tref::Prim(Prim::Date)),
+            )),
+            vec!["LocalDate"]
+        );
+        // An ordinary primitive brands nothing.
+        assert!(branded_types(&Tref::Prim(Prim::String)).is_empty());
+    }
 }

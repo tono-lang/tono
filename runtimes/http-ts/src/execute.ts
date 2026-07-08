@@ -94,6 +94,10 @@ function applyResponseBindings(
 ): string {
   if (descriptor.response_bindings.length === 0) return text;
   let object: Record<string, unknown> = {};
+  // Equivalent-mutant guard: the empty-text check only skips a JSON.parse("")
+  // that the catch below would swallow anyway, so mutating it cannot change the
+  // resulting `{}`. It stays for intent (do not parse an empty body).
+  // Stryker disable next-line ConditionalExpression,StringLiteral
   if (text !== "") {
     try {
       object = JSON.parse(text) as Record<string, unknown>;

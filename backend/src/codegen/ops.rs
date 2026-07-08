@@ -460,4 +460,22 @@ mod tests {
             vec!["m#coded_bad".to_string(), "m#generic_bad".to_string()]
         );
     }
+
+    #[test]
+    fn error_code_reads_a_bare_string_argument() {
+        // The frontend wraps a positional argument in a one-element array, but a
+        // bare string is accepted for hand-authored input; both resolve the code.
+        let module = module(
+            vec![error_shape(
+                "m#declined",
+                vec![
+                    trait_of("status", json!([402])),
+                    trait_of("errorCode", json!("declined")),
+                ],
+            )],
+            vec![],
+        );
+        let errors = declared_errors(&op(vec![], vec!["m#declined"]), &module);
+        assert_eq!(errors[0].code, Some("declined".into()));
+    }
 }

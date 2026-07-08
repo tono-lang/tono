@@ -1,0 +1,244 @@
+---
+source: backend/tests/snapshot_codegen.rs
+expression: out
+---
+// ==== models.go ====
+package models
+
+import "strconv"
+
+type Timestamp string
+
+type LocalDate string
+
+type Duration string
+
+type Entry[K comparable, V any] struct {
+	Key   K
+	Value V
+}
+type Entries[K comparable, V any] []Entry[K, V]
+
+type Account struct {
+	AccountID int64 `json:"account_id,string"`
+	Secret []byte `json:"secret"`
+	Tip *int64 `json:"tip,string,omitempty"`
+	Status Status `json:"status"`
+	Code HTTPCode `json:"code"`
+	Method Method `json:"method"`
+	Counts Entries[int32, string] `json:"counts"`
+}
+
+type Status string
+
+const (
+	StatusActive Status = "active"
+	StatusClosed Status = "closed"
+)
+
+type HTTPCode int
+
+const (
+	HTTPCodeOk HTTPCode = 200
+	HTTPCodeNotFound HTTPCode = 404
+	HTTPCodeError HTTPCode = 500
+)
+
+type Method interface{ isMethod() }
+
+type MethodCard struct{ Value CardData }
+
+func (MethodCard) isMethod() {}
+
+type MethodBank struct{ Value BankData }
+
+func (MethodBank) isMethod() {}
+
+
+type CardData struct {
+	Last4 string `json:"last4"`
+}
+
+type BankData struct {
+	Iban string `json:"iban"`
+}
+
+type PaymentDeclined struct {
+	Message string `json:"message"`
+}
+
+type RateLimited struct {
+}
+
+type Violation struct {
+	Field      string `json:"field"`
+	Constraint string `json:"constraint"`
+	Message    string `json:"message"`
+}
+
+type ValidationError struct {
+	Violations []Violation `json:"violations"`
+}
+
+func (e *ValidationError) Error() string { return "validation failed" }
+
+type TransportError struct {
+	Cause error
+}
+
+func (e *TransportError) Error() string { return "transport failure" }
+
+func (e *TransportError) Unwrap() error { return e.Cause }
+
+type DecodeError struct {
+	Path     string
+	Expected string
+	Raw      string
+}
+
+func (e *DecodeError) Error() string { return "response body did not match the declared schema" }
+
+type ContractError struct {
+	ContractName string
+	Cause        error
+}
+
+func (e *ContractError) Error() string { return "contract hook '" + e.ContractName + "' failed" }
+
+func (e *ContractError) Unwrap() error { return e.Cause }
+
+type APIError struct {
+	Status int
+	Body   string
+}
+
+func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status) }
+
+func (e *PaymentDeclined) Error() string { return "payment_declined" }
+
+func (e *PaymentDeclined) Retryable() bool { return true }
+
+func (e *RateLimited) Error() string { return "rate_limited" }
+
+func (e *RateLimited) Retryable() bool { return false }
+
+type Client interface {
+	CreateCharge(input Account) (Account, error)
+}
+
+// ==== models_serde.go ====
+package models
+
+import "encoding/json"
+import "fmt"
+
+func (e Entries[K, V]) MarshalJSON() ([]byte, error) {
+	pairs := make([][2]any, len(e))
+	for i, en := range e {
+		pairs[i] = [2]any{en.Key, en.Value}
+	}
+	return json.Marshal(pairs)
+}
+
+func (e *Entries[K, V]) UnmarshalJSON(b []byte) error {
+	var pairs [][2]json.RawMessage
+	if err := json.Unmarshal(b, &pairs); err != nil {
+		return err
+	}
+	out := make(Entries[K, V], len(pairs))
+	for i, p := range pairs {
+		var k K
+		var v V
+		if err := json.Unmarshal(p[0], &k); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(p[1], &v); err != nil {
+			return err
+		}
+		out[i] = Entry[K, V]{Key: k, Value: v}
+	}
+	*e = out
+	return nil
+}
+
+func marshalVariant(payload any, disc, tag string) ([]byte, error) {
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil, err
+	}
+	obj[disc], _ = json.Marshal(tag)
+	return json.Marshal(obj)
+}
+
+func (a *Account) UnmarshalJSON(b []byte) error {
+	type alias Account
+	var tmp struct {
+		alias
+		Method json.RawMessage `json:"method"`
+	}
+	tmp.alias = alias(*a)
+	if err := json.Unmarshal(b, &tmp); err != nil {
+		return err
+	}
+	*a = Account(tmp.alias)
+	if len(tmp.Method) > 0 {
+		m, err := unmarshalMethod(tmp.Method)
+		if err != nil {
+			return err
+		}
+		a.Method = m
+	}
+	return nil
+}
+
+func (m MethodCard) MarshalJSON() ([]byte, error) { return marshalVariant(m.Value, "type", "card") }
+
+func (m MethodBank) MarshalJSON() ([]byte, error) { return marshalVariant(m.Value, "type", "bank") }
+
+func unmarshalMethod(b []byte) (Method, error) {
+	var d map[string]json.RawMessage
+	if err := json.Unmarshal(b, &d); err != nil {
+		return nil, err
+	}
+	var tag string
+	json.Unmarshal(d["type"], &tag)
+	switch tag {
+	case "card":
+		var p CardData
+		if err := json.Unmarshal(b, &p); err != nil {
+			return nil, err
+		}
+		return MethodCard{Value: p}, nil
+	case "bank":
+		var p BankData
+		if err := json.Unmarshal(b, &p); err != nil {
+			return nil, err
+		}
+		return MethodBank{Value: p}, nil
+	}
+	return nil, fmt.Errorf("unknown variant %q", tag)
+}
+
+func DecodeCreateChargeError(status int, body []byte) error {
+	var probe struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	if status == 402 && probe.Code == "payment_declined" {
+		var data PaymentDeclined
+		if json.Unmarshal(body, &data) == nil {
+			return &data
+		}
+	}
+	if status == 429 {
+		var data RateLimited
+		if json.Unmarshal(body, &data) == nil {
+			return &data
+		}
+	}
+	return &APIError{Status: status, Body: string(body)}
+}
