@@ -11,7 +11,8 @@ let check_module ~(file : Ast.file) (m : Ir.module_) :
   let enum_diags = Check_enum.check_decls file in
   let constraint_diags = Check_constraints.check ~file m in
   let op_diags = Check_operations.check_decls tbl file in
+  let http_diags = Check_http.check_decls file in
   ( m,
     Diagnostic.sort
       (dup_diags @ ref_diags @ member_diags @ enum_diags @ constraint_diags
-     @ op_diags) )
+     @ op_diags @ http_diags) )

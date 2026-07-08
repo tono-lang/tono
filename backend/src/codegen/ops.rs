@@ -199,17 +199,26 @@ pub fn error_names() -> ErrorNames {
 }
 
 /// The generated method identifier for an operation, honoring `@rename(lang)`.
-fn method_ident(op: &Shape, config: &CasingConfig, lang: &str) -> String {
+pub fn method_ident(op: &Shape, config: &CasingConfig, lang: &str) -> String {
     let local = op.id.rsplit('#').next().unwrap_or(&op.id);
     let rename = rename_of(&op.traits, lang);
     transform(local, SymbolKind::Method, config, rename.as_deref())
 }
 
-fn op_io(op: &Shape) -> (Option<&Tref>, Option<&Tref>) {
+/// An operation's input and output type references.
+pub fn op_io(op: &Shape) -> (Option<&Tref>, Option<&Tref>) {
     match &op.kind {
         ShapeKind::Operation { input, output, .. } => (input.as_ref(), output.as_ref()),
         _ => (None, None),
     }
+}
+
+/// The opaque wire descriptor the Protocol resolver attached to an operation, if
+/// any (a purely local op carries none). It is embedded verbatim by the target
+/// and interpreted only by the runtime, so it is returned as an opaque value and
+/// never destructured here (Protocol x Target orthogonality).
+pub fn wire_descriptor(op: &Shape) -> Option<&serde_json::Value> {
+    find_trait(&op.traits, "wire_descriptor").map(|t| &t.value)
 }
 
 /// Build the client declaration: one method signature per operation, the

@@ -15,5 +15,6 @@
   calculus_test
   cli_test
   fmt_test
-  fmt_property_test)
+  fmt_property_test
+  protocol_http_test)
  (libraries tono_frontend alcotest qcheck-core qcheck-core.runner yojson))

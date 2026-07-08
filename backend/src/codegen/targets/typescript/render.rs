@@ -109,7 +109,14 @@ impl TsRules {
 
 impl RenderRules for TsRules {
     fn render_import(&self, module: &str, names: &[&str]) -> String {
-        format!("import {{ {} }} from \"./{module}\";", names.join(", "))
+        // A sibling generated module is a relative path; a bare package specifier
+        // (the hand-written runtime, scoped `@scope/name`) is imported as-is.
+        let specifier = if module.starts_with('@') || module.starts_with('.') {
+            module.to_string()
+        } else {
+            format!("./{module}")
+        };
+        format!("import {{ {} }} from \"{specifier}\";", names.join(", "))
     }
 
     fn render_decl(&self, decl: &Decl) -> String {
@@ -197,6 +204,16 @@ mod tests {
         assert_eq!(
             TsRules.render_import("payments", &["BankAccount", "Card", "Charge"]),
             "import { BankAccount, Card, Charge } from \"./payments\";"
+        );
+    }
+
+    #[test]
+    fn an_external_package_imports_as_a_bare_specifier() {
+        // The hand-written runtime is a scoped package, not a sibling module, so
+        // it keeps its bare specifier rather than gaining a `./` prefix.
+        assert_eq!(
+            TsRules.render_import("@tono/http-runtime-ts", &["execute", "WireDescriptor"]),
+            "import { execute, WireDescriptor } from \"@tono/http-runtime-ts\";"
         );
     }
 

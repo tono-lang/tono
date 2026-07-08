@@ -11,9 +11,11 @@ payments.tono ──frontend──▶ ir.json ──tono gen──▶ sdk/{rust,
   exercise the hard wire cases: 64-bit integers (string on the wire), `bytes`
   (base64), an open enum and an int-backed enum, an internally-tagged union, a
   nullable field, a list, a map, and the well-known `uuid`/`timestamp` types.
-  It also declares an async operation with two declared errors, so the SDKs
+  It also declares an async HTTP operation with two declared errors, so the SDKs
   carry the error taxonomy, the client surface, and the per-operation error
-  discrimination.
+  discrimination. The `@http` binding is resolved into an opaque wire descriptor
+  the TypeScript SDK embeds and hands to the hand-written runtime
+  ([`runtimes/http-ts`](../../runtimes/http-ts)) at `runtime.execute`.
 - [`ir.json`](ir.json) — the canonical IR the frontend emits (the contract the
   backend consumes).
 - [`sdk/`](sdk) — the generated source, one file per language.
