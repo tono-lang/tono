@@ -1,0 +1,3 @@
+(tests
+ (names analysis_test)
+ (libraries tono_lsp_lib lsp alcotest))

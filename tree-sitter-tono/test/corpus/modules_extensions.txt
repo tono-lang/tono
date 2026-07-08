@@ -1,0 +1,97 @@
+==================
+Import with and without alias
+==================
+
+import payments.charge
+import billing as b
+
+---
+
+(source_file
+  (import
+    path: (module_path (identifier) (identifier)))
+  (import
+    path: (module_path (identifier))
+    alias: (identifier)))
+
+==================
+Qualified type reference
+==================
+
+struct receipt { source: payments.charge }
+
+---
+
+(source_file
+  (struct
+    name: (identifier)
+    (member
+      name: (identifier)
+      type: (qualified_type
+        module: (identifier)
+        name: (identifier)))))
+
+==================
+Generic struct and generic application
+==================
+
+struct box[T] { item: T }
+struct use { b: box[i64] }
+
+---
+
+(source_file
+  (struct
+    name: (identifier)
+    (type_parameters (identifier))
+    (member
+      name: (identifier)
+      type: (named_type (identifier))))
+  (struct
+    name: (identifier)
+    (member
+      name: (identifier)
+      type: (named_type
+        (identifier)
+        (type_arguments (primitive_type))))))
+
+==================
+Extension hook with a binding
+==================
+
+ext hook before_request {
+  ts: "ext/ts/auth.ts#addBearer"
+}
+
+---
+
+(source_file
+  (extension
+    name: (identifier)
+    (ext_binding
+      key: (identifier)
+      value: (string))))
+
+==================
+Extension contract with a signature
+==================
+
+ext contract validate(charge) -> bool {
+  ts: "ext/ts/check.ts#validate",
+  conformance: "conformance/validate.json"
+}
+
+---
+
+(source_file
+  (extension
+    name: (identifier)
+    (ext_signature
+      (named_type (identifier))
+      (primitive_type))
+    (ext_binding
+      key: (identifier)
+      value: (string))
+    (ext_binding
+      key: (identifier)
+      value: (string))))

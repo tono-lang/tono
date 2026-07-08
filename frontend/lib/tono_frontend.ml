@@ -145,7 +145,15 @@ module Cli = struct
 
   let usage =
     "usage: tono-frontend (compile <file.tono> [--module <name>] | compile-dir \
-     <root> | fmt <file.tono> | version)"
+     <root> | check <file.tono> | fmt <file.tono> | version)"
+
+  (* Render diagnostics one per line, source order. Shared by the [check]
+     command's report. *)
+  let render_diags (diags : Diagnostic.t list) : string =
+    String.concat "" (List.map (fun d -> Diagnostic.to_string d ^ "\n") diags)
+
+  let has_error (diags : Diagnostic.t list) : bool =
+    List.exists (fun (d : Diagnostic.t) -> d.severity = Diagnostic.Error) diags
 
   (* Pull an optional [--module <name>] out of the compile arguments; the first
      remaining bare argument is the source path. *)
@@ -212,6 +220,19 @@ module Cli = struct
                 | Error msg -> { code = 1; out = ""; err = msg ^ "\n" })))
     | _ :: "compile-dir" :: root :: _ -> compile_dir ~list_files ~read_file root
     | [ _; "compile-dir" ] -> { code = 2; out = ""; err = usage ^ "\n" }
+    | _ :: "check" :: path :: _ -> (
+        (* Parse, lower, and typecheck, then report every diagnostic (errors and
+           warnings alike). Unlike [compile] this emits no IR: the exit code is
+           the signal (1 on any error, 0 otherwise) and the report goes to
+           stderr so a clean run stays silent. *)
+        match read_file path with
+        | exception Sys_error msg -> { code = 1; out = ""; err = msg ^ "\n" }
+        | src ->
+            let _m, diags = compile src in
+            let report = render_diags diags in
+            if has_error diags then { code = 1; out = ""; err = report }
+            else { code = 0; out = ""; err = report })
+    | [ _; "check" ] -> { code = 2; out = ""; err = usage ^ "\n" }
     | _ :: "fmt" :: path :: _ -> (
         match read_file path with
         | exception Sys_error msg -> { code = 1; out = ""; err = msg ^ "\n" }
