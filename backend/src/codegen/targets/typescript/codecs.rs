@@ -472,6 +472,45 @@ mod tests {
     }
 
     #[test]
+    fn a_cross_module_member_imports_the_other_modules_codecs() {
+        // A member typed by another module routes through that module's codec, so
+        // the serde file must import encode/decode from the other module's serde
+        // file; a same-module reference stays local and pulls in nothing.
+        let shape = structure(
+            "payments.charge#Charge",
+            vec![member(
+                "status",
+                Tref::Ref {
+                    id: "payments.common#Status".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
+        let refs = codec_refs(&shape, "payments.charge");
+        let names: Vec<&str> = refs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"encodeStatus"));
+        assert!(names.contains(&"decodeStatus"));
+        // Both are imported from the referenced module's serde file.
+        assert!(refs
+            .iter()
+            .all(|s| s.import.as_ref().unwrap().module == "payments.common_serde"));
+        // A same-module reference is in this very file, so it contributes no import.
+        let local = structure(
+            "payments.charge#Line",
+            vec![member(
+                "item",
+                Tref::Ref {
+                    id: "payments.charge#Item".into(),
+                    args: vec![],
+                },
+                true,
+            )],
+        );
+        assert!(codec_refs(&local, "payments.charge").is_empty());
+    }
+
+    #[test]
     fn int_backed_enum_codec_is_identity_over_number() {
         let shape = int_enum_shape("billing#http_code", vec![("ok".into(), Some(200))]);
         let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
