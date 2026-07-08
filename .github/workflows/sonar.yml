@@ -42,7 +42,10 @@ jobs:
       - name: Generate TypeScript runtime coverage for Sonar
         if: env.SONAR_TOKEN != ''
         working-directory: runtimes/http-ts
-        run: npm ci && npm test
+        # --ignore-scripts blocks dependency lifecycle scripts; vitest and its
+        # esbuild backend resolve their platform binaries via optional deps, so
+        # no install script needs to run.
+        run: npm ci --ignore-scripts && npm test
       - name: Rebase runtime lcov paths to the repo root
         if: env.SONAR_TOKEN != ''
         # vitest writes SF paths relative to the package; Sonar resolves them from
