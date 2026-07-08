@@ -3,6 +3,28 @@
 package charges
 
 import "encoding/json"
+import "example.com/sdk/payments/common"
+
+func (c *Charge) UnmarshalJSON(b []byte) error {
+	type alias Charge
+	var tmp struct {
+		alias
+		Method json.RawMessage `json:"method"`
+	}
+	tmp.alias = alias(*c)
+	if err := json.Unmarshal(b, &tmp); err != nil {
+		return err
+	}
+	*c = Charge(tmp.alias)
+	if len(tmp.Method) > 0 {
+		m, err := common.UnmarshalPaymentMethod(tmp.Method)
+		if err != nil {
+			return err
+		}
+		c.Method = m
+	}
+	return nil
+}
 
 func DecodeCreateChargeError(status int, body []byte) error {
 	var probe struct {

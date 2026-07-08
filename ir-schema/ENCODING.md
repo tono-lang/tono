@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 1, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 2, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **1**.
+The current version is **2**.
 
 ## Modules
 
@@ -127,7 +127,7 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
 
 { "id": "payments#Status", "kind": "enum",
   "backing": "string", "values": [ ["active", null], ["closed", null] ],
-  "open": true, "traits": [] }
+  "traits": [] }
 
 { "id": "payments#Payments", "kind": "service",
   "operations": [ "payments#ListCharges" ], "traits": [] }
@@ -138,9 +138,10 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
 ```
 
 - `union` always emits an explicit `discriminator` (default `"type"`).
-- `enum` carries `backing` (`"string"` or `"int"`), `values` as `[name, intOrNull]`
-  pairs, and the `open` flag. The implicit unknown variant of an open enum is a
-  decode-time concern of the backend and is not materialized here.
+- `enum` carries `backing` (`"string"` or `"int"`) and `values` as
+  `[name, intOrNull]` pairs. Every enum is open; the implicit unknown variant is a
+  decode-time concern of the backend and is not materialized here, so there is no
+  `open` flag.
 - `operation` carries `input`/`output` as a type reference or `null`, and
   `errors` as an array of type references. They are type references (not bare
   ids) so an operation can return an applied generic directly.
@@ -178,11 +179,12 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
   leave no node in the IR: by the time a reference reaches the wire it is already
   a fully-qualified `module#local` id. The module import graph must be a DAG;
   a cycle is a compile error.
-- **Visibility.** `pub` on a top-level declaration exports it (it becomes visible
-  to other modules and is emitted in the SDK) and rides the IR as a `pub` trait
-  on the shape. A private (non-`pub`) shape is visible only within its own module;
-  referencing it across a module boundary is a compile error. Within a module
-  everything is visible without `pub` or an import.
+- **Visibility.** `pub` on a top-level declaration makes it visible to other
+  modules and rides the IR as a `pub` trait on the shape. A private (non-`pub`)
+  shape is visible only within its own module; referencing it across a module
+  boundary is a compile error. Within a module everything is visible without `pub`
+  or an import. Visibility gates references, not emission: a private shape a public
+  one folds in is still generated in its own module.
 
 ## Generated package mapping
 
@@ -210,9 +212,12 @@ consumed by codegen (`tono gen`), steer the mapping:
   cross-package imports (Go has no relative imports), e.g.
   `example.com/sdk/payments/common`.
 
-Private items are never part of a package's public export surface. The mapping is
-purely structural; in-code identifiers are always the local (last) name, so
-qualifying a module never changes a generated type or field name.
+Visibility governs cross-module *references* (a non-`pub` shape cannot be named
+from another module), not whether a shape is emitted: a private shape that a
+public one folds in (a union over private variant structs) is still emitted, as an
+ordinary type in its own module, because the public type needs it to compile. The
+mapping is purely structural; in-code identifiers are always the local (last)
+name, so qualifying a module never changes a generated type or field name.
 
 ## Regenerating the fixtures
 

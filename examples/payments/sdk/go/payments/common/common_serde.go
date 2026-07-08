@@ -26,7 +26,7 @@ func (m PaymentMethodBank) MarshalJSON() ([]byte, error) {
 	return marshalVariant(m.Value, "kind", "bank")
 }
 
-func unmarshalPaymentMethod(b []byte) (PaymentMethod, error) {
+func UnmarshalPaymentMethod(b []byte) (PaymentMethod, error) {
 	var d map[string]json.RawMessage
 	if err := json.Unmarshal(b, &d); err != nil {
 		return nil, err

@@ -85,6 +85,11 @@ let compile_project (files : (string * string) list) :
   let label name (d : Diagnostic.t) =
     { d with Diagnostic.message = name ^ ": " ^ d.message }
   in
+  (* Lower and typecheck every module even when [build] found import or cycle
+     errors: resolution does not traverse the import graph, so a cycle does not
+     derail it, and running the per-module checks surfaces every diagnostic in one
+     pass rather than one class at a time. The model is discarded upstream whenever
+     there is any error. *)
   let modules, per_diags =
     List.fold_right
       (fun (name, file, pdiags) (mods, diags) ->

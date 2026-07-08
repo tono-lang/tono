@@ -48,7 +48,46 @@ EOF
 echo "go..."
 mkdir -p "$work/go"
 cp -R "$sdk"/go/. "$work/go/"
-(cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 && go build ./...)
+# A driver that round-trips a charge through JSON, proving the cross-module union
+# field (Method, whose type lives in the common package) actually decodes and not
+# just that the package compiles.
+mkdir -p "$work/go/verify"
+cat >"$work/go/verify/main.go" <<EOF
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"$go_module/payments/charges"
+	"$go_module/payments/common"
+)
+
+func main() {
+	orig := charges.Charge{Method: common.PaymentMethodCard{Value: common.Card{Last4: "4242"}}}
+	b, err := json.Marshal(orig)
+	if err != nil {
+		fmt.Println("marshal:", err)
+		os.Exit(1)
+	}
+	var back charges.Charge
+	if err := json.Unmarshal(b, &back); err != nil {
+		fmt.Println("unmarshal:", err)
+		os.Exit(1)
+	}
+	card, ok := back.Method.(common.PaymentMethodCard)
+	if !ok {
+		fmt.Printf("method did not decode to a card variant: %T\n", back.Method)
+		os.Exit(1)
+	}
+	if card.Value.Last4 != "4242" {
+		fmt.Println("union payload did not survive the round trip:", card.Value.Last4)
+		os.Exit(1)
+	}
+}
+EOF
+(cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 && go build ./... && go run ./verify)
 
 echo "typescript..."
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"

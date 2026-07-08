@@ -71,10 +71,14 @@ pub struct GeneratedFile {
 /// Emit every output file a module produces for a target. Most targets emit one
 /// file; Go emits its types and its serialization separately, so this returns one
 /// or more [`ModuleFile`]s.
-fn emit_module_files(module: &Module, target: TargetKind) -> Vec<ModuleFile> {
+fn emit_module_files(
+    module: &Module,
+    target: TargetKind,
+    union_ids: &std::collections::HashSet<String>,
+) -> Vec<ModuleFile> {
     match target {
         TargetKind::Rust => rust::emit::emit_module(module, &rust::types::rust_casing()),
-        TargetKind::Go => go::emit::emit_module(module, &go::types::go_casing()),
+        TargetKind::Go => go::emit::emit_module(module, &go::types::go_casing(), union_ids),
         TargetKind::TypeScript => {
             typescript::emit::emit_module(module, &typescript::types::ts_casing())
         }
@@ -180,10 +184,20 @@ pub fn generate(
     // (which takes the module-path prefix) from a standard-library one.
     let internal_modules: std::collections::BTreeSet<String> =
         model.modules.iter().map(|m| m.name.clone()).collect();
+    // Every union's fully-qualified id across the model, so the Go target can give a
+    // struct field a container UnmarshalJSON even when its union type is in another
+    // module.
+    let union_ids: std::collections::HashSet<String> = model
+        .modules
+        .iter()
+        .flat_map(|m| &m.shapes)
+        .filter(|s| matches!(s.kind, crate::ir::ShapeKind::Union { .. }))
+        .map(|s| s.id.clone())
+        .collect();
     let mut files = Vec::new();
     for &target in targets {
         for module in &model.modules {
-            for module_file in emit_module_files(module, target) {
+            for module_file in emit_module_files(module, target, &union_ids) {
                 let path =
                     output_path(target, &module.name, module_file.suffix, target.extension());
                 files.push(GeneratedFile {
@@ -419,7 +433,7 @@ mod tests {
         assert!(go_serde.text.contains("func marshalVariant("));
         assert!(go_serde
             .text
-            .contains("func unmarshalMethod(b []byte) (Method, error) {"));
+            .contains("func UnmarshalMethod(b []byte) (Method, error) {"));
         assert!(go_serde
             .text
             .contains("func (a *Account) UnmarshalJSON(b []byte) error {"));

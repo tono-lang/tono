@@ -48,7 +48,14 @@ fn generated_go_compiles_and_round_trips() {
     // prepended since the rendered file begins with imports, then gofmt formats the
     // whole. The harness compiles the generated files together with the driver in one
     // `package main`, so the clause names `main`, not the IR module.
-    for module_file in emit_module(&demo_module(), &go_casing()) {
+    let module = demo_module();
+    let union_ids: std::collections::HashSet<String> = module
+        .shapes
+        .iter()
+        .filter(|s| matches!(s.kind, tono_backend::ir::ShapeKind::Union { .. }))
+        .map(|s| s.id.clone())
+        .collect();
+    for module_file in emit_module(&module, &go_casing(), &union_ids) {
         let rough = render_file(
             &module_file.file,
             &GoRules::default(),
