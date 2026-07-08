@@ -19,6 +19,7 @@ pub struct Charge {
     pub id: String,
     #[serde(with = "i64_string")]
     pub amount: i64,
+    #[deprecated(note = "folded into amount")]
     #[serde(with = "u64_string")]
     pub fee: u64,
     #[serde(with = "base64_bytes")]

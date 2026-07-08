@@ -9,6 +9,7 @@ export type Duration = string & { readonly __brand: "Duration" };
 export interface Charge {
   id: string;
   amount: bigint;
+  /** @deprecated folded into amount */
   fee: bigint;
   receipt: Uint8Array;
   currency: string;

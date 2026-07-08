@@ -323,6 +323,7 @@ fn function_owned(name: &str, params: &[(&str, &str)], ret: &str, body: String) 
                 ty: TypeExpr::Ref(Symbol::builtin(t)),
                 nullable: false,
                 wire: None,
+                deprecated: None,
             })
             .collect(),
         ret: Some(TypeExpr::Ref(Symbol::builtin(ret))),

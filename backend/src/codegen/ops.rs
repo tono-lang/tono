@@ -248,6 +248,7 @@ pub fn client_decl(
                             ty: type_expr_of(t),
                             nullable: false,
                             wire: None,
+                            deprecated: None,
                         }]
                     })
                     .unwrap_or_default(),

@@ -16,6 +16,31 @@ use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, FnBody, Function, Method, TypeExpr};
 
+/// The godoc deprecation comment for a `@deprecated` element, or empty when it is
+/// not deprecated. Go's convention is a `// Deprecated: ...` line directly above
+/// the declaration (no blank line between, or gofmt detaches it); a `Some("")`
+/// (marked without a reason) renders the bare `// Deprecated:`. A newline in the
+/// reason collapses to a space so the comment stays one line. The caller adds the
+/// indentation and trailing newline for its position.
+pub(crate) fn deprecated_comment(reason: Option<&str>) -> String {
+    match reason {
+        None => String::new(),
+        Some("") => "// Deprecated:".into(),
+        Some(r) => format!("// Deprecated: {}", r.replace('\n', " ")),
+    }
+}
+
+/// Prefix a declaration/field with its godoc deprecation comment, indented and
+/// newline-terminated, when one is present.
+fn deprecated_prefix(reason: Option<&str>, indent: &str) -> String {
+    let comment = deprecated_comment(reason);
+    if comment.is_empty() {
+        String::new()
+    } else {
+        format!("{indent}{comment}\n")
+    }
+}
+
 /// The Go render rules.
 pub struct GoRules;
 
@@ -72,7 +97,8 @@ impl GoRules {
         if pointer {
             tag.push_str(",omitempty");
         }
-        format!("\t{} {ty} `json:\"{tag}\"`\n", field.name.name)
+        let dep = deprecated_prefix(field.deprecated.as_deref(), "\t");
+        format!("{dep}\t{} {ty} `json:\"{tag}\"`\n", field.name.name)
     }
 
     fn render_enum(&self, decl: &EnumDecl) -> String {
@@ -83,7 +109,8 @@ impl GoRules {
             EnumRepr::String => "string",
             EnumRepr::Int(_) => "int",
         };
-        let mut out = format!("type {name} {base}\n");
+        let dep = deprecated_prefix(decl.deprecated.as_deref(), "");
+        let mut out = format!("{dep}type {name} {base}\n");
         if decl.members.is_empty() {
             return out;
         }
@@ -157,7 +184,8 @@ impl RenderRules for GoRules {
                     .iter()
                     .map(|f| self.render_field(f))
                     .collect();
-                format!("type {} struct {{\n{fields}}}", interface.name.name)
+                let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
+                format!("{dep}type {} struct {{\n{fields}}}", interface.name.name)
             }
             Decl::Enum(decl) => self.render_enum(decl),
             Decl::Function(function) => self.render_function(function),
@@ -192,6 +220,7 @@ mod tests {
             ty,
             nullable,
             wire: Some(wire.to_string()),
+            deprecated: None,
         }
     }
 
@@ -229,6 +258,7 @@ mod tests {
                     "secret",
                 ),
             ],
+            deprecated: None,
         });
         let out = GoRules.render_decl(&decl);
         assert!(out.starts_with("type Charge struct {\n"));
@@ -263,6 +293,7 @@ mod tests {
                     "meta",
                 ),
             ],
+            deprecated: None,
         });
         let out = GoRules.render_decl(&decl);
         // An optional slice is not a pointer; it stays a slice, with no omitempty.
@@ -279,7 +310,9 @@ mod tests {
                 ty: TypeExpr::Ref(Symbol::builtin("string")),
                 nullable: false,
                 wire: None,
+                deprecated: None,
             }],
+            deprecated: None,
         });
         assert!(GoRules
             .render_decl(&decl)
@@ -292,6 +325,7 @@ mod tests {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("pending"), Symbol::builtin("in_review")],
             backing: EnumRepr::String,
+            deprecated: None,
         });
         assert_eq!(
             GoRules.render_decl(&decl),
@@ -310,6 +344,7 @@ mod tests {
                 Symbol::builtin("error"),
             ],
             backing: EnumRepr::Int(vec![200, 404, 500]),
+            deprecated: None,
         });
         assert_eq!(
             GoRules.render_decl(&decl),
@@ -324,8 +359,39 @@ mod tests {
             name: Symbol::builtin("Empty"),
             members: vec![],
             backing: EnumRepr::String,
+            deprecated: None,
         });
         assert_eq!(GoRules.render_decl(&decl), "type Empty string\n");
+    }
+
+    #[test]
+    fn a_deprecated_struct_field_and_enum_carry_godoc_comments() {
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Charge"),
+            fields: vec![Field {
+                name: Symbol::builtin("Amount"),
+                ty: TypeExpr::Ref(Symbol::builtin("uint64")),
+                nullable: false,
+                wire: Some("amount".into()),
+                deprecated: Some("use AmountCents".into()),
+            }],
+            deprecated: Some("use ChargeV2".into()),
+        });
+        let out = GoRules.render_decl(&decl);
+        // The godoc line sits directly above the type and the field, no blank line.
+        assert!(out.contains("// Deprecated: use ChargeV2\ntype Charge struct"));
+        assert!(out.contains("\t// Deprecated: use AmountCents\n\tAmount"));
+
+        // A bare `@deprecated` (no reason) renders the plain marker above the enum.
+        let enum_decl = Decl::Enum(EnumDecl {
+            name: Symbol::builtin("Status"),
+            members: vec![Symbol::builtin("open")],
+            backing: EnumRepr::String,
+            deprecated: Some(String::new()),
+        });
+        assert!(GoRules
+            .render_decl(&enum_decl)
+            .starts_with("// Deprecated:\ntype Status string"));
     }
 
     #[test]
@@ -410,6 +476,7 @@ mod tests {
             name: Symbol::builtin("Method"),
             discriminator: "type".into(),
             variants: vec![],
+            deprecated: None,
         });
         let method = Decl::Method(Method {
             name: Symbol::builtin("Ping"),

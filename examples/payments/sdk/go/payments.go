@@ -11,8 +11,9 @@ type LocalDate string
 type Duration string
 
 type Charge struct {
-	ID       string            `json:"id"`
-	Amount   int64             `json:"amount,string"`
+	ID     string `json:"id"`
+	Amount int64  `json:"amount,string"`
+	// Deprecated: folded into amount
 	Fee      uint64            `json:"fee,string"`
 	Receipt  []byte            `json:"receipt"`
 	Currency string            `json:"currency"`

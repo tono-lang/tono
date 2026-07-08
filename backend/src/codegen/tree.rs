@@ -85,11 +85,14 @@ impl Decl {
     }
 }
 
-/// A product type: a named structure/interface with fields.
+/// A product type: a named structure/interface with fields. `deprecated` carries
+/// the `@deprecated` reason (`Some("")` when marked without one), rendered as each
+/// target's native deprecation annotation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interface {
     pub name: Symbol,
     pub fields: Vec<Field>,
+    pub deprecated: Option<String>,
 }
 
 /// A field: an identifier symbol, its type expression, nullability, and an
@@ -103,6 +106,10 @@ pub struct Field {
     pub ty: TypeExpr,
     pub nullable: bool,
     pub wire: Option<String>,
+    /// The `@deprecated` reason (`Some("")` when marked without one). Rendered as
+    /// the target's native field deprecation. Always `None` for a method/function
+    /// parameter, which is never deprecated.
+    pub deprecated: Option<String>,
 }
 
 /// An operation stub: a typed signature. The opaque wire descriptor and the
@@ -168,6 +175,7 @@ pub struct EnumDecl {
     pub name: Symbol,
     pub members: Vec<Symbol>,
     pub backing: EnumRepr,
+    pub deprecated: Option<String>,
 }
 
 /// An internally-tagged union: a discriminator field name (default `type`) and
@@ -178,6 +186,7 @@ pub struct UnionDecl {
     pub name: Symbol,
     pub discriminator: String,
     pub variants: Vec<Variant>,
+    pub deprecated: Option<String>,
 }
 
 /// A union variant. Its `name` is the wire tag (overridable by `wire`). A
@@ -279,19 +288,23 @@ mod tests {
                             ty: TypeExpr::Ref(Symbol::builtin("string")),
                             nullable: false,
                             wire: None,
+                            deprecated: None,
                         },
                         Field {
                             name: Symbol::builtin("page"),
                             ty: page_of_charge(),
                             nullable: true,
                             wire: Some("page_ref".into()),
+                            deprecated: None,
                         },
                     ],
+                    deprecated: None,
                 }),
                 Decl::Enum(EnumDecl {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active"), Symbol::builtin("Closed")],
                     backing: EnumRepr::String,
+                    deprecated: None,
                 }),
                 Decl::Union(UnionDecl {
                     name: Symbol::builtin("Method"),
@@ -302,6 +315,7 @@ mod tests {
                         payload: None,
                         wire: Some("card".into()),
                     }],
+                    deprecated: None,
                 }),
                 Decl::Method(Method {
                     name: Symbol::builtin("create_charge"),
@@ -310,6 +324,7 @@ mod tests {
                         ty: TypeExpr::Ref(Symbol::imported("Charge", "payments", "Charge")),
                         nullable: false,
                         wire: None,
+                        deprecated: None,
                     }],
                     ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
                     err: None,

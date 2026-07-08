@@ -26,6 +26,7 @@
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{field_ident, type_ident, type_ident_from_id, wire_key};
 use crate::codegen::symbol::{Symbol, SymbolKind};
+use crate::codegen::targets::go::render::deprecated_comment;
 use crate::codegen::targets::go::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Raw};
 use crate::ir::{Member, Shape, ShapeKind, Tref};
@@ -238,12 +239,18 @@ fn variant_ident(m: &Member) -> String {
 /// definitions (no serialization), so they belong in the types file; the wrapper
 /// `MarshalJSON`s and the `unmarshalX` dispatcher are serde and live in
 /// [`union_serde`]. Used by the type phase.
-pub fn union_type_decls(shape: &Shape, members: &[Member]) -> Vec<Decl> {
+pub fn union_type_decls(shape: &Shape, members: &[Member], deprecated: Option<&str>) -> Vec<Decl> {
     let ty = type_ident(shape, LANG);
     let payload_ty = |m: &Member| symbol_of(&m.target).name;
     let marker = format!("is{ty}");
 
-    let mut iface = format!("type {ty} interface{{ {marker}() }}\n");
+    let dep = deprecated_comment(deprecated);
+    let lead = if dep.is_empty() {
+        String::new()
+    } else {
+        format!("{dep}\n")
+    };
+    let mut iface = format!("{lead}type {ty} interface{{ {marker}() }}\n");
     for m in members {
         let wrapper = format!("{ty}{}", variant_ident(m));
         let payload = payload_ty(m);
@@ -460,7 +467,7 @@ mod tests {
     #[test]
     fn union_type_decls_emit_the_interface_wrappers_and_markers_only() {
         let shape = payment_method_union();
-        let decls = union_type_decls(&shape, union_members(&shape));
+        let decls = union_type_decls(&shape, union_members(&shape), None);
         let out = rendered(&decls);
         // The interface with one marker method and a wrapper per variant.
         assert!(out.contains("type PaymentMethod interface{ isPaymentMethod() }"));
@@ -477,6 +484,19 @@ mod tests {
             panic!("union type decls are a Raw block");
         };
         assert!(!raw.refs.iter().any(|s| s.name == "json"));
+    }
+
+    #[test]
+    fn a_deprecated_union_leads_with_the_godoc_comment() {
+        let shape = payment_method_union();
+        let decls = union_type_decls(&shape, union_members(&shape), Some("use v2"));
+        let Decl::Raw(raw) = &decls[0] else {
+            panic!("union type decls are a Raw block");
+        };
+        // The godoc line sits directly above the marker interface.
+        assert!(raw
+            .text
+            .starts_with("// Deprecated: use v2\ntype PaymentMethod interface"));
     }
 
     #[test]
@@ -511,7 +531,7 @@ mod tests {
             )],
         );
         // The in-code wrapper keeps the variant name; the wire tag is the override.
-        let types = rendered(&union_type_decls(&shape, union_members(&shape)));
+        let types = rendered(&union_type_decls(&shape, union_members(&shape), None));
         assert!(types.contains("type MethodCard struct{ Value CardData }"));
         let serde = rendered(&emit_serde_decls(&shape, &go_casing(), &no_unions()));
         assert!(serde.contains("marshalVariant(m.Value, \"type\", \"CARD\")"));

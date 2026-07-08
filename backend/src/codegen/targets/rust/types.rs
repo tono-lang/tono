@@ -40,8 +40,8 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         |m| field_of(m, config),
         // Rust's open enum is a hand-written data enum (custom serde); the types
         // file holds only its definition, not the impls.
-        |backing, values, name| vec![enum_item(backing, values, name)],
-        |discriminator, members, name| vec![union_item(discriminator, members, name)],
+        |backing, values, name, dep| vec![enum_item(backing, values, name, dep)],
+        |discriminator, members, name, dep| vec![union_item(discriminator, members, name, dep)],
     )
 }
 
@@ -74,6 +74,7 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
         ty: conventions::entries_or_map(type_expr_of(&member.target), &member.traits),
         nullable: !member.required,
         wire: conventions::wire_of(&member.traits),
+        deprecated: conventions::deprecated_of(&member.traits),
     }
 }
 
