@@ -42,6 +42,17 @@ pub fn serde_decls(module: &Module) -> Vec<Decl> {
     ops::discriminator_decls(module, |op, ordered| discriminator_fn(op, ordered, &n))
 }
 
+/// The `Violation` record on its own: the field/constraint/message triple a
+/// validator pushes. The full taxonomy embeds it, so it is only emitted standalone
+/// for a module that has constraints but no operations (hence no taxonomy).
+pub fn violation_decl() -> Decl {
+    let n = error_names();
+    Decl::raw(format!(
+        "#[derive(Debug)]\npub struct {} {{\n    pub field: String,\n    pub constraint: String,\n    pub message: String,\n}}",
+        n.violation
+    ))
+}
+
 /// The closed error taxonomy plus the module's `Api` payload enum. The
 /// category structs are plain data; the `TonoError` enum carries exactly one
 /// variant per category and implements `Display`/`Error` (with the transport
@@ -54,10 +65,7 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
         ))
     };
     let mut decls = vec![
-        data_struct(
-            &n.violation,
-            "    pub field: String,\n    pub constraint: String,\n    pub message: String,\n",
-        ),
+        violation_decl(),
         data_struct(
             &n.validation,
             &format!("    pub violations: Vec<{}>,\n", n.violation),

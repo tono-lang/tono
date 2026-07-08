@@ -14,8 +14,9 @@ use crate::codegen::targets::rust::codecs::{
     open_enum_macro, runtime_helpers, well_known_decls, HelperSet,
 };
 use crate::codegen::targets::rust::errors;
-use crate::codegen::targets::rust::types::{emit_serde, emit_type};
+use crate::codegen::targets::rust::types::{emit_serde, emit_type, emit_validators};
 use crate::codegen::tree::{Decl, File, ModuleFile, Raw};
+use crate::codegen::validation;
 use crate::ir::Module;
 
 /// Assemble a Rust module into separate output files: a types file (well-known
@@ -40,6 +41,8 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
             }
         }
         type_decls.extend(types);
+        // Validators live with the types (next to the `Violation` record they push).
+        type_decls.extend(emit_validators(shape, config));
         serde_shape_decls.extend(emit_serde(shape));
     }
 
@@ -50,6 +53,10 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     if !module.operations.is_empty() {
         type_decls.extend(errors::type_decls(module, config));
         discriminators = errors::serde_decls(module);
+    } else if module.shapes.iter().any(validation::shape_has_checks) {
+        // Constraints without operations still need the `Violation` record a
+        // validator references, which the taxonomy would otherwise have carried.
+        type_decls.push(errors::violation_decl());
     }
 
     // The serde file holds the used helper modules, the open enums' impls, and

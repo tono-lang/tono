@@ -23,7 +23,38 @@ export interface Charge {
   method: PaymentMethod;
 }
 
+export function validateCharge(value: Charge): Violation[] {
+  const violations: Violation[] = [];
+  if (value.amount < 0n) {
+    violations.push({
+      field: "amount",
+      constraint: "range",
+      message: "amount must be >= 0",
+    });
+  }
+  if ([...value.currency].length < 3) {
+    violations.push({
+      field: "currency",
+      constraint: "length",
+      message: "currency length must be >= 3",
+    });
+  }
+  if ([...value.currency].length > 3) {
+    violations.push({
+      field: "currency",
+      constraint: "length",
+      message: "currency length must be <= 3",
+    });
+  }
+  return violations;
+}
+
 export type HTTPCode = 200 | 404 | 500 | (number & {});
+
+export interface Page<T> {
+  items: T[];
+  nextCursor?: string | null;
+}
 
 export interface CardDeclined {
   message: string;

@@ -7,10 +7,12 @@
 
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{self, field_ident};
+use crate::codegen::ops::error_names;
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::targets::rust::codecs::{enum_item, enum_serde_item, union_item};
 use crate::codegen::targets::rust::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr};
+use crate::codegen::validation::{self, Measure, ValSyntax};
 use crate::ir::{Member, Shape, ShapeKind, Tref};
 
 /// The Rust language key for per-language traits such as `@rename`.
@@ -62,6 +64,57 @@ pub fn emit_serde(shape: &Shape) -> Vec<Decl> {
     }
 }
 
+/// The Rust spelling of a length measure: a string counts code points, and a list
+/// or byte buffer counts its `len()`.
+struct RustVal;
+impl ValSyntax for RustVal {
+    fn length(&self, access: &str, measure: Measure) -> String {
+        match measure {
+            Measure::Chars => format!("{access}.chars().count()"),
+            Measure::Elements | Measure::Bytes => format!("{access}.len()"),
+        }
+    }
+    fn wide_suffix(&self) -> &str {
+        // Rust holds 64-bit integers natively, so a bound needs no literal suffix.
+        ""
+    }
+}
+
+/// Emit the validator for a structure whose members carry `@range`/`@length`
+/// constraints: an `impl` with a `validate(&self) -> Vec<Violation>` that collects
+/// one violation per failed check. It belongs in the types file, next to the struct
+/// and the `Violation` record it references. A shape with no lowerable constraint
+/// (or a generic one, unmodeled here) emits nothing.
+pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
+    let ShapeKind::Structure { params, members } = &shape.kind else {
+        return Vec::new();
+    };
+    if !params.is_empty() {
+        return Vec::new();
+    }
+    let violation = error_names().violation;
+    let mut body = String::new();
+    for member in members {
+        let access = format!("self.{}", field_ident(member, config, LANG));
+        for check in validation::member_checks(member) {
+            body.push_str(&format!(
+                "        if {} {{\n            violations.push({violation} {{ field: {:?}.to_string(), constraint: {:?}.to_string(), message: {:?}.to_string() }});\n        }}\n",
+                check.condition(&access, &RustVal),
+                check.field,
+                check.constraint,
+                check.message,
+            ));
+        }
+    }
+    if body.is_empty() {
+        return Vec::new();
+    }
+    let ty = conventions::type_ident(shape, LANG);
+    vec![Decl::raw(format!(
+        "impl {ty} {{\n    pub fn validate(&self) -> Vec<{violation}> {{\n        let mut violations = Vec::new();\n{body}        violations\n    }}\n}}"
+    ))]
+}
+
 /// The PascalCase Rust identifier for an open-enum or union variant, derived from
 /// its wire value / member name. Independent of the wire string the codec emits.
 pub(crate) fn variant_ident(name: &str, config: &CasingConfig) -> String {
@@ -81,10 +134,59 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::target::RenderRules;
+    use crate::codegen::targets::rust::RustRules;
     use crate::codegen::test_support::{
-        enum_shape, int_enum_shape, member, structure, union_shape,
+        enum_shape, int_enum_shape, member, member_constrained, structure, union_shape,
     };
-    use crate::ir::{Prim, ShapeKind};
+    use crate::ir::{Constraint, Prim, ShapeKind};
+
+    #[test]
+    fn a_constrained_struct_emits_a_validate_impl_over_its_checks() {
+        let shape = structure(
+            "billing#charge",
+            vec![
+                member_constrained(
+                    "amount",
+                    Tref::Prim(Prim::I64),
+                    vec![Constraint::Range {
+                        min: Some(0.0),
+                        max: None,
+                        excl_min: false,
+                        excl_max: false,
+                    }],
+                ),
+                member_constrained(
+                    "currency",
+                    Tref::Prim(Prim::String),
+                    vec![Constraint::Length {
+                        min: Some(3),
+                        max: Some(3),
+                    }],
+                ),
+            ],
+        );
+        let out = RustRules.render_decl(&emit_validators(&shape, &rust_casing())[0]);
+        assert!(out.contains("impl Charge {"));
+        assert!(out.contains("pub fn validate(&self) -> Vec<Violation> {"));
+        // The i64 bound needs no suffix; the message states the inclusive minimum.
+        assert!(out.contains("if self.amount < 0 {"));
+        assert!(out.contains(
+            "violations.push(Violation { field: \"amount\".to_string(), constraint: \"range\".to_string(), message: \"amount must be >= 0\".to_string() });"
+        ));
+        // A string length counts code points and bounds both ends.
+        assert!(out.contains("if self.currency.chars().count() < 3 {"));
+        assert!(out.contains("if self.currency.chars().count() > 3 {"));
+    }
+
+    #[test]
+    fn a_struct_without_constraints_emits_no_validator() {
+        let shape = structure(
+            "billing#note",
+            vec![member("text", Tref::Prim(Prim::String), true)],
+        );
+        assert!(emit_validators(&shape, &rust_casing()).is_empty());
+    }
 
     #[test]
     fn a_structure_becomes_a_struct_with_snake_fields() {

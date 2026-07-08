@@ -50,7 +50,13 @@ pub fn runtime_helpers() -> Vec<Decl> {
 /// to an import of the types file.
 pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str) -> Vec<Decl> {
     let decls = match &shape.kind {
-        ShapeKind::Structure { members, .. } => struct_codecs(shape, members, config),
+        // A generic structure has no monomorphic codec: `encodePage(value: Page)`
+        // would reference the type without its required argument, and a parameter's
+        // element codec is unknown here. Emitting the parameterized type is the
+        // scope; serializing a generic instance is a separate, later concern.
+        ShapeKind::Structure { params, members } if params.is_empty() => {
+            struct_codecs(shape, members, config)
+        }
         ShapeKind::Enum { .. } => enum_codecs(shape),
         ShapeKind::Union {
             members,

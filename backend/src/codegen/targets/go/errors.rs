@@ -41,6 +41,17 @@ pub fn serde_decls(module: &Module) -> Vec<Decl> {
     ops::discriminator_decls(module, |op, ordered| discriminator_fn(op, ordered, &n))
 }
 
+/// The `Violation` record on its own: the field/constraint/message triple a
+/// validator appends. The full taxonomy embeds it, so it is only emitted standalone
+/// for a module that has constraints but no operations (hence no taxonomy).
+pub fn violation_decl() -> Decl {
+    let n = error_names();
+    Decl::raw(format!(
+        "type {} struct {{\n\tField      string `json:\"field\"`\n\tConstraint string `json:\"constraint\"`\n\tMessage    string `json:\"message\"`\n}}",
+        n.violation
+    ))
+}
+
 /// The wire message of a declared error: its body code when declared, else its
 /// canonical snake name.
 fn declared_message(err: &DeclaredError) -> String {
@@ -69,10 +80,7 @@ fn taxonomy_decls() -> Vec<Decl> {
         ))
     };
     vec![
-        Decl::raw(format!(
-            "type {} struct {{\n\tField      string `json:\"field\"`\n\tConstraint string `json:\"constraint\"`\n\tMessage    string `json:\"message\"`\n}}",
-            n.violation
-        )),
+        violation_decl(),
         Decl::raw(format!(
             "type {} struct {{\n\tViolations []{} `json:\"violations\"`\n}}",
             n.validation, n.violation

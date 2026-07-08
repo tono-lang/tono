@@ -22,6 +22,7 @@ pub mod targets;
 #[cfg(test)]
 pub mod test_support;
 pub mod tree;
+pub mod validation;
 
 pub use casing::{CaseStyle, CasingConfig};
 pub use format::{Formatted, Formatter};

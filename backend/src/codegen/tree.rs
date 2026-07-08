@@ -85,12 +85,17 @@ impl Decl {
     }
 }
 
-/// A product type: a named structure/interface with fields. `deprecated` carries
-/// the `@deprecated` reason (`Some("")` when marked without one), rendered as each
-/// target's native deprecation annotation.
+/// A product type: a named structure/interface with fields. `params` are the
+/// generic type parameters of the definition (already cased to the target's type
+/// spelling), empty for a non-generic shape; they render as the declaration's type
+/// parameter clause (`<T>` / `[T any]`) while a reference that applies them rides
+/// `TypeExpr::Generic`. `deprecated` carries the `@deprecated` reason (`Some("")`
+/// when marked without one), rendered as each target's native deprecation
+/// annotation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interface {
     pub name: Symbol,
+    pub params: Vec<String>,
     pub fields: Vec<Field>,
     pub deprecated: Option<String>,
 }
@@ -282,6 +287,7 @@ mod tests {
             decls: vec![
                 Decl::Interface(Interface {
                     name: Symbol::builtin("Charge"),
+                    params: vec![],
                     fields: vec![
                         Field {
                             name: Symbol::builtin("id"),

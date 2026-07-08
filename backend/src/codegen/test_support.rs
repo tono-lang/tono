@@ -6,11 +6,23 @@
 use crate::codegen::symbol::Symbol;
 use crate::codegen::target::{RenderRules, Target};
 use crate::codegen::tree::Decl;
-use crate::ir::{EnumBacking, Member, Module, Prim, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{Constraint, EnumBacking, Member, Module, Prim, Shape, ShapeKind, Trait, Tref};
 
 /// A required member with no traits.
 pub fn member(name: &str, target: Tref, required: bool) -> Member {
     member_with(name, target, required, vec![])
+}
+
+/// A required member carrying validation constraints, used by the validator tests.
+pub fn member_constrained(name: &str, target: Tref, constraints: Vec<Constraint>) -> Member {
+    Member {
+        name: name.into(),
+        target,
+        required: true,
+        default: None,
+        constraints,
+        traits: vec![],
+    }
 }
 
 /// A member with explicit traits.

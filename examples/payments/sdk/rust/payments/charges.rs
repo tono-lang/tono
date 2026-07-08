@@ -36,12 +36,47 @@ pub struct Charge {
     pub method: PaymentMethod,
 }
 
+impl Charge {
+    pub fn validate(&self) -> Vec<Violation> {
+        let mut violations = Vec::new();
+        if self.amount < 0 {
+            violations.push(Violation {
+                field: "amount".to_string(),
+                constraint: "range".to_string(),
+                message: "amount must be >= 0".to_string(),
+            });
+        }
+        if self.currency.chars().count() < 3 {
+            violations.push(Violation {
+                field: "currency".to_string(),
+                constraint: "length".to_string(),
+                message: "currency length must be >= 3".to_string(),
+            });
+        }
+        if self.currency.chars().count() > 3 {
+            violations.push(Violation {
+                field: "currency".to_string(),
+                constraint: "length".to_string(),
+                message: "currency length must be <= 3".to_string(),
+            });
+        }
+        violations
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum HTTPCode {
     Ok,
     NotFound,
     Error,
     Unknown(i64),
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

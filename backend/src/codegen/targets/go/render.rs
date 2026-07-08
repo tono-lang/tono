@@ -56,6 +56,18 @@ pub struct GoRules {
     pub current_module: String,
 }
 
+/// The generic type-parameter clause of a definition (`[T any]`, `[T any, U any]`),
+/// or the empty string for a non-generic shape. Go requires a constraint on every
+/// type parameter, and an unconstrained parameter is spelled `any`.
+fn type_params(params: &[String]) -> String {
+    if params.is_empty() {
+        String::new()
+    } else {
+        let bound: Vec<String> = params.iter().map(|p| format!("{p} any")).collect();
+        format!("[{}]", bound.join(", "))
+    }
+}
+
 /// The Go spelling of each composite type construct; the recursion lives in the
 /// shared `syntax` driver. An `@entries` map is the generated generic `Entries[K,
 /// V]`, whose `MarshalJSON`/`UnmarshalJSON` carry each pair as a two-element array.
@@ -223,7 +235,11 @@ impl RenderRules for GoRules {
                     .map(|f| self.render_field(f))
                     .collect();
                 let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
-                format!("{dep}type {} struct {{\n{fields}}}", interface.name.name)
+                format!(
+                    "{dep}type {}{} struct {{\n{fields}}}",
+                    interface.name.name,
+                    type_params(&interface.params)
+                )
             }
             Decl::Enum(decl) => self.render_enum(decl),
             Decl::Function(function) => self.render_function(function),
@@ -291,6 +307,7 @@ mod tests {
     fn a_struct_renders_fields_with_json_tags() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![
                 field(
                     "AccountID",
@@ -327,9 +344,30 @@ mod tests {
     }
 
     #[test]
+    fn a_generic_struct_renders_its_type_parameter_clause_with_the_any_bound() {
+        // Go requires a constraint on each parameter; an unconstrained one is `any`.
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Page"),
+            params: vec!["T".into()],
+            fields: vec![field(
+                "Items",
+                TypeExpr::list(TypeExpr::Ref(Symbol::builtin("T"))),
+                false,
+                "items",
+            )],
+            deprecated: None,
+        });
+        assert_eq!(
+            GoRules::default().render_decl(&decl),
+            "type Page[T any] struct {\n\tItems []T `json:\"items\"`\n}"
+        );
+    }
+
+    #[test]
     fn collections_stay_slices_and_maps_even_when_optional() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Bag"),
+            params: vec![],
             fields: vec![
                 field(
                     "Tags",
@@ -359,6 +397,7 @@ mod tests {
     fn a_field_without_a_wire_override_tags_with_its_name() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![Field {
                 name: Symbol::builtin("Id"),
                 ty: TypeExpr::Ref(Symbol::builtin("string")),
@@ -422,6 +461,7 @@ mod tests {
     fn a_deprecated_struct_field_and_enum_carry_godoc_comments() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![Field {
                 name: Symbol::builtin("Amount"),
                 ty: TypeExpr::Ref(Symbol::builtin("uint64")),

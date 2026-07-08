@@ -63,6 +63,17 @@ fn relative_module_path(from_module: &str, to_module: &str) -> String {
     }
 }
 
+/// The generic type-parameter clause of a definition (`<T>`, `<T, U>`), or the
+/// empty string for a non-generic shape. TypeScript needs no parameter bound, so
+/// each name renders bare.
+fn type_params(params: &[String]) -> String {
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", params.join(", "))
+    }
+}
+
 /// The TypeScript spelling of each composite type construct; the recursion lives
 /// in the shared `syntax` driver. An `@entries` map is already the
 /// `[[k, v], …]` wire shape (a `[K, V]` tuple list).
@@ -184,8 +195,9 @@ impl RenderRules for TsRules {
                     .map(|f| self.render_field(f))
                     .collect();
                 let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
+                let params = type_params(&interface.params);
                 format!(
-                    "{dep}export interface {} {{\n{fields}}}",
+                    "{dep}export interface {}{params} {{\n{fields}}}",
                     interface.name.name
                 )
             }
@@ -318,6 +330,7 @@ mod tests {
     fn an_interface_renders_fields_with_nullability() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![
                 field("id", TypeExpr::Ref(Symbol::builtin("string")), false),
                 field("note", TypeExpr::Ref(Symbol::builtin("string")), true),
@@ -334,6 +347,7 @@ mod tests {
     fn deprecated_decls_and_fields_carry_jsdoc() {
         let iface = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![Field {
                 name: Symbol::builtin("amount"),
                 ty: TypeExpr::Ref(Symbol::builtin("number")),
@@ -367,6 +381,24 @@ mod tests {
         assert!(TsRules
             .render_decl(&union)
             .starts_with("/** @deprecated gone */\nexport type Source"));
+    }
+
+    #[test]
+    fn a_generic_interface_renders_its_type_parameter_clause() {
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Page"),
+            params: vec!["T".into()],
+            fields: vec![field(
+                "items",
+                TypeExpr::list(TypeExpr::Ref(Symbol::builtin("T"))),
+                false,
+            )],
+            deprecated: None,
+        });
+        assert_eq!(
+            TsRules.render_decl(&decl),
+            "export interface Page<T> {\n  items: T[];\n}"
+        );
     }
 
     #[test]

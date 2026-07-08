@@ -271,6 +271,7 @@ mod tests {
                         .collect();
                     vec![Decl::Interface(Interface {
                         name: Symbol::builtin(Self::local_name(&shape.id)),
+                        params: vec![],
                         fields,
                         deprecated: None,
                     })]
@@ -319,6 +320,7 @@ mod tests {
             module: "billing".into(),
             decls: vec![Decl::Interface(Interface {
                 name: Symbol::builtin("Invoice"),
+                params: vec![],
                 fields: vec![
                     imported_field("a", "A", "alpha"),
                     imported_field("z", "Z", "zeta"),
@@ -397,6 +399,7 @@ mod tests {
             module: "billing".into(),
             decls: vec![Decl::Interface(Interface {
                 name: Symbol::builtin("Plain"),
+                params: vec![],
                 fields: vec![Field {
                     name: Symbol::builtin("id"),
                     ty: TypeExpr::Ref(Symbol::builtin("String")),
@@ -419,6 +422,7 @@ mod tests {
             module: "billing".into(),
             decls: vec![Decl::Interface(Interface {
                 name: Symbol::builtin("Charge"),
+                params: vec![],
                 fields: vec![Field {
                     name: Symbol::builtin("amountCents"),
                     ty: TypeExpr::Ref(Symbol::builtin("i64")),
@@ -442,6 +446,7 @@ mod tests {
             module: "billing".into(),
             decls: vec![Decl::Interface(Interface {
                 name: Symbol::builtin("Invoice"),
+                params: vec![],
                 fields: vec![imported_field("a", "A", "alpha")],
                 deprecated: None,
             })],
@@ -464,6 +469,7 @@ mod tests {
             decls: vec![
                 Decl::Interface(Interface {
                     name: Symbol::builtin("Shapes"),
+                    params: vec![],
                     fields: vec![
                         Field {
                             name: Symbol::builtin("items"),

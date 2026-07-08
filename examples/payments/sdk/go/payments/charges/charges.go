@@ -26,6 +26,20 @@ type Charge struct {
 	Method   common.PaymentMethod `json:"method"`
 }
 
+func ValidateCharge(value Charge) []Violation {
+	violations := []Violation{}
+	if value.Amount < 0 {
+		violations = append(violations, Violation{Field: "amount", Constraint: "range", Message: "amount must be >= 0"})
+	}
+	if len([]rune(value.Currency)) < 3 {
+		violations = append(violations, Violation{Field: "currency", Constraint: "length", Message: "currency length must be >= 3"})
+	}
+	if len([]rune(value.Currency)) > 3 {
+		violations = append(violations, Violation{Field: "currency", Constraint: "length", Message: "currency length must be <= 3"})
+	}
+	return violations
+}
+
 type HTTPCode int
 
 const (
@@ -33,6 +47,11 @@ const (
 	HTTPCodeNotFound HTTPCode = 404
 	HTTPCodeError    HTTPCode = 500
 )
+
+type Page[T any] struct {
+	Items      []T     `json:"items"`
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
 
 type CardDeclined struct {
 	Message string `json:"message"`

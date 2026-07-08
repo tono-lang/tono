@@ -3,10 +3,12 @@
 
 use crate::codegen::casing::{CaseStyle, CasingConfig};
 use crate::codegen::conventions::{self, field_ident, wire_of};
+use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::symbols::symbol_of;
-use crate::codegen::tree::{Decl, Field, TypeExpr, UnionDecl, Variant};
-use crate::ir::{Member, Shape, Tref};
+use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr, UnionDecl, Variant};
+use crate::codegen::validation::{self, Measure, ValSyntax};
+use crate::ir::{Member, Shape, ShapeKind, Tref};
 
 /// The TypeScript language key for per-language traits such as `@rename`.
 pub(crate) const LANG: &str = "typescript";
@@ -68,13 +70,131 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
     }
 }
 
+/// The TypeScript spelling of a length measure: a string counts code points via
+/// spread (so astral characters count once, unlike `.length`'s UTF-16 units), and
+/// an array counts its `.length`.
+struct TsVal;
+impl ValSyntax for TsVal {
+    fn length(&self, access: &str, measure: Measure) -> String {
+        match measure {
+            Measure::Chars => format!("[...{access}].length"),
+            Measure::Elements | Measure::Bytes => format!("{access}.length"),
+        }
+    }
+    fn wide_suffix(&self) -> &str {
+        // A 64-bit integer is a `bigint`, whose literal carries the `n` suffix.
+        "n"
+    }
+}
+
+/// Emit the validator for a structure whose members carry `@range`/`@length`
+/// constraints: a `validate<Type>(value: <Type>): Violation[]` that collects one
+/// violation per failed check. It belongs in the types file, next to the interface
+/// and the `Violation` record it references. A shape with no lowerable constraint
+/// (or a generic one, unmodeled here) emits nothing.
+pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
+    let ShapeKind::Structure { params, members } = &shape.kind else {
+        return Vec::new();
+    };
+    if !params.is_empty() {
+        return Vec::new();
+    }
+    let violation = error_names().violation;
+    let mut body = format!("  const violations: {violation}[] = [];\n");
+    let mut any = false;
+    for member in members {
+        let access = format!("value.{}", field_ident(member, config, LANG));
+        for check in validation::member_checks(member) {
+            any = true;
+            body.push_str(&format!(
+                "  if ({}) {{\n    violations.push({{ field: {:?}, constraint: {:?}, message: {:?} }});\n  }}\n",
+                check.condition(&access, &TsVal),
+                check.field,
+                check.constraint,
+                check.message,
+            ));
+        }
+    }
+    if !any {
+        return Vec::new();
+    }
+    body.push_str("  return violations;");
+    let ty = conventions::type_ident(shape, LANG);
+    vec![Decl::Function(Function {
+        name: Symbol::builtin(format!("validate{ty}")),
+        params: vec![Field {
+            name: Symbol::builtin("value"),
+            ty: TypeExpr::Ref(Symbol::builtin(ty.clone())),
+            nullable: false,
+            wire: None,
+            deprecated: None,
+        }],
+        ret: Some(TypeExpr::list(TypeExpr::Ref(Symbol::builtin(violation)))),
+        body: FnBody::Raw {
+            text: body,
+            refs: Vec::new(),
+        },
+    })]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::target::RenderRules;
+    use crate::codegen::targets::typescript::TsRules;
     use crate::codegen::test_support::{
-        enum_shape, int_enum_shape, member, structure, union_shape,
+        enum_shape, int_enum_shape, member, member_constrained, structure, union_shape,
     };
     use crate::codegen::tree::EnumRepr;
+    use crate::ir::Constraint;
+
+    #[test]
+    fn a_constrained_struct_emits_a_validate_function_over_its_checks() {
+        let shape = structure(
+            "billing#charge",
+            vec![
+                member_constrained(
+                    "amount",
+                    Tref::Prim(crate::ir::Prim::I64),
+                    vec![Constraint::Range {
+                        min: Some(0.0),
+                        max: None,
+                        excl_min: false,
+                        excl_max: false,
+                    }],
+                ),
+                member_constrained(
+                    "currency",
+                    Tref::Prim(crate::ir::Prim::String),
+                    vec![Constraint::Length {
+                        min: Some(3),
+                        max: Some(3),
+                    }],
+                ),
+            ],
+        );
+        let out = TsRules.render_decl(&emit_validators(&shape, &ts_casing())[0]);
+        assert!(out.contains("export function validateCharge(value: Charge): Violation[] {"));
+        assert!(out.contains("const violations: Violation[] = [];"));
+        // An i64 is a bigint, so the bound carries the `n` suffix.
+        assert!(out.contains("if (value.amount < 0n) {"));
+        assert!(out.contains(
+            "violations.push({ field: \"amount\", constraint: \"range\", message: \"amount must be >= 0\" });"
+        ));
+        // A string length counts code points via spread.
+        assert!(out.contains("if ([...value.currency].length < 3) {"));
+        assert!(out.contains("if ([...value.currency].length > 3) {"));
+        assert!(out.contains("return violations;"));
+    }
+
+    #[test]
+    fn a_struct_without_constraints_emits_no_validator() {
+        let shape = structure(
+            "billing#note",
+            vec![member("text", Tref::Prim(crate::ir::Prim::String), true)],
+        );
+        assert!(emit_validators(&shape, &ts_casing()).is_empty());
+    }
     use crate::ir::{Prim, ShapeKind};
 
     #[test]
