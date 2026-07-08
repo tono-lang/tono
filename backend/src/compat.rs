@@ -549,9 +549,12 @@ fn wire_of(traits: &[Trait]) -> Option<&str> {
         .and_then(|t| t.value.as_str())
 }
 
-/// Whether a `@deprecated` trait (`core#deprecated`) is present.
+/// Whether a `@deprecated` trait is present, matching the local name so it reads
+/// both the frontend's bare `deprecated` and the fixtures' `core#deprecated`.
 fn is_deprecated(traits: &[Trait]) -> bool {
-    traits.iter().any(|t| t.id == "core#deprecated")
+    traits
+        .iter()
+        .any(|t| t.id == "deprecated" || t.id == "core#deprecated")
 }
 
 /// A compact, human-readable spelling of a type reference for change details.

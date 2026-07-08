@@ -2,7 +2,7 @@
 pub struct charge {
   id: uuid
   amount: i64 @range(min: 0)
-  fee: u64
+  fee: u64 @deprecated("folded into amount")
   receipt: bytes
   currency: string @length(min: 3, max: 3)
   note: string?

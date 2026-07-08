@@ -45,15 +45,26 @@ pub fn has_entries(traits: &[Trait]) -> bool {
     traits.iter().any(|t| t.id == "core#entries")
 }
 
-/// The `@deprecated` reason (trait `core#deprecated`). A string value is the
-/// reason; a present but non-string value (a bare `@deprecated`) yields `Some("")`;
-/// absence yields `None`. Every target rebases this onto its native deprecation
-/// annotation, keeping the element generated but marked.
+/// The `@deprecated` reason, or `None` when absent. The trait id is matched by its
+/// local name, tolerating an optional `core#` namespace, so it reads both the
+/// frontend's bare `deprecated` and the golden fixtures' `core#deprecated`. The
+/// reason is the single argument, which the frontend encodes as a one-element array
+/// (`["use v2"]`) and the fixtures as a bare string; a bare `@deprecated` (no
+/// argument) yields `Some("")`. Every target rebases this onto its native
+/// deprecation annotation, keeping the element generated but marked.
 pub fn deprecated_of(traits: &[Trait]) -> Option<String> {
     traits
         .iter()
-        .find(|t| t.id == "core#deprecated")
-        .map(|t| t.value.as_str().unwrap_or("").to_string())
+        .find(|t| t.id == "deprecated" || t.id == "core#deprecated")
+        .map(|t| match &t.value {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(items) => items
+                .first()
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            _ => String::new(),
+        })
 }
 
 /// Reshape a map into an `@entries` pairs-array when the member carries the
@@ -317,14 +328,20 @@ mod tests {
 
     #[test]
     fn deprecated_reads_the_reason_and_the_bare_form() {
-        // A string value is the reason.
+        // The fixtures' bare-string value is the reason.
         assert_eq!(
             deprecated_of(&[trait_of("core#deprecated", json!("use v2"))]).as_deref(),
             Some("use v2")
         );
-        // A bare `@deprecated` (any non-string value) is deprecated without a reason.
+        // The frontend encodes the single argument as a one-element array, and emits
+        // the trait id bare (namespace resolution is a later pass).
         assert_eq!(
-            deprecated_of(&[trait_of("core#deprecated", json!(true))]).as_deref(),
+            deprecated_of(&[trait_of("deprecated", json!(["use v2"]))]).as_deref(),
+            Some("use v2")
+        );
+        // A bare `@deprecated` (no argument) is deprecated without a reason.
+        assert_eq!(
+            deprecated_of(&[trait_of("deprecated", json!(null))]).as_deref(),
             Some("")
         );
         // Absent means not deprecated.
