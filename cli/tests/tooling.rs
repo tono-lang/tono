@@ -1,0 +1,328 @@
+//! End-to-end checks of `tono`'s source-level subcommands: `check` and `fmt`
+//! delegate to the OCaml frontend, and `preview` renders the SDK and runs the
+//! target toolchain. These need the built frontend binary; they skip cleanly
+//! when it is absent so a backend-only checkout still passes.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// The dune-built frontend binary. `TONO_FRONTEND` overrides it; otherwise we
+/// look in the default build tree next to the workspace.
+fn frontend() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("TONO_FRONTEND") {
+        let p = PathBuf::from(p);
+        return p.exists().then_some(p);
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let p = root.join("_build/default/frontend/bin/tono_frontend.exe");
+    p.exists().then_some(p)
+}
+
+fn have(tool: &str) -> bool {
+    Command::new(tool).arg("--version").output().is_ok()
+}
+
+/// A `tono` invocation with the frontend wired in. Returns `None` (skip) when
+/// the frontend binary is not built.
+fn tono() -> Option<Command> {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tono"));
+    cmd.env("TONO_FRONTEND", frontend()?);
+    Some(cmd)
+}
+
+fn tmp(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("tono-tooling-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn write_tono(dir: &Path, name: &str, src: &str) -> PathBuf {
+    let p = dir.join(name);
+    std::fs::write(&p, src).unwrap();
+    p
+}
+
+macro_rules! skip_without_frontend {
+    () => {
+        match tono() {
+            Some(c) => c,
+            None => {
+                eprintln!("skipping: frontend binary not built (set TONO_FRONTEND)");
+                return;
+            }
+        }
+    };
+}
+
+/// Run `tono preview <file> --target <targets> --out <dir>/scaffold` and return
+/// the exit success plus captured stdout.
+fn run_preview(mut cmd: Command, file: &Path, targets: &str, dir: &Path) -> (bool, String) {
+    let out = cmd
+        .args(["preview"])
+        .arg(file)
+        .args(["--target", targets, "--out"])
+        .arg(dir.join("scaffold"))
+        .output()
+        .unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+#[test]
+fn check_reports_type_errors() {
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("check-bad");
+    let file = write_tono(&dir, "bad.tono", "struct box { it: missing }\n");
+    let out = cmd.args(["check"]).arg(&file).output().unwrap();
+    assert!(
+        !out.status.success(),
+        "an unresolved type must fail the check"
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("missing"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_clean_source_succeeds() {
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("check-ok");
+    let file = write_tono(&dir, "ok.tono", "struct point { x: i64\n y: i64 }\n");
+    let out = cmd.args(["check"]).arg(&file).output().unwrap();
+    assert!(out.status.success(), "a clean file checks green");
+    assert!(out.stdout.is_empty(), "check emits no IR");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn fmt_prints_canonical_source() {
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("fmt");
+    let file = write_tono(&dir, "messy.tono", "struct point { x: i64, y: i64 }\n");
+    let out = cmd.args(["fmt"]).arg(&file).output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("struct point {\n  x: i64\n  y: i64\n}"),
+        "got:\n{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_renders_and_compiles_go() {
+    let cmd = skip_without_frontend!();
+    if !have("go") {
+        eprintln!("skipping: go toolchain not available");
+        return;
+    }
+    let dir = tmp("preview-go");
+    let file = write_tono(
+        &dir,
+        "charge.tono",
+        "struct charge { amount: i64\n note: string }\n",
+    );
+    let (ok, stdout) = run_preview(cmd, &file, "go", &dir);
+    assert!(ok, "preview failed:\n{stdout}");
+    assert!(
+        stdout.contains("type Charge struct"),
+        "renders the SDK:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("compiles: yes (go build)"),
+        "runs the checker:\n{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_renders_typescript_even_without_tsc() {
+    let cmd = skip_without_frontend!();
+    let dir = tmp("preview-ts");
+    let file = write_tono(&dir, "charge.tono", "struct charge { amount: i64 }\n");
+    // Rendering always happens; the check either compiles or reports a skip, but
+    // an absent toolchain never fails the command.
+    let (ok, stdout) = run_preview(cmd, &file, "typescript", &dir);
+    assert!(
+        ok,
+        "preview must not fail on a missing toolchain:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("interface Charge"),
+        "renders the SDK:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("compiles: yes") || stdout.contains("tsc not found (skipped)"),
+        "reports a check outcome:\n{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn frontend_is_discovered_without_env() {
+    // The dev-build discovery path: no TONO_FRONTEND, the binary is found in
+    // the dune build tree next to the workspace.
+    if frontend().is_none() {
+        eprintln!("skipping: frontend binary not built");
+        return;
+    }
+    let dir = tmp("discover");
+    let file = write_tono(&dir, "ok.tono", "struct point { x: i64 }\n");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tono"));
+    cmd.env_remove("TONO_FRONTEND");
+    let out = cmd.args(["check"]).arg(&file).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check finds the frontend without TONO_FRONTEND:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_renders_and_compiles_rust() {
+    // cargo is always present: this test runs under it.
+    let cmd = skip_without_frontend!();
+    let dir = tmp("preview-rust");
+    let file = write_tono(
+        &dir,
+        "charge.tono",
+        "struct charge { amount: i64\n note: string? }\n",
+    );
+    let (ok, stdout) = run_preview(cmd, &file, "rust", &dir);
+    assert!(ok, "rust preview:\n{stdout}");
+    assert!(
+        stdout.contains("pub struct Charge"),
+        "renders rust:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("compiles: yes (cargo check)"),
+        "checks rust:\n{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_skips_missing_typescript_toolchain() {
+    // A minimal PATH guarantees `tsc` is absent, so the skip path is
+    // deterministic regardless of what the host has installed.
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("preview-no-tsc");
+    let file = write_tono(&dir, "charge.tono", "struct charge { amount: i64 }\n");
+    cmd.env("PATH", "/usr/bin:/bin");
+    let (ok, stdout) = run_preview(cmd, &file, "typescript", &dir);
+    assert!(ok, "a missing toolchain is not a failure");
+    assert!(
+        stdout.contains("compile-check: tsc not found (skipped)"),
+        "reports the skip:\n{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_watch_reruns_and_stops_when_file_is_removed() {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut cmd = skip_without_frontend!();
+    if !have("go") {
+        eprintln!("skipping: go toolchain not available");
+        return;
+    }
+    let dir = tmp("preview-watch");
+    let file = write_tono(&dir, "w.tono", "struct a { x: i64 }\n");
+    let mut child = cmd
+        .args(["preview"])
+        .arg(&file)
+        .args(["--target", "go", "--out"])
+        .arg(dir.join("scaffold"))
+        .arg("--watch")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // First render, then a save triggers the second, then deleting the file
+    // ends the watch. The margins are generous next to the 300ms poll.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::fs::write(&file, "struct a { x: i64\n y: string }\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::fs::remove_file(&file).unwrap();
+    let mut waited = 0;
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        waited += 200;
+        if waited > 30_000 {
+            let _ = child.kill();
+            panic!("watch did not stop after the file was removed");
+        }
+    };
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    assert!(status.success(), "watch exits cleanly:\n{stdout}");
+    assert_eq!(
+        stdout.matches("--- preview").count(),
+        2,
+        "one render per save:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("watch stopped"),
+        "reports the stop:\n{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_handles_multiple_targets() {
+    let cmd = skip_without_frontend!();
+    if !have("go") {
+        eprintln!("skipping: go toolchain not available");
+        return;
+    }
+    let dir = tmp("preview-multi");
+    let file = write_tono(&dir, "charge.tono", "struct charge { amount: i64 }\n");
+    let (ok, stdout) = run_preview(cmd, &file, "go,typescript", &dir);
+    assert!(ok, "multi-target preview:\n{stdout}");
+    assert!(stdout.contains("== target: go =="), "renders go:\n{stdout}");
+    assert!(
+        stdout.contains("== target: typescript =="),
+        "renders ts:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("compiles: yes (go build)"),
+        "checks go:\n{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_surfaces_frontend_errors() {
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("preview-bad");
+    let file = write_tono(&dir, "bad.tono", "struct box { it: missing }\n");
+    let out = cmd
+        .args(["preview"])
+        .arg(&file)
+        .args(["--target", "go"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a source error must fail preview");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_requires_a_target() {
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("preview-notarget");
+    let file = write_tono(&dir, "ok.tono", "struct point { x: i64 }\n");
+    let out = cmd.args(["preview"]).arg(&file).output().unwrap();
+    assert!(!out.status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+}

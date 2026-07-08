@@ -23,10 +23,10 @@ go_module="example.com/sdk"
 export PATH="$root/backend/codegen-tests/typescript/node_modules/.bin:$PATH"
 
 echo "building the frontend and backend CLIs..."
-opam exec -- dune build frontend/bin/main.exe
+opam exec -- dune build frontend/bin/tono_frontend.exe
 cargo build --quiet --bin tono
 
-frontend="$root/_build/default/frontend/bin/main.exe"
+frontend="$root/_build/default/frontend/bin/tono_frontend.exe"
 tono="$root/target/debug/tono"
 
 echo "compiling $example/src to IR..."

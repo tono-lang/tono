@@ -50,7 +50,7 @@ jobs:
         with:
           ocaml-compiler: "5.2"
       - name: Install tooling and frontend dependencies
-        run: opam install ocamlformat bisect_ppx yojson alcotest qcheck-core --yes
+        run: opam install ocamlformat bisect_ppx yojson alcotest qcheck-core lsp jsonrpc --yes
       - name: Format check
         run: opam exec -- dune build @fmt
       - name: Build (warnings = errors)

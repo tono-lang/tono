@@ -1,0 +1,119 @@
+==================
+Struct with a member trait
+==================
+
+pub struct charge {
+  amount: i64 @range(min: 0)
+}
+
+---
+
+(source_file
+  (struct
+    name: (identifier)
+    (member
+      name: (identifier)
+      type: (primitive_type)
+      (trait
+        name: (identifier)
+        (trait_arguments
+          (trait_argument
+            (trait_pair
+              key: (identifier)
+              value: (number))))))))
+
+==================
+Nullable, list, and map types
+==================
+
+struct s {
+  note: string?
+  tags: []string
+  meta: map[string]string
+}
+
+---
+
+(source_file
+  (struct
+    name: (identifier)
+    (member
+      name: (identifier)
+      type: (nullable_type (primitive_type)))
+    (member
+      name: (identifier)
+      type: (list_type (primitive_type)))
+    (member
+      name: (identifier)
+      type: (map_type (primitive_type) (primitive_type)))))
+
+==================
+Enum with an explicit value
+==================
+
+enum status { active, settled = 2 }
+
+---
+
+(source_file
+  (enum
+    name: (identifier)
+    (enum_case name: (identifier))
+    (enum_case
+      name: (identifier)
+      value: (number))))
+
+==================
+Union with payload variants
+==================
+
+union pm { card(card), bank(bank_account) }
+
+---
+
+(source_file
+  (union
+    name: (identifier)
+    (variant
+      name: (identifier)
+      payload: (named_type (identifier)))
+    (variant
+      name: (identifier)
+      payload: (named_type (identifier)))))
+
+==================
+Operation with leading and trailing traits
+==================
+
+@doc("creates a charge")
+op create(charge): charge @async
+
+---
+
+(source_file
+  (trait
+    name: (identifier)
+    (trait_arguments
+      (trait_argument (string))))
+  (operation
+    name: (identifier)
+    input: (named_type (identifier))
+    output: (named_type (identifier))
+    (trait name: (identifier))))
+
+==================
+Line comment
+==================
+
+// a comment
+struct s { x: i64 }
+
+---
+
+(source_file
+  (comment)
+  (struct
+    name: (identifier)
+    (member
+      name: (identifier)
+      type: (primitive_type))))

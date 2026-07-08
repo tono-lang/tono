@@ -1,3 +1,9 @@
+(library
+ (name tono_lsp_lib)
+ (modules analysis)
+ (libraries tono_frontend lsp))
+
 (executable
  (name tono_lsp)
- (libraries tono_frontend))
+ (modules tono_lsp)
+ (libraries tono_lsp_lib lsp jsonrpc))
