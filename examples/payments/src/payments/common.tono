@@ -1,0 +1,11 @@
+// Shared types other modules import. `card` and `bank_account` are private:
+// visible only within this module, they are folded into the public
+// `payment_method` union but are never referenced across a module boundary.
+pub enum status { active, settled, refunded }
+
+struct card { last4: string }
+
+struct bank_account { iban: string }
+
+@discriminator("kind")
+pub union payment_method { card(card), bank(bank_account) }

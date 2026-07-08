@@ -37,6 +37,32 @@ fn deprecated_prefix(reason: Option<&str>, indent: &str) -> String {
 /// The TypeScript render rules.
 pub struct TsRules;
 
+/// The relative module specifier from the importing file to the imported module's
+/// file. A dotted module is a directory path (`payments.common` ->
+/// `payments/common.ts`); the importer's directory is its own path minus the file
+/// segment. The result always starts with `./` or `../` so it is an explicit
+/// relative import. Same directory (including a module's own serde companion)
+/// yields `./<name>`.
+fn relative_module_path(from_module: &str, to_module: &str) -> String {
+    let mut from_dir: Vec<&str> = from_module.split('.').collect();
+    from_dir.pop(); // drop the importing file's own segment
+    let to_path: Vec<&str> = to_module.split('.').collect();
+    let common = from_dir
+        .iter()
+        .zip(to_path.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let ups = from_dir.len() - common;
+    let mut parts: Vec<&str> = vec![".."; ups];
+    parts.extend_from_slice(&to_path[common..]);
+    let joined = parts.join("/");
+    if joined.starts_with("..") {
+        joined
+    } else {
+        format!("./{joined}")
+    }
+}
+
 /// The TypeScript spelling of each composite type construct; the recursion lives
 /// in the shared `syntax` driver. An `@entries` map is already the
 /// `[[k, v], …]` wire shape (a `[K, V]` tuple list).
@@ -136,16 +162,17 @@ impl TsRules {
 }
 
 impl RenderRules for TsRules {
-    fn render_import(&self, module: &str, names: &[&str]) -> String {
+    fn render_import(&self, from_module: &str, module: &str, names: &[&str]) -> String {
         // A bare package specifier (the hand-written runtime, a scoped
         // `@scope/name`) or an already-relative path is imported as-is; a dotted
-        // module name is a relative sub-path: payments.common -> ./payments/common.
-        let specifier = if module.starts_with('@') || module.starts_with('.') {
+        // module name maps to a path relative to the importing file
+        // (payments.charges importing payments.common -> ./common).
+        let path = if module.starts_with('@') || module.starts_with('.') {
             module.to_string()
         } else {
-            format!("./{}", module.replace('.', "/"))
+            relative_module_path(from_module, module)
         };
-        format!("import {{ {} }} from \"{specifier}\";", names.join(", "))
+        format!("import {{ {} }} from \"{path}\";", names.join(", "))
     }
 
     fn render_decl(&self, decl: &Decl) -> String {
@@ -241,12 +268,12 @@ mod tests {
     #[test]
     fn imports_render_as_named_imports() {
         assert_eq!(
-            TsRules.render_import("payments", &["Charge"]),
+            TsRules.render_import("billing", "payments", &["Charge"]),
             "import { Charge } from \"./payments\";"
         );
         // Several names from one module group into one import statement.
         assert_eq!(
-            TsRules.render_import("payments", &["BankAccount", "Card", "Charge"]),
+            TsRules.render_import("billing", "payments", &["BankAccount", "Card", "Charge"]),
             "import { BankAccount, Card, Charge } from \"./payments\";"
         );
     }
@@ -256,8 +283,34 @@ mod tests {
         // The hand-written runtime is a scoped package, not a sibling module, so
         // it keeps its bare specifier rather than gaining a `./` prefix.
         assert_eq!(
-            TsRules.render_import("@tono/http-runtime-ts", &["execute", "WireDescriptor"]),
+            TsRules.render_import(
+                "payments.charges",
+                "@tono/http-runtime-ts",
+                &["execute", "WireDescriptor"]
+            ),
             "import { execute, WireDescriptor } from \"@tono/http-runtime-ts\";"
+        );
+    }
+
+    #[test]
+    fn nested_module_imports_are_relative_to_the_importer() {
+        // A sibling module in the same directory is `./name`, including a module's
+        // own serde companion.
+        assert_eq!(
+            relative_module_path("payments.charges", "payments.common"),
+            "./common"
+        );
+        assert_eq!(
+            relative_module_path("payments.charges", "payments.charges"),
+            "./charges"
+        );
+        // A module in a different subtree walks up then down.
+        assert_eq!(relative_module_path("a.b.c", "x.y"), "../../x/y");
+        // A single-segment (flat) module stays `./name`.
+        assert_eq!(relative_module_path("billing", "payments"), "./payments");
+        assert_eq!(
+            TsRules.render_import("payments.charges", "payments.common", &["Money"]),
+            "import { Money } from \"./common\";"
         );
     }
 

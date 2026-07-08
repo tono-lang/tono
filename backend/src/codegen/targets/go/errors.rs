@@ -182,7 +182,7 @@ mod tests {
     use crate::codegen::test_support::{error_demo_module, error_shape, operation, rendered};
 
     fn types_text(module: &Module) -> String {
-        rendered(&type_decls(module, &go_casing()), &GoRules)
+        rendered(&type_decls(module, &go_casing()), &GoRules::default())
     }
 
     #[test]
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn the_discriminator_probes_the_code_field_and_falls_back() {
-        let out = rendered(&serde_decls(&error_demo_module()), &GoRules);
+        let out = rendered(&serde_decls(&error_demo_module()), &GoRules::default());
         assert!(out.contains("func DecodeCreateChargeError(status int, body []byte) error {"));
         assert!(out.contains("Code string `json:\"code\"`"));
         assert!(out.contains("if status == 402 && probe.Code == \"payment_declined\" {"));
@@ -247,7 +247,7 @@ mod tests {
             .shapes
             .push(error_shape("m#slow_down", vec![], 503, None, false));
         module.operations = vec![operation("m#fetch", vec![], vec!["m#slow_down"])];
-        let out = rendered(&serde_decls(&module), &GoRules);
+        let out = rendered(&serde_decls(&module), &GoRules::default());
         assert!(!out.contains("probe"));
         assert!(out.contains("if status == 503 {"));
     }

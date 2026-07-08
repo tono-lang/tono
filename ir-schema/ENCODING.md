@@ -193,15 +193,22 @@ the dotted name:
 |---|---|---|---|
 | `payments.common` | `crate::payments::common` (`rust/payments/common.rs`) | package `common` (`go/payments/common/common.go`) | `./payments/common` (`typescript/payments/common.ts`) |
 
-A single-segment module keeps the flat layout (`rust/payments.rs`). Two config
-hooks, consumed by codegen (`tono gen`), rewrite the canonical module name before
-this mapping:
+The generated output is compilable as a tree: Rust emits a `mod.rs` per directory
+so `use crate::a::b` resolves; Go names each package for the module's last segment
+and package-qualifies a cross-package reference (`common.Status`); TypeScript
+imports each module by a path relative to the importing file (`./common`).
+
+A single-segment module keeps the flat layout (`rust/payments.rs`). Config hooks,
+consumed by codegen (`tono gen`), steer the mapping:
 
 - `--flatten` collapses the dotted hierarchy into one flat segment (dots become
   underscores), so no sub-packages are produced (`payments.common` ->
   `payments_common`).
 - `--module-remap <from>=<to>` rewrites a matching dotted prefix (repeatable);
   `--module-remap payments=billing` turns `payments.common` into `billing.common`.
+- `--go-module <path>` sets the generated Go SDK's module path, prefixed onto
+  cross-package imports (Go has no relative imports), e.g.
+  `example.com/sdk/payments/common`.
 
 Private items are never part of a package's public export surface. The mapping is
 purely structural; in-code identifiers are always the local (last) name, so

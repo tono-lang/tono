@@ -84,7 +84,13 @@ fn emit_module_files(module: &Module, target: TargetKind) -> Vec<ModuleFile> {
 /// Render one of a module's output files into rough source text: the banner, then
 /// the rendered declarations (with the package clause prepended for Go). The `cat`
 /// passthrough keeps the engine's layout without depending on a real formatter.
-fn render_module(module_file: &ModuleFile, module: &Module, target: TargetKind) -> String {
+fn render_module(
+    module_file: &ModuleFile,
+    module: &Module,
+    target: TargetKind,
+    config: &CodegenConfig,
+    internal_modules: &std::collections::BTreeSet<String>,
+) -> String {
     let passthrough = Formatter::new("cat", vec![]);
     let companion = module_file.imports_companion.as_deref();
     let rendered = match target {
@@ -93,13 +99,14 @@ fn render_module(module_file: &ModuleFile, module: &Module, target: TargetKind) 
                 .text
         }
         TargetKind::Go => {
-            let rough = render_file_with_companion(
-                &module_file.file,
-                companion,
-                &go::GoRules,
-                &passthrough,
-            )
-            .text;
+            let go_rules = go::GoRules {
+                go_module: config.go_module.clone(),
+                internal_modules: internal_modules.clone(),
+                current_module: module.name.clone(),
+            };
+            let rough =
+                render_file_with_companion(&module_file.file, companion, &go_rules, &passthrough)
+                    .text;
             // The Go package is named for the module's last segment; a dotted
             // module nests in a directory of that name (see [`output_path`]).
             format!(
@@ -169,6 +176,10 @@ pub fn generate(
     // Apply the module remap/flatten hooks once, up front, so the render rules and
     // output paths below see only the effective (post-config) module names.
     let model = modules::apply(config, model);
+    // The SDK's own module names, so Go can tell an internal cross-package import
+    // (which takes the module-path prefix) from a standard-library one.
+    let internal_modules: std::collections::BTreeSet<String> =
+        model.modules.iter().map(|m| m.name.clone()).collect();
     let mut files = Vec::new();
     for &target in targets {
         for module in &model.modules {
@@ -178,12 +189,66 @@ pub fn generate(
                 files.push(GeneratedFile {
                     target,
                     path,
-                    text: render_module(&module_file, module, target),
+                    text: render_module(&module_file, module, target, config, &internal_modules),
                 });
             }
         }
     }
+    // Rust needs a module tree so `use crate::a::b` resolves; a nested layout gets
+    // a `mod.rs` per directory declaring its children.
+    if targets.contains(&TargetKind::Rust) {
+        files.extend(rust_mod_tree(&files));
+    }
     files
+}
+
+/// Synthesize the Rust module tree: for every directory below the `rust/` root
+/// that holds generated files, a `mod.rs` declaring `pub mod <child>;` for each
+/// child module file (its stem) and subdirectory. The crate root's immediate
+/// children (the top-level files or directories directly under `rust/`) are
+/// declared by the consuming crate's `lib.rs`, so no `rust/mod.rs` is emitted; a
+/// flat single-segment layout therefore produces no `mod.rs` at all.
+fn rust_mod_tree(files: &[GeneratedFile]) -> Vec<GeneratedFile> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let root = PathBuf::from(TargetKind::Rust.dir());
+    let mut children: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
+    for file in files.iter().filter(|f| f.target == TargetKind::Rust) {
+        let comps: Vec<String> = file
+            .path
+            .iter()
+            .map(|c| c.to_string_lossy().into_owned())
+            .collect();
+        // Register each path element as a child of the directory that holds it,
+        // skipping the crate root (its children are the consumer's to declare).
+        for i in 1..comps.len() {
+            let parent: PathBuf = comps[..i].iter().collect();
+            if parent == root {
+                continue;
+            }
+            let raw = &comps[i];
+            let child = if i == comps.len() - 1 {
+                raw.strip_suffix(".rs").unwrap_or(raw)
+            } else {
+                raw
+            };
+            children
+                .entry(parent)
+                .or_default()
+                .insert(child.to_string());
+        }
+    }
+    children
+        .into_iter()
+        .map(|(dir, names)| {
+            let body: String = names.iter().map(|n| format!("pub mod {n};\n")).collect();
+            GeneratedFile {
+                target: TargetKind::Rust,
+                path: dir.join("mod.rs"),
+                text: format!("{BANNER}{body}"),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -535,17 +600,33 @@ mod tests {
         assert!(paths.contains(&"typescript/payments/charge.ts".to_string()));
 
         // The cross-package reference imports through each language's idiomatic
-        // module path.
+        // module path: Rust an absolute crate path, TypeScript a path relative to
+        // the importing file, Go the package sub-path.
         assert!(text_at(&files, "rust/payments/charge.rs")
             .contains("use crate::payments::common::Money;"));
         assert!(
             text_at(&files, "go/payments/charge/charge.go").contains("import \"payments/common\"")
         );
-        assert!(
-            text_at(&files, "typescript/payments/charge.ts").contains("from \"./payments/common\"")
-        );
+        assert!(text_at(&files, "typescript/payments/charge.ts").contains("from \"./common\""));
         // The Go package is named for the last segment, not the dotted path.
         assert!(text_at(&files, "go/payments/common/common.go").contains("package common"));
+
+        // Rust gets a module tree so the crate paths resolve.
+        assert!(paths.contains(&"rust/payments/mod.rs".to_string()));
+        let mod_rs = text_at(&files, "rust/payments/mod.rs");
+        assert!(mod_rs.contains("pub mod common;"));
+        assert!(mod_rs.contains("pub mod charge;"));
+    }
+
+    #[test]
+    fn go_module_prefix_makes_cross_package_imports_absolute() {
+        let config = CodegenConfig {
+            go_module: Some("example.com/sdk".into()),
+            ..CodegenConfig::default()
+        };
+        let files = generate(&sub_package_model(), &[TargetKind::Go], &config);
+        assert!(text_at(&files, "go/payments/charge/charge.go")
+            .contains("import \"example.com/sdk/payments/common\""));
     }
 
     #[test]
@@ -553,6 +634,7 @@ mod tests {
         let config = CodegenConfig {
             flatten: true,
             remap: vec![],
+            go_module: None,
         };
         let files = generate(&sub_package_model(), &[TargetKind::Rust], &config);
         let paths = paths_of(&files);
@@ -567,6 +649,7 @@ mod tests {
         let config = CodegenConfig {
             flatten: false,
             remap: vec![("payments".into(), "billing".into())],
+            go_module: None,
         };
         let files = generate(&sub_package_model(), &[TargetKind::Rust], &config);
         let paths = paths_of(&files);

@@ -16,7 +16,7 @@ use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::ir::decode_model;
 
 const USAGE: &str = "usage: tono (\n  \
-    gen --target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [<ir.json>]\n  \
+    gen --target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] [<ir.json>]\n  \
     breaking [<ir.json>] --baseline <ref> [--baseline-path <path>] [--config <cfg.json>] [--level <cat>=<sev>]... [--allow <key>]...\n  \
     version)";
 
@@ -62,6 +62,9 @@ fn run_gen(args: &[String]) -> Result<(), String> {
                     .remap
                     .push(parse_remap(&flag_value(args, &mut i, "--module-remap")?)?)
             }
+            // The generated Go SDK's module path, prefixed onto cross-package
+            // imports (Go has no relative imports).
+            "--go-module" => config.go_module = Some(flag_value(args, &mut i, "--go-module")?),
             path => ir_path = Some(path.to_string()),
         }
         i += 1;

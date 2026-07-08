@@ -3,8 +3,6 @@
 import { ClientOptions, WireDescriptor, execute } from "@tono/http-runtime-ts";
 import {
   APIError,
-  BankAccount,
-  Card,
   CardDeclined,
   CardDeclinedError,
   Charge,
@@ -13,12 +11,16 @@ import {
   HTTPCode,
   NotFound,
   NotFoundError,
-  PaymentMethod,
-  Status,
   Timestamp,
   TonoError,
   TransportError,
-} from "./payments";
+} from "./charges";
+import {
+  decodePaymentMethod,
+  decodeStatus,
+  encodePaymentMethod,
+  encodeStatus,
+} from "./common_serde";
 
 export function encodeI64(v: bigint): string {
   return v.toString();
@@ -72,67 +74,12 @@ export function decodeCharge(raw: any): Charge {
   };
 }
 
-export function encodeStatus(value: Status): string {
-  return value;
-}
-
-export function decodeStatus(raw: string): Status {
-  return raw as Status;
-}
-
 export function encodeHTTPCode(value: HTTPCode): number {
   return value;
 }
 
 export function decodeHTTPCode(raw: number): HTTPCode {
   return raw as HTTPCode;
-}
-
-export function encodeCard(value: Card): unknown {
-  return {
-    last4: value.last4,
-  };
-}
-
-export function decodeCard(raw: any): Card {
-  return {
-    last4: raw.last4,
-  };
-}
-
-export function encodeBankAccount(value: BankAccount): unknown {
-  return {
-    iban: value.iban,
-  };
-}
-
-export function decodeBankAccount(raw: any): BankAccount {
-  return {
-    iban: raw.iban,
-  };
-}
-
-export function encodePaymentMethod(value: PaymentMethod): unknown {
-  switch (value.kind) {
-    case "card":
-      return { kind: "card", ...(encodeCard(value as any) as object) };
-    case "bank":
-      return { kind: "bank", ...(encodeBankAccount(value as any) as object) };
-  }
-  throw new Error("unknown variant");
-}
-
-export function decodePaymentMethod(raw: any): PaymentMethod {
-  switch (raw.kind) {
-    case "card":
-      return { kind: "card", ...(decodeCard(raw) as object) } as PaymentMethod;
-    case "bank":
-      return {
-        kind: "bank",
-        ...(decodeBankAccount(raw) as object),
-      } as PaymentMethod;
-  }
-  throw new Error("unknown variant");
 }
 
 export function encodeCardDeclined(value: CardDeclined): unknown {
@@ -183,7 +130,7 @@ export function decodeCreateChargeError(
 }
 
 const createChargeDescriptor: WireDescriptor = JSON.parse(
-  '{"bindings":[["id",{"kind":"body"}],["amount",{"kind":"body"}],["fee",{"kind":"body"}],["receipt",{"kind":"body"}],["currency",{"kind":"body"}],["note",{"kind":"body"}],["tags",{"kind":"body"}],["metadata",{"kind":"body"}],["created",{"kind":"body"}],["status",{"kind":"body"}],["method",{"kind":"body"}]],"errors":[[402,"card_declined","card_declined"],[404,"not_found",null]],"http_method":"POST","response_bindings":[],"success":[[200,{"args":[],"ref":"charge"}]],"uri":"/charges"}',
+  '{"bindings":[["id",{"kind":"body"}],["amount",{"kind":"body"}],["fee",{"kind":"body"}],["receipt",{"kind":"body"}],["currency",{"kind":"body"}],["note",{"kind":"body"}],["tags",{"kind":"body"}],["metadata",{"kind":"body"}],["created",{"kind":"body"}],["status",{"kind":"body"}],["method",{"kind":"body"}]],"errors":[[402,"payments.charges#card_declined","card_declined"],[404,"payments.charges#not_found",null]],"http_method":"POST","response_bindings":[],"success":[[200,{"args":[],"ref":"payments.charges#charge"}]],"uri":"/charges"}',
 );
 export class HttpClient implements Client {
   constructor(private readonly options: ClientOptions) {}

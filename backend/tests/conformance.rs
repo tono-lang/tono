@@ -102,7 +102,7 @@ fn go_output() -> Option<Value> {
         let rough = render_file_with_companion(
             &module_file.file,
             module_file.imports_companion.as_deref(),
-            &go::GoRules,
+            &go::GoRules::default(),
             &Formatter::new("cat", vec![]),
         )
         .text;

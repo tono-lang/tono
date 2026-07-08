@@ -164,7 +164,7 @@ mod tests {
             .iter()
             .map(|d| {
                 crate::codegen::target::RenderRules::render_decl(
-                    &crate::codegen::targets::go::GoRules,
+                    &crate::codegen::targets::go::GoRules::default(),
                     d,
                 )
             })

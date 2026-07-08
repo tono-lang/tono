@@ -43,7 +43,7 @@ pub fn render_file_with_companion(
     }
     for (module, names) in &groups {
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        rough.push_str(&rules.render_import(module, &names));
+        rough.push_str(&rules.render_import(&file.module, module, &names));
         rough.push('\n');
     }
     if !groups.is_empty() {
@@ -133,7 +133,7 @@ mod tests {
     }
 
     impl RenderRules for RustRules {
-        fn render_import(&self, module: &str, names: &[&str]) -> String {
+        fn render_import(&self, _from_module: &str, module: &str, names: &[&str]) -> String {
             format!("use {module}::{};", names.join(", "))
         }
 

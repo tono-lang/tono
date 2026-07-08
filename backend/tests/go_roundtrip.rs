@@ -49,7 +49,12 @@ fn generated_go_compiles_and_round_trips() {
     // whole. The harness compiles the generated files together with the driver in one
     // `package main`, so the clause names `main`, not the IR module.
     for module_file in emit_module(&demo_module(), &go_casing()) {
-        let rough = render_file(&module_file.file, &GoRules, &Formatter::new("cat", vec![])).text;
+        let rough = render_file(
+            &module_file.file,
+            &GoRules::default(),
+            &Formatter::new("cat", vec![]),
+        )
+        .text;
         let source = format!("{}\n{}", package_clause("main"), rough);
         let formatted = Formatter::new("gofmt", vec![]).run(&source);
         assert!(

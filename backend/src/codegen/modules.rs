@@ -24,6 +24,11 @@ pub struct CodegenConfig {
     /// Rewrite a matching dotted module prefix as `(from, to)`; the first match
     /// wins and a prefix only matches on a segment boundary.
     pub remap: Vec<(String, String)>,
+    /// The generated Go SDK's module path (from `--go-module`). Go has no relative
+    /// imports, so a cross-package import needs this as a prefix
+    /// (`<go_module>/payments/common`). `None` suits the flat single-package
+    /// layout, where no cross-package import arises.
+    pub go_module: Option<String>,
 }
 
 /// Map a canonical module name through the config: apply the first matching remap
@@ -156,6 +161,7 @@ mod tests {
         let c = CodegenConfig {
             flatten: true,
             remap: vec![],
+            go_module: None,
         };
         assert_eq!(canonicalize(&c, "payments.common"), "payments_common");
         assert_eq!(canonicalize(&c, "payments"), "payments");
@@ -166,6 +172,7 @@ mod tests {
         let c = CodegenConfig {
             flatten: false,
             remap: vec![("payments".into(), "billing".into())],
+            go_module: None,
         };
         assert_eq!(canonicalize(&c, "payments"), "billing");
         assert_eq!(canonicalize(&c, "payments.common"), "billing.common");
@@ -178,6 +185,7 @@ mod tests {
         let c = CodegenConfig {
             flatten: true,
             remap: vec![("payments".into(), "billing.core".into())],
+            go_module: None,
         };
         assert_eq!(canonicalize(&c, "payments.common"), "billing_core_common");
     }
@@ -216,6 +224,7 @@ mod tests {
         let c = CodegenConfig {
             flatten: false,
             remap: vec![("payments".into(), "billing".into())],
+            go_module: None,
         };
         let out = apply(&c, &model);
         let m = &out.modules[0];

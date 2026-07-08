@@ -333,7 +333,7 @@ mod tests {
     fn rendered(decls: &[Decl]) -> String {
         decls
             .iter()
-            .map(|d| GoRules.render_decl(d))
+            .map(|d| GoRules::default().render_decl(d))
             .collect::<Vec<_>>()
             .join("\n")
     }

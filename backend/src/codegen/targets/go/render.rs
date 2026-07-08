@@ -41,13 +41,42 @@ fn deprecated_prefix(reason: Option<&str>, indent: &str) -> String {
     }
 }
 
-/// The Go render rules.
-pub struct GoRules;
+/// The Go render rules. `go_module` is the SDK's Go module path (from
+/// `--go-module`); a cross-package import to one of the SDK's own modules
+/// (`internal_modules`) needs it as a prefix, since Go has no relative imports.
+/// Standard-library imports (`encoding/json`, `fmt`) are not SDK modules, so they
+/// are never prefixed. Both are empty for the flat single-package layout, where no
+/// cross-package import arises.
+#[derive(Default)]
+pub struct GoRules {
+    pub go_module: Option<String>,
+    pub internal_modules: std::collections::BTreeSet<String>,
+    /// The module of the file being rendered, so a reference to another package
+    /// gets a `pkg.` selector while a same-package one stays bare.
+    pub current_module: String,
+}
 
 /// The Go spelling of each composite type construct; the recursion lives in the
 /// shared `syntax` driver. An `@entries` map is the generated generic `Entries[K,
 /// V]`, whose `MarshalJSON`/`UnmarshalJSON` carry each pair as a two-element array.
 impl TypeSyntax for GoRules {
+    fn leaf(&self, symbol: &crate::codegen::symbol::Symbol) -> String {
+        // A reference to another SDK package is qualified with that package's
+        // selector (its module's last segment); a same-package reference and a
+        // built-in stay bare. Only the SDK's own modules qualify, so a nested
+        // layout gets `common.Status` while the flat single-package layout (empty
+        // `internal_modules`) leaves every name bare.
+        match &symbol.import {
+            Some(import)
+                if import.module != self.current_module
+                    && self.internal_modules.contains(&import.module) =>
+            {
+                let pkg = import.module.rsplit('.').next().unwrap_or(&import.module);
+                format!("{pkg}.{}", symbol.name)
+            }
+            _ => symbol.name.clone(),
+        }
+    }
     fn list(&self, inner: &str) -> String {
         format!("[]{inner}")
     }
@@ -171,12 +200,18 @@ impl GoRules {
 }
 
 impl RenderRules for GoRules {
-    fn render_import(&self, module: &str, _names: &[&str]) -> String {
-        // Go imports the whole package, so the per-symbol names play no part. A
-        // dotted module name is a package sub-path: payments.common ->
-        // payments/common.
-        let path = module.replace('.', "/");
-        format!("import \"{path}\"")
+    fn render_import(&self, _from_module: &str, module: &str, _names: &[&str]) -> String {
+        // Go imports the whole package, so the per-symbol names play no part. An
+        // SDK module is a package sub-path (payments.common -> payments/common)
+        // prefixed with the SDK's Go module path so it resolves; a standard-library
+        // import (encoding/json, fmt) is left verbatim.
+        let full = match &self.go_module {
+            Some(root) if self.internal_modules.contains(module) => {
+                format!("{root}/{}", module.replace('.', "/"))
+            }
+            _ => module.replace('.', "/"),
+        };
+        format!("import \"{full}\"")
     }
 
     fn render_decl(&self, decl: &Decl) -> String {
@@ -229,10 +264,26 @@ mod tests {
 
     #[test]
     fn imports_render_as_go_import_lines() {
-        // Go imports the whole package, so the per-symbol names are ignored.
+        // Go imports the whole package, so the per-symbol names are ignored. With
+        // no module path the flat package name stands alone.
         assert_eq!(
-            GoRules.render_import("payments", &["Charge", "Card"]),
+            GoRules::default().render_import("billing", "payments", &["Charge", "Card"]),
             "import \"payments\""
+        );
+        // A module path prefixes an SDK sub-package so the import resolves, but a
+        // standard-library import is left verbatim.
+        let rules = GoRules {
+            go_module: Some("example.com/sdk".into()),
+            internal_modules: ["payments.common".to_string()].into_iter().collect(),
+            current_module: "payments.charges".into(),
+        };
+        assert_eq!(
+            rules.render_import("payments.charges", "payments.common", &["Money"]),
+            "import \"example.com/sdk/payments/common\""
+        );
+        assert_eq!(
+            rules.render_import("payments.charges", "encoding/json", &[]),
+            "import \"encoding/json\""
         );
     }
 
@@ -263,7 +314,7 @@ mod tests {
             ],
             deprecated: None,
         });
-        let out = GoRules.render_decl(&decl);
+        let out = GoRules::default().render_decl(&decl);
         assert!(out.starts_with("type Charge struct {\n"));
         // The 64-bit integer is held natively but tagged `,string`.
         assert!(out.contains("\tAccountID int64 `json:\"account_id,string\"`\n"));
@@ -298,7 +349,7 @@ mod tests {
             ],
             deprecated: None,
         });
-        let out = GoRules.render_decl(&decl);
+        let out = GoRules::default().render_decl(&decl);
         // An optional slice is not a pointer; it stays a slice, with no omitempty.
         assert!(out.contains("\tTags []string `json:\"tags\"`\n"));
         assert!(out.contains("\tMeta map[string]int32 `json:\"meta\"`\n"));
@@ -317,7 +368,7 @@ mod tests {
             }],
             deprecated: None,
         });
-        assert!(GoRules
+        assert!(GoRules::default()
             .render_decl(&decl)
             .contains("\tId string `json:\"Id\"`\n"));
     }
@@ -331,7 +382,7 @@ mod tests {
             deprecated: None,
         });
         assert_eq!(
-            GoRules.render_decl(&decl),
+            GoRules::default().render_decl(&decl),
             "type Status string\n\nconst (\n\tStatusPending Status = \"pending\"\n\t\
              StatusInReview Status = \"in_review\"\n)"
         );
@@ -350,7 +401,7 @@ mod tests {
             deprecated: None,
         });
         assert_eq!(
-            GoRules.render_decl(&decl),
+            GoRules::default().render_decl(&decl),
             "type HTTPCode int\n\nconst (\n\tHTTPCodeOk HTTPCode = 200\n\t\
              HTTPCodeNotFound HTTPCode = 404\n\tHTTPCodeError HTTPCode = 500\n)"
         );
@@ -364,7 +415,7 @@ mod tests {
             backing: EnumRepr::String,
             deprecated: None,
         });
-        assert_eq!(GoRules.render_decl(&decl), "type Empty string\n");
+        assert_eq!(GoRules::default().render_decl(&decl), "type Empty string\n");
     }
 
     #[test]
@@ -380,7 +431,7 @@ mod tests {
             }],
             deprecated: Some("use ChargeV2".into()),
         });
-        let out = GoRules.render_decl(&decl);
+        let out = GoRules::default().render_decl(&decl);
         // The godoc line sits directly above the type and the field, no blank line.
         assert!(out.contains("// Deprecated: use ChargeV2\ntype Charge struct"));
         assert!(out.contains("\t// Deprecated: use AmountCents\n\tAmount"));
@@ -392,14 +443,14 @@ mod tests {
             backing: EnumRepr::String,
             deprecated: Some(String::new()),
         });
-        assert!(GoRules
+        assert!(GoRules::default()
             .render_decl(&enum_decl)
             .starts_with("// Deprecated:\ntype Status string"));
     }
 
     #[test]
     fn type_expressions_render_idiomatically() {
-        let rules = GoRules;
+        let rules = GoRules::default();
         assert_eq!(
             rules.render_type(&TypeExpr::list(TypeExpr::Ref(Symbol::builtin("Charge")))),
             "[]Charge"
@@ -450,7 +501,7 @@ mod tests {
             },
         });
         assert_eq!(
-            GoRules.render_decl(&function),
+            GoRules::default().render_decl(&function),
             "func Decode(data []byte) error {\n\treturn nil\n}"
         );
     }
@@ -461,7 +512,7 @@ mod tests {
             name: Symbol::builtin("Uuid"),
             value: "string".into(),
         });
-        assert_eq!(GoRules.render_decl(&alias), "type Uuid string");
+        assert_eq!(GoRules::default().render_decl(&alias), "type Uuid string");
     }
 
     #[test]
@@ -470,7 +521,10 @@ mod tests {
             text: "func (m Method) foo() {}".into(),
             refs: vec![],
         });
-        assert_eq!(GoRules.render_decl(&raw), "func (m Method) foo() {}");
+        assert_eq!(
+            GoRules::default().render_decl(&raw),
+            "func (m Method) foo() {}"
+        );
     }
 
     #[test]
@@ -488,8 +542,8 @@ mod tests {
             err: None,
             is_async: false,
         });
-        assert_eq!(GoRules.render_decl(&union), "");
-        assert_eq!(GoRules.render_decl(&method), "");
+        assert_eq!(GoRules::default().render_decl(&union), "");
+        assert_eq!(GoRules::default().render_decl(&method), "");
     }
 
     #[test]
@@ -522,7 +576,7 @@ mod tests {
             ],
         });
         assert_eq!(
-            GoRules.render_decl(&decl),
+            GoRules::default().render_decl(&decl),
             "type Client interface {\n\tCreateCharge(input CreateChargeInput) \
              (Charge, error)\n\tPing() error\n}"
         );

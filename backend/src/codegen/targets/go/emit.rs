@@ -156,7 +156,7 @@ mod tests {
             .iter()
             .find(|f| f.suffix == suffix)
             .unwrap_or_else(|| panic!("module did not emit a {suffix:?} file"));
-        render_file(&mf.file, &GoRules, &passthrough()).text
+        render_file(&mf.file, &GoRules::default(), &passthrough()).text
     }
 
     #[test]
