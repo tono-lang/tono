@@ -30,7 +30,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 [workspace]
 EOF
-(cd "$work/rust" && cargo build --quiet)
+# Deny warnings so a deprecated field (or any other lint) in the generated SDK
+# fails here rather than in a downstream consumer's stricter build.
+(cd "$work/rust" && RUSTFLAGS="-D warnings" cargo build --quiet)
 
 echo "go..."
 mkdir -p "$work/go"

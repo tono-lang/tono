@@ -137,3 +137,24 @@ fn a_missing_baseline_ref_fails_cleanly() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_mistyped_flag_is_rejected_not_swallowed_as_the_ir_path() {
+    let dir = repo("badflag");
+    std::fs::write(dir.join("current.json"), RETYPED).unwrap();
+    let out = tono()
+        .current_dir(&dir)
+        .args([
+            "breaking",
+            "current.json",
+            "--baselin", // typo: must error, not become a second positional
+            "HEAD",
+            "--baseline-path",
+            "ir.json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a mistyped flag must fail");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown flag"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

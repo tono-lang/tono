@@ -18,15 +18,15 @@ const DERIVES: &str = "#[derive(Clone, Debug, serde::Deserialize, serde::Seriali
 
 /// The `#[deprecated]` attribute for a `@deprecated` element, or empty when the
 /// element is not deprecated. A `Some("")` (marked without a reason) renders the
-/// bare form. Backslashes and quotes in the note are escaped and newlines collapse
-/// to spaces so the attribute stays a single valid line; the caller adds the
-/// indentation and trailing newline for its position (top-level or field).
+/// bare form. Backslashes and quotes in the note are escaped, and any whitespace
+/// control char collapses to a space so the attribute stays a single valid line;
+/// the caller adds the indentation and trailing newline for its position.
 ///
-/// No `#[allow(deprecated)]` is emitted on the generated serde impls: rustc does
-/// not fire the deprecation lint for uses within the same module as the definition,
-/// so the derived `Serialize`/`Deserialize` accessing a deprecated field compile
-/// clean even under `deny(warnings)`. The warning is intentional at external call
-/// sites, which is the point of `@deprecated`.
+/// No `#[allow(deprecated)]` is emitted on the generated serde impls: the derived
+/// `Serialize`/`Deserialize` accessing a deprecated field compile clean even under
+/// `deny(warnings)`, verified by the example-SDK compile gate which now builds with
+/// `-D warnings`. The warning fires only at external call sites, which is the point
+/// of `@deprecated`.
 pub(crate) fn deprecated_attr(reason: Option<&str>) -> String {
     match reason {
         None => String::new(),
@@ -35,7 +35,7 @@ pub(crate) fn deprecated_attr(reason: Option<&str>) -> String {
             let note = r
                 .replace('\\', "\\\\")
                 .replace('"', "\\\"")
-                .replace('\n', " ");
+                .replace(['\n', '\r', '\t'], " ");
             format!("#[deprecated(note = \"{note}\")]")
         }
     }

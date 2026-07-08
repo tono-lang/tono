@@ -102,7 +102,12 @@ fn run_breaking(args: &[String]) -> Result<(), String> {
             "--config" => config_path = Some(flag_value(args, &mut i, "--config")?),
             "--level" => levels.push(parse_level(&flag_value(args, &mut i, "--level")?)?),
             "--allow" => allow.push(flag_value(args, &mut i, "--allow")?),
-            path => current_path = Some(path.to_string()),
+            // Reject a mistyped flag rather than silently treating it as the IR
+            // path, and reject a second positional so an accidental extra argument
+            // does not overwrite the first.
+            flag if flag.starts_with("--") => return Err(format!("unknown flag: {flag}\n{USAGE}")),
+            path if current_path.is_none() => current_path = Some(path.to_string()),
+            path => return Err(format!("unexpected extra argument: {path}\n{USAGE}")),
         }
         i += 1;
     }

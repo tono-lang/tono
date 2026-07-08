@@ -264,7 +264,7 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
                     detail: format!("{bd} -> {cd}"),
                 });
             }
-            diff_members(&b.id, bm, cm, out);
+            diff_variants(&b.id, bm, cm, out);
         }
         (
             ShapeKind::Enum {
@@ -408,6 +408,64 @@ fn diff_member(id: &str, b: &Member, c: &Member, out: &mut Vec<Change>) {
     }
 }
 
+/// Compare union variants by name. A union is internally tagged and closed, so a
+/// removed variant can no longer decode wire data carrying its tag (wire break); an
+/// added variant leaves existing data decodable (additive). A variant is not a
+/// struct field, so it gets its own `*-variant` keys rather than the member ones.
+fn diff_variants(id: &str, base: &[Member], curr: &[Member], out: &mut Vec<Change>) {
+    let bi: BTreeMap<&str, &Member> = base.iter().map(|m| (m.name.as_str(), m)).collect();
+    let ci: BTreeMap<&str, &Member> = curr.iter().map(|m| (m.name.as_str(), m)).collect();
+
+    let mut names: Vec<&str> = bi.keys().chain(ci.keys()).copied().collect();
+    names.sort_unstable();
+    names.dedup();
+
+    for name in names {
+        match (bi.get(name), ci.get(name)) {
+            (Some(_), None) => out.push(Change {
+                key: format!("remove-variant {id}::{name}"),
+                category: Category::WireBreaking,
+                detail: format!("variant {name} removed"),
+            }),
+            (None, Some(_)) => out.push(Change {
+                key: format!("add-variant {id}::{name}"),
+                category: Category::AdditiveSafe,
+                detail: format!("variant {name} added"),
+            }),
+            (Some(b), Some(c)) => diff_variant(id, b, c, out),
+            (None, None) => unreachable!("name came from one of the two maps"),
+        }
+    }
+}
+
+fn diff_variant(id: &str, b: &Member, c: &Member, out: &mut Vec<Change>) {
+    let path = format!("{id}::{}", b.name);
+
+    if b.target != c.target {
+        out.push(Change {
+            key: format!("retype-variant {path}"),
+            category: Category::WireBreaking,
+            detail: format!("{} -> {}", render_tref(&b.target), render_tref(&c.target)),
+        });
+    }
+
+    if wire_of(&b.traits) != wire_of(&c.traits) {
+        out.push(Change {
+            key: format!("change-wire {path}@wire"),
+            category: Category::WireBreaking,
+            detail: format!(
+                "{} -> {}",
+                wire_of(&b.traits).unwrap_or(&b.name),
+                wire_of(&c.traits).unwrap_or(&c.name)
+            ),
+        });
+    }
+
+    if !is_deprecated(&b.traits) && is_deprecated(&c.traits) {
+        out.push(deprecation_change(&path));
+    }
+}
+
 /// A new constraint, or one tightened to reject previously-valid values, changes
 /// runtime behavior. Pure loosening is backward-compatible and emits nothing.
 fn diff_constraints(path: &str, base: &[Constraint], curr: &[Constraint], out: &mut Vec<Change>) {
@@ -428,9 +486,11 @@ fn diff_constraints(path: &str, base: &[Constraint], curr: &[Constraint], out: &
     }
 }
 
-/// Compare enum values by tag. A removed value narrows the type (wire break); an
-/// added value is safe because enums are always open; a changed integer
-/// discriminant re-points an existing value on the wire.
+/// Compare enum values by tag. Every enum is open, so a removed value still
+/// round-trips on the wire through the unknown arm: dropping it only removes a
+/// consumer's named arm (source break), not the wire contract. An added value is
+/// safe for the same reason. Changing the backing or an integer discriminant does
+/// change the wire form, so those are wire breaks.
 fn diff_enum(
     id: &str,
     bb: &EnumBacking,
@@ -458,7 +518,7 @@ fn diff_enum(
         match (bi.get(tag), ci.get(tag)) {
             (Some(_), None) => out.push(Change {
                 key: format!("remove-enum-value {id}::{tag}"),
-                category: Category::WireBreaking,
+                category: Category::SourceBreaking,
                 detail: format!("value {tag} removed"),
             }),
             (None, Some(_)) => out.push(Change {
@@ -693,9 +753,13 @@ fn lowered(old: Option<f64>, new: Option<f64>) -> bool {
     }
 }
 
-/// Set equality over type references (order-independent, allowing duplicates).
+/// Multiset equality over type references: order-independent, and each element
+/// must appear the same number of times on both sides (so `[X, X, Y]` and
+/// `[X, Y, Y]` differ). `Tref` is not hashable, so this counts occurrences.
 fn same_set(a: &[Tref], b: &[Tref]) -> bool {
-    a.len() == b.len() && a.iter().all(|t| b.contains(t)) && b.iter().all(|t| a.contains(t))
+    a.len() == b.len()
+        && a.iter()
+            .all(|t| a.iter().filter(|x| *x == t).count() == b.iter().filter(|x| *x == t).count())
 }
 
 /// Whether a shape's members / operation signature reference a target id.

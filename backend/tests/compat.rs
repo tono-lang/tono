@@ -233,7 +233,7 @@ fn enum_shape(id: &str, backing: EnumBacking, values: Vec<(String, Option<i64>)>
 }
 
 #[test]
-fn narrowing_an_enum_breaks_but_widening_is_safe() {
+fn narrowing_an_enum_is_source_breaking_and_widening_is_safe() {
     let two = enum_shape(
         "billing#Status",
         EnumBacking::String,
@@ -244,13 +244,15 @@ fn narrowing_an_enum_breaks_but_widening_is_safe() {
         EnumBacking::String,
         vec![("open".into(), None)],
     );
+    // Every enum is open, so a dropped value still decodes into the unknown arm on
+    // the wire; only the consumer's named arm is gone, which is source-breaking.
     assert_eq!(
         find(
             &diff(&two, &one),
             "remove-enum-value billing#Status::closed"
         )
         .category,
-        Category::WireBreaking
+        Category::SourceBreaking
     );
     assert_eq!(
         find(&diff(&one, &two), "add-enum-value billing#Status::closed").category,
@@ -314,6 +316,52 @@ fn changing_a_union_discriminator_is_wire_breaking() {
         .category,
         Category::WireBreaking
     );
+}
+
+fn source_union(variant_names: &[&str]) -> Model {
+    let members = variant_names
+        .iter()
+        .map(|n| {
+            member(
+                n,
+                Tref::Ref {
+                    id: format!("billing#{n}"),
+                    args: vec![],
+                },
+                true,
+            )
+        })
+        .collect();
+    model(vec![Shape {
+        id: "billing#Source".into(),
+        kind: ShapeKind::Union {
+            params: vec![],
+            members,
+            discriminator: "type".into(),
+        },
+        traits: vec![],
+    }])
+}
+
+#[test]
+fn union_variants_use_variant_keys_not_member_keys() {
+    let one = source_union(&["card"]);
+    let two = source_union(&["card", "bank"]);
+
+    // Adding a variant is additive (existing wire data still decodes); removing one
+    // is a wire break. Both are reported with `*-variant` keys, not the misleading
+    // member wording.
+    let added = diff(&one, &two);
+    let add = find(&added, "add-variant billing#Source::bank");
+    assert_eq!(add.category, Category::AdditiveSafe);
+    assert!(!keys(&added).iter().any(|k| k.starts_with("add-member")));
+
+    let removed = diff(&two, &one);
+    assert_eq!(
+        find(&removed, "remove-variant billing#Source::bank").category,
+        Category::WireBreaking
+    );
+    assert!(!keys(&removed).iter().any(|k| k.starts_with("remove-member")));
 }
 
 #[test]
