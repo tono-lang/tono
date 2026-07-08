@@ -17,8 +17,8 @@
   },
   "license": "Apache-2.0",
   "devDependencies": {
-    "@vitest/coverage-v8": "^2.0.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^5.5.0",
-    "vitest": "^2.0.0"
+    "vitest": "^4.1.10"
   }
 }
