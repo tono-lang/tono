@@ -141,21 +141,28 @@ fn making_a_member_required_breaks_but_optional_is_safe() {
 
 #[test]
 fn changing_a_wire_key_is_wire_breaking() {
-    let mut renamed = member("amount", Tref::Prim(Prim::U64), true);
-    renamed.traits = vec![Trait {
-        id: "core#wire".into(),
-        value: json!("amount_cents"),
-    }];
-    let before = charge(vec![member("amount", Tref::Prim(Prim::U64), true)]);
-    let after = charge(vec![renamed]);
-    assert_eq!(
-        find(
-            &diff(&before, &after),
-            "change-wire billing#Charge.amount@wire"
-        )
-        .category,
-        Category::WireBreaking
-    );
+    // Cover both the frontend form (bare `wire` id, argument as a one-element
+    // array) and the fixtures' form (`core#wire`, bare string): both must be
+    // detected, otherwise a `@wire` change slips through on real IR.
+    let with_wire = |id: &str, value| {
+        let mut m = member("amount", Tref::Prim(Prim::U64), true);
+        m.traits = vec![Trait {
+            id: id.into(),
+            value,
+        }];
+        charge(vec![m])
+    };
+    let plain = charge(vec![member("amount", Tref::Prim(Prim::U64), true)]);
+
+    for after in [
+        with_wire("wire", json!(["amount_cents"])),
+        with_wire("core#wire", json!("amount_cents")),
+    ] {
+        let report = diff(&plain, &after);
+        let change = find(&report, "change-wire billing#Charge.amount@wire");
+        assert_eq!(change.category, Category::WireBreaking);
+        assert_eq!(change.detail, "amount -> amount_cents");
+    }
 }
 
 #[test]
@@ -406,6 +413,83 @@ fn marking_a_shape_deprecated_is_additive() {
         )
         .category,
         Category::AdditiveSafe
+    );
+}
+
+#[test]
+fn marking_a_member_deprecated_is_additive() {
+    // A field gaining @deprecated (the frontend's bare `deprecated` id) is safe,
+    // reported at the member path, just like the shape-level case.
+    let plain = charge(vec![member("fee", Tref::Prim(Prim::U64), true)]);
+    let mut deprecated_member = member("fee", Tref::Prim(Prim::U64), true);
+    deprecated_member.traits = vec![Trait {
+        id: "deprecated".into(),
+        value: json!(["folded into amount"]),
+    }];
+    assert_eq!(
+        find(
+            &diff(&plain, &charge(vec![deprecated_member])),
+            "add-deprecated billing#Charge.fee"
+        )
+        .category,
+        Category::AdditiveSafe
+    );
+}
+
+fn service_with_op(op_ids: Vec<&str>, keep_op_shape: bool) -> Model {
+    let service = Shape {
+        id: "billing#Api".into(),
+        kind: ShapeKind::Service {
+            operations: op_ids.iter().map(|s| s.to_string()).collect(),
+        },
+        traits: vec![],
+    };
+    let operations = if keep_op_shape {
+        vec![Shape {
+            id: "billing#Op".into(),
+            kind: ShapeKind::Operation {
+                input: None,
+                output: None,
+                errors: vec![],
+            },
+            traits: vec![],
+        }]
+    } else {
+        vec![]
+    };
+    Model {
+        tono_ir_version: 2,
+        modules: vec![Module {
+            name: "billing".into(),
+            shapes: vec![service],
+            operations,
+        }],
+    }
+}
+
+#[test]
+fn a_deleted_operation_is_reported_once_not_twice() {
+    let before = service_with_op(vec!["billing#Op"], true);
+
+    // Deleted entirely: only the removed shape is reported, not a redundant
+    // remove-service-op for the same fact.
+    let deleted = service_with_op(vec![], false);
+    let report = diff(&before, &deleted);
+    assert!(keys(&report).contains(&"remove-shape billing#Op"));
+    assert!(!keys(&report)
+        .iter()
+        .any(|k| k.starts_with("remove-service-op")));
+
+    // Dropped from the service list but still defined elsewhere: that is the
+    // genuine service-level break, so it is reported.
+    let unexposed = service_with_op(vec![], true);
+    assert_eq!(
+        find(
+            &diff(&before, &unexposed),
+            "remove-service-op billing#Api/billing#Op"
+        )
+        .category,
+        Category::SourceBreaking
     );
 }
 

@@ -176,7 +176,8 @@ fn git_show(git_ref: &str, path: &str) -> Result<String, String> {
     String::from_utf8(out.stdout).map_err(|e| format!("git show {spec}: output is not utf-8: {e}"))
 }
 
-/// The most recent tag, the default baseline ref (RFC-0012's last-release-tag).
+/// The most recent tag, the default baseline ref (compare against the last
+/// released version).
 fn last_tag() -> Result<String, String> {
     let out = Command::new("git")
         .args(["describe", "--tags", "--abbrev=0"])

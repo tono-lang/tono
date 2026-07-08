@@ -33,8 +33,9 @@ pub enum Category {
 }
 
 impl Category {
-    /// The out-of-the-box severity for a level (RFC-0012 defaults). Overridable
-    /// per level in [`Config`].
+    /// The out-of-the-box severity for a level, overridable per level in
+    /// [`Config`]: a wire or source break fails the build, a behavioral change
+    /// warns, and an additive change is silent.
     pub fn default_severity(self) -> Severity {
         match self {
             Category::WireBreaking | Category::SourceBreaking => Severity::Error,
@@ -179,7 +180,7 @@ pub fn diff(baseline: &Model, current: &Model) -> Report {
         match (base.get(id), curr.get(id)) {
             (Some(b), None) => out.push(removed_shape(b, &curr)),
             (None, Some(c)) => added_shape(c, &mut out),
-            (Some(b), Some(c)) => diff_shape(b, c, &mut out),
+            (Some(b), Some(c)) => diff_shape(b, c, &curr, &mut out),
             (None, None) => unreachable!("id came from one of the two maps"),
         }
     }
@@ -228,7 +229,7 @@ fn added_shape(shape: &Shape, out: &mut Vec<Change>) {
     }
 }
 
-fn diff_shape(b: &Shape, c: &Shape, out: &mut Vec<Change>) {
+fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut Vec<Change>) {
     match (&b.kind, &c.kind) {
         (
             ShapeKind::Structure {
@@ -288,7 +289,7 @@ fn diff_shape(b: &Shape, c: &Shape, out: &mut Vec<Change>) {
             },
         ) => diff_operation(&b.id, bi, bo, be, ci, co, ce, out),
         (ShapeKind::Service { operations: bo }, ShapeKind::Service { operations: co }) => {
-            diff_service(&b.id, bo, co, out)
+            diff_service(&b.id, bo, co, current, out)
         }
         // A shape whose kind changed (structure -> enum, ...) is not a smooth
         // diff: the old kind is gone and a new one takes its id.
@@ -401,6 +402,10 @@ fn diff_member(id: &str, b: &Member, c: &Member, out: &mut Vec<Change>) {
     }
 
     diff_constraints(&path, &b.constraints, &c.constraints, out);
+
+    if !is_deprecated(&b.traits) && is_deprecated(&c.traits) {
+        out.push(deprecation_change(&path));
+    }
 }
 
 /// A new constraint, or one tightened to reject previously-valid values, changes
@@ -508,11 +513,19 @@ fn diff_operation(
     }
 }
 
-/// A service's operation list, compared as a set. Removing an operation drops it
-/// from the generated client (source break); adding one is safe.
-fn diff_service(id: &str, base: &[String], curr: &[String], out: &mut Vec<Change>) {
+/// A service's operation list, compared as a set. Dropping an operation the
+/// service still exposes is a source break; adding one is safe. An operation that
+/// was removed from the model entirely is already reported once as a removed
+/// shape, so it is not double-counted here.
+fn diff_service(
+    id: &str,
+    base: &[String],
+    curr: &[String],
+    current: &BTreeMap<&str, &Shape>,
+    out: &mut Vec<Change>,
+) {
     for op in base {
-        if !curr.contains(op) {
+        if !curr.contains(op) && current.contains_key(op.as_str()) {
             out.push(Change {
                 key: format!("remove-service-op {id}/{op}"),
                 category: Category::SourceBreaking,
@@ -541,12 +554,19 @@ fn deprecation_change(id: &str) -> Change {
 
 // --- small readers and renderers, kept local so the module stands alone ---
 
-/// The `@wire` override on a member (trait `core#wire`), or `None`.
+/// The `@wire` override on a member, or `None`. Matches the trait by its local
+/// name (tolerating a `core#` namespace) and unwraps the single argument, which
+/// the frontend encodes as a one-element array and the fixtures as a bare string,
+/// so a `@wire` change is detected on real IR, not only on hand-authored IR.
 fn wire_of(traits: &[Trait]) -> Option<&str> {
     traits
         .iter()
-        .find(|t| t.id == "core#wire")
-        .and_then(|t| t.value.as_str())
+        .find(|t| t.id == "wire" || t.id == "core#wire")
+        .and_then(|t| match &t.value {
+            serde_json::Value::String(s) => Some(s.as_str()),
+            serde_json::Value::Array(items) => items.first().and_then(|v| v.as_str()),
+            _ => None,
+        })
 }
 
 /// Whether a `@deprecated` trait is present, matching the local name so it reads
