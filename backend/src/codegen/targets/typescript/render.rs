@@ -208,6 +208,16 @@ mod tests {
     }
 
     #[test]
+    fn an_external_package_imports_as_a_bare_specifier() {
+        // The hand-written runtime is a scoped package, not a sibling module, so
+        // it keeps its bare specifier rather than gaining a `./` prefix.
+        assert_eq!(
+            TsRules.render_import("@tono/http-runtime-ts", &["execute", "WireDescriptor"]),
+            "import { execute, WireDescriptor } from \"@tono/http-runtime-ts\";"
+        );
+    }
+
+    #[test]
     fn an_interface_renders_fields_with_nullability() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
