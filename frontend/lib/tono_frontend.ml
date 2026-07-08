@@ -15,6 +15,7 @@ module Parser = Parser
 module Printer = Printer
 module Lower = Lower
 module Typecheck = Typecheck
+module Protocol_http = Protocol_http
 
 (* The pure calculus: a self-contained, total expression sub-language. Its
    modules carry a [Calc_] prefix because the library namespace is flat. *)
@@ -51,6 +52,11 @@ let compile_to_json ?(module_name = "") (src : string) : (string, string) result
   if errors <> [] then
     Error (String.concat "\n" (List.map Diagnostic.to_string errors))
   else
+    (* Protocol resolution is the final IR -> IR step: each operation's HTTP
+       annotations are materialized into an opaque wire descriptor the backend
+       embeds verbatim. It rides the trait bag, so the core IR stays
+       protocol-agnostic (the descriptor is data, not model structure). *)
+    let m = Protocol_http.resolve_module m in
     let model =
       { Ir.tono_ir_version = Ir_json.current_ir_version; modules = [ m ] }
     in

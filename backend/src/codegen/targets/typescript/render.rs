@@ -109,7 +109,14 @@ impl TsRules {
 
 impl RenderRules for TsRules {
     fn render_import(&self, module: &str, names: &[&str]) -> String {
-        format!("import {{ {} }} from \"./{module}\";", names.join(", "))
+        // A sibling generated module is a relative path; a bare package specifier
+        // (the hand-written runtime, scoped `@scope/name`) is imported as-is.
+        let specifier = if module.starts_with('@') || module.starts_with('.') {
+            module.to_string()
+        } else {
+            format!("./{module}")
+        };
+        format!("import {{ {} }} from \"{specifier}\";", names.join(", "))
     }
 
     fn render_decl(&self, decl: &Decl) -> String {

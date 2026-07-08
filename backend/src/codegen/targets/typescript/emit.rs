@@ -9,6 +9,7 @@
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::symbol::Symbol;
+use crate::codegen::targets::typescript::client;
 use crate::codegen::targets::typescript::codecs::{emit_codecs, runtime_helpers};
 use crate::codegen::targets::typescript::errors;
 use crate::codegen::targets::typescript::types::emit_type;
@@ -48,6 +49,10 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     if !module.operations.is_empty() {
         type_decls.extend(errors::type_decls(module, config));
         serde_decls.extend(errors::serde_decls(module));
+        // The transport client lives with the codecs it calls (encode input,
+        // decode output, the error discriminator) and embeds each operation's
+        // opaque wire descriptor.
+        serde_decls.extend(client::client_decls(module, config));
     }
 
     let mut files = vec![ModuleFile {

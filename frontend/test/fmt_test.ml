@@ -90,6 +90,7 @@ struct bank_account { iban: string }
 @discriminator("kind")
 union source { card(card), bank(bank_account) }
 struct page[t] { items: []t, next: string? }
+@status(404)
 struct not_found { message: string }
 op create_charge(charge): charge @errors(not_found)
 |}

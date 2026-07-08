@@ -42,8 +42,27 @@ cp "$sdk"/go/*.go "$work/go/"
 echo "typescript..."
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"
 # The TypeScript SDK is split into a types module and a serde module; the serde
-# file imports the types, so compile both together.
-"$tsc" --noEmit --strict --target ES2020 --lib ES2020,DOM \
-  "$sdk/typescript/payments.ts" "$sdk/typescript/payments_serde.ts"
+# file imports the types (compiled together) plus the hand-written HTTP runtime.
+# A tsconfig maps the runtime package to its source so the client compiles against
+# the real transport, closing the Protocol/Target seam end to end.
+mkdir -p "$work/ts"
+cp "$sdk"/typescript/*.ts "$work/ts/"
+cat >"$work/ts/tsconfig.json" <<EOF
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2020",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM"],
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
+  },
+  "files": ["payments.ts", "payments_serde.ts"]
+}
+EOF
+(cd "$work/ts" && "$tsc" -p tsconfig.json)
 
 echo "all three generated SDKs compile"

@@ -2,6 +2,7 @@
 //! encoding for the hard cases (open enum, internally-tagged union, generics,
 //! nullable, i64-as-string, bytes-as-base64, branded well-known types).
 
+pub mod client;
 pub mod codecs;
 pub mod emit;
 pub mod errors;
@@ -20,7 +21,7 @@ crate::declare_target! {
         symbol_of: symbols::symbol_of,
         emit_type: types::emit_type,
         casing: types::ts_casing,
-        runtime_pkg: "@sdk/http-runtime-ts",
+        runtime_pkg: client::RUNTIME_PKG,
     }
 }
 
@@ -34,7 +35,8 @@ mod tests {
     #[test]
     fn target_identity_and_runtime() {
         assert_eq!(TsTarget.name(), "typescript");
-        assert_eq!(TsTarget.runtime_pkg(), "@sdk/http-runtime-ts");
+        assert_eq!(TsTarget.runtime_pkg(), client::RUNTIME_PKG);
+        assert_eq!(TsTarget.runtime_pkg(), "@tono/http-runtime-ts");
     }
 
     #[test]
