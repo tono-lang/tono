@@ -197,6 +197,7 @@ mod tests {
             ty,
             nullable: false,
             wire: None,
+            deprecated: None,
         }
     }
 
@@ -225,6 +226,7 @@ mod tests {
             decls: vec![Decl::Interface(Interface {
                 name: Symbol::builtin("Subject"),
                 fields,
+                deprecated: None,
             })],
         }
     }
@@ -390,6 +392,7 @@ mod tests {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active")],
                     backing: crate::codegen::tree::EnumRepr::String,
+                    deprecated: None,
                 }),
                 Decl::Method(method(
                     "create",
@@ -479,6 +482,7 @@ mod tests {
                     ))),
                     wire: None,
                 }],
+                deprecated: None,
             })],
         };
         // The variant field's type and the variant payload's type.

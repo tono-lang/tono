@@ -16,7 +16,7 @@
 
 use crate::codegen::casing::{CaseStyle, CasingConfig};
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::rust::render::type_string;
+use crate::codegen::targets::rust::render::{deprecated_attr, type_string};
 use crate::codegen::targets::rust::symbols::symbol_of;
 use crate::codegen::targets::rust::types::variant_ident;
 use crate::codegen::tree::{Decl, Field, Raw, TypeExpr};
@@ -59,6 +59,7 @@ pub(crate) fn enum_item(
     backing: &EnumBacking,
     values: &[(String, Option<i64>)],
     name: &str,
+    deprecated: Option<&str>,
 ) -> Decl {
     let variants = enum_variants(values);
     let unknown = match backing {
@@ -66,6 +67,11 @@ pub(crate) fn enum_item(
         EnumBacking::Int => "    Unknown(i64),\n}",
     };
     let mut text = String::new();
+    let attr = deprecated_attr(deprecated);
+    if !attr.is_empty() {
+        text.push_str(&attr);
+        text.push('\n');
+    }
     text.push_str("#[derive(Clone, Debug)]\n");
     text.push_str(&format!("pub enum {name} {{\n"));
     for (ident, _) in &variants {
@@ -183,10 +189,20 @@ fn enum_variants(values: &[(String, Option<i64>)]) -> Vec<(String, String)> {
 /// variants each carry one payload. The variant identifier is PascalCase; its
 /// wire tag (the member's `@wire` override, else its name) rides `#[serde(rename)]`.
 /// Each payload type is declared as a ref so cross-module payloads are imported.
-pub(crate) fn union_item(discriminator: &str, members: &[Member], name: &str) -> Decl {
+pub(crate) fn union_item(
+    discriminator: &str,
+    members: &[Member],
+    name: &str,
+    deprecated: Option<&str>,
+) -> Decl {
     let config = variant_casing();
 
     let mut text = String::new();
+    let attr = deprecated_attr(deprecated);
+    if !attr.is_empty() {
+        text.push_str(&attr);
+        text.push('\n');
+    }
     text.push_str("#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]\n");
     text.push_str(&format!("#[serde(tag = \"{discriminator}\")]\n"));
     text.push_str(&format!("pub enum {name} {{\n"));
@@ -462,6 +478,7 @@ mod tests {
             ty,
             nullable,
             wire: None,
+            deprecated: None,
         }
     }
 
@@ -510,6 +527,7 @@ mod tests {
             &EnumBacking::String,
             &values(vec!["pending", "card_present"]),
             "Status",
+            None,
         );
         // The definition is just the data enum with its catch-all; the serde impls
         // live in a separate item, so they are absent here.
@@ -563,6 +581,7 @@ mod tests {
             &EnumBacking::Int,
             &int_values(vec![("ok", 200), ("not_found", 404)]),
             "HTTPCode",
+            None,
         );
         // The variants are bare; the catch-all carries the backing i64.
         assert!(matches!(&decl, Decl::Raw(raw) if
@@ -592,7 +611,7 @@ mod tests {
 
     #[test]
     fn an_empty_enum_definition_is_just_the_unknown_arm() {
-        let def = enum_item(&EnumBacking::String, &[], "Empty");
+        let def = enum_item(&EnumBacking::String, &[], "Empty", None);
         assert!(matches!(&def, Decl::Raw(raw) if
             raw.text.contains("    Unknown(String),")
                 && raw.text.contains("pub enum Empty {")));
@@ -613,7 +632,7 @@ mod tests {
             // no rename, exercising the no-rename path.
             wire_member("wire", "billing#wire_data", Some("Wire")),
         ];
-        let decl = union_item("type", &members, "Method");
+        let decl = union_item("type", &members, "Method", None);
         assert!(matches!(&decl, Decl::Raw(raw) if
             raw.text.contains("#[serde(tag = \"type\")]")
                 && raw.text.contains("pub enum Method {")
@@ -631,6 +650,24 @@ mod tests {
                 // Payload symbols are declared so cross-module ones get imported.
                 && raw.refs.len() == 3
                 && raw.refs.iter().any(|s| s.name == "CardData")));
+    }
+
+    #[test]
+    fn a_deprecated_enum_and_union_lead_with_the_attribute() {
+        // The enum and union are Raw text, so the attribute is prepended there.
+        let e = enum_item(
+            &EnumBacking::String,
+            &values(vec!["pending"]),
+            "Status",
+            Some("use v2"),
+        );
+        assert!(matches!(&e, Decl::Raw(raw)
+            if raw.text.starts_with("#[deprecated(note = \"use v2\")]\n#[derive(")));
+
+        let members = vec![wire_member("card", "cards#card_data", None)];
+        let u = union_item("type", &members, "Method", Some(""));
+        assert!(matches!(&u, Decl::Raw(raw)
+            if raw.text.starts_with("#[deprecated]\n#[derive(")));
     }
 
     #[test]

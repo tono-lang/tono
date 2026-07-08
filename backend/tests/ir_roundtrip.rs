@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tono_backend::ir::{self, check_roundtrip, decode_model, Constraint, Prim, ShapeKind, Tref};
 
-const FIXTURE_NAMES: [&str; 5] = [
+const FIXTURE_NAMES: [&str; 6] = [
+    "deprecated",
     "list_charges",
     "nullable_charge",
     "open_enum_union",

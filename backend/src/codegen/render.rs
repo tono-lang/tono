@@ -266,11 +266,13 @@ mod tests {
                             ty: self.type_expr_of(&m.target),
                             nullable: !m.required,
                             wire: Self::wire_of(&m.traits),
+                            deprecated: None,
                         })
                         .collect();
                     vec![Decl::Interface(Interface {
                         name: Symbol::builtin(Self::local_name(&shape.id)),
                         fields,
+                        deprecated: None,
                     })]
                 }
                 _ => vec![],
@@ -307,6 +309,7 @@ mod tests {
             ty: TypeExpr::Ref(Symbol::imported(ty_name, module, ty_name)),
             nullable: false,
             wire: None,
+            deprecated: None,
         }
     }
 
@@ -320,6 +323,7 @@ mod tests {
                     imported_field("a", "A", "alpha"),
                     imported_field("z", "Z", "zeta"),
                 ],
+                deprecated: None,
             })],
         };
         let out = render_file(&file, &RustRules, &passthrough());
@@ -352,6 +356,7 @@ mod tests {
                     ty: TypeExpr::Ref(Symbol::builtin("unknown")),
                     nullable: false,
                     wire: None,
+                    deprecated: None,
                 }],
                 ret: Some(TypeExpr::Ref(Symbol::imported("Charge", "model", "Charge"))),
                 body: FnBody::Raw {
@@ -397,7 +402,9 @@ mod tests {
                     ty: TypeExpr::Ref(Symbol::builtin("String")),
                     nullable: false,
                     wire: None,
+                    deprecated: None,
                 }],
+                deprecated: None,
             })],
         };
         let out = render_file(&file, &RustRules, &passthrough());
@@ -417,7 +424,9 @@ mod tests {
                     ty: TypeExpr::Ref(Symbol::builtin("i64")),
                     nullable: false,
                     wire: Some("amount_cents".into()),
+                    deprecated: None,
                 }],
+                deprecated: None,
             })],
         };
         let out = render_file(&file, &RustRules, &passthrough());
@@ -434,6 +443,7 @@ mod tests {
             decls: vec![Decl::Interface(Interface {
                 name: Symbol::builtin("Invoice"),
                 fields: vec![imported_field("a", "A", "alpha")],
+                deprecated: None,
             })],
         };
         let first = render_file(&file, &RustRules, &passthrough());
@@ -462,6 +472,7 @@ mod tests {
                             ))),
                             nullable: false,
                             wire: None,
+                            deprecated: None,
                         },
                         Field {
                             name: Symbol::builtin("index"),
@@ -471,12 +482,14 @@ mod tests {
                             ),
                             nullable: false,
                             wire: None,
+                            deprecated: None,
                         },
                         Field {
                             name: Symbol::builtin("note"),
                             ty: TypeExpr::nullable(TypeExpr::Ref(Symbol::builtin("String"))),
                             nullable: false,
                             wire: None,
+                            deprecated: None,
                         },
                         Field {
                             name: Symbol::builtin("page"),
@@ -486,6 +499,7 @@ mod tests {
                             ),
                             nullable: true,
                             wire: None,
+                            deprecated: None,
                         },
                         Field {
                             name: Symbol::builtin("counts"),
@@ -495,13 +509,16 @@ mod tests {
                             ),
                             nullable: false,
                             wire: None,
+                            deprecated: None,
                         },
                     ],
+                    deprecated: None,
                 }),
                 Decl::Enum(EnumDecl {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active"), Symbol::builtin("Closed")],
                     backing: crate::codegen::tree::EnumRepr::String,
+                    deprecated: None,
                 }),
                 Decl::Union(UnionDecl {
                     name: Symbol::builtin("Method"),
@@ -512,6 +529,7 @@ mod tests {
                         payload: None,
                         wire: None,
                     }],
+                    deprecated: None,
                 }),
                 Decl::Method(Method {
                     name: Symbol::builtin("create"),
@@ -520,6 +538,7 @@ mod tests {
                         ty: TypeExpr::Ref(Symbol::builtin("String")),
                         nullable: false,
                         wire: None,
+                        deprecated: None,
                     }],
                     ret: Some(TypeExpr::Ref(Symbol::builtin("String"))),
                     err: None,

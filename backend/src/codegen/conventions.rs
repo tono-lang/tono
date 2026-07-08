@@ -45,6 +45,17 @@ pub fn has_entries(traits: &[Trait]) -> bool {
     traits.iter().any(|t| t.id == "core#entries")
 }
 
+/// The `@deprecated` reason (trait `core#deprecated`). A string value is the
+/// reason; a present but non-string value (a bare `@deprecated`) yields `Some("")`;
+/// absence yields `None`. Every target rebases this onto its native deprecation
+/// annotation, keeping the element generated but marked.
+pub fn deprecated_of(traits: &[Trait]) -> Option<String> {
+    traits
+        .iter()
+        .find(|t| t.id == "core#deprecated")
+        .map(|t| t.value.as_str().unwrap_or("").to_string())
+}
+
 /// Reshape a map into an `@entries` pairs-array when the member carries the
 /// `core#entries` trait; any other type is unchanged. The escape only applies to
 /// a map (a non-map `@entries` is rejected upstream by the typechecker).
@@ -190,20 +201,32 @@ pub fn emit_shape(
     shape: &Shape,
     lang: &str,
     field_of: impl Fn(&Member) -> Field,
-    emit_enum: impl Fn(&EnumBacking, &[(String, Option<i64>)], &str) -> Vec<Decl>,
-    emit_union: impl Fn(&str, &[Member], &str) -> Vec<Decl>,
+    emit_enum: impl Fn(&EnumBacking, &[(String, Option<i64>)], &str, Option<&str>) -> Vec<Decl>,
+    emit_union: impl Fn(&str, &[Member], &str, Option<&str>) -> Vec<Decl>,
 ) -> Vec<Decl> {
+    let deprecated = deprecated_of(&shape.traits);
     match &shape.kind {
         ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
             name: type_name(shape, lang),
             fields: members.iter().map(&field_of).collect(),
+            deprecated,
         })],
-        ShapeKind::Enum { backing, values } => emit_enum(backing, values, &type_ident(shape, lang)),
+        ShapeKind::Enum { backing, values } => emit_enum(
+            backing,
+            values,
+            &type_ident(shape, lang),
+            deprecated.as_deref(),
+        ),
         ShapeKind::Union {
             discriminator,
             members,
             ..
-        } => emit_union(discriminator, members, &type_ident(shape, lang)),
+        } => emit_union(
+            discriminator,
+            members,
+            &type_ident(shape, lang),
+            deprecated.as_deref(),
+        ),
         _ => vec![],
     }
 }
@@ -215,7 +238,12 @@ pub fn emit_shape(
 /// member names supply the in-code identifiers; their wire form rides the backing.
 /// An int-backed value missing a discriminant falls back to zero rather than
 /// panicking (the frontend guarantees one is present).
-pub fn open_enum(backing: &EnumBacking, values: &[(String, Option<i64>)], name: &str) -> Decl {
+pub fn open_enum(
+    backing: &EnumBacking,
+    values: &[(String, Option<i64>)],
+    name: &str,
+    deprecated: Option<&str>,
+) -> Decl {
     let repr = match backing {
         EnumBacking::String => EnumRepr::String,
         EnumBacking::Int => EnumRepr::Int(values.iter().map(|(_, n)| n.unwrap_or(0)).collect()),
@@ -227,6 +255,7 @@ pub fn open_enum(backing: &EnumBacking, values: &[(String, Option<i64>)], name: 
             .map(|(value, _)| Symbol::builtin(value.clone()))
             .collect(),
         backing: repr,
+        deprecated: deprecated.map(str::to_string),
     })
 }
 
@@ -284,6 +313,22 @@ mod tests {
         assert_eq!(rename_of(&traits, "go").as_deref(), Some("RenamedGo"));
         assert_eq!(rename_of(&traits, "typescript"), None);
         assert_eq!(rename_of(&[], "rust"), None);
+    }
+
+    #[test]
+    fn deprecated_reads_the_reason_and_the_bare_form() {
+        // A string value is the reason.
+        assert_eq!(
+            deprecated_of(&[trait_of("core#deprecated", json!("use v2"))]).as_deref(),
+            Some("use v2")
+        );
+        // A bare `@deprecated` (any non-string value) is deprecated without a reason.
+        assert_eq!(
+            deprecated_of(&[trait_of("core#deprecated", json!(true))]).as_deref(),
+            Some("")
+        );
+        // Absent means not deprecated.
+        assert_eq!(deprecated_of(&[]), None);
     }
 
     #[test]
@@ -510,6 +555,7 @@ mod tests {
             &EnumBacking::String,
             &[("pending".into(), None), ("settled".into(), None)],
             "Status",
+            None,
         );
         assert!(matches!(decl, Decl::Enum(d)
             if d.name.name == "Status"
@@ -525,6 +571,7 @@ mod tests {
             &EnumBacking::Int,
             &[("ok".into(), Some(200)), ("error".into(), Some(500))],
             "HTTPCode",
+            None,
         );
         assert!(matches!(decl, Decl::Enum(d)
             if d.name.name == "HTTPCode"
@@ -532,7 +579,7 @@ mod tests {
                 && d.members[1].name == "error"
                 && d.backing == EnumRepr::Int(vec![200, 500])));
         // A missing discriminant falls back to zero rather than panicking.
-        let lenient = open_enum(&EnumBacking::Int, &[("ok".into(), None)], "HTTPCode");
+        let lenient = open_enum(&EnumBacking::Int, &[("ok".into(), None)], "HTTPCode", None);
         assert!(matches!(lenient, Decl::Enum(d)
             if d.backing == EnumRepr::Int(vec![0])));
     }
@@ -544,14 +591,16 @@ mod tests {
             ty: TypeExpr::Ref(Symbol::builtin("x")),
             nullable: false,
             wire: None,
+            deprecated: None,
         };
-        let mark_enum = |_: &EnumBacking, _: &[(String, Option<i64>)], name: &str| {
-            vec![Decl::Alias(crate::codegen::tree::Alias {
-                name: Symbol::builtin(name.to_string()),
-                value: "enum".into(),
-            })]
-        };
-        let mark_union = |_: &str, _: &[Member], name: &str| {
+        let mark_enum =
+            |_: &EnumBacking, _: &[(String, Option<i64>)], name: &str, _: Option<&str>| {
+                vec![Decl::Alias(crate::codegen::tree::Alias {
+                    name: Symbol::builtin(name.to_string()),
+                    value: "enum".into(),
+                })]
+            };
+        let mark_union = |_: &str, _: &[Member], name: &str, _: Option<&str>| {
             vec![Decl::Alias(crate::codegen::tree::Alias {
                 name: Symbol::builtin(name.to_string()),
                 value: "union".into(),

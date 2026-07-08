@@ -16,6 +16,36 @@ use crate::codegen::tree::{Decl, Field, FnBody, Function, Method, TypeExpr};
 /// The standard derives every generated struct and enum carries.
 const DERIVES: &str = "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]";
 
+/// The `#[deprecated]` attribute for a `@deprecated` element, or empty when the
+/// element is not deprecated. A `Some("")` (marked without a reason) renders the
+/// bare form. Backslashes and quotes in the note are escaped and newlines collapse
+/// to spaces so the attribute stays a single valid line; the caller adds the
+/// indentation and trailing newline for its position (top-level or field).
+pub(crate) fn deprecated_attr(reason: Option<&str>) -> String {
+    match reason {
+        None => String::new(),
+        Some("") => "#[deprecated]".into(),
+        Some(r) => {
+            let note = r
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', " ");
+            format!("#[deprecated(note = \"{note}\")]")
+        }
+    }
+}
+
+/// Prefix a rendered line/block with a deprecation attribute, indented and
+/// newline-terminated, when one is present.
+fn deprecated_prefix(reason: Option<&str>, indent: &str) -> String {
+    let attr = deprecated_attr(reason);
+    if attr.is_empty() {
+        String::new()
+    } else {
+        format!("{indent}{attr}\n")
+    }
+}
+
 /// Render a component-tree type expression into Rust surface syntax. Free so the
 /// codec layer (which builds union payload types) can reuse it.
 pub(crate) fn type_string(ty: &TypeExpr) -> String {
@@ -77,7 +107,8 @@ impl RustRules {
         } else {
             format!("    #[serde({})]\n", args.join(", "))
         };
-        format!("{attr}    pub {}: {ty},\n", field.name.name)
+        let dep = deprecated_prefix(field.deprecated.as_deref(), "    ");
+        format!("{dep}{attr}    pub {}: {ty},\n", field.name.name)
     }
 
     /// One client method signature. An async operation is an `async fn` (the
@@ -146,8 +177,9 @@ impl RenderRules for RustRules {
                     .iter()
                     .map(|f| self.render_field(f))
                     .collect();
+                let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
                 format!(
-                    "{DERIVES}\npub struct {} {{\n{fields}}}",
+                    "{dep}{DERIVES}\npub struct {} {{\n{fields}}}",
                     interface.name.name
                 )
             }
@@ -193,6 +225,7 @@ mod tests {
             ty,
             nullable,
             wire: wire.map(str::to_string),
+            deprecated: None,
         }
     }
 
@@ -219,6 +252,7 @@ mod tests {
                 false,
                 None,
             )],
+            deprecated: None,
         });
         assert_eq!(
             RustRules.render_decl(&decl),
@@ -237,6 +271,7 @@ mod tests {
                 false,
                 Some("memo"),
             )],
+            deprecated: None,
         });
         let out = RustRules.render_decl(&decl);
         assert!(out.contains("    #[serde(rename = \"memo\")]\n"));
@@ -262,6 +297,7 @@ mod tests {
                 ),
                 field("tip", TypeExpr::Ref(Symbol::builtin("u64")), true, None),
             ],
+            deprecated: None,
         });
         let out = RustRules.render_decl(&decl);
         // The wire rename and the string codec combine into one serde attribute.
@@ -286,6 +322,7 @@ mod tests {
                 true,
                 None,
             )],
+            deprecated: None,
         });
         let out = RustRules.render_decl(&decl);
         assert!(out.contains("    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n"));
@@ -302,11 +339,44 @@ mod tests {
                 true,
                 Some("memo"),
             )],
+            deprecated: None,
         });
         let out = RustRules.render_decl(&decl);
         assert!(out.contains(
             "    #[serde(rename = \"memo\", default, skip_serializing_if = \"Option::is_none\")]\n"
         ));
+    }
+
+    #[test]
+    fn a_deprecated_struct_and_field_carry_rust_attributes() {
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Charge"),
+            fields: vec![
+                Field {
+                    name: Symbol::builtin("amount"),
+                    ty: TypeExpr::Ref(Symbol::builtin("u32")),
+                    nullable: false,
+                    wire: None,
+                    deprecated: Some("use amount_cents".into()),
+                },
+                Field {
+                    name: Symbol::builtin("id"),
+                    ty: TypeExpr::Ref(Symbol::builtin("String")),
+                    nullable: false,
+                    wire: None,
+                    deprecated: Some(String::new()),
+                },
+            ],
+            deprecated: Some("use ChargeV2".into()),
+        });
+        let out = RustRules.render_decl(&decl);
+        // The struct attribute leads the derive so it attaches to the type.
+        assert!(out.contains("#[deprecated(note = \"use ChargeV2\")]\n#[derive("));
+        // A field with a reason carries the note; a bare one the plain attribute.
+        assert!(
+            out.contains("    #[deprecated(note = \"use amount_cents\")]\n    pub amount: u32,")
+        );
+        assert!(out.contains("    #[deprecated]\n    pub id: String,"));
     }
 
     #[test]
@@ -394,11 +464,13 @@ mod tests {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("pending")],
             backing: crate::codegen::tree::EnumRepr::String,
+            deprecated: None,
         });
         let union_decl = Decl::Union(UnionDecl {
             name: Symbol::builtin("Method"),
             discriminator: "type".into(),
             variants: vec![],
+            deprecated: None,
         });
         let method = Decl::Method(Method {
             name: Symbol::builtin("ping"),
