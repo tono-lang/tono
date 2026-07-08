@@ -15,6 +15,10 @@
 //! per-language concern, deferred), and `@pattern` (which would pull a regex
 //! engine as a dependency) and `@multipleOf` (unexercised) are not lowered yet.
 
+use crate::codegen::casing::CasingConfig;
+use crate::codegen::conventions::field_ident;
+use crate::codegen::symbol::Symbol;
+use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{Constraint, Member, Prim, Tref};
 
 /// What a length check counts, since the unit differs by the field's type and each
@@ -219,6 +223,105 @@ pub fn shape_has_checks(shape: &crate::ir::Shape) -> bool {
         }
         _ => false,
     }
+}
+
+/// One rendered guard a validator emits: the boolean condition (already spelled
+/// through the target's syntax over the field access) plus the `Violation` triple
+/// to push when it holds. The target only formats these into its own statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuardLine {
+    pub condition: String,
+    pub field: String,
+    pub constraint: &'static str,
+    pub message: String,
+}
+
+/// The guard lines for a structure's members: each check rendered against
+/// `<access_prefix><field-ident>` (e.g. `self.amount`, `value.Currency`), so the
+/// per-member/per-check iteration and condition building live here rather than in
+/// each target. Empty when nothing is constrained.
+pub fn guard_lines(
+    members: &[Member],
+    syntax: &dyn ValSyntax,
+    access_prefix: &str,
+    config: &CasingConfig,
+    lang: &str,
+) -> Vec<GuardLine> {
+    let mut out = Vec::new();
+    for member in members {
+        let access = format!("{access_prefix}{}", field_ident(member, config, lang));
+        for check in member_checks(member) {
+            out.push(GuardLine {
+                condition: check.condition(&access, syntax),
+                field: check.field.clone(),
+                constraint: check.constraint,
+                message: check.message.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// The guard lines for a shape that should get a validator, or `None` when it
+/// should not: a non-structure, a generic structure (unmodeled), or a structure
+/// with no lowerable constraint. Collapses the shared preamble every target's
+/// `emit_validators` would otherwise repeat.
+pub fn structure_guard_lines(
+    shape: &crate::ir::Shape,
+    syntax: &dyn ValSyntax,
+    access_prefix: &str,
+    config: &CasingConfig,
+    lang: &str,
+) -> Option<Vec<GuardLine>> {
+    let crate::ir::ShapeKind::Structure { params, members } = &shape.kind else {
+        return None;
+    };
+    if !params.is_empty() {
+        return None;
+    }
+    let lines = guard_lines(members, syntax, access_prefix, config, lang);
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines)
+    }
+}
+
+/// Assemble a validator body from its guard lines: a header, one rendered
+/// statement per guard (the target supplies the `if`/push spelling), and a footer.
+pub fn validator_body(
+    lines: &[GuardLine],
+    header: &str,
+    footer: &str,
+    guard: impl Fn(&GuardLine) -> String,
+) -> String {
+    let mut body = header.to_string();
+    for line in lines {
+        body.push_str(&guard(line));
+    }
+    body.push_str(footer);
+    body
+}
+
+/// A free-function validator declaration shared by the targets that spell one that
+/// way (TypeScript, Go): `fn(value: <Ty>) -> Vec<Violation>` over the given body.
+/// Rust instead emits an inherent method, so it builds its own declaration.
+pub fn validator_function(name: String, ty: String, violation: String, body: String) -> Decl {
+    Decl::Function(Function {
+        name: Symbol::builtin(name),
+        params: vec![Field {
+            name: Symbol::builtin("value"),
+            ty: TypeExpr::Ref(Symbol::builtin(ty)),
+            nullable: false,
+            wire: None,
+            deprecated: None,
+        }],
+        ret: Some(TypeExpr::list(TypeExpr::Ref(Symbol::builtin(violation)))),
+        body: FnBody::Raw {
+            text: body,
+            refs: Vec::new(),
+        },
+    })
 }
 
 #[cfg(test)]

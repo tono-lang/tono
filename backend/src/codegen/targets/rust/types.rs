@@ -86,32 +86,25 @@ impl ValSyntax for RustVal {
 /// and the `Violation` record it references. A shape with no lowerable constraint
 /// (or a generic one, unmodeled here) emits nothing.
 pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
-    let ShapeKind::Structure { params, members } = &shape.kind else {
+    let Some(lines) = validation::structure_guard_lines(shape, &RustVal, "self.", config, LANG)
+    else {
         return Vec::new();
     };
-    if !params.is_empty() {
-        return Vec::new();
-    }
     let violation = error_names().violation;
-    let mut body = String::new();
-    for member in members {
-        let access = format!("self.{}", field_ident(member, config, LANG));
-        for check in validation::member_checks(member) {
-            body.push_str(&format!(
+    let inner = validation::validator_body(
+        &lines,
+        "        let mut violations = Vec::new();\n",
+        "        violations\n",
+        |l| {
+            format!(
                 "        if {} {{\n            violations.push({violation} {{ field: {:?}.to_string(), constraint: {:?}.to_string(), message: {:?}.to_string() }});\n        }}\n",
-                check.condition(&access, &RustVal),
-                check.field,
-                check.constraint,
-                check.message,
-            ));
-        }
-    }
-    if body.is_empty() {
-        return Vec::new();
-    }
+                l.condition, l.field, l.constraint, l.message
+            )
+        },
+    );
     let ty = conventions::type_ident(shape, LANG);
     vec![Decl::raw(format!(
-        "impl {ty} {{\n    pub fn validate(&self) -> Vec<{violation}> {{\n        let mut violations = Vec::new();\n{body}        violations\n    }}\n}}"
+        "impl {ty} {{\n    pub fn validate(&self) -> Vec<{violation}> {{\n{inner}    }}\n}}"
     ))]
 }
 

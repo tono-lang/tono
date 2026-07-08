@@ -563,6 +563,37 @@ mod tests {
     }
 
     #[test]
+    fn a_generic_structure_emits_no_codec() {
+        // A generic struct has no monomorphic codec: `encodePage(value: Page)` would
+        // reference `Page` without its argument. The parameterized type is emitted,
+        // but the codec is skipped, so the guard must hold for a non-empty `params`.
+        let generic = Shape {
+            id: "billing#page".into(),
+            kind: ShapeKind::Structure {
+                params: vec!["t".into()],
+                members: vec![member(
+                    "items",
+                    Tref::List(Box::new(Tref::Param("t".into()))),
+                    true,
+                )],
+            },
+            traits: vec![],
+        };
+        assert!(emit_codecs(&generic, &ts_casing(), "billing").is_empty());
+        // The same members on a non-generic struct do produce a codec, so the guard
+        // is what makes the difference, not the shape being empty.
+        let concrete = structure(
+            "billing#bag",
+            vec![member(
+                "items",
+                Tref::List(Box::new(Tref::Prim(Prim::String))),
+                true,
+            )],
+        );
+        assert!(!emit_codecs(&concrete, &ts_casing(), "billing").is_empty());
+    }
+
+    #[test]
     fn unsupported_shapes_emit_no_codecs() {
         let service = Shape {
             id: "billing#Api".into(),

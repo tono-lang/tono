@@ -16,9 +16,9 @@ use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::codecs::union_type_decls;
 use crate::codegen::targets::go::symbols::symbol_of;
-use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
+use crate::codegen::tree::{Decl, Field, TypeExpr};
 use crate::codegen::validation::{self, Measure, ValSyntax};
-use crate::ir::{Member, Shape, ShapeKind, Tref};
+use crate::ir::{Member, Shape, Tref};
 
 /// The Go language key for per-language traits such as `@rename`.
 pub(crate) const LANG: &str = "go";
@@ -90,48 +90,29 @@ impl ValSyntax for GoVal {
 /// as the `Violation` record it references. A shape with no lowerable constraint
 /// (or a generic one, unmodeled here) emits nothing.
 pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
-    let ShapeKind::Structure { params, members } = &shape.kind else {
+    let Some(lines) = validation::structure_guard_lines(shape, &GoVal, "value.", config, LANG)
+    else {
         return Vec::new();
     };
-    if !params.is_empty() {
-        return Vec::new();
-    }
     let violation = error_names().violation;
-    let mut body = format!("\tviolations := []{violation}{{}}\n");
-    let mut any = false;
-    for member in members {
-        let access = format!("value.{}", field_ident(member, config, LANG));
-        for check in validation::member_checks(member) {
-            any = true;
-            body.push_str(&format!(
+    let body = validation::validator_body(
+        &lines,
+        &format!("\tviolations := []{violation}{{}}\n"),
+        "\treturn violations",
+        |l| {
+            format!(
                 "\tif {} {{\n\t\tviolations = append(violations, {violation}{{Field: {:?}, Constraint: {:?}, Message: {:?}}})\n\t}}\n",
-                check.condition(&access, &GoVal),
-                check.field,
-                check.constraint,
-                check.message,
-            ));
-        }
-    }
-    if !any {
-        return Vec::new();
-    }
-    body.push_str("\treturn violations");
-    let ty = conventions::type_ident(shape, LANG);
-    vec![Decl::Function(Function {
-        name: Symbol::builtin(format!("Validate{ty}")),
-        params: vec![Field {
-            name: Symbol::builtin("value"),
-            ty: TypeExpr::Ref(Symbol::builtin(ty.clone())),
-            nullable: false,
-            wire: None,
-            deprecated: None,
-        }],
-        ret: Some(TypeExpr::list(TypeExpr::Ref(Symbol::builtin(violation)))),
-        body: FnBody::Raw {
-            text: body,
-            refs: Vec::new(),
+                l.condition, l.field, l.constraint, l.message
+            )
         },
-    })]
+    );
+    let ty = conventions::type_ident(shape, LANG);
+    vec![validation::validator_function(
+        format!("Validate{ty}"),
+        ty.clone(),
+        violation,
+        body,
+    )]
 }
 
 #[cfg(test)]
