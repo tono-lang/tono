@@ -27,8 +27,7 @@ let http_path (op : Ast.decl) : string option =
   | None -> None
   | Some { targs; _ } ->
       List.find_map
-        (function
-          | Ast.AKv ("path", Ast.AString p) -> Some p | _ -> None)
+        (function Ast.AKv ("path", Ast.AString p) -> Some p | _ -> None)
         targs
 
 (* The {name} placeholders in a path template, in order. An unterminated brace
@@ -76,7 +75,9 @@ let is_body (m : Ast.member) : bool =
 let check_labels (op : Ast.decl) (members : Ast.member list)
     (placeholders : string list) : Diagnostic.t list =
   let label_members =
-    List.filter (fun (m : Ast.member) -> has_trait "httpLabel" m.mtraits) members
+    List.filter
+      (fun (m : Ast.member) -> has_trait "httpLabel" m.mtraits)
+      members
   in
   let label_names = List.map (fun (m : Ast.member) -> m.mname) label_members in
   let unmatched_placeholders =

@@ -52,9 +52,7 @@ let show_desc (d : Protocol_http.wire_descriptor) : string =
       d.response_bindings
   in
   let success =
-    List.map
-      (fun (s, t) -> Printf.sprintf "%d:%s" s (show_tref t))
-      d.success
+    List.map (fun (s, t) -> Printf.sprintf "%d:%s" s (show_tref t)) d.success
   in
   let errors =
     List.map
@@ -74,7 +72,6 @@ let show_desc (d : Protocol_http.wire_descriptor) : string =
 
 (* A lookup over a fixed shape list, standing in for the module index. *)
 let lookup shapes id = List.find_opt (fun (s : Ir.shape) -> s.id = id) shapes
-
 let resolve shapes o = Option.get (Protocol_http.resolve_op (lookup shapes) o)
 
 (* Every part variant plus the two response parts, in one operation. *)
@@ -103,7 +100,8 @@ let all_parts () =
       ~traits:
         [
           trait "http"
-            (`Assoc [ ("method", `String "get"); ("path", `String "/things/{id}") ]);
+            (`Assoc
+               [ ("method", `String "get"); ("path", `String "/things/{id}") ]);
         ]
       ~input:(Ir.Ref ("req", []))
       ~output:(Ir.Ref ("resp", []))
@@ -120,13 +118,16 @@ let body_default () =
   let req = structure "req" [ member "a"; member "b" ] in
   let o =
     op "make"
-      ~traits:[ trait "http" (`Assoc [ ("method", `String "POST"); ("path", `String "/x") ]) ]
+      ~traits:
+        [
+          trait "http"
+            (`Assoc [ ("method", `String "POST"); ("path", `String "/x") ]);
+        ]
       ~input:(Ir.Ref ("req", []))
       ~output:(Ir.Ref ("req", []))
   in
   Alcotest.(check string)
-    "body default + 200"
-    "POST|/x|a=body,b=body||200:req|"
+    "body default + 200" "POST|/x|a=body,b=body||200:req|"
     (show_desc (resolve [ req ] o))
 
 (* An explicit @httpPayload member occupies the whole body. *)
@@ -136,13 +137,16 @@ let payload_whole_body () =
   in
   let o =
     op "put"
-      ~traits:[ trait "http" (`Assoc [ ("method", `String "PUT"); ("path", `String "/x") ]) ]
+      ~traits:
+        [
+          trait "http"
+            (`Assoc [ ("method", `String "PUT"); ("path", `String "/x") ]);
+        ]
       ~input:(Ir.Ref ("req", []))
   in
   (* No output type, but 200 is still the declared success status (no body). *)
   Alcotest.(check string)
-    "payload"
-    "PUT|/x|raw=payload||200:-|"
+    "payload" "PUT|/x|raw=payload||200:-|"
     (show_desc (resolve [ req ] o))
 
 (* A success code override rides @http(code:). *)
@@ -178,7 +182,11 @@ let bare_bindings_and_dropped_errors () =
   let no_status = structure "no_status" [] in
   let o =
     op "act"
-      ~traits:[ trait "http" (`Assoc [ ("method", `String "get"); ("path", `String "/x") ]) ]
+      ~traits:
+        [
+          trait "http"
+            (`Assoc [ ("method", `String "get"); ("path", `String "/x") ]);
+        ]
       ~input:(Ir.Ref ("req", []))
       ~errors:[ Ir.Ref ("no_status", []); Ir.Ref ("missing", []) ]
   in
@@ -205,16 +213,20 @@ let non_operation_is_none () =
 let module_attaches_trait () =
   let o =
     op "make"
-      ~traits:[ trait "http" (`Assoc [ ("method", `String "POST"); ("path", `String "/x") ]) ]
+      ~traits:
+        [
+          trait "http"
+            (`Assoc [ ("method", `String "POST"); ("path", `String "/x") ]);
+        ]
   in
-  let m : Ir.module_ =
-    { mod_name = "m"; shapes = []; operations = [ o ] }
-  in
+  let m : Ir.module_ = { mod_name = "m"; shapes = []; operations = [ o ] } in
   let m' = Protocol_http.resolve_module m in
   let op' = List.hd m'.operations in
   Alcotest.(check bool)
     "has wire_descriptor" true
-    (List.exists (fun (t : Ir.trait) -> t.trait_id = "wire_descriptor") op'.traits)
+    (List.exists
+       (fun (t : Ir.trait) -> t.trait_id = "wire_descriptor")
+       op'.traits)
 
 (* The JSON encoding exercises every part, response part, and error form. *)
 let encode_covers_all_forms () =
@@ -372,13 +384,18 @@ let () =
           Alcotest.test_case "all parts" `Quick all_parts;
           Alcotest.test_case "body default" `Quick body_default;
           Alcotest.test_case "payload whole body" `Quick payload_whole_body;
-          Alcotest.test_case "success code override" `Quick success_code_override;
+          Alcotest.test_case "success code override" `Quick
+            success_code_override;
           Alcotest.test_case "bare bindings + dropped errors" `Quick
             bare_bindings_and_dropped_errors;
-          Alcotest.test_case "no http no descriptor" `Quick no_http_no_descriptor;
-          Alcotest.test_case "non-operation is none" `Quick non_operation_is_none;
-          Alcotest.test_case "module attaches trait" `Quick module_attaches_trait;
-          Alcotest.test_case "encode covers all forms" `Quick encode_covers_all_forms;
+          Alcotest.test_case "no http no descriptor" `Quick
+            no_http_no_descriptor;
+          Alcotest.test_case "non-operation is none" `Quick
+            non_operation_is_none;
+          Alcotest.test_case "module attaches trait" `Quick
+            module_attaches_trait;
+          Alcotest.test_case "encode covers all forms" `Quick
+            encode_covers_all_forms;
         ] );
       ( "check_http",
         [
@@ -396,6 +413,7 @@ let () =
             nullable_map_in_query_rejected;
           Alcotest.test_case "placeholder without struct input" `Quick
             placeholder_without_struct_input;
-          Alcotest.test_case "no http no checks" `Quick no_http_no_binding_checks;
+          Alcotest.test_case "no http no checks" `Quick
+            no_http_no_binding_checks;
         ] );
     ]

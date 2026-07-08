@@ -1,15 +1,7 @@
 (* The HTTP Protocol resolver. See the interface for the seam it sits in. *)
 
-type part =
-  | Label
-  | Query of string
-  | Header of string
-  | Body
-  | Payload
-
-type response_part =
-  | Response_header of string
-  | Response_status_code
+type part = Label | Query of string | Header of string | Body | Payload
+type response_part = Response_header of string | Response_status_code
 
 type wire_descriptor = {
   http_method : string;
@@ -27,8 +19,7 @@ type wire_descriptor = {
    compiled IR resolve identically (mirrors the backend's [find_trait]). *)
 let trait_by (id : string) (traits : Ir.trait list) : Ir.trait option =
   let matches (t : Ir.trait) =
-    String.equal t.trait_id id
-    || String.equal t.trait_id ("core#" ^ id)
+    String.equal t.trait_id id || String.equal t.trait_id ("core#" ^ id)
   in
   List.find_opt matches traits
 
@@ -114,8 +105,7 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
   match (op.kind, trait_by "http" op.traits) with
   | Ir.Operation { input; output; errors }, Some http ->
       let str k default =
-        Option.value ~default
-          (Option.bind (obj_field k http.value) string_arg)
+        Option.value ~default (Option.bind (obj_field k http.value) string_arg)
       in
       let http_method = String.uppercase_ascii (str "method" "GET") in
       let uri = str "path" "/" in
@@ -124,7 +114,8 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
           (Option.bind (obj_field "code" http.value) int_arg)
       in
       let bindings =
-        List.map (fun (m : Ir.member) -> (m.name, part_of_member m))
+        List.map
+          (fun (m : Ir.member) -> (m.name, part_of_member m))
           (members_of lookup input)
       in
       let response_bindings =
@@ -156,7 +147,11 @@ let encode (d : wire_descriptor) : Ir.json =
   let pair (name, p) = `List [ `String name; encode_part p ] in
   let rpair (name, p) = `List [ `String name; encode_response_part p ] in
   let succ (status, out) =
-    `List [ `Int status; (match out with Some t -> Ir_json.encode_tref t | None -> `Null) ]
+    `List
+      [
+        `Int status;
+        (match out with Some t -> Ir_json.encode_tref t | None -> `Null);
+      ]
   in
   let err (status, id, code) =
     `List
@@ -179,7 +174,9 @@ let encode (d : wire_descriptor) : Ir.json =
 (* ── Module pass ───────────────────────────────────────────────────────── *)
 
 let resolve_module (m : Ir.module_) : Ir.module_ =
-  let lookup id = List.find_opt (fun (s : Ir.shape) -> String.equal s.id id) m.shapes in
+  let lookup id =
+    List.find_opt (fun (s : Ir.shape) -> String.equal s.id id) m.shapes
+  in
   let attach (op : Ir.shape) : Ir.shape =
     match resolve_op lookup op with
     | None -> op
@@ -187,7 +184,8 @@ let resolve_module (m : Ir.module_) : Ir.module_ =
         {
           op with
           traits =
-            op.traits @ [ { Ir.trait_id = "wire_descriptor"; value = encode desc } ];
+            op.traits
+            @ [ { Ir.trait_id = "wire_descriptor"; value = encode desc } ];
         }
   in
   { m with operations = List.map attach m.operations }

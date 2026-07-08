@@ -51,12 +51,7 @@ fn embed(descriptor: &serde_json::Value) -> String {
 /// One operation's method body plus the module type symbols it references (for
 /// import collection). The method embeds the descriptor, calls `execute`, and
 /// maps the outcome onto the taxonomy.
-fn op_method(
-    op: &Shape,
-    module: &Module,
-    config: &CasingConfig,
-    refs: &mut Vec<Symbol>,
-) -> String {
+fn op_method(op: &Shape, module: &Module, config: &CasingConfig, refs: &mut Vec<Symbol>) -> String {
     let n = error_names();
     let name = method_ident(op, config, LANG);
     let (input, output) = op_io(op);
@@ -217,10 +212,14 @@ mod tests {
 
     #[test]
     fn the_client_implements_the_interface_and_calls_execute() {
-        let out = client_text(&http_module(json!({"http_method": "POST", "uri": "/charges"})));
+        let out = client_text(&http_module(
+            json!({"http_method": "POST", "uri": "/charges"}),
+        ));
         assert!(out.contains("export class HttpClient implements Client {"));
         assert!(out.contains("async createCharge(input: ChargeInput): Promise<Charge> {"));
-        assert!(out.contains("await execute(createChargeDescriptor, encodeChargeInput(input), this.options);"));
+        assert!(out.contains(
+            "await execute(createChargeDescriptor, encodeChargeInput(input), this.options);"
+        ));
         // A network failure and a schema mismatch raise the SDK's own taxonomy;
         // the runtime raises nothing itself.
         assert!(out.contains("throw new TransportError(outcome.cause);"));

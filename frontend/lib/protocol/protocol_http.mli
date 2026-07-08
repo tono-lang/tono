@@ -16,9 +16,7 @@ type part =
   | Payload (* this member is the whole body, no envelope *)
 
 (* Where an output member is read from in the HTTP response. *)
-type response_part =
-  | Response_header of string
-  | Response_status_code
+type response_part = Response_header of string | Response_status_code
 
 (* The opaque, language-agnostic wire form of one operation. The Target embeds
    its JSON encoding without interpreting any field. *)
