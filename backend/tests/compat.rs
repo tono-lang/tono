@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde_json::json;
 use tono_backend::compat::{diff, Category, Change, Config, Report, Severity};
 use tono_backend::ir::{
-    Constraint, EnumBacking, Member, Model, Module, Prim, Shape, ShapeKind, Trait, Tref,
+    Constraint, EnumBacking, EnumValue, Member, Model, Module, Prim, Shape, ShapeKind, Trait, Tref,
 };
 
 fn model(shapes: Vec<Shape>) -> Model {
@@ -226,6 +226,14 @@ fn adding_a_constraint_is_behavioral() {
 }
 
 fn enum_shape(id: &str, backing: EnumBacking, values: Vec<(String, Option<i64>)>) -> Model {
+    let values = values
+        .into_iter()
+        .map(|(name, value)| EnumValue {
+            name,
+            value,
+            traits: vec![],
+        })
+        .collect();
     model(vec![Shape {
         id: id.into(),
         kind: ShapeKind::Enum { backing, values },

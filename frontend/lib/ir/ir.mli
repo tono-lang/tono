@@ -69,7 +69,7 @@ and shape_kind =
     }
   | Enum of {
       backing : [ `String | `Int ];
-      values : (string * int option) list;
+      values : enum_value list;
           (* every enum is open; Unknown(raw) is a backend decode-time concern *)
     }
   | Service of { operations : shape_id list }
@@ -80,6 +80,14 @@ and shape_kind =
     }
 
 and shape = { id : shape_id; kind : shape_kind; traits : trait list }
+
+(* One enum member: wire name, optional explicit integer (int-backed enums only),
+   and its trait bag. Documentation (@doc) rides the bag, as on shapes and members. *)
+and enum_value = {
+  ev_name : string;
+  ev_int : int option;
+  ev_traits : trait list;
+}
 
 (* A bespoke extension bound to a per-language source file. [Hook] fills a fixed
    lifecycle slot (its name is the slot); [Contract] and [Constraint] are named
@@ -146,6 +154,10 @@ val union :
   members:member list ->
   unit ->
   shape_kind
+
+(* [enum_value ?int ?traits name] builds an enum member; [int] is the explicit
+   discriminant (int-backed enums), [traits] its bag (defaults empty). *)
+val enum_value : ?int:int -> ?traits:trait list -> string -> enum_value
 
 module Shape_map : Map.S with type key = shape_id
 

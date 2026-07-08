@@ -72,10 +72,7 @@ and shape_kind =
       discriminator : string;
     }
     (* wire field name, default "type" *)
-  | Enum of {
-      backing : [ `String | `Int ];
-      values : (string * int option) list;
-    }
+  | Enum of { backing : [ `String | `Int ]; values : enum_value list }
     (* every enum is open; the Unknown(raw) variant is a backend decode-time
        concern and is not materialized here *)
   | Service of { operations : shape_id list }
@@ -91,6 +88,16 @@ and shape = {
   id : shape_id;
   kind : shape_kind;
   traits : trait list; (* shape-level traits *)
+}
+
+(* One member of an enum: its wire name, an optional explicit integer (present
+   only on int-backed enums), and its trait bag. Documentation (@doc) rides the
+   bag exactly like it does on shapes and struct members, so the codegen reads
+   it through the same path everywhere. *)
+and enum_value = {
+  ev_name : string;
+  ev_int : int option;
+  ev_traits : trait list;
 }
 
 (* A bespoke extension: logic that does not fit the pure calculus, bound to a
@@ -162,6 +169,9 @@ let multiple_of f =
    the IR even when the surface syntax omitted it. *)
 let union ?(discriminator = "type") ~params ~members () =
   Union { params; members; discriminator }
+
+let enum_value ?int ?(traits = []) name =
+  { ev_name = name; ev_int = int; ev_traits = traits }
 
 module Shape_map = Map.Make (String)
 

@@ -440,7 +440,10 @@ let enum_shape : Ir.shape =
     id = "payments#Status";
     kind =
       Ir.Enum
-        { backing = `String; values = [ ("active", None); ("closed", None) ] };
+        {
+          backing = `String;
+          values = [ Ir.enum_value "active"; Ir.enum_value "closed" ];
+        };
     traits = [];
   }
 
@@ -448,7 +451,11 @@ let int_enum_shape : Ir.shape =
   {
     id = "payments#Code";
     kind =
-      Ir.Enum { backing = `Int; values = [ ("ok", Some 0); ("fail", Some 1) ] };
+      Ir.Enum
+        {
+          backing = `Int;
+          values = [ Ir.enum_value ~int:0 "ok"; Ir.enum_value ~int:1 "fail" ];
+        };
     traits = [];
   }
 

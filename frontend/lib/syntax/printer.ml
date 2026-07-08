@@ -5,7 +5,18 @@
    The printer assumes a diagnostic-free parse; [TError] gets a parseable
    placeholder only so a defensive caller never emits garbage. *)
 
-let string_literal (s : string) : string =
+(* Whether [needle] occurs in [hay]; used to keep a triple-quoted print from
+   embedding its own delimiter. *)
+let contains_substring hay needle =
+  let hn = String.length hay and nn = String.length needle in
+  let rec loop i =
+    if i + nn > hn then false
+    else if String.sub hay i nn = needle then true
+    else loop (i + 1)
+  in
+  nn = 0 || loop 0
+
+let escaped_string (s : string) : string =
   let b = Buffer.create (String.length s + 2) in
   Buffer.add_char b '"';
   String.iter
@@ -20,6 +31,20 @@ let string_literal (s : string) : string =
     s;
   Buffer.add_char b '"';
   Buffer.contents b
+
+let string_literal (s : string) : string =
+  (* A multi-line string (a doc, typically) prints in triple-quote form so it
+     stays readable and round-trips its newlines verbatim. The triple-quote lexer
+     reads raw bytes, so this is only safe when the content cannot be mistaken for
+     the closing delimiter: it must not contain a run of three double-quotes, and
+     a trailing double-quote would merge with the closer. Anything else falls back
+     to the always-valid escaped single-line form. *)
+  let triple_safe =
+    String.contains s '\n'
+    && (not (contains_substring s "\"\"\""))
+    && not (String.length s > 0 && s.[String.length s - 1] = '"')
+  in
+  if triple_safe then "\"\"\"" ^ s ^ "\"\"\"" else escaped_string s
 
 (* Expand "1.5e+300" to positional notation: the literal grammar has no
    exponent form, so the digits are shifted around the decimal point. *)

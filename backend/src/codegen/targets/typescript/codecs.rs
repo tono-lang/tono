@@ -387,6 +387,7 @@ fn function_owned(name: &str, params: &[(&str, &str)], ret: &str, body: String) 
                 nullable: false,
                 wire: None,
                 deprecated: None,
+                doc: None,
             })
             .collect(),
         ret: Some(TypeExpr::Ref(Symbol::builtin(ret))),

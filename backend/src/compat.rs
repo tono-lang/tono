@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::ir::{Constraint, EnumBacking, Member, Model, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{Constraint, EnumBacking, EnumValue, Member, Model, Shape, ShapeKind, Trait, Tref};
 
 /// The break level a change falls into. The order is severity-ascending only for
 /// tie-breaking display; the effective severity comes from [`Config`], not from
@@ -494,9 +494,9 @@ fn diff_constraints(path: &str, base: &[Constraint], curr: &[Constraint], out: &
 fn diff_enum(
     id: &str,
     bb: &EnumBacking,
-    bv: &[(String, Option<i64>)],
+    bv: &[EnumValue],
     cb: &EnumBacking,
-    cv: &[(String, Option<i64>)],
+    cv: &[EnumValue],
     out: &mut Vec<Change>,
 ) {
     if bb != cb {
@@ -507,8 +507,8 @@ fn diff_enum(
         });
     }
 
-    let bi: BTreeMap<&str, &Option<i64>> = bv.iter().map(|(t, n)| (t.as_str(), n)).collect();
-    let ci: BTreeMap<&str, &Option<i64>> = cv.iter().map(|(t, n)| (t.as_str(), n)).collect();
+    let bi: BTreeMap<&str, Option<i64>> = bv.iter().map(|v| (v.name.as_str(), v.value)).collect();
+    let ci: BTreeMap<&str, Option<i64>> = cv.iter().map(|v| (v.name.as_str(), v.value)).collect();
 
     let mut tags: Vec<&str> = bi.keys().chain(ci.keys()).copied().collect();
     tags.sort_unstable();

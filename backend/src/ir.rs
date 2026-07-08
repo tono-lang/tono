@@ -13,7 +13,9 @@ use serde_json::Value;
 /// incompatible change; there is no negotiation across versions.
 /// v2 removed the enum `open` field (every enum is open).
 /// v3 added the module `extensions` table (bespoke hooks/contracts/constraints).
-pub const TONO_IR_VERSION: u32 = 3;
+/// v4 made an enum value an object carrying a trait bag (documentation rides it),
+/// replacing the `[name, intOrNull]` pair.
+pub const TONO_IR_VERSION: u32 = 4;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -222,6 +224,19 @@ pub enum EnumBacking {
     Int,
 }
 
+/// One member of an enum: its wire name, an optional explicit integer (present
+/// only on int-backed enums, absent otherwise, mirroring the frontend encoder),
+/// and its trait bag. Documentation (`@doc`) rides the bag exactly as it does on
+/// shapes and struct members, so codegen reads it through the same path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnumValue {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<i64>,
+    #[serde(default)]
+    pub traits: Vec<Trait>,
+}
+
 /// Shape kind, internally tagged by `kind` and flattened next to a shape's
 /// `id` and `traits`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,7 +262,7 @@ pub enum ShapeKind {
     Enum {
         backing: EnumBacking,
         #[serde(default)]
-        values: Vec<(String, Option<i64>)>,
+        values: Vec<EnumValue>,
     },
     Service {
         #[serde(default)]

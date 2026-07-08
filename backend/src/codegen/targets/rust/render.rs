@@ -8,6 +8,7 @@
 //! a tagged union needs custom plumbing, so the Rust target emits both as
 //! verbatim `Decl::Raw` items in a later phase. Their arms here render nothing.
 
+use crate::codegen::doc;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::targets::rust::codecs::serde_with;
@@ -124,8 +125,13 @@ impl RustRules {
         } else {
             format!("    #[serde({})]\n", args.join(", "))
         };
+        let doc = field
+            .doc
+            .as_deref()
+            .map(|d| doc::rustdoc(d, "    "))
+            .unwrap_or_default();
         let dep = deprecated_prefix(field.deprecated.as_deref(), "    ");
-        format!("{dep}{attr}    pub {}: {ty},\n", field.name.name)
+        format!("{doc}{dep}{attr}    pub {}: {ty},\n", field.name.name)
     }
 
     /// One client method signature. An async operation is an `async fn` (the
@@ -149,8 +155,13 @@ impl RustRules {
             None => ok,
         };
         let effect = if method.is_async { "async " } else { "" };
+        let doc = method
+            .doc
+            .as_deref()
+            .map(|d| doc::rustdoc(d, "    "))
+            .unwrap_or_default();
         format!(
-            "    {effect}fn {}({}) -> {ret};\n",
+            "{doc}    {effect}fn {}({}) -> {ret};\n",
             method.name.name,
             params.join(", ")
         )
@@ -198,9 +209,14 @@ impl RenderRules for RustRules {
                     .iter()
                     .map(|f| self.render_field(f))
                     .collect();
+                let doc = interface
+                    .doc
+                    .as_deref()
+                    .map(|d| doc::rustdoc(d, ""))
+                    .unwrap_or_default();
                 let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
                 format!(
-                    "{dep}{DERIVES}\npub struct {}{} {{\n{fields}}}",
+                    "{doc}{dep}{DERIVES}\npub struct {}{} {{\n{fields}}}",
                     interface.name.name,
                     type_params(&interface.params)
                 )
@@ -248,6 +264,7 @@ mod tests {
             nullable,
             wire: wire.map(str::to_string),
             deprecated: None,
+            doc: None,
         }
     }
 
@@ -281,6 +298,7 @@ mod tests {
                 None,
             )],
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             RustRules.render_decl(&decl),
@@ -303,6 +321,7 @@ mod tests {
                 None,
             )],
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             RustRules.render_decl(&decl),
@@ -323,6 +342,7 @@ mod tests {
                 Some("memo"),
             )],
             deprecated: None,
+            doc: None,
         });
         let out = RustRules.render_decl(&decl);
         assert!(out.contains("    #[serde(rename = \"memo\")]\n"));
@@ -350,6 +370,7 @@ mod tests {
                 field("tip", TypeExpr::Ref(Symbol::builtin("u64")), true, None),
             ],
             deprecated: None,
+            doc: None,
         });
         let out = RustRules.render_decl(&decl);
         // The wire rename and the string codec combine into one serde attribute.
@@ -376,6 +397,7 @@ mod tests {
                 None,
             )],
             deprecated: None,
+            doc: None,
         });
         let out = RustRules.render_decl(&decl);
         assert!(out.contains("    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n"));
@@ -394,6 +416,7 @@ mod tests {
                 Some("memo"),
             )],
             deprecated: None,
+            doc: None,
         });
         let out = RustRules.render_decl(&decl);
         assert!(out.contains(
@@ -413,6 +436,7 @@ mod tests {
                     nullable: false,
                     wire: None,
                     deprecated: Some("use amount_cents".into()),
+                    doc: None,
                 },
                 Field {
                     name: Symbol::builtin("id"),
@@ -420,9 +444,11 @@ mod tests {
                     nullable: false,
                     wire: None,
                     deprecated: Some(String::new()),
+                    doc: None,
                 },
             ],
             deprecated: Some("use ChargeV2".into()),
+            doc: None,
         });
         let out = RustRules.render_decl(&decl);
         // The struct attribute leads the derive so it attaches to the type.
@@ -432,6 +458,32 @@ mod tests {
             out.contains("    #[deprecated(note = \"use amount_cents\")]\n    pub amount: u32,")
         );
         assert!(out.contains("    #[deprecated]\n    pub id: String,"));
+    }
+
+    #[test]
+    fn doc_renders_as_rustdoc_on_the_struct_and_the_field() {
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Charge"),
+            params: vec![],
+            fields: vec![Field {
+                name: Symbol::builtin("amount"),
+                ty: TypeExpr::Ref(Symbol::builtin("u32")),
+                nullable: false,
+                wire: None,
+                deprecated: None,
+                doc: Some("The amount in **minor** units.".into()),
+            }],
+            deprecated: None,
+            doc: Some("A billing charge.\n\nMarkdown rides rustdoc verbatim.".into()),
+        });
+        let out = RustRules.render_decl(&decl);
+        // The struct doc leads, one `///` per line (a blank line stays a bare `///`).
+        assert!(out.starts_with(
+            "/// A billing charge.\n///\n/// Markdown rides rustdoc verbatim.\n#[derive("
+        ));
+        // The field doc sits above the field (a `u32` needs no serde codec, so the
+        // doc is adjacent), Markdown untouched.
+        assert!(out.contains("    /// The amount in **minor** units.\n    pub amount: u32,"));
     }
 
     #[test]
@@ -518,14 +570,17 @@ mod tests {
         let enum_decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("pending")],
+            member_docs: vec![None],
             backing: crate::codegen::tree::EnumRepr::String,
             deprecated: None,
+            doc: None,
         });
         let union_decl = Decl::Union(UnionDecl {
             name: Symbol::builtin("Method"),
             discriminator: "type".into(),
             variants: vec![],
             deprecated: None,
+            doc: None,
         });
         let method = Decl::Method(Method {
             name: Symbol::builtin("ping"),
@@ -533,6 +588,7 @@ mod tests {
             ret: None,
             err: None,
             is_async: false,
+            doc: None,
         });
         assert_eq!(RustRules.render_decl(&enum_decl), "");
         assert_eq!(RustRules.render_decl(&union_decl), "");
@@ -555,6 +611,7 @@ mod tests {
                     ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
                     err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
                     is_async: true,
+                    doc: None,
                 },
                 Method {
                     name: Symbol::builtin("local_op"),
@@ -562,6 +619,7 @@ mod tests {
                     ret: None,
                     err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
                     is_async: false,
+                    doc: None,
                 },
             ],
         });
@@ -583,6 +641,7 @@ mod tests {
                 ret: None,
                 err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
                 is_async: false,
+                doc: None,
             }],
         });
         assert!(!RustRules.render_decl(&decl).contains("async_fn_in_trait"));

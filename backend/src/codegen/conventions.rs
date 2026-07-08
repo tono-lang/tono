@@ -11,7 +11,7 @@
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, Interface, TypeExpr};
-use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{EnumBacking, EnumValue, Member, Prim, Shape, ShapeKind, Trait, Tref};
 
 /// The `@rename(lang)` identifier override (trait `core#rename`, a value object
 /// keyed by language). Replaces the in-code identifier only; never the wire key.
@@ -65,6 +65,27 @@ pub fn deprecated_of(traits: &[Trait]) -> Option<String> {
                 .to_string(),
             _ => String::new(),
         })
+}
+
+/// The `@doc` Markdown content, or `None` when absent or empty. The trait id is
+/// matched by its local name with an optional `core#` namespace, tolerating both
+/// the frontend's bare `doc` and the fixtures' `core#doc`. The content is the
+/// single argument, encoded by the frontend as a one-element array (`["text"]`)
+/// and by the fixtures as a bare string. An empty string yields `None`, since a
+/// documentation comment with no content is not worth emitting. Every target
+/// lowers this onto its native doc format (JSDoc, rustdoc, godoc).
+pub fn doc_of(traits: &[Trait]) -> Option<String> {
+    traits
+        .iter()
+        .find(|t| t.id == "doc" || t.id == "core#doc")
+        .and_then(|t| match &t.value {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Array(items) => {
+                items.first().and_then(|v| v.as_str()).map(str::to_string)
+            }
+            _ => None,
+        })
+        .filter(|s| !s.is_empty())
 }
 
 /// Reshape a map into an `@entries` pairs-array when the member carries the
@@ -214,10 +235,11 @@ pub fn emit_shape(
     shape: &Shape,
     lang: &str,
     field_of: impl Fn(&Member) -> Field,
-    emit_enum: impl Fn(&EnumBacking, &[(String, Option<i64>)], &str, Option<&str>) -> Vec<Decl>,
-    emit_union: impl Fn(&str, &[Member], &str, Option<&str>) -> Vec<Decl>,
+    emit_enum: impl Fn(&EnumBacking, &[EnumValue], &str, Option<&str>, Option<&str>) -> Vec<Decl>,
+    emit_union: impl Fn(&str, &[Member], &str, Option<&str>, Option<&str>) -> Vec<Decl>,
 ) -> Vec<Decl> {
     let deprecated = deprecated_of(&shape.traits);
+    let doc = doc_of(&shape.traits);
     match &shape.kind {
         ShapeKind::Structure { params, members } => vec![Decl::Interface(Interface {
             name: type_name(shape, lang),
@@ -227,12 +249,14 @@ pub fn emit_shape(
             params: params.iter().map(|p| type_case(p)).collect(),
             fields: members.iter().map(&field_of).collect(),
             deprecated,
+            doc,
         })],
         ShapeKind::Enum { backing, values } => emit_enum(
             backing,
             values,
             &type_ident(shape, lang),
             deprecated.as_deref(),
+            doc.as_deref(),
         ),
         ShapeKind::Union {
             discriminator,
@@ -243,6 +267,7 @@ pub fn emit_shape(
             members,
             &type_ident(shape, lang),
             deprecated.as_deref(),
+            doc.as_deref(),
         ),
         _ => vec![],
     }
@@ -257,22 +282,25 @@ pub fn emit_shape(
 /// panicking (the frontend guarantees one is present).
 pub fn open_enum(
     backing: &EnumBacking,
-    values: &[(String, Option<i64>)],
+    values: &[EnumValue],
     name: &str,
     deprecated: Option<&str>,
+    doc: Option<&str>,
 ) -> Decl {
     let repr = match backing {
         EnumBacking::String => EnumRepr::String,
-        EnumBacking::Int => EnumRepr::Int(values.iter().map(|(_, n)| n.unwrap_or(0)).collect()),
+        EnumBacking::Int => EnumRepr::Int(values.iter().map(|v| v.value.unwrap_or(0)).collect()),
     };
     Decl::Enum(EnumDecl {
         name: Symbol::builtin(name.to_string()),
         members: values
             .iter()
-            .map(|(value, _)| Symbol::builtin(value.clone()))
+            .map(|v| Symbol::builtin(v.name.clone()))
             .collect(),
+        member_docs: values.iter().map(|v| doc_of(&v.traits)).collect(),
         backing: repr,
         deprecated: deprecated.map(str::to_string),
+        doc: doc.map(str::to_string),
     })
 }
 
@@ -320,6 +348,15 @@ mod tests {
         }
     }
 
+    /// A bagless enum value, for the enum-emission tests.
+    fn ev(name: &str, value: Option<i64>) -> EnumValue {
+        EnumValue {
+            name: name.into(),
+            value,
+            traits: vec![],
+        }
+    }
+
     #[test]
     fn rename_is_language_scoped() {
         let traits = vec![trait_of(
@@ -352,6 +389,26 @@ mod tests {
         );
         // Absent means not deprecated.
         assert_eq!(deprecated_of(&[]), None);
+    }
+
+    #[test]
+    fn doc_reads_the_content_and_ignores_the_empty_form() {
+        // The fixtures' bare-string value is the content.
+        assert_eq!(
+            doc_of(&[trait_of("core#doc", json!("A charge."))]).as_deref(),
+            Some("A charge.")
+        );
+        // The frontend encodes the single argument as a one-element array, with the
+        // trait id bare.
+        assert_eq!(
+            doc_of(&[trait_of("doc", json!(["Multi\nline."]))]).as_deref(),
+            Some("Multi\nline.")
+        );
+        // An empty doc yields None: a comment with no content is not worth emitting.
+        assert_eq!(doc_of(&[trait_of("doc", json!([""]))]), None);
+        assert_eq!(doc_of(&[trait_of("doc", json!(null))]), None);
+        // Absent means no doc.
+        assert_eq!(doc_of(&[]), None);
     }
 
     #[test]
@@ -506,10 +563,11 @@ mod tests {
             nullable: false,
             wire: None,
             deprecated: None,
+            doc: None,
         };
         let noop_enum =
-            |_: &EnumBacking, _: &[(String, Option<i64>)], _: &str, _: Option<&str>| vec![];
-        let noop_union = |_: &str, _: &[Member], _: &str, _: Option<&str>| vec![];
+            |_: &EnumBacking, _: &[EnumValue], _: &str, _: Option<&str>, _: Option<&str>| vec![];
+        let noop_union = |_: &str, _: &[Member], _: &str, _: Option<&str>, _: Option<&str>| vec![];
         let shape = Shape {
             id: "m#page".into(),
             kind: ShapeKind::Structure {
@@ -615,8 +673,9 @@ mod tests {
     fn open_enum_names_a_string_backed_list_of_verbatim_wire_literals() {
         let decl = open_enum(
             &EnumBacking::String,
-            &[("pending".into(), None), ("settled".into(), None)],
+            &[ev("pending", None), ev("settled", None)],
             "Status",
+            None,
             None,
         );
         assert!(matches!(decl, Decl::Enum(d)
@@ -631,8 +690,9 @@ mod tests {
     fn open_enum_carries_int_wire_integers_parallel_to_members() {
         let decl = open_enum(
             &EnumBacking::Int,
-            &[("ok".into(), Some(200)), ("error".into(), Some(500))],
+            &[ev("ok", Some(200)), ev("error", Some(500))],
             "HTTPCode",
+            None,
             None,
         );
         assert!(matches!(decl, Decl::Enum(d)
@@ -641,7 +701,7 @@ mod tests {
                 && d.members[1].name == "error"
                 && d.backing == EnumRepr::Int(vec![200, 500])));
         // A missing discriminant falls back to zero rather than panicking.
-        let lenient = open_enum(&EnumBacking::Int, &[("ok".into(), None)], "HTTPCode", None);
+        let lenient = open_enum(&EnumBacking::Int, &[ev("ok", None)], "HTTPCode", None, None);
         assert!(matches!(lenient, Decl::Enum(d)
             if d.backing == EnumRepr::Int(vec![0])));
     }
@@ -654,15 +714,16 @@ mod tests {
             nullable: false,
             wire: None,
             deprecated: None,
+            doc: None,
         };
         let mark_enum =
-            |_: &EnumBacking, _: &[(String, Option<i64>)], name: &str, _: Option<&str>| {
+            |_: &EnumBacking, _: &[EnumValue], name: &str, _: Option<&str>, _: Option<&str>| {
                 vec![Decl::Alias(crate::codegen::tree::Alias {
                     name: Symbol::builtin(name.to_string()),
                     value: "enum".into(),
                 })]
             };
-        let mark_union = |_: &str, _: &[Member], name: &str, _: Option<&str>| {
+        let mark_union = |_: &str, _: &[Member], name: &str, _: Option<&str>, _: Option<&str>| {
             vec![Decl::Alias(crate::codegen::tree::Alias {
                 name: Symbol::builtin(name.to_string()),
                 value: "union".into(),
@@ -695,7 +756,7 @@ mod tests {
             id: "m#Status".into(),
             kind: ShapeKind::Enum {
                 backing: crate::ir::EnumBacking::String,
-                values: vec![("a".into(), None)],
+                values: vec![ev("a", None)],
             },
             traits: vec![],
         };

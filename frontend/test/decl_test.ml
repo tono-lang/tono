@@ -30,7 +30,7 @@ let enum_string_backed () =
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   Alcotest.(check string)
     "string enum"
-    {|{"backing":"string","id":"status","kind":"enum","traits":[],"values":[["active",null],["closed",null]]}|}
+    {|{"backing":"string","id":"status","kind":"enum","traits":[],"values":[{"name":"active","traits":[]},{"name":"closed","traits":[]}]}|}
     (shape_json shape)
 
 let enum_int_backed () =
@@ -40,7 +40,7 @@ let enum_int_backed () =
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   Alcotest.(check string)
     "int enum"
-    {|{"backing":"int","id":"http_code","kind":"enum","traits":[],"values":[["ok",200],["fail",500]]}|}
+    {|{"backing":"int","id":"http_code","kind":"enum","traits":[],"values":[{"name":"ok","traits":[],"value":200},{"name":"fail","traits":[],"value":500}]}|}
     (shape_json shape)
 
 let enum_negative () =
@@ -48,7 +48,7 @@ let enum_negative () =
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   Alcotest.(check string)
     "negative int-backed enum"
-    {|{"backing":"int","id":"sign","kind":"enum","traits":[],"values":[["neg",-1],["zero",0]]}|}
+    {|{"backing":"int","id":"sign","kind":"enum","traits":[],"values":[{"name":"neg","traits":[],"value":-1},{"name":"zero","traits":[],"value":0}]}|}
     (shape_json shape)
 
 (* Lowering records the (possibly inconsistent) backing without judging it; the
@@ -59,16 +59,22 @@ let enum_int_missing_value () =
   Alcotest.(check int) "lowering does not judge backing" 0 (List.length ds);
   Alcotest.(check string)
     "value list keeps b without a value"
-    {|{"backing":"int","id":"mixed","kind":"enum","traits":[],"values":[["a",1],["b",null]]}|}
+    {|{"backing":"int","id":"mixed","kind":"enum","traits":[],"values":[{"name":"a","traits":[],"value":1},{"name":"b","traits":[]}]}|}
     (shape_json shape)
 
 let enum_case_snake () =
   let _, ds = run Parser.parse_enum "enum e { Active }" in
   Alcotest.(check bool) "PascalCase case diagnosed" true (List.length ds >= 1)
 
-let enum_case_traits_rejected () =
-  let _, ds = run Parser.parse_enum {|enum e { a @doc("x") }|} in
-  Alcotest.(check bool) "case traits diagnosed" true (List.length ds >= 1)
+(* A trait on an enum case lowers into the value's bag, like a shape or member
+   trait; @doc rides it. *)
+let enum_case_doc_trait () =
+  let shape, ds = run Parser.parse_enum {|enum e { a @doc("x") }|} in
+  Alcotest.(check int) "no diagnostics" 0 (List.length ds);
+  Alcotest.(check string)
+    "case carries the doc trait"
+    {|{"backing":"string","id":"e","kind":"enum","traits":[],"values":[{"name":"a","traits":[{"id":"doc","value":["x"]}]}]}|}
+    (shape_json shape)
 
 (* ── Union ─────────────────────────────────────────────────────────────── *)
 
@@ -212,8 +218,7 @@ let () =
           Alcotest.test_case "negative values" `Quick enum_negative;
           Alcotest.test_case "int missing value" `Quick enum_int_missing_value;
           Alcotest.test_case "case snake_case" `Quick enum_case_snake;
-          Alcotest.test_case "case traits rejected" `Quick
-            enum_case_traits_rejected;
+          Alcotest.test_case "case doc trait" `Quick enum_case_doc_trait;
         ] );
       ( "union",
         [

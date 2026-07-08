@@ -120,7 +120,12 @@ let open_enum_union : Ir.model =
         Ir.Enum
           {
             backing = `String;
-            values = [ ("active", None); ("closed", None); ("refunded", None) ];
+            values =
+              [
+                Ir.enum_value "active";
+                Ir.enum_value "closed";
+                Ir.enum_value "refunded";
+              ];
           };
       traits = [];
     }
@@ -223,7 +228,11 @@ let primitives : Ir.model =
       id = "lab#Priority";
       kind =
         Ir.Enum
-          { backing = `Int; values = [ ("low", Some 0); ("high", Some 10) ] };
+          {
+            backing = `Int;
+            values =
+              [ Ir.enum_value ~int:0 "low"; Ir.enum_value ~int:10 "high" ];
+          };
       traits = [];
     }
   in

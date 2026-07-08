@@ -14,8 +14,10 @@
 (* The IR schema revision this build understands. Bumped by one on every
    incompatible change to the wire format; there is no negotiation.
    v2 removed the enum [open] field (every enum is open).
-   v3 added the module [extensions] table (bespoke hooks/contracts/constraints). *)
-let current_ir_version = 3
+   v3 added the module [extensions] table (bespoke hooks/contracts/constraints).
+   v4 made an enum value an object ({"name", "value"?, "traits"}) so it can carry
+   a trait bag (documentation rides it), replacing the [name, intOrNull] pair. *)
+let current_ir_version = 4
 
 (* ── Encoding ──────────────────────────────────────────────────────────── *)
 
@@ -67,8 +69,11 @@ let encode_constraint (c : Ir.constraint_) : Ir.json =
         (Ir.Invalid_ir
            "custom constraint must live in the trait bag, not in constraints")
 
-let encode_enum_value (name, v) : Ir.json =
-  `List [ `String name; (match v with Some i -> `Int i | None -> `Null) ]
+let encode_enum_value (v : Ir.enum_value) : Ir.json =
+  `Assoc
+    (("name", `String v.ev_name)
+     :: (match v.ev_int with Some i -> [ ("value", `Int i) ] | None -> [])
+    @ [ ("traits", `List (List.map encode_trait v.ev_traits)) ])
 
 let encode_backing = function `String -> "string" | `Int -> "int"
 
@@ -395,19 +400,30 @@ let decode_member j =
   Ok ({ name; target; required; default; constraints; traits } : Ir.member)
 
 let decode_enum_value j =
-  let* xs = as_list j in
-  match xs with
-  | [ n; v ] ->
-      let* name = as_string n in
-      let* value =
-        match v with
-        | `Null -> Ok None
-        | _ ->
-            let* i = as_int v in
-            Ok (Some i)
-      in
-      Ok (name, value)
-  | _ -> err "enum value expects a [name, intOrNull] pair"
+  let* kvs = as_assoc j in
+  let get k = List.assoc_opt k kvs in
+  let* name =
+    match get "name" with
+    | Some v -> as_string v
+    | None -> err "enum value is missing name"
+  in
+  (* An absent (or null) "value" is a string-backed member with no discriminant;
+     an int-backed one carries its integer here. *)
+  let* value =
+    match get "value" with
+    | None | Some `Null -> Ok None
+    | Some v ->
+        let* i = as_int v in
+        Ok (Some i)
+  in
+  let* traits =
+    match get "traits" with
+    | None -> Ok []
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_trait xs
+  in
+  Ok ({ ev_name = name; ev_int = value; ev_traits = traits } : Ir.enum_value)
 
 let decode_tref_opt = function
   | None | Some `Null -> Ok None

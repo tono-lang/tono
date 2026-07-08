@@ -3,36 +3,10 @@
 //! rendered here; unions, methods, and generated functions are added by later
 //! phases.
 
+use crate::codegen::doc;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, EnumRepr, Field, FnBody, Function, Method, TypeExpr, Variant};
-
-/// The JSDoc `@deprecated` tag for a `@deprecated` element, or empty when it is
-/// not deprecated. A `Some("")` (marked without a reason) renders the bare
-/// `/** @deprecated */`. A `*/` inside the reason is defused so it cannot close the
-/// comment early, and newlines collapse to spaces. The caller adds the indentation
-/// and trailing newline for its position.
-fn deprecated_jsdoc(reason: Option<&str>) -> String {
-    match reason {
-        None => String::new(),
-        Some("") => "/** @deprecated */".into(),
-        Some(r) => {
-            let text = r.replace("*/", "* /").replace('\n', " ");
-            format!("/** @deprecated {text} */")
-        }
-    }
-}
-
-/// Prefix a declaration/field with its JSDoc deprecation tag, indented and
-/// newline-terminated, when one is present.
-fn deprecated_prefix(reason: Option<&str>, indent: &str) -> String {
-    let doc = deprecated_jsdoc(reason);
-    if doc.is_empty() {
-        String::new()
-    } else {
-        format!("{indent}{doc}\n")
-    }
-}
 
 /// The TypeScript render rules.
 pub struct TsRules;
@@ -108,7 +82,7 @@ impl TsRules {
     fn render_field(&self, field: &Field) -> String {
         let ty = self.render_type(&field.ty);
         // Nullable maps to an optional field that also admits an explicit null.
-        let dep = deprecated_prefix(field.deprecated.as_deref(), "  ");
+        let dep = doc::jsdoc_block(field.doc.as_deref(), field.deprecated.as_deref(), "  ");
         if field.nullable {
             format!("{dep}  {}?: {ty} | null;\n", field.name.name)
         } else {
@@ -154,7 +128,12 @@ impl TsRules {
         } else {
             ret
         };
-        format!("  {}({}): {ret};\n", method.name.name, params.join(", "))
+        let jsdoc = doc::jsdoc_block(method.doc.as_deref(), None, "  ");
+        format!(
+            "{jsdoc}  {}({}): {ret};\n",
+            method.name.name,
+            params.join(", ")
+        )
     }
 
     fn render_variant(&self, discriminator: &str, variant: &Variant) -> String {
@@ -194,7 +173,11 @@ impl RenderRules for TsRules {
                     .iter()
                     .map(|f| self.render_field(f))
                     .collect();
-                let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
+                let dep = doc::jsdoc_block(
+                    interface.doc.as_deref(),
+                    interface.deprecated.as_deref(),
+                    "",
+                );
                 let params = type_params(&interface.params);
                 format!(
                     "{dep}export interface {}{params} {{\n{fields}}}",
@@ -220,7 +203,9 @@ impl RenderRules for TsRules {
                     ),
                 };
                 arms.push(open.into());
-                let dep = deprecated_prefix(decl.deprecated.as_deref(), "");
+                // A literal-union type alias has no per-member slot, so member docs
+                // are not expressible in TypeScript; only the enum-level doc is.
+                let dep = doc::jsdoc_block(decl.doc.as_deref(), decl.deprecated.as_deref(), "");
                 format!(
                     "{dep}export type {} = {};",
                     decl.name.name,
@@ -233,7 +218,7 @@ impl RenderRules for TsRules {
                     .iter()
                     .map(|v| self.render_variant(&decl.discriminator, v))
                     .collect();
-                let dep = deprecated_prefix(decl.deprecated.as_deref(), "");
+                let dep = doc::jsdoc_block(decl.doc.as_deref(), decl.deprecated.as_deref(), "");
                 format!(
                     "{dep}export type {} = {};",
                     decl.name.name,
@@ -274,6 +259,7 @@ mod tests {
             nullable,
             wire: None,
             deprecated: None,
+            doc: None,
         }
     }
 
@@ -327,6 +313,33 @@ mod tests {
     }
 
     #[test]
+    fn doc_renders_as_jsdoc_and_combines_with_deprecation() {
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Charge"),
+            params: vec![],
+            fields: vec![Field {
+                name: Symbol::builtin("amount"),
+                ty: TypeExpr::Ref(Symbol::builtin("number")),
+                nullable: false,
+                wire: None,
+                deprecated: Some("use amountCents".into()),
+                doc: Some("The amount.".into()),
+            }],
+            deprecated: None,
+            doc: Some("A billing charge.\n\nMarkdown rides JSDoc verbatim.".into()),
+        });
+        let out = TsRules.render_decl(&decl);
+        // A multi-line doc becomes a JSDoc block above the interface.
+        assert!(out.starts_with(
+            "/**\n * A billing charge.\n *\n * Markdown rides JSDoc verbatim.\n */\nexport interface Charge"
+        ));
+        // The field combines its doc and the @deprecated tag into one block.
+        assert!(out.contains(
+            "  /**\n   * The amount.\n   * @deprecated use amountCents\n   */\n  amount: number;"
+        ));
+    }
+
+    #[test]
     fn an_interface_renders_fields_with_nullability() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
@@ -336,6 +349,7 @@ mod tests {
                 field("note", TypeExpr::Ref(Symbol::builtin("string")), true),
             ],
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             TsRules.render_decl(&decl),
@@ -354,8 +368,10 @@ mod tests {
                 nullable: false,
                 wire: None,
                 deprecated: Some("use amountCents".into()),
+                doc: None,
             }],
             deprecated: Some("use ChargeV2".into()),
+            doc: None,
         });
         let out = TsRules.render_decl(&iface);
         assert!(out.starts_with("/** @deprecated use ChargeV2 */\nexport interface Charge"));
@@ -365,8 +381,10 @@ mod tests {
         let enum_decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("open")],
+            member_docs: vec![None],
             backing: EnumRepr::String,
             deprecated: Some(String::new()),
+            doc: None,
         });
         assert!(TsRules
             .render_decl(&enum_decl)
@@ -377,6 +395,7 @@ mod tests {
             discriminator: "type".into(),
             variants: vec![],
             deprecated: Some("gone".into()),
+            doc: None,
         });
         assert!(TsRules
             .render_decl(&union)
@@ -394,6 +413,7 @@ mod tests {
                 false,
             )],
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             TsRules.render_decl(&decl),
@@ -448,8 +468,10 @@ mod tests {
         let decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("pending"), Symbol::builtin("settled")],
+            member_docs: vec![None, None],
             backing: EnumRepr::String,
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             TsRules.render_decl(&decl),
@@ -466,8 +488,10 @@ mod tests {
                 Symbol::builtin("not_found"),
                 Symbol::builtin("error"),
             ],
+            member_docs: vec![None, None, None],
             backing: EnumRepr::Int(vec![200, 404, 500]),
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             TsRules.render_decl(&decl),
@@ -480,8 +504,10 @@ mod tests {
         let decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Empty"),
             members: vec![],
+            member_docs: vec![],
             backing: EnumRepr::String,
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             TsRules.render_decl(&decl),
@@ -502,15 +528,18 @@ mod tests {
                     fields: vec![],
                     payload: Some(TypeExpr::Ref(Symbol::builtin("CardData"))),
                     wire: None,
+                    doc: None,
                 },
                 Variant {
                     name: Symbol::builtin("cash"),
                     fields: vec![],
                     payload: None,
                     wire: Some("CASH".into()),
+                    doc: None,
                 },
             ],
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             TsRules.render_decl(&decl),
@@ -552,6 +581,7 @@ mod tests {
             ret: None,
             err: None,
             is_async: false,
+            doc: None,
         });
         assert_eq!(TsRules.render_decl(&method), "");
     }
@@ -572,6 +602,7 @@ mod tests {
                     // Errors are thrown in TS, so the channel stays out of the signature.
                     err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
                     is_async: true,
+                    doc: None,
                 },
                 Method {
                     name: Symbol::builtin("localOp"),
@@ -579,6 +610,7 @@ mod tests {
                     ret: None,
                     err: None,
                     is_async: false,
+                    doc: None,
                 },
             ],
         });

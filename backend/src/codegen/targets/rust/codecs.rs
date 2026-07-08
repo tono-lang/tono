@@ -15,12 +15,14 @@
 //! the engine renders their text untouched while still collecting their imports.
 
 use crate::codegen::casing::{CaseStyle, CasingConfig};
+use crate::codegen::conventions::doc_of;
+use crate::codegen::doc;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::rust::render::{deprecated_attr, type_string};
 use crate::codegen::targets::rust::symbols::symbol_of;
 use crate::codegen::targets::rust::types::variant_ident;
 use crate::codegen::tree::{Decl, Field, Raw, TypeExpr};
-use crate::ir::{EnumBacking, Member};
+use crate::ir::{EnumBacking, EnumValue, Member};
 
 /// The `#[serde(with = "...")]` module path a field needs for its wire encoding,
 /// or `None` when serde's native handling is correct. 64-bit integers and bytes
@@ -57,16 +59,20 @@ fn variant_casing() -> CasingConfig {
 /// references no imported symbols.
 pub(crate) fn enum_item(
     backing: &EnumBacking,
-    values: &[(String, Option<i64>)],
+    values: &[EnumValue],
     name: &str,
     deprecated: Option<&str>,
+    doc: Option<&str>,
 ) -> Decl {
-    let variants = enum_variants(values);
+    let config = variant_casing();
     let unknown = match backing {
         EnumBacking::String => "    Unknown(String),\n}",
         EnumBacking::Int => "    Unknown(i64),\n}",
     };
     let mut text = String::new();
+    if let Some(d) = doc {
+        text.push_str(&doc::rustdoc(d, ""));
+    }
     let attr = deprecated_attr(deprecated);
     if !attr.is_empty() {
         text.push_str(&attr);
@@ -74,8 +80,11 @@ pub(crate) fn enum_item(
     }
     text.push_str("#[derive(Clone, Debug)]\n");
     text.push_str(&format!("pub enum {name} {{\n"));
-    for (ident, _) in &variants {
-        text.push_str(&format!("    {ident},\n"));
+    for v in values {
+        if let Some(d) = doc_of(&v.traits) {
+            text.push_str(&doc::rustdoc(&d, "    "));
+        }
+        text.push_str(&format!("    {},\n", variant_ident(&v.name, &config)));
     }
     text.push_str(unknown);
 
@@ -95,11 +104,7 @@ pub(crate) fn enum_item(
 /// the expanded impls in a sibling module because the enum type is local to the
 /// crate; the serde file's `use crate::<module>::*` brings it into scope. The item
 /// references no imported symbols.
-pub(crate) fn enum_serde_item(
-    backing: &EnumBacking,
-    values: &[(String, Option<i64>)],
-    name: &str,
-) -> Decl {
+pub(crate) fn enum_serde_item(backing: &EnumBacking, values: &[EnumValue], name: &str) -> Decl {
     let config = variant_casing();
     // The only per-backing difference is data: the decode wire type and how each
     // known value is spelled as a Rust literal (a quoted string vs an `i64`).
@@ -108,17 +113,17 @@ pub(crate) fn enum_serde_item(
             "String",
             values
                 .iter()
-                .map(|(wire, _)| (variant_ident(wire, &config), format!("\"{wire}\"")))
+                .map(|v| (variant_ident(&v.name, &config), format!("\"{}\"", v.name)))
                 .collect(),
         ),
         EnumBacking::Int => (
             "i64",
             values
                 .iter()
-                .map(|(wire, n)| {
+                .map(|v| {
                     (
-                        variant_ident(wire, &config),
-                        format!("{}i64", n.unwrap_or(0)),
+                        variant_ident(&v.name, &config),
+                        format!("{}i64", v.value.unwrap_or(0)),
                     )
                 })
                 .collect(),
@@ -175,16 +180,6 @@ const OPEN_ENUM_MACRO: &str = r#"macro_rules! open_enum {
     };
 }"#;
 
-/// The (PascalCase identifier, wire value) pairs of an open enum's known variants,
-/// used by the data-enum definition.
-fn enum_variants(values: &[(String, Option<i64>)]) -> Vec<(String, String)> {
-    let config = variant_casing();
-    values
-        .iter()
-        .map(|(wire, _)| (variant_ident(wire, &config), wire.clone()))
-        .collect()
-}
-
 /// Build the internally-tagged union item: a `#[serde(tag = ...)]` enum whose
 /// variants each carry one payload. The variant identifier is PascalCase; its
 /// wire tag (the member's `@wire` override, else its name) rides `#[serde(rename)]`.
@@ -194,10 +189,14 @@ pub(crate) fn union_item(
     members: &[Member],
     name: &str,
     deprecated: Option<&str>,
+    doc: Option<&str>,
 ) -> Decl {
     let config = variant_casing();
 
     let mut text = String::new();
+    if let Some(d) = doc {
+        text.push_str(&doc::rustdoc(d, ""));
+    }
     let attr = deprecated_attr(deprecated);
     if !attr.is_empty() {
         text.push_str(&attr);
@@ -210,6 +209,9 @@ pub(crate) fn union_item(
         let ident = variant_ident(&member.name, &config);
         let tag = wire_tag(member);
         let payload = type_string(&TypeExpr::Ref(symbol_of(&member.target)));
+        if let Some(d) = doc_of(&member.traits) {
+            text.push_str(&doc::rustdoc(&d, "    "));
+        }
         if tag != ident {
             text.push_str(&format!("    #[serde(rename = \"{tag}\")]\n"));
         }
@@ -461,14 +463,25 @@ mod tests {
     use crate::codegen::test_support::wire_member;
     use crate::ir::{Prim, Tref};
 
-    fn values(pairs: Vec<&str>) -> Vec<(String, Option<i64>)> {
-        pairs.into_iter().map(|v| (v.to_string(), None)).collect()
-    }
-
-    fn int_values(pairs: Vec<(&str, i64)>) -> Vec<(String, Option<i64>)> {
+    fn values(pairs: Vec<&str>) -> Vec<EnumValue> {
         pairs
             .into_iter()
-            .map(|(v, n)| (v.to_string(), Some(n)))
+            .map(|v| EnumValue {
+                name: v.to_string(),
+                value: None,
+                traits: vec![],
+            })
+            .collect()
+    }
+
+    fn int_values(pairs: Vec<(&str, i64)>) -> Vec<EnumValue> {
+        pairs
+            .into_iter()
+            .map(|(v, n)| EnumValue {
+                name: v.to_string(),
+                value: Some(n),
+                traits: vec![],
+            })
             .collect()
     }
 
@@ -479,6 +492,7 @@ mod tests {
             nullable,
             wire: None,
             deprecated: None,
+            doc: None,
         }
     }
 
@@ -527,6 +541,7 @@ mod tests {
             &EnumBacking::String,
             &values(vec!["pending", "card_present"]),
             "Status",
+            None,
             None,
         );
         // The definition is just the data enum with its catch-all; the serde impls
@@ -582,6 +597,7 @@ mod tests {
             &int_values(vec![("ok", 200), ("not_found", 404)]),
             "HTTPCode",
             None,
+            None,
         );
         // The variants are bare; the catch-all carries the backing i64.
         assert!(matches!(&decl, Decl::Raw(raw) if
@@ -611,7 +627,7 @@ mod tests {
 
     #[test]
     fn an_empty_enum_definition_is_just_the_unknown_arm() {
-        let def = enum_item(&EnumBacking::String, &[], "Empty", None);
+        let def = enum_item(&EnumBacking::String, &[], "Empty", None, None);
         assert!(matches!(&def, Decl::Raw(raw) if
             raw.text.contains("    Unknown(String),")
                 && raw.text.contains("pub enum Empty {")));
@@ -632,7 +648,7 @@ mod tests {
             // no rename, exercising the no-rename path.
             wire_member("wire", "billing#wire_data", Some("Wire")),
         ];
-        let decl = union_item("type", &members, "Method", None);
+        let decl = union_item("type", &members, "Method", None, None);
         assert!(matches!(&decl, Decl::Raw(raw) if
             raw.text.contains("#[serde(tag = \"type\")]")
                 && raw.text.contains("pub enum Method {")
@@ -660,12 +676,13 @@ mod tests {
             &values(vec!["pending"]),
             "Status",
             Some("use v2"),
+            None,
         );
         assert!(matches!(&e, Decl::Raw(raw)
             if raw.text.starts_with("#[deprecated(note = \"use v2\")]\n#[derive(")));
 
         let members = vec![wire_member("card", "cards#card_data", None)];
-        let u = union_item("type", &members, "Method", Some(""));
+        let u = union_item("type", &members, "Method", Some(""), None);
         assert!(matches!(&u, Decl::Raw(raw)
             if raw.text.starts_with("#[deprecated]\n#[derive(")));
     }

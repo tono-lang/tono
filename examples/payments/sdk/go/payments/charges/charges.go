@@ -11,6 +11,7 @@ type LocalDate string
 
 type Duration string
 
+// A small payments API that exercises the hard wire cases end to end.
 type Charge struct {
 	ID     string `json:"id"`
 	Amount int64  `json:"amount,string"`
@@ -48,15 +49,18 @@ const (
 	HTTPCodeError    HTTPCode = 500
 )
 
+// A page of results with an optional continuation cursor.
 type Page[T any] struct {
 	Items      []T     `json:"items"`
 	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
+// The card issuer declined the charge.
 type CardDeclined struct {
 	Message string `json:"message"`
 }
 
+// No charge exists for the requested id.
 type NotFound struct {
 	Message string `json:"message"`
 }
@@ -114,5 +118,6 @@ func (e *NotFound) Error() string { return "not_found" }
 func (e *NotFound) Retryable() bool { return false }
 
 type Client interface {
+	// Creates a charge.
 	CreateCharge(input Charge) (Charge, error)
 }

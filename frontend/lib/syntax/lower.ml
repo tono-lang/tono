@@ -314,13 +314,12 @@ let lower_decl ~module_name ~resolve ~diags (d : Ast.decl) : Ir.shape =
         List.map
           (fun (c : Ast.enum_case) ->
             check_snake diags c.cname_span "enum case" c.cname;
-            if c.ctraits <> [] then
-              report diags
-                (Diagnostic.error c.cname_span
-                   "enum case traits are not supported");
             (* Backing consistency (an int-backed case missing its value) is a
-               semantic check the typechecker reports (TC0009). *)
-            (c.cname, c.cint))
+               semantic check the typechecker reports (TC0009). Case traits ride
+               the bag, exactly like shape and member traits; @doc lives there. *)
+            Ir.enum_value ?int:c.cint
+              ~traits:(lower_bag_traits c.ctraits)
+              c.cname)
           cases
       in
       {
