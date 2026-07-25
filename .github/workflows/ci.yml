@@ -166,6 +166,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # The full history is needed to diff against the merge base on PRs.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
@@ -173,8 +176,17 @@ jobs:
           tool: cargo-mutants
       # Scope and hermetic test set come from .cargo/mutants.toml. A surviving
       # mutant in the hand-written seam exits non-zero and fails the build.
+      # PRs mutate only the lines the diff touches (the triple-dot diff excludes
+      # lines that changed only on the base branch); the full sweep runs on
+      # every push to main, so unchanged code is still covered there.
       - name: Mutate the bespoke seam (a live mutant fails the build)
-        run: cargo mutants
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff "origin/${{ github.base_ref }}"...HEAD > /tmp/pr.diff
+            cargo mutants --jobs 4 --in-diff /tmp/pr.diff
+          else
+            cargo mutants --jobs 4
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
