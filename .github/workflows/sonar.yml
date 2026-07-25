@@ -32,6 +32,22 @@ jobs:
         if: env.SONAR_TOKEN != ''
         with:
           tool: cargo-llvm-cov
+      # The CLI tooling tests shell out to the OCaml frontend and the Go
+      # toolchain; without them those tests skip and the cli crate's coverage
+      # collapses.
+      - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3
+        if: env.SONAR_TOKEN != ''
+        with:
+          ocaml-compiler: "5.2"
+      - name: Build the OCaml frontend for the CLI tooling tests
+        if: env.SONAR_TOKEN != ''
+        run: |
+          opam install yojson lsp jsonrpc --yes
+          opam exec -- dune build frontend/bin/tono_frontend.exe
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        if: env.SONAR_TOKEN != ''
+        with:
+          go-version: "1.21"
       - name: Generate Rust coverage for Sonar
         if: env.SONAR_TOKEN != ''
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info

@@ -98,6 +98,35 @@ let run_extra_bare_arg () =
     "the first path's basename wins" true
     (contains o.Cli.out "demo")
 
+let run_check_clean () =
+  let o =
+    Cli.run ~read_file:(always demo_src) [| "x"; "check"; "demo.tono" |]
+  in
+  Alcotest.(check int) "clean source exits 0" 0 o.Cli.code;
+  Alcotest.(check string) "no report" "" o.Cli.err;
+  Alcotest.(check string) "no ir on stdout" "" o.Cli.out
+
+let run_check_error () =
+  (* An unresolved type reference is a typecheck error (TC0001). *)
+  let src = "struct box { it: missing }" in
+  let o = Cli.run ~read_file:(always src) [| "x"; "check"; "bad.tono" |] in
+  Alcotest.(check int) "type error exits 1" 1 o.Cli.code;
+  Alcotest.(check string) "no ir on stdout" "" o.Cli.out;
+  Alcotest.(check bool) "reports a diagnostic" true (o.Cli.err <> "")
+
+let run_check_missing_path () =
+  let o = Cli.run ~read_file:(always "") [| "x"; "check" |] in
+  Alcotest.(check int) "usage exit code" 2 o.Cli.code;
+  Alcotest.(check bool) "usage on stderr" true (contains o.Cli.err "usage")
+
+let run_check_file_not_found () =
+  let raising p = raise (Sys_error (p ^ ": No such file")) in
+  let o = Cli.run ~read_file:raising [| "x"; "check"; "nope.tono" |] in
+  Alcotest.(check int) "io error exit code" 1 o.Cli.code;
+  Alcotest.(check bool)
+    "reports the io error" true
+    (contains o.Cli.err "nope.tono")
+
 let run_fmt () =
   let o =
     Cli.run
@@ -251,6 +280,11 @@ let () =
           Alcotest.test_case "no args" `Quick run_no_args;
           Alcotest.test_case "unknown command" `Quick run_unknown;
           Alcotest.test_case "extra bare arg" `Quick run_extra_bare_arg;
+          Alcotest.test_case "check clean" `Quick run_check_clean;
+          Alcotest.test_case "check error" `Quick run_check_error;
+          Alcotest.test_case "check missing path" `Quick run_check_missing_path;
+          Alcotest.test_case "check file not found" `Quick
+            run_check_file_not_found;
           Alcotest.test_case "fmt" `Quick run_fmt;
           Alcotest.test_case "fmt invalid source" `Quick run_fmt_invalid_source;
           Alcotest.test_case "fmt missing path" `Quick run_fmt_missing_path;

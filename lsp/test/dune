@@ -1,0 +1,13 @@
+(tests
+ (names analysis_test)
+ (modules analysis_test)
+ (libraries tono_lsp_lib lsp alcotest))
+
+; Protocol-level regressions can only be caught against the real server loop,
+; so this suite drives the built binary over a pipe.
+
+(tests
+ (names server_test)
+ (modules server_test)
+ (libraries yojson unix alcotest)
+ (deps ../tono_lsp.exe))

@@ -16,6 +16,11 @@ val target_of : Ast.import -> string
    per-module pass, so they are not double-reported. *)
 val build : (string * Ast.file) list -> index * Diagnostic.t list
 
+(* [build] with each diagnostic paired with the module whose imports raised it
+   and the message unlabeled, for tooling that publishes per file. *)
+val build_attributed :
+  (string * Ast.file) list -> index * (string * Diagnostic.t) list
+
 (* The reference resolver lowering uses to qualify a module's ids and references
    into "module#name" form, following [this_module]'s import map. *)
 val resolver : index -> this_module:string -> Lower.ref_resolver

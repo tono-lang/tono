@@ -25,14 +25,50 @@ use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::config as manifest;
 use tono_backend::ir::{decode_model, Model};
 
+mod preview;
+
 const USAGE: &str = "usage: tono (\n  \
     gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [<ir.json>]\n  \
+    check <file.tono>\n  \
+    fmt <file.tono>\n  \
+    preview <file.tono> --target <list> [--out <dir>] [--watch]\n  \
     breaking [<ir.json>] [--baseline <ref>] [--baseline-path <path>] [--config <cfg.json>] [--level <cat>=<sev>]... [--allow <key>]...\n  \
     version)";
 
 /// The project manifest's conventional filename, auto-discovered by walking up
 /// from the working directory when no explicit path is given.
 const MANIFEST_NAME: &str = "tono.toml";
+
+/// The OCaml frontend binary, the single source of parsing and typechecking.
+/// `check`, `fmt`, and preview's parse step delegate to it (no `.tono` is ever
+/// parsed in Rust).
+///
+/// Resolution order, first hit wins: `TONO_FRONTEND`, a sibling of the running
+/// `tono` (an installed pair), the dev build tree next to this crate, then bare
+/// `tono-frontend` on `PATH`. This lets a fresh checkout work with no setup.
+fn frontend_bin() -> String {
+    if let Some(p) = std::env::var_os("TONO_FRONTEND") {
+        return p.to_string_lossy().into_owned();
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("tono-frontend"));
+            candidates.push(dir.join("tono_frontend"));
+            candidates.push(dir.join("tono_frontend.exe"));
+        }
+    }
+    // Dev checkout: the dune-built binary lives beside the workspace.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent();
+    if let Some(root) = root {
+        candidates.push(root.join("_build/default/frontend/bin/tono_frontend.exe"));
+    }
+    candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "tono-frontend".into())
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -48,6 +84,9 @@ fn main() -> ExitCode {
 fn run(args: &[String]) -> Result<(), String> {
     match args.get(1).map(String::as_str) {
         Some("gen") => run_gen(&args[2..]),
+        Some("check") => run_frontend("check", &args[2..]),
+        Some("fmt") => run_frontend("fmt", &args[2..]),
+        Some("preview") => run_preview(&args[2..]),
         Some("breaking") => run_breaking(&args[2..]),
         Some("version") | None => {
             println!("tono {}", tono_backend::version());
@@ -214,6 +253,164 @@ fn parse_remap(value: &str) -> Result<(String, String), String> {
         .split_once('=')
         .map(|(from, to)| (from.to_string(), to.to_string()))
         .ok_or_else(|| format!("--module-remap expects <from>=<to>, got: {value}"))
+}
+
+/// Relay a source-level subcommand (`check`, `fmt`) to the frontend, inheriting
+/// its stdio and exit code. The frontend owns parsing and typechecking, so these
+/// are thin passthroughs: it prints diagnostics or the formatted source itself.
+fn run_frontend(sub: &str, args: &[String]) -> Result<(), String> {
+    let status = Command::new(frontend_bin())
+        .arg(sub)
+        .args(args)
+        .status()
+        .map_err(|e| {
+            format!(
+                "could not run {} ({e}); set TONO_FRONTEND to the frontend binary",
+                frontend_bin()
+            )
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        // Mirror the frontend's exit code (1 for diagnostics, 2 for usage).
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
+/// Compile a `.tono` file to IR JSON by shelling out to the frontend. Its stderr
+/// (diagnostics) is surfaced verbatim on failure.
+fn frontend_compile(path: &str) -> Result<String, String> {
+    let out = Command::new(frontend_bin())
+        .arg("compile")
+        .arg(path)
+        .output()
+        .map_err(|e| {
+            format!(
+                "could not run {} ({e}); set TONO_FRONTEND to the frontend binary",
+                frontend_bin()
+            )
+        })?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    String::from_utf8(out.stdout).map_err(|e| format!("frontend output is not utf-8: {e}"))
+}
+
+/// The preview: parse the source to IR (frontend), render the SDK for each
+/// requested target, then compile-check the rendered code with that target's
+/// toolchain. The rendered source is printed; the check reports compiles yes/no
+/// (or skipped when the toolchain is absent). `--watch` re-runs on every save.
+fn run_preview(args: &[String]) -> Result<(), String> {
+    let mut path: Option<String> = None;
+    let mut target_csv: Option<String> = None;
+    let mut out: Option<String> = None;
+    let mut watch = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--target" => target_csv = Some(flag_value(args, &mut i, "--target")?),
+            "--out" => out = Some(flag_value(args, &mut i, "--out")?),
+            "--watch" => watch = true,
+            flag if flag.starts_with("--") => return Err(format!("unknown flag: {flag}\n{USAGE}")),
+            p if path.is_none() => path = Some(p.to_string()),
+            p => return Err(format!("unexpected extra argument: {p}\n{USAGE}")),
+        }
+        i += 1;
+    }
+
+    let path = path.ok_or("missing <file.tono>")?;
+    let targets = parse_targets(&target_csv.ok_or("missing --target")?)?;
+    let base = out.map(PathBuf::from).unwrap_or_else(preview::default_dir);
+
+    if watch {
+        return run_preview_watch(&path, &targets, &base);
+    }
+    match preview_once(&path, &targets, &base)? {
+        true => Ok(()),
+        false => Err("preview compile-check failed".to_string()),
+    }
+}
+
+/// The per-target scaffold directory under the shared base, so targets never
+/// clobber each other.
+fn target_slug(target: TargetKind) -> &'static str {
+    match target {
+        TargetKind::Rust => "rust",
+        TargetKind::Go => "go",
+        TargetKind::TypeScript => "typescript",
+    }
+}
+
+/// One preview pass over every target. Returns whether all present toolchains
+/// reported success (a skipped toolchain is not a failure). A frontend or IR
+/// error is a hard error and aborts the pass.
+fn preview_once(path: &str, targets: &[TargetKind], base: &Path) -> Result<bool, String> {
+    let model = decode_model(&frontend_compile(path)?)?;
+    let config = CodegenConfig::default();
+    let mut all_ok = true;
+    for &target in targets {
+        println!("== target: {} ==", target_slug(target));
+        check_go_layout(&model, &[target], &config)?;
+        let files = generate(&model, &[target], &config)?;
+        if files.is_empty() {
+            println!("(nothing to render for this target)");
+            continue;
+        }
+        // Render each file through the target formatter and show it.
+        let formatted: Vec<(PathBuf, String)> = files
+            .iter()
+            .map(|f| (f.path.clone(), formatter_for(f.target).run(&f.text).text))
+            .collect();
+        for (p, text) in &formatted {
+            println!("// ==== {} ====", p.display());
+            println!("{text}");
+        }
+        let refs: Vec<(&Path, &str)> = formatted
+            .iter()
+            .map(|(p, t)| (p.as_path(), t.as_str()))
+            .collect();
+        let outcome = preview::check(target, &refs, &base.join(target_slug(target)))?;
+        if !outcome.ran {
+            println!("compile-check: {} not found (skipped)", outcome.tool);
+        } else if outcome.ok {
+            println!("compiles: yes ({})", outcome.tool);
+        } else {
+            println!("compiles: no ({})", outcome.tool);
+            print!("{}", outcome.output);
+            all_ok = false;
+        }
+    }
+    Ok(all_ok)
+}
+
+/// Watch the source and re-run the preview on every change. A transient error
+/// (a save caught mid-edit) is printed and the watch continues rather than
+/// exiting. The watch ends cleanly when the file disappears: that is the edit
+/// session moving on (rename or delete), not a save to re-render.
+fn run_preview_watch(path: &str, targets: &[TargetKind], base: &Path) -> Result<(), String> {
+    use std::time::Duration;
+    println!("watching {path} (Ctrl-C to stop; deleting the file ends the watch)");
+    let mut last: Option<std::time::SystemTime> = None;
+    loop {
+        match fs::metadata(path).and_then(|m| m.modified()) {
+            Err(_) if last.is_some() => {
+                println!("{path} is gone; watch stopped");
+                return Ok(());
+            }
+            Err(_) => {}
+            Ok(stamp) => {
+                if Some(stamp) != last {
+                    last = Some(stamp);
+                    println!("\n--- preview {path} ---");
+                    if let Err(e) = preview_once(path, targets, base) {
+                        eprintln!("{e}");
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
 }
 
 /// Consume the value that follows a flag, advancing the cursor past it.

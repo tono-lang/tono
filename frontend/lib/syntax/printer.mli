@@ -9,4 +9,5 @@ val string_literal : string -> string
    exponent. The shortest such form that round-trips to the same float. *)
 val float_literal : float -> string
 val print_ty : Ast.ty -> string
+val print_trait : Ast.trait -> string
 val print_file : Ast.file -> string
