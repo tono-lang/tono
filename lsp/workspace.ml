@@ -4,6 +4,7 @@
    it. *)
 
 module Analysis = Tono_lsp_lib.Analysis
+module Project = Tono_lsp_lib.Project
 
 (* The source root governing [path]: a directory carrying tono.toml wins (its
    src/ child when present, itself otherwise), else the nearest ancestor
@@ -58,11 +59,11 @@ let module_of ~(root : string) (path : string) : string option =
 
 (* Parse cache: an entry is rebuilt only when its text changed, so a project
    rebuild after one edit re-parses one file. *)
-let parse_cache : (string, string * Analysis.project_entry) Hashtbl.t =
+let parse_cache : (string, string * Project.project_entry) Hashtbl.t =
   Hashtbl.create 64
 
 let entry_for ~(overlay : string -> string option) ~(root : string)
-    (rel : string) : Analysis.project_entry option =
+    (rel : string) : Project.project_entry option =
   let full = Filename.concat root rel in
   let text =
     match overlay full with
@@ -78,7 +79,7 @@ let entry_for ~(overlay : string -> string option) ~(root : string)
       | _ ->
           let module_ = Tono_frontend.Cli.module_name_of_rel rel in
           let id = Lsp.Uri.to_string (Lsp.Uri.of_path full) in
-          let e = Analysis.project_entry ~module_ ~id ~text in
+          let e = Project.project_entry ~module_ ~id ~text in
           Hashtbl.replace parse_cache full (text, e);
           e)
     text
@@ -86,9 +87,8 @@ let entry_for ~(overlay : string -> string option) ~(root : string)
 (* The whole project under [root], open-buffer contents taking precedence over
    disk. *)
 let project_of ~(overlay : string -> string option) (root : string) :
-    Analysis.project =
-  Analysis.build_project
-    (List.filter_map (entry_for ~overlay ~root) (scan root))
+    Project.project =
+  Project.build_project (List.filter_map (entry_for ~overlay ~root) (scan root))
 
 (* Diagnostics cache keyed by the module's content closure: an edit re-checks
    only the edited module and the open modules that (transitively) import it;
@@ -96,13 +96,13 @@ let project_of ~(overlay : string -> string option) (root : string) :
 let diag_cache : (string, string * Lsp.Types.Diagnostic.t list) Hashtbl.t =
   Hashtbl.create 64
 
-let diagnostics ~(project : Analysis.project) ~(root : string)
+let diagnostics ~(project : Project.project) ~(root : string)
     ~(module_ : string) : Lsp.Types.Diagnostic.t list =
-  let key = Analysis.module_check_key project ~module_ in
+  let key = Project.module_check_key project ~module_ in
   let slot = root ^ "\x00" ^ module_ in
   match Hashtbl.find_opt diag_cache slot with
   | Some (k, ds) when String.equal k key -> ds
   | _ ->
-      let ds = Analysis.project_diagnostics project ~module_ in
+      let ds = Project.project_diagnostics project ~module_ in
       Hashtbl.replace diag_cache slot (key, ds);
       ds

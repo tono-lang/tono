@@ -12,6 +12,7 @@ module CR = Lsp.Client_request
 module SN = Lsp.Server_notification
 module Text_document = Lsp.Text_document
 module Analysis = Tono_lsp_lib.Analysis
+module Project = Tono_lsp_lib.Project
 
 (* [Lsp.Io.Make] is parameterized over an IO monad and a channel pair. The
    identity monad turns its [read]/[write] into ordinary blocking calls. *)
@@ -132,7 +133,7 @@ let overlay () : string -> string option =
   in
   fun path -> List.assoc_opt path snapshot
 
-let project_ctx (uri : DocumentUri.t) : (Analysis.project * string) option =
+let project_ctx (uri : DocumentUri.t) : (Project.project * string) option =
   Option.map
     (fun (root, module_) ->
       (Workspace.project_of ~overlay:(overlay ()) root, module_))
@@ -225,12 +226,10 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
         | CR.TextDocumentDefinition p -> (
             match project_ctx p.textDocument.uri with
             | Some (project, module_) -> (
-                match
-                  Analysis.project_symbol_at project ~module_ p.position
-                with
+                match Project.project_symbol_at project ~module_ p.position with
                 | Some (m, name) -> (
                     match
-                      Analysis.project_decl_location project ~module_:m ~name
+                      Project.project_decl_location project ~module_:m ~name
                     with
                     | Some (id, range) ->
                         Some
@@ -262,16 +261,14 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
         | CR.TextDocumentReferences p -> (
             match project_ctx p.textDocument.uri with
             | Some (project, module_) -> (
-                match
-                  Analysis.project_symbol_at project ~module_ p.position
-                with
+                match Project.project_symbol_at project ~module_ p.position with
                 | Some (m, name) ->
                     Some
                       (List.map
                          (fun (id, text, sp) ->
                            Location.create ~uri:(Lsp.Uri.of_string id)
                              ~range:(Analysis.range_in ~text sp))
-                         (Analysis.project_occurrences project ~module_:m ~name
+                         (Project.project_occurrences project ~module_:m ~name
                             ~include_decl:p.context.includeDeclaration))
                 | None -> Some [])
             | None -> (
@@ -294,21 +291,21 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
             match project_ctx p.textDocument.uri with
             | Some (project, module_) -> (
                 match
-                  Analysis.project_rename project ~module_ p.position
+                  Project.project_rename project ~module_ p.position
                     ~new_name:p.newName
                 with
-                | Analysis.Renamed changes ->
+                | Project.Renamed changes ->
                     WorkspaceEdit.create
                       ~changes:
                         (List.map
                            (fun (id, edits) -> (Lsp.Uri.of_string id, edits))
                            changes)
                       ()
-                | Analysis.Collision message ->
+                | Project.Collision message ->
                     Jsonrpc.Response.Error.raise
                       (Jsonrpc.Response.Error.make ~code:InvalidParams ~message
                          ())
-                | Analysis.NotASymbol -> WorkspaceEdit.create ())
+                | Project.NotASymbol -> WorkspaceEdit.create ())
             | None -> (
                 match doc_text p.textDocument.uri with
                 | Some text ->
@@ -335,7 +332,7 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
                          (CodeAction.create ~title ~kind:CodeActionKind.QuickFix
                             ~edit:(WorkspaceEdit.create ~changes ())
                             ()))
-                     (Analysis.project_code_actions project ~module_
+                     (Project.project_code_actions project ~module_
                         ~range:p.range)))
         | CR.WorkspaceSymbol p ->
             let roots =
@@ -356,13 +353,13 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
                          ~location:
                            (Location.create ~uri:(Lsp.Uri.of_string id) ~range)
                          ())
-                     (Analysis.project_symbols project ~query:p.query))
+                     (Project.project_symbols project ~query:p.query))
                  roots)
         | CR.SignatureHelp p -> (
             match doc_text p.textDocument.uri with
             | Some text -> (
                 match
-                  Analysis.signature_help ~text ~file:(Analysis.parse text)
+                  Project.signature_help ~text ~file:(Analysis.parse text)
                     p.position
                 with
                 | Some sh -> sh
