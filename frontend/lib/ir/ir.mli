@@ -78,8 +78,52 @@ and shape_kind =
       output : tref option;
       errors : tref list; (* tref so an operation can apply a generic directly *)
     }
+  | Entry of { fields : entry_field list; operations : shape list }
+    (* a struct with ops in its body: the SDK construction surface plus its
+       methods; never a wire type *)
+  | Config of { fields : entry_field list }
+(* a construction-only struct (fields carry sources, or an entry composes
+       it via @bind); never a wire type *)
 
 and shape = { id : shape_id; kind : shape_kind; traits : trait list }
+
+(* Where an entry/config field's value can come from; the declared order is the
+   fallback chain. *)
+and source = Arg | With | Env of env_name | Default of json
+and env_name = Env_name of string | Env_field of string list
+
+(* A parsed template: literal runs, entry-field placeholders ({.x}), and
+   operation-input member placeholders ({id}, protocol trait positions only). *)
+and template_part =
+  | Tpl_lit of string
+  | Tpl_field of string list
+  | Tpl_input of string
+
+(* The selection table of [field: T = match .subject { ... }]; a pattern is a
+   scalar JSON literal, [None] the wildcard arm. *)
+and select = { subject : string list; arms : select_arm list }
+and select_arm = { arm_pattern : json option; arm_value : arm_value }
+
+and arm_value =
+  | Arm_field of string list
+  | Arm_lit of json
+  | Arm_sources of source list
+
+(* One @bind(target, .source) at a composition point. *)
+and bind = { bind_field : string; bind_source : string list }
+
+(* One field of an entry or config; presence is governed by the sources. *)
+and entry_field = {
+  ef_name : string;
+  ef_target : tref;
+  ef_sources : source list;
+  ef_format : template_part list option;
+  ef_transforms : string list;
+  ef_select : select option;
+  ef_binds : bind list;
+  ef_constraints : constraint_ list;
+  ef_traits : trait list;
+}
 
 (* One enum member: wire name, optional explicit integer (int-backed enums only),
    and its trait bag. Documentation (@doc) rides the bag, as on shapes and members. *)

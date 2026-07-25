@@ -18,16 +18,31 @@ type part =
 (* Where an output member is read from in the HTTP response. *)
 type response_part = Response_header of string | Response_status_code
 
+(* A value position in a protocol trait: a literal, an entry-field reference,
+   or a template mixing literal runs with entry-field placeholders. The runtime
+   interprets these verbatim; it never learns the field taxonomy. *)
+type value_expr =
+  | Vlit of Ir.json
+  | Vfield of string list
+  | Vtemplate of Ir.template_part list
+
 (* The opaque, language-agnostic wire form of one operation. The Target embeds
-   its JSON encoding without interpreting any field. *)
+   its JSON encoding without interpreting any field. The entry-scoped fields
+   (endpoint, request headers, timeout, retry) are present only on operations
+   declared in an entry body; a loose operation leaves them empty. *)
 type wire_descriptor = {
   http_method : string;
-  uri : string; (* path template with {name} placeholders *)
+  uri : string; (* path template with {name} and {.field} placeholders *)
   bindings : (string * part) list; (* input member -> request part *)
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list; (* status -> output type, if any *)
   errors : (int * Ir.shape_id * string option) list;
       (* status -> error shape id; 3rd is the @errorCode body field, if any *)
+  endpoint : string list option; (* @http endpoint: entry-field path *)
+  request_headers : (Ir.template_part list * value_expr) list;
+      (* @header(key, value): key template -> value *)
+  timeout : string list option; (* @timeout(.field) entry-field path *)
+  retry : string list option; (* @retry(.field) entry-field path *)
 }
 
 (* Resolve one operation shape against a shape lookup. Returns [None] for an

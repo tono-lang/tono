@@ -44,3 +44,27 @@ let ext_binding_missing = "TC0030"
 let ext_binding_malformed = "TC0031"
 let ext_duplicate = "TC0032"
 let ext_binding_duplicate_language = "TC0033"
+
+(* Entry model: roles emerge from struct content and their boundaries are
+   closed. An entry/config crossing the wire boundary (op input/output/error, or
+   a wire member's type); a source trait in a position that cannot carry one; a
+   source that can never fire (@arg combined with anything else, match combined
+   with sources); a consumed field whose resolution chain reaches a field with
+   no declared source; an unresolvable field reference; a resolution cycle;
+   a malformed match (subject/pattern/arm); a non-exhaustive match; a @bind
+   outside its composition point; an entry @http op without an endpoint ref; a
+   protocol trait on an op that cannot carry it; an unknown transform catalog
+   entry; an entry/config shape rule (generics, nullable field). *)
+let entry_wire_boundary = "TC0034"
+let source_position_invalid = "TC0035"
+let source_dead = "TC0036"
+let field_unresolvable = "TC0037"
+let field_ref_unknown = "TC0038"
+let resolution_cycle = "TC0039"
+let match_invalid = "TC0040"
+let match_not_exhaustive = "TC0041"
+let bind_invalid = "TC0042"
+let entry_endpoint_missing = "TC0043"
+let protocol_trait_invalid = "TC0044"
+let transform_unknown = "TC0045"
+let entry_shape_invalid = "TC0046"

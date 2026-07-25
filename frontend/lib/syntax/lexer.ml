@@ -270,6 +270,10 @@ let tokenize (src : string) : Token.t list * Diagnostic.t list =
       | ')' ->
           bump st;
           add_tok st Token.RParen ~start
+      | ':' when char_at st (st.off + 1) = Some ':' ->
+          bump st;
+          bump st;
+          add_tok st Token.ColonColon ~start
       | ':' ->
           bump st;
           add_tok st Token.Colon ~start
@@ -282,6 +286,10 @@ let tokenize (src : string) : Token.t list * Diagnostic.t list =
       | '.' ->
           bump st;
           add_tok st Token.Dot ~start
+      | '=' when char_at st (st.off + 1) = Some '>' ->
+          bump st;
+          bump st;
+          add_tok st Token.FatArrow ~start
       | '=' ->
           bump st;
           add_tok st Token.Eq ~start

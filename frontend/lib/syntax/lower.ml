@@ -96,6 +96,10 @@ let rec json_of_arg : Ast.trait_arg -> Ir.json = function
   | Ast.AInt n -> `Int n
   | Ast.AFloat f -> `Float f
   | Ast.AName s -> `String s
+  | Ast.ARef r ->
+      (* A field reference in a trait value keeps its path structured, so the
+         Protocol resolver (and the backend) never re-parse ".a.b" strings. *)
+      `Assoc [ ("field", `List (List.map (fun s -> `String s) r.Ast.segs)) ]
   | Ast.AKv (k, v) -> `Assoc [ (k, json_of_arg v) ]
 
 (* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
@@ -201,6 +205,172 @@ let constraint_of_trait diags (tr : Ast.trait) : Ir.constraint_ option =
           None)
   | _ -> None
 
+(* ── Entry fields ──────────────────────────────────────────────────────── *)
+
+(* Parse a template string into parts: "{.a.b}" is an entry-field placeholder,
+   "{name}" an operation-input member placeholder, everything else literal. An
+   unterminated "{" is diagnosed and the rest of the string kept literal. *)
+let parse_template ~diags ~span (s : string) : Ir.template_part list =
+  let n = String.length s in
+  let parts = ref [] in
+  let lit = Buffer.create 16 in
+  let flush () =
+    if Buffer.length lit > 0 then (
+      parts := Ir.Tpl_lit (Buffer.contents lit) :: !parts;
+      Buffer.clear lit)
+  in
+  let rec go i =
+    if i >= n then flush ()
+    else if s.[i] = '{' then (
+      match String.index_from_opt s i '}' with
+      | None ->
+          report diags
+            (Diagnostic.error span "unterminated '{' placeholder in template");
+          Buffer.add_substring lit s i (n - i);
+          flush ()
+      | Some j ->
+          flush ();
+          let ph = String.sub s (i + 1) (j - i - 1) in
+          if String.length ph > 0 && ph.[0] = '.' then
+            let path =
+              String.split_on_char '.' (String.sub ph 1 (String.length ph - 1))
+            in
+            parts := Ir.Tpl_field path :: !parts
+          else parts := Ir.Tpl_input ph :: !parts;
+          go (j + 1))
+    else (
+      Buffer.add_char lit s.[i];
+      go (i + 1))
+  in
+  go 0;
+  List.rev !parts
+
+(* The transform a catalog trait names, e.g. "str::trim" -> "trim". Catalog
+   membership is a typecheck concern; lowering keeps any "str::" suffix. *)
+let transform_of (tname : string) : string option =
+  let prefix = "str::" in
+  let pn = String.length prefix in
+  if String.length tname > pn && String.equal (String.sub tname 0 pn) prefix
+  then Some (String.sub tname pn (String.length tname - pn))
+  else None
+
+let lower_source ~diags (tr : Ast.trait) : Ir.source option =
+  match tr.Ast.tname with
+  | "arg" -> Some Ir.Arg
+  | "with" -> Some Ir.With
+  | "env" -> (
+      match tr.targs with
+      | [ Ast.AString s ] -> Some (Ir.Env (Ir.Env_name s))
+      | [ Ast.ARef r ] -> Some (Ir.Env (Ir.Env_field r.segs))
+      | _ ->
+          report diags
+            (Diagnostic.error tr.tspan
+               "@env expects a single variable name string or a field reference");
+          None)
+  | "default" ->
+      let v = match tr.targs with a :: _ -> json_of_arg a | [] -> `Null in
+      Some (Ir.Default v)
+  | _ -> None
+
+let lower_pattern : Ast.match_pattern -> Ir.json option = function
+  | Ast.PString s -> Some (`String s)
+  | Ast.PInt n -> Some (`Int n)
+  | Ast.PName "true" -> Some (`Bool true)
+  | Ast.PName "false" -> Some (`Bool false)
+  | Ast.PName n -> Some (`String n) (* an enum case name *)
+  | Ast.PWildcard -> None
+
+let lower_arm_value ~diags : Ast.arm_value -> Ir.arm_value = function
+  | Ast.AVRef r -> Ir.Arm_field r.segs
+  | Ast.AVString s -> Ir.Arm_lit (`String s)
+  | Ast.AVInt n -> Ir.Arm_lit (`Int n)
+  | Ast.AVName "true" -> Ir.Arm_lit (`Bool true)
+  | Ast.AVName "false" -> Ir.Arm_lit (`Bool false)
+  | Ast.AVName n -> Ir.Arm_lit (`String n)
+  | Ast.AVSources traits ->
+      Ir.Arm_sources
+        (List.filter_map
+           (fun (tr : Ast.trait) ->
+             match tr.tname with
+             | "arg" | "with" | "env" | "default" -> lower_source ~diags tr
+             | _ ->
+                 report diags
+                   (Diagnostic.error tr.tspan
+                      "a match arm only stacks value sources (@env/@default)");
+                 None)
+           traits)
+
+let lower_select ~diags (fm : Ast.field_match) : Ir.select =
+  {
+    Ir.subject = fm.subject.segs;
+    arms =
+      List.map
+        (fun (a : Ast.match_arm) ->
+          {
+            Ir.arm_pattern = lower_pattern a.pat;
+            arm_value = lower_arm_value ~diags a.value;
+          })
+        fm.arms;
+  }
+
+let lower_entry_field ~resolve ~diags (m : Ast.member) : Ir.entry_field =
+  check_snake diags m.mname_span "member name" m.mname;
+  (* Nullability on an entry/config field is a typecheck error (optionality
+     comes from the sources); lowering keeps the base type either way. *)
+  let base = match m.mtype with Ast.TNullable (t, _) -> t | t -> t in
+  let target = lower_type ~params:[] ~resolve ~diags base in
+  let sources = ref [] in
+  let transforms = ref [] in
+  let binds = ref [] in
+  let format = ref None in
+  let constraints = ref [] in
+  let bag = ref [] in
+  List.iter
+    (fun (tr : Ast.trait) ->
+      match tr.tname with
+      | "arg" | "with" | "env" | "default" -> (
+          match lower_source ~diags tr with
+          | Some s -> sources := !sources @ [ s ]
+          | None -> ())
+      | "format" -> (
+          match tr.targs with
+          | [ Ast.AString s ] ->
+              format := Some (parse_template ~diags ~span:tr.tspan s)
+          | _ ->
+              report diags
+                (Diagnostic.error tr.tspan
+                   "@format expects a single template string"))
+      | "bind" -> (
+          match tr.targs with
+          | [ Ast.AName tgt; Ast.ARef r ] ->
+              binds :=
+                !binds @ [ { Ir.bind_field = tgt; bind_source = r.segs } ]
+          | _ ->
+              report diags
+                (Diagnostic.error tr.tspan
+                   "@bind expects a target field name and a source reference, \
+                    e.g. @bind(api_key, .api_key)"))
+      | "range" | "length" | "pattern" | "multipleOf" -> (
+          match constraint_of_trait diags tr with
+          | Some c -> constraints := !constraints @ [ c ]
+          | None -> ())
+      | name -> (
+          match transform_of name with
+          | Some t -> transforms := !transforms @ [ t ]
+          | None -> bag := !bag @ [ bag_trait tr ]))
+    m.mtraits;
+  {
+    Ir.ef_name = m.mname;
+    ef_target = target;
+    ef_sources = !sources;
+    ef_format = !format;
+    ef_transforms = !transforms;
+    ef_select = Option.map (lower_select ~diags) m.mmatch;
+    ef_binds = !binds;
+    ef_constraints = !constraints;
+    ef_traits = !bag;
+  }
+
 (* ── Members ───────────────────────────────────────────────────────────── *)
 
 let lower_member ~params ~resolve ~diags (m : Ast.member) : Ir.member =
@@ -246,14 +416,80 @@ let lower_member ~params ~resolve ~diags (m : Ast.member) : Ir.member =
 let take_trait name (traits : Ast.trait list) =
   List.partition (fun (t : Ast.trait) -> String.equal t.tname name) traits
 
-let lower_decl ~module_name ~resolve ~diags (d : Ast.decl) : Ir.shape =
+(* Lower an operation's traits and body into an Operation shape under [id].
+   Shared by top-level ops and ops nested in an entry body. *)
+let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~input ~output ~pub_trait
+    : Ir.shape =
+  let lower_opt = Option.map (lower_type ~params:[] ~resolve ~diags) in
+  (* @errors(A, B) lists the operation's error types by name; repeated
+     @errors traits accumulate. A non-name argument has no type to point
+     at, so it is diagnosed rather than silently dropped. Only same-module
+     names resolve here (qualifier:None): a trait argument is a bare identifier
+     in the grammar, so a qualified [common.NotFound] does not parse as one
+     token; cross-module error references need a qualified trait-argument form,
+     left to a focused follow-up. *)
+  let errs, rest = take_trait "errors" d.dtraits in
+  let errors =
+    List.concat_map
+      (fun (tr : Ast.trait) ->
+        List.filter_map
+          (function
+            | Ast.AName n -> Some (Ir.Ref (resolve ~qualifier:None ~name:n, []))
+            | _ ->
+                report diags
+                  (Diagnostic.error tr.tspan "@errors expects type names");
+                None)
+          tr.Ast.targs)
+      errs
+  in
+  {
+    Ir.id;
+    kind =
+      Ir.Operation
+        { input = lower_opt input; output = lower_opt output; errors };
+    traits = pub_trait @ lower_bag_traits rest;
+  }
+
+let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
+    : Ir.shape =
   check_snake diags d.dname_span "shape name" d.dname;
   let pub_trait =
     if d.pub then [ { Ir.trait_id = "pub"; value = `Null } ] else []
   in
   let bag rest = pub_trait @ lower_bag_traits rest in
   match d.dkind with
-  | Ast.DStruct { params; members } ->
+  | Ast.DStruct { params = _; members; ops } when role = Roles.Entry ->
+      (* Entry generics have no meaning (the construction surface is concrete);
+         the typechecker rejects them, lowering drops them. Nested ops are
+         identified as [module#entry.op], scoped to the entry so they never
+         collide with a top-level shape. *)
+      let fields = List.map (lower_entry_field ~resolve ~diags) members in
+      let operations =
+        List.map
+          (fun (op : Ast.decl) ->
+            check_snake diags op.dname_span "operation name" op.dname;
+            match op.dkind with
+            | Ast.DOp { input; output } ->
+                lower_op_shape
+                  ~id:(qualify module_name (d.dname ^ "." ^ op.dname))
+                  ~resolve ~diags op ~input ~output ~pub_trait:[]
+            | _ -> assert false)
+          ops
+      in
+      {
+        Ir.id = qualify module_name d.dname;
+        kind = Ir.Entry { fields; operations };
+        traits = bag d.dtraits;
+      }
+  | Ast.DStruct { params = _; members; ops = _ } when role = Roles.Config ->
+      {
+        Ir.id = qualify module_name d.dname;
+        kind =
+          Ir.Config
+            { fields = List.map (lower_entry_field ~resolve ~diags) members };
+        traits = bag d.dtraits;
+      }
+  | Ast.DStruct { params; members; ops = _ } ->
       {
         Ir.id = qualify module_name d.dname;
         kind =
@@ -328,36 +564,9 @@ let lower_decl ~module_name ~resolve ~diags (d : Ast.decl) : Ir.shape =
         traits = bag d.dtraits;
       }
   | Ast.DOp { input; output } ->
-      let lower_opt = Option.map (lower_type ~params:[] ~resolve ~diags) in
-      (* @errors(A, B) lists the operation's error types by name; repeated
-         @errors traits accumulate. A non-name argument has no type to point
-         at, so it is diagnosed rather than silently dropped. Only same-module
-         names resolve here (qualifier:None): a trait argument is a bare identifier
-         in the grammar, so a qualified [common.NotFound] does not parse as one
-         token; cross-module error references need a qualified trait-argument form,
-         left to a focused follow-up. *)
-      let errs, rest = take_trait "errors" d.dtraits in
-      let errors =
-        List.concat_map
-          (fun (tr : Ast.trait) ->
-            List.filter_map
-              (function
-                | Ast.AName n ->
-                    Some (Ir.Ref (resolve ~qualifier:None ~name:n, []))
-                | _ ->
-                    report diags
-                      (Diagnostic.error tr.tspan "@errors expects type names");
-                    None)
-              tr.Ast.targs)
-          errs
-      in
-      {
-        Ir.id = qualify module_name d.dname;
-        kind =
-          Ir.Operation
-            { input = lower_opt input; output = lower_opt output; errors };
-        traits = bag rest;
-      }
+      lower_op_shape
+        ~id:(qualify module_name d.dname)
+        ~resolve ~diags d ~input ~output ~pub_trait
   | Ast.DExt _ ->
       (* Extensions have no shape; [lower_file] routes them to [lower_ext]. *)
       assert false
@@ -411,6 +620,7 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
   let resolve =
     match resolve with Some r -> r | None -> default_resolver ~module_name
   in
+  let roles = Roles.classify file.Ast.decls in
   let shapes_rev = ref [] in
   let ops_rev = ref [] in
   let exts_rev = ref [] in
@@ -419,7 +629,8 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
       match d.dkind with
       | Ast.DExt _ -> exts_rev := lower_ext ~resolve ~diags d :: !exts_rev
       | _ -> (
-          let shape = lower_decl ~module_name ~resolve ~diags d in
+          let role = Roles.role_of roles d.dname in
+          let shape = lower_decl ~role ~module_name ~resolve ~diags d in
           match shape.Ir.kind with
           | Ir.Operation _ -> ops_rev := shape :: !ops_rev
           | _ -> shapes_rev := shape :: !shapes_rev))

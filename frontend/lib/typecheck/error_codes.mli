@@ -46,3 +46,19 @@ val ext_binding_missing : string
 val ext_binding_malformed : string
 val ext_duplicate : string
 val ext_binding_duplicate_language : string
+
+(* Entry model: closed boundaries between entry/config and wire, declared value
+   sources, table selection, composition, and protocol trait positions. *)
+val entry_wire_boundary : string
+val source_position_invalid : string
+val source_dead : string
+val field_unresolvable : string
+val field_ref_unknown : string
+val resolution_cycle : string
+val match_invalid : string
+val match_not_exhaustive : string
+val bind_invalid : string
+val entry_endpoint_missing : string
+val protocol_trait_invalid : string
+val transform_unknown : string
+val entry_shape_invalid : string

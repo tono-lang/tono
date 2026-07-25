@@ -20,12 +20,35 @@ let rec erase_ty = function
   | Ast.TError _ -> Ast.TError dspan
 
 let erase_trait (t : Ast.trait) = { t with Ast.tspan = dspan }
+let erase_ref (r : Ast.ref_path) = { r with Ast.ref_span = dspan }
+
+let erase_arm_value = function
+  | Ast.AVRef r -> Ast.AVRef (erase_ref r)
+  | Ast.AVSources ts -> Ast.AVSources (List.map erase_trait ts)
+  | (Ast.AVString _ | Ast.AVInt _ | Ast.AVName _) as v -> v
+
+let erase_match (fm : Ast.field_match) =
+  {
+    Ast.subject = erase_ref fm.Ast.subject;
+    arms =
+      List.map
+        (fun (a : Ast.match_arm) ->
+          {
+            a with
+            Ast.pat_span = dspan;
+            value = erase_arm_value a.Ast.value;
+            value_span = dspan;
+          })
+        fm.Ast.arms;
+    match_span = dspan;
+  }
 
 let erase_member (m : Ast.member) =
   {
     m with
     Ast.mname_span = dspan;
     mtype = erase_ty m.Ast.mtype;
+    mmatch = Option.map erase_match m.Ast.mmatch;
     mtraits = List.map erase_trait m.Ast.mtraits;
   }
 
@@ -44,9 +67,14 @@ let erase_variant (v : Ast.union_variant) =
     vtraits = List.map erase_trait v.Ast.vtraits;
   }
 
-let erase_kind = function
-  | Ast.DStruct { params; members } ->
-      Ast.DStruct { params; members = List.map erase_member members }
+let rec erase_kind = function
+  | Ast.DStruct { params; members; ops } ->
+      Ast.DStruct
+        {
+          params;
+          members = List.map erase_member members;
+          ops = List.map erase_decl ops;
+        }
   | Ast.DEnum { cases } -> Ast.DEnum { cases = List.map erase_case cases }
   | Ast.DUnion { params; variants } ->
       Ast.DUnion { params; variants = List.map erase_variant variants }
@@ -76,7 +104,7 @@ let erase_kind = function
           econformance;
         }
 
-let erase_decl (d : Ast.decl) =
+and erase_decl (d : Ast.decl) =
   {
     d with
     Ast.dname_span = dspan;
@@ -175,7 +203,13 @@ let gen_traits = G.list_size (G.int_range 0 2) gen_trait
 
 let gen_member =
   let+ name = gen_lname and+ ty = gen_ty and+ traits = gen_traits in
-  { Ast.mname = name; mname_span = dspan; mtype = ty; mtraits = traits }
+  {
+    Ast.mname = name;
+    mname_span = dspan;
+    mtype = ty;
+    mmatch = None;
+    mtraits = traits;
+  }
 
 let gen_case =
   let+ name = gen_lname
@@ -196,7 +230,7 @@ let gen_kind =
     [
       (let+ params = gen_params
        and+ members = G.list_size (G.int_range 0 4) gen_member in
-       Ast.DStruct { params; members });
+       Ast.DStruct { params; members; ops = [] });
       (let+ cases = G.list_size (G.int_range 0 3) gen_case in
        Ast.DEnum { cases });
       (let+ params = gen_params

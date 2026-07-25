@@ -176,12 +176,23 @@ let check_op (decls : Ast.decl list) (op : Ast.decl) : Diagnostic.t list =
   | None -> []
   | Some path ->
       let members = input_members decls op in
-      check_labels op members (placeholders path)
+      (* A ".x" placeholder references an entry field, resolved at construction
+         time, not an input member; the entries pass validates those. *)
+      let input_placeholders =
+        List.filter
+          (fun p -> not (String.length p > 0 && p.[0] = '.'))
+          (placeholders path)
+      in
+      check_labels op members input_placeholders
       @ check_label_presence members
       @ check_payload members @ check_maps members
 
 let check_decls (decls : Ast.decl list) : Diagnostic.t list =
   List.concat_map
     (fun (d : Ast.decl) ->
-      match d.dkind with Ast.DOp _ -> check_op decls d | _ -> [])
+      match d.dkind with
+      | Ast.DOp _ -> check_op decls d
+      (* Ops nested in an entry body carry the same HTTP surface rules. *)
+      | Ast.DStruct { ops; _ } -> List.concat_map (check_op decls) ops
+      | _ -> [])
     decls

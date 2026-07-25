@@ -12,7 +12,7 @@
 //! the model ([`apply`]); the render rules and output paths then see only the
 //! effective names and never need to know about the config.
 
-use crate::ir::{Extension, Member, Model, Module, Shape, ShapeKind, Signature, Tref};
+use crate::ir::{EntryField, Extension, Member, Model, Module, Shape, ShapeKind, Signature, Tref};
 
 /// Config hooks consumed by codegen when mapping modules to packages. The default
 /// (no flatten, no remap) is the idiomatic sub-package mapping.
@@ -136,6 +136,22 @@ fn kind(config: &CodegenConfig, k: &ShapeKind) -> ShapeKind {
             output: output.as_ref().map(|t| tref(config, t)),
             errors: errors.iter().map(|t| tref(config, t)).collect(),
         },
+        ShapeKind::Entry { fields, operations } => ShapeKind::Entry {
+            fields: fields.iter().map(|f| entry_field(config, f)).collect(),
+            operations: operations.iter().map(|op| shape(config, op)).collect(),
+        },
+        ShapeKind::Config { fields } => ShapeKind::Config {
+            fields: fields.iter().map(|f| entry_field(config, f)).collect(),
+        },
+    }
+}
+
+// Entry-field sources, binds, and templates carry field names, never module
+// ids; only the target type crosses module namespaces.
+fn entry_field(config: &CodegenConfig, f: &EntryField) -> EntryField {
+    EntryField {
+        target: tref(config, &f.target),
+        ..f.clone()
     }
 }
 

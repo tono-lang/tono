@@ -3,6 +3,11 @@
 type part = Label | Query of string | Header of string | Body | Payload
 type response_part = Response_header of string | Response_status_code
 
+type value_expr =
+  | Vlit of Ir.json
+  | Vfield of string list
+  | Vtemplate of Ir.template_part list
+
 type wire_descriptor = {
   http_method : string;
   uri : string;
@@ -10,6 +15,10 @@ type wire_descriptor = {
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list;
   errors : (int * Ir.shape_id * string option) list;
+  endpoint : string list option;
+  request_headers : (Ir.template_part list * value_expr) list;
+  timeout : string list option;
+  retry : string list option;
 }
 
 (* ── Reading the lowered trait bag ─────────────────────────────────────── *)
@@ -17,11 +26,14 @@ type wire_descriptor = {
 (* The frontend emits bare trait ids today; a future name-resolution pass will
    namespace them as [core#...]. Accept both spellings so hand-authored IR and
    compiled IR resolve identically (mirrors the backend's [find_trait]). *)
+let trait_matches (id : string) (t : Ir.trait) : bool =
+  String.equal t.trait_id id || String.equal t.trait_id ("core#" ^ id)
+
 let trait_by (id : string) (traits : Ir.trait list) : Ir.trait option =
-  let matches (t : Ir.trait) =
-    String.equal t.trait_id id || String.equal t.trait_id ("core#" ^ id)
-  in
-  List.find_opt matches traits
+  List.find_opt (trait_matches id) traits
+
+let traits_all (id : string) (traits : Ir.trait list) : Ir.trait list =
+  List.filter (trait_matches id) traits
 
 let has_trait id traits = Option.is_some (trait_by id traits)
 
@@ -42,6 +54,37 @@ let int_arg (v : Ir.json) : int option =
 
 let obj_field (k : string) (v : Ir.json) : Ir.json option =
   match v with `Assoc kvs -> List.assoc_opt k kvs | _ -> None
+
+(* An entry-field reference the frontend lowered as {"field": ["a", "b"]}. *)
+let field_path (v : Ir.json) : string list option =
+  match v with
+  | `Assoc [ ("field", `List segs) ] ->
+      let strs =
+        List.filter_map (function `String s -> Some s | _ -> None) segs
+      in
+      if List.length strs = List.length segs then Some strs else None
+  | _ -> None
+
+(* Parse a template string into IR parts; the diagnostics sink is discarded
+   because the frontend already validated the string at the AST level. *)
+let template_of (s : string) : Ir.template_part list =
+  let d = ref [] in
+  let dpos : Span.pos = { line = 0; col = 0; offset = 0 } in
+  let dspan : Span.span = { start = dpos; finish = dpos } in
+  Lower.parse_template ~diags:d ~span:dspan s
+
+let has_placeholder (s : string) : bool =
+  match template_of s with [] | [ Ir.Tpl_lit _ ] -> false | _ -> true
+
+(* A protocol trait value position: a structured field ref, a template-bearing
+   string, or a plain literal. *)
+let value_expr_of (j : Ir.json) : value_expr =
+  match field_path j with
+  | Some p -> Vfield p
+  | None -> (
+      match j with
+      | `String s when has_placeholder s -> Vtemplate (template_of s)
+      | other -> Vlit other)
 
 (* ── Binding assignment ────────────────────────────────────────────────── *)
 
@@ -126,7 +169,40 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
       in
       let success = [ (code, output) ] in
       let errors = List.filter_map (error_entry lookup) errors in
-      Some { http_method; uri; bindings; response_bindings; success; errors }
+      (* Entry-scoped positions: the endpoint ref on @http, op-level @header
+         key/value pairs, and the @timeout/@retry field refs. The single
+         positional argument of @timeout/@retry arrives as a one-element array
+         (the frontend's uniform lowering). *)
+      let endpoint = Option.bind (obj_field "endpoint" http.value) field_path in
+      let request_headers =
+        List.filter_map
+          (fun (t : Ir.trait) ->
+            match t.value with
+            | `List [ `String key; value ] ->
+                Some (template_of key, value_expr_of value)
+            | _ -> None)
+          (traits_all "header" op.traits)
+      in
+      let single_ref id =
+        match trait_by id op.traits with
+        | Some { value = `List [ v ]; _ } -> field_path v
+        | _ -> None
+      in
+      let timeout = single_ref "timeout" in
+      let retry = single_ref "retry" in
+      Some
+        {
+          http_method;
+          uri;
+          bindings;
+          response_bindings;
+          success;
+          errors;
+          endpoint;
+          request_headers;
+          timeout;
+          retry;
+        }
   | _ -> None
 
 (* ── JSON encoding (the opaque blob) ───────────────────────────────────── *)
@@ -161,15 +237,34 @@ let encode (d : wire_descriptor) : Ir.json =
         (match code with Some c -> `String c | None -> `Null);
       ]
   in
+  let path segs = `List (List.map (fun s -> `String s) segs) in
+  let value_expr = function
+    | Vlit j -> `Assoc [ ("lit", j) ]
+    | Vfield p -> `Assoc [ ("field", path p) ]
+    | Vtemplate parts ->
+        `Assoc
+          [ ("template", `List (List.map Ir_json.encode_template_part parts)) ]
+  in
+  let header (key, value) =
+    `List
+      [ `List (List.map Ir_json.encode_template_part key); value_expr value ]
+  in
+  let opt_path k = function None -> [] | Some p -> [ (k, path p) ] in
   `Assoc
-    [
-      ("http_method", `String d.http_method);
-      ("uri", `String d.uri);
-      ("bindings", `List (List.map pair d.bindings));
-      ("response_bindings", `List (List.map rpair d.response_bindings));
-      ("success", `List (List.map succ d.success));
-      ("errors", `List (List.map err d.errors));
-    ]
+    ([
+       ("http_method", `String d.http_method);
+       ("uri", `String d.uri);
+       ("bindings", `List (List.map pair d.bindings));
+       ("response_bindings", `List (List.map rpair d.response_bindings));
+       ("success", `List (List.map succ d.success));
+       ("errors", `List (List.map err d.errors));
+     ]
+    @ opt_path "endpoint" d.endpoint
+    @ (match d.request_headers with
+      | [] -> []
+      | hs -> [ ("request_headers", `List (List.map header hs)) ])
+    @ opt_path "timeout" d.timeout
+    @ opt_path "retry" d.retry)
 
 (* ── Module pass ───────────────────────────────────────────────────────── *)
 
@@ -188,4 +283,19 @@ let resolve_module (m : Ir.module_) : Ir.module_ =
             @ [ { Ir.trait_id = "wire_descriptor"; value = encode desc } ];
         }
   in
-  { m with operations = List.map attach m.operations }
+  (* Ops nested in an entry resolve exactly like loose ops; their descriptor
+     additionally carries the entry-scoped refs the traits declared. *)
+  let shapes =
+    List.map
+      (fun (s : Ir.shape) ->
+        match s.kind with
+        | Ir.Entry { fields; operations } ->
+            {
+              s with
+              kind =
+                Ir.Entry { fields; operations = List.map attach operations };
+            }
+        | _ -> s)
+      m.shapes
+  in
+  { m with shapes; operations = List.map attach m.operations }

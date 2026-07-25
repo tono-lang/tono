@@ -16,6 +16,18 @@ val encode_trait : Ir.trait -> Ir.json
 val decode_trait : Ir.json -> (Ir.trait, string) result
 val encode_member : Ir.member -> Ir.json
 val decode_member : Ir.json -> (Ir.member, string) result
+val encode_source : Ir.source -> Ir.json
+val decode_source : Ir.json -> (Ir.source, string) result
+val encode_template_part : Ir.template_part -> Ir.json
+val decode_template_part : Ir.json -> (Ir.template_part, string) result
+val encode_arm_value : Ir.arm_value -> Ir.json
+val decode_arm_value : Ir.json -> (Ir.arm_value, string) result
+val encode_select : Ir.select -> Ir.json
+val decode_select : Ir.json -> (Ir.select, string) result
+val encode_bind : Ir.bind -> Ir.json
+val decode_bind : Ir.json -> (Ir.bind, string) result
+val encode_entry_field : Ir.entry_field -> Ir.json
+val decode_entry_field : Ir.json -> (Ir.entry_field, string) result
 val encode_shape : Ir.shape -> Ir.json
 val decode_shape : Ir.json -> (Ir.shape, string) result
 val encode_extension : Ir.extension -> Ir.json

@@ -355,6 +355,192 @@ let extension_model : Ir.model =
       ];
   }
 
+(* Example: the entry model surface (v5). One entry with every source kind,
+   a @format derivation, a transform pipeline, a match selection covering all
+   arm forms, a @bind composition, and a nested op whose traits carry field
+   references; one config; the wire structs the op touches. *)
+let entries_client : Ir.model =
+  let field ?(sources = []) ?format ?(transforms = []) ?select ?(binds = [])
+      ?(constraints = []) ?(traits = []) name target : Ir.entry_field =
+    {
+      ef_name = name;
+      ef_target = target;
+      ef_sources = sources;
+      ef_format = format;
+      ef_transforms = transforms;
+      ef_select = select;
+      ef_binds = binds;
+      ef_constraints = constraints;
+      ef_traits = traits;
+    }
+  in
+  let conf : Ir.shape =
+    {
+      id = "notes#conf";
+      kind =
+        Ir.Config
+          {
+            fields =
+              [
+                field "api_key" string_t
+                  ~sources:[ Ir.Env (Ir.Env_name "API_KEY") ];
+                field "region" string_t
+                  ~sources:
+                    [ Ir.Env (Ir.Env_name "REGION"); Ir.Default (`String "us") ];
+              ];
+          };
+      traits = [];
+    }
+  in
+  let save_note : Ir.shape =
+    {
+      id = "notes#client.save_note";
+      kind =
+        Ir.Operation
+          {
+            input = Some (ref_ "notes#note" []);
+            output = Some (ref_ "notes#note" []);
+            errors = [ ref_ "notes#overloaded" [] ];
+          };
+      traits =
+        [
+          trait "http"
+            (`Assoc
+               [
+                 ("method", `String "POST");
+                 ("path", `String "/notes/{id}");
+                 ("endpoint", `Assoc [ ("field", `List [ `String "endpoint" ]) ]);
+               ]);
+          trait "header"
+            (`List
+               [
+                 `String "X-Client-Name";
+                 `Assoc [ ("field", `List [ `String "client_name" ]) ];
+               ]);
+          trait "timeout"
+            (`List [ `Assoc [ ("field", `List [ `String "timeout" ]) ] ]);
+          trait "retry"
+            (`List [ `Assoc [ ("field", `List [ `String "max_retries" ]) ] ]);
+        ];
+    }
+  in
+  let client : Ir.shape =
+    {
+      id = "notes#client";
+      kind =
+        Ir.Entry
+          {
+            fields =
+              [
+                field "api_key" string_t ~sources:[ Ir.Arg ]
+                  ~constraints:[ Ir.length ~min:1 () ];
+                field "client_name" string_t
+                  ~sources:[ Ir.With; Ir.Default (`String "demo") ]
+                  ~traits:[ trait "doc" (`String "Names the caller.") ];
+                field "client_key" string_t
+                  ~format:[ Ir.Tpl_field [ "client_name" ] ]
+                  ~transforms:[ "trim"; "upper_snake" ];
+                field "endpoint_env" string_t
+                  ~format:
+                    [
+                      Ir.Tpl_lit "ENDPOINT_";
+                      Ir.Tpl_field [ "client_key" ];
+                      Ir.Tpl_lit "_V2";
+                    ];
+                field "endpoint_version" string_t
+                  ~sources:
+                    [
+                      Ir.Env (Ir.Env_name "ENDPOINT_VERSION");
+                      Ir.Default (`String "v2");
+                    ];
+                field "endpoint_v1" string_t
+                  ~sources:[ Ir.Env (Ir.Env_name "ENDPOINT") ];
+                field "endpoint_v2" string_t
+                  ~sources:[ Ir.Env (Ir.Env_field [ "endpoint_env" ]) ];
+                field "endpoint" string_t
+                  ~select:
+                    {
+                      Ir.subject = [ "endpoint_version" ];
+                      arms =
+                        [
+                          {
+                            arm_pattern = Some (`String "v1");
+                            arm_value = Ir.Arm_field [ "endpoint_v1" ];
+                          };
+                          {
+                            arm_pattern = Some (`String "legacy");
+                            arm_value =
+                              Ir.Arm_lit (`String "https://old.example.com");
+                          };
+                          {
+                            arm_pattern = None;
+                            arm_value =
+                              Ir.Arm_sources
+                                [
+                                  Ir.Env (Ir.Env_name "ENDPOINT_V2");
+                                  Ir.Default (`String "https://example.com");
+                                ];
+                          };
+                        ];
+                    };
+                field "timeout" (prim Ir.Duration)
+                  ~sources:[ Ir.With; Ir.Default (`String "10s") ];
+                field "max_retries"
+                  (prim (Ir.int_prim ~bits:32 ~signed:true))
+                  ~sources:[ Ir.With; Ir.Default (`Int 3) ];
+                field "settings" (ref_ "notes#conf" [])
+                  ~binds:
+                    [
+                      { Ir.bind_field = "api_key"; bind_source = [ "api_key" ] };
+                    ];
+              ];
+            operations = [ save_note ];
+          };
+      traits = [ trait "pub" `Null ];
+    }
+  in
+  let note : Ir.shape =
+    {
+      id = "notes#note";
+      kind =
+        Ir.Structure
+          {
+            params = [];
+            members =
+              [
+                member "id" string_t ~traits:[ trait "httpLabel" `Null ];
+                member "body" string_t;
+              ];
+          };
+      traits = [];
+    }
+  in
+  let overloaded : Ir.shape =
+    {
+      id = "notes#overloaded";
+      kind =
+        Ir.Structure { params = []; members = [ member "message" string_t ] };
+      traits =
+        [
+          trait "status" (`Int 529);
+          trait "errorCode" (`String "overloaded");
+          trait "retryable" `Null;
+        ];
+    }
+  in
+  {
+    tono_ir_version = Ir_json.current_ir_version;
+    modules =
+      [
+        {
+          mod_name = "notes";
+          shapes = [ conf; client; note; overloaded ];
+          operations = [];
+          extensions = [];
+        };
+      ];
+  }
+
 (* The full corpus, keyed by fixture file name. *)
 let examples : (string * Ir.model) list =
   [
@@ -364,4 +550,5 @@ let examples : (string * Ir.model) list =
     ("primitives", primitives);
     ("service_api", service_api);
     ("extension_model", extension_model);
+    ("entries_client", entries_client);
   ]

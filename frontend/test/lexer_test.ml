@@ -26,11 +26,13 @@ let show_kind : Token.kind -> string = function
   | LParen -> "("
   | RParen -> ")"
   | Colon -> ":"
+  | ColonColon -> "::"
   | Question -> "?"
   | Comma -> ","
   | Dot -> "."
   | Eq -> "="
   | Arrow -> "->"
+  | FatArrow -> "=>"
   | Eof -> "eof"
 
 let kinds src = List.map (fun (t : Token.t) -> show_kind t.kind) (toks_of src)

@@ -13,19 +13,57 @@ type ty =
   | TNullable of ty * Span.span (* T? *)
   | TError of Span.span (* a type position that failed to parse *)
 
+(* A field reference written [.a] or a path [.a.b]: the segments after the
+   leading dot, in order. Refs are resolved against the enclosing entry (or
+   config) by the typechecker; the parser only records the path. *)
+type ref_path = { segs : string list; ref_span : Span.span }
+
 type trait_arg =
   | AString of string
   | AInt of int
   | AFloat of float
   | AName of string (* an identifier argument: a type/name ref or HTTP method *)
+  | ARef of ref_path (* a field reference argument, e.g. @env(.endpoint_env) *)
   | AKv of string * trait_arg (* key: value, e.g. @range(min: 0) *)
 
 type trait = { tname : string; targs : trait_arg list; tspan : Span.span }
+
+(* One pattern of a field-selection match: a literal of the subject's type, a
+   bare name (bool literal or enum case), or the [_] wildcard. *)
+type match_pattern =
+  | PString of string
+  | PInt of int
+  | PName of string
+  | PWildcard
+
+(* What a selected arm yields: another field, a literal, or a stack of value
+   sources ([@env]/[@default]) resolved in place. *)
+type arm_value =
+  | AVRef of ref_path
+  | AVString of string
+  | AVInt of int
+  | AVName of string
+  | AVSources of trait list
+
+type match_arm = {
+  pat : match_pattern;
+  pat_span : Span.span;
+  value : arm_value;
+  value_span : Span.span;
+}
+
+(* [field: T = match .subject { pat => value ... }] — the only selection form. *)
+type field_match = {
+  subject : ref_path;
+  arms : match_arm list;
+  match_span : Span.span;
+}
 
 type member = {
   mname : string;
   mname_span : Span.span;
   mtype : ty;
+  mmatch : field_match option; (* [= match ...] selection, entry/config only *)
   mtraits : trait list;
 }
 
@@ -58,7 +96,9 @@ type ext_binding = { lang : string; lang_span : Span.span; target : string }
 type ext_sig = { esig_in : ty; esig_out : ty }
 
 type decl_kind =
-  | DStruct of { params : string list; members : member list }
+  | DStruct of { params : string list; members : member list; ops : decl list }
+    (* [ops] are operations declared in the struct body (an "entry"); each is a
+       full decl with [dkind = DOp]. A plain data struct has none. *)
   | DEnum of { cases : enum_case list }
   | DUnion of { params : string list; variants : union_variant list }
   | DOp of { input : ty option; output : ty option }
@@ -70,7 +110,7 @@ type decl_kind =
       econformance : string option;
     }
 
-type decl = {
+and decl = {
   dname : string;
   dname_span : Span.span;
   pub : bool;
