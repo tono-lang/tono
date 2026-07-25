@@ -65,6 +65,20 @@ let compile_to_json ?(module_name = "") (src : string) : (string, string) result
     in
     Ok (Ir_json.to_canonical_string (Ir_json.encode_model model))
 
+(* One module's lower+typecheck against a prebuilt project index: the
+   per-module unit behind [compile_project], exposed so tooling (the LSP) can
+   attribute diagnostics to files and cache per module without a second copy
+   of the pipeline. The operation's HTTP annotations are materialized into the
+   wire descriptor, mirroring the single-module path. *)
+let check_project_module (index : Modules.index) ~(name : string)
+    (file : Ast.file) : Ir.module_ * Diagnostic.t list =
+  let resolve = Modules.resolver index ~this_module:name in
+  let qualified = Modules.qualified index ~this_module:name in
+  let ldiags = ref [] in
+  let m = Lower.lower_file ~module_name:name ~resolve ~diags:ldiags file in
+  let m, tdiags = Typecheck.check_module ~qualified ~file m in
+  (Protocol_http.resolve_module m, List.rev !ldiags @ tdiags)
+
 (* Compile a whole project: a set of (qualified module name, source) pairs, where
    the name is derived from the file path (payments/charge.tono ->
    payments.charge). Every module is parsed, then the project index resolves
@@ -94,18 +108,8 @@ let compile_project (files : (string * string) list) :
   let modules, per_diags =
     List.fold_right
       (fun (name, file, pdiags) (mods, diags) ->
-        let resolve = Modules.resolver index ~this_module:name in
-        let qualified = Modules.qualified index ~this_module:name in
-        let ldiags = ref [] in
-        let m =
-          Lower.lower_file ~module_name:name ~resolve ~diags:ldiags file
-        in
-        let m, tdiags = Typecheck.check_module ~qualified ~file m in
-        (* Materialize each operation's HTTP annotations into its wire descriptor,
-           mirroring the single-module path; the step is protocol-agnostic and a
-           no-op for operations without @http. *)
-        let m = Protocol_http.resolve_module m in
-        let here = List.map (label name) (pdiags @ List.rev !ldiags @ tdiags) in
+        let m, own = check_project_module index ~name file in
+        let here = List.map (label name) (pdiags @ own) in
         (m :: mods, here @ diags))
       parsed ([], [])
   in

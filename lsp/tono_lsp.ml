@@ -72,7 +72,11 @@ let server_capabilities () : ServerCapabilities.t =
     ~hoverProvider:(`Bool true) ~definitionProvider:(`Bool true)
     ~completionProvider:(CompletionOptions.create ())
     ~referencesProvider:(`Bool true) ~documentSymbolProvider:(`Bool true)
-    ~renameProvider:(`Bool true) ~documentFormattingProvider:(`Bool true) ()
+    ~renameProvider:(`Bool true) ~documentFormattingProvider:(`Bool true)
+    ~codeActionProvider:(`Bool true) ~workspaceSymbolProvider:(`Bool true)
+    ~signatureHelpProvider:
+      (SignatureHelpOptions.create ~triggerCharacters:[ "("; "," ] ())
+    ()
 
 let initialize_result () : InitializeResult.t =
   let serverInfo =
@@ -99,6 +103,103 @@ let remember_markdown (caps : ClientCapabilities.t) : unit =
     | Some formats -> List.mem MarkupKind.Markdown formats
     | None -> false
 
+(* --- workspace wiring --- *)
+
+(* Whether the client accepts dynamic registration for file watchers, learned
+   at initialize; the watcher request goes out on [initialized]. *)
+let client_watch_registration = ref false
+
+let remember_watch_capability (caps : ClientCapabilities.t) : unit =
+  client_watch_registration :=
+    Option.value ~default:false
+      (Option.bind caps.workspace (fun (w : WorkspaceClientCapabilities.t) ->
+           Option.bind w.didChangeWatchedFiles
+             (fun (c : DidChangeWatchedFilesClientCapabilities.t) ->
+               c.dynamicRegistration)))
+
+(* Open documents that belong to a project: uri key -> (source root, module). *)
+let doc_roots : (string, string * string) Hashtbl.t = Hashtbl.create 16
+
+(* The open-buffer overlay: unsaved editor content wins over disk, including
+   when the file is imported by another open file. *)
+let overlay () : string -> string option =
+  let snapshot =
+    Hashtbl.fold
+      (fun _ doc acc ->
+        (Lsp.Uri.to_path (Text_document.documentUri doc), Text_document.text doc)
+        :: acc)
+      store []
+  in
+  fun path -> List.assoc_opt path snapshot
+
+let project_ctx (uri : DocumentUri.t) : (Analysis.project * string) option =
+  Option.map
+    (fun (root, module_) ->
+      (Workspace.project_of ~overlay:(overlay ()) root, module_))
+    (Hashtbl.find_opt doc_roots (key uri))
+
+(* Re-publish every open document under [root]: an edit in one file can change
+   its dependents' diagnostics, and the per-module cache makes untouched
+   modules free. *)
+let publish_project_root (root : string) : unit =
+  let project = Workspace.project_of ~overlay:(overlay ()) root in
+  Hashtbl.iter
+    (fun k (r, module_) ->
+      if String.equal r root then
+        send_notification
+          (SN.PublishDiagnostics
+             (PublishDiagnosticsParams.create ~uri:(Lsp.Uri.of_string k)
+                ~diagnostics:(Workspace.diagnostics ~project ~root ~module_)
+                ())))
+    doc_roots
+
+let republish_all_roots () : unit =
+  let roots =
+    Hashtbl.fold
+      (fun _ (root, _) acc -> if List.mem root acc then acc else root :: acc)
+      doc_roots []
+  in
+  List.iter publish_project_root roots
+
+(* Analyze one document: with a discoverable project root the diagnostics
+   carry full project context; otherwise the single-file path. *)
+let analyze_and_publish (uri : DocumentUri.t) (text : string) : unit =
+  let path = Lsp.Uri.to_path uri in
+  match Workspace.source_root_of path with
+  | Some root when Workspace.module_of ~root path <> None -> (
+      match Workspace.module_of ~root path with
+      | Some module_ ->
+          Hashtbl.replace doc_roots (key uri) (root, module_);
+          publish_project_root root
+      | None -> publish_diagnostics uri text)
+  | _ ->
+      Hashtbl.remove doc_roots (key uri);
+      publish_diagnostics uri text
+
+(* Ask the client to watch .tono files so an edit to an imported file on disk
+   refreshes open dependents. *)
+let register_watcher () : unit =
+  let watchers =
+    [ FileSystemWatcher.create ~globPattern:(`Pattern "**/*.tono") () ]
+  in
+  let options = DidChangeWatchedFilesRegistrationOptions.create ~watchers in
+  let registration =
+    Registration.create ~id:"tono.watched-files"
+      ~method_:"workspace/didChangeWatchedFiles"
+      ~registerOptions:
+        (DidChangeWatchedFilesRegistrationOptions.yojson_of_t options)
+      ()
+  in
+  let params = RegistrationParams.create ~registrations:[ registration ] in
+  Rpc.write stdout
+    (Jsonrpc.Packet.Request
+       (Jsonrpc.Request.create ~id:(`String "tono.watched-files.registration")
+          ~method_:"client/registerCapability"
+          ~params:
+            (Jsonrpc.Structured.t_of_yojson
+               (RegistrationParams.yojson_of_t params))
+          ()))
+
 (* Dispatch a single request. The GADT ties each constructor to its response
    type, so [handle] is written with a locally-abstract result type and the
    compiler checks each arm returns the right shape. Unsupported methods raise a
@@ -112,6 +213,7 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
       let handle : type resp. resp CR.t -> resp = function
         | CR.Initialize p ->
             remember_markdown p.capabilities;
+            remember_watch_capability p.capabilities;
             initialize_result ()
         | CR.Shutdown -> ()
         | CR.TextDocumentHover p -> (
@@ -121,15 +223,34 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
                   ~file:(Analysis.parse text) p.position
             | None -> None)
         | CR.TextDocumentDefinition p -> (
-            match doc_text p.textDocument.uri with
-            | Some text -> (
+            match project_ctx p.textDocument.uri with
+            | Some (project, module_) -> (
                 match
-                  Analysis.definition_at ~uri:p.textDocument.uri ~text
-                    ~file:(Analysis.parse text) p.position
+                  Analysis.project_symbol_at project ~module_ p.position
                 with
-                | Some loc -> Some (`Location [ loc ])
+                | Some (m, name) -> (
+                    match
+                      Analysis.project_decl_location project ~module_:m ~name
+                    with
+                    | Some (id, range) ->
+                        Some
+                          (`Location
+                             [
+                               Location.create ~uri:(Lsp.Uri.of_string id)
+                                 ~range;
+                             ])
+                    | None -> None)
                 | None -> None)
-            | None -> None)
+            | None -> (
+                match doc_text p.textDocument.uri with
+                | Some text -> (
+                    match
+                      Analysis.definition_at ~uri:p.textDocument.uri ~text
+                        ~file:(Analysis.parse text) p.position
+                    with
+                    | Some loc -> Some (`Location [ loc ])
+                    | None -> None)
+                | None -> None))
         | CR.TextDocumentCompletion p -> (
             match doc_text p.textDocument.uri with
             | Some text ->
@@ -139,13 +260,28 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
                         p.position))
             | None -> Some (`List []))
         | CR.TextDocumentReferences p -> (
-            match doc_text p.textDocument.uri with
-            | Some text ->
-                Some
-                  (Analysis.references_at ~uri:p.textDocument.uri ~text
-                     ~file:(Analysis.parse text)
-                     ~include_decl:p.context.includeDeclaration p.position)
-            | None -> None)
+            match project_ctx p.textDocument.uri with
+            | Some (project, module_) -> (
+                match
+                  Analysis.project_symbol_at project ~module_ p.position
+                with
+                | Some (m, name) ->
+                    Some
+                      (List.map
+                         (fun (id, text, sp) ->
+                           Location.create ~uri:(Lsp.Uri.of_string id)
+                             ~range:(Analysis.range_in ~text sp))
+                         (Analysis.project_occurrences project ~module_:m ~name
+                            ~include_decl:p.context.includeDeclaration))
+                | None -> Some [])
+            | None -> (
+                match doc_text p.textDocument.uri with
+                | Some text ->
+                    Some
+                      (Analysis.references_at ~uri:p.textDocument.uri ~text
+                         ~file:(Analysis.parse text)
+                         ~include_decl:p.context.includeDeclaration p.position)
+                | None -> None))
         | CR.DocumentSymbol p -> (
             match doc_text p.textDocument.uri with
             | Some text ->
@@ -155,15 +291,83 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
                         ~file:(Analysis.parse text)))
             | None -> None)
         | CR.TextDocumentRename p -> (
-            match doc_text p.textDocument.uri with
-            | Some text ->
-                Analysis.rename_at ~uri:p.textDocument.uri ~text
-                  ~file:(Analysis.parse text) ~new_name:p.newName p.position
-            | None -> WorkspaceEdit.create ())
+            match project_ctx p.textDocument.uri with
+            | Some (project, module_) -> (
+                match
+                  Analysis.project_rename project ~module_ p.position
+                    ~new_name:p.newName
+                with
+                | Analysis.Renamed changes ->
+                    WorkspaceEdit.create
+                      ~changes:
+                        (List.map
+                           (fun (id, edits) -> (Lsp.Uri.of_string id, edits))
+                           changes)
+                      ()
+                | Analysis.Collision message ->
+                    Jsonrpc.Response.Error.raise
+                      (Jsonrpc.Response.Error.make ~code:InvalidParams ~message
+                         ())
+                | Analysis.NotASymbol -> WorkspaceEdit.create ())
+            | None -> (
+                match doc_text p.textDocument.uri with
+                | Some text ->
+                    Analysis.rename_at ~uri:p.textDocument.uri ~text
+                      ~file:(Analysis.parse text) ~new_name:p.newName p.position
+                | None -> WorkspaceEdit.create ()))
         | CR.TextDocumentFormatting p -> (
             match doc_text p.textDocument.uri with
             | Some text -> Analysis.formatting ~text
             | None -> None)
+        | CR.CodeAction p -> (
+            match project_ctx p.textDocument.uri with
+            | None -> None
+            | Some (project, module_) ->
+                Some
+                  (List.map
+                     (fun (title, edits) ->
+                       let changes =
+                         List.map
+                           (fun (id, e) -> (Lsp.Uri.of_string id, [ e ]))
+                           edits
+                       in
+                       `CodeAction
+                         (CodeAction.create ~title ~kind:CodeActionKind.QuickFix
+                            ~edit:(WorkspaceEdit.create ~changes ())
+                            ()))
+                     (Analysis.project_code_actions project ~module_
+                        ~range:p.range)))
+        | CR.WorkspaceSymbol p ->
+            let roots =
+              Hashtbl.fold
+                (fun _ (root, _) acc ->
+                  if List.mem root acc then acc else root :: acc)
+                doc_roots []
+            in
+            Some
+              (List.concat_map
+                 (fun root ->
+                   let project =
+                     Workspace.project_of ~overlay:(overlay ()) root
+                   in
+                   List.map
+                     (fun (name, kind, id, range) ->
+                       SymbolInformation.create ~name ~kind
+                         ~location:
+                           (Location.create ~uri:(Lsp.Uri.of_string id) ~range)
+                         ())
+                     (Analysis.project_symbols project ~query:p.query))
+                 roots)
+        | CR.SignatureHelp p -> (
+            match doc_text p.textDocument.uri with
+            | Some text -> (
+                match
+                  Analysis.signature_help ~text ~file:(Analysis.parse text)
+                    p.position
+                with
+                | Some sh -> sh
+                | None -> SignatureHelp.create ~signatures:[] ())
+            | None -> SignatureHelp.create ~signatures:[] ())
         | _ ->
             Jsonrpc.Response.Error.raise
               (Jsonrpc.Response.Error.make ~code:MethodNotFound
@@ -182,22 +386,29 @@ let on_notification (n : Jsonrpc.Notification.t) : unit =
          desynchronize the buffer on non-ASCII content. *)
       let doc = Text_document.make ~position_encoding:`UTF16 p in
       Hashtbl.replace store (key p.textDocument.uri) doc;
-      publish_diagnostics p.textDocument.uri (Text_document.text doc)
+      analyze_and_publish p.textDocument.uri (Text_document.text doc)
   | Ok (CN.TextDocumentDidChange p) -> (
       match Hashtbl.find_opt store (key p.textDocument.uri) with
       | Some doc ->
           let doc = Text_document.apply_content_changes doc p.contentChanges in
           Hashtbl.replace store (key p.textDocument.uri) doc;
-          publish_diagnostics p.textDocument.uri (Text_document.text doc)
+          analyze_and_publish p.textDocument.uri (Text_document.text doc)
       | None -> ())
   | Ok (CN.TextDocumentDidClose p) ->
       Hashtbl.remove store (key p.textDocument.uri);
+      Hashtbl.remove doc_roots (key p.textDocument.uri);
       (* Editors keep published diagnostics until told otherwise; clear them so
          a closed buffer leaves no stale problems behind. *)
       send_notification
         (SN.PublishDiagnostics
            (PublishDiagnosticsParams.create ~uri:p.textDocument.uri
               ~diagnostics:[] ()))
+  | Ok CN.Initialized -> if !client_watch_registration then register_watcher ()
+  | Ok (CN.DidChangeWatchedFiles _) ->
+      (* An imported file changed or vanished on disk: dependents among the
+         open documents get fresh diagnostics (the overlay still wins for open
+         buffers). *)
+      republish_all_roots ()
   | Ok _ -> ()
 
 (* One inbound frame, read with the raw channel primitives instead of

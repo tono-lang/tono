@@ -5,5 +5,5 @@
 
 (executable
  (name tono_lsp)
- (modules tono_lsp)
+ (modules tono_lsp workspace)
  (libraries tono_lsp_lib lsp jsonrpc yojson))

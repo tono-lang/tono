@@ -59,7 +59,7 @@ let edges (index : index) (m : string) : (string * Span.span) list =
           else None)
         imports
 
-let detect_cycles (index : index) : Diagnostic.t list =
+let detect_cycles (index : index) : (string * Diagnostic.t) list =
   let done_ = Hashtbl.create 16 in
   let reported = Hashtbl.create 16 in
   let diags = ref [] in
@@ -72,9 +72,9 @@ let detect_cycles (index : index) : Diagnostic.t list =
       let ring = List.rev members in
       let path = String.concat " -> " (ring @ [ List.hd ring ]) in
       diags :=
-        label owner
-          (err Error_codes.module_cycle span
-             "module import cycle (imports must form a DAG): %s" path)
+        ( owner,
+          err Error_codes.module_cycle span
+            "module import cycle (imports must form a DAG): %s" path )
         :: !diags)
   in
   let rec dfs stack m =
@@ -104,7 +104,7 @@ let detect_cycles (index : index) : Diagnostic.t list =
    segment, or an alias colliding with another import's segment) would let one
    silently shadow the other in the [import_map]. Flag the later import so the
    collision is made explicit with an [as] alias instead of resolving silently. *)
-let qualifier_collisions (index : index) : Diagnostic.t list =
+let qualifier_collisions (index : index) : (string * Diagnostic.t) list =
   SMap.fold
     (fun name imports acc ->
       let seen : (string, string) Hashtbl.t = Hashtbl.create 8 in
@@ -113,11 +113,11 @@ let qualifier_collisions (index : index) : Diagnostic.t list =
           let q = qualifier_of i in
           match Hashtbl.find_opt seen q with
           | Some prev ->
-              label name
-                (err Error_codes.duplicate_import i.Ast.ispan
-                   "import qualifier '%s' is already bound to '%s'; add an \
-                    'as' alias to reference '%s'"
-                   q prev (target_of i))
+              ( name,
+                err Error_codes.duplicate_import i.Ast.ispan
+                  "import qualifier '%s' is already bound to '%s'; add an 'as' \
+                   alias to reference '%s'"
+                  q prev (target_of i) )
               :: acc
           | None ->
               Hashtbl.add seen q (target_of i);
@@ -130,7 +130,8 @@ let qualifier_collisions (index : index) : Diagnostic.t list =
    cycles (TC0025). Duplicate-shape names are not reported here: the typechecker
    re-runs [Symtab.build] per module, so reporting them here too would surface each
    one twice. *)
-let build (files : (string * Ast.file) list) : index * Diagnostic.t list =
+let build_attributed (files : (string * Ast.file) list) :
+    index * (string * Diagnostic.t) list =
   let symbols, imports =
     List.fold_left
       (fun (symbols, imports) (name, (file : Ast.file)) ->
@@ -147,14 +148,18 @@ let build (files : (string * Ast.file) list) : index * Diagnostic.t list =
             let target = target_of i in
             if SMap.mem target index.symbols then acc
             else
-              label name
-                (err Error_codes.unknown_import i.Ast.ispan
-                   "unknown module '%s'; no such file in the project" target)
+              ( name,
+                err Error_codes.unknown_import i.Ast.ispan
+                  "unknown module '%s'; no such file in the project" target )
               :: acc)
           acc imports)
       index.imports []
   in
   (index, qualifier_collisions index @ import_diags @ detect_cycles index)
+
+let build (files : (string * Ast.file) list) : index * Diagnostic.t list =
+  let index, attributed = build_attributed files in
+  (index, List.map (fun (name, d) -> label name d) attributed)
 
 (* ── Resolution used by lowering and the typechecker ───────────────────── *)
 
