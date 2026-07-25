@@ -4,10 +4,12 @@
 
 open Lsp.Types
 
-(* Map a frontend span to an LSP range (1-based -> 0-based). *)
-val range_of_span : Tono_frontend.Span.span -> Range.t
+(* Map a frontend span (1-based, byte columns) to an LSP range (0-based, UTF-16
+   code units). The document text is needed to decode the line's UTF-8. *)
+val range_of_span : text:string -> Tono_frontend.Span.span -> Range.t
 
-(* Byte offset of an LSP position inside the given document text. *)
+(* Byte offset of an LSP position (UTF-16 character column) inside the given
+   document text. *)
 val offset_of_position : string -> Position.t -> int
 
 (* Parse source into the surface AST (parse-level only; diagnostics dropped). *)
@@ -53,7 +55,8 @@ val rename_at :
   WorkspaceEdit.t
 
 (* Document outline: top-level shapes with their members as children. *)
-val document_symbols : file:Tono_frontend.Ast.file -> DocumentSymbol.t list
+val document_symbols :
+  text:string -> file:Tono_frontend.Ast.file -> DocumentSymbol.t list
 
 (* Whole-document formatting via the frontend's canonical printer (the `tono fmt`
    engine). None on a parse error. *)

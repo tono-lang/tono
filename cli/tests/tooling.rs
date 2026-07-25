@@ -112,29 +112,32 @@ fn fmt_prints_canonical_source() {
 }
 
 #[test]
-fn preview_renders_and_compiles_go() {
-    let cmd = skip_without_frontend!();
-    if !have("go") {
-        eprintln!("skipping: go toolchain not available");
-        return;
+fn preview_renders_and_compiles_each_target() {
+    // One case per compilable target: the rendered marker proves the right
+    // language was emitted, the checker line proves its toolchain ran. cargo
+    // is always present (this test runs under it); go is probed.
+    let cases = [
+        ("go", "type Charge struct", "compiles: yes (go build)"),
+        ("rust", "pub struct Charge", "compiles: yes (cargo check)"),
+    ];
+    for (target, rendered, checked) in cases {
+        let cmd = skip_without_frontend!();
+        if target == "go" && !have("go") {
+            eprintln!("skipping {target}: toolchain not available");
+            continue;
+        }
+        let dir = tmp(&format!("preview-{target}"));
+        let file = write_tono(
+            &dir,
+            "charge.tono",
+            "struct charge { amount: i64\n note: string? }\n",
+        );
+        let (ok, stdout) = run_preview(cmd, &file, target, &dir);
+        assert!(ok, "{target} preview failed:\n{stdout}");
+        assert!(stdout.contains(rendered), "renders {target}:\n{stdout}");
+        assert!(stdout.contains(checked), "checks {target}:\n{stdout}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    let dir = tmp("preview-go");
-    let file = write_tono(
-        &dir,
-        "charge.tono",
-        "struct charge { amount: i64\n note: string }\n",
-    );
-    let (ok, stdout) = run_preview(cmd, &file, "go", &dir);
-    assert!(ok, "preview failed:\n{stdout}");
-    assert!(
-        stdout.contains("type Charge struct"),
-        "renders the SDK:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("compiles: yes (go build)"),
-        "runs the checker:\n{stdout}"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -177,29 +180,6 @@ fn frontend_is_discovered_without_env() {
         out.status.success(),
         "check finds the frontend without TONO_FRONTEND:\n{}",
         String::from_utf8_lossy(&out.stderr)
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn preview_renders_and_compiles_rust() {
-    // cargo is always present: this test runs under it.
-    let cmd = skip_without_frontend!();
-    let dir = tmp("preview-rust");
-    let file = write_tono(
-        &dir,
-        "charge.tono",
-        "struct charge { amount: i64\n note: string? }\n",
-    );
-    let (ok, stdout) = run_preview(cmd, &file, "rust", &dir);
-    assert!(ok, "rust preview:\n{stdout}");
-    assert!(
-        stdout.contains("pub struct Charge"),
-        "renders rust:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("compiles: yes (cargo check)"),
-        "checks rust:\n{stdout}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

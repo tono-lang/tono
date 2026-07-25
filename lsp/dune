@@ -6,4 +6,4 @@
 (executable
  (name tono_lsp)
  (modules tono_lsp)
- (libraries tono_lsp_lib lsp jsonrpc))
+ (libraries tono_lsp_lib lsp jsonrpc yojson))

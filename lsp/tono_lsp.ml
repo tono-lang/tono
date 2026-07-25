@@ -130,7 +130,8 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
             | Some text ->
                 Some
                   (`DocumentSymbol
-                     (Analysis.document_symbols ~file:(Analysis.parse text)))
+                     (Analysis.document_symbols ~text
+                        ~file:(Analysis.parse text)))
             | None -> None)
         | CR.TextDocumentRename p -> (
             match doc_text p.textDocument.uri with
@@ -155,7 +156,10 @@ let on_notification (n : Jsonrpc.Notification.t) : unit =
   match CN.of_jsonrpc n with
   | Error _ -> ()
   | Ok (CN.TextDocumentDidOpen p) ->
-      let doc = Text_document.make ~position_encoding:`UTF8 p in
+      (* UTF16 matches what clients send: LSP positions default to UTF-16 code
+         units, and incremental didChange ranges applied at any other encoding
+         desynchronize the buffer on non-ASCII content. *)
+      let doc = Text_document.make ~position_encoding:`UTF16 p in
       Hashtbl.replace store (key p.textDocument.uri) doc;
       publish_diagnostics p.textDocument.uri (Text_document.text doc)
   | Ok (CN.TextDocumentDidChange p) -> (
@@ -166,22 +170,96 @@ let on_notification (n : Jsonrpc.Notification.t) : unit =
           publish_diagnostics p.textDocument.uri (Text_document.text doc)
       | None -> ())
   | Ok (CN.TextDocumentDidClose p) ->
-      Hashtbl.remove store (key p.textDocument.uri)
+      Hashtbl.remove store (key p.textDocument.uri);
+      (* Editors keep published diagnostics until told otherwise; clear them so
+         a closed buffer leaves no stale problems behind. *)
+      send_notification
+        (SN.PublishDiagnostics
+           (PublishDiagnosticsParams.create ~uri:p.textDocument.uri
+              ~diagnostics:[] ()))
   | Ok _ -> ()
+
+(* One inbound frame, read with the raw channel primitives instead of
+   [Rpc.read]: that helper raises on a malformed JSON body after the bytes are
+   consumed, which would kill the loop with no way to answer. Parsing here
+   keeps the raw json around, so a broken request (e.g. `"params": null`,
+   which JSON-RPC forbids) still gets an error response keyed by its id, and
+   the server survives whatever a client sends. *)
+type frame = Eof | Packet of Jsonrpc.Packet.t | Broken of Jsonrpc.Id.t option
+
+let read_frame ic : frame =
+  let rec content_length len =
+    match Chan.read_line ic with
+    | None -> None
+    | Some line -> (
+        let line = String.trim line in
+        if line = "" then len
+        else
+          match String.index_opt line ':' with
+          | Some i
+            when String.lowercase_ascii (String.sub line 0 i) = "content-length"
+            ->
+              content_length
+                (int_of_string_opt
+                   (String.trim
+                      (String.sub line (i + 1) (String.length line - i - 1))))
+          | _ -> content_length len)
+  in
+  match content_length None with
+  | None -> Eof
+  | Some n -> (
+      match Chan.read_exactly ic n with
+      | None -> Eof
+      | Some body -> (
+          match Yojson.Safe.from_string body with
+          | exception _ -> Broken None
+          | json -> (
+              match Jsonrpc.Packet.t_of_yojson json with
+              | packet -> Packet packet
+              | exception _ ->
+                  let id =
+                    match json with
+                    | `Assoc fields -> (
+                        match List.assoc_opt "id" fields with
+                        | Some (`Int i) -> Some (`Int i)
+                        | Some (`String s) -> Some (`String s)
+                        | _ -> None)
+                    | _ -> None
+                  in
+                  Broken id)))
+
+let error_response id code message =
+  Jsonrpc.Packet.Response
+    (Jsonrpc.Response.error id (Jsonrpc.Response.Error.make ~code ~message ()))
 
 let () =
   set_binary_mode_in stdin true;
   set_binary_mode_out stdout true;
   let running = ref true in
   while !running do
-    match Rpc.read stdin with
-    | None -> running := false
-    | Some (Jsonrpc.Packet.Request req) ->
-        Rpc.write stdout (Jsonrpc.Packet.Response (on_request req))
-    | Some (Jsonrpc.Packet.Notification n) -> (
-        (* [exit] terminates the loop; every other notification is handled. *)
+    match read_frame stdin with
+    | Eof -> running := false
+    | Broken (Some id) ->
+        Rpc.write stdout
+          (error_response id InvalidParams
+             "request params must be a structured value")
+    | Broken None -> ()
+    | Packet (Jsonrpc.Packet.Request req) ->
+        (* A handler bug must answer as an error, never take the server down:
+           the editor session outlives any single request. *)
+        let response =
+          try on_request req
+          with exn ->
+            Jsonrpc.Response.error req.id
+              (Jsonrpc.Response.Error.make ~code:InternalError
+                 ~message:(Printexc.to_string exn) ())
+        in
+        Rpc.write stdout (Jsonrpc.Packet.Response response)
+    | Packet (Jsonrpc.Packet.Notification n) -> (
+        (* [exit] terminates the loop; every other notification is handled, and
+           a failure inside one is dropped (notifications have no reply). *)
         match CN.of_jsonrpc n with
         | Ok CN.Exit -> running := false
-        | _ -> on_notification n)
-    | Some _ -> ()
+        | _ -> ( try on_notification n with _ -> ()))
+    | Packet _ -> ()
   done

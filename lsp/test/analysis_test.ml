@@ -79,7 +79,7 @@ let offset_roundtrip () =
 
 let document_symbols_outline () =
   let file = Analysis.parse two_shapes in
-  let syms = Analysis.document_symbols ~file in
+  let syms = Analysis.document_symbols ~text:two_shapes ~file in
   let names = List.map (fun (s : DocumentSymbol.t) -> s.name) syms in
   Alcotest.(check (list string))
     "one symbol per shape" [ "point"; "edge" ] names;
@@ -133,6 +133,40 @@ let formatting_declines_on_parse_error () =
     "no edit for unparsable source" true
     (Analysis.formatting ~text:"struct {" = None)
 
+(* "ação" is 6 bytes but 4 UTF-16 code units, so byte and UTF-16 columns
+   diverge after the doc string: `point` sits at byte 22 and UTF-16 column 20.
+   Positions must convert through the UTF-16 view in both directions. *)
+let accented =
+  "@doc(\"ação\") struct point { at: edge }\nstruct edge { x: i64 }"
+
+let utf16_offset_of_position () =
+  let off = Analysis.offset_of_position accented (pos 0 20) in
+  Alcotest.(check char)
+    "utf16 column decodes to the byte of p" 'p' accented.[off]
+
+let utf16_hover_range () =
+  let file = Analysis.parse accented in
+  match Analysis.hover_at ~text:accented ~file (pos 0 20) with
+  | None -> Alcotest.fail "hover lands on the declaration name"
+  | Some h -> (
+      match h.Hover.range with
+      | None -> Alcotest.fail "hover carries a range"
+      | Some r ->
+          Alcotest.(check int)
+            "range starts at the utf16 column" 20 r.Range.start.character)
+
+let utf16_rename_range () =
+  let uri = Lsp.Uri.of_string "file:///x.tono" in
+  let file = Analysis.parse accented in
+  let we =
+    Analysis.rename_at ~uri ~text:accented ~file ~new_name:"node" (pos 0 20)
+  in
+  match we.WorkspaceEdit.changes with
+  | Some [ (_uri, edit :: _) ] ->
+      Alcotest.(check int)
+        "edit starts at the utf16 column" 20 edit.TextEdit.range.start.character
+  | _ -> Alcotest.fail "expected a single-document change set"
+
 let () =
   Alcotest.run "analysis"
     [
@@ -158,5 +192,12 @@ let () =
           Alcotest.test_case "formatting" `Quick formatting_uses_the_printer;
           Alcotest.test_case "formatting parse error" `Quick
             formatting_declines_on_parse_error;
+        ] );
+      ( "utf16",
+        [
+          Alcotest.test_case "offset of position" `Quick
+            utf16_offset_of_position;
+          Alcotest.test_case "hover range" `Quick utf16_hover_range;
+          Alcotest.test_case "rename range" `Quick utf16_rename_range;
         ] );
     ]
