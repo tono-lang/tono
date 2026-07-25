@@ -15,6 +15,17 @@ export type Part =
 // Where one output member is read from in the HTTP response.
 export type ResponsePart = { kind: "header"; name: string } | { kind: "statusCode" };
 
+// A descriptor position that yields a number at call time: a literal frozen by
+// the compiler, or a reference to a resolved client field looked up in
+// `ClientOptions.values` by canonical name.
+export type ValueSource = { readonly ref: string } | { readonly lit: number };
+
+// Declares that the operation retries, with the maximum number of retries
+// (attempts after the first) read from `max`.
+export interface RetrySpec {
+  readonly max: ValueSource;
+}
+
 export interface WireDescriptor {
   readonly http_method: string;
   readonly uri: string;
@@ -23,17 +34,44 @@ export interface WireDescriptor {
   // status -> output type ref (opaque here; the SDK owns decoding). The runtime
   // uses only the status to decide success vs error.
   readonly success: ReadonlyArray<readonly [number, unknown]>;
-  // status -> error shape id -> optional @errorCode body field (unused by the
-  // runtime; the SDK's discriminator consumes it).
-  readonly errors: ReadonlyArray<readonly [number, string, string | null]>;
+  // status -> error shape id -> optional @errorCode discriminator value ->
+  // whether the error is retryable. The SDK's discriminator consumes the id;
+  // the runtime consumes status, code, and the retryable flag (absent in
+  // descriptors emitted before retry existed, meaning not retryable).
+  readonly errors: ReadonlyArray<readonly [number, string, string | null, boolean?]>;
+  // Absent retry means one attempt, ever. `timeout` is the per-attempt budget
+  // in milliseconds; absent means no per-attempt deadline.
+  readonly retry?: RetrySpec | null;
+  readonly timeout?: ValueSource | null;
 }
 
-// What the caller supplies once, shared across every operation. The runtime
-// ships no auth of its own; a bespoke hook sets an auth header through `headers`.
+// The canonical transport slot: adapt any HTTP stack by mapping
+// CanonicalRequest/CanonicalResponse, without emulating `fetch`.
+//
+// Contract: one call is one attempt. The runtime owns retry (driven by the
+// descriptor's retry declaration), so a transport with internal retries does
+// not combine with it: either disable the transport's retries or do not
+// declare retry on the operations. The signal fires when the per-attempt
+// timeout expires; a transport should abort its work on it (the runtime times
+// the attempt out regardless, but cannot reclaim what the transport started).
+export type CanonicalTransport = (
+  req: CanonicalRequest,
+  signal?: AbortSignal,
+) => Promise<CanonicalResponse>;
+
+// What the caller supplies once, shared across every operation. Exactly one
+// transport slot may be set: `fetch` (native) or `transport` (canonical);
+// setting both is a construction error. The runtime ships no auth of its own;
+// a bespoke hook sets an auth header through `headers`.
 export interface ClientOptions {
   readonly baseUrl: string;
   readonly fetch?: typeof fetch;
+  readonly transport?: CanonicalTransport;
   readonly headers?: Readonly<Record<string, string>>;
+  // The resolved client fields the descriptor's ref positions (retry max,
+  // timeout) look up by canonical name. The runtime stays blind to where they
+  // came from.
+  readonly values?: Readonly<Record<string, unknown>>;
 }
 
 // The request the runtime builds from a descriptor before sending it. A

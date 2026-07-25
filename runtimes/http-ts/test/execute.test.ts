@@ -179,6 +179,20 @@ describe("response classification", () => {
 });
 
 describe("response bindings", () => {
+  it("drops a non-JSON body and lets the bound fields stand on their own", async () => {
+    const { fetchImpl } = recorder(200, "not json", { "X-Request-Id": "req-1" });
+    const outcome = await execute(
+      descriptor({ response_bindings: [["requestId", { kind: "header", name: "X-Request-Id" }]] }),
+      {},
+      { baseUrl: "https://api.test", fetch: fetchImpl },
+    );
+    expect(outcome).toEqual({
+      outcome: "success",
+      status: 200,
+      body: JSON.stringify({ requestId: "req-1" }),
+    });
+  });
+
   it("folds a response header into the decoded body under its member name", async () => {
     const { fetchImpl } = recorder(200, '{"id":"x"}', { "X-Request-Id": "req-1" });
     const outcome = await execute(

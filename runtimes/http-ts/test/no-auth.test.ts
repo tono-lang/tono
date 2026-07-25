@@ -7,9 +7,9 @@ import type { WireDescriptor } from "../src/descriptor";
 // The runtime ships zero auth (ADR-0028): auth is bespoke via the extension
 // model, and a header is only ever set through ClientOptions.headers.
 describe("no built-in auth", () => {
-  it("exports only execute at runtime, nothing auth-shaped", () => {
-    const names = Object.keys(runtime);
-    expect(names).toEqual(["execute"]);
+  it("exports only the transport surface at runtime, nothing auth-shaped", () => {
+    const names = Object.keys(runtime).sort();
+    expect(names).toEqual(["assertExclusiveTransport", "execute"]);
     for (const name of names) {
       const lower = name.toLowerCase();
       expect(lower).not.toContain("auth");

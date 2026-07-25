@@ -1,0 +1,331 @@
+{
+  "comment": "Cross-runtime behavior vectors for the HTTP runtimes' retry/timeout executor. Each runtime runs every vector through its canonical transport slot with random pinned to 0.5 and an instant, recording sleep. Script entries are consumed one per attempt: response returns that status/body, transport_failure fails the attempt, hang blocks until the per-attempt timeout fires. expect.attempts is the number of transport calls; expect.delays_ms are the backoff sleeps between attempts (random * min(2000, 100 * 2^retry)).",
+  "vectors": [
+    {
+      "name": "no retry declared means one attempt, ever",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": []
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "response", "status": 500, "body": "{}" }],
+      "expect": { "outcome": "error", "status": 500, "body": "{}", "attempts": 1, "delays_ms": [] }
+    },
+    {
+      "name": "transport failures retry until success",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "lit": 2 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" },
+        { "kind": "response", "status": 200, "body": "{\"ok\":true}" }
+      ],
+      "expect": {
+        "outcome": "success",
+        "status": 200,
+        "body": "{\"ok\":true}",
+        "attempts": 3,
+        "delays_ms": [50, 100]
+      }
+    },
+    {
+      "name": "a declared retryable error retries",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [[429, "svc#overloaded", "overloaded", true]],
+        "retry": { "max": { "lit": 3 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [
+        { "kind": "response", "status": 429, "body": "{\"code\":\"overloaded\"}" },
+        { "kind": "response", "status": 200, "body": "{}" }
+      ],
+      "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 2, "delays_ms": [50] }
+    },
+    {
+      "name": "a declared non-retryable error does not retry",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [[404, "svc#not_found", null, false]],
+        "retry": { "max": { "lit": 3 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "response", "status": 404, "body": "{}" }],
+      "expect": { "outcome": "error", "status": 404, "body": "{}", "attempts": 1, "delays_ms": [] }
+    },
+    {
+      "name": "an undeclared error status does not retry",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "lit": 3 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "response", "status": 500, "body": "{}" }],
+      "expect": { "outcome": "error", "status": 500, "body": "{}", "attempts": 1, "delays_ms": [] }
+    },
+    {
+      "name": "the code discriminator blocks retry when the non-retryable error matches",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [
+          [429, "svc#overloaded", "overloaded", true],
+          [429, "svc#quota_exceeded", "quota_exceeded", false]
+        ],
+        "retry": { "max": { "lit": 3 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "response", "status": 429, "body": "{\"code\":\"quota_exceeded\"}" }],
+      "expect": {
+        "outcome": "error",
+        "status": 429,
+        "body": "{\"code\":\"quota_exceeded\"}",
+        "attempts": 1,
+        "delays_ms": []
+      }
+    },
+    {
+      "name": "the code discriminator allows retry when the retryable error matches",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [
+          [429, "svc#overloaded", "overloaded", true],
+          [429, "svc#quota_exceeded", "quota_exceeded", false]
+        ],
+        "retry": { "max": { "lit": 2 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [
+        { "kind": "response", "status": 429, "body": "{\"code\":\"overloaded\"}" },
+        { "kind": "response", "status": 429, "body": "{\"code\":\"overloaded\"}" },
+        { "kind": "response", "status": 200, "body": "{}" }
+      ],
+      "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 3, "delays_ms": [50, 100] }
+    },
+    {
+      "name": "a null declared code matches any body, including a non-JSON one",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [[503, "svc#unavailable", null, true]],
+        "retry": { "max": { "lit": 1 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [
+        { "kind": "response", "status": 503, "body": "service melting" },
+        { "kind": "response", "status": 200, "body": "{}" }
+      ],
+      "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 2, "delays_ms": [50] }
+    },
+    {
+      "name": "a declared code with a non-matching body does not retry",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [[503, "svc#unavailable", "unavailable", true]],
+        "retry": { "max": { "lit": 3 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "response", "status": 503, "body": "not json" }],
+      "expect": { "outcome": "error", "status": 503, "body": "not json", "attempts": 1, "delays_ms": [] }
+    },
+    {
+      "name": "exhausted retries return the last outcome",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "lit": 1 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "transport_failure" }, { "kind": "transport_failure" }],
+      "expect": { "outcome": "transport", "attempts": 2, "delays_ms": [50] }
+    },
+    {
+      "name": "the retry maximum resolves through a ref into the client values",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "ref": "max_retries" } }
+      },
+      "values": { "max_retries": 2 },
+      "input": {},
+      "script": [
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" },
+        { "kind": "response", "status": 200, "body": "{}" }
+      ],
+      "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 3, "delays_ms": [50, 100] }
+    },
+    {
+      "name": "a ref that resolves to nothing disables retry",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "ref": "absent" } }
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "transport_failure" }],
+      "expect": { "outcome": "transport", "attempts": 1, "delays_ms": [] }
+    },
+    {
+      "name": "a fractional retry maximum floors",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "lit": 2.5 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" }
+      ],
+      "expect": { "outcome": "transport", "attempts": 3, "delays_ms": [50, 100] }
+    },
+    {
+      "name": "backoff grows exponentially and caps",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "lit": 6 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" },
+        { "kind": "transport_failure" },
+        { "kind": "response", "status": 200, "body": "{}" }
+      ],
+      "expect": {
+        "outcome": "success",
+        "status": 200,
+        "body": "{}",
+        "attempts": 7,
+        "delays_ms": [50, 100, 200, 400, 800, 1000]
+      }
+    },
+    {
+      "name": "a success is never retried",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "lit": 3 } }
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "response", "status": 200, "body": "{}" }],
+      "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 1, "delays_ms": [] }
+    },
+    {
+      "name": "a timed-out attempt is a transport failure and retries",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "retry": { "max": { "lit": 1 } },
+        "timeout": { "lit": 30 }
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "hang" }, { "kind": "response", "status": 200, "body": "{}" }],
+      "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 2, "delays_ms": [50] }
+    },
+    {
+      "name": "a timeout without retry surfaces as a transport outcome",
+      "descriptor": {
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "timeout": { "ref": "timeout_ms" }
+      },
+      "values": { "timeout_ms": 30 },
+      "input": {},
+      "script": [{ "kind": "hang" }],
+      "expect": { "outcome": "transport", "attempts": 1, "delays_ms": [] }
+    }
+  ]
+}
