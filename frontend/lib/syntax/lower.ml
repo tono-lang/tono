@@ -249,9 +249,9 @@ let parse_template ~diags ~span (s : string) : Ir.template_part list =
    membership is a typecheck concern; lowering keeps any "str::" suffix. *)
 let transform_of (tname : string) : string option =
   let prefix = "str::" in
-  let pn = String.length prefix in
-  if String.length tname > pn && String.equal (String.sub tname 0 pn) prefix
-  then Some (String.sub tname pn (String.length tname - pn))
+  let plen = String.length prefix in
+  if String.length tname > plen && String.equal (String.sub tname 0 plen) prefix
+  then Some (String.sub tname plen (String.length tname - plen))
   else None
 
 let lower_source ~diags (tr : Ast.trait) : Ir.source option =

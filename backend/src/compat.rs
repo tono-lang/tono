@@ -781,8 +781,6 @@ fn references(shape: &Shape, target: &str) -> bool {
                 || errors.iter().any(refs_tref)
         }
         ShapeKind::Enum { .. } | ShapeKind::Service { .. } => false,
-        // An entry references wire types through its field targets and its
-        // nested ops; a config only through its field targets.
         ShapeKind::Entry { fields, operations } => {
             fields.iter().any(|f| refs_tref(&f.target))
                 || operations.iter().any(|op| references(op, target))

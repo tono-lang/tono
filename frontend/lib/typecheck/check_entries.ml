@@ -26,13 +26,6 @@ let kv_arg key (args : Ast.trait_arg list) : Ast.trait_arg option =
     (function Ast.AKv (k, v) when String.equal k key -> Some v | _ -> None)
     args
 
-let source_names = [ "arg"; "with"; "env"; "default" ]
-
-let source_traits (m : Ast.member) : Ast.trait list =
-  List.filter
-    (fun (t : Ast.trait) -> List.mem t.Ast.tname source_names)
-    m.Ast.mtraits
-
 (* The closed @str::* catalog, shared vocabulary with the casing engine. *)
 let str_transforms =
   [ "trim"; "upper_snake"; "snake"; "kebab"; "pascal"; "lower"; "upper" ]
@@ -41,162 +34,26 @@ let is_nullable : Ast.ty -> bool = function
   | Ast.TNullable _ -> true
   | _ -> false
 
-let base_ty : Ast.ty -> Ast.ty = function Ast.TNullable (t, _) -> t | t -> t
-
-(* ── Context ───────────────────────────────────────────────────────────── *)
-
-type ctx = { decls : Ast.decl list; roles : (string, Roles.role) Hashtbl.t }
-
-let decl_by_name ctx name =
-  List.find_opt (fun (d : Ast.decl) -> String.equal d.Ast.dname name) ctx.decls
-
-let struct_members ctx name : Ast.member list option =
-  match decl_by_name ctx name with
-  | Some { dkind = Ast.DStruct { members; _ }; _ } -> Some members
-  | _ -> None
-
-let role_of_name ctx name : Roles.role = Roles.role_of ctx.roles name
-
-(* Resolve a reference path against [fields]: the head names a field, further
-   segments descend into struct-typed fields (a structured source or a composed
-   config). Returns the terminal member when every segment resolves. *)
-let rec resolve_path ctx (fields : Ast.member list) (segs : string list) :
-    Ast.member option =
-  match segs with
-  | [] -> None
-  | s :: rest -> (
-      match
-        List.find_opt (fun (m : Ast.member) -> String.equal m.mname s) fields
-      with
-      | None -> None
-      | Some m -> (
-          if rest = [] then Some m
-          else
-            match base_ty m.mtype with
-            | Ast.TName (n, [], _) -> (
-                match struct_members ctx n with
-                | Some ms -> resolve_path ctx ms rest
-                | None -> None)
-            | _ -> None))
-
-let path_str segs = "." ^ String.concat "." segs
-
-(* ── Scalar classification (match subjects and patterns) ───────────────── *)
-
-type scalar = SBool | SString | SInt | SEnum of string list | SOther
-
-let int_prims = [ "i8"; "i16"; "i32"; "i64"; "u8"; "u16"; "u32"; "u64" ]
-
-let scalar_of_ty ctx (t : Ast.ty) : scalar =
-  match base_ty t with
-  | Ast.TPrim ("bool", _) -> SBool
-  | Ast.TPrim ("string", _) -> SString
-  | Ast.TPrim (p, _) when List.mem p int_prims -> SInt
-  | Ast.TName (n, [], _) -> (
-      match decl_by_name ctx n with
-      | Some { dkind = Ast.DEnum { cases }; _ } ->
-          SEnum (List.map (fun (c : Ast.enum_case) -> c.Ast.cname) cases)
-      | _ -> SOther)
-  | _ -> SOther
-
-(* ── Reference collection ──────────────────────────────────────────────── *)
-
-(* Field references inside one template string, e.g. "A{.x}B{.y.z}". Input
-   placeholders ({id}) are not field references and are skipped here. *)
-let template_refs (s : string) : string list list =
-  let d = ref [] in
-  let dpos : Span.pos = { line = 0; col = 0; offset = 0 } in
-  let dspan : Span.span = { start = dpos; finish = dpos } in
-  let parts = Lower.parse_template ~diags:d ~span:dspan s in
-  List.filter_map (function Ir.Tpl_field p -> Some p | _ -> None) parts
-
-(* The field references a member's trait metadata consumes (env refs, format
-   placeholders, bind sources), paired with the span to report against. Match
-   refs are excluded: [check_match] owns their reporting with better messages;
-   [member_refs] below folds them back in for dependency analysis. *)
-let member_trait_refs (m : Ast.member) : (string list * Span.span) list =
-  let of_trait (tr : Ast.trait) =
-    match tr.Ast.tname with
-    | "env" ->
-        List.filter_map
-          (function Ast.ARef r -> Some (r.Ast.segs, tr.tspan) | _ -> None)
-          tr.targs
-    | "format" ->
-        List.concat_map
-          (function
-            | Ast.AString s ->
-                List.map (fun p -> (p, tr.Ast.tspan)) (template_refs s)
-            | _ -> [])
-          tr.targs
-    | "bind" ->
-        List.filter_map
-          (function Ast.ARef r -> Some (r.Ast.segs, tr.tspan) | _ -> None)
-          tr.targs
-    | _ -> []
-  in
-  List.concat_map of_trait m.mtraits
-
-(* Every field reference a member consumes, including the match's subject and
-   arms; the dependency graph and the lazy-resolution walk read this. *)
-let member_refs (m : Ast.member) : (string list * Span.span) list =
-  let of_match (fm : Ast.field_match) =
-    (fm.subject.segs, fm.subject.ref_span)
-    :: List.concat_map
-         (fun (a : Ast.match_arm) ->
-           match a.value with
-           | Ast.AVRef r -> [ (r.segs, r.ref_span) ]
-           | Ast.AVSources traits ->
-               List.concat_map
-                 (fun (tr : Ast.trait) ->
-                   List.filter_map
-                     (function
-                       | Ast.ARef r -> Some (r.Ast.segs, tr.Ast.tspan)
-                       | _ -> None)
-                     tr.Ast.targs)
-                 traits
-           | _ -> [])
-         fm.arms
-  in
-  member_trait_refs m
-  @ match m.mmatch with Some fm -> of_match fm | None -> []
-
-let protocol_trait_names = [ "header"; "timeout"; "retry" ]
-
-(* The field references an operation's protocol traits consume: the @http
-   endpoint and path template, @header keys and values, @timeout and @retry. *)
-let op_refs (op : Ast.decl) : (string list * Span.span) list =
-  List.concat_map
-    (fun (tr : Ast.trait) ->
-      if
-        String.equal tr.Ast.tname "http"
-        || List.mem tr.Ast.tname protocol_trait_names
-      then
-        List.concat_map
-          (fun arg ->
-            let rec refs_of = function
-              | Ast.ARef r -> [ (r.Ast.segs, tr.Ast.tspan) ]
-              | Ast.AString s ->
-                  List.map (fun p -> (p, tr.Ast.tspan)) (template_refs s)
-              | Ast.AKv (_, v) -> refs_of v
-              | _ -> []
-            in
-            refs_of arg)
-          tr.targs
-      else [])
-    op.Ast.dtraits
+(* The field scope, reference collection, and resolution graph live in
+   [Entry_scope]; match validation lives in [Check_entry_match]. *)
+let base_ty = Entry_scope.base_ty
+let source_traits = Entry_scope.source_traits
+let has_own_source = Entry_scope.has_own_source
+let struct_members = Entry_scope.struct_members
+let role_of_name = Entry_scope.role_of_name
+let resolve_path = Entry_scope.resolve_path
+let path_str = Entry_scope.path_str
+let scalar_of_ty = Entry_scope.scalar_of_ty
+let member_trait_refs = Entry_scope.member_trait_refs
+let protocol_trait_names = Entry_scope.protocol_trait_names
+let op_refs = Entry_scope.op_refs
+let dep_heads = Entry_scope.dep_heads
+let check_cycles = Entry_scope.check_cycles
+let broken = Entry_scope.broken
+let chain_error = Entry_scope.chain_error
+let check_match = Check_entry_match.check_match
 
 (* ── Field-local rules ─────────────────────────────────────────────────── *)
-
-(* Whether a field declares any way to get a value on its own: sources, a
-   match, a format derivation, or being a composed config. *)
-let has_own_source ctx (m : Ast.member) : bool =
-  source_traits m <> []
-  || Option.is_some m.mmatch
-  || Option.is_some (find_trait "format" m.mtraits)
-  ||
-  match base_ty m.mtype with
-  | Ast.TName (n, [], _) -> role_of_name ctx n = Roles.Config
-  | _ -> false
 
 let check_transforms (m : Ast.member) : Diagnostic.t list =
   List.filter_map
@@ -283,249 +140,6 @@ let check_nullable_field (m : Ast.member) : Diagnostic.t list =
         m.mname;
     ]
   else []
-
-(* ── Match validation ──────────────────────────────────────────────────── *)
-
-let pattern_key : Ast.match_pattern -> string = function
-  | Ast.PString s -> "s:" ^ s
-  | Ast.PInt n -> "i:" ^ string_of_int n
-  | Ast.PName n -> "n:" ^ n
-  | Ast.PWildcard -> "_"
-
-let check_match ctx (fields : Ast.member list) (m : Ast.member)
-    (fm : Ast.field_match) : Diagnostic.t list =
-  match resolve_path ctx fields fm.subject.segs with
-  | None ->
-      [
-        err Error_codes.field_ref_unknown fm.subject.ref_span
-          "unknown field '%s' as the match subject" (path_str fm.subject.segs);
-      ]
-  | Some subject -> (
-      match scalar_of_ty ctx subject.mtype with
-      | SOther ->
-          [
-            err Error_codes.match_invalid fm.subject.ref_span
-              "match subject '%s' must be a bool, string, integer, or enum \
-               field"
-              (path_str fm.subject.segs);
-          ]
-      | scalar ->
-          let pattern_diags (a : Ast.match_arm) =
-            match (scalar, a.pat) with
-            | _, Ast.PWildcard -> []
-            | SBool, Ast.PName ("true" | "false") -> []
-            | SBool, _ ->
-                [
-                  err Error_codes.match_invalid a.pat_span
-                    "a bool match takes the patterns true, false, or '_'";
-                ]
-            | SString, Ast.PString _ -> []
-            | SString, _ ->
-                [
-                  err Error_codes.match_invalid a.pat_span
-                    "a string match takes quoted literal patterns or '_'";
-                ]
-            | SInt, Ast.PInt _ -> []
-            | SInt, _ ->
-                [
-                  err Error_codes.match_invalid a.pat_span
-                    "an integer match takes integer literal patterns or '_'";
-                ]
-            | SEnum cases, Ast.PName n when List.mem n cases -> []
-            | SEnum _, Ast.PName n ->
-                [
-                  err Error_codes.match_invalid a.pat_span
-                    "'%s' is not a case of the matched enum" n;
-                ]
-            | SEnum _, _ ->
-                [
-                  err Error_codes.match_invalid a.pat_span
-                    "an enum match takes bare case names or '_'";
-                ]
-            | SOther, _ -> []
-          in
-          let value_diags (a : Ast.match_arm) =
-            match a.value with
-            | Ast.AVRef r -> (
-                match resolve_path ctx fields r.segs with
-                | Some _ -> []
-                | None ->
-                    [
-                      err Error_codes.field_ref_unknown r.ref_span
-                        "unknown field '%s' in a match arm" (path_str r.segs);
-                    ])
-            | Ast.AVSources traits ->
-                List.concat_map
-                  (fun (tr : Ast.trait) ->
-                    if List.mem tr.Ast.tname [ "env"; "default" ] then
-                      List.filter_map
-                        (function
-                          | Ast.ARef r -> (
-                              match resolve_path ctx fields r.Ast.segs with
-                              | Some _ -> None
-                              | None ->
-                                  Some
-                                    (err Error_codes.field_ref_unknown tr.tspan
-                                       "unknown field '%s' in a match arm \
-                                        source"
-                                       (path_str r.segs)))
-                          | _ -> None)
-                        tr.targs
-                    else
-                      [
-                        err Error_codes.match_invalid tr.tspan
-                          "a match arm only stacks @env/@default sources";
-                      ])
-                  traits
-            | Ast.AVString _ | Ast.AVInt _ | Ast.AVName _ -> []
-          in
-          let dup_and_reach_diags =
-            let rec go seen wild = function
-              | [] -> []
-              | (a : Ast.match_arm) :: rest ->
-                  let here =
-                    if wild then
-                      [
-                        err Error_codes.match_invalid a.pat_span
-                          "unreachable arm: it follows the '_' wildcard";
-                      ]
-                    else if List.mem (pattern_key a.pat) seen then
-                      [
-                        err Error_codes.match_invalid a.pat_span
-                          "duplicate pattern in match";
-                      ]
-                    else []
-                  in
-                  here
-                  @ go
-                      (pattern_key a.pat :: seen)
-                      (wild || a.pat = Ast.PWildcard)
-                      rest
-            in
-            go [] false fm.arms
-          in
-          let exhaustive =
-            List.exists
-              (fun (a : Ast.match_arm) -> a.pat = Ast.PWildcard)
-              fm.arms
-            ||
-            let covered =
-              List.filter_map
-                (fun (a : Ast.match_arm) ->
-                  match a.pat with Ast.PName n -> Some n | _ -> None)
-                fm.arms
-            in
-            match scalar with
-            | SBool -> List.mem "true" covered && List.mem "false" covered
-            | SEnum cases -> List.for_all (fun c -> List.mem c covered) cases
-            | _ -> false
-          in
-          let exhaustive_diags =
-            if exhaustive then []
-            else
-              [
-                err Error_codes.match_not_exhaustive fm.match_span
-                  "match on field '%s' is not exhaustive; add the missing \
-                   cases or a '_' arm"
-                  m.mname;
-              ]
-          in
-          List.concat_map pattern_diags fm.arms
-          @ List.concat_map value_diags fm.arms
-          @ dup_and_reach_diags @ exhaustive_diags)
-
-(* ── Resolution graph: reachability, cycles, lazy chains ───────────────── *)
-
-(* Dependency heads of a field, restricted to refs that resolve (unresolvable
-   ones are reported separately as TC0038). *)
-let dep_heads ctx (fields : Ast.member list) (m : Ast.member) : string list =
-  List.filter_map
-    (fun (segs, _) ->
-      match segs with
-      | head :: _ when Option.is_some (resolve_path ctx fields [ head ]) ->
-          Some head
-      | _ -> None)
-    (member_refs m)
-
-let check_cycles ctx (fields : Ast.member list) : Diagnostic.t list =
-  let field name =
-    List.find_opt (fun (m : Ast.member) -> String.equal m.mname name) fields
-  in
-  let deps name =
-    match field name with Some m -> dep_heads ctx fields m | None -> []
-  in
-  (* Iterative DFS with an explicit color map; a back edge closes a cycle. *)
-  let color = Hashtbl.create 16 in
-  let diags = ref [] in
-  let rec visit stack name =
-    match Hashtbl.find_opt color name with
-    | Some `Done -> ()
-    | Some `Active ->
-        let cycle =
-          let rec take acc = function
-            | [] -> List.rev acc
-            | x :: _ when String.equal x name -> List.rev (x :: acc)
-            | x :: rest -> take (x :: acc) rest
-          in
-          take [] stack
-        in
-        let span =
-          match field name with
-          | Some m -> m.mname_span
-          | None -> (List.hd fields).mname_span
-        in
-        diags :=
-          err Error_codes.resolution_cycle span
-            "field resolution forms a cycle: %s"
-            (String.concat " -> " (List.rev (name :: cycle)))
-          :: !diags
-    | None ->
-        Hashtbl.replace color name `Active;
-        List.iter (visit (name :: stack)) (deps name);
-        Hashtbl.replace color name `Done
-  in
-  List.iter (fun (m : Ast.member) -> visit [] m.mname) fields;
-  List.rev !diags
-
-(* [broken name] is the chain from [name] down to the first dependency that
-   declares no source at all, or [None] when the field statically resolves.
-   Cycles are reported separately, so an active node cuts off as resolvable. *)
-let broken ctx (fields : Ast.member list) : string -> string list option =
-  let memo = Hashtbl.create 16 in
-  let rec go active name =
-    if List.mem name active then None
-    else
-      match Hashtbl.find_opt memo name with
-      | Some r -> r
-      | None ->
-          let r =
-            match
-              List.find_opt
-                (fun (m : Ast.member) -> String.equal m.mname name)
-                fields
-            with
-            | None -> None
-            | Some m ->
-                if not (has_own_source ctx m) then Some [ name ]
-                else
-                  List.find_map
-                    (fun dep ->
-                      Option.map
-                        (fun chain -> name :: chain)
-                        (go (name :: active) dep))
-                    (dep_heads ctx fields m)
-          in
-          Hashtbl.replace memo name r;
-          r
-  in
-  go []
-
-let chain_error span (path : string list) (chain : string list) =
-  let last = List.nth chain (List.length chain - 1) in
-  err Error_codes.field_unresolvable span
-    "cannot resolve '%s': %s ('%s' declares no value source)" (path_str path)
-    (String.concat " <- " chain)
-    last
 
 (* ── Composition (@bind) ───────────────────────────────────────────────── *)
 
@@ -642,7 +256,7 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
             ]
         | Some (Ast.ARef r) -> (
             match resolve r.segs with
-            | Some m when scalar_of_ty ctx m.mtype = SString -> []
+            | Some m when scalar_of_ty ctx m.mtype = Entry_scope.SString -> []
             | Some _ ->
                 [
                   err Error_codes.entry_endpoint_missing r.ref_span
@@ -684,7 +298,9 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
       "duration"
   in
   let retry_diags =
-    typed_ref "retry" (fun ctx t -> scalar_of_ty ctx t = SInt) "integer"
+    typed_ref "retry"
+      (fun ctx t -> scalar_of_ty ctx t = Entry_scope.SInt)
+      "integer"
   in
   let header_diags =
     List.concat_map
@@ -929,7 +545,7 @@ let bound_config_fields ctx (config_name : string) : string list =
               | _ -> [])
             members
       | _ -> [])
-    ctx.decls
+    ctx.Entry_scope.decls
 
 let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
     Diagnostic.t list =
@@ -977,7 +593,7 @@ let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
 (* ── Module pass ───────────────────────────────────────────────────────── *)
 
 let check_decls (decls : Ast.decl list) : Diagnostic.t list =
-  let ctx = { decls; roles = Roles.classify decls } in
+  let ctx = { Entry_scope.decls; roles = Roles.classify decls } in
   List.concat_map
     (fun (d : Ast.decl) ->
       match d.dkind with

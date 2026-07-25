@@ -23,130 +23,46 @@
    values may carry field references ({"field": [...]}). *)
 let current_ir_version = 5
 
-(* ── Encoding ──────────────────────────────────────────────────────────── *)
+(* The scalar and entry-model codecs live in [Ir_json_base] and
+   [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
+   point the tools and the backend contract reference. *)
+let encode_prim = Ir_json_base.encode_prim
+let decode_prim = Ir_json_base.decode_prim
+let encode_tref = Ir_json_base.encode_tref
+let decode_tref = Ir_json_base.decode_tref
+let decode_tref_opt = Ir_json_base.decode_tref_opt
+let encode_constraint = Ir_json_base.encode_constraint
+let decode_constraint = Ir_json_base.decode_constraint
+let encode_trait = Ir_json_base.encode_trait
+let decode_trait = Ir_json_base.decode_trait
+let encode_member = Ir_json_base.encode_member
+let decode_member = Ir_json_base.decode_member
+let encode_enum_value = Ir_json_base.encode_enum_value
+let decode_enum_value = Ir_json_base.decode_enum_value
+let encode_backing = Ir_json_base.encode_backing
+let encode_source = Ir_json_entry.encode_source
+let decode_source = Ir_json_entry.decode_source
+let encode_template_part = Ir_json_entry.encode_template_part
+let decode_template_part = Ir_json_entry.decode_template_part
+let encode_arm_value = Ir_json_entry.encode_arm_value
+let decode_arm_value = Ir_json_entry.decode_arm_value
+let encode_select = Ir_json_entry.encode_select
+let decode_select = Ir_json_entry.decode_select
+let encode_bind = Ir_json_entry.encode_bind
+let decode_bind = Ir_json_entry.decode_bind
+let encode_entry_field = Ir_json_entry.encode_entry_field
+let decode_entry_field = Ir_json_entry.decode_entry_field
+let ( let* ) = Result.bind
+let err fmt = Printf.ksprintf (fun s -> Error s) fmt
+let map_result = Ir_json_base.map_result
+let as_assoc = Ir_json_base.as_assoc
+let as_list = Ir_json_base.as_list
+let as_string = Ir_json_base.as_string
+let as_int = Ir_json_base.as_int
 
-let encode_prim (p : Ir.prim) : Ir.json =
-  let s =
-    match p with
-    | Bool -> "bool"
-    | String -> "string"
-    | Bytes -> "bytes"
-    | Float -> "float"
-    | Timestamp -> "timestamp"
-    | Date -> "date"
-    | Duration -> "duration"
-    | Uuid -> "uuid"
-    | Int { bits; signed } ->
-        if not (List.mem bits Ir.valid_int_bits) then
-          raise
-            (Ir.Invalid_ir
-               (Printf.sprintf
-                  "integer bit width %d is not one of 8, 16, 32, 64" bits));
-        (if signed then "i" else "u") ^ string_of_int bits
-  in
-  `String s
+(* ── Shapes, modules, and the model envelope ───────────────────────────── *)
 
-let encode_trait (t : Ir.trait) : Ir.json =
-  `Assoc [ ("id", `String t.trait_id); ("value", t.value) ]
-
-let encode_constraint (c : Ir.constraint_) : Ir.json =
-  match c with
-  | Range { min; max; excl_min; excl_max } ->
-      let num k = function
-        | None -> []
-        | Some f -> [ (k, `Float (Ir.finite "Range bound" f)) ]
-      in
-      `Assoc
-        [
-          ( "range",
-            `Assoc
-              (num "min" min @ num "max" max
-              @ [ ("exclMin", `Bool excl_min); ("exclMax", `Bool excl_max) ]) );
-        ]
-  | Length { min; max } ->
-      let num k = function None -> [] | Some i -> [ (k, `Int i) ] in
-      `Assoc [ ("length", `Assoc (num "min" min @ num "max" max)) ]
-  | Pattern s -> `Assoc [ ("pattern", `String s) ]
-  | MultipleOf f -> `Assoc [ ("multipleOf", `Float (Ir.finite "MultipleOf" f)) ]
-  | Custom _ ->
-      raise
-        (Ir.Invalid_ir
-           "custom constraint must live in the trait bag, not in constraints")
-
-let encode_enum_value (v : Ir.enum_value) : Ir.json =
-  `Assoc
-    (("name", `String v.ev_name)
-     :: (match v.ev_int with Some i -> [ ("value", `Int i) ] | None -> [])
-    @ [ ("traits", `List (List.map encode_trait v.ev_traits)) ])
-
-let encode_backing = function `String -> "string" | `Int -> "int"
-
-(* ── Entry-model encoding ──────────────────────────────────────────────── *)
-
-let encode_path (segs : string list) : Ir.json =
-  `List (List.map (fun s -> `String s) segs)
-
-let encode_source (s : Ir.source) : Ir.json =
-  match s with
-  | Ir.Arg -> `String "arg"
-  | Ir.With -> `String "with"
-  | Ir.Env (Ir.Env_name n) -> `Assoc [ ("env", `String n) ]
-  | Ir.Env (Ir.Env_field p) ->
-      `Assoc [ ("env", `Assoc [ ("field", encode_path p) ]) ]
-  | Ir.Default v -> `Assoc [ ("default", v) ]
-
-let encode_template_part (p : Ir.template_part) : Ir.json =
-  match p with
-  | Ir.Tpl_lit s -> `Assoc [ ("lit", `String s) ]
-  | Ir.Tpl_field path -> `Assoc [ ("field", encode_path path) ]
-  | Ir.Tpl_input name -> `Assoc [ ("input", `String name) ]
-
-let encode_arm_value (v : Ir.arm_value) : Ir.json =
-  match v with
-  | Ir.Arm_field path -> `Assoc [ ("field", encode_path path) ]
-  | Ir.Arm_lit j -> `Assoc [ ("lit", j) ]
-  | Ir.Arm_sources ss ->
-      `Assoc [ ("sources", `List (List.map encode_source ss)) ]
-
-let encode_select (s : Ir.select) : Ir.json =
-  let arm (a : Ir.select_arm) =
-    `Assoc
-      ((match a.arm_pattern with Some p -> [ ("pattern", p) ] | None -> [])
-      @ [ ("value", encode_arm_value a.arm_value) ])
-  in
-  `Assoc
-    [
-      ("subject", encode_path s.subject); ("arms", `List (List.map arm s.arms));
-    ]
-
-let encode_bind (b : Ir.bind) : Ir.json =
-  `Assoc
-    [ ("field", `String b.bind_field); ("source", encode_path b.bind_source) ]
-
-let rec encode_tref (t : Ir.tref) : Ir.json =
-  match t with
-  | Prim p -> `Assoc [ ("prim", encode_prim p) ]
-  | Ref (id, args) ->
-      `Assoc
-        [ ("ref", `String id); ("args", `List (List.map encode_tref args)) ]
-  | Param s -> `Assoc [ ("param", `String s) ]
-  | List t -> `Assoc [ ("list", encode_tref t) ]
-  | Map (k, v) -> `Assoc [ ("map", `List [ encode_tref k; encode_tref v ]) ]
-
-and encode_member (m : Ir.member) : Ir.json =
-  `Assoc
-    ([
-       ("name", `String m.name);
-       ("target", encode_tref m.target);
-       ("required", `Bool m.required);
-     ]
-    @ (match m.default with None -> [] | Some v -> [ ("default", v) ])
-    @ [
-        ("constraints", `List (List.map encode_constraint m.constraints));
-        ("traits", `List (List.map encode_trait m.traits));
-      ])
-
-and encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
+let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
   let params ps = `List (List.map (fun p -> `String p) ps) in
   let members ms = `List (List.map encode_member ms) in
   match k with
@@ -194,27 +110,6 @@ and encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("fields", `List (List.map encode_entry_field fields));
       ]
 
-and encode_entry_field (f : Ir.entry_field) : Ir.json =
-  `Assoc
-    ([
-       ("name", `String f.ef_name);
-       ("target", encode_tref f.ef_target);
-       ("sources", `List (List.map encode_source f.ef_sources));
-     ]
-    @ (match f.ef_format with
-      | None -> []
-      | Some parts ->
-          [ ("format", `List (List.map encode_template_part parts)) ])
-    @ [ ("transforms", `List (List.map (fun t -> `String t) f.ef_transforms)) ]
-    @ (match f.ef_select with
-      | None -> []
-      | Some s -> [ ("select", encode_select s) ])
-    @ [
-        ("binds", `List (List.map encode_bind f.ef_binds));
-        ("constraints", `List (List.map encode_constraint f.ef_constraints));
-        ("traits", `List (List.map encode_trait f.ef_traits));
-      ])
-
 and encode_shape (s : Ir.shape) : Ir.json =
   `Assoc
     ((("id", `String s.id) :: encode_shape_kind_fields s.kind)
@@ -261,342 +156,6 @@ let encode_model (m : Ir.model) : Ir.json =
       ("tono_ir_version", `Int m.tono_ir_version);
       ("modules", `List (List.map encode_module m.modules));
     ]
-
-(* ── Decoding ──────────────────────────────────────────────────────────── *)
-
-let ( let* ) = Result.bind
-let err fmt = Printf.ksprintf (fun s -> Error s) fmt
-
-let rec map_result f = function
-  | [] -> Ok []
-  | x :: xs ->
-      let* y = f x in
-      let* ys = map_result f xs in
-      Ok (y :: ys)
-
-let as_assoc = function `Assoc kvs -> Ok kvs | _ -> err "expected an object"
-let as_list = function `List xs -> Ok xs | _ -> err "expected an array"
-let as_string = function `String s -> Ok s | _ -> err "expected a string"
-let as_bool = function `Bool b -> Ok b | _ -> err "expected a boolean"
-
-let as_int = function
-  | `Int i -> Ok i
-  | `Intlit s -> (
-      match int_of_string_opt s with
-      | Some i -> Ok i
-      | None -> err "integer out of range: %s" s)
-  | _ -> err "expected an integer"
-
-(* JSON has no NaN or infinity, and the encoder rejects non-finite floats, so a
-   value that parses to one (e.g. an overflowing literal like 1e999) is refused
-   here rather than being accepted on decode and then crashing on re-encode. *)
-let as_finite_float f =
-  if Float.is_finite f then Ok f else err "number is not finite"
-
-let as_float = function
-  | `Int i -> Ok (float_of_int i)
-  | `Float f -> as_finite_float f
-  | `Intlit s -> (
-      match float_of_string_opt s with
-      | Some f -> as_finite_float f
-      | None -> err "not a number: %s" s)
-  | _ -> err "expected a number"
-
-let ensure_only allowed kvs =
-  match List.find_opt (fun (k, _) -> not (List.mem k allowed)) kvs with
-  | None -> Ok ()
-  | Some (k, _) -> err "unexpected key %S" k
-
-let int_prim_of_string = function
-  | "i8" -> Some (8, true)
-  | "i16" -> Some (16, true)
-  | "i32" -> Some (32, true)
-  | "i64" -> Some (64, true)
-  | "u8" -> Some (8, false)
-  | "u16" -> Some (16, false)
-  | "u32" -> Some (32, false)
-  | "u64" -> Some (64, false)
-  | _ -> None
-
-let decode_prim j =
-  let* s = as_string j in
-  match s with
-  | "bool" -> Ok Ir.Bool
-  | "string" -> Ok Ir.String
-  | "bytes" -> Ok Ir.Bytes
-  | "float" -> Ok Ir.Float
-  | "timestamp" -> Ok Ir.Timestamp
-  | "date" -> Ok Ir.Date
-  | "duration" -> Ok Ir.Duration
-  | "uuid" -> Ok Ir.Uuid
-  | other -> (
-      match int_prim_of_string other with
-      | Some (bits, signed) -> Ok (Ir.Int { bits; signed })
-      | None -> err "unknown primitive %S" other)
-
-let tref_keys = [ "prim"; "ref"; "param"; "list"; "map" ]
-
-let rec decode_tref j =
-  let* kvs = as_assoc j in
-  match List.filter (fun (k, _) -> List.mem k tref_keys) kvs with
-  | [ ("prim", v) ] ->
-      let* () = ensure_only [ "prim" ] kvs in
-      let* p = decode_prim v in
-      Ok (Ir.Prim p)
-  | [ ("param", v) ] ->
-      let* () = ensure_only [ "param" ] kvs in
-      let* s = as_string v in
-      Ok (Ir.Param s)
-  | [ ("list", v) ] ->
-      let* () = ensure_only [ "list" ] kvs in
-      let* t = decode_tref v in
-      Ok (Ir.List t)
-  | [ ("map", v) ] -> (
-      let* () = ensure_only [ "map" ] kvs in
-      let* xs = as_list v in
-      match xs with
-      | [ a; b ] ->
-          let* ka = decode_tref a in
-          let* vb = decode_tref b in
-          Ok (Ir.Map (ka, vb))
-      | _ -> err "map expects a 2-element array")
-  | [ ("ref", v) ] ->
-      let* () = ensure_only [ "ref"; "args" ] kvs in
-      let* id = as_string v in
-      let* args =
-        match List.assoc_opt "args" kvs with
-        | None -> err "ref is missing args"
-        | Some a ->
-            let* xs = as_list a in
-            map_result decode_tref xs
-      in
-      Ok (Ir.Ref (id, args))
-  | [] -> err "tref object has no recognized variant key"
-  | _ -> err "tref object has multiple variant keys"
-
-let constraint_keys = [ "range"; "length"; "pattern"; "multipleOf" ]
-
-let decode_constraint j =
-  let* kvs = as_assoc j in
-  match List.filter (fun (k, _) -> List.mem k constraint_keys) kvs with
-  | [ ("range", v) ] ->
-      let* () = ensure_only [ "range" ] kvs in
-      let* o = as_assoc v in
-      let get k = List.assoc_opt k o in
-      let float_opt k =
-        match get k with
-        | None -> Ok None
-        | Some x ->
-            let* f = as_float x in
-            Ok (Some f)
-      in
-      let bool_flag k =
-        match get k with
-        | None -> Ok false
-        | Some (`Bool b) -> Ok b
-        | Some _ -> err "%s must be a boolean" k
-      in
-      let* min = float_opt "min" in
-      let* max = float_opt "max" in
-      let* excl_min = bool_flag "exclMin" in
-      let* excl_max = bool_flag "exclMax" in
-      Ok (Ir.Range { min; max; excl_min; excl_max })
-  | [ ("length", v) ] ->
-      let* () = ensure_only [ "length" ] kvs in
-      let* o = as_assoc v in
-      let get k = List.assoc_opt k o in
-      let opt k =
-        match get k with
-        | None -> Ok None
-        | Some x ->
-            let* i = as_int x in
-            Ok (Some i)
-      in
-      let* min = opt "min" in
-      let* max = opt "max" in
-      Ok (Ir.Length { min; max })
-  | [ ("pattern", v) ] ->
-      let* () = ensure_only [ "pattern" ] kvs in
-      let* s = as_string v in
-      Ok (Ir.Pattern s)
-  | [ ("multipleOf", v) ] ->
-      let* () = ensure_only [ "multipleOf" ] kvs in
-      let* f = as_float v in
-      Ok (Ir.MultipleOf f)
-  | [] -> err "constraint object has no recognized key"
-  | _ -> err "constraint object has multiple keys"
-
-let decode_trait j =
-  let* kvs = as_assoc j in
-  let* id =
-    match List.assoc_opt "id" kvs with
-    | Some v -> as_string v
-    | None -> err "trait is missing id"
-  in
-  let* value =
-    match List.assoc_opt "value" kvs with
-    | Some v -> Ok v
-    | None -> err "trait is missing value"
-  in
-  Ok ({ trait_id = id; value } : Ir.trait)
-
-let decode_member j =
-  let* kvs = as_assoc j in
-  let get k = List.assoc_opt k kvs in
-  let* name =
-    match get "name" with
-    | Some v -> as_string v
-    | None -> err "member is missing name"
-  in
-  let* target =
-    match get "target" with
-    | Some v -> decode_tref v
-    | None -> err "member is missing target"
-  in
-  let* required =
-    match get "required" with
-    | Some v -> as_bool v
-    | None -> err "member is missing required"
-  in
-  (* A present "default" key (even null) means a default exists; an absent key
-     means there is none. *)
-  let default = get "default" in
-  let* constraints =
-    match get "constraints" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_constraint xs
-  in
-  let* traits =
-    match get "traits" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_trait xs
-  in
-  Ok ({ name; target; required; default; constraints; traits } : Ir.member)
-
-let decode_enum_value j =
-  let* kvs = as_assoc j in
-  let get k = List.assoc_opt k kvs in
-  let* name =
-    match get "name" with
-    | Some v -> as_string v
-    | None -> err "enum value is missing name"
-  in
-  (* An absent (or null) "value" is a string-backed member with no discriminant;
-     an int-backed one carries its integer here. *)
-  let* value =
-    match get "value" with
-    | None | Some `Null -> Ok None
-    | Some v ->
-        let* i = as_int v in
-        Ok (Some i)
-  in
-  let* traits =
-    match get "traits" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_trait xs
-  in
-  Ok ({ ev_name = name; ev_int = value; ev_traits = traits } : Ir.enum_value)
-
-let decode_tref_opt = function
-  | None | Some `Null -> Ok None
-  | Some v ->
-      let* t = decode_tref v in
-      Ok (Some t)
-
-(* ── Entry-model decoding ──────────────────────────────────────────────── *)
-
-let decode_path j =
-  let* xs = as_list j in
-  map_result as_string xs
-
-let decode_source j =
-  match j with
-  | `String "arg" -> Ok Ir.Arg
-  | `String "with" -> Ok Ir.With
-  | `String other -> err "unknown source %S" other
-  | `Assoc kvs -> (
-      match kvs with
-      | [ ("env", `String n) ] -> Ok (Ir.Env (Ir.Env_name n))
-      | [ ("env", `Assoc [ ("field", p) ]) ] ->
-          let* path = decode_path p in
-          Ok (Ir.Env (Ir.Env_field path))
-      | [ ("default", v) ] -> Ok (Ir.Default v)
-      | _ -> err "source object must be a single env or default key")
-  | _ -> err "expected a source"
-
-let decode_template_part j =
-  let* kvs = as_assoc j in
-  match kvs with
-  | [ ("lit", v) ] ->
-      let* s = as_string v in
-      Ok (Ir.Tpl_lit s)
-  | [ ("field", v) ] ->
-      let* p = decode_path v in
-      Ok (Ir.Tpl_field p)
-  | [ ("input", v) ] ->
-      let* s = as_string v in
-      Ok (Ir.Tpl_input s)
-  | _ -> err "template part must be a single lit, field, or input key"
-
-let decode_arm_value j =
-  let* kvs = as_assoc j in
-  match kvs with
-  | [ ("field", v) ] ->
-      let* p = decode_path v in
-      Ok (Ir.Arm_field p)
-  | [ ("lit", v) ] -> Ok (Ir.Arm_lit v)
-  | [ ("sources", v) ] ->
-      let* xs = as_list v in
-      let* ss = map_result decode_source xs in
-      Ok (Ir.Arm_sources ss)
-  | _ -> err "arm value must be a single field, lit, or sources key"
-
-let decode_select j =
-  let* kvs = as_assoc j in
-  let* subject =
-    match List.assoc_opt "subject" kvs with
-    | Some v -> decode_path v
-    | None -> err "select is missing subject"
-  in
-  let decode_arm aj =
-    let* akvs = as_assoc aj in
-    let* () = ensure_only [ "pattern"; "value" ] akvs in
-    let pattern = List.assoc_opt "pattern" akvs in
-    let* value =
-      match List.assoc_opt "value" akvs with
-      | Some v -> decode_arm_value v
-      | None -> err "select arm is missing value"
-    in
-    Ok ({ arm_pattern = pattern; arm_value = value } : Ir.select_arm)
-  in
-  let* arms =
-    match List.assoc_opt "arms" kvs with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_arm xs
-  in
-  Ok ({ subject; arms } : Ir.select)
-
-let decode_bind j =
-  let* kvs = as_assoc j in
-  let* field =
-    match List.assoc_opt "field" kvs with
-    | Some v -> as_string v
-    | None -> err "bind is missing field"
-  in
-  let* source =
-    match List.assoc_opt "source" kvs with
-    | Some v -> decode_path v
-    | None -> err "bind is missing source"
-  in
-  Ok ({ bind_field = field; bind_source = source } : Ir.bind)
 
 let rec decode_shape_kind kvs =
   let get k = List.assoc_opt k kvs in
@@ -690,85 +249,6 @@ and decode_fields = function
   | Some v ->
       let* xs = as_list v in
       map_result decode_entry_field xs
-
-and decode_entry_field j =
-  let* kvs = as_assoc j in
-  let get k = List.assoc_opt k kvs in
-  let* name =
-    match get "name" with
-    | Some v -> as_string v
-    | None -> err "entry field is missing name"
-  in
-  let* target =
-    match get "target" with
-    | Some v -> decode_tref v
-    | None -> err "entry field is missing target"
-  in
-  let* sources =
-    match get "sources" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_source xs
-  in
-  (* A present "format" key means a derivation exists; an absent key means
-     there is none (same convention as a member's "default"). *)
-  let* format =
-    match get "format" with
-    | None -> Ok None
-    | Some v ->
-        let* xs = as_list v in
-        let* parts = map_result decode_template_part xs in
-        Ok (Some parts)
-  in
-  let* transforms =
-    match get "transforms" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result as_string xs
-  in
-  let* select =
-    match get "select" with
-    | None -> Ok None
-    | Some v ->
-        let* s = decode_select v in
-        Ok (Some s)
-  in
-  let* binds =
-    match get "binds" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_bind xs
-  in
-  let* constraints =
-    match get "constraints" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_constraint xs
-  in
-  let* traits =
-    match get "traits" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_trait xs
-  in
-  Ok
-    ({
-       ef_name = name;
-       ef_target = target;
-       ef_sources = sources;
-       ef_format = format;
-       ef_transforms = transforms;
-       ef_select = select;
-       ef_binds = binds;
-       ef_constraints = constraints;
-       ef_traits = traits;
-     }
-      : Ir.entry_field)
 
 and decode_shape j =
   let* kvs = as_assoc j in
@@ -916,6 +396,6 @@ let to_canonical_string (j : Ir.json) : string =
 (* Re-exported low-level helpers so their edge cases can be tested directly while
    staying out of the intended public surface (see the .mli). *)
 module Internal = struct
-  let as_int = as_int
-  let as_float = as_float
+  let as_int = Ir_json_base.as_int
+  let as_float = Ir_json_base.as_float
 end
