@@ -121,29 +121,26 @@ let remember_watch_capability (caps : ClientCapabilities.t) : unit =
 (* Open documents that belong to a project: uri key -> (source root, module). *)
 let doc_roots : (string, string * string) Hashtbl.t = Hashtbl.create 16
 
-(* The open-buffer overlay: unsaved editor content wins over disk, including
-   when the file is imported by another open file. *)
-let overlay () : string -> string option =
-  let snapshot =
-    Hashtbl.fold
-      (fun _ doc acc ->
-        (Lsp.Uri.to_path (Text_document.documentUri doc), Text_document.text doc)
-        :: acc)
-      store []
-  in
-  fun path -> List.assoc_opt path snapshot
+(* The open-buffer overlay as (path, text) pairs: unsaved editor content wins
+   over disk, and a buffer with no file on disk still joins its project. *)
+let open_docs () : (string * string) list =
+  Hashtbl.fold
+    (fun _ doc acc ->
+      (Lsp.Uri.to_path (Text_document.documentUri doc), Text_document.text doc)
+      :: acc)
+    store []
 
 let project_ctx (uri : DocumentUri.t) : (Project.project * string) option =
   Option.map
     (fun (root, module_) ->
-      (Workspace.project_of ~overlay:(overlay ()) root, module_))
+      (Workspace.project_of ~open_docs:(open_docs ()) root, module_))
     (Hashtbl.find_opt doc_roots (key uri))
 
 (* Re-publish every open document under [root]: an edit in one file can change
    its dependents' diagnostics, and the per-module cache makes untouched
    modules free. *)
 let publish_project_root (root : string) : unit =
-  let project = Workspace.project_of ~overlay:(overlay ()) root in
+  let project = Workspace.project_of ~open_docs:(open_docs ()) root in
   Hashtbl.iter
     (fun k (r, module_) ->
       if String.equal r root then
@@ -345,7 +342,7 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
               (List.concat_map
                  (fun root ->
                    let project =
-                     Workspace.project_of ~overlay:(overlay ()) root
+                     Workspace.project_of ~open_docs:(open_docs ()) root
                    in
                    List.map
                      (fun (name, kind, id, range) ->

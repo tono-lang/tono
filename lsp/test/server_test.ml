@@ -447,6 +447,62 @@ let signature_help_in_trait () =
          in
          go 0)
 
+(* Differential regression: an unsaved buffer must be exactly as strict as the
+   compiler. A file with a workspace-resolvable qualifier but no import gets
+   TC0023 (not silence), the add-import quick fix is offered, and applying its
+   edit clears the diagnostic. *)
+let unsaved_buffer_matches_the_compiler () =
+  let base, _common, _charges = make_project () in
+  (* The buffer's path sits under the project but does not exist on disk. *)
+  let path = Filename.concat (Filename.concat base "src") "billing.tono" in
+  let src = "struct invoice { total: common.money }\n" in
+  let fixed = "import pay.common\n\n" ^ src in
+  let opened =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":%s,"languageId":"tono","version":1,"text":%s}}}|}
+      (json_string (uri_of path))
+      (json_string src)
+  in
+  let action_req =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction","params":{"textDocument":{"uri":%s},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":39}},"context":{"diagnostics":[]}}}|}
+      (json_string (uri_of path))
+  in
+  let changed =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":%s,"version":2},"contentChanges":[{"text":%s}]}}|}
+      (json_string (uri_of path))
+      (json_string fixed)
+  in
+  let frames, status =
+    session [ init_body; opened; action_req; changed; exit_body ]
+  in
+  Alcotest.(check bool) "server exits cleanly" true (exited_cleanly status);
+  let published =
+    List.filter_map
+      (fun f ->
+        if member "method" f = Some (`String "textDocument/publishDiagnostics")
+        then Option.bind (member "params" f) (member "diagnostics")
+        else None)
+      frames
+  in
+  (match published with
+  | [ `List first; `List second ] ->
+      Alcotest.(check bool)
+        "the missing import is diagnosed, like the compiler" true
+        (List.exists (fun d -> member "code" d = Some (`String "TC0023")) first);
+      Alcotest.(check int) "the applied edit clears it" 0 (List.length second)
+  | _ -> Alcotest.fail "expected two publishDiagnostics");
+  match response_for 2 frames with
+  | None -> Alcotest.fail "expected a code action response"
+  | Some r -> (
+      match member "result" r with
+      | Some (`List (action :: _)) ->
+          Alcotest.(check bool)
+            "offers the import fix" true
+            (member "title" action = Some (`String "import pay.common"))
+      | _ -> Alcotest.fail "expected the add-import quick fix")
+
 let () =
   Alcotest.run "server"
     [
@@ -472,5 +528,7 @@ let () =
             watched_file_change_republishes;
           Alcotest.test_case "workspace symbol" `Quick workspace_symbol_search;
           Alcotest.test_case "signature help" `Quick signature_help_in_trait;
+          Alcotest.test_case "unsaved buffer strictness" `Quick
+            unsaved_buffer_matches_the_compiler;
         ] );
     ]

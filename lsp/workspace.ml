@@ -62,11 +62,11 @@ let module_of ~(root : string) (path : string) : string option =
 let parse_cache : (string, string * Project.project_entry) Hashtbl.t =
   Hashtbl.create 64
 
-let entry_for ~(overlay : string -> string option) ~(root : string)
+let entry_for ~(open_docs : (string * string) list) ~(root : string)
     (rel : string) : Project.project_entry option =
   let full = Filename.concat root rel in
   let text =
-    match overlay full with
+    match List.assoc_opt full open_docs with
     | Some t -> Some t
     | None -> (
         try Some (In_channel.with_open_bin full In_channel.input_all)
@@ -84,11 +84,28 @@ let entry_for ~(overlay : string -> string option) ~(root : string)
           e)
     text
 
-(* The whole project under [root], open-buffer contents taking precedence over
-   disk. *)
-let project_of ~(overlay : string -> string option) (root : string) :
+(* The whole project under [root]: every .tono on disk plus any open buffer
+   under the root not saved to disk yet. A new unsaved file must still join
+   its project, or every project check would silently skip it and the editor
+   would show fewer errors than the compiler. Open-buffer contents take
+   precedence over disk everywhere. *)
+let project_of ~(open_docs : (string * string) list) (root : string) :
     Project.project =
-  Project.build_project (List.filter_map (entry_for ~overlay ~root) (scan root))
+  let prefix = root ^ Filename.dir_sep in
+  let lp = String.length prefix in
+  let unsaved =
+    List.filter_map
+      (fun (path, _) ->
+        if
+          String.length path > lp
+          && String.equal (String.sub path 0 lp) prefix
+          && not (Sys.file_exists path)
+        then Some (String.sub path lp (String.length path - lp))
+        else None)
+      open_docs
+  in
+  let rels = List.sort_uniq compare (scan root @ unsaved) in
+  Project.build_project (List.filter_map (entry_for ~open_docs ~root) rels)
 
 (* Diagnostics cache keyed by the module's content closure: an edit re-checks
    only the edited module and the open modules that (transitively) import it;
