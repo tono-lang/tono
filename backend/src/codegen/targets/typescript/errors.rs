@@ -41,6 +41,17 @@ pub fn serde_decls(module: &Module) -> Vec<Decl> {
     })
 }
 
+/// The `Violation` record on its own: the field/constraint/message triple a
+/// validator pushes. The full taxonomy embeds it, so it is only emitted standalone
+/// for a module that has constraints but no operations (hence no taxonomy).
+pub fn violation_decl() -> Decl {
+    let n = error_names();
+    Decl::raw(format!(
+        "export interface {} {{\n  field: string;\n  constraint: string;\n  message: string;\n}}",
+        n.violation
+    ))
+}
+
 /// The class name of a declared error: its type name plus an `Error` suffix,
 /// so the class never collides with the shape's own data interface in the
 /// types file.
@@ -62,10 +73,7 @@ fn taxonomy_decls() -> Vec<Decl> {
         Decl::raw(format!(
             "export abstract class {root} extends Error {{\n  retryable(): boolean {{\n    return false;\n  }}\n}}"
         )),
-        Decl::raw(format!(
-            "export interface {} {{\n  field: string;\n  constraint: string;\n  message: string;\n}}",
-            n.violation
-        )),
+        violation_decl(),
         category(
             &n.validation,
             &format!("readonly violations: {}[]", n.violation),

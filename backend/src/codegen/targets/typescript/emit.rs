@@ -12,8 +12,9 @@ use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::client;
 use crate::codegen::targets::typescript::codecs::{emit_codecs, runtime_helpers};
 use crate::codegen::targets::typescript::errors;
-use crate::codegen::targets::typescript::types::emit_type;
+use crate::codegen::targets::typescript::types::{emit_type, emit_validators};
 use crate::codegen::tree::{Alias, Decl, File, ModuleFile};
+use crate::codegen::validation;
 use crate::ir::Module;
 
 /// The branded well-known type aliases: zero-dependency nominal types that are a
@@ -42,6 +43,8 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     let mut serde_decls = runtime_helpers();
     for shape in &module.shapes {
         type_decls.extend(emit_type(shape, config));
+        // Validators live with the types (next to the `Violation` record they push).
+        type_decls.extend(emit_validators(shape, config));
         serde_decls.extend(emit_codecs(shape, config, &module.name));
     }
     // Operations bring the error classes and the client interface into the
@@ -53,6 +56,10 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         // decode output, the error discriminator) and embeds each operation's
         // opaque wire descriptor.
         serde_decls.extend(client::client_decls(module, config));
+    } else if module.shapes.iter().any(validation::shape_has_checks) {
+        // Constraints without operations still need the `Violation` record a
+        // validator references, which the taxonomy would otherwise have carried.
+        type_decls.push(errors::violation_decl());
     }
 
     let mut files = vec![ModuleFile {

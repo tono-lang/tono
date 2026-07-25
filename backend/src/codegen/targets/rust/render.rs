@@ -61,6 +61,17 @@ pub(crate) fn type_string(ty: &TypeExpr) -> String {
 /// The Rust render rules.
 pub struct RustRules;
 
+/// The generic type-parameter clause of a definition (`<T>`, `<T, U>`), or the
+/// empty string for a non-generic shape. The serde derives generate the bound on
+/// each parameter themselves, so the names render bare here.
+fn type_params(params: &[String]) -> String {
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", params.join(", "))
+    }
+}
+
 /// The Rust spelling of each composite type construct; the recursion lives in the
 /// shared `syntax` driver. `@entries` is a `Vec<(K, V)>`, which serde renders
 /// directly as the `[[k, v], …]` wire array.
@@ -189,8 +200,9 @@ impl RenderRules for RustRules {
                     .collect();
                 let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
                 format!(
-                    "{dep}{DERIVES}\npub struct {} {{\n{fields}}}",
-                    interface.name.name
+                    "{dep}{DERIVES}\npub struct {}{} {{\n{fields}}}",
+                    interface.name.name,
+                    type_params(&interface.params)
                 )
             }
             Decl::Function(function) => self.render_function(function),
@@ -261,6 +273,7 @@ mod tests {
     fn a_struct_renders_derives_and_public_fields() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![field(
                 "id",
                 TypeExpr::Ref(Symbol::builtin("String")),
@@ -277,9 +290,32 @@ mod tests {
     }
 
     #[test]
+    fn a_generic_struct_renders_its_type_parameter_clause() {
+        // The serde derives synthesize the per-parameter bound, so the clause is
+        // just the bare names.
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Page"),
+            params: vec!["T".into()],
+            fields: vec![field(
+                "items",
+                TypeExpr::list(TypeExpr::Ref(Symbol::builtin("T"))),
+                false,
+                None,
+            )],
+            deprecated: None,
+        });
+        assert_eq!(
+            RustRules.render_decl(&decl),
+            "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]\n\
+             pub struct Page<T> {\n    pub items: Vec<T>,\n}"
+        );
+    }
+
+    #[test]
     fn a_wire_override_becomes_a_serde_rename_without_touching_the_identifier() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![field(
                 "memo_text",
                 TypeExpr::Ref(Symbol::builtin("String")),
@@ -297,6 +333,7 @@ mod tests {
     fn a_wide_integer_field_routes_through_the_string_codec() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![
                 field(
                     "amount_cents",
@@ -331,6 +368,7 @@ mod tests {
     fn an_optional_field_is_an_option_that_is_skipped_and_defaulted() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![field(
                 "note",
                 TypeExpr::Ref(Symbol::builtin("String")),
@@ -348,6 +386,7 @@ mod tests {
     fn an_optional_renamed_field_combines_both_attributes() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![field(
                 "note",
                 TypeExpr::Ref(Symbol::builtin("String")),
@@ -366,6 +405,7 @@ mod tests {
     fn a_deprecated_struct_and_field_carry_rust_attributes() {
         let decl = Decl::Interface(Interface {
             name: Symbol::builtin("Charge"),
+            params: vec![],
             fields: vec![
                 Field {
                     name: Symbol::builtin("amount"),

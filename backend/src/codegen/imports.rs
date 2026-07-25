@@ -225,6 +225,7 @@ mod tests {
             module: module.into(),
             decls: vec![Decl::Interface(Interface {
                 name: Symbol::builtin("Subject"),
+                params: vec![],
                 fields,
                 deprecated: None,
             })],
@@ -533,6 +534,7 @@ mod proptests {
                 module: module.into(),
                 decls: vec![Decl::Interface(Interface {
                     name: Symbol::builtin("Subject"),
+                    params: vec![],
                     fields,
                     deprecated: None,
                 })],

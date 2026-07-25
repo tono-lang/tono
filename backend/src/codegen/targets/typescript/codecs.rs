@@ -50,7 +50,13 @@ pub fn runtime_helpers() -> Vec<Decl> {
 /// to an import of the types file.
 pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str) -> Vec<Decl> {
     let decls = match &shape.kind {
-        ShapeKind::Structure { members, .. } => struct_codecs(shape, members, config),
+        // A generic structure has no monomorphic codec: `encodePage(value: Page)`
+        // would reference the type without its required argument, and a parameter's
+        // element codec is unknown here. Emitting the parameterized type is the
+        // scope; serializing a generic instance is a separate, later concern.
+        ShapeKind::Structure { params, members } if params.is_empty() => {
+            struct_codecs(shape, members, config)
+        }
         ShapeKind::Enum { .. } => enum_codecs(shape),
         ShapeKind::Union {
             members,
@@ -554,6 +560,37 @@ mod tests {
     fn a_non_reference_variant_payload_has_no_codec_name() {
         // Defensive: variant payloads are references in practice.
         assert_eq!(payload_codec_name(&Tref::Prim(Prim::Bool)), "");
+    }
+
+    #[test]
+    fn a_generic_structure_emits_no_codec() {
+        // A generic struct has no monomorphic codec: `encodePage(value: Page)` would
+        // reference `Page` without its argument. The parameterized type is emitted,
+        // but the codec is skipped, so the guard must hold for a non-empty `params`.
+        let generic = Shape {
+            id: "billing#page".into(),
+            kind: ShapeKind::Structure {
+                params: vec!["t".into()],
+                members: vec![member(
+                    "items",
+                    Tref::List(Box::new(Tref::Param("t".into()))),
+                    true,
+                )],
+            },
+            traits: vec![],
+        };
+        assert!(emit_codecs(&generic, &ts_casing(), "billing").is_empty());
+        // The same members on a non-generic struct do produce a codec, so the guard
+        // is what makes the difference, not the shape being empty.
+        let concrete = structure(
+            "billing#bag",
+            vec![member(
+                "items",
+                Tref::List(Box::new(Tref::Prim(Prim::String))),
+                true,
+            )],
+        );
+        assert!(!emit_codecs(&concrete, &ts_casing(), "billing").is_empty());
     }
 
     #[test]

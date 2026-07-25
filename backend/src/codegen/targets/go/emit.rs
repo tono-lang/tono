@@ -22,8 +22,9 @@ use crate::codegen::targets::go::codecs::{
     emit_serde_decls, runtime_serde_helpers, runtime_type_helpers, RuntimeHelpers,
 };
 use crate::codegen::targets::go::errors;
-use crate::codegen::targets::go::types::emit_type;
+use crate::codegen::targets::go::types::{emit_type, emit_validators};
 use crate::codegen::tree::{Alias, Decl, File, ModuleFile};
+use crate::codegen::validation;
 use crate::ir::{Module, ShapeKind};
 
 /// The branded well-known types: distinct named string types, so they serialize
@@ -89,6 +90,8 @@ pub fn emit_module(
     let mut serde_decls = runtime_serde_helpers(helpers);
     for shape in &module.shapes {
         type_decls.extend(emit_type(shape, config));
+        // Validators live with the types (same package as the `Violation` record).
+        type_decls.extend(emit_validators(shape, config));
         serde_decls.extend(emit_serde_decls(shape, config, union_ids, &module.name));
     }
     // Operations bring the error values and the blocking client interface
@@ -97,6 +100,10 @@ pub fn emit_module(
     if !module.operations.is_empty() {
         type_decls.extend(errors::type_decls(module, config));
         serde_decls.extend(errors::serde_decls(module));
+    } else if module.shapes.iter().any(validation::shape_has_checks) {
+        // Constraints without operations still need the `Violation` record a
+        // validator references, which the taxonomy would otherwise have carried.
+        type_decls.push(errors::violation_decl());
     }
 
     let mut files = vec![ModuleFile {

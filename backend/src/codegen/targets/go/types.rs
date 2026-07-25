@@ -12,10 +12,12 @@
 
 use crate::codegen::casing::{CaseStyle, CasingConfig};
 use crate::codegen::conventions::{self, field_ident, wire_key};
+use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::codecs::union_type_decls;
 use crate::codegen::targets::go::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr};
+use crate::codegen::validation::{self, Measure, ValSyntax};
 use crate::ir::{Member, Shape, Tref};
 
 /// The Go language key for per-language traits such as `@rename`.
@@ -65,14 +67,111 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
     }
 }
 
+/// The Go spelling of a length measure: a string counts code points through
+/// `[]rune` (no import, unlike `utf8.RuneCountInString`), and a slice or byte
+/// buffer counts its `len`.
+struct GoVal;
+impl ValSyntax for GoVal {
+    fn length(&self, access: &str, measure: Measure) -> String {
+        match measure {
+            Measure::Chars => format!("len([]rune({access}))"),
+            Measure::Elements | Measure::Bytes => format!("len({access})"),
+        }
+    }
+    fn wide_suffix(&self) -> &str {
+        // Go holds 64-bit integers natively, so a bound needs no literal suffix.
+        ""
+    }
+}
+
+/// Emit the validator for a structure whose members carry `@range`/`@length`
+/// constraints: a `Validate<Type>(value <Type>) []Violation` that collects one
+/// violation per failed check. It belongs in the types file, in the same package
+/// as the `Violation` record it references. A shape with no lowerable constraint
+/// (or a generic one, unmodeled here) emits nothing.
+pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
+    let Some(lines) = validation::structure_guard_lines(shape, &GoVal, "value.", config, LANG)
+    else {
+        return Vec::new();
+    };
+    let violation = error_names().violation;
+    let body = validation::validator_body(
+        &lines,
+        &format!("\tviolations := []{violation}{{}}\n"),
+        "\treturn violations",
+        |l| {
+            format!(
+                "\tif {} {{\n\t\tviolations = append(violations, {violation}{{Field: {:?}, Constraint: {:?}, Message: {:?}}})\n\t}}\n",
+                l.condition, l.field, l.constraint, l.message
+            )
+        },
+    );
+    let ty = conventions::type_ident(shape, LANG);
+    vec![validation::validator_function(
+        format!("Validate{ty}"),
+        ty.clone(),
+        violation,
+        body,
+    )]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::target::RenderRules;
+    use crate::codegen::targets::go::GoRules;
     use crate::codegen::test_support::{
-        enum_shape, int_enum_shape, member, member_with, structure, union_shape,
+        enum_shape, int_enum_shape, member, member_constrained, member_with, structure, union_shape,
     };
     use crate::codegen::tree::EnumRepr;
-    use crate::ir::{Prim, ShapeKind};
+    use crate::ir::{Constraint, Prim, ShapeKind};
+
+    #[test]
+    fn a_constrained_struct_emits_a_validate_func_over_its_checks() {
+        let shape = structure(
+            "billing#charge",
+            vec![
+                member_constrained(
+                    "amount",
+                    Tref::Prim(Prim::I64),
+                    vec![Constraint::Range {
+                        min: Some(0.0),
+                        max: None,
+                        excl_min: false,
+                        excl_max: false,
+                    }],
+                ),
+                member_constrained(
+                    "currency",
+                    Tref::Prim(Prim::String),
+                    vec![Constraint::Length {
+                        min: Some(3),
+                        max: Some(3),
+                    }],
+                ),
+            ],
+        );
+        let out = GoRules::default().render_decl(&emit_validators(&shape, &go_casing())[0]);
+        assert!(out.contains("func ValidateCharge(value Charge) []Violation {"));
+        assert!(out.contains("violations := []Violation{}"));
+        assert!(out.contains("if value.Amount < 0 {"));
+        assert!(out.contains(
+            "violations = append(violations, Violation{Field: \"amount\", Constraint: \"range\", Message: \"amount must be >= 0\"})"
+        ));
+        // A string length counts code points through []rune (no import needed).
+        assert!(out.contains("if len([]rune(value.Currency)) < 3 {"));
+        assert!(out.contains("if len([]rune(value.Currency)) > 3 {"));
+        assert!(out.contains("return violations"));
+    }
+
+    #[test]
+    fn a_struct_without_constraints_emits_no_validator() {
+        let shape = structure(
+            "billing#note",
+            vec![member("text", Tref::Prim(Prim::String), true)],
+        );
+        assert!(emit_validators(&shape, &go_casing()).is_empty());
+    }
 
     #[test]
     fn a_structure_becomes_a_struct_with_exported_fields_carrying_their_wire_key() {

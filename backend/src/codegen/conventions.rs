@@ -149,7 +149,9 @@ pub fn leaf_symbol_of(
 ) -> Symbol {
     match t {
         Tref::Prim(p) => prim_symbol(p),
-        Tref::Param(name) => Symbol::builtin(name.clone()),
+        // A type parameter is cased like any other type identifier, so a field that
+        // applies it matches the definition's parameter clause (both PascalCase).
+        Tref::Param(name) => Symbol::builtin(type_case(name)),
         Tref::Ref { id, .. } => ref_symbol(id),
         Tref::List(_) => Symbol::builtin(list),
         Tref::Map(_, _) => Symbol::builtin(map),
@@ -217,8 +219,12 @@ pub fn emit_shape(
 ) -> Vec<Decl> {
     let deprecated = deprecated_of(&shape.traits);
     match &shape.kind {
-        ShapeKind::Structure { members, .. } => vec![Decl::Interface(Interface {
+        ShapeKind::Structure { params, members } => vec![Decl::Interface(Interface {
             name: type_name(shape, lang),
+            // Type parameters are type identifiers, so they ride the same casing as
+            // any other type name; a reference that applies them (a `Param` leaf)
+            // goes through the same `type_case`, so the two spellings always match.
+            params: params.iter().map(|p| type_case(p)).collect(),
             fields: members.iter().map(&field_of).collect(),
             deprecated,
         })],
@@ -485,6 +491,45 @@ mod tests {
         );
         assert!(matches!(&generic, TypeExpr::Generic(head, args)
             if head.name == "Page" && args.len() == 1));
+    }
+
+    #[test]
+    fn emit_shape_cases_generic_params_like_the_leaf_that_applies_them() {
+        // The IR carries the parameter in snake/lowercase (`t`); the definition's
+        // clause and any field that applies it must both come out PascalCase (`T`),
+        // so they always agree.
+        let field_of = |m: &Member| Field {
+            name: Symbol::builtin(m.name.clone()),
+            ty: type_expr_of(&m.target, &|t: &Tref| {
+                leaf_symbol_of(t, |p| Symbol::builtin(format!("{p:?}")), "List", "Map")
+            }),
+            nullable: false,
+            wire: None,
+            deprecated: None,
+        };
+        let noop_enum =
+            |_: &EnumBacking, _: &[(String, Option<i64>)], _: &str, _: Option<&str>| vec![];
+        let noop_union = |_: &str, _: &[Member], _: &str, _: Option<&str>| vec![];
+        let shape = Shape {
+            id: "m#page".into(),
+            kind: ShapeKind::Structure {
+                params: vec!["t".into()],
+                members: vec![Member {
+                    name: "items".into(),
+                    target: Tref::List(Box::new(Tref::Param("t".into()))),
+                    required: true,
+                    default: None,
+                    constraints: vec![],
+                    traits: vec![],
+                }],
+            },
+            traits: vec![],
+        };
+        let decls = emit_shape(&shape, "rust", field_of, noop_enum, noop_union);
+        assert!(matches!(&decls[..], [Decl::Interface(i)]
+            if i.name.name == "Page"
+                && i.params == vec!["T".to_string()]
+                && i.fields[0].ty == TypeExpr::list(TypeExpr::Ref(Symbol::builtin("T")))));
     }
 
     #[test]
