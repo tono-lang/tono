@@ -1,0 +1,19 @@
+# Mutation gate for the hand-written Go runtime (the bespoke seam carries the
+# strong gate, same as the TypeScript runtime's Stryker config).
+#
+# workers 1: parallel test binaries contend for the machine and push clean
+# kills over the per-mutant timeout, misreporting them as TIMED OUT. The
+# module is small; the serial run stays under a couple of minutes.
+#
+# timeout-coefficient 20: the suite has real-time waits (per-attempt timeout
+# tests), so the default 5x budget is too tight for a mutated run that trips
+# a test bail-out.
+unleash:
+  workers: 1
+  timeout-coefficient: 20
+  # 99.99, not 100: gremlins fails when the score is <= the threshold, so 100
+  # can never pass. With well under 10k mutants a single lived or uncovered
+  # one drops the score below 99.99, so this still means "zero tolerance".
+  threshold:
+    efficacy: 99.99
+    mutant-coverage: 99.99

@@ -7,6 +7,11 @@
 // (an unmarked member is already a `body` entry, a label is already a `label`
 // entry). The runtime raises no typed error; the generated SDK maps the Outcome
 // onto its taxonomy.
+//
+// When the descriptor declares retry, an attempt whose outcome is retryable (a
+// transport failure, or an error response matching a declared retryable error)
+// is repeated up to the declared maximum, with exponential full-jitter backoff
+// between attempts. The declared timeout bounds each attempt separately.
 
 import type {
   CanonicalRequest,
@@ -16,9 +21,28 @@ import type {
   Outcome,
   WireDescriptor,
 } from "./descriptor";
+import { backoffDelayMs, isRetryable, resolveMaxRetries, resolveTimeoutMs } from "./retry";
 
 // The encoded wire record the generated SDK passes in: member wire-name -> value.
 type Input = Record<string, unknown>;
+
+// Deterministic seams for the retry loop: production uses the real clock and
+// Math.random; tests pin them to make retry timing and jitter assertable.
+export interface ExecuteSeams {
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly random?: () => number;
+}
+
+// Setting both transport slots is a construction error: the caller must pick
+// the native slot (`fetch`) or the canonical one (`transport`). Exported so a
+// generated client constructor can fail at construction, not at first call.
+export function assertExclusiveTransport(options: ClientOptions): void {
+  if (options.fetch && options.transport) {
+    throw new Error(
+      "ClientOptions.fetch and ClientOptions.transport are mutually exclusive: set the native slot or the canonical slot, not both",
+    );
+  }
+}
 
 function asRecord(input: unknown): Input {
   return input !== null && typeof input === "object" ? (input as Input) : {};
@@ -134,14 +158,67 @@ function isSuccessStatus(descriptor: WireDescriptor, status: number): boolean {
   return descriptor.success.some(([declared]) => declared === status);
 }
 
-export async function execute(
-  descriptor: WireDescriptor,
-  input: unknown,
+async function nativeCall(
+  request: CanonicalRequest,
   options: ClientOptions,
-  hooks?: Hooks,
-): Promise<Outcome> {
-  const record = asRecord(input);
+  signal: AbortSignal | undefined,
+): Promise<CanonicalResponse> {
+  const transport = options.fetch ?? fetch;
+  const response = await transport(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body,
+    signal,
+  });
+  // The body read can fail mid-stream too, so it shares the transport error path.
+  const text = await response.text();
+  return { status: response.status, headers: headerRecord(response.headers), body: text };
+}
 
+// One transport call under the per-attempt timeout. The timeout aborts the
+// signal (so a cooperating transport cancels its work) and rejects the attempt
+// regardless, so a transport that ignores the signal still times out.
+async function callTransport(
+  request: CanonicalRequest,
+  options: ClientOptions,
+  timeoutMs: number,
+): Promise<CanonicalResponse> {
+  if (timeoutMs <= 0) {
+    return options.transport
+      ? options.transport(request, undefined)
+      : nativeCall(request, options, undefined);
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const cause = new Error(`attempt timed out after ${timeoutMs}ms`);
+      controller.abort(cause);
+      reject(cause);
+    }, timeoutMs);
+  });
+  const call = options.transport
+    ? options.transport(request, controller.signal)
+    : nativeCall(request, options, controller.signal);
+  try {
+    const raced = Promise.race([call, expiry]);
+    // The losing branch settles later; mark it handled so its rejection does
+    // not surface as an unhandled one.
+    call.catch(() => {});
+    return await raced;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// One attempt: build the request, run the hooks, call the transport, classify.
+async function attemptCall(
+  descriptor: WireDescriptor,
+  record: Input,
+  options: ClientOptions,
+  hooks: Hooks | undefined,
+  timeoutMs: number,
+): Promise<Outcome> {
   const headers = buildHeaders(descriptor, record, options.headers ?? {});
   const body = buildBody(descriptor, record);
   if (body !== undefined && !hasHeader(headers, "content-type")) {
@@ -152,31 +229,20 @@ export async function execute(
 
   // The bespoke `before_request` hook runs outside the transport try/catch: a
   // hook that throws must surface as its own error (the generated wrapper turns
-  // it into a ContractError), not be misreported as a transport failure.
+  // it into a ContractError), not be misreported as a transport failure. The
+  // timeout covers the transport call and body read only, starting after the
+  // hook so a slow hook does not eat into the attempt.
   let request: CanonicalRequest = { method: descriptor.http_method, url, headers, body };
   if (hooks?.before_request) request = await hooks.before_request(request);
 
-  const transport = options.fetch ?? fetch;
-  let response: Response;
-  let text: string;
+  let canonical: CanonicalResponse;
   try {
-    response = await transport(request.url, {
-      method: request.method,
-      headers: request.headers,
-      body: request.body,
-    });
-    // The body read can fail mid-stream too, so it shares the transport catch.
-    text = await response.text();
+    canonical = await callTransport(request, options, timeoutMs);
   } catch (cause) {
     return { outcome: "transport", cause };
   }
 
   // `after_response` likewise runs outside the catch so its throw propagates.
-  let canonical: CanonicalResponse = {
-    status: response.status,
-    headers: headerRecord(response.headers),
-    body: text,
-  };
   if (hooks?.after_response) canonical = await hooks.after_response(canonical);
 
   if (isSuccessStatus(descriptor, canonical.status)) {
@@ -187,4 +253,28 @@ export async function execute(
     };
   }
   return { outcome: "error", status: canonical.status, body: canonical.body };
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function execute(
+  descriptor: WireDescriptor,
+  input: unknown,
+  options: ClientOptions,
+  hooks?: Hooks,
+  seams?: ExecuteSeams,
+): Promise<Outcome> {
+  assertExclusiveTransport(options);
+  const record = asRecord(input);
+  const maxRetries = resolveMaxRetries(descriptor.retry, options.values);
+  const timeoutMs = resolveTimeoutMs(descriptor.timeout, options.values);
+  const random = seams?.random ?? Math.random;
+  const sleep = seams?.sleep ?? defaultSleep;
+  for (let attempt = 0; ; attempt++) {
+    const outcome = await attemptCall(descriptor, record, options, hooks, timeoutMs);
+    if (attempt >= maxRetries || !isRetryable(descriptor, outcome)) return outcome;
+    await sleep(backoffDelayMs(attempt, random()));
+  }
 }

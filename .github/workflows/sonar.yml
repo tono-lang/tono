@@ -67,6 +67,17 @@ jobs:
         # vitest writes SF paths relative to the package; Sonar resolves them from
         # the repo root, so prefix them with the package path.
         run: sed -i 's#^SF:src/#SF:runtimes/http-ts/src/#' runtimes/http-ts/coverage/lcov.info
+      - name: Generate Go runtime coverage for Sonar
+        if: env.SONAR_TOKEN != ''
+        working-directory: runtimes/http-go
+        run: go test -coverprofile=coverage.out ./...
+        env:
+          TONO_PARITY_VECTORS: ${{ github.workspace }}/runtimes/parity/vectors.json
+      - name: Rebase Go coverage paths to the repo root
+        if: env.SONAR_TOKEN != ''
+        # go test writes module-path-prefixed file names; Sonar resolves them
+        # from the repo root, so swap the module prefix for the package path.
+        run: sed -i 's#github.com/tono-lang/tono/runtimes/http-go/#runtimes/http-go/#' runtimes/http-go/coverage.out
       - name: SonarQube Scan
         if: env.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@v6

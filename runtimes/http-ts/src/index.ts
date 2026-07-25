@@ -5,11 +5,15 @@
 export type {
   CanonicalRequest,
   CanonicalResponse,
+  CanonicalTransport,
   ClientOptions,
   Hooks,
   Outcome,
   Part,
   ResponsePart,
+  RetrySpec,
+  ValueSource,
   WireDescriptor,
 } from "./descriptor";
-export { execute } from "./execute";
+export type { ExecuteSeams } from "./execute";
+export { assertExclusiveTransport, execute } from "./execute";

@@ -10,6 +10,7 @@
     "noImplicitReturns": true,
     "declaration": true,
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "types": []
   },
   "include": ["src", "test"]

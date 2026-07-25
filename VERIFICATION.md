@@ -12,7 +12,8 @@ is strong on the hand-written (bespoke) seam.
 | Types / serialization | property (round-trip + idempotence) | light | `frontend/test/test_property.ml` (QCheck), `backend/tests/property_ir.rs` (proptest) |
 | Calculus | golden | light | `frontend/test/calculus_test.ml` |
 | Bespoke (codecs + error taxonomy) | golden + differential + **mutation** | **strong** | `backend/tests/conformance.rs`, `.cargo/mutants.toml` |
-| Bespoke runtime (HTTP transport) | property + **mutation** | **strong** | `runtimes/http-ts/test`, `runtimes/http-ts/stryker.config.json` |
+| Bespoke runtime (HTTP transport) | property + **mutation** | **strong** | `runtimes/http-ts/test`, `runtimes/http-ts/stryker.config.json`, `runtimes/http-go/*_test.go`, `runtimes/http-go/.gremlins.yaml` |
+| Runtime parity (retry/timeout/errors) | shared behavior vectors | breaks build | `runtimes/parity/vectors.json`, run by every HTTP runtime's test suite |
 | Generator (codegen) | snapshot | review | `backend/tests/snapshot_codegen.rs` |
 | IR (frontend <-> backend) | round-trip | breaks build | `backend/tests/ir_roundtrip.rs`, `frontend/test/golden_test.ml` |
 
@@ -64,13 +65,21 @@ cargo mutants            # exits non-zero if any bespoke mutant survives
 cargo mutants --list     # the mutants in scope
 ```
 
-The hand-written HTTP transport runtime is bespoke too, but it is TypeScript, so
-it carries the same strong gate through StrykerJS instead of cargo-mutants:
+The hand-written HTTP transport runtimes are bespoke too, so they carry the
+same strong gate through the mutation tool of their language:
 
 ```
-cd runtimes/http-ts && npm run mutation   # break threshold is 100
+cd runtimes/http-ts && npm run mutation   # StrykerJS, break threshold is 100
+cd runtimes/http-go && gremlins unleash   # gremlins, thresholds in .gremlins.yaml
 ```
 
 A genuinely-equivalent mutant (one that cannot change observable behavior) is
 annotated at the site with a one-line reason: `#[mutants::skip]` on the Rust side,
-`// Stryker disable next-line` in the runtime. There are no blanket exclusions.
+`// Stryker disable next-line` in the TypeScript runtime. There are no blanket
+exclusions. gremlins has no per-site annotation, so the Go runtime is written
+to avoid equivalent mutants (no redundant guards) instead.
+
+The HTTP runtimes also share one behavior-vector suite
+(`runtimes/parity/vectors.json`): every runtime runs the same retry, timeout,
+and error-classification scenarios with pinned jitter and recorded backoff, so
+the runtimes cannot drift apart.
