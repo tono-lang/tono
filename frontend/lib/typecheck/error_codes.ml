@@ -68,3 +68,7 @@ let entry_endpoint_missing = "TC0043"
 let protocol_trait_invalid = "TC0044"
 let transform_unknown = "TC0045"
 let entry_shape_invalid = "TC0046"
+
+(* A second occurrence of a non-repeatable trait (@doc, @http, ...) on one
+   declaration or member; usually the trailing-trait absorption footgun. *)
+let duplicate_trait = "TC0047"

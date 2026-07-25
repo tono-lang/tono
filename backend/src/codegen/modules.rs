@@ -270,4 +270,91 @@ mod tests {
             _ => panic!("expected a structure"),
         }
     }
+
+    #[test]
+    fn apply_rewrites_entry_and_config_targets() {
+        use crate::ir::EntryField;
+        let field = |name: &str, target_id: &str| EntryField {
+            name: name.into(),
+            target: Tref::Ref {
+                id: target_id.into(),
+                args: vec![],
+            },
+            sources: vec![],
+            format: None,
+            transforms: vec![],
+            select: None,
+            binds: vec![],
+            constraints: vec![],
+            traits: vec![],
+        };
+        let model = Model {
+            tono_ir_version: 5,
+            modules: vec![Module {
+                name: "payments.api".into(),
+                shapes: vec![
+                    Shape {
+                        id: "payments.api#client".into(),
+                        kind: ShapeKind::Entry {
+                            fields: vec![field("settings", "payments.api#conf")],
+                            operations: vec![Shape {
+                                id: "payments.api#client.save".into(),
+                                kind: ShapeKind::Operation {
+                                    input: Some(Tref::Ref {
+                                        id: "payments.api#note".into(),
+                                        args: vec![],
+                                    }),
+                                    output: None,
+                                    errors: vec![],
+                                },
+                                traits: vec![],
+                            }],
+                        },
+                        traits: vec![],
+                    },
+                    Shape {
+                        id: "payments.api#conf".into(),
+                        kind: ShapeKind::Config {
+                            fields: vec![field("peer", "payments.api#note")],
+                        },
+                        traits: vec![],
+                    },
+                ],
+                operations: vec![],
+                extensions: vec![],
+            }],
+        };
+        let c = CodegenConfig {
+            flatten: false,
+            remap: vec![("payments".into(), "billing".into())],
+            go_module: None,
+        };
+        let out = apply(&c, &model);
+        let target_id = |f: &EntryField| match &f.target {
+            Tref::Ref { id, .. } => id.clone(),
+            _ => panic!("expected a ref"),
+        };
+        match &out.modules[0].shapes[0].kind {
+            ShapeKind::Entry { fields, operations } => {
+                assert_eq!(target_id(&fields[0]), "billing.api#conf");
+                assert_eq!(operations[0].id, "billing.api#client.save");
+                match &operations[0].kind {
+                    ShapeKind::Operation {
+                        input: Some(Tref::Ref { id, .. }),
+                        ..
+                    } => {
+                        assert_eq!(id, "billing.api#note");
+                    }
+                    _ => panic!("expected an operation with a ref input"),
+                }
+            }
+            _ => panic!("expected an entry"),
+        }
+        match &out.modules[0].shapes[1].kind {
+            ShapeKind::Config { fields } => {
+                assert_eq!(target_id(&fields[0]), "billing.api#note");
+            }
+            _ => panic!("expected a config"),
+        }
+    }
 }

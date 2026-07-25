@@ -130,6 +130,21 @@ let check_source_combinations ~in_config (m : Ast.member) : Diagnostic.t list =
   in
   arg_diags @ match_diags @ format_diags @ config_diags
 
+(* A "{...}" inside an @env name would read as literal characters of the
+   variable name and only surprise at runtime; deriving the name is @format's
+   job. *)
+let check_env_names (m : Ast.member) : Diagnostic.t list =
+  List.filter_map
+    (fun (tr : Ast.trait) ->
+      match (tr.Ast.tname, tr.targs) with
+      | "env", [ Ast.AString s ] when String.contains s '{' ->
+          Some
+            (err Error_codes.source_position_invalid tr.tspan
+               "@env takes a literal variable name; derive a dynamic name with \
+                @format on a named field and reference it with @env(.field)")
+      | _ -> None)
+    m.Ast.mtraits
+
 let check_nullable_field (m : Ast.member) : Diagnostic.t list =
   if is_nullable m.mtype then
     [
@@ -203,15 +218,17 @@ let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
       op.Ast.dtraits
 
 (* A loose (non-entry) operation has no field scope: any field reference in a
-   protocol trait, and any endpoint:, belongs to an entry. *)
+   protocol trait, any endpoint:, and @timeout/@retry (which only take field
+   references by definition) belong to an entry. *)
 let check_loose_op (op : Ast.decl) : Diagnostic.t list =
+  let entry_only what span =
+    err Error_codes.protocol_trait_invalid span
+      "%s is only available on an operation declared in an entry body" what
+  in
   let ref_diags =
     List.map
       (fun ((segs : string list), span) ->
-        err Error_codes.protocol_trait_invalid span
-          "field reference '%s' is only available on an operation declared in \
-           an entry body"
-          (path_str segs))
+        entry_only (Printf.sprintf "field reference '%s'" (path_str segs)) span)
       (op_refs op)
   in
   let endpoint_diags =
@@ -219,15 +236,33 @@ let check_loose_op (op : Ast.decl) : Diagnostic.t list =
     | Some tr when Option.is_some (kv_arg "endpoint" tr.targs) -> (
         match kv_arg "endpoint" tr.targs with
         | Some (Ast.ARef _) -> [] (* already reported as a field reference *)
-        | _ ->
-            [
-              err Error_codes.protocol_trait_invalid tr.tspan
-                "endpoint: is only available on an operation declared in an \
-                 entry body";
-            ])
+        | _ -> [ entry_only "endpoint:" tr.tspan ])
     | _ -> []
   in
-  check_protocol_positions op @ ref_diags @ endpoint_diags
+  (* A literal @timeout(5)/@retry(3) would otherwise pass here and be dropped
+     in silence by the protocol resolver. *)
+  let timeout_retry_diags =
+    List.concat_map
+      (fun name ->
+        List.filter_map
+          (fun (tr : Ast.trait) ->
+            match tr.Ast.targs with
+            | [ Ast.ARef _ ] -> None (* already reported as a field reference *)
+            | _ -> Some (entry_only ("@" ^ name) tr.tspan))
+          (traits_named name op.dtraits))
+      [ "timeout"; "retry" ]
+  in
+  (* @header still requires @http; @timeout/@retry are covered above. *)
+  let header_http_diags =
+    if Option.is_some (find_trait "http" op.dtraits) then []
+    else
+      List.map
+        (fun (tr : Ast.trait) ->
+          err Error_codes.protocol_trait_invalid tr.tspan
+            "@header is a protocol trait and requires @http on the operation")
+        (traits_named "header" op.dtraits)
+  in
+  header_http_diags @ ref_diags @ endpoint_diags @ timeout_retry_diags
 
 let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     Diagnostic.t list =
@@ -306,14 +341,26 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     List.concat_map
       (fun (tr : Ast.trait) ->
         match tr.Ast.targs with
-        | [ key; _value ] -> (
-            match key with
-            | Ast.AString _ -> []
+        | [ key; value ] -> (
+            (match key with
+              | Ast.AString _ -> []
+              | _ ->
+                  [
+                    err Error_codes.protocol_trait_invalid tr.tspan
+                      "@header expects a string key (a literal, possibly with \
+                       {.field} placeholders)";
+                  ])
+            @
+            (* A non-string literal value has no defined stringification on
+               the wire; the accepted forms are the language rule (literal
+               string, ref, template). *)
+            match value with
+            | Ast.AString _ | Ast.ARef _ -> []
             | _ ->
                 [
                   err Error_codes.protocol_trait_invalid tr.tspan
-                    "@header expects a string key (a literal, possibly with \
-                     {.field} placeholders)";
+                    "@header expects a string literal, a field reference, or a \
+                     template as its value";
                 ])
         | _ ->
             [
@@ -328,19 +375,53 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
 
 (* ── Wire boundary ─────────────────────────────────────────────────────── *)
 
+(* Why a name classifies as a config when it declares no sources of its own:
+   the entry composition that flipped it. Boundary diagnostics cite this so
+   the error points at the cause, not only the wire use. *)
+let config_origin ctx (name : string) : string =
+  let flipped_by =
+    match Entry_scope.decl_by_name ctx name with
+    | Some { Ast.dkind = Ast.DStruct { members; _ }; _ }
+      when not (List.exists Roles.member_has_source members) ->
+        List.find_map
+          (fun (d : Ast.decl) ->
+            match d.Ast.dkind with
+            | Ast.DStruct { ops = _ :: _; members = emembers; _ } ->
+                List.find_map
+                  (fun (m : Ast.member) ->
+                    match base_ty m.mtype with
+                    | Ast.TName (n, [], _)
+                      when String.equal n name && Roles.member_has_bind m ->
+                        Some (d.Ast.dname, m.mname)
+                    | _ -> None)
+                  emembers
+            | _ -> None)
+          ctx.Entry_scope.decls
+    | _ -> None
+  in
+  match flipped_by with
+  | Some (entry, field) ->
+      Printf.sprintf
+        " (a config because entry '%s' composes it via @bind on field '%s')"
+        entry field
+  | None -> ""
+
 (* Any type reference to an entry/config from a wire position: op inputs and
    outputs, declared errors, wire struct members, union payloads. *)
 let rec boundary_ty ctx (t : Ast.ty) : Diagnostic.t list =
   match t with
   | Ast.TName (n, args, span) ->
       (match role_of_name ctx n with
-        | Roles.Entry | Roles.Config ->
+        | Roles.Entry ->
             [
               err Error_codes.entry_wire_boundary span
-                "'%s' is an %s and never crosses the wire" n
-                (match role_of_name ctx n with
-                | Roles.Entry -> "entry"
-                | _ -> "config");
+                "'%s' is an entry and never crosses the wire" n;
+            ]
+        | Roles.Config ->
+            [
+              err Error_codes.entry_wire_boundary span
+                "'%s' is a config and never crosses the wire%s" n
+                (config_origin ctx n);
             ]
         | Roles.Wire -> [])
       @ List.concat_map (boundary_ty ctx) args
@@ -430,10 +511,40 @@ let check_member_boundary ctx ~(container : Roles.role) (m : Ast.member) :
       | Roles.Config, _ ->
           [
             err Error_codes.entry_wire_boundary span
-              "'%s' is a config and can only be composed by an entry field" n;
+              "'%s' is a config and can only be composed by an entry field%s" n
+              (config_origin ctx n);
           ]
       | Roles.Wire, _ -> [])
   | _ -> []
+
+(* Construction metadata on a wire member would be dropped in silence: the IR
+   loses a match, and @format/@str::* would ride the bag with no consumer,
+   while the source reads as if they fire. *)
+let check_wire_member_metadata (m : Ast.member) : Diagnostic.t list =
+  (match m.mmatch with
+    | Some fm ->
+        [
+          err Error_codes.source_position_invalid fm.match_span
+            "a match selection only lives on entry/config fields";
+        ]
+    | None -> [])
+  @ List.filter_map
+      (fun (tr : Ast.trait) ->
+        if String.equal tr.Ast.tname "format" then
+          Some
+            (err Error_codes.source_position_invalid tr.tspan
+               "@format only lives on entry/config fields")
+        else if Option.is_some (String.index_opt tr.Ast.tname ':') then
+          Some
+            (err Error_codes.source_position_invalid tr.tspan
+               "transform catalogs (@str::*) only live on entry/config fields")
+        else if String.equal tr.Ast.tname "bind" then
+          Some
+            (err Error_codes.bind_invalid tr.tspan
+               "@bind only lives at a composition point: an entry field whose \
+                type is a config")
+        else None)
+      m.Ast.mtraits
 
 let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
     (ops : Ast.decl list) : Diagnostic.t list =
@@ -451,7 +562,7 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
             (member_trait_refs m)
         in
         check_source_combinations ~in_config:false m
-        @ check_transforms m @ check_nullable_field m
+        @ check_env_names m @ check_transforms m @ check_nullable_field m
         @ check_binds ctx members m
         @ check_member_boundary ctx ~container:Roles.Entry m
         @ unresolved_ref_diags
@@ -574,7 +685,7 @@ let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
             ]
         in
         check_source_combinations ~in_config:true m
-        @ check_transforms m @ check_nullable_field m
+        @ check_env_names m @ check_transforms m @ check_nullable_field m
         @ check_member_boundary ctx ~container:Roles.Config m
         @ (traits_named "bind" m.mtraits
           |> List.map (fun (tr : Ast.trait) ->
@@ -605,7 +716,9 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
           | Roles.Config -> check_config ctx d params members
           | Roles.Wire ->
               List.concat_map
-                (check_member_boundary ctx ~container:Roles.Wire)
+                (fun m ->
+                  check_member_boundary ctx ~container:Roles.Wire m
+                  @ check_wire_member_metadata m)
                 members)
       | Ast.DUnion { variants; _ } ->
           check_non_struct_sources d

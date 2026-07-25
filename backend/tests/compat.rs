@@ -75,6 +75,117 @@ fn retyping_a_member_is_wire_breaking() {
     assert_eq!(change.detail, "u64 -> string");
 }
 
+fn entry_field_ref(name: &str, target_id: &str) -> tono_backend::ir::EntryField {
+    tono_backend::ir::EntryField {
+        name: name.into(),
+        target: Tref::Ref {
+            id: target_id.into(),
+            args: vec![],
+        },
+        sources: vec![],
+        format: None,
+        transforms: vec![],
+        select: None,
+        binds: vec![],
+        constraints: vec![],
+        traits: vec![],
+    }
+}
+
+fn entry(id: &str, fields: Vec<tono_backend::ir::EntryField>, operations: Vec<Shape>) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Entry { fields, operations },
+        traits: vec![],
+    }
+}
+
+fn config(id: &str, fields: Vec<tono_backend::ir::EntryField>) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Config { fields },
+        traits: vec![],
+    }
+}
+
+#[test]
+fn removing_an_orphan_entry_or_config_is_source_breaking() {
+    let before = model(vec![
+        entry("billing#client", vec![], vec![]),
+        config("billing#conf", vec![]),
+    ]);
+    let after = model(vec![]);
+    let report = diff(&before, &after);
+    let removed_entry = find(&report, "remove-shape billing#client");
+    assert_eq!(removed_entry.category, Category::SourceBreaking);
+    assert_eq!(removed_entry.detail, "entry removed");
+    let removed_config = find(&report, "remove-shape billing#conf");
+    assert_eq!(removed_config.category, Category::SourceBreaking);
+    assert_eq!(removed_config.detail, "config removed");
+}
+
+#[test]
+fn removing_a_shape_an_entry_or_config_references_is_wire_breaking() {
+    // Referenced through an entry field target.
+    let before = model(vec![
+        structure("billing#Card", vec![]),
+        entry(
+            "billing#client",
+            vec![entry_field_ref("card", "billing#Card")],
+            vec![],
+        ),
+    ]);
+    let after = model(vec![entry(
+        "billing#client",
+        vec![entry_field_ref("card", "billing#Card")],
+        vec![],
+    )]);
+    assert_eq!(
+        find(&diff(&before, &after), "remove-shape billing#Card").category,
+        Category::WireBreaking
+    );
+
+    // Referenced through an op nested in the entry body.
+    let nested_op = Shape {
+        id: "billing#client.save".into(),
+        kind: ShapeKind::Operation {
+            input: Some(Tref::Ref {
+                id: "billing#Note".into(),
+                args: vec![],
+            }),
+            output: None,
+            errors: vec![],
+        },
+        traits: vec![],
+    };
+    let before = model(vec![
+        structure("billing#Note", vec![]),
+        entry("billing#client", vec![], vec![nested_op.clone()]),
+    ]);
+    let after = model(vec![entry("billing#client", vec![], vec![nested_op])]);
+    assert_eq!(
+        find(&diff(&before, &after), "remove-shape billing#Note").category,
+        Category::WireBreaking
+    );
+
+    // Referenced through a config field target.
+    let before = model(vec![
+        structure("billing#Creds", vec![]),
+        config(
+            "billing#conf",
+            vec![entry_field_ref("creds", "billing#Creds")],
+        ),
+    ]);
+    let after = model(vec![config(
+        "billing#conf",
+        vec![entry_field_ref("creds", "billing#Creds")],
+    )]);
+    assert_eq!(
+        find(&diff(&before, &after), "remove-shape billing#Creds").category,
+        Category::WireBreaking
+    );
+}
+
 #[test]
 fn removing_a_member_is_wire_breaking() {
     let before = charge(vec![

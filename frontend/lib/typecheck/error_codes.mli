@@ -62,3 +62,4 @@ val entry_endpoint_missing : string
 val protocol_trait_invalid : string
 val transform_unknown : string
 val entry_shape_invalid : string
+val duplicate_trait : string
