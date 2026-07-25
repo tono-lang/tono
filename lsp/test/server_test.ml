@@ -121,6 +121,33 @@ let did_close_clears_diagnostics () =
       Alcotest.(check int) "close clears diagnostics" 0 (List.length last)
   | _ -> Alcotest.fail "expected exactly two publishDiagnostics notifications"
 
+(* Positions must speak UTF-16 through the real server too: with multi-byte
+   content before the hovered symbol ("ação" is 6 bytes, 4 code units), the
+   answered range counts code units, not bytes. *)
+let hover_range_counts_utf16_units () =
+  let frames, status =
+    session
+      [
+        {|{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}|};
+        {|{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.tono","languageId":"tono","version":1,"text":"@doc(\"ação\") struct point { at: edge }\nstruct edge { x: i64 }"}}}|};
+        {|{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///t.tono"},"position":{"line":0,"character":20}}}|};
+        {|{"jsonrpc":"2.0","method":"exit"}|};
+      ]
+  in
+  Alcotest.(check bool) "server exits cleanly" true (exited_cleanly status);
+  match response_for 2 frames with
+  | None -> Alcotest.fail "expected a hover response"
+  | Some r -> (
+      let character =
+        Option.bind (member "result" r) (fun result ->
+            Option.bind (member "range" result) (fun range ->
+                Option.bind (member "start" range) (member "character")))
+      in
+      match character with
+      | Some (`Int c) ->
+          Alcotest.(check int) "range starts at the utf16 column" 20 c
+      | _ -> Alcotest.fail "expected a hover range")
+
 let () =
   Alcotest.run "server"
     [
@@ -130,5 +157,7 @@ let () =
             malformed_messages_get_error_responses;
           Alcotest.test_case "didClose clears diagnostics" `Quick
             did_close_clears_diagnostics;
+          Alcotest.test_case "utf16 hover range" `Quick
+            hover_range_counts_utf16_units;
         ] );
     ]

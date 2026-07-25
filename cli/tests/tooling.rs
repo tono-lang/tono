@@ -203,8 +203,10 @@ fn preview_skips_missing_typescript_toolchain() {
 
 #[test]
 fn preview_watch_reruns_and_stops_when_file_is_removed() {
-    use std::io::Read;
+    use std::io::{BufRead, BufReader};
     use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
     let mut cmd = skip_without_frontend!();
     if !have("go") {
         eprintln!("skipping: go toolchain not available");
@@ -221,31 +223,49 @@ fn preview_watch_reruns_and_stops_when_file_is_removed() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    // First render, then a save triggers the second, then deleting the file
-    // ends the watch. The margins are generous next to the 300ms poll.
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    // The watch is event-driven, so the test is too: each step waits for the
+    // child to report the previous render instead of guessing with sleeps
+    // (a slow runner would otherwise race the second build).
+    let (tx, rx) = mpsc::channel::<String>();
+    let pipe = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut all = String::new();
+        for line in BufReader::new(pipe).lines() {
+            let Ok(line) = line else { break };
+            all.push_str(&line);
+            all.push('\n');
+            let _ = tx.send(line);
+        }
+        all
+    });
+    let wait_for = |needle: &str| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(line) if line.contains(needle) => return,
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for {needle:?}"),
+            }
+        }
+    };
+    wait_for("compiles:");
     std::fs::write(&file, "struct a { x: i64\n y: string }\n").unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    wait_for("compiles:");
     std::fs::remove_file(&file).unwrap();
     let mut waited = 0;
     let status = loop {
         if let Some(s) = child.try_wait().unwrap() {
             break s;
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(200));
         waited += 200;
         if waited > 30_000 {
             let _ = child.kill();
             panic!("watch did not stop after the file was removed");
         }
     };
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
+    let stdout = reader.join().unwrap();
     assert!(status.success(), "watch exits cleanly:\n{stdout}");
     assert_eq!(
         stdout.matches("--- preview").count(),
