@@ -11,8 +11,8 @@ use proptest::prelude::*;
 use proptest::sample::select;
 use serde_json::Value;
 use tono_backend::ir::{
-    check_roundtrip, decode_model, Constraint, EnumBacking, Member, Model, Module, Prim, Shape,
-    ShapeKind, Trait, Tref, TONO_IR_VERSION,
+    check_roundtrip, decode_model, Constraint, EnumBacking, EnumValue, Member, Model, Module, Prim,
+    Shape, ShapeKind, Trait, Tref, TONO_IR_VERSION,
 };
 
 // Small fixed pools keep generated documents well-formed and stable while still
@@ -161,12 +161,23 @@ fn shape_kind() -> impl Strategy<Value = ShapeKind> {
             vec(
                 (
                     select(vec!["a", "b", "c"]).prop_map(String::from),
-                    option::of(0i64..100)
+                    option::of(0i64..100),
+                    vec(trait_(), 0..2),
                 ),
                 0..3,
             ),
         )
-            .prop_map(|(backing, values)| ShapeKind::Enum { backing, values }),
+            .prop_map(|(backing, values)| ShapeKind::Enum {
+                backing,
+                values: values
+                    .into_iter()
+                    .map(|(name, value, traits)| EnumValue {
+                        name,
+                        value,
+                        traits,
+                    })
+                    .collect(),
+            }),
         vec(ident(), 0..3).prop_map(|operations| ShapeKind::Service { operations }),
         (option::of(tref()), option::of(tref()), vec(tref(), 0..2)).prop_map(
             |(input, output, errors)| ShapeKind::Operation {

@@ -44,7 +44,7 @@ op origin(): point
               Ir.Enum
                 {
                   backing = `String;
-                  values = [ ("north", None); ("south", None) ];
+                  values = [ Ir.enum_value "north"; Ir.enum_value "south" ];
                 };
             traits = [];
           };

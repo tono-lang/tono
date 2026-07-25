@@ -11,10 +11,18 @@
 //! `Decl::Raw` items. That arm renders nothing here.
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
+use crate::codegen::doc;
 use crate::codegen::symbol::SymbolKind;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, FnBody, Function, Method, TypeExpr};
+
+/// A godoc comment prefix for a documented element, indented and newline-terminated,
+/// or empty when there is no doc. The Markdown is flattened to plain text (godoc is
+/// not Markdown) and sits directly above the declaration.
+fn doc_prefix(doc: Option<&str>, indent: &str) -> String {
+    doc.map(|d| doc::godoc(d, indent)).unwrap_or_default()
+}
 
 /// The godoc deprecation comment for a `@deprecated` element, or empty when it is
 /// not deprecated. Go's convention is a `// Deprecated: ...` line directly above
@@ -138,8 +146,9 @@ impl GoRules {
         if pointer {
             tag.push_str(",omitempty");
         }
+        let doc = doc_prefix(field.doc.as_deref(), "\t");
         let dep = deprecated_prefix(field.deprecated.as_deref(), "\t");
-        format!("{dep}\t{} {ty} `json:\"{tag}\"`\n", field.name.name)
+        format!("{doc}{dep}\t{} {ty} `json:\"{tag}\"`\n", field.name.name)
     }
 
     fn render_enum(&self, decl: &EnumDecl) -> String {
@@ -150,8 +159,9 @@ impl GoRules {
             EnumRepr::String => "string",
             EnumRepr::Int(_) => "int",
         };
+        let doc = doc_prefix(decl.doc.as_deref(), "");
         let dep = deprecated_prefix(decl.deprecated.as_deref(), "");
-        let mut out = format!("{dep}type {name} {base}\n");
+        let mut out = format!("{doc}{dep}type {name} {base}\n");
         if decl.members.is_empty() {
             return out;
         }
@@ -163,6 +173,10 @@ impl GoRules {
                 "{name}{}",
                 transform(value, SymbolKind::Variant, &pascal, None)
             );
+            // Per-member docs are parallel to members; render one above its const.
+            if let Some(Some(d)) = decl.member_docs.get(i) {
+                out.push_str(&doc::godoc(d, "\t"));
+            }
             match &decl.backing {
                 EnumRepr::String => out.push_str(&format!("\t{ident} {name} = \"{value}\"\n")),
                 EnumRepr::Int(ints) => out.push_str(&format!("\t{ident} {name} = {}\n", ints[i])),
@@ -188,7 +202,8 @@ impl GoRules {
             (None, Some(_)) => " error".into(),
             (None, None) => String::new(),
         };
-        format!("\t{}({}){ret}\n", method.name.name, params.join(", "))
+        let doc = doc_prefix(method.doc.as_deref(), "\t");
+        format!("{doc}\t{}({}){ret}\n", method.name.name, params.join(", "))
     }
 
     fn render_function(&self, function: &Function) -> String {
@@ -234,9 +249,10 @@ impl RenderRules for GoRules {
                     .iter()
                     .map(|f| self.render_field(f))
                     .collect();
+                let doc = doc_prefix(interface.doc.as_deref(), "");
                 let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
                 format!(
-                    "{dep}type {}{} struct {{\n{fields}}}",
+                    "{doc}{dep}type {}{} struct {{\n{fields}}}",
                     interface.name.name,
                     type_params(&interface.params)
                 )
@@ -275,6 +291,7 @@ mod tests {
             nullable,
             wire: Some(wire.to_string()),
             deprecated: None,
+            doc: None,
         }
     }
 
@@ -330,6 +347,7 @@ mod tests {
                 ),
             ],
             deprecated: None,
+            doc: None,
         });
         let out = GoRules::default().render_decl(&decl);
         assert!(out.starts_with("type Charge struct {\n"));
@@ -356,6 +374,7 @@ mod tests {
                 "items",
             )],
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             GoRules::default().render_decl(&decl),
@@ -386,6 +405,7 @@ mod tests {
                 ),
             ],
             deprecated: None,
+            doc: None,
         });
         let out = GoRules::default().render_decl(&decl);
         // An optional slice is not a pointer; it stays a slice, with no omitempty.
@@ -404,8 +424,10 @@ mod tests {
                 nullable: false,
                 wire: None,
                 deprecated: None,
+                doc: None,
             }],
             deprecated: None,
+            doc: None,
         });
         assert!(GoRules::default()
             .render_decl(&decl)
@@ -417,8 +439,10 @@ mod tests {
         let decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("pending"), Symbol::builtin("in_review")],
+            member_docs: vec![None, None],
             backing: EnumRepr::String,
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             GoRules::default().render_decl(&decl),
@@ -436,8 +460,10 @@ mod tests {
                 Symbol::builtin("not_found"),
                 Symbol::builtin("error"),
             ],
+            member_docs: vec![None, None, None],
             backing: EnumRepr::Int(vec![200, 404, 500]),
             deprecated: None,
+            doc: None,
         });
         assert_eq!(
             GoRules::default().render_decl(&decl),
@@ -451,8 +477,10 @@ mod tests {
         let decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Empty"),
             members: vec![],
+            member_docs: vec![],
             backing: EnumRepr::String,
             deprecated: None,
+            doc: None,
         });
         assert_eq!(GoRules::default().render_decl(&decl), "type Empty string\n");
     }
@@ -468,8 +496,10 @@ mod tests {
                 nullable: false,
                 wire: Some("amount".into()),
                 deprecated: Some("use AmountCents".into()),
+                doc: None,
             }],
             deprecated: Some("use ChargeV2".into()),
+            doc: None,
         });
         let out = GoRules::default().render_decl(&decl);
         // The godoc line sits directly above the type and the field, no blank line.
@@ -480,12 +510,48 @@ mod tests {
         let enum_decl = Decl::Enum(EnumDecl {
             name: Symbol::builtin("Status"),
             members: vec![Symbol::builtin("open")],
+            member_docs: vec![None],
             backing: EnumRepr::String,
             deprecated: Some(String::new()),
+            doc: None,
         });
         assert!(GoRules::default()
             .render_decl(&enum_decl)
             .starts_with("// Deprecated:\ntype Status string"));
+    }
+
+    #[test]
+    fn doc_renders_as_flattened_godoc_on_the_struct_field_and_enum_member() {
+        let decl = Decl::Interface(Interface {
+            name: Symbol::builtin("Charge"),
+            params: vec![],
+            fields: vec![Field {
+                name: Symbol::builtin("Amount"),
+                ty: TypeExpr::Ref(Symbol::builtin("int64")),
+                nullable: false,
+                wire: Some("amount".into()),
+                deprecated: None,
+                doc: Some("The **amount** in minor units.".into()),
+            }],
+            deprecated: None,
+            doc: Some("A billing charge.".into()),
+        });
+        let out = GoRules::default().render_decl(&decl);
+        // godoc sits directly above the type and the field; Markdown is flattened.
+        assert!(out.starts_with("// A billing charge.\ntype Charge struct"));
+        assert!(out.contains("\t// The amount in minor units.\n\tAmount"));
+
+        // A per-member doc renders above its const.
+        let enum_decl = Decl::Enum(EnumDecl {
+            name: Symbol::builtin("Status"),
+            members: vec![Symbol::builtin("open"), Symbol::builtin("closed")],
+            member_docs: vec![Some("Still open.".into()), None],
+            backing: EnumRepr::String,
+            deprecated: None,
+            doc: None,
+        });
+        let out = GoRules::default().render_decl(&enum_decl);
+        assert!(out.contains("\t// Still open.\n\tStatusOpen Status = \"open\""));
     }
 
     #[test]
@@ -574,6 +640,7 @@ mod tests {
             discriminator: "type".into(),
             variants: vec![],
             deprecated: None,
+            doc: None,
         });
         let method = Decl::Method(Method {
             name: Symbol::builtin("Ping"),
@@ -581,6 +648,7 @@ mod tests {
             ret: None,
             err: None,
             is_async: false,
+            doc: None,
         });
         assert_eq!(GoRules::default().render_decl(&union), "");
         assert_eq!(GoRules::default().render_decl(&method), "");
@@ -605,6 +673,7 @@ mod tests {
                     ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
                     err: Some(TypeExpr::Ref(Symbol::builtin("error"))),
                     is_async: true,
+                    doc: None,
                 },
                 Method {
                     name: Symbol::builtin("Ping"),
@@ -612,6 +681,7 @@ mod tests {
                     ret: None,
                     err: Some(TypeExpr::Ref(Symbol::builtin("error"))),
                     is_async: false,
+                    doc: None,
                 },
             ],
         });

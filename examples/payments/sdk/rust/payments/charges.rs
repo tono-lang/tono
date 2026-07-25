@@ -16,6 +16,7 @@ pub struct LocalDate(pub String);
 #[serde(transparent)]
 pub struct Duration(pub String);
 
+/// A small payments API that exercises the hard wire cases end to end.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Charge {
     pub id: String,
@@ -72,6 +73,7 @@ pub enum HTTPCode {
     Unknown(i64),
 }
 
+/// A page of results with an optional continuation cursor.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Page<T> {
     pub items: Vec<T>,
@@ -79,11 +81,13 @@ pub struct Page<T> {
     pub next_cursor: Option<String>,
 }
 
+/// The card issuer declined the charge.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct CardDeclined {
     pub message: String,
 }
 
+/// No charge exists for the requested id.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct NotFound {
     pub message: String,
@@ -183,5 +187,6 @@ impl std::error::Error for TonoError {
 
 #[allow(async_fn_in_trait)]
 pub trait Client {
+    /// Creates a charge.
     async fn create_charge(&self, input: Charge) -> Result<Charge, TonoError>;
 }

@@ -9,7 +9,7 @@
 //! retryability read off the referenced error shape.
 
 use crate::codegen::casing::{transform, CasingConfig};
-use crate::codegen::conventions::{rename_of, type_ident_from_id};
+use crate::codegen::conventions::{doc_of, rename_of, type_ident_from_id};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::tree::{ClientDecl, Decl, Field, Method, TypeExpr};
 use crate::ir::{Module, Shape, ShapeKind, Trait, Tref};
@@ -249,12 +249,14 @@ pub fn client_decl(
                             nullable: false,
                             wire: None,
                             deprecated: None,
+                            doc: None,
                         }]
                     })
                     .unwrap_or_default(),
                 ret: output.map(type_expr_of),
                 err: err.clone(),
                 is_async: effect_of(op) == Effect::Async,
+                doc: doc_of(&op.traits),
             }
         })
         .collect();

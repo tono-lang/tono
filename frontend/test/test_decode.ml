@@ -135,12 +135,14 @@ let shape_suite =
       {|{"id": "x#Y", "kind": "enum", "backing": 5}|};
     fails "enum values not array" Ir_json.decode_shape
       {|{"id": "x#Y", "kind": "enum", "backing": "string", "values": 5}|};
-    fails "enum value not pair" Ir_json.decode_shape
-      {|{"id": "x#Y", "kind": "enum", "backing": "int", "values": [["a",1,2]]}|};
-    fails "enum value entry not array" Ir_json.decode_shape
+    fails "enum value not object" Ir_json.decode_shape
       {|{"id": "x#Y", "kind": "enum", "backing": "int", "values": [5]}|};
+    fails "enum value missing name" Ir_json.decode_shape
+      {|{"id": "x#Y", "kind": "enum", "backing": "int", "values": [{"value": 1}]}|};
     fails "enum value name not string" Ir_json.decode_shape
-      {|{"id": "x#Y", "kind": "enum", "backing": "int", "values": [[5, 1]]}|};
+      {|{"id": "x#Y", "kind": "enum", "backing": "int", "values": [{"name": 5}]}|};
+    fails "enum value traits not array" Ir_json.decode_shape
+      {|{"id": "x#Y", "kind": "enum", "backing": "string", "values": [{"name": "a", "traits": 5}]}|};
     fails "service operations not array" Ir_json.decode_shape
       {|{"id": "x#Y", "kind": "service", "operations": 5}|};
     fails "operation errors not array" Ir_json.decode_shape
@@ -180,7 +182,7 @@ let model_suite =
       {|{"tono_ir_version": "x", "modules": []}|};
     fails "model modules not array" Ir_json.decode_model
       {|{"tono_ir_version": 3, "modules": 5}|};
-    ok "model without modules" Ir_json.decode_model {|{"tono_ir_version": 3}|};
+    ok "model without modules" Ir_json.decode_model {|{"tono_ir_version": 4}|};
     ok "module minimal" Ir_json.decode_module {|{"name": "m"}|};
   ]
 

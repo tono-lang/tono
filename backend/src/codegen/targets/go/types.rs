@@ -48,10 +48,12 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         |m| field_of(m, config),
         // A Go enum is a named string or int built from its wire values; the const
         // identifiers are derived at render time.
-        |backing, values, name, dep| vec![conventions::open_enum(backing, values, name, dep)],
+        |backing, values, name, dep, doc| {
+            vec![conventions::open_enum(backing, values, name, dep, doc)]
+        },
         // The interface, wrappers, and markers are types; their serde lives in the
         // serde phase.
-        |_discriminator, members, _name, dep| union_type_decls(shape, members, dep),
+        |_discriminator, members, _name, dep, doc| union_type_decls(shape, members, dep, doc),
     )
 }
 
@@ -64,6 +66,7 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
         // turns it into `json:"<wire>..."` with the right wire-encoding options.
         wire: Some(wire_key(member)),
         deprecated: conventions::deprecated_of(&member.traits),
+        doc: conventions::doc_of(&member.traits),
     }
 }
 

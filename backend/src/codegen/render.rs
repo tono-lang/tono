@@ -267,6 +267,7 @@ mod tests {
                             nullable: !m.required,
                             wire: Self::wire_of(&m.traits),
                             deprecated: None,
+                            doc: None,
                         })
                         .collect();
                     vec![Decl::Interface(Interface {
@@ -274,6 +275,7 @@ mod tests {
                         params: vec![],
                         fields,
                         deprecated: None,
+                        doc: None,
                     })]
                 }
                 _ => vec![],
@@ -289,6 +291,7 @@ mod tests {
                 ret: None,
                 err: None,
                 is_async: false,
+                doc: None,
             })]
         }
 
@@ -311,6 +314,7 @@ mod tests {
             nullable: false,
             wire: None,
             deprecated: None,
+            doc: None,
         }
     }
 
@@ -326,6 +330,7 @@ mod tests {
                     imported_field("z", "Z", "zeta"),
                 ],
                 deprecated: None,
+                doc: None,
             })],
         };
         let out = render_file(&file, &RustRules, &passthrough());
@@ -359,6 +364,7 @@ mod tests {
                     nullable: false,
                     wire: None,
                     deprecated: None,
+                    doc: None,
                 }],
                 ret: Some(TypeExpr::Ref(Symbol::imported("Charge", "model", "Charge"))),
                 body: FnBody::Raw {
@@ -406,8 +412,10 @@ mod tests {
                     nullable: false,
                     wire: None,
                     deprecated: None,
+                    doc: None,
                 }],
                 deprecated: None,
+                doc: None,
             })],
         };
         let out = render_file(&file, &RustRules, &passthrough());
@@ -429,8 +437,10 @@ mod tests {
                     nullable: false,
                     wire: Some("amount_cents".into()),
                     deprecated: None,
+                    doc: None,
                 }],
                 deprecated: None,
+                doc: None,
             })],
         };
         let out = render_file(&file, &RustRules, &passthrough());
@@ -449,6 +459,7 @@ mod tests {
                 params: vec![],
                 fields: vec![imported_field("a", "A", "alpha")],
                 deprecated: None,
+                doc: None,
             })],
         };
         let first = render_file(&file, &RustRules, &passthrough());
@@ -479,6 +490,7 @@ mod tests {
                             nullable: false,
                             wire: None,
                             deprecated: None,
+                            doc: None,
                         },
                         Field {
                             name: Symbol::builtin("index"),
@@ -489,6 +501,7 @@ mod tests {
                             nullable: false,
                             wire: None,
                             deprecated: None,
+                            doc: None,
                         },
                         Field {
                             name: Symbol::builtin("note"),
@@ -496,6 +509,7 @@ mod tests {
                             nullable: false,
                             wire: None,
                             deprecated: None,
+                            doc: None,
                         },
                         Field {
                             name: Symbol::builtin("page"),
@@ -506,6 +520,7 @@ mod tests {
                             nullable: true,
                             wire: None,
                             deprecated: None,
+                            doc: None,
                         },
                         Field {
                             name: Symbol::builtin("counts"),
@@ -516,15 +531,19 @@ mod tests {
                             nullable: false,
                             wire: None,
                             deprecated: None,
+                            doc: None,
                         },
                     ],
                     deprecated: None,
+                    doc: None,
                 }),
                 Decl::Enum(EnumDecl {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active"), Symbol::builtin("Closed")],
+                    member_docs: vec![None, None],
                     backing: crate::codegen::tree::EnumRepr::String,
                     deprecated: None,
+                    doc: None,
                 }),
                 Decl::Union(UnionDecl {
                     name: Symbol::builtin("Method"),
@@ -534,8 +553,10 @@ mod tests {
                         fields: vec![],
                         payload: None,
                         wire: None,
+                        doc: None,
                     }],
                     deprecated: None,
+                    doc: None,
                 }),
                 Decl::Method(Method {
                     name: Symbol::builtin("create"),
@@ -545,10 +566,12 @@ mod tests {
                         nullable: false,
                         wire: None,
                         deprecated: None,
+                        doc: None,
                     }],
                     ret: Some(TypeExpr::Ref(Symbol::builtin("String"))),
                     err: None,
                     is_async: false,
+                    doc: None,
                 }),
             ],
         };

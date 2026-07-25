@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 2, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 4, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **2**.
+The current version is **4**.
 
 ## Modules
 
@@ -126,7 +126,8 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
   "params": [], "members": [ /* members */ ], "discriminator": "type", "traits": [] }
 
 { "id": "payments#Status", "kind": "enum",
-  "backing": "string", "values": [ ["active", null], ["closed", null] ],
+  "backing": "string",
+  "values": [ { "name": "active", "traits": [] }, { "name": "closed", "traits": [] } ],
   "traits": [] }
 
 { "id": "payments#Payments", "kind": "service",
@@ -138,10 +139,14 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
 ```
 
 - `union` always emits an explicit `discriminator` (default `"type"`).
-- `enum` carries `backing` (`"string"` or `"int"`) and `values` as
-  `[name, intOrNull]` pairs. Every enum is open; the implicit unknown variant is a
-  decode-time concern of the backend and is not materialized here, so there is no
-  `open` flag.
+- `enum` carries `backing` (`"string"` or `"int"`) and `values`, each an object
+  `{ "name", "value"?, "traits" }`: `value` is the explicit integer, present only
+  on an int-backed enum, and `traits` is the member's bag (documentation rides it).
+  Every enum is open; the implicit unknown variant is a decode-time concern of the
+  backend and is not materialized here.
+- Documentation is the `@doc` trait (`core#doc`), a Markdown string carried in any
+  trait bag (shape, member, or enum value); the backend lowers it to each target's
+  native doc comment.
 - `operation` carries `input`/`output` as a type reference or `null`, and
   `errors` as an array of type references. They are type references (not bare
   ids) so an operation can return an applied generic directly.

@@ -6,7 +6,21 @@
 use crate::codegen::symbol::Symbol;
 use crate::codegen::target::{RenderRules, Target};
 use crate::codegen::tree::Decl;
-use crate::ir::{Constraint, EnumBacking, Member, Module, Prim, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{
+    Constraint, EnumBacking, EnumValue, Member, Module, Prim, Shape, ShapeKind, Trait, Tref,
+};
+
+/// Convert `(wire, discriminant)` test tuples into bagless enum values.
+fn enum_values(values: Vec<(String, Option<i64>)>) -> Vec<EnumValue> {
+    values
+        .into_iter()
+        .map(|(name, value)| EnumValue {
+            name,
+            value,
+            traits: vec![],
+        })
+        .collect()
+}
 
 /// A required member with no traits.
 pub fn member(name: &str, target: Tref, required: bool) -> Member {
@@ -77,7 +91,7 @@ pub fn enum_shape(id: &str, values: Vec<(String, Option<i64>)>) -> Shape {
         id: id.into(),
         kind: ShapeKind::Enum {
             backing: EnumBacking::String,
-            values,
+            values: enum_values(values),
         },
         traits: vec![],
     }
@@ -89,7 +103,7 @@ pub fn int_enum_shape(id: &str, values: Vec<(String, Option<i64>)>) -> Shape {
         id: id.into(),
         kind: ShapeKind::Enum {
             backing: EnumBacking::Int,
-            values,
+            values: enum_values(values),
         },
         traits: vec![],
     }

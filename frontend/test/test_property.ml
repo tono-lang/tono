@@ -125,7 +125,10 @@ let gen_members = G.list_size (G.int_range 0 3) gen_member
 let gen_params = G.list_size (G.int_range 0 2) gen_param
 
 let gen_enum_value =
-  G.pair (G.oneof_list [ "a"; "b"; "c" ]) (gen_opt (G.int_range 0 100))
+  let+ ev_name = G.oneof_list [ "a"; "b"; "c" ]
+  and+ ev_int = gen_opt (G.int_range 0 100)
+  and+ ev_traits = G.list_size (G.int_range 0 2) gen_trait in
+  ({ ev_name; ev_int; ev_traits } : Ir.enum_value)
 
 let gen_shape_kind : Ir.shape_kind G.t =
   G.oneof

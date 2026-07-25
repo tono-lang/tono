@@ -91,13 +91,15 @@ impl Decl {
 /// parameter clause (`<T>` / `[T any]`) while a reference that applies them rides
 /// `TypeExpr::Generic`. `deprecated` carries the `@deprecated` reason (`Some("")`
 /// when marked without one), rendered as each target's native deprecation
-/// annotation.
+/// annotation. `doc` carries the `@doc` Markdown, lowered to each target's native
+/// documentation comment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interface {
     pub name: Symbol,
     pub params: Vec<String>,
     pub fields: Vec<Field>,
     pub deprecated: Option<String>,
+    pub doc: Option<String>,
 }
 
 /// A field: an identifier symbol, its type expression, nullability, and an
@@ -115,6 +117,9 @@ pub struct Field {
     /// the target's native field deprecation. Always `None` for a method/function
     /// parameter, which is never deprecated.
     pub deprecated: Option<String>,
+    /// The `@doc` Markdown for this field, or `None`. Rendered as the target's
+    /// native member documentation. `None` for a method/function parameter.
+    pub doc: Option<String>,
 }
 
 /// An operation stub: a typed signature. The opaque wire descriptor and the
@@ -131,6 +136,9 @@ pub struct Method {
     pub ret: Option<TypeExpr>,
     pub err: Option<TypeExpr>,
     pub is_async: bool,
+    /// The `@doc` Markdown for the operation, or `None`. Rendered as the target's
+    /// native method documentation.
+    pub doc: Option<String>,
 }
 
 /// The generated client surface of a module: one method signature per
@@ -179,8 +187,13 @@ pub enum EnumRepr {
 pub struct EnumDecl {
     pub name: Symbol,
     pub members: Vec<Symbol>,
+    /// Per-member `@doc`, parallel to `members` (same length): the doc for
+    /// `members[i]` is `member_docs[i]`, or `None`. Kept parallel like the wire
+    /// integers in `EnumRepr::Int`, since a member is a bare symbol here.
+    pub member_docs: Vec<Option<String>>,
     pub backing: EnumRepr,
     pub deprecated: Option<String>,
+    pub doc: Option<String>,
 }
 
 /// An internally-tagged union: a discriminator field name (default `type`) and
@@ -192,6 +205,7 @@ pub struct UnionDecl {
     pub discriminator: String,
     pub variants: Vec<Variant>,
     pub deprecated: Option<String>,
+    pub doc: Option<String>,
 }
 
 /// A union variant. Its `name` is the wire tag (overridable by `wire`). A
@@ -204,6 +218,9 @@ pub struct Variant {
     pub fields: Vec<Field>,
     pub payload: Option<TypeExpr>,
     pub wire: Option<String>,
+    /// The `@doc` Markdown for this variant, or `None`. Rendered as the target's
+    /// native documentation on the variant type.
+    pub doc: Option<String>,
 }
 
 /// A composable type expression over Symbols.
@@ -295,6 +312,7 @@ mod tests {
                             nullable: false,
                             wire: None,
                             deprecated: None,
+                            doc: None,
                         },
                         Field {
                             name: Symbol::builtin("page"),
@@ -302,15 +320,19 @@ mod tests {
                             nullable: true,
                             wire: Some("page_ref".into()),
                             deprecated: None,
+                            doc: None,
                         },
                     ],
                     deprecated: None,
+                    doc: None,
                 }),
                 Decl::Enum(EnumDecl {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active"), Symbol::builtin("Closed")],
+                    member_docs: vec![None, None],
                     backing: EnumRepr::String,
                     deprecated: None,
+                    doc: None,
                 }),
                 Decl::Union(UnionDecl {
                     name: Symbol::builtin("Method"),
@@ -320,8 +342,10 @@ mod tests {
                         fields: vec![],
                         payload: None,
                         wire: Some("card".into()),
+                        doc: None,
                     }],
                     deprecated: None,
+                    doc: None,
                 }),
                 Decl::Method(Method {
                     name: Symbol::builtin("create_charge"),
@@ -331,10 +355,12 @@ mod tests {
                         nullable: false,
                         wire: None,
                         deprecated: None,
+                        doc: None,
                     }],
                     ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
                     err: None,
                     is_async: false,
+                    doc: None,
                 }),
                 Decl::Client(ClientDecl {
                     name: Symbol::builtin("Client"),
@@ -344,6 +370,7 @@ mod tests {
                         ret: Some(TypeExpr::Ref(Symbol::builtin("Charge"))),
                         err: Some(TypeExpr::Ref(Symbol::builtin("TonoError"))),
                         is_async: true,
+                        doc: None,
                     }],
                 }),
             ],

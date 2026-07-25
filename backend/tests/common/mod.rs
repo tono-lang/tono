@@ -6,7 +6,18 @@
 //! helpers, so unused items per binary are expected.
 #![allow(dead_code)]
 
-use tono_backend::ir::{EnumBacking, Member, Module, Prim, Shape, ShapeKind, Trait, Tref};
+use tono_backend::ir::{
+    EnumBacking, EnumValue, Member, Module, Prim, Shape, ShapeKind, Trait, Tref,
+};
+
+/// A bagless enum value with an optional integer discriminant.
+pub fn enum_val(name: &str, value: Option<i64>) -> EnumValue {
+    EnumValue {
+        name: name.into(),
+        value,
+        traits: vec![],
+    }
+}
 
 /// A member with explicit traits.
 pub fn member(name: &str, target: Tref, required: bool, traits: Vec<Trait>) -> Member {
@@ -75,7 +86,7 @@ pub fn matrix_module() -> Module {
                 id: "models#Status".into(),
                 kind: ShapeKind::Enum {
                     backing: EnumBacking::String,
-                    values: vec![("active".into(), None), ("closed".into(), None)],
+                    values: vec![enum_val("active", None), enum_val("closed", None)],
                 },
                 traits: vec![],
             },
@@ -84,9 +95,9 @@ pub fn matrix_module() -> Module {
                 kind: ShapeKind::Enum {
                     backing: EnumBacking::Int,
                     values: vec![
-                        ("ok".into(), Some(200)),
-                        ("not_found".into(), Some(404)),
-                        ("error".into(), Some(500)),
+                        enum_val("ok", Some(200)),
+                        enum_val("not_found", Some(404)),
+                        enum_val("error", Some(500)),
                     ],
                 },
                 traits: vec![],

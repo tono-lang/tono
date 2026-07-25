@@ -186,6 +186,7 @@ fn discriminator_fn(
                 nullable: false,
                 wire: None,
                 deprecated: None,
+                doc: None,
             },
             Field {
                 name: Symbol::builtin("body"),
@@ -193,6 +194,7 @@ fn discriminator_fn(
                 nullable: false,
                 wire: None,
                 deprecated: None,
+                doc: None,
             },
         ],
         ret: Some(TypeExpr::Ref(module_symbol(&n.root, module))),

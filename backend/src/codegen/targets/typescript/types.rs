@@ -36,13 +36,16 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
         |m| field_of(m, config),
         // An open enum is a literal-union type built from its wire values: string
         // tags for a string-backed enum, integer literals for an int-backed one.
-        |backing, values, name, dep| vec![conventions::open_enum(backing, values, name, dep)],
-        |discriminator, members, name, dep| {
+        |backing, values, name, dep, doc| {
+            vec![conventions::open_enum(backing, values, name, dep, doc)]
+        },
+        |discriminator, members, name, dep, doc| {
             vec![Decl::Union(UnionDecl {
                 name: Symbol::builtin(name.to_string()),
                 discriminator: discriminator.to_string(),
                 variants: members.iter().map(variant_of).collect(),
                 deprecated: dep.map(str::to_string),
+                doc: doc.map(str::to_string),
             })]
         },
     )
@@ -57,6 +60,7 @@ fn variant_of(member: &Member) -> Variant {
         fields: Vec::new(),
         payload: Some(type_expr_of(&member.target)),
         wire: wire_of(&member.traits),
+        doc: conventions::doc_of(&member.traits),
     }
 }
 
@@ -67,6 +71,7 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
         nullable: !member.required,
         wire: wire_of(&member.traits),
         deprecated: conventions::deprecated_of(&member.traits),
+        doc: conventions::doc_of(&member.traits),
     }
 }
 

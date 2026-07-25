@@ -67,7 +67,7 @@ let sum_variants st id =
            (fun (m : Ir.member) -> (m.name, Some (of_tref m.target)))
            members)
   | Some { kind = Ir.Enum { values; _ }; _ } ->
-      Some (List.map (fun (name, _) -> (name, None)) values)
+      Some (List.map (fun (v : Ir.enum_value) -> (v.ev_name, None)) values)
   | _ -> None
 
 (* ── Type inference ────────────────────────────────────────────────────── *)

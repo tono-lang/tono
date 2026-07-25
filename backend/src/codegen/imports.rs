@@ -198,6 +198,7 @@ mod tests {
             nullable: false,
             wire: None,
             deprecated: None,
+            doc: None,
         }
     }
 
@@ -213,6 +214,7 @@ mod tests {
             ret,
             err,
             is_async: false,
+            doc: None,
         }
     }
 
@@ -228,6 +230,7 @@ mod tests {
                 params: vec![],
                 fields,
                 deprecated: None,
+                doc: None,
             })],
         }
     }
@@ -392,8 +395,10 @@ mod tests {
                 Decl::Enum(EnumDecl {
                     name: Symbol::builtin("Status"),
                     members: vec![Symbol::builtin("Active")],
+                    member_docs: vec![None],
                     backing: crate::codegen::tree::EnumRepr::String,
                     deprecated: None,
+                    doc: None,
                 }),
                 Decl::Method(method(
                     "create",
@@ -482,8 +487,10 @@ mod tests {
                         "CardData", "cards", "CardData",
                     ))),
                     wire: None,
+                    doc: None,
                 }],
                 deprecated: None,
+                doc: None,
             })],
         };
         // The variant field's type and the variant payload's type.
@@ -528,6 +535,7 @@ mod proptests {
                     nullable: false,
                     wire: None,
                     deprecated: None,
+                    doc: None,
                 })
                 .collect();
             let file = File {
@@ -537,6 +545,7 @@ mod proptests {
                     params: vec![],
                     fields,
                     deprecated: None,
+                    doc: None,
                 })],
             };
 

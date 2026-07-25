@@ -8,6 +8,7 @@ export type LocalDate = string & { readonly __brand: "LocalDate" };
 
 export type Duration = string & { readonly __brand: "Duration" };
 
+/** A small payments API that exercises the hard wire cases end to end. */
 export interface Charge {
   id: string;
   amount: bigint;
@@ -51,15 +52,18 @@ export function validateCharge(value: Charge): Violation[] {
 
 export type HTTPCode = 200 | 404 | 500 | (number & {});
 
+/** A page of results with an optional continuation cursor. */
 export interface Page<T> {
   items: T[];
   nextCursor?: string | null;
 }
 
+/** The card issuer declined the charge. */
 export interface CardDeclined {
   message: string;
 }
 
+/** No charge exists for the requested id. */
 export interface NotFound {
   message: string;
 }
@@ -145,5 +149,6 @@ export class NotFoundError extends APIError {
 }
 
 export interface Client {
+  /** Creates a charge. */
   createCharge(input: Charge): Promise<Charge>;
 }

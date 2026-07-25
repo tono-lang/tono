@@ -315,6 +315,7 @@ pub fn validator_function(name: String, ty: String, violation: String, body: Str
             nullable: false,
             wire: None,
             deprecated: None,
+            doc: None,
         }],
         ret: Some(TypeExpr::list(TypeExpr::Ref(Symbol::builtin(violation)))),
         body: FnBody::Raw {
