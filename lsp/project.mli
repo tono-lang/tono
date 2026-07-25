@@ -46,11 +46,12 @@ val project_occurrences :
 
 type rename_outcome =
   | Renamed of (string * TextEdit.t list) list
-  | Collision of string
+  | Refused of string
   | NotASymbol
 
-(* Workspace rename: per-document edit lists, or a refusal when the new name
-   collides with an existing declaration in the target module. *)
+(* Workspace rename: per-document edit lists, or a refusal when the new name is not a
+   valid identifier or collides with an existing declaration in the target
+   module. *)
 val project_rename :
   project -> module_:string -> Position.t -> new_name:string -> rename_outcome
 

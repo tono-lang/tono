@@ -63,19 +63,33 @@ let detect_cycles (index : index) : (string * Diagnostic.t) list =
   let done_ = Hashtbl.create 16 in
   let reported = Hashtbl.create 16 in
   let diags = ref [] in
-  let report owner members span =
+  let report _owner members span =
     (* [members] is the cycle in reverse discovery order; dedupe by its set so
-       one cycle is reported once regardless of the entry point. *)
+       one cycle is reported once regardless of the entry point. Every member
+       gets the diagnostic, each on its own import edge into the next module
+       of the ring: a cycle is every participant's error, and a per-file
+       consumer (the LSP) must be able to surface it in whichever file is
+       open. *)
     let key = String.concat "\x00" (List.sort compare members) in
     if not (Hashtbl.mem reported key) then (
       Hashtbl.add reported key ();
       let ring = List.rev members in
       let path = String.concat " -> " (ring @ [ List.hd ring ]) in
-      diags :=
-        ( owner,
-          err Error_codes.module_cycle span
-            "module import cycle (imports must form a DAG): %s" path )
-        :: !diags)
+      let n = List.length ring in
+      List.iteri
+        (fun i m ->
+          let next = List.nth ring ((i + 1) mod n) in
+          let edge_span =
+            match List.assoc_opt next (edges index m) with
+            | Some s -> s
+            | None -> span
+          in
+          diags :=
+            ( m,
+              err Error_codes.module_cycle edge_span
+                "module import cycle (imports must form a DAG): %s" path )
+            :: !diags)
+        ring)
   in
   let rec dfs stack m =
     List.iter

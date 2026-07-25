@@ -503,6 +503,83 @@ let unsaved_buffer_matches_the_compiler () =
             (member "title" action = Some (`String "import pay.common"))
       | _ -> Alcotest.fail "expected the add-import quick fix")
 
+(* A rename target must be a name the parser accepts: keywords, primitive
+   names, malformed identifiers, and the empty string are refused before any
+   edit is built (applying them would corrupt the file). *)
+let rename_validates_the_new_name () =
+  let _base, _common, charges = make_project () in
+  let line, col = ref_position charges in
+  let rename id new_name =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","id":%d,"method":"textDocument/rename","params":{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d},"newName":%s}}|}
+      id
+      (json_string (uri_of charges))
+      line col (json_string new_name)
+  in
+  let bad = [ "struct"; "i64"; "Bad-Name"; "has space"; "" ] in
+  let frames, _ =
+    session
+      ([ init_body; didopen_body charges ]
+      @ List.mapi (fun i n -> rename (i + 2) n) bad
+      @ [ rename 7 "funds"; exit_body ])
+  in
+  List.iteri
+    (fun i n ->
+      match response_for (i + 2) frames with
+      | Some r ->
+          Alcotest.(check bool)
+            (Printf.sprintf "rename to %S is refused" n)
+            true
+            (member "error" r <> None)
+      | None -> Alcotest.fail "expected a response to the invalid rename")
+    bad;
+  match response_for 7 frames with
+  | Some r ->
+      Alcotest.(check bool)
+        "a valid free name still renames" true
+        (Option.bind (member "result" r) (member "changes") <> None)
+  | None -> Alcotest.fail "expected a response to the valid rename"
+
+(* An import cycle is every participant's error: the open file must show
+   TC0025 on its own import line, and breaking the cycle must clear it. *)
+let import_cycle_is_diagnosed_and_clears () =
+  let base = Filename.temp_file "tono-lsp-cycle" "" in
+  Sys.remove base;
+  Unix.mkdir base 0o755;
+  let src = Filename.concat base "src" in
+  Unix.mkdir src 0o755;
+  let a = Filename.concat src "a" in
+  Unix.mkdir a 0o755;
+  let one = Filename.concat a "one.tono" in
+  write_file one "import a.two\n\npub struct one_t { peer: two.two_t }\n";
+  let two = Filename.concat a "two.tono" in
+  write_file two "import a.one\n\npub struct two_t { peer: one.one_t }\n";
+  let changed =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":%s,"version":2},"contentChanges":[{"text":%s}]}}|}
+      (json_string (uri_of one))
+      (json_string "pub struct one_t { x: i64 }\n")
+  in
+  let frames, status =
+    session [ init_body; didopen_body one; changed; exit_body ]
+  in
+  Alcotest.(check bool) "server exits cleanly" true (exited_cleanly status);
+  let published =
+    List.filter_map
+      (fun f ->
+        if member "method" f = Some (`String "textDocument/publishDiagnostics")
+        then Option.bind (member "params" f) (member "diagnostics")
+        else None)
+      frames
+  in
+  match published with
+  | [ `List first; `List second ] ->
+      Alcotest.(check bool)
+        "the cycle is diagnosed in the open file" true
+        (List.exists (fun d -> member "code" d = Some (`String "TC0025")) first);
+      Alcotest.(check int) "breaking the cycle clears it" 0 (List.length second)
+  | _ -> Alcotest.fail "expected two publishDiagnostics"
+
 let () =
   Alcotest.run "server"
     [
@@ -530,5 +607,9 @@ let () =
           Alcotest.test_case "signature help" `Quick signature_help_in_trait;
           Alcotest.test_case "unsaved buffer strictness" `Quick
             unsaved_buffer_matches_the_compiler;
+          Alcotest.test_case "rename name validation" `Quick
+            rename_validates_the_new_name;
+          Alcotest.test_case "import cycle" `Quick
+            import_cycle_is_diagnosed_and_clears;
         ] );
     ]

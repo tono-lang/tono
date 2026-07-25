@@ -72,6 +72,16 @@ let offset_of_position (text : string) (pos : Position.t) : int =
 
 let parse (src : string) : Ast.file = fst (Tono_frontend.Parser.parse src)
 
+(* Whether [s] can stand where a declaration name stands: exactly one
+   identifier token and a clean lex. The lexer is the rule, so keywords lex as
+   keyword tokens and primitives as [Prim] and both are rejected without a
+   second reserved-word list. *)
+let valid_identifier (s : string) : bool =
+  match Lexer.tokenize s with
+  | [ { Token.kind = Token.Ident id; _ }; { Token.kind = Token.Eof; _ } ], [] ->
+      String.equal id s
+  | _ -> false
+
 let lsp_of_fdiags ~(text : string) (diags : FDiag.t list) : Diagnostic.t list =
   List.map
     (fun (d : FDiag.t) ->

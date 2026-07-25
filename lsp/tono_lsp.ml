@@ -298,12 +298,19 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
                            (fun (id, edits) -> (Lsp.Uri.of_string id, edits))
                            changes)
                       ()
-                | Project.Collision message ->
+                | Project.Refused message ->
                     Jsonrpc.Response.Error.raise
                       (Jsonrpc.Response.Error.make ~code:InvalidParams ~message
                          ())
                 | Project.NotASymbol -> WorkspaceEdit.create ())
             | None -> (
+                if not (Analysis.valid_identifier p.newName) then
+                  Jsonrpc.Response.Error.raise
+                    (Jsonrpc.Response.Error.make ~code:InvalidParams
+                       ~message:
+                         (Printf.sprintf "'%s' is not a valid declaration name"
+                            p.newName)
+                       ());
                 match doc_text p.textDocument.uri with
                 | Some text ->
                     Analysis.rename_at ~uri:p.textDocument.uri ~text

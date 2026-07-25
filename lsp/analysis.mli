@@ -15,6 +15,10 @@ val offset_of_position : string -> Position.t -> int
 (* Parse source into the surface AST (parse-level only; diagnostics dropped). *)
 val parse : string -> Tono_frontend.Ast.file
 
+(* Whether the string is a single valid identifier per the frontend lexer
+   (keywords and primitive names are not). *)
+val valid_identifier : string -> bool
+
 (* Full diagnostics (parse + lower + typecheck) for a document, as LSP values. *)
 val lsp_diagnostics : string -> Diagnostic.t list
 

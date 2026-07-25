@@ -234,7 +234,7 @@ let project_occurrences (p : project) ~(module_ : string) ~(name : string)
 
 type rename_outcome =
   | Renamed of (string * TextEdit.t list) list
-  | Collision of string
+  | Refused of string
   | NotASymbol
 
 (* Workspace rename: every file referencing the symbol is edited; a rename
@@ -242,41 +242,50 @@ type rename_outcome =
    refused with the reason. *)
 let project_rename (p : project) ~(module_ : string) (pos : Position.t)
     ~(new_name : string) : rename_outcome =
-  match project_symbol_at p ~module_ pos with
-  | None -> NotASymbol
-  | Some (target_module, name) -> (
-      let collides =
-        match project_find p target_module with
-        | Some e ->
-            List.exists
-              (fun (d : Ast.decl) -> d.dname = new_name)
-              e.pe_file.Ast.decls
-        | None -> false
-      in
-      if collides then
-        Collision
-          (Printf.sprintf "a declaration named '%s' already exists in module %s"
-             new_name target_module)
-      else
-        match
-          project_occurrences p ~module_:target_module ~name ~include_decl:true
-        with
-        | [] -> NotASymbol
-        | occ ->
-            let grouped =
-              List.fold_left
-                (fun acc (id, text, sp) ->
-                  let edit =
-                    TextEdit.create ~newText:new_name
-                      ~range:(range_of_span ~text sp)
-                  in
-                  match List.assoc_opt id acc with
-                  | Some edits ->
-                      (id, edit :: edits) :: List.remove_assoc id acc
-                  | None -> (id, [ edit ]) :: acc)
-                [] occ
-            in
-            Renamed grouped)
+  if not (Analysis.valid_identifier new_name) then
+    Refused
+      (Printf.sprintf
+         "'%s' is not a valid declaration name (one identifier; keywords and \
+          primitive names are reserved)"
+         new_name)
+  else
+    match project_symbol_at p ~module_ pos with
+    | None -> NotASymbol
+    | Some (target_module, name) -> (
+        let collides =
+          match project_find p target_module with
+          | Some e ->
+              List.exists
+                (fun (d : Ast.decl) -> d.dname = new_name)
+                e.pe_file.Ast.decls
+          | None -> false
+        in
+        if collides then
+          Refused
+            (Printf.sprintf
+               "a declaration named '%s' already exists in module %s" new_name
+               target_module)
+        else
+          match
+            project_occurrences p ~module_:target_module ~name
+              ~include_decl:true
+          with
+          | [] -> NotASymbol
+          | occ ->
+              let grouped =
+                List.fold_left
+                  (fun acc (id, text, sp) ->
+                    let edit =
+                      TextEdit.create ~newText:new_name
+                        ~range:(range_of_span ~text sp)
+                    in
+                    match List.assoc_opt id acc with
+                    | Some edits ->
+                        (id, edit :: edits) :: List.remove_assoc id acc
+                    | None -> (id, [ edit ]) :: acc)
+                  [] occ
+              in
+              Renamed grouped)
 
 (* Project-wide symbol search: case-insensitive substring over every declared
    shape and operation. *)
