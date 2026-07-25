@@ -216,7 +216,9 @@ let hover_primitive () =
     (contains v "string on the wire")
 
 let hover_nullable_marker () =
-  let v = hover_value "struct s { n: string? }" (pos 0 20) in
+  (* At the exact boundary the left token wins (end-inclusive resolution), so
+     the marker is addressed one column in. *)
+  let v = hover_value "struct s { n: string? }" (pos 0 21) in
   Alcotest.(check bool)
     "explains two-state nullability" true
     (contains v "present or absent")
@@ -252,6 +254,21 @@ let completion_op_input_is_a_type_position () =
   let labels = completion_labels "op f(" (pos 0 5) in
   Alcotest.(check bool) "primitives in op input" true (List.mem "i64" labels)
 
+(* End-inclusive resolution: hover at a reference's end column answers the
+   same as one column earlier. *)
+let hover_at_token_end () =
+  (* `edge` in [two_shapes] spans columns 19-23 on line 0. *)
+  Alcotest.(check string)
+    "end column resolves the token to its left"
+    (hover_value two_shapes (pos 0 22))
+    (hover_value two_shapes (pos 0 23))
+
+let formatting_identity_is_no_edit () =
+  let canonical = "struct point {\n  x: i64\n}\n" in
+  Alcotest.(check bool)
+    "already-canonical input formats to no edits" true
+    (Analysis.formatting ~text:canonical = Some [])
+
 let () =
   Alcotest.run "analysis"
     [
@@ -284,6 +301,9 @@ let () =
             utf16_offset_of_position;
           Alcotest.test_case "hover range" `Quick utf16_hover_range;
           Alcotest.test_case "rename range" `Quick utf16_rename_range;
+          Alcotest.test_case "token end" `Quick hover_at_token_end;
+          Alcotest.test_case "formatting identity" `Quick
+            formatting_identity_is_no_edit;
         ] );
       ( "hover content",
         [

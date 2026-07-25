@@ -236,6 +236,12 @@ let tokenize (src : string) : Token.t list * Diagnostic.t list =
       diags = [];
     }
   in
+  (* Windows tools and some editors prepend a UTF-8 BOM; it carries no
+     meaning, so skip it like leading whitespace (columns count bytes, so the
+     three bytes advance the column and every later span stays truthful). *)
+  if st.len >= 3 && String.sub src 0 3 = "\xEF\xBB\xBF" then (
+    st.off <- 3;
+    st.col <- 4);
   let finished = ref false in
   while not !finished do
     skip_trivia st;

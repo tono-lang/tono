@@ -61,6 +61,7 @@ let response_for (id : int) (frames : Yojson.Safe.t list) : Yojson.Safe.t option
   List.find_opt (fun f -> member "id" f = Some (`Int id)) frames
 
 let exited_cleanly = function Unix.WEXITED 0 -> true | _ -> false
+let shutdown_body = {|{"jsonrpc":"2.0","id":99,"method":"shutdown"}|}
 
 (* A `params: null` request (forbidden by JSON-RPC) and a request whose body
    has the wrong shape must both be answered as errors, with the server alive
@@ -103,6 +104,7 @@ let did_close_clears_diagnostics () =
         {|{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}|};
         {|{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.tono","languageId":"tono","version":1,"text":"struct box { it: missing }"}}}|};
         {|{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file:///t.tono"}}}|};
+        shutdown_body;
         {|{"jsonrpc":"2.0","method":"exit"}|};
       ]
   in
@@ -131,6 +133,7 @@ let hover_range_counts_utf16_units () =
         {|{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}|};
         {|{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.tono","languageId":"tono","version":1,"text":"@doc(\"ação\") struct point { at: edge }\nstruct edge { x: i64 }"}}}|};
         {|{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///t.tono"},"position":{"line":0,"character":20}}}|};
+        shutdown_body;
         {|{"jsonrpc":"2.0","method":"exit"}|};
       ]
   in
@@ -215,7 +218,9 @@ let ref_position charges =
    diagnostics, because imports resolve with project context. *)
 let project_open_is_clean () =
   let _base, _common, charges = make_project () in
-  let frames, status = session [ init_body; didopen_body charges; exit_body ] in
+  let frames, status =
+    session [ init_body; didopen_body charges; shutdown_body; exit_body ]
+  in
   Alcotest.(check bool) "server exits cleanly" true (exited_cleanly status);
   let published =
     List.filter_map
@@ -240,7 +245,7 @@ let cross_file_definition () =
       line col
   in
   let frames, _ =
-    session [ init_body; didopen_body charges; body; exit_body ]
+    session [ init_body; didopen_body charges; body; shutdown_body; exit_body ]
   in
   match response_for 2 frames with
   | None -> Alcotest.fail "expected a definition response"
@@ -306,7 +311,8 @@ let add_import_code_action () =
       (json_string (uri_of broken))
   in
   let frames, _ =
-    session [ init_body; didopen_body broken; action_req; exit_body ]
+    session
+      [ init_body; didopen_body broken; action_req; shutdown_body; exit_body ]
   in
   match response_for 2 frames with
   | None -> Alcotest.fail "expected a code action response"
@@ -383,6 +389,7 @@ let watched_file_change_republishes () =
   (match wait_publish () with
   | Some (`List (_ :: _)) -> ()
   | _ -> Alcotest.fail "the dependent re-publishes a real diagnostic");
+  send shutdown_body;
   send exit_body;
   (try
      while true do
@@ -399,7 +406,7 @@ let workspace_symbol_search () =
     {|{"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"money"}}|}
   in
   let frames, _ =
-    session [ init_body; didopen_body charges; body; exit_body ]
+    session [ init_body; didopen_body charges; body; shutdown_body; exit_body ]
   in
   match response_for 2 frames with
   | None -> Alcotest.fail "expected a workspace/symbol response"
@@ -433,7 +440,9 @@ let signature_help_in_trait () =
   let body =
     {|{"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///sig.tono"},"position":{"line":1,"character":9}}}|}
   in
-  let frames, _ = session [ init_body; opened; body; exit_body ] in
+  let frames, _ =
+    session [ init_body; opened; body; shutdown_body; exit_body ]
+  in
   match response_for 2 frames with
   | None -> Alcotest.fail "expected a signature help response"
   | Some r ->
@@ -475,7 +484,7 @@ let unsaved_buffer_matches_the_compiler () =
       (json_string fixed)
   in
   let frames, status =
-    session [ init_body; opened; action_req; changed; exit_body ]
+    session [ init_body; opened; action_req; changed; shutdown_body; exit_body ]
   in
   Alcotest.(check bool) "server exits cleanly" true (exited_cleanly status);
   let published =
@@ -521,7 +530,7 @@ let rename_validates_the_new_name () =
     session
       ([ init_body; didopen_body charges ]
       @ List.mapi (fun i n -> rename (i + 2) n) bad
-      @ [ rename 7 "funds"; exit_body ])
+      @ [ rename 7 "funds"; shutdown_body; exit_body ])
   in
   List.iteri
     (fun i n ->
@@ -561,7 +570,7 @@ let import_cycle_is_diagnosed_and_clears () =
       (json_string "pub struct one_t { x: i64 }\n")
   in
   let frames, status =
-    session [ init_body; didopen_body one; changed; exit_body ]
+    session [ init_body; didopen_body one; changed; shutdown_body; exit_body ]
   in
   Alcotest.(check bool) "server exits cleanly" true (exited_cleanly status);
   let published =
@@ -579,6 +588,49 @@ let import_cycle_is_diagnosed_and_clears () =
         (List.exists (fun d -> member "code" d = Some (`String "TC0025")) first);
       Alcotest.(check int) "breaking the cycle clears it" 0 (List.length second)
   | _ -> Alcotest.fail "expected two publishDiagnostics"
+
+(* The lifecycle gate (spec #initialize/#shutdown/#exit): requests before
+   initialize answer ServerNotInitialized, initialize is once-only, requests
+   after shutdown are invalid, and exit without shutdown reports code 1. *)
+let lifecycle_gates_dispatch () =
+  let hover id =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","id":%d,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///t.tono"},"position":{"line":0,"character":0}}}|}
+      id
+  in
+  let init id =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","id":%d,"method":"initialize","params":{"capabilities":{}}}|}
+      id
+  in
+  let frames, status =
+    session [ hover 2; init 3; init 4; shutdown_body; hover 5; exit_body ]
+  in
+  Alcotest.(check bool) "clean exit after shutdown" true (exited_cleanly status);
+  let error_code id =
+    Option.bind (response_for id frames) (fun r ->
+        Option.bind (member "error" r) (member "code"))
+  in
+  Alcotest.(check bool)
+    "pre-initialize request is ServerNotInitialized" true
+    (error_code 2 = Some (`Int (-32002)));
+  Alcotest.(check bool)
+    "initialize succeeds once" true
+    (Option.bind (response_for 3 frames) (member "result") <> None);
+  Alcotest.(check bool)
+    "second initialize is an error" true
+    (error_code 4 <> None);
+  Alcotest.(check bool)
+    "request after shutdown is an error" true
+    (error_code 5 = Some (`Int (-32600)))
+
+let exit_without_shutdown_is_abnormal () =
+  let _frames, status =
+    session [ init_body; {|{"jsonrpc":"2.0","method":"exit"}|} ]
+  in
+  match status with
+  | Unix.WEXITED 1 -> ()
+  | _ -> Alcotest.fail "exit without shutdown must report code 1"
 
 let () =
   Alcotest.run "server"
@@ -611,5 +663,8 @@ let () =
             rename_validates_the_new_name;
           Alcotest.test_case "import cycle" `Quick
             import_cycle_is_diagnosed_and_clears;
+          Alcotest.test_case "lifecycle gate" `Quick lifecycle_gates_dispatch;
+          Alcotest.test_case "abnormal exit code" `Quick
+            exit_without_shutdown_is_abnormal;
         ] );
     ]

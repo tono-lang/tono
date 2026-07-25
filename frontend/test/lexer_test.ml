@@ -217,6 +217,16 @@ let ext_and_arrow () =
   Alcotest.(check (list string))
     "negative still a number" [ "int:-5"; "eof" ] (kinds "-5")
 
+(* A UTF-8 BOM (Windows tools, some editors) is meaningless and skipped like
+   whitespace; spans keep counting the real bytes. *)
+let bom_is_skipped () =
+  let src = "\xEF\xBB\xBFstruct a { x: i64 }" in
+  Alcotest.(check int) "no diagnostics" 0 (List.length (diags_of src));
+  match toks_of src with
+  | t :: _ ->
+      Alcotest.(check string) "first token" "struct" (show_kind t.Token.kind)
+  | [] -> Alcotest.fail "expected tokens"
+
 let () =
   Alcotest.run "lexer"
     [
@@ -252,5 +262,6 @@ let () =
           Alcotest.test_case "unterminated triple" `Quick unterminated_triple;
           Alcotest.test_case "backslash at eof" `Quick backslash_at_eof;
           Alcotest.test_case "unexpected char" `Quick unexpected_char;
+          Alcotest.test_case "utf-8 bom" `Quick bom_is_skipped;
         ] );
     ]

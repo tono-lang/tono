@@ -89,6 +89,15 @@ let initialize_result () : InitializeResult.t =
 let doc_text uri =
   Option.map Text_document.text (Hashtbl.find_opt store (key uri))
 
+(* The lifecycle phase gates dispatch: before initialize every request is
+   answered ServerNotInitialized and every notification except exit is
+   dropped; after shutdown every request is an error and exit is the only
+   notification that matters. Exit without a prior shutdown is the abnormal
+   path and reports exit code 1. *)
+type phase = Uninitialized | Running | ShutDown
+
+let phase = ref Uninitialized
+
 (* Whether the client renders markdown hover, learned at initialize; picks the
    hover content flavor for the whole session. *)
 let client_markdown = ref false
@@ -203,179 +212,205 @@ let register_watcher () : unit =
    compiler checks each arm returns the right shape. Unsupported methods raise a
    MethodNotFound error the caller turns into a JSON-RPC error response. *)
 let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
-  match CR.of_jsonrpc req with
-  | Error message ->
+  match !phase with
+  | Uninitialized when req.method_ <> "initialize" ->
       Jsonrpc.Response.error req.id
-        (Jsonrpc.Response.Error.make ~code:InvalidRequest ~message ())
-  | Ok (CR.E r) -> (
-      let handle : type resp. resp CR.t -> resp = function
-        | CR.Initialize p ->
-            remember_markdown p.capabilities;
-            remember_watch_capability p.capabilities;
-            initialize_result ()
-        | CR.Shutdown -> ()
-        | CR.TextDocumentHover p -> (
-            match doc_text p.textDocument.uri with
-            | Some text ->
-                Analysis.hover_at ~markdown:!client_markdown ~text
-                  ~file:(Analysis.parse text) p.position
-            | None -> None)
-        | CR.TextDocumentDefinition p -> (
-            match project_ctx p.textDocument.uri with
-            | Some (project, module_) -> (
-                match Project.project_symbol_at project ~module_ p.position with
-                | Some (m, name) -> (
-                    match
-                      Project.project_decl_location project ~module_:m ~name
-                    with
-                    | Some (id, range) ->
-                        Some
-                          (`Location
-                             [
-                               Location.create ~uri:(Lsp.Uri.of_string id)
-                                 ~range;
-                             ])
-                    | None -> None)
+        (Jsonrpc.Response.Error.make ~code:ServerNotInitialized
+           ~message:"server not initialized" ())
+  | ShutDown ->
+      Jsonrpc.Response.error req.id
+        (Jsonrpc.Response.Error.make ~code:InvalidRequest
+           ~message:"server is shut down" ())
+  | _ -> (
+      match CR.of_jsonrpc req with
+      | Error message ->
+          Jsonrpc.Response.error req.id
+            (Jsonrpc.Response.Error.make ~code:InvalidRequest ~message ())
+      | Ok (CR.E r) -> (
+          let handle : type resp. resp CR.t -> resp = function
+            | CR.Initialize p ->
+                if !phase <> Uninitialized then
+                  Jsonrpc.Response.Error.raise
+                    (Jsonrpc.Response.Error.make ~code:InvalidRequest
+                       ~message:"initialize may only be sent once" ());
+                remember_markdown p.capabilities;
+                remember_watch_capability p.capabilities;
+                phase := Running;
+                initialize_result ()
+            | CR.Shutdown ->
+                phase := ShutDown;
+                ()
+            | CR.TextDocumentHover p -> (
+                match doc_text p.textDocument.uri with
+                | Some text ->
+                    Analysis.hover_at ~markdown:!client_markdown ~text
+                      ~file:(Analysis.parse text) p.position
                 | None -> None)
-            | None -> (
+            | CR.TextDocumentDefinition p -> (
+                match project_ctx p.textDocument.uri with
+                | Some (project, module_) -> (
+                    match
+                      Project.project_symbol_at project ~module_ p.position
+                    with
+                    | Some (m, name) -> (
+                        match
+                          Project.project_decl_location project ~module_:m ~name
+                        with
+                        | Some (id, range) ->
+                            Some
+                              (`Location
+                                 [
+                                   Location.create ~uri:(Lsp.Uri.of_string id)
+                                     ~range;
+                                 ])
+                        | None -> None)
+                    | None -> None)
+                | None -> (
+                    match doc_text p.textDocument.uri with
+                    | Some text -> (
+                        match
+                          Analysis.definition_at ~uri:p.textDocument.uri ~text
+                            ~file:(Analysis.parse text) p.position
+                        with
+                        | Some loc -> Some (`Location [ loc ])
+                        | None -> None)
+                    | None -> None))
+            | CR.TextDocumentCompletion p -> (
+                match doc_text p.textDocument.uri with
+                | Some text ->
+                    Some
+                      (`List
+                         (Analysis.completions ~text ~file:(Analysis.parse text)
+                            p.position))
+                | None -> Some (`List []))
+            | CR.TextDocumentReferences p -> (
+                match project_ctx p.textDocument.uri with
+                | Some (project, module_) -> (
+                    match
+                      Project.project_symbol_at project ~module_ p.position
+                    with
+                    | Some (m, name) ->
+                        Some
+                          (List.map
+                             (fun (id, text, sp) ->
+                               Location.create ~uri:(Lsp.Uri.of_string id)
+                                 ~range:(Analysis.range_in ~text sp))
+                             (Project.project_occurrences project ~module_:m
+                                ~name ~include_decl:p.context.includeDeclaration))
+                    | None -> Some [])
+                | None -> (
+                    match doc_text p.textDocument.uri with
+                    | Some text ->
+                        Some
+                          (Analysis.references_at ~uri:p.textDocument.uri ~text
+                             ~file:(Analysis.parse text)
+                             ~include_decl:p.context.includeDeclaration
+                             p.position)
+                    | None -> None))
+            | CR.DocumentSymbol p -> (
+                match doc_text p.textDocument.uri with
+                | Some text ->
+                    Some
+                      (`DocumentSymbol
+                         (Analysis.document_symbols ~text
+                            ~file:(Analysis.parse text)))
+                | None -> None)
+            | CR.TextDocumentRename p -> (
+                match project_ctx p.textDocument.uri with
+                | Some (project, module_) -> (
+                    match
+                      Project.project_rename project ~module_ p.position
+                        ~new_name:p.newName
+                    with
+                    | Project.Renamed changes ->
+                        WorkspaceEdit.create
+                          ~changes:
+                            (List.map
+                               (fun (id, edits) ->
+                                 (Lsp.Uri.of_string id, edits))
+                               changes)
+                          ()
+                    | Project.Refused message ->
+                        Jsonrpc.Response.Error.raise
+                          (Jsonrpc.Response.Error.make ~code:InvalidParams
+                             ~message ())
+                    | Project.NotASymbol -> WorkspaceEdit.create ())
+                | None -> (
+                    if not (Analysis.valid_identifier p.newName) then
+                      Jsonrpc.Response.Error.raise
+                        (Jsonrpc.Response.Error.make ~code:InvalidParams
+                           ~message:
+                             (Printf.sprintf
+                                "'%s' is not a valid declaration name" p.newName)
+                           ());
+                    match doc_text p.textDocument.uri with
+                    | Some text ->
+                        Analysis.rename_at ~uri:p.textDocument.uri ~text
+                          ~file:(Analysis.parse text) ~new_name:p.newName
+                          p.position
+                    | None -> WorkspaceEdit.create ()))
+            | CR.TextDocumentFormatting p -> (
+                match doc_text p.textDocument.uri with
+                | Some text -> Analysis.formatting ~text
+                | None -> None)
+            | CR.CodeAction p -> (
+                match project_ctx p.textDocument.uri with
+                | None -> None
+                | Some (project, module_) ->
+                    Some
+                      (List.map
+                         (fun (title, edits) ->
+                           let changes =
+                             List.map
+                               (fun (id, e) -> (Lsp.Uri.of_string id, [ e ]))
+                               edits
+                           in
+                           `CodeAction
+                             (CodeAction.create ~title
+                                ~kind:CodeActionKind.QuickFix
+                                ~edit:(WorkspaceEdit.create ~changes ())
+                                ()))
+                         (Project.project_code_actions project ~module_
+                            ~range:p.range)))
+            | CR.WorkspaceSymbol p ->
+                let roots =
+                  Hashtbl.fold
+                    (fun _ (root, _) acc ->
+                      if List.mem root acc then acc else root :: acc)
+                    doc_roots []
+                in
+                Some
+                  (List.concat_map
+                     (fun root ->
+                       let project =
+                         Workspace.project_of ~open_docs:(open_docs ()) root
+                       in
+                       List.map
+                         (fun (name, kind, id, range) ->
+                           SymbolInformation.create ~name ~kind
+                             ~location:
+                               (Location.create ~uri:(Lsp.Uri.of_string id)
+                                  ~range)
+                             ())
+                         (Project.project_symbols project ~query:p.query))
+                     roots)
+            | CR.SignatureHelp p -> (
                 match doc_text p.textDocument.uri with
                 | Some text -> (
                     match
-                      Analysis.definition_at ~uri:p.textDocument.uri ~text
-                        ~file:(Analysis.parse text) p.position
+                      Project.signature_help ~text ~file:(Analysis.parse text)
+                        p.position
                     with
-                    | Some loc -> Some (`Location [ loc ])
-                    | None -> None)
-                | None -> None))
-        | CR.TextDocumentCompletion p -> (
-            match doc_text p.textDocument.uri with
-            | Some text ->
-                Some
-                  (`List
-                     (Analysis.completions ~text ~file:(Analysis.parse text)
-                        p.position))
-            | None -> Some (`List []))
-        | CR.TextDocumentReferences p -> (
-            match project_ctx p.textDocument.uri with
-            | Some (project, module_) -> (
-                match Project.project_symbol_at project ~module_ p.position with
-                | Some (m, name) ->
-                    Some
-                      (List.map
-                         (fun (id, text, sp) ->
-                           Location.create ~uri:(Lsp.Uri.of_string id)
-                             ~range:(Analysis.range_in ~text sp))
-                         (Project.project_occurrences project ~module_:m ~name
-                            ~include_decl:p.context.includeDeclaration))
-                | None -> Some [])
-            | None -> (
-                match doc_text p.textDocument.uri with
-                | Some text ->
-                    Some
-                      (Analysis.references_at ~uri:p.textDocument.uri ~text
-                         ~file:(Analysis.parse text)
-                         ~include_decl:p.context.includeDeclaration p.position)
-                | None -> None))
-        | CR.DocumentSymbol p -> (
-            match doc_text p.textDocument.uri with
-            | Some text ->
-                Some
-                  (`DocumentSymbol
-                     (Analysis.document_symbols ~text
-                        ~file:(Analysis.parse text)))
-            | None -> None)
-        | CR.TextDocumentRename p -> (
-            match project_ctx p.textDocument.uri with
-            | Some (project, module_) -> (
-                match
-                  Project.project_rename project ~module_ p.position
-                    ~new_name:p.newName
-                with
-                | Project.Renamed changes ->
-                    WorkspaceEdit.create
-                      ~changes:
-                        (List.map
-                           (fun (id, edits) -> (Lsp.Uri.of_string id, edits))
-                           changes)
-                      ()
-                | Project.Refused message ->
-                    Jsonrpc.Response.Error.raise
-                      (Jsonrpc.Response.Error.make ~code:InvalidParams ~message
-                         ())
-                | Project.NotASymbol -> WorkspaceEdit.create ())
-            | None -> (
-                if not (Analysis.valid_identifier p.newName) then
-                  Jsonrpc.Response.Error.raise
-                    (Jsonrpc.Response.Error.make ~code:InvalidParams
-                       ~message:
-                         (Printf.sprintf "'%s' is not a valid declaration name"
-                            p.newName)
-                       ());
-                match doc_text p.textDocument.uri with
-                | Some text ->
-                    Analysis.rename_at ~uri:p.textDocument.uri ~text
-                      ~file:(Analysis.parse text) ~new_name:p.newName p.position
-                | None -> WorkspaceEdit.create ()))
-        | CR.TextDocumentFormatting p -> (
-            match doc_text p.textDocument.uri with
-            | Some text -> Analysis.formatting ~text
-            | None -> None)
-        | CR.CodeAction p -> (
-            match project_ctx p.textDocument.uri with
-            | None -> None
-            | Some (project, module_) ->
-                Some
-                  (List.map
-                     (fun (title, edits) ->
-                       let changes =
-                         List.map
-                           (fun (id, e) -> (Lsp.Uri.of_string id, [ e ]))
-                           edits
-                       in
-                       `CodeAction
-                         (CodeAction.create ~title ~kind:CodeActionKind.QuickFix
-                            ~edit:(WorkspaceEdit.create ~changes ())
-                            ()))
-                     (Project.project_code_actions project ~module_
-                        ~range:p.range)))
-        | CR.WorkspaceSymbol p ->
-            let roots =
-              Hashtbl.fold
-                (fun _ (root, _) acc ->
-                  if List.mem root acc then acc else root :: acc)
-                doc_roots []
-            in
-            Some
-              (List.concat_map
-                 (fun root ->
-                   let project =
-                     Workspace.project_of ~open_docs:(open_docs ()) root
-                   in
-                   List.map
-                     (fun (name, kind, id, range) ->
-                       SymbolInformation.create ~name ~kind
-                         ~location:
-                           (Location.create ~uri:(Lsp.Uri.of_string id) ~range)
-                         ())
-                     (Project.project_symbols project ~query:p.query))
-                 roots)
-        | CR.SignatureHelp p -> (
-            match doc_text p.textDocument.uri with
-            | Some text -> (
-                match
-                  Project.signature_help ~text ~file:(Analysis.parse text)
-                    p.position
-                with
-                | Some sh -> sh
+                    | Some sh -> sh
+                    | None -> SignatureHelp.create ~signatures:[] ())
                 | None -> SignatureHelp.create ~signatures:[] ())
-            | None -> SignatureHelp.create ~signatures:[] ())
-        | _ ->
-            Jsonrpc.Response.Error.raise
-              (Jsonrpc.Response.Error.make ~code:MethodNotFound
-                 ~message:"unsupported request" ())
-      in
-      try Jsonrpc.Response.ok req.id (CR.yojson_of_result r (handle r))
-      with Jsonrpc.Response.Error.E e -> Jsonrpc.Response.error req.id e)
+            | _ ->
+                Jsonrpc.Response.Error.raise
+                  (Jsonrpc.Response.Error.make ~code:MethodNotFound
+                     ~message:"unsupported request" ())
+          in
+          try Jsonrpc.Response.ok req.id (CR.yojson_of_result r (handle r))
+          with Jsonrpc.Response.Error.E e -> Jsonrpc.Response.error req.id e))
 
 (* Notifications never get a reply; document-sync ones refresh diagnostics. *)
 let on_notification (n : Jsonrpc.Notification.t) : unit =
@@ -469,6 +504,7 @@ let () =
   set_binary_mode_in stdin true;
   set_binary_mode_out stdout true;
   let running = ref true in
+  let dirty_exit = ref false in
   while !running do
     match read_frame stdin with
     | Eof -> running := false
@@ -489,10 +525,16 @@ let () =
         in
         Rpc.write stdout (Jsonrpc.Packet.Response response)
     | Packet (Jsonrpc.Packet.Notification n) -> (
-        (* [exit] terminates the loop; every other notification is handled, and
-           a failure inside one is dropped (notifications have no reply). *)
+        (* [exit] terminates the loop; every other notification is handled
+           only while running (dropped before initialize and after shutdown),
+           and a failure inside one is dropped (notifications have no
+           reply). *)
         match CN.of_jsonrpc n with
-        | Ok CN.Exit -> running := false
+        | Ok CN.Exit ->
+            if !phase <> ShutDown then dirty_exit := true;
+            running := false
+        | _ when !phase <> Running -> ()
         | _ -> ( try on_notification n with _ -> ()))
     | Packet _ -> ()
-  done
+  done;
+  if !dirty_exit then exit 1

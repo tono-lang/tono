@@ -102,8 +102,12 @@ let lsp_diagnostics (src : string) : Diagnostic.t list =
 
 (* --- surface AST navigation --- *)
 
+(* End-inclusive: editors place the caret at a token's end constantly, and
+   the convention (rust-analyzer, gopls) is that the position equal to the
+   range end still resolves the token to its left. The grammar separates
+   names with punctuation, so end-of-one is never start-of-another name. *)
 let contains (s : Span.span) (off : int) : bool =
-  s.start.offset <= off && off < s.finish.offset
+  s.start.offset <= off && off <= s.finish.offset
 
 let decl_word (d : Ast.decl) : string =
   match d.dkind with
@@ -744,6 +748,10 @@ let end_position (text : string) : Position.t =
 let formatting ~(text : string) : TextEdit.t list option =
   match Tono_frontend.format_source text with
   | Error _ -> None
+  | Ok formatted when String.equal formatted text ->
+      (* Already canonical: an identity edit would make clients mark the
+         buffer modified for nothing. *)
+      Some []
   | Ok formatted ->
       let range =
         Range.create
