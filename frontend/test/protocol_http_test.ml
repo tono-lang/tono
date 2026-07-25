@@ -219,7 +219,9 @@ let module_attaches_trait () =
             (`Assoc [ ("method", `String "POST"); ("path", `String "/x") ]);
         ]
   in
-  let m : Ir.module_ = { mod_name = "m"; shapes = []; operations = [ o ] } in
+  let m : Ir.module_ =
+    { mod_name = "m"; shapes = []; operations = [ o ]; extensions = [] }
+  in
   let m' = Protocol_http.resolve_module m in
   let op' = List.hd m'.operations in
   Alcotest.(check bool)

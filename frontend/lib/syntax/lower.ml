@@ -359,37 +359,77 @@ let lower_decl ~module_name ~resolve ~diags (d : Ast.decl) : Ir.shape =
             { input = lower_opt input; output = lower_opt output; errors };
         traits = bag rest;
       }
+  | Ast.DExt _ ->
+      (* Extensions have no shape; [lower_file] routes them to [lower_ext]. *)
+      assert false
 
-(* Lower a whole file into a module: operations land in [operations], every other
-   shape in [shapes], preserving declaration order. Shape ids and references are
-   namespaced through [resolve]; the default (used when a file is compiled on its
-   own) qualifies own names with [module_name] and treats a qualifier as if it
-   were a module directly, which the resolve pass then flags as an unknown import.
-   The project pipeline supplies a [resolve] backed by the import map. Imports
-   themselves carry no runtime IR: they only steer reference resolution. *)
 let default_resolver ~module_name : ref_resolver =
  fun ~qualifier ~name ->
   match qualifier with
   | None -> qualify module_name name
   | Some q -> qualify q name
 
+(* ── Extensions ────────────────────────────────────────────────────────── *)
+
+(* Signature refs are namespaced through [resolve] but their existence is not
+   checked (a hook's input/output can be a runtime type like [canonical_request]);
+   binding-vs-signature validation is deferred. *)
+let lower_ext_sig ~resolve ~diags (s : Ast.ext_sig) : Ir.ext_sig =
+  {
+    Ir.input = lower_type ~params:[] ~resolve ~diags s.esig_in;
+    output = lower_type ~params:[] ~resolve ~diags s.esig_out;
+  }
+
+let lower_ext ~resolve ~diags (d : Ast.decl) : Ir.extension =
+  check_snake diags d.dname_span "extension name" d.dname;
+  match d.dkind with
+  | Ast.DExt { ekind; esig; ebindings; econformance; _ } ->
+      let ext_kind =
+        match ekind with
+        | Ast.EHook -> Ir.Hook
+        | Ast.EContract -> Ir.Contract
+        | Ast.EConstraint -> Ir.Constraint
+      in
+      let ext_bindings =
+        List.map (fun (b : Ast.ext_binding) -> (b.lang, b.target)) ebindings
+      in
+      {
+        Ir.ext_name = d.dname;
+        ext_kind;
+        ext_sig = Option.map (lower_ext_sig ~resolve ~diags) esig;
+        ext_bindings;
+        ext_conformance = econformance;
+      }
+  | _ -> assert false
+
+(* Lower a whole file into a module: operations land in [operations], extensions
+   in [extensions], every other shape in [shapes], preserving declaration order.
+   Shape ids and references are namespaced through [resolve]; the default (used
+   when a file is compiled on its own) qualifies own names with [module_name] and
+   treats a qualifier as a module directly, which the resolve pass then flags as
+   an unknown import. Imports carry no runtime IR: they only steer resolution. *)
 let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
   let resolve =
     match resolve with Some r -> r | None -> default_resolver ~module_name
   in
   let shapes_rev = ref [] in
   let ops_rev = ref [] in
+  let exts_rev = ref [] in
   List.iter
-    (fun d ->
-      let shape = lower_decl ~module_name ~resolve ~diags d in
-      match shape.Ir.kind with
-      | Ir.Operation _ -> ops_rev := shape :: !ops_rev
-      | _ -> shapes_rev := shape :: !shapes_rev)
+    (fun (d : Ast.decl) ->
+      match d.dkind with
+      | Ast.DExt _ -> exts_rev := lower_ext ~resolve ~diags d :: !exts_rev
+      | _ -> (
+          let shape = lower_decl ~module_name ~resolve ~diags d in
+          match shape.Ir.kind with
+          | Ir.Operation _ -> ops_rev := shape :: !ops_rev
+          | _ -> shapes_rev := shape :: !shapes_rev))
     file.Ast.decls;
   {
     Ir.mod_name = module_name;
     shapes = List.rev !shapes_rev;
     operations = List.rev !ops_rev;
+    extensions = List.rev !exts_rev;
   }
 
 (* Exposed for testing the primitive-keyword mapping in isolation, including its

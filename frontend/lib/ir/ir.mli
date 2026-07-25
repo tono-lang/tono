@@ -81,10 +81,28 @@ and shape_kind =
 
 and shape = { id : shape_id; kind : shape_kind; traits : trait list }
 
+(* A bespoke extension bound to a per-language source file. [Hook] fills a fixed
+   lifecycle slot (its name is the slot); [Contract] and [Constraint] are named
+   with a typed signature. Conformance gates a contract at emit time. *)
+type ext_kind = Hook | Contract | Constraint
+
+(* The typed boundary of a contract/constraint. Hooks omit it: their signature is
+   fixed by the slot. Signature refs are stored verbatim, not resolved. *)
+type ext_sig = { input : tref; output : tref }
+
+type extension = {
+  ext_name : string;
+  ext_kind : ext_kind;
+  ext_sig : ext_sig option;
+  ext_bindings : binding;
+  ext_conformance : string option;
+}
+
 type module_ = {
   mod_name : string;
   shapes : shape list;
   operations : shape list;
+  extensions : extension list;
 }
 
 type model = {

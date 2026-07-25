@@ -15,7 +15,8 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
   let constraint_diags = Check_constraints.check ~decls m in
   let op_diags = Check_operations.check_decls tbl decls in
   let http_diags = Check_http.check_decls decls in
+  let ext_diags = Check_ext.check_decls decls in
   ( m,
     Diagnostic.sort
       (dup_diags @ ref_diags @ member_diags @ enum_diags @ constraint_diags
-     @ op_diags @ http_diags) )
+     @ op_diags @ http_diags @ ext_diags) )

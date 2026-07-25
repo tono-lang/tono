@@ -3,6 +3,8 @@
 //! under `ir-schema/fixtures/` are the arbiter, and the cross-language
 //! round-trip test fails the build on any divergence.
 
+use std::collections::BTreeMap;
+
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -10,7 +12,8 @@ use serde_json::Value;
 /// IR schema revision this build understands. Bumped by one on every
 /// incompatible change; there is no negotiation across versions.
 /// v2 removed the enum `open` field (every enum is open).
-pub const TONO_IR_VERSION: u32 = 2;
+/// v3 added the module `extensions` table (bespoke hooks/contracts/constraints).
+pub const TONO_IR_VERSION: u32 = 3;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -267,6 +270,42 @@ pub struct Shape {
     pub traits: Vec<Trait>,
 }
 
+/// A bespoke extension bound to per-language source files. `Hook` fills a fixed
+/// lifecycle slot (its `name` is the slot); `Contract`/`Constraint` are named
+/// with a typed signature. Serializes as the lowercase word under a `kind` key.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtKind {
+    Hook,
+    Contract,
+    Constraint,
+}
+
+/// A contract/constraint boundary: the input and output type refs. Hooks omit
+/// it (their slot fixes the signature).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Signature {
+    pub input: Tref,
+    pub output: Tref,
+}
+
+/// One extension-table entry. `bindings` maps a language to its
+/// `ext/{lang}/...#symbol` reference; `conformance` is the vector reference the
+/// generator requires for a contract. The optional-field defaults mirror the
+/// frontend encoder (which omits an absent signature/conformance) so both sides
+/// round-trip the same bytes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Extension {
+    pub name: String,
+    pub kind: ExtKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Signature>,
+    #[serde(default)]
+    pub bindings: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conformance: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Module {
     pub name: String,
@@ -274,6 +313,11 @@ pub struct Module {
     pub shapes: Vec<Shape>,
     #[serde(default)]
     pub operations: Vec<Shape>,
+    // The frontend always writes this array (empty when there are no
+    // extensions), so it is not skipped when empty: matching the encoder keeps
+    // the cross-language round-trip byte-for-byte.
+    #[serde(default)]
+    pub extensions: Vec<Extension>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

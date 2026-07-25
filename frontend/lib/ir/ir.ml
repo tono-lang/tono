@@ -93,10 +93,30 @@ and shape = {
   traits : trait list; (* shape-level traits *)
 }
 
+(* A bespoke extension: logic that does not fit the pure calculus, bound to a
+   per-language source file. [Hook] fills a fixed lifecycle slot (its name is the
+   slot); [Contract] and [Constraint] are named with a typed signature. The
+   binding is the escape hatch; conformance gates a contract at emit time. *)
+type ext_kind = Hook | Contract | Constraint
+
+(* The typed boundary of a contract/constraint. Hooks omit it: their signature is
+   fixed by the slot. Signature refs are stored verbatim, not resolved against
+   user shapes (binding-vs-signature validation is deferred). *)
+type ext_sig = { input : tref; output : tref }
+
+type extension = {
+  ext_name : string; (* slot name for a hook, otherwise the contract name *)
+  ext_kind : ext_kind;
+  ext_sig : ext_sig option;
+  ext_bindings : binding; (* lang -> "ext/{lang}/...#symbol" *)
+  ext_conformance : string option; (* mandatory for a contract at emit time *)
+}
+
 type module_ = {
   mod_name : string;
   shapes : shape list;
   operations : shape list;
+  extensions : extension list;
 }
 
 type model = {

@@ -100,6 +100,12 @@ pub fn emit_module(
     if !module.operations.is_empty() {
         type_decls.extend(errors::type_decls(module, config));
         serde_decls.extend(errors::serde_decls(module));
+        // Bespoke boundary wrappers sit next to the error values they map to, so
+        // they ride the operation surface: a module with no operations has no
+        // ContractError to wrap a failure into. A pure-contract module still trips
+        // the conformance gate, it just emits no wrapper until an operation gives it
+        // the error surface (or the concrete client lands).
+        type_decls.extend(crate::codegen::targets::go::client::wrapper_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the `Violation` record a
         // validator references, which the taxonomy would otherwise have carried.
@@ -179,6 +185,7 @@ mod tests {
                 vec![member("amount_cents", Tref::Prim(Prim::I64), true)],
             )],
             operations: vec![],
+            extensions: vec![],
         };
         let files = emit_module(&module, &go_casing(), &union_ids(&module));
         // A pure-types module emits a single file: there is no serialization to hold.
@@ -230,6 +237,7 @@ mod tests {
                 ),
             ],
             operations: vec![],
+            extensions: vec![],
         };
         let files = emit_module(&module, &go_casing(), &union_ids(&module));
         assert_eq!(files.len(), 2);
@@ -283,6 +291,7 @@ mod tests {
             name: "models".into(),
             shapes: vec![structure("models#Doc", vec![counts])],
             operations: vec![],
+            extensions: vec![],
         };
         let files = emit_module(&module, &go_casing(), &union_ids(&module));
         assert_eq!(files.len(), 2);

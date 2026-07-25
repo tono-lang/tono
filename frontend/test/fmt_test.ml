@@ -103,6 +103,43 @@ op create_charge(charge): charge @errors(not_found)
     (Ir_json.to_canonical_string (Ir_json.encode_module m1))
     (Ir_json.to_canonical_string (Ir_json.encode_module m2))
 
+(* The three extension kinds print to the one canonical layout, and re-parsing
+   that layout yields the same IR (printer <-> parser round-trip over ext). *)
+let ext_layout () =
+  let src =
+    {|
+ext hook before_request { ts: "ext/ts/auth.ts#addBearer"  rust: "ext/rust/a.rs#f" }
+ext contract   sign_request  (canonical_request) -> string {
+  ts: "ext/ts/sign.ts#signRequest" conformance: "vectors/sign.json" }
+ext constraint luhn (string) -> bool { ts: "ext/ts/luhn.ts#isLuhn" }
+|}
+  in
+  let expected =
+    {|ext hook before_request {
+  ts: "ext/ts/auth.ts#addBearer"
+  rust: "ext/rust/a.rs#f"
+}
+
+ext contract sign_request (canonical_request) -> string {
+  ts: "ext/ts/sign.ts#signRequest"
+  conformance: "vectors/sign.json"
+}
+
+ext constraint luhn (string) -> bool {
+  ts: "ext/ts/luhn.ts#isLuhn"
+}
+|}
+  in
+  Alcotest.(check string) "canonical ext layout" expected (fmt src);
+  (* Idempotent, and the formatted source compiles to the same IR. *)
+  Alcotest.(check string) "idempotent" expected (fmt (fmt src));
+  let m1, _ = Tono_frontend.compile ~module_name:"m" src in
+  let m2, _ = Tono_frontend.compile ~module_name:"m" (fmt src) in
+  Alcotest.(check string)
+    "same IR"
+    (Ir_json.to_canonical_string (Ir_json.encode_module m1))
+    (Ir_json.to_canonical_string (Ir_json.encode_module m2))
+
 (* String and float literals re-lex to the same values. *)
 let literals () =
   List.iter
@@ -224,6 +261,7 @@ let () =
             defensive_placeholders;
           Alcotest.test_case "op swallows following traits" `Quick
             op_swallows_following_traits;
+          Alcotest.test_case "ext layout" `Quick ext_layout;
         ] );
       ( "format_source",
         [

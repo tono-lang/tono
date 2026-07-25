@@ -326,6 +326,7 @@ mod tests {
             name: "m".into(),
             shapes,
             operations,
+            extensions: vec![],
         }
     }
 

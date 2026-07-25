@@ -107,6 +107,12 @@ let resolve_decl ~(qualified : qualified) (tbl : Symtab.t) (d : Ast.decl) :
         | None -> []
       in
       opt input @ opt output
+  (* A signature ref can name a runtime type (e.g. canonical_request) that is not
+     a user shape and has no per-target registry here, so extension signatures are
+     exempt from name resolution entirely. The tradeoff is that a plain typo of a
+     user shape in a signature is not flagged either; binding-vs-signature
+     validation (which would catch it) is deferred. *)
+  | Ast.DExt _ -> []
 
 let resolve_decls ?(qualified = no_imports) (tbl : Symtab.t)
     (decls : Ast.decl list) : Diagnostic.t list =

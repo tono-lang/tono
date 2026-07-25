@@ -63,6 +63,7 @@ op origin(): point
             traits = [];
           };
         ];
+      extensions = [];
     }
   in
   Alcotest.(check string)
@@ -124,6 +125,39 @@ op create_charge(charge): charge @errors(not_found) @async
       Alcotest.(check string)
         "re-encode is identical" (canon json) (module_json m')
 
+(* The three extension kinds compile into the module's extension table and the
+   IR survives a JSON round-trip, exercising the ext surface end to end. *)
+let extension_roundtrip () =
+  let src =
+    {|
+ext hook before_request {
+  ts: "ext/ts/auth.ts#addBearer"
+  rust: "ext/rust/auth.rs#add_bearer"
+}
+
+ext contract sign_request (canonical_request) -> string {
+  ts: "ext/ts/sign.ts#signRequest"
+  conformance: "vectors/sign_request.json"
+}
+
+ext constraint luhn (string) -> bool {
+  ts: "ext/ts/luhn.ts#isLuhn"
+}
+|}
+  in
+  let m, ds = Tono_frontend.compile ~module_name:"payments" src in
+  Alcotest.(check int) "compiles cleanly" 0 (List.length ds);
+  Alcotest.(check (list string))
+    "extension names"
+    [ "before_request"; "sign_request"; "luhn" ]
+    (List.map (fun (e : Ir.extension) -> e.ext_name) m.extensions);
+  let json = Ir_json.encode_module m in
+  match Ir_json.decode_module json with
+  | Error e -> Alcotest.failf "module did not round-trip: %s" e
+  | Ok m' ->
+      Alcotest.(check string)
+        "re-encode is identical" (canon json) (module_json m')
+
 let () =
   Alcotest.run "golden"
     [
@@ -131,5 +165,6 @@ let () =
         [
           Alcotest.test_case "golden module" `Quick golden_module;
           Alcotest.test_case "rich round-trip" `Quick rich_roundtrip;
+          Alcotest.test_case "extension round-trip" `Quick extension_roundtrip;
         ] );
     ]

@@ -151,6 +151,7 @@ mod tests {
                 traits: vec![],
             }],
             operations: vec![],
+            extensions: vec![],
         };
         let files = emit_module(&module, &ts_casing());
         assert_eq!(files.len(), 2, "TypeScript splits types from serde");
@@ -181,6 +182,7 @@ mod tests {
             name: "billing".into(),
             shapes: vec![],
             operations: vec![],
+            extensions: vec![],
         };
         let files = emit_module(&module, &ts_casing());
         assert_eq!(files.len(), 1);

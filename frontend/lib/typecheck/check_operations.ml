@@ -156,7 +156,7 @@ let check_decl (tbl : Symtab.t) (decls : Ast.decl list) (d : Ast.decl) :
     Diagnostic.t list =
   match d.dkind with
   | Ast.DOp _ -> check_op tbl decls d
-  | Ast.DStruct _ | Ast.DEnum _ | Ast.DUnion _ -> []
+  | Ast.DStruct _ | Ast.DEnum _ | Ast.DUnion _ | Ast.DExt _ -> []
 
 let check_decls (tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
   List.concat_map (check_decl tbl decls) decls

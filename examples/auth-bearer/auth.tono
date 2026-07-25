@@ -1,0 +1,18 @@
+@doc("A tiny API whose auth is bespoke: a before_request hook sets the header.")
+pub struct account {
+  id: uuid
+  email: string
+}
+
+@doc("Fetches the authenticated account.")
+op get_account(): account
+  @http(method: "GET", path: "/account")
+  @async
+
+// Auth is 100% bespoke (there is no built-in scheme). A before_request hook
+// binds to a per-language source file that sets the Authorization header on the
+// canonical request before it is sent. Copy ext/ts/auth.ts and adapt the token
+// source (env var, config, refresh) to your needs.
+ext hook before_request {
+  ts: "ext/ts/auth.ts#addBearer"
+}

@@ -2,5 +2,14 @@
 // stable, and the only layer that interprets a wire descriptor. It ships no auth
 // of its own; bespoke auth sets a header through `ClientOptions.headers`.
 
-export type { ClientOptions, Outcome, Part, ResponsePart, WireDescriptor } from "./descriptor";
+export type {
+  CanonicalRequest,
+  CanonicalResponse,
+  ClientOptions,
+  Hooks,
+  Outcome,
+  Part,
+  ResponsePart,
+  WireDescriptor,
+} from "./descriptor";
 export { execute } from "./execute";

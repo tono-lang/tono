@@ -7,6 +7,7 @@
 //! serde cannot express idiomatically (the open-enum `Unknown` arm, the
 //! integer-as-string helpers) are emitted as verbatim items by a later phase.
 
+pub mod client;
 pub mod codecs;
 pub mod emit;
 pub mod errors;
@@ -15,6 +16,7 @@ pub mod symbols;
 pub mod types;
 
 pub use render::RustRules;
+pub use types::rust_casing;
 
 crate::declare_target! {
     /// The Rust target: the Symbol table and emitters. Render rules and codec

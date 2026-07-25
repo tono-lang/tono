@@ -4,7 +4,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const IR: &str = r#"{"tono_ir_version":2,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR: &str = r#"{"tono_ir_version":3,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+
+/// A contract extension with no conformance reference: the generator must refuse
+/// to emit (AC-4). Everything else is well-formed.
+const IR_UNCONFORMANT_CONTRACT: &str = r#"{"tono_ir_version":3,"modules":[{"name":"demo","shapes":[],"operations":[],"extensions":[{"name":"sign","kind":"contract","bindings":{"ts":"ext/ts/s.ts#sign"},"signature":{"input":{"prim":"string"},"output":{"prim":"string"}}}]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))
@@ -110,6 +114,33 @@ fn gen_rejects_invalid_ir() {
 }
 
 #[test]
+fn gen_rejects_a_contract_without_conformance() {
+    // The strong gate: a kind=contract extension with no conformance reference
+    // must refuse to emit (build error), so the CLI exits non-zero.
+    let out = tmpdir("gate");
+    let mut child = tono()
+        .args([
+            "gen",
+            "--target",
+            "typescript",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(IR_UNCONFORMANT_CONTRACT.as_bytes())
+        .unwrap();
+    assert!(!child.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
 fn gen_flag_without_a_value_fails() {
     let status = tono()
         .args(["gen", "--target"])
@@ -145,7 +176,7 @@ fn unknown_command_fails() {
 
 /// A single dotted module, so the sub-package mapping and the config hooks have
 /// something to place under a directory.
-const DOTTED_IR: &str = r#"{"tono_ir_version":2,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const DOTTED_IR: &str = r#"{"tono_ir_version":3,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// Run `tono gen` with the given extra args, feeding `DOTTED_IR` on stdin.
 fn gen_dotted(out: &Path, extra: &[&str]) {
@@ -186,7 +217,7 @@ fn gen_module_remap_rewrites_the_prefix() {
 }
 
 /// Two modules where one references the other across the boundary.
-const TWO_MODULE_IR: &str = r#"{"tono_ir_version":2,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]},{"name":"payments.charge","shapes":[{"id":"payments.charge#Charge","kind":"structure","params":[],"members":[{"name":"total","required":true,"target":{"ref":"payments.common#Money","args":[]},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const TWO_MODULE_IR: &str = r#"{"tono_ir_version":3,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]},{"name":"payments.charge","shapes":[{"id":"payments.charge#Charge","kind":"structure","params":[],"members":[{"name":"total","required":true,"target":{"ref":"payments.common#Money","args":[]},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// Run `tono gen --target go` with the given extra args, feeding `TWO_MODULE_IR`.
 fn gen_two_module_go(out: &Path, extra: &[&str]) -> bool {
