@@ -27,9 +27,10 @@ type value_expr =
   | Vtemplate of Ir.template_part list
 
 (* The opaque, language-agnostic wire form of one operation. The Target embeds
-   its JSON encoding without interpreting any field. The entry-scoped fields
-   (endpoint, request headers, timeout, retry) are present only on operations
-   declared in an entry body; a loose operation leaves them empty. *)
+   its JSON encoding without interpreting any field. The endpoint, timeout, and
+   retry refs only arise on operations declared in an entry body (a loose op
+   leaves them empty); request_headers carries op-level @header declarations,
+   which either kind of operation may make. *)
 type wire_descriptor = {
   http_method : string;
   uri : string; (* path template with {name} and {.field} placeholders *)

@@ -187,6 +187,63 @@ fn removing_a_shape_an_entry_or_config_references_is_wire_breaking() {
 }
 
 #[test]
+fn unchanged_entry_and_config_produce_no_changes() {
+    let shapes = || {
+        vec![
+            entry(
+                "billing#client",
+                vec![entry_field_ref("card", "billing#Card")],
+                vec![Shape {
+                    id: "billing#client.save".into(),
+                    kind: ShapeKind::Operation {
+                        input: None,
+                        output: None,
+                        errors: vec![],
+                    },
+                    traits: vec![],
+                }],
+            ),
+            config("billing#conf", vec![]),
+            structure("billing#Card", vec![]),
+        ]
+    };
+    let report = diff(&model(shapes()), &model(shapes()));
+    assert!(report.changes.is_empty(), "spurious: {:?}", keys(&report));
+}
+
+#[test]
+fn removing_an_op_from_an_entry_is_source_breaking() {
+    let op = Shape {
+        id: "billing#client.save".into(),
+        kind: ShapeKind::Operation {
+            input: None,
+            output: None,
+            errors: vec![],
+        },
+        traits: vec![],
+    };
+    let before = model(vec![entry("billing#client", vec![], vec![op])]);
+    let after = model(vec![entry("billing#client", vec![], vec![])]);
+    let report = diff(&before, &after);
+    let change = find(&report, "change-shape billing#client");
+    assert_eq!(change.category, Category::SourceBreaking);
+    assert_eq!(change.detail, "entry changed");
+}
+
+#[test]
+fn changing_a_config_field_is_source_breaking() {
+    let before = model(vec![config(
+        "billing#conf",
+        vec![entry_field_ref("creds", "billing#Creds")],
+    )]);
+    let after = model(vec![config("billing#conf", vec![])]);
+    assert_eq!(
+        find(&diff(&before, &after), "change-shape billing#conf").category,
+        Category::SourceBreaking
+    );
+}
+
+#[test]
 fn removing_a_member_is_wire_breaking() {
     let before = charge(vec![
         member("amount", Tref::Prim(Prim::U64), true),

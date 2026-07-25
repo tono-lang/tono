@@ -255,9 +255,16 @@ let transform_of (tname : string) : string option =
   else None
 
 let lower_source ~diags (tr : Ast.trait) : Ir.source option =
+  let marker source =
+    if tr.Ast.targs <> [] then
+      report diags
+        (Diagnostic.error tr.tspan
+           (Printf.sprintf "@%s takes no arguments" tr.tname));
+    Some source
+  in
   match tr.Ast.tname with
-  | "arg" -> Some Ir.Arg
-  | "with" -> Some Ir.With
+  | "arg" -> marker Ir.Arg
+  | "with" -> marker Ir.With
   | "env" -> (
       match tr.targs with
       | [ Ast.AString s ] -> Some (Ir.Env (Ir.Env_name s))
@@ -268,6 +275,11 @@ let lower_source ~diags (tr : Ast.trait) : Ir.source option =
                "@env expects a single variable name string or a field reference");
           None)
   | "default" ->
+      (match tr.targs with
+      | [] | [ _ ] -> ()
+      | _ ->
+          report diags
+            (Diagnostic.error tr.tspan "@default takes a single value"));
       let v = match tr.targs with a :: _ -> json_of_arg a | [] -> `Null in
       Some (Ir.Default v)
   | _ -> None

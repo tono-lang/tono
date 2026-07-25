@@ -33,9 +33,10 @@ let shape_by_id (m : Ir.module_) id =
   | Some s -> s
   | None -> Alcotest.failf "shape %s not found" id
 
-(* The RFC's canonical client: every source kind, derivation, selection,
-   composition, and an op consuming entry fields through its traits. *)
-let rfc_client =
+(* The canonical entry-model client: every source kind, derivation,
+   selection, composition, and an op consuming entry fields through its
+   traits. *)
+let canonical_client =
   {|
 struct conf {
   api_key: string @env("API_KEY")
@@ -81,10 +82,10 @@ struct overloaded {
 }
 |}
 
-(* ── Parser + typecheck: the RFC forms are accepted ────────────────────── *)
+(* ── Parser + typecheck: the canonical forms are accepted ──────────────── *)
 
-let rfc_accepted () =
-  Alcotest.(check (list string)) "no diagnostics" [] (codes rfc_client)
+let canonical_accepted () =
+  Alcotest.(check (list string)) "no diagnostics" [] (codes canonical_client)
 
 let loose_ops_untouched () =
   Alcotest.(check (list string))
@@ -96,7 +97,7 @@ let loose_ops_untouched () =
 (* ── Lowering: the IR entry surface ────────────────────────────────────── *)
 
 let lowered_entry () =
-  let m = compile rfc_client in
+  let m = compile canonical_client in
   let client = shape_by_id m "m#client" in
   match client.kind with
   | Ir.Entry { fields; operations } ->
@@ -172,7 +173,7 @@ let lowered_entry () =
   | _ -> Alcotest.fail "client did not lower to an entry"
 
 let lowered_config () =
-  let m = compile rfc_client in
+  let m = compile canonical_client in
   match (shape_by_id m "m#conf").kind with
   | Ir.Config { fields } ->
       Alcotest.(check int) "config fields" 2 (List.length fields)
@@ -197,7 +198,7 @@ let bind_only_config () =
 (* ── IR round-trip: encode(model) decodes back to the same model ───────── *)
 
 let ir_roundtrip () =
-  let m = compile rfc_client in
+  let m = compile canonical_client in
   let model : Ir.model =
     { tono_ir_version = Ir_json.current_ir_version; modules = [ m ] }
   in
@@ -216,7 +217,7 @@ let version_is_5 () =
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
 let fmt_roundtrip () =
-  let file, pd = Parser.parse rfc_client in
+  let file, pd = Parser.parse canonical_client in
   Alcotest.(check int) "no parse diagnostics" 0 (List.length pd);
   let printed = Printer.print_file file in
   let reparsed, pd2 = Parser.parse printed in
@@ -228,7 +229,7 @@ let fmt_roundtrip () =
 (* ── Protocol: entry refs land in the wire descriptor ──────────────────── *)
 
 let descriptor_carries_refs () =
-  let m = Protocol_http.resolve_module (compile rfc_client) in
+  let m = Protocol_http.resolve_module (compile canonical_client) in
   let client = shape_by_id m "m#client" in
   match client.kind with
   | Ir.Entry { operations; _ } ->
@@ -441,7 +442,8 @@ let () =
     [
       ( "accept",
         [
-          Alcotest.test_case "rfc forms parse and check" `Quick rfc_accepted;
+          Alcotest.test_case "canonical forms parse and check" `Quick
+            canonical_accepted;
           Alcotest.test_case "loose ops untouched" `Quick loose_ops_untouched;
         ] );
       ( "lower",

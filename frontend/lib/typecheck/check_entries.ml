@@ -21,11 +21,6 @@ let find_trait name (traits : Ast.trait list) : Ast.trait option =
 let traits_named name (traits : Ast.trait list) : Ast.trait list =
   List.filter (fun (t : Ast.trait) -> String.equal t.tname name) traits
 
-let kv_arg key (args : Ast.trait_arg list) : Ast.trait_arg option =
-  List.find_map
-    (function Ast.AKv (k, v) when String.equal k key -> Some v | _ -> None)
-    args
-
 (* The closed @str::* catalog, shared vocabulary with the casing engine. *)
 let str_transforms =
   [ "trim"; "upper_snake"; "snake"; "kebab"; "pascal"; "lower"; "upper" ]
@@ -45,7 +40,6 @@ let resolve_path = Entry_scope.resolve_path
 let path_str = Entry_scope.path_str
 let scalar_of_ty = Entry_scope.scalar_of_ty
 let member_trait_refs = Entry_scope.member_trait_refs
-let protocol_trait_names = Entry_scope.protocol_trait_names
 let op_refs = Entry_scope.op_refs
 let dep_heads = Entry_scope.dep_heads
 let check_cycles = Entry_scope.check_cycles
@@ -145,6 +139,25 @@ let check_env_names (m : Ast.member) : Diagnostic.t list =
       | _ -> None)
     m.Ast.mtraits
 
+(* @env(.field) names the environment variable through the field's value, so
+   the referenced field must be a string. *)
+let check_env_ref_types ctx (fields : Ast.member list) (m : Ast.member) :
+    Diagnostic.t list =
+  List.filter_map
+    (fun (tr : Ast.trait) ->
+      match (tr.Ast.tname, tr.targs) with
+      | "env", [ Ast.ARef r ] -> (
+          match resolve_path ctx fields r.segs with
+          | Some f when scalar_of_ty ctx f.mtype <> Entry_scope.SString ->
+              Some
+                (err Error_codes.source_position_invalid tr.tspan
+                   "@env(%s) must reference a string field: the value names \
+                    the environment variable"
+                   (path_str r.segs))
+          | _ -> None (* unknown refs are reported by the reachability pass *))
+      | _ -> None)
+    m.Ast.mtraits
+
 let check_nullable_field (m : Ast.member) : Diagnostic.t list =
   if is_nullable m.mtype then
     [
@@ -169,25 +182,49 @@ let check_binds ctx (fields : Ast.member list) (m : Ast.member) :
         List.concat_map
           (fun (tr : Ast.trait) ->
             match tr.Ast.targs with
-            | [ Ast.AName target; Ast.ARef r ] ->
-                (if
-                   List.exists
-                     (fun (cm : Ast.member) -> String.equal cm.mname target)
-                     config_fields
-                 then []
-                 else
-                   [
-                     err Error_codes.bind_invalid tr.tspan
-                       "'%s' is not a field of the composed config '%s'" target
-                       n;
-                   ])
+            | [ Ast.AName target; Ast.ARef r ] -> (
+                let target_field =
+                  List.find_opt
+                    (fun (cm : Ast.member) -> String.equal cm.mname target)
+                    config_fields
+                in
+                let source_field = resolve_path ctx fields r.segs in
+                (match target_field with
+                  | Some _ -> []
+                  | None ->
+                      [
+                        err Error_codes.bind_invalid tr.tspan
+                          "'%s' is not a field of the composed config '%s'"
+                          target n;
+                      ])
+                @ (match source_field with
+                  | Some _ -> []
+                  | None ->
+                      [
+                        err Error_codes.field_ref_unknown tr.tspan
+                          "unknown field '%s' as a @bind source"
+                          (path_str r.segs);
+                      ])
                 @
-                if Option.is_some (resolve_path ctx fields r.segs) then []
-                else
-                  [
-                    err Error_codes.field_ref_unknown tr.tspan
-                      "unknown field '%s' as a @bind source" (path_str r.segs);
-                  ]
+                (* Binds are typed: the bound value replaces the config
+                   field's own resolution, so the types must agree. The
+                   printed spelling is the structural comparison. *)
+                match (target_field, source_field) with
+                | Some tf, Some sf
+                  when not
+                         (String.equal
+                            (Printer.print_ty (base_ty tf.mtype))
+                            (Printer.print_ty (base_ty sf.mtype))) ->
+                    [
+                      err Error_codes.bind_invalid tr.tspan
+                        "@bind source '%s' has type %s but config field '%s' \
+                         is %s"
+                        (path_str r.segs)
+                        (Printer.print_ty (base_ty sf.mtype))
+                        target
+                        (Printer.print_ty (base_ty tf.mtype));
+                    ]
+                | _ -> [])
             | _ ->
                 (* Malformed argument shapes are diagnosed during lowering. *)
                 [])
@@ -200,178 +237,10 @@ let check_binds ctx (fields : Ast.member list) (m : Ast.member) :
                type is a config")
           binds
 
-(* ── Operations ────────────────────────────────────────────────────────── *)
+(* ── Operations: the position rules live in [Check_entry_ops] ──────────── *)
 
-(* Protocol checks shared by every op: @header/@timeout/@retry require @http
-   (a purely local operation has no protocol surface). *)
-let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
-  if Option.is_some (find_trait "http" op.dtraits) then []
-  else
-    List.filter_map
-      (fun (tr : Ast.trait) ->
-        if List.mem tr.Ast.tname protocol_trait_names then
-          Some
-            (err Error_codes.protocol_trait_invalid tr.tspan
-               "@%s is a protocol trait and requires @http on the operation"
-               tr.tname)
-        else None)
-      op.Ast.dtraits
-
-(* A loose (non-entry) operation has no field scope: any field reference in a
-   protocol trait, any endpoint:, and @timeout/@retry (which only take field
-   references by definition) belong to an entry. *)
-let check_loose_op (op : Ast.decl) : Diagnostic.t list =
-  let entry_only what span =
-    err Error_codes.protocol_trait_invalid span
-      "%s is only available on an operation declared in an entry body" what
-  in
-  let ref_diags =
-    List.map
-      (fun ((segs : string list), span) ->
-        entry_only (Printf.sprintf "field reference '%s'" (path_str segs)) span)
-      (op_refs op)
-  in
-  let endpoint_diags =
-    match find_trait "http" op.dtraits with
-    | Some tr when Option.is_some (kv_arg "endpoint" tr.targs) -> (
-        match kv_arg "endpoint" tr.targs with
-        | Some (Ast.ARef _) -> [] (* already reported as a field reference *)
-        | _ -> [ entry_only "endpoint:" tr.tspan ])
-    | _ -> []
-  in
-  (* A literal @timeout(5)/@retry(3) would otherwise pass here and be dropped
-     in silence by the protocol resolver. *)
-  let timeout_retry_diags =
-    List.concat_map
-      (fun name ->
-        List.filter_map
-          (fun (tr : Ast.trait) ->
-            match tr.Ast.targs with
-            | [ Ast.ARef _ ] -> None (* already reported as a field reference *)
-            | _ -> Some (entry_only ("@" ^ name) tr.tspan))
-          (traits_named name op.dtraits))
-      [ "timeout"; "retry" ]
-  in
-  (* @header still requires @http; @timeout/@retry are covered above. *)
-  let header_http_diags =
-    if Option.is_some (find_trait "http" op.dtraits) then []
-    else
-      List.map
-        (fun (tr : Ast.trait) ->
-          err Error_codes.protocol_trait_invalid tr.tspan
-            "@header is a protocol trait and requires @http on the operation")
-        (traits_named "header" op.dtraits)
-  in
-  header_http_diags @ ref_diags @ endpoint_diags @ timeout_retry_diags
-
-let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
-    Diagnostic.t list =
-  let resolve segs = resolve_path ctx fields segs in
-  let ref_diags =
-    List.filter_map
-      (fun (segs, span) ->
-        if Option.is_some (resolve segs) then None
-        else
-          Some
-            (err Error_codes.field_ref_unknown span
-               "unknown field '%s' referenced by an operation trait"
-               (path_str segs)))
-      (op_refs op)
-  in
-  let http_diags =
-    match find_trait "http" op.dtraits with
-    | None -> []
-    | Some http -> (
-        match kv_arg "endpoint" http.targs with
-        | None ->
-            [
-              err Error_codes.entry_endpoint_missing http.tspan
-                "an entry operation's @http must name its endpoint, e.g. \
-                 @http(..., endpoint: .endpoint)";
-            ]
-        | Some (Ast.ARef r) -> (
-            match resolve r.segs with
-            | Some m when scalar_of_ty ctx m.mtype = Entry_scope.SString -> []
-            | Some _ ->
-                [
-                  err Error_codes.entry_endpoint_missing r.ref_span
-                    "endpoint '%s' must reference a string field"
-                    (path_str r.segs);
-                ]
-            | None -> [] (* unknown ref already reported above *))
-        | Some _ ->
-            [
-              err Error_codes.entry_endpoint_missing http.tspan
-                "endpoint: takes a field reference (.field), not a literal";
-            ])
-  in
-  let typed_ref name want scalar_desc =
-    List.concat_map
-      (fun (tr : Ast.trait) ->
-        match tr.Ast.targs with
-        | [ Ast.ARef r ] -> (
-            match resolve r.segs with
-            | None -> [] (* already reported *)
-            | Some m ->
-                if want ctx m.mtype then []
-                else
-                  [
-                    err Error_codes.protocol_trait_invalid r.ref_span
-                      "@%s must reference a %s field" name scalar_desc;
-                  ])
-        | _ ->
-            [
-              err Error_codes.protocol_trait_invalid tr.tspan
-                "@%s takes a single field reference, e.g. @%s(.field)" name name;
-            ])
-      (traits_named name op.dtraits)
-  in
-  let timeout_diags =
-    typed_ref "timeout"
-      (fun _ t ->
-        match base_ty t with Ast.TPrim ("duration", _) -> true | _ -> false)
-      "duration"
-  in
-  let retry_diags =
-    typed_ref "retry"
-      (fun ctx t -> scalar_of_ty ctx t = Entry_scope.SInt)
-      "integer"
-  in
-  let header_diags =
-    List.concat_map
-      (fun (tr : Ast.trait) ->
-        match tr.Ast.targs with
-        | [ key; value ] -> (
-            (match key with
-              | Ast.AString _ -> []
-              | _ ->
-                  [
-                    err Error_codes.protocol_trait_invalid tr.tspan
-                      "@header expects a string key (a literal, possibly with \
-                       {.field} placeholders)";
-                  ])
-            @
-            (* A non-string literal value has no defined stringification on
-               the wire; the accepted forms are the language rule (literal
-               string, ref, template). *)
-            match value with
-            | Ast.AString _ | Ast.ARef _ -> []
-            | _ ->
-                [
-                  err Error_codes.protocol_trait_invalid tr.tspan
-                    "@header expects a string literal, a field reference, or a \
-                     template as its value";
-                ])
-        | _ ->
-            [
-              err Error_codes.protocol_trait_invalid tr.tspan
-                "@header expects a key and a value, e.g. @header(\"X-Name\", \
-                 .field)";
-            ])
-      (traits_named "header" op.dtraits)
-  in
-  check_protocol_positions op
-  @ ref_diags @ http_diags @ timeout_diags @ retry_diags @ header_diags
+let check_loose_op = Check_entry_ops.check_loose_op
+let check_entry_op = Check_entry_ops.check_entry_op
 
 (* ── Wire boundary ─────────────────────────────────────────────────────── *)
 
@@ -562,7 +431,9 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
             (member_trait_refs m)
         in
         check_source_combinations ~in_config:false m
-        @ check_env_names m @ check_transforms m @ check_nullable_field m
+        @ check_env_names m
+        @ check_env_ref_types ctx members m
+        @ check_transforms m @ check_nullable_field m
         @ check_binds ctx members m
         @ check_member_boundary ctx ~container:Roles.Entry m
         @ unresolved_ref_diags
@@ -573,6 +444,23 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
       members
   in
   let cycle_diags = check_cycles ctx members in
+  (* Nested ops share the entry's id scope (module#entry.op): two ops with one
+     name would lower to colliding shape ids. *)
+  let dup_op_diags =
+    let rec go seen = function
+      | [] -> []
+      | (op : Ast.decl) :: rest ->
+          (if List.mem op.dname seen then
+             [
+               err Error_codes.duplicate_shape op.dname_span
+                 "operation '%s' is declared twice in entry '%s'" op.dname
+                 d.dname;
+             ]
+           else [])
+          @ go (op.dname :: seen) rest
+    in
+    go [] ops
+  in
   let op_diags = List.concat_map (check_entry_op ctx members) ops in
   (* Lazy resolution: a consumed chain that bottoms out on a sourceless field
      errors at the point of consumption, naming the chain. Sourceless fields
@@ -634,7 +522,8 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
       members
   in
   check_generics d params "entry"
-  @ field_diags @ cycle_diags @ op_diags @ lazy_diags @ sourceless_diags
+  @ field_diags @ cycle_diags @ dup_op_diags @ op_diags @ lazy_diags
+  @ sourceless_diags
 
 (* Config fields a composing entry binds; a sourceless bound field is fed at
    the composition point, so it is not an error. *)
@@ -685,7 +574,9 @@ let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
             ]
         in
         check_source_combinations ~in_config:true m
-        @ check_env_names m @ check_transforms m @ check_nullable_field m
+        @ check_env_names m
+        @ check_env_ref_types ctx members m
+        @ check_transforms m @ check_nullable_field m
         @ check_member_boundary ctx ~container:Roles.Config m
         @ (traits_named "bind" m.mtraits
           |> List.map (fun (tr : Ast.trait) ->

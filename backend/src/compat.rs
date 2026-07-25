@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use crate::compat_shape::*;
 use crate::ir::{Constraint, EnumBacking, EnumValue, Member, Model, Shape, ShapeKind, Trait, Tref};
 
 /// The break level a change falls into. The order is severity-ascending only for
@@ -290,6 +291,21 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
         ) => diff_operation(&b.id, bi, bo, be, ci, co, ce, out),
         (ShapeKind::Service { operations: bo }, ShapeKind::Service { operations: co }) => {
             diff_service(&b.id, bo, co, current, out)
+        }
+        // Entries and configs never cross the wire; removing any part of their
+        // construction surface breaks compiling callers, so any difference is
+        // conservatively one source-breaking change. Field-level categories
+        // (a removed @with vs a changed @env fallback) arrive with the entry
+        // codegen work.
+        (ShapeKind::Entry { .. }, ShapeKind::Entry { .. })
+        | (ShapeKind::Config { .. }, ShapeKind::Config { .. }) => {
+            if b.kind != c.kind {
+                out.push(Change {
+                    key: format!("change-shape {}", b.id),
+                    category: Category::SourceBreaking,
+                    detail: format!("{} changed", kind_name(&b.kind)),
+                });
+            }
         }
         // A shape whose kind changed (structure -> enum, ...) is not a smooth
         // diff: the old kind is gone and a new one takes its id.
@@ -635,165 +651,4 @@ fn is_deprecated(traits: &[Trait]) -> bool {
     traits
         .iter()
         .any(|t| t.id == "deprecated" || t.id == "core#deprecated")
-}
-
-/// A compact, human-readable spelling of a type reference for change details.
-fn render_tref(t: &Tref) -> String {
-    match t {
-        Tref::Prim(p) => format!("{p:?}").to_lowercase(),
-        Tref::Param(name) => name.clone(),
-        Tref::Ref { id, args } if args.is_empty() => id.clone(),
-        Tref::Ref { id, args } => {
-            let inner: Vec<String> = args.iter().map(render_tref).collect();
-            format!("{id}<{}>", inner.join(", "))
-        }
-        Tref::List(inner) => format!("list<{}>", render_tref(inner)),
-        Tref::Map(k, v) => format!("map<{}, {}>", render_tref(k), render_tref(v)),
-    }
-}
-
-fn render_opt(t: &Option<Tref>) -> String {
-    match t {
-        Some(t) => render_tref(t),
-        None => "none".into(),
-    }
-}
-
-fn kind_name(kind: &ShapeKind) -> &'static str {
-    match kind {
-        ShapeKind::Structure { .. } => "structure",
-        ShapeKind::Union { .. } => "union",
-        ShapeKind::Enum { .. } => "enum",
-        ShapeKind::Service { .. } => "service",
-        ShapeKind::Operation { .. } => "operation",
-        ShapeKind::Entry { .. } => "entry",
-        ShapeKind::Config { .. } => "config",
-    }
-}
-
-fn backing_name(b: &EnumBacking) -> &'static str {
-    match b {
-        EnumBacking::String => "string",
-        EnumBacking::Int => "int",
-    }
-}
-
-fn constraint_name(c: &Constraint) -> &'static str {
-    match c {
-        Constraint::Range { .. } => "range",
-        Constraint::Length { .. } => "length",
-        Constraint::Pattern(_) => "pattern",
-        Constraint::MultipleOf(_) => "multipleOf",
-    }
-}
-
-/// Whether two constraints are the same variant (so they pair up for a tightening
-/// comparison rather than reading as an add/remove).
-fn same_constraint_kind(a: &Constraint, b: &Constraint) -> bool {
-    constraint_name(a) == constraint_name(b)
-}
-
-/// Whether `new` rejects values `old` accepted. Bounds narrowing (a raised min, a
-/// lowered max, or an inclusive bound made exclusive) tightens; `Pattern` and
-/// `MultipleOf` are treated conservatively (any change tightens) since proving a
-/// looser regex or modulus dependency-free is not worth it.
-fn tightened(old: &Constraint, new: &Constraint) -> bool {
-    match (old, new) {
-        (
-            Constraint::Range {
-                min: omin,
-                max: omax,
-                excl_min: oemin,
-                excl_max: oemax,
-            },
-            Constraint::Range {
-                min: nmin,
-                max: nmax,
-                excl_min: nemin,
-                excl_max: nemax,
-            },
-        ) => {
-            raised(*omin, *nmin)
-                || lowered(*omax, *nmax)
-                || (!oemin && *nemin)
-                || (!oemax && *nemax)
-        }
-        (
-            Constraint::Length {
-                min: omin,
-                max: omax,
-            },
-            Constraint::Length {
-                min: nmin,
-                max: nmax,
-            },
-        ) => {
-            raised(omin.map(|v| v as f64), nmin.map(|v| v as f64))
-                || lowered(omax.map(|v| v as f64), nmax.map(|v| v as f64))
-        }
-        (Constraint::Pattern(o), Constraint::Pattern(n)) => o != n,
-        (Constraint::MultipleOf(o), Constraint::MultipleOf(n)) => o != n,
-        _ => false,
-    }
-}
-
-/// A lower bound is tighter when it appears where there was none, or moves up.
-fn raised(old: Option<f64>, new: Option<f64>) -> bool {
-    match (old, new) {
-        (_, None) => false,
-        (None, Some(_)) => true,
-        (Some(o), Some(n)) => n > o,
-    }
-}
-
-/// An upper bound is tighter when it appears where there was none, or moves down.
-fn lowered(old: Option<f64>, new: Option<f64>) -> bool {
-    match (old, new) {
-        (_, None) => false,
-        (None, Some(_)) => true,
-        (Some(o), Some(n)) => n < o,
-    }
-}
-
-/// Multiset equality over type references: order-independent, and each element
-/// must appear the same number of times on both sides (so `[X, X, Y]` and
-/// `[X, Y, Y]` differ). `Tref` is not hashable, so this counts occurrences.
-fn same_set(a: &[Tref], b: &[Tref]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .all(|t| a.iter().filter(|x| *x == t).count() == b.iter().filter(|x| *x == t).count())
-}
-
-/// Whether a shape's members / operation signature reference a target id.
-fn references(shape: &Shape, target: &str) -> bool {
-    let refs_tref = |t: &Tref| tref_references(t, target);
-    match &shape.kind {
-        ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => {
-            members.iter().any(|m| refs_tref(&m.target))
-        }
-        ShapeKind::Operation {
-            input,
-            output,
-            errors,
-        } => {
-            input.as_ref().is_some_and(&refs_tref)
-                || output.as_ref().is_some_and(&refs_tref)
-                || errors.iter().any(refs_tref)
-        }
-        ShapeKind::Enum { .. } | ShapeKind::Service { .. } => false,
-        ShapeKind::Entry { fields, operations } => {
-            fields.iter().any(|f| refs_tref(&f.target))
-                || operations.iter().any(|op| references(op, target))
-        }
-        ShapeKind::Config { fields } => fields.iter().any(|f| refs_tref(&f.target)),
-    }
-}
-
-fn tref_references(t: &Tref, target: &str) -> bool {
-    match t {
-        Tref::Ref { id, args } => id == target || args.iter().any(|a| tref_references(a, target)),
-        Tref::List(inner) => tref_references(inner, target),
-        Tref::Map(k, v) => tref_references(k, target) || tref_references(v, target),
-        Tref::Prim(_) | Tref::Param(_) => false,
-    }
 }

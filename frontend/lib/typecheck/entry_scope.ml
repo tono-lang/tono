@@ -227,7 +227,10 @@ let check_cycles ctx (fields : Ast.member list) : Diagnostic.t list =
 
 (* [broken name] is the chain from [name] down to the first dependency that
    declares no source at all, or [None] when the field statically resolves.
-   Cycles are reported separately, so an active node cuts off as resolvable. *)
+   Cycles are reported separately, so an active node cuts off as resolvable;
+   a [None] memoized under that cutoff can then hide a chain reachable another
+   way, which is sound only because any such graph already carries the cycle
+   error. *)
 let broken ctx (fields : Ast.member list) : string -> string list option =
   let memo = Hashtbl.create 16 in
   let rec go active name =

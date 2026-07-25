@@ -5,7 +5,10 @@
    lines. Repeatable vocabulary (@errors, @header, @env, @default, @str::*,
    @rename keyed by language) stays untouched. *)
 
-let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
+(* A warning, not an error: the duplicate was harmless before (a single
+   occurrence won), so existing specs keep compiling while the accident
+   surfaces. *)
+let warn code span fmt = Printf.ksprintf (Diagnostic.warning ~code span) fmt
 
 let non_repeatable =
   [
@@ -32,7 +35,7 @@ let dups ?(hint = "") (traits : Ast.trait list) : Diagnostic.t list =
         let here =
           if List.mem tr.Ast.tname non_repeatable && List.mem tr.tname seen then
             [
-              err Error_codes.duplicate_trait tr.tspan
+              warn Error_codes.duplicate_trait tr.tspan
                 "duplicate @%s: this trait is not repeatable%s" tr.tname hint;
             ]
           else []

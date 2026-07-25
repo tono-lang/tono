@@ -137,7 +137,14 @@ let decode_select j =
   let decode_arm aj =
     let* akvs = as_assoc aj in
     let* () = ensure_only [ "pattern"; "value" ] akvs in
-    let pattern = List.assoc_opt "pattern" akvs in
+    (* A present null collapses to the wildcard: patterns are scalar literals,
+       and the Rust mirror's Option maps null to absent, so both sides must
+       read the two spellings identically. *)
+    let pattern =
+      match List.assoc_opt "pattern" akvs with
+      | Some `Null | None -> None
+      | p -> p
+    in
     let* value =
       match List.assoc_opt "value" akvs with
       | Some v -> decode_arm_value v

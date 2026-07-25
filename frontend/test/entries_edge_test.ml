@@ -584,7 +584,7 @@ let header_key_template_and_literal_value () =
        \  ep: string @env(\"EP\")\n\
        \  k: string @env(\"K\")\n\
        \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
-        @header(\"X-{.k}\", \"v\") @header(\"Y\", \"{.k}-suffix\")\n\
+        @header(\"X-{.k}\", \"v\") @header(\"Y\", .k)\n\
         }\n" ^ wire)
   in
   match desc with
@@ -594,17 +594,40 @@ let header_key_template_and_literal_value () =
           (`List
              [
                `List [ key1; `Assoc [ ("lit", `String "v") ] ];
-               `List [ _key2; `Assoc [ ("template", `List parts) ] ];
+               `List [ _key2; `Assoc [ ("field", `List [ `String "k" ]) ] ];
              ]) ->
           Alcotest.(check bool)
             "templated key has a field part" true
             (match key1 with
             | `List [ `Assoc [ ("lit", _) ]; `Assoc [ ("field", _) ] ] -> true
-            | _ -> false);
-          Alcotest.(check int)
-            "value template has two parts" 2 (List.length parts)
+            | _ -> false)
       | _ -> Alcotest.fail "unexpected request_headers shape")
   | _ -> Alcotest.fail "descriptor is not an object"
+
+(* The resolver stays data-driven: a template that reaches a header value in
+   hand-authored IR is forwarded, even though the surface rejects it. *)
+let resolver_tolerates_value_template () =
+  let op : Ir.shape =
+    {
+      id = "m#c.o";
+      kind = Ir.Operation { input = None; output = None; errors = [] };
+      traits =
+        [
+          { Ir.trait_id = "http"; value = `Assoc [ ("method", `String "GET") ] };
+          {
+            Ir.trait_id = "header";
+            value = `List [ `String "K"; `String "{.k}-x" ];
+          };
+        ];
+    }
+  in
+  match Protocol_http.resolve_op (fun _ -> None) op with
+  | Some d -> (
+      match d.request_headers with
+      | [ (_, Protocol_http.Vtemplate parts) ] ->
+          Alcotest.(check int) "template parts" 2 (List.length parts)
+      | _ -> Alcotest.fail "expected one templated header value")
+  | None -> Alcotest.fail "no descriptor"
 
 let () =
   Alcotest.run "entries_edge"
@@ -732,5 +755,7 @@ let () =
         [
           Alcotest.test_case "header templates" `Quick
             header_key_template_and_literal_value;
+          Alcotest.test_case "resolver value template" `Quick
+            resolver_tolerates_value_template;
         ] );
     ]

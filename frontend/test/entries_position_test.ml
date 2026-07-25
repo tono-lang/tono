@@ -117,9 +117,128 @@ let config_boundary_names_composition_point () =
     (contains (List.hd diags).message
        "composes it via @bind on field 'settings'")
 
+(* ── Typed refs and remaining review paths ─────────────────────────────── *)
+
+let bind_type_mismatch_rejected () =
+  expect "i32 bound into a string field" [ "TC0042" ]
+    ("struct conf { api_key: string @env(\"K\") }\n"
+   ^ "pub struct c {\n\
+     \  max_retries: i32 @with @default(3)\n\
+     \  s: conf @bind(api_key, .max_retries)\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep)\n\
+      }\n" ^ wire)
+
+let env_ref_must_be_string () =
+  expect "i32 naming an env variable" [ "TC0035" ]
+    (entry "  n: i32 @with @default(1)\n  k: string @env(.n)")
+
+let duplicate_entry_op_rejected () =
+  expect "two ops with one name" [ "TC0002" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: \"/a\", endpoint: .ep)\n\
+     \  op o(): r @http(method: \"GET\", path: \"/b\", endpoint: .ep)\n\
+      }\n" ^ wire)
+
+let header_value_template_rejected () =
+  expect "template in a header value" [ "TC0044" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
+      @header(\"K\", \"{.ep}-x\")\n\
+      }\n" ^ wire)
+
+let header_key_input_placeholder_rejected () =
+  expect "input placeholder in a header key" [ "TC0044" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
+      @header(\"X-{id}\", .ep)\n\
+      }\n" ^ wire)
+
+let unterminated_path_placeholder_diagnosed () =
+  let diags =
+    check
+      ("pub struct c {\n\
+       \  ep: string @env(\"EP\")\n\
+       \  op o(): r @http(method: \"GET\", path: \"/x{oops\", endpoint: .ep)\n\
+        }\n" ^ wire)
+  in
+  Alcotest.(check bool)
+    "unterminated brace reported" true
+    (List.exists
+       (fun (d : Diagnostic.t) -> contains d.message "unterminated '{'")
+       diags)
+
+let duplicate_trait_is_a_warning () =
+  let diags = check "@doc(\"a\")\n@doc(\"b\")\nstruct s { x: string }" in
+  match diags with
+  | [ d ] ->
+      Alcotest.(check bool)
+        "warning severity" true
+        (d.severity = Diagnostic.Warning)
+  | _ -> Alcotest.fail "expected exactly one diagnostic"
+
+let source_marker_args_diagnosed () =
+  let lower_msgs src =
+    let file, _ = Parser.parse src in
+    let diags = ref [] in
+    ignore (Lower.lower_file ~module_name:"m" ~diags file);
+    List.map (fun (d : Diagnostic.t) -> d.message) !diags
+  in
+  let has src frag =
+    Alcotest.(check bool)
+      frag true
+      (List.exists (fun m -> contains m frag) (lower_msgs src))
+  in
+  has "struct s { a: string @arg(5), op ping() }" "@arg takes no arguments";
+  has "struct s { a: string @with(x), op ping() }" "@with takes no arguments";
+  has "struct s { a: string @default(\"x\", \"y\"), op ping() }"
+    "@default takes a single value"
+
+let null_pattern_decodes_as_wildcard () =
+  match
+    Ir_json.decode_select
+      (`Assoc
+         [
+           ("subject", `List [ `String "v" ]);
+           ( "arms",
+             `List
+               [
+                 `Assoc
+                   [ ("pattern", `Null); ("value", `Assoc [ ("lit", `Null) ]) ];
+               ] );
+         ])
+  with
+  | Ok { arms = [ { arm_pattern = None; _ } ]; _ } -> ()
+  | Ok _ -> Alcotest.fail "null pattern did not collapse to the wildcard"
+  | Error e -> Alcotest.failf "decode failed: %s" e
+
 let () =
   Alcotest.run "entries_position"
     [
+      ( "typed-refs",
+        [
+          Alcotest.test_case "bind type mismatch" `Quick
+            bind_type_mismatch_rejected;
+          Alcotest.test_case "env ref must be string" `Quick
+            env_ref_must_be_string;
+          Alcotest.test_case "duplicate entry op" `Quick
+            duplicate_entry_op_rejected;
+          Alcotest.test_case "header value template" `Quick
+            header_value_template_rejected;
+          Alcotest.test_case "header key input placeholder" `Quick
+            header_key_input_placeholder_rejected;
+          Alcotest.test_case "unterminated path placeholder" `Quick
+            unterminated_path_placeholder_diagnosed;
+          Alcotest.test_case "duplicate trait is a warning" `Quick
+            duplicate_trait_is_a_warning;
+          Alcotest.test_case "source marker args" `Quick
+            source_marker_args_diagnosed;
+          Alcotest.test_case "null pattern wildcard" `Quick
+            null_pattern_decodes_as_wildcard;
+        ] );
       ( "silent-drop",
         [
           Alcotest.test_case "wire member match" `Quick
