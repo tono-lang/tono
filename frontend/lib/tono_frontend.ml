@@ -15,6 +15,7 @@ module Parser = Parser
 module Printer = Printer
 module Lower = Lower
 module Typecheck = Typecheck
+module Check_ext = Check_ext
 module Protocol_http = Protocol_http
 module Modules = Modules
 module Error_codes = Error_codes

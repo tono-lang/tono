@@ -49,25 +49,30 @@ let definition_miss () =
   | None -> ()
   | Some _ -> Alcotest.fail "keyword position is not a reference"
 
-let hover_decl () =
-  let file = Analysis.parse two_shapes in
-  match Analysis.hover_at ~text:two_shapes ~file (pos 0 8) with
-  | None -> Alcotest.fail "expected hover on a declaration name"
+(* The hover markup value at a position, or a test failure. *)
+let hover_value ?(markdown = false) (src : string) (p : Position.t) : string =
+  let file = Analysis.parse src in
+  match Analysis.hover_at ~markdown ~text:src ~file p with
+  | None -> Alcotest.fail "expected a hover"
   | Some h -> (
       match h.Hover.contents with
-      | `MarkupContent mc ->
-          Alcotest.(check bool)
-            "describes the struct" true
-            (contains mc.MarkupContent.value "struct point")
+      | `MarkupContent mc -> mc.MarkupContent.value
       | _ -> Alcotest.fail "expected markup content")
 
+let hover_decl () =
+  let v = hover_value two_shapes (pos 0 8) in
+  Alcotest.(check bool)
+    "prints the full declaration" true
+    (contains v "struct point {")
+
+let completion_labels (src : string) (p : Position.t) : string list =
+  let file = Analysis.parse src in
+  List.map
+    (fun (c : CompletionItem.t) -> c.label)
+    (Analysis.completions ~text:src ~file p)
+
 let completions_list () =
-  let file = Analysis.parse two_shapes in
-  let labels =
-    List.map
-      (fun (c : CompletionItem.t) -> c.label)
-      (Analysis.completions ~file)
-  in
+  let labels = completion_labels two_shapes (pos 0 0) in
   Alcotest.(check bool) "declared shape point" true (List.mem "point" labels);
   Alcotest.(check bool) "declared shape edge" true (List.mem "edge" labels);
   Alcotest.(check bool) "primitive i64" true (List.mem "i64" labels)
@@ -146,7 +151,7 @@ let utf16_offset_of_position () =
 
 let utf16_hover_range () =
   let file = Analysis.parse accented in
-  match Analysis.hover_at ~text:accented ~file (pos 0 20) with
+  match Analysis.hover_at ~markdown:false ~text:accented ~file (pos 0 20) with
   | None -> Alcotest.fail "hover lands on the declaration name"
   | Some h -> (
       match h.Hover.range with
@@ -166,6 +171,86 @@ let utf16_rename_range () =
       Alcotest.(check int)
         "edit starts at the utf16 column" 20 edit.TextEdit.range.start.character
   | _ -> Alcotest.fail "expected a single-document change set"
+
+(* --- hover content layer --- *)
+
+let documented =
+  "@doc(\"The point.\") struct point { at: edge }\nstruct edge { x: i64 }"
+
+let hover_markdown_decl () =
+  let v = hover_value ~markdown:true documented (pos 0 27) in
+  Alcotest.(check bool) "fenced tono block" true (contains v "```tono");
+  Alcotest.(check bool)
+    "prints the declaration" true
+    (contains v "struct point");
+  Alcotest.(check bool) "doc renders as prose" true (contains v "The point.");
+  Alcotest.(check bool)
+    "the doc trait stays out of the code block" false (contains v "@doc(")
+
+let hover_member () =
+  let v = hover_value two_shapes (pos 0 15) in
+  Alcotest.(check bool) "name and type" true (contains v "at: edge")
+
+let hover_type_ref_shows_target_decl () =
+  let v = hover_value two_shapes (pos 0 20) in
+  Alcotest.(check bool)
+    "the full target declaration" true
+    (contains v "struct edge {")
+
+let hover_keyword () =
+  let v = hover_value two_shapes (pos 0 2) in
+  Alcotest.(check bool)
+    "explains the construct" true
+    (contains v "record shape")
+
+let hover_hook_word_lists_the_lifecycle () =
+  let src = "ext hook before_request {\n  ts: \"ext/a.ts#f\"\n}" in
+  let v = hover_value src (pos 0 5) in
+  Alcotest.(check bool)
+    "slots come from the checker table" true (contains v "client_init")
+
+let hover_primitive () =
+  let v = hover_value two_shapes (pos 1 18) in
+  Alcotest.(check bool)
+    "explains the wire form" true
+    (contains v "string on the wire")
+
+let hover_nullable_marker () =
+  let v = hover_value "struct s { n: string? }" (pos 0 20) in
+  Alcotest.(check bool)
+    "explains two-state nullability" true
+    (contains v "present or absent")
+
+let hover_trait_contract () =
+  let src =
+    "op create(point): point\n\
+    \  @http(method: \"POST\", path: \"/points\")\n\
+     struct point { x: i64 }"
+  in
+  let v = hover_value src (pos 1 4) in
+  Alcotest.(check bool) "lists the valid keys" true (contains v "method")
+
+(* --- contextual completion --- *)
+
+let completion_after_at () =
+  let labels = completion_labels "struct s { x: i64 }\n@" (pos 1 1) in
+  Alcotest.(check bool) "offers traits" true (List.mem "http" labels);
+  Alcotest.(check bool) "no shapes here" false (List.mem "s" labels)
+
+let completion_hook_slots () =
+  let labels = completion_labels "ext hook " (pos 0 9) in
+  Alcotest.(check int) "exactly the lifecycle" 4 (List.length labels);
+  Alcotest.(check bool) "a real slot" true (List.mem "before_request" labels)
+
+let completion_type_position () =
+  let labels = completion_labels "struct s { x: " (pos 0 14) in
+  Alcotest.(check bool) "primitives" true (List.mem "i64" labels);
+  Alcotest.(check bool) "declared shapes" true (List.mem "s" labels);
+  Alcotest.(check bool) "no traits" false (List.mem "http" labels)
+
+let completion_op_input_is_a_type_position () =
+  let labels = completion_labels "op f(" (pos 0 5) in
+  Alcotest.(check bool) "primitives in op input" true (List.mem "i64" labels)
 
 let () =
   Alcotest.run "analysis"
@@ -199,5 +284,26 @@ let () =
             utf16_offset_of_position;
           Alcotest.test_case "hover range" `Quick utf16_hover_range;
           Alcotest.test_case "rename range" `Quick utf16_rename_range;
+        ] );
+      ( "hover content",
+        [
+          Alcotest.test_case "markdown declaration" `Quick hover_markdown_decl;
+          Alcotest.test_case "member" `Quick hover_member;
+          Alcotest.test_case "type ref shows target" `Quick
+            hover_type_ref_shows_target_decl;
+          Alcotest.test_case "keyword" `Quick hover_keyword;
+          Alcotest.test_case "hook lifecycle" `Quick
+            hover_hook_word_lists_the_lifecycle;
+          Alcotest.test_case "primitive" `Quick hover_primitive;
+          Alcotest.test_case "nullable marker" `Quick hover_nullable_marker;
+          Alcotest.test_case "trait contract" `Quick hover_trait_contract;
+        ] );
+      ( "completion context",
+        [
+          Alcotest.test_case "after @" `Quick completion_after_at;
+          Alcotest.test_case "hook slots" `Quick completion_hook_slots;
+          Alcotest.test_case "type position" `Quick completion_type_position;
+          Alcotest.test_case "op input" `Quick
+            completion_op_input_is_a_type_position;
         ] );
     ]

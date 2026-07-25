@@ -84,6 +84,21 @@ let initialize_result () : InitializeResult.t =
 let doc_text uri =
   Option.map Text_document.text (Hashtbl.find_opt store (key uri))
 
+(* Whether the client renders markdown hover, learned at initialize; picks the
+   hover content flavor for the whole session. *)
+let client_markdown = ref false
+
+let remember_markdown (caps : ClientCapabilities.t) : unit =
+  client_markdown :=
+    match
+      Option.bind caps.textDocument
+        (fun (td : TextDocumentClientCapabilities.t) ->
+          Option.bind td.hover (fun (h : HoverClientCapabilities.t) ->
+              h.contentFormat))
+    with
+    | Some formats -> List.mem MarkupKind.Markdown formats
+    | None -> false
+
 (* Dispatch a single request. The GADT ties each constructor to its response
    type, so [handle] is written with a locally-abstract result type and the
    compiler checks each arm returns the right shape. Unsupported methods raise a
@@ -95,12 +110,15 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
         (Jsonrpc.Response.Error.make ~code:InvalidRequest ~message ())
   | Ok (CR.E r) -> (
       let handle : type resp. resp CR.t -> resp = function
-        | CR.Initialize _ -> initialize_result ()
+        | CR.Initialize p ->
+            remember_markdown p.capabilities;
+            initialize_result ()
         | CR.Shutdown -> ()
         | CR.TextDocumentHover p -> (
             match doc_text p.textDocument.uri with
             | Some text ->
-                Analysis.hover_at ~text ~file:(Analysis.parse text) p.position
+                Analysis.hover_at ~markdown:!client_markdown ~text
+                  ~file:(Analysis.parse text) p.position
             | None -> None)
         | CR.TextDocumentDefinition p -> (
             match doc_text p.textDocument.uri with
@@ -115,7 +133,10 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
         | CR.TextDocumentCompletion p -> (
             match doc_text p.textDocument.uri with
             | Some text ->
-                Some (`List (Analysis.completions ~file:(Analysis.parse text)))
+                Some
+                  (`List
+                     (Analysis.completions ~text ~file:(Analysis.parse text)
+                        p.position))
             | None -> Some (`List []))
         | CR.TextDocumentReferences p -> (
             match doc_text p.textDocument.uri with

@@ -18,9 +18,18 @@ val parse : string -> Tono_frontend.Ast.file
 (* Full diagnostics (parse + lower + typecheck) for a document, as LSP values. *)
 val lsp_diagnostics : string -> Diagnostic.t list
 
-(* Hover for the node under the cursor: a declaration name or a type reference. *)
+(* Hover for the node under the cursor, most specific first: a declaration
+   name or a member name (the declaration or member pretty-printed by the
+   canonical fmt printer plus its @doc prose), a type reference (the full
+   target declaration), a trait (its contract), then keywords, primitives, and
+   the ? marker. [markdown] selects a fenced tono code block or the plaintext
+   fallback for clients without markdown support. *)
 val hover_at :
-  text:string -> file:Tono_frontend.Ast.file -> Position.t -> Hover.t option
+  markdown:bool ->
+  text:string ->
+  file:Tono_frontend.Ast.file ->
+  Position.t ->
+  Hover.t option
 
 (* Go-to-definition: a type reference under the cursor resolves to the declaring
    shape's name location in the same document. *)
@@ -31,8 +40,14 @@ val definition_at :
   Position.t ->
   Location.t option
 
-(* Completions: the file's declared shapes plus the primitive keywords. *)
-val completions : file:Tono_frontend.Ast.file -> CompletionItem.t list
+(* Context-aware completions: traits after `@`, lifecycle slots after
+   `ext hook`, primitives plus declared shapes in type position, and the flat
+   list of shapes and primitives elsewhere. *)
+val completions :
+  text:string ->
+  file:Tono_frontend.Ast.file ->
+  Position.t ->
+  CompletionItem.t list
 
 (* Find references: every use of the name under the cursor (declaration site
    included when [include_decl]). *)
