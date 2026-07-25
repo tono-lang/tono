@@ -53,6 +53,19 @@ impl Formatter {
         }
     }
 
+    /// The official formatter for `target`: every generated file must pass through
+    /// it before reaching a reader.
+    pub fn for_target(target: crate::codegen::TargetKind) -> Self {
+        use crate::codegen::TargetKind;
+        match target {
+            TargetKind::Rust => Formatter::new("rustfmt", vec!["--edition".into(), "2021".into()]),
+            TargetKind::Go => Formatter::new("gofmt", vec![]),
+            TargetKind::TypeScript => {
+                Formatter::new("prettier", vec!["--parser".into(), "typescript".into()])
+            }
+        }
+    }
+
     /// Format `rough` by piping it through the subprocess. On a missing binary
     /// or a non-zero exit, return the rough text unchanged with a warning;
     /// never fail.

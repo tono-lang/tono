@@ -8,6 +8,7 @@
 //! rules are supplied by target backends.
 
 pub mod casing;
+pub mod check;
 pub mod conventions;
 pub mod doc;
 pub mod extensions;
@@ -28,6 +29,7 @@ pub mod tree;
 pub mod validation;
 
 pub use casing::{CaseStyle, CasingConfig};
+pub use check::{check, CheckOptions, CheckOutcome};
 pub use format::{Formatted, Formatter};
 pub use modules::CodegenConfig;
 pub use pipeline::{
