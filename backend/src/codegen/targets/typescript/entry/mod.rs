@@ -27,8 +27,7 @@ use crate::codegen::targets::typescript::types::{type_expr_of, TsVal, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
 use crate::ir::{
-    ArmValue, EntryField, EnvName, Member, Module, Prim, Shape, ShapeKind, Source, TemplatePart,
-    Tref,
+    EntryField, EnvName, Member, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref,
 };
 
 /// The runtime package (same one the loose-op client uses).

@@ -147,68 +147,6 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn arm_stmts(
-        &mut self,
-        field: &EntryField,
-        value: &ArmValue,
-        dest: &str,
-        why: &str,
-        guaranteed: bool,
-    ) -> String {
-        match value {
-            ArmValue::Lit(v) => format!("{dest} = {}", literal(&field.target, v)),
-            ArmValue::Field(path) => {
-                let head = path.first().cloned().unwrap_or_default();
-                let expr = self.path_expr(path);
-                if self.guaranteed(&head) {
-                    format!("{dest} = {expr}")
-                } else {
-                    format!(
-                        "if {head_why} != \"\" {{\n\t{why} = \"{head} <- \" + {head_why}\n}} else {{\n\t{dest} = {expr}\n}}",
-                        head_why = why_var(&head),
-                    )
-                }
-            }
-            ArmValue::Sources(sources) => {
-                let stub = plan::arm_sources(field, sources);
-                if guaranteed {
-                    self.chain_guaranteed(&stub, dest)
-                } else {
-                    format!(
-                        "{why} = \"no source\"\n{}",
-                        self.chain_sequential(&stub, dest, why)
-                    )
-                }
-            }
-        }
-    }
-
-    /// A non-guaranteed chain body (used inside a match arm), relative to column
-    /// zero: the first source runs unconditionally, later ones guard on the
-    /// why-var.
-    fn chain_sequential(&mut self, field: &EntryField, dest: &str, why: &str) -> String {
-        let mut out = String::new();
-        let mut first = true;
-        for source in &field.sources {
-            let step = match source {
-                Source::With => self.with_step_body(field, dest, why),
-                Source::Env(name) => self.env_step_body(field, name, dest, why),
-                Source::Default(v) => {
-                    format!("{dest} = {}\n{why} = \"\"", literal(&field.target, v))
-                }
-                Source::Arg => continue,
-            };
-            if first {
-                out.push_str(&step);
-                out.push('\n');
-                first = false;
-            } else {
-                out.push_str(&format!("if {why} != \"\" {{\n{}\n}}\n", nest(&step, 1)));
-            }
-        }
-        out
-    }
-
     /// The template split: each part as a Go string expression, plus the
     /// non-guaranteed heads it reads (first-appearance order).
     fn format_pieces(&mut self, parts: &[TemplatePart]) -> (Vec<String>, Vec<String>) {
@@ -264,27 +202,6 @@ impl Resolver<'_, '_> {
         let label = self.env_label(name);
         let miss = self.env_miss_reason(name);
         Some((dest, why, lookup, label, miss))
-    }
-
-    fn member_arm_body(&mut self, member: &EntryField, value: &ArmValue, dest: &str) -> String {
-        match value {
-            ArmValue::Lit(v) => format!("{dest} = {}", literal(&member.target, v)),
-            ArmValue::Field(path) => {
-                let head = path.first().cloned().unwrap_or_default();
-                let expr = self.path_expr(path);
-                if self.guaranteed(&head) {
-                    format!("{dest} = {expr}")
-                } else {
-                    format!(
-                        "if {head_why} == \"\" {{\n\t{dest} = {expr}\n}}",
-                        head_why = why_var(&head),
-                    )
-                }
-            }
-            ArmValue::Sources(sources) => {
-                self.member_chain_body(&plan::arm_sources(member, sources), dest)
-            }
-        }
     }
 }
 
@@ -429,64 +346,52 @@ impl Emitter for Resolver<'_, '_> {
         out
     }
 
-    /// `field: T = match .subject { ... }` lowered to the native switch,
-    /// relative to column zero.
-    fn select_body(&mut self, field: &EntryField, dest: &str) -> String {
-        let Some(select) = field.select.clone() else {
-            return String::new();
-        };
-        let guaranteed = self.entry.is_guaranteed(field);
-        let why = why_var(&field.name);
-        let subject_head = select.subject.first().cloned().unwrap_or_default();
-        let subject_expr = self.path_expr(&select.subject);
-        let mut arms = String::new();
-        let mut saw_wildcard = false;
-        for arm in &select.arms {
-            let stmts = self.arm_stmts(field, &arm.value, dest, &why, guaranteed);
-            match &arm.pattern {
-                Some(p) => {
-                    arms.push_str(&format!(
-                        "case {}:\n{}\n",
-                        pattern_literal(p),
-                        nest(&stmts, 1)
-                    ));
-                }
-                None => {
-                    saw_wildcard = true;
-                    arms.push_str(&format!("default:\n{}\n", nest(&stmts, 1)));
-                }
-            }
-        }
-        if !saw_wildcard {
-            // Every enum is open, so an undeclared value can still arrive at
-            // run time even with total declared coverage. Failing construction
-            // beats freezing a silent zero value into the resolved settings.
-            let miss = if guaranteed {
-                self.import("fmt", "fmt");
-                format!(
-                    "return nil, fmt.Errorf(\"{field}: match on {subject}: unmatched value %v\", {subject_expr})",
-                    field = field.name,
-                    subject = subject_head,
-                )
-            } else {
-                format!("{why} = \"match: unmatched value\"")
-            };
-            arms.push_str(&format!("default:\n{}\n", nest(&miss, 1)));
-        }
-        let switch = format!("switch {subject_expr} {{\n{arms}}}");
-        let guarded = if self.guaranteed(&subject_head) {
-            switch
-        } else {
-            format!(
-                "if {subj_why} != \"\" {{\n\t{why} = \"{subject_head} <- \" + {subj_why}\n}} else {{\n{sw}\n}}",
-                subj_why = why_var(&subject_head),
-                sw = nest(&switch, 1),
-            )
-        };
+    fn switch_header(&self, subject: &str) -> String {
+        format!("switch {subject}")
+    }
+
+    fn case_open(&self, pattern: &str) -> String {
+        format!("case {pattern}:")
+    }
+
+    fn default_open(&self) -> String {
+        "default:".to_string()
+    }
+
+    fn case_tail(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn case_close(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn pattern_lit(&self, pattern: &serde_json::Value) -> String {
+        pattern_literal(pattern)
+    }
+
+    /// Every enum is open, so an undeclared value can still arrive at run time
+    /// even with total declared coverage. Failing construction beats freezing a
+    /// silent zero value into the resolved settings.
+    fn select_miss(
+        &mut self,
+        field: &EntryField,
+        subject_head: &str,
+        subject_expr: &str,
+        guaranteed: bool,
+    ) -> Leaf {
         if guaranteed {
-            guarded
+            self.import("fmt", "fmt");
+            Leaf(format!(
+                "return nil, fmt.Errorf(\"{field}: match on {subject}: unmatched value %v\", {subject_expr})",
+                field = field.name,
+                subject = subject_head,
+            ))
         } else {
-            format!("{why} := \"\"\n{guarded}")
+            Leaf(format!(
+                "{} = \"match: unmatched value\"",
+                why_var(&field.name)
+            ))
         }
     }
 
@@ -593,40 +498,6 @@ impl Emitter for Resolver<'_, '_> {
         );
         out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
         out
-    }
-
-    /// A member match, lowered without a why-var: an absent subject or an
-    /// unmatched value leaves the member's zero value. Relative to column zero.
-    fn member_select_body(&mut self, member: &EntryField, dest: &str) -> String {
-        let Some(select) = member.select.clone() else {
-            return String::new();
-        };
-        let subject_head = select.subject.first().cloned().unwrap_or_default();
-        let subject_expr = self.path_expr(&select.subject);
-        let mut arms = String::new();
-        for arm in &select.arms {
-            let stmts = self.member_arm_body(member, &arm.value, dest);
-            match &arm.pattern {
-                Some(p) => {
-                    arms.push_str(&format!(
-                        "case {}:\n{}\n",
-                        pattern_literal(p),
-                        nest(&stmts, 1)
-                    ));
-                }
-                None => arms.push_str(&format!("default:\n{}\n", nest(&stmts, 1))),
-            }
-        }
-        let switch = format!("switch {subject_expr} {{\n{arms}}}");
-        if self.guaranteed(&subject_head) {
-            switch
-        } else {
-            format!(
-                "if {subj_why} == \"\" {{\n{}\n}}",
-                nest(&switch, 1),
-                subj_why = why_var(&subject_head),
-            )
-        }
     }
 
     fn member_chain_body(&mut self, stub: &EntryField, dest: &str) -> String {
