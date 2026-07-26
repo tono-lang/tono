@@ -202,7 +202,9 @@ pub trait Emitter {
     //     cascade, TypeScript a set-flag sequence, so neither is shared). Each
     //     returns already-spelled statements the builders wrap into the tree. ---
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String;
-    fn format_body(&mut self, field: &EntryField, dest: &str) -> String;
+    /// The `@format` assignment itself (`dest = cast(part + part + ..)` with the
+    /// `@str::*` pipeline folded in); the deferral guard around it is shared.
+    fn format_assign(&mut self, field: &EntryField, dest: &str) -> String;
     fn transforms_body(&mut self, field: &EntryField, dest: &str) -> Option<String>;
     fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String;
     fn json_body(&mut self, field: &EntryField) -> String;
@@ -267,7 +269,7 @@ pub fn build_field<'a>(
 fn build_scalar(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter) -> Stmt {
     let dest = e.dest(&field.name);
     if field.format.is_some() {
-        return Stmt::Leaf(Leaf(e.format_body(field, &dest)));
+        return build_format(field, entry, e, &dest);
     }
     let head = if has_arg(field) {
         Stmt::Leaf(e.assign_arg(field, &dest))
@@ -279,6 +281,37 @@ fn build_scalar(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter) -> 
     seq(vec![
         head,
         opt_leaf(e.transforms_body(field, &dest).map(Leaf)),
+    ])
+}
+
+/// A `@format` derivation: the assignment is a per-target leaf (template concat,
+/// cast, and the `@str::*` pipeline folded in); the deferral guard is shared. A
+/// template that reads a deferred head assigns only once every head resolves,
+/// carrying the last miss reason otherwise.
+fn build_format(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, dest: &str) -> Stmt {
+    let Some(parts) = field.format.clone() else {
+        return Stmt::Nop;
+    };
+    let assign = Stmt::Leaf(Leaf(e.format_assign(field, dest)));
+    let deps = format_absent_deps(entry, &parts);
+    if deps.is_empty() {
+        return assign;
+    }
+    let arms = deps
+        .iter()
+        .map(|dep| {
+            (
+                e.cond_why_absent(dep),
+                Stmt::Leaf(e.assign_reason(&field.name, dep)),
+            )
+        })
+        .collect();
+    seq(vec![
+        Stmt::Leaf(e.why_open(&field.name, "")),
+        Stmt::If {
+            arms,
+            otherwise: Some(Box::new(assign)),
+        },
     ])
 }
 
@@ -387,7 +420,7 @@ fn build_member(member: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, de
     let head = if member.select.is_some() {
         build_member_select(member, entry, e, dest)
     } else if member.format.is_some() {
-        Stmt::Leaf(Leaf(e.format_body(member, dest)))
+        build_format(member, entry, e, dest)
     } else {
         Stmt::Leaf(Leaf(
             e.member_chain_body(&arm_sources(member, &member.sources), dest),

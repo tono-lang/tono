@@ -375,28 +375,15 @@ impl Emitter for Resolver<'_, '_> {
         }
     }
 
-    /// `@format` template plus the `@str::*` pipeline, relative to column zero.
-    fn format_body(&mut self, field: &EntryField, dest: &str) -> String {
+    /// The `@format` template concatenation cast to the field type, with the
+    /// `@str::*` pipeline folded in. Relative to column zero.
+    fn format_assign(&mut self, field: &EntryField, dest: &str) -> String {
         let Some(parts) = field.format.clone() else {
             return String::new();
         };
-        let (concat, absent_deps) = self.format_pieces(&parts);
+        let (concat, _) = self.format_pieces(&parts);
         let expr = apply_transforms(concat.join(" + "), &field.transforms, self.helpers);
-        let assign = format!("{dest} = {};", cast_string(&field.target, &expr));
-        if absent_deps.is_empty() {
-            return assign;
-        }
-        let why = why_var(&field.name);
-        let mut chain = format!("let {why} = \"\";\n");
-        for (i, dep) in absent_deps.iter().enumerate() {
-            chain.push_str(&format!(
-                "{}if ({dep_why} !== \"\") {{\n  {why} = \"{dep} <- \" + {dep_why};\n}}",
-                if i == 0 { "" } else { " else " },
-                dep_why = why_var(dep),
-            ));
-        }
-        chain.push_str(&format!(" else {{\n  {assign}\n}}"));
-        chain
+        format!("{dest} = {};", cast_string(&field.target, &expr))
     }
 
     /// The `@str::*` pipeline over an already-resolved destination, or `None`
