@@ -143,6 +143,12 @@ fn taxonomy_decls() -> Vec<Decl> {
             vec![Symbol::imported("strconv", "strconv", "strconv")],
         ),
         marker_method(&n.api),
+        // Construction failures (a required source that resolved to nothing) ride
+        // their own category so a caller can tell a misconfigured client from a
+        // request or transport failure.
+        Decl::raw(format!("type {} struct {{\n\tMessage string\n}}", n.config)),
+        error_method(&n.config, "e.Message"),
+        marker_method(&n.config),
     ]
 }
 

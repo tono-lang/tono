@@ -79,6 +79,13 @@ export class APIError extends TonoError {
   }
 }
 
+export class ConfigError extends TonoError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigError";
+  }
+}
+
 export class OverloadedError extends APIError {
   constructor(readonly data: Overloaded, body: string) {
     super(529, body);
@@ -91,7 +98,7 @@ export class OverloadedError extends APIError {
 
 // ==== models_serde.ts ====
 import { CanonicalTransport, ClientOptions, WireDescriptor, assertExclusiveTransport, execute } from "@tono/http-runtime-ts";
-import { APIError, Credentials, DecodeError, Duration, Note, Overloaded, OverloadedError, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./notes";
+import { APIError, ConfigError, Credentials, DecodeError, Duration, Note, Overloaded, OverloadedError, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./notes";
 
 export function encodeI64(v: bigint): string {
   return v.toString();
@@ -380,7 +387,7 @@ export class Client {
     labelsWhy = "env SERVICE_LABELS: empty";
   }
   if (s.endpoint === "") {
-    throw new Error("endpoint <- " + (endpointWhy || "no value"));
+    throw new ConfigError("endpoint <- " + (endpointWhy || "no value"));
   }
     const violations: Violation[] = [];
     if ([...s.apiKey].length < 1) {

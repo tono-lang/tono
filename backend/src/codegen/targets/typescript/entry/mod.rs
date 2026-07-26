@@ -331,6 +331,11 @@ fn class_decl(
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 1, &r);
         r.body.push_str(&text);
+        // A non-empty requires block throws ConfigError for an unresolved
+        // consumed chain, so the class file imports that category.
+        if !text.is_empty() {
+            refs.push(module_symbol(&en.config, module));
+        }
     }
 
     // Declared validation runs last, over what bespoke left in place.
@@ -629,8 +634,10 @@ fn op_method(
                 }
                 if validation::shape_has_checks(shape) {
                     refs.push(module_symbol(&format!("validate{out_name}"), module));
+                    // A distinct name: the same method may also validate its input
+                    // (which binds `vs`), and both live in the method scope.
                     validate = format!(
-                        "      const vs = validate{out_name}(out);\n      if (vs.length > 0) {{\n        {t}\n      }}\n",
+                        "      const outVs = validate{out_name}(out);\n      if (outVs.length > 0) {{\n        {t}\n      }}\n",
                     );
                 }
             }

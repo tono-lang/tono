@@ -106,6 +106,10 @@ fn taxonomy_decls() -> Vec<Decl> {
             "readonly status: number, readonly body: string",
             "`api error ${status}`",
         ),
+        // Construction failures (a required source that resolved to nothing) ride
+        // their own category so a caller can tell a misconfigured client from a
+        // request or transport failure.
+        category(&n.config, "message: string", "message"),
     ]
 }
 
@@ -240,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn the_taxonomy_is_five_categories_rooted_at_tono_error() {
+    fn the_taxonomy_is_six_categories_rooted_at_tono_error() {
         let out = types_text(&error_demo_module());
         assert!(out.contains("export abstract class TonoError extends Error {"));
         for category in [
@@ -249,6 +253,7 @@ mod tests {
             "DecodeError",
             "ContractError",
             "APIError",
+            "ConfigError",
         ] {
             assert!(
                 out.contains(&format!("export class {category} extends TonoError {{")),
@@ -257,8 +262,8 @@ mod tests {
         }
         // The root's default predicate reports non-retryable.
         assert!(out.contains("retryable(): boolean {\n    return false;"));
-        // Exactly the five categories: no sixth class extends the root.
-        assert_eq!(out.matches("extends TonoError {").count(), 5);
+        // Exactly the six categories: no seventh class extends the root.
+        assert_eq!(out.matches("extends TonoError {").count(), 6);
     }
 
     #[test]

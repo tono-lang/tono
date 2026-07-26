@@ -93,6 +93,14 @@ func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status)
 
 func (e *APIError) sdkError() {}
 
+type ConfigError struct {
+	Message string
+}
+
+func (e *ConfigError) Error() string { return e.Message }
+
+func (e *ConfigError) sdkError() {}
+
 func (e *Overloaded) Error() string { return "overloaded" }
 
 func (e *Overloaded) Retryable() bool { return true }
@@ -176,7 +184,6 @@ package notes
 import "bytes"
 import "context"
 import "encoding/json"
-import "errors"
 import "fmt"
 import "github.com/tono-lang/tono/runtimes/http-go"
 import "os"
@@ -328,7 +335,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		if why == "" {
 			why = "no value"
 		}
-		return nil, errors.New("endpoint <- " + why)
+		return nil, &ConfigError{Message: "endpoint <- " + why}
 	}
 	violations := []Violation{}
 	if len([]rune(s.APIKey)) < 1 {

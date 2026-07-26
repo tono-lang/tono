@@ -125,6 +125,14 @@ func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status)
 
 func (e *APIError) sdkError() {}
 
+type ConfigError struct {
+	Message string
+}
+
+func (e *ConfigError) Error() string { return e.Message }
+
+func (e *ConfigError) sdkError() {}
+
 func (e *PaymentDeclined) Error() string { return "payment_declined" }
 
 func (e *PaymentDeclined) Retryable() bool { return true }

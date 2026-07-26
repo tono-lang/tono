@@ -187,6 +187,7 @@ pub struct ErrorNames {
     pub transport: String,
     pub decode: String,
     pub contract: String,
+    pub config: String,
     pub violation: String,
 }
 
@@ -199,6 +200,7 @@ pub fn error_names() -> ErrorNames {
         transport: type_ident_from_id("transport_error"),
         decode: type_ident_from_id("decode_error"),
         contract: type_ident_from_id("contract_error"),
+        config: type_ident_from_id("config_error"),
         violation: type_ident_from_id("violation"),
     }
 }

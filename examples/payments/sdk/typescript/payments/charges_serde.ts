@@ -291,8 +291,8 @@ export class Client {
     } catch {
       throw new DecodeError("$", "Charge", outcome.body);
     }
-    const vs = validateCharge(out);
-    if (vs.length > 0) {
+    const outVs = validateCharge(out);
+    if (outVs.length > 0) {
       throw new DecodeError("$", "Charge", outcome.body);
     }
     return out;

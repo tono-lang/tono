@@ -165,7 +165,9 @@ fn bound_hooks_wire_the_settings_bridge_and_the_transport_slots() {
     assert!(serde.contains("hooks: &tonohttp.Hooks{BeforeRequest: beforeRequestHook}"));
     // The hook order lands in the emitted text: init before the requires.
     let init = serde.find("clientInitHook(&s)").unwrap();
-    let require = serde.find("errors.New(\"endpoint <- \"").unwrap();
+    let require = serde
+        .find("&ConfigError{Message: \"endpoint <- \"")
+        .unwrap();
     assert!(init < require);
 }
 
@@ -435,7 +437,7 @@ fn a_consumed_config_member_requires_a_value_at_construction() {
     let serde = serde_text(&module);
     // The leaf value itself is checked (there is no member-level why).
     assert!(serde.contains("if s.Settings.APIKey == \"\" {"));
-    assert!(serde.contains("errors.New(\"settings.api_key: no value\")"));
+    assert!(serde.contains("&ConfigError{Message: \"settings.api_key: no value\"}"));
 }
 
 #[test]
@@ -463,7 +465,9 @@ fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
     assert!(serde.contains("settingsMaxConnsWhy := \"no source\""));
     // The require reads the reason, never the (possibly legitimately zero) value.
     assert!(serde.contains("if settingsMaxConnsWhy != \"\" {"));
-    assert!(serde.contains("errors.New(\"settings.max_conns <- \" + settingsMaxConnsWhy)"));
+    assert!(
+        serde.contains("&ConfigError{Message: \"settings.max_conns <- \" + settingsMaxConnsWhy}")
+    );
     // It is not compared against the numeric zero (that would reject a real 0).
     assert!(!serde.contains("s.Settings.MaxConns == 0"));
 }

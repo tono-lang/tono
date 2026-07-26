@@ -122,6 +122,14 @@ func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status)
 
 func (e *APIError) sdkError() {}
 
+type ConfigError struct {
+	Message string
+}
+
+func (e *ConfigError) Error() string { return e.Message }
+
+func (e *ConfigError) sdkError() {}
+
 func (e *CardDeclined) Error() string { return "card_declined" }
 
 func (e *CardDeclined) Retryable() bool { return true }

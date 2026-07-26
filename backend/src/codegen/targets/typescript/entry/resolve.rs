@@ -525,36 +525,40 @@ impl Emitter for Resolver<'_, '_> {
 
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
         format!(
-            "if ((s.{head}.{member} ?? {zero}) === {zero}) {{\n  throw new Error(\"{name}: no value\");\n}}",
+            "if ((s.{head}.{member} ?? {zero}) === {zero}) {{\n  throw new {config}(\"{name}: no value\");\n}}",
             head = field_camel(head, self.config),
             member = field_camel(member, self.config),
             zero = cast_string(leaf, "\"\""),
+            config = error_names().config,
         )
     }
 
     fn require_member_deferred(&mut self, name: &str, why: &str) -> String {
         format!(
-            "if ({why} !== \"\") {{\n  throw new Error(\"{name} <- \" + {why});\n}}",
+            "if ({why} !== \"\") {{\n  throw new {config}(\"{name} <- \" + {why});\n}}",
             why = why_var(why),
+            config = error_names().config,
         )
     }
 
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         format!(
-            "if (s.{ident} === {zero}) {{\n  throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n}}",
+            "if (s.{ident} === {zero}) {{\n  throw new {config}(\"{name} <- \" + ({why} || \"no value\"));\n}}",
             ident = field_camel(head, self.config),
             zero = cast_string(target, "\"\""),
             why = why_var(head),
             name = head,
+            config = error_names().config,
         )
     }
 
     fn require_bytes(&mut self, head: &str) -> String {
         format!(
-            "if (s.{ident}.length === 0) {{\n  throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n}}",
+            "if (s.{ident}.length === 0) {{\n  throw new {config}(\"{name} <- \" + ({why} || \"no value\"));\n}}",
             ident = field_camel(head, self.config),
             why = why_var(head),
             name = head,
+            config = error_names().config,
         )
     }
 
@@ -565,10 +569,11 @@ impl Emitter for Resolver<'_, '_> {
             "0"
         };
         format!(
-            "if ({why} !== \"\" && s.{ident} === {zero}) {{\n  throw new Error(\"{name} <- \" + {why});\n}}",
+            "if ({why} !== \"\" && s.{ident} === {zero}) {{\n  throw new {config}(\"{name} <- \" + {why});\n}}",
             ident = field_camel(head, self.config),
             why = why_var(head),
             name = head,
+            config = error_names().config,
         )
     }
 }

@@ -125,6 +125,13 @@ export class APIError extends TonoError {
   }
 }
 
+export class ConfigError extends TonoError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigError";
+  }
+}
+
 export class CardDeclinedError extends APIError {
   constructor(
     readonly data: CardDeclined,

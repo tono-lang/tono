@@ -102,7 +102,7 @@ fn the_settings_bridge_wires_client_init_by_mutation() {
     assert!(out.contains("throw new ContractError(\"client_init\", e);"));
     // Bridge before validation: init runs before the consumed-chain check.
     let init = out.find("wrapClientInit(s);").unwrap();
-    let require = out.find("throw new Error(\"endpoint <- \"").unwrap();
+    let require = out.find("throw new ConfigError(\"endpoint <- \"").unwrap();
     assert!(init < require);
 }
 
@@ -186,7 +186,9 @@ fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
     assert!(out.contains("let settingsMaxConnsWhy = \"no source\";"));
     // The require reads the reason, never the (possibly legitimately zero) value.
     assert!(out.contains("if (settingsMaxConnsWhy !== \"\") {"));
-    assert!(out.contains("throw new Error(\"settings.max_conns <- \" + settingsMaxConnsWhy);"));
+    assert!(
+        out.contains("throw new ConfigError(\"settings.max_conns <- \" + settingsMaxConnsWhy);")
+    );
     // It is not compared against the numeric zero (that would reject a real 0).
     assert!(!out.contains("s.settings.maxConns === 0"));
 }
@@ -460,7 +462,7 @@ fn a_consumed_config_member_requires_a_value_at_construction() {
     // The leaf value itself is checked (there is no member-level why), read
     // through its zero so an undefined draft member counts as absent.
     assert!(out.contains("if ((s.settings.apiKey ?? \"\") === \"\") {"));
-    assert!(out.contains("throw new Error(\"settings.api_key: no value\");"));
+    assert!(out.contains("throw new ConfigError(\"settings.api_key: no value\");"));
 }
 
 #[test]
