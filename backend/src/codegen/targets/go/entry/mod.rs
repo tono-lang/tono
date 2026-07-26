@@ -395,14 +395,15 @@ fn hook_wrapper_decls(
             "func {name}{sig} {{\n\
              \t{ret}err := {call}\n\
              \tif err != nil {{\n\
-             \t\tvar wrapped *{contract}\n\
-             \t\tif errors.As(err, &wrapped) {{\n\t\t\treturn {out}err\n\t\t}}\n\
+             \t\tvar known {marker}\n\
+             \t\tif errors.As(err, &known) {{\n\t\t\treturn {out}err\n\t\t}}\n\
              \t\treturn {out}&{contract}{{ContractName: \"{slot}\", Cause: err}}\n\
              \t}}\n\
              \treturn {out}nil\n\
              }}",
             name = hook_wrapper_name(slot),
             contract = en.contract,
+            marker = super::errors::SDK_ERROR_MARKER,
             out = if ret.is_empty() { "" } else { "out, " },
             ret = if ret.is_empty() { "" } else { "out, " },
         )

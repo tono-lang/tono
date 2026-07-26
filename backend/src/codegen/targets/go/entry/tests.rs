@@ -651,4 +651,9 @@ fn after_response_and_on_error_hooks_get_boundary_wrappers() {
     let serde = serde_text(&module);
     assert!(serde.contains("func afterResponseHook(ctx context.Context, res tonohttp.CanonicalResponse) (tonohttp.CanonicalResponse, error) {"));
     assert!(serde.contains("func onErrorHook(err error) error {"));
+    // The wrapper preserves any generated SDK error (marker interface), wrapping
+    // only a foreign one as a ContractError. It no longer keeps just
+    // *ContractError.
+    assert!(serde.contains("var known interface{ sdkError() }"));
+    assert!(serde.contains("if errors.As(err, &known) {"));
 }

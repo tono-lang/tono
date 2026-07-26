@@ -18,6 +18,19 @@ use crate::codegen::targets::go::types::{type_expr_of, LANG};
 use crate::codegen::tree::Decl;
 use crate::ir::{Module, Shape};
 
+/// The anonymous marker interface a bound hook's boundary wrapper matches with
+/// `errors.As` to tell an SDK-emitted error (preserve it as-is) from a foreign
+/// one (wrap it as a ContractError). Every generated error value carries the
+/// unexported `sdkError()` method, so only this package's types satisfy it and
+/// the taxonomy stays sealed.
+pub const SDK_ERROR_MARKER: &str = "interface{ sdkError() }";
+
+/// The unexported marker method that makes a generated error value part of the
+/// sealed SDK taxonomy (see [`SDK_ERROR_MARKER`]).
+fn marker_method(name: &str) -> Decl {
+    Decl::raw(format!("func (e *{name}) sdkError() {{}}"))
+}
+
 /// The declarations for the types file: the taxonomy error values, the
 /// declared errors' methods, and the blocking client interface.
 pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
@@ -94,9 +107,11 @@ fn taxonomy_decls() -> Vec<Decl> {
             n.validation, n.violation
         )),
         error_method(&n.validation, "\"validation failed\""),
+        marker_method(&n.validation),
         Decl::raw(format!("type {} struct {{\n\tCause error\n}}", n.transport)),
         error_method(&n.transport, "\"transport failure\""),
         unwrap_method(&n.transport),
+        marker_method(&n.transport),
         Decl::raw(format!(
             "type {} struct {{\n\tPath     string\n\tExpected string\n\tRaw      string\n}}",
             n.decode
@@ -105,6 +120,7 @@ fn taxonomy_decls() -> Vec<Decl> {
             &n.decode,
             "\"response body did not match the declared schema\"",
         ),
+        marker_method(&n.decode),
         Decl::raw(format!(
             "type {} struct {{\n\tContractName string\n\tCause        error\n}}",
             n.contract
@@ -114,6 +130,7 @@ fn taxonomy_decls() -> Vec<Decl> {
             "\"contract hook '\" + e.ContractName + \"' failed\"",
         ),
         unwrap_method(&n.contract),
+        marker_method(&n.contract),
         Decl::raw(format!(
             "type {} struct {{\n\tStatus int\n\tBody   string\n}}",
             n.api
@@ -125,6 +142,7 @@ fn taxonomy_decls() -> Vec<Decl> {
             ),
             vec![Symbol::imported("strconv", "strconv", "strconv")],
         ),
+        marker_method(&n.api),
     ]
 }
 
@@ -145,6 +163,7 @@ fn declared_error_decls(module: &Module) -> Vec<Decl> {
                     "func (e *{ty}) Retryable() bool {{ return {} }}",
                     err.retryable
                 )),
+                marker_method(&ty),
             ]
         })
         .collect()
