@@ -287,11 +287,13 @@ function durationToMs(v: string): number {
   // trailing-dot ("1.s") and leading-dot (".5s") forms.
   // Sticky alone: exec advances lastIndex, and y already anchors
   // each match to it (g would be redundant).
-  const re = /(\d+(?:\.\d*)?|\.\d+)(ns|us|\u00b5s|ms|s|m|h)/y;
+  // Both micro signs Go accepts: U+00B5 (micro) and U+03BC (Greek mu).
+  const re = /(\d+(?:\.\d*)?|\.\d+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h)/y;
   const unit: Record<string, number> = {
     ns: 1e-6,
     us: 1e-3,
     "\u00b5s": 1e-3,
+    "\u03bcs": 1e-3,
     ms: 1,
     s: 1000,
     m: 60000,

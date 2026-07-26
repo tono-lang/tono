@@ -322,6 +322,9 @@ fn structured_sources_decode_strictly_and_honor_explicit_values() {
     // Strict decode: probe for required members, unknown fields rejected,
     // declared validation at construction, the env name as context.
     assert!(serde.contains("fmt.Errorf(\"%s: missing field token\", \"SERVICE_CREDENTIALS\")"));
+    // An explicit null in a required member is as absent as a missing key
+    // (the TypeScript decode rejects it too).
+    assert!(serde.contains("if rv, ok := probe[\"token\"]; !ok || string(rv) == \"null\" {"));
     assert!(serde.contains("dec.DisallowUnknownFields()"));
     assert!(serde.contains("ValidateCredentials(decoded)"));
     // The explicit @with value wins: the decode runs only while unset.
@@ -373,6 +376,176 @@ fn an_operation_without_a_descriptor_stubs_with_a_contract_error() {
     let serde = serde_text(&module);
     assert!(!serde.contains("var saveNoteDescriptor"));
     assert!(serde.contains("errors.New(\"operation has no transport binding\")"));
+}
+
+#[test]
+fn transforms_apply_to_chain_and_match_resolved_values() {
+    let mut module = fixture_module();
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "team".into(),
+                target: Tref::Prim(Prim::String),
+                sources: vec![Source::Env(EnvName::Name("TEAM".into()))],
+                format: None,
+                transforms: vec!["snake".into()],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+            let mut picked = EntryField {
+                name: "picked".into(),
+                target: Tref::Prim(Prim::String),
+                sources: vec![],
+                format: None,
+                transforms: vec!["upper".into()],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            };
+            picked.select = Some(crate::ir::Select {
+                subject: vec!["client_name".into()],
+                arms: vec![
+                    crate::ir::SelectArm {
+                        pattern: Some(serde_json::json!("demo")),
+                        value: crate::ir::ArmValue::Lit(serde_json::json!("d")),
+                    },
+                    crate::ir::SelectArm {
+                        pattern: None,
+                        value: crate::ir::ArmValue::Lit(serde_json::json!("x")),
+                    },
+                ],
+            });
+            fields.push(picked);
+        }
+    }
+    let serde = serde_text(&module);
+    // The pipeline runs over the resolved value whatever idiom produced it.
+    assert!(serde.contains("s.Team = strSnake(s.Team)"));
+    assert!(serde.contains("s.Picked = strings.ToUpper(s.Picked)"));
+}
+
+#[test]
+fn a_config_member_keeps_its_declared_derivation() {
+    let mut module = fixture_module();
+    for shape in &mut module.shapes {
+        if let ShapeKind::Config { fields } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "label".into(),
+                target: Tref::Prim(Prim::String),
+                sources: vec![],
+                format: Some(vec![
+                    crate::ir::TemplatePart::Lit("conf-".into()),
+                    crate::ir::TemplatePart::Field(vec!["client_name".into()]),
+                ]),
+                transforms: vec!["upper".into()],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+            fields.push(EntryField {
+                name: "size".into(),
+                target: Tref::Prim(Prim::String),
+                sources: vec![],
+                format: None,
+                transforms: vec![],
+                select: Some(crate::ir::Select {
+                    subject: vec!["client_name".into()],
+                    arms: vec![crate::ir::SelectArm {
+                        pattern: Some(serde_json::json!("demo")),
+                        value: crate::ir::ArmValue::Lit(serde_json::json!("small")),
+                    }],
+                }),
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+        }
+    }
+    let serde = serde_text(&module);
+    // The member's @format (with its transforms) lands inside the composition.
+    assert!(serde.contains("composed.Label = strings.ToUpper(\"conf-\" + s.ClientName)"));
+    // The member's match lowers to a switch writing the composed member; an
+    // unmatched value leaves the zero (no member-level why to track).
+    assert!(serde.contains("case \"demo\":"));
+    assert!(serde.contains("composed.Size = \"small\""));
+}
+
+#[test]
+fn the_env_boundary_decodes_bytes_and_rejects_non_decimal_floats() {
+    let mut module = fixture_module();
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "secret".into(),
+                target: Tref::Prim(Prim::Bytes),
+                sources: vec![Source::Env(EnvName::Name("SECRET".into()))],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+            fields.push(EntryField {
+                name: "rate".into(),
+                target: Tref::Prim(Prim::Float),
+                sources: vec![Source::Env(EnvName::Name("RATE".into()))],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+        }
+    }
+    let serde = serde_text(&module);
+    // Bytes ride the env boundary as base64, the same encoding the wire uses.
+    assert!(serde.contains("base64.StdEncoding.DecodeString(v)"));
+    assert!(serde.contains("fmt.Errorf(\"%s: invalid base64 %q\", \"SECRET\", v)"));
+    // Floats take decimal notation only (no Inf/NaN/hex), like the TS boundary.
+    assert!(serde.contains("strings.ContainsRune(\"0123456789+-.eE\", r)"));
+}
+
+#[test]
+fn a_consumed_config_member_requires_a_value_at_construction() {
+    let mut module = fixture_module();
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations {
+                op.traits.push(crate::ir::Trait {
+                    id: "header".into(),
+                    value: serde_json::json!(["X-Key", {"field": ["settings", "api_key"]}]),
+                });
+            }
+        }
+    }
+    let serde = serde_text(&module);
+    // The leaf value itself is checked (there is no member-level why).
+    assert!(serde.contains("if s.Settings.APIKey == \"\" {"));
+    assert!(serde.contains("errors.New(\"settings.api_key: no value\")"));
+}
+
+#[test]
+fn the_bespoke_stub_error_passes_through_the_bound_on_error_hook() {
+    let mut module = fixture_module();
+    module.extensions = vec![crate::ir::Extension {
+        name: "on_error".into(),
+        kind: crate::ir::ExtKind::Hook,
+        signature: None,
+        bindings: [("go".to_string(), "ext/go/err.go#MapError".to_string())]
+            .into_iter()
+            .collect(),
+        conformance: None,
+    }];
+    let serde = serde_text(&module);
+    assert!(serde.contains(
+        "return zero, onErrorHook(&ContractError{ContractName: \"save_note\", Cause: errors.New(\"operation has no transport binding\")})"
+    ));
 }
 
 #[test]

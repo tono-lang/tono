@@ -345,8 +345,10 @@ fn encode_expr(value: &str, t: &Tref) -> String {
 }
 
 /// The TypeScript expression that decodes `value` of IR type `t` from its wire
-/// form into the in-memory representation.
-fn decode_expr(value: &str, t: &Tref) -> String {
+/// form into the in-memory representation. Also the entry boundary's spelling
+/// for a whole-JSON field, so an env-sourced map/list decodes exactly like the
+/// same shape arriving on the wire.
+pub(crate) fn decode_expr(value: &str, t: &Tref) -> String {
     match t {
         Tref::Prim(Prim::I64 | Prim::U64) => format!("decodeI64({value})"),
         Tref::Prim(Prim::Bytes) => format!("decodeBytes({value})"),

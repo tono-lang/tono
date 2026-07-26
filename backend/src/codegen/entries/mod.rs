@@ -247,6 +247,31 @@ pub fn op_local_name(id: &str) -> &str {
 /// these canonical names would collide with the slot member.
 const RESERVED_SLOT_FIELDS: [&str; 4] = ["headers", "transport", "http_client", "fetch"];
 
+/// Canonical names an `@arg` field cannot take: they become bare constructor
+/// parameters, and these are the locals and parameters the generated
+/// constructors already declare (Go's Settings/carrier/values plumbing, the
+/// TypeScript config object, both targets' scratch variables).
+const RESERVED_ARG_NAMES: [&str; 18] = [
+    "s",
+    "w",
+    "v",
+    "n",
+    "ok",
+    "raw",
+    "err",
+    "ms",
+    "opt",
+    "opts",
+    "config",
+    "values",
+    "violations",
+    "runtime",
+    "probe",
+    "dec",
+    "decoded",
+    "composed",
+];
+
 /// Generation-time validation of the entry surface: the cases the frontend
 /// cannot see (they are target rules) and that would otherwise produce
 /// uncompilable or silently wrong output. Returns the first offense.
@@ -257,12 +282,33 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
             continue;
         }
         for entry in &entries {
-            for field in entry.declared() {
+            let declared = entry.declared();
+            for field in declared.iter().copied() {
                 if RESERVED_SLOT_FIELDS.contains(&field.name.as_str()) {
                     return Err(format!(
                         "module {}: entry {} field {} collides with the generated Settings transport slot of the same name; rename the field",
                         module.name, entry.name, field.name
                     ));
+                }
+                if RESERVED_ARG_NAMES.contains(&field.name.as_str())
+                    && has_source(field, |s| matches!(s, Source::Arg))
+                {
+                    return Err(format!(
+                        "module {}: entry {} field {} is an @arg but its name is a local the generated constructor already declares; rename the field",
+                        module.name, entry.name, field.name
+                    ));
+                }
+                // The generated resolution derives a `<field>_why` reason
+                // variable and a `<field>_set` flag per field; a sibling
+                // field spelling either name collides with them.
+                for suffix in ["_why", "_set"] {
+                    let derived = format!("{}{suffix}", field.name);
+                    if declared.iter().any(|other| other.name == derived) {
+                        return Err(format!(
+                            "module {}: entry {} declares both {} and {}; the resolution derives a variable named {} for the former, rename one",
+                            module.name, entry.name, field.name, derived, derived
+                        ));
+                    }
                 }
                 // A construction field resolves within its module: the
                 // resolution idiom (config vs structured vs scalar) and the
@@ -335,6 +381,37 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                     "module {}: entry {} collides with the {} companion generated for entry {}; rename the entry",
                     module.name, entry.name, companion, owner
                 ));
+            }
+        }
+        // The Go constructor is `New` (single entry) or `New<Entry>` (multi):
+        // an entry type spelling the same identifier cannot share the package.
+        if !multi && entries.iter().any(|e| e.name == "new") {
+            return Err(format!(
+                "module {}: the entry new collides with the New constructor it generates; rename the entry",
+                module.name
+            ));
+        }
+        if multi {
+            for entry in &entries {
+                if let Some(other) = entries
+                    .iter()
+                    .find(|o| entry.name == format!("new_{}", o.name))
+                {
+                    return Err(format!(
+                        "module {}: entry {} collides with the New{} constructor generated for entry {}; rename one",
+                        module.name,
+                        entry.name,
+                        crate::codegen::casing::transform(
+                            other.name,
+                            crate::codegen::symbol::SymbolKind::Type,
+                            &crate::codegen::casing::CasingConfig::new(
+                                crate::codegen::casing::CaseStyle::Pascal
+                            ),
+                            None
+                        ),
+                        other.name
+                    ));
+                }
             }
         }
         // A loose op and an entry op sharing a local name would emit two
@@ -433,51 +510,61 @@ impl<'a> EntryModel<'a> {
     }
 
     /// The head fields the entry's operations consume through their protocol
+    /// traits, deduplicated ([`Self::consumed_field_paths`] carries the full
+    /// paths).
+    pub fn consumed_field_heads(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for path in self.consumed_field_paths() {
+            if let Some(head) = path.first() {
+                if !out.iter().any(|h| h == head) {
+                    out.push(head.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// The field paths the entry's operations consume through their protocol
     /// traits: the `@http` endpoint reference, `{.field}` path placeholders,
     /// `@header` value references, and the `@timeout`/`@retry` references.
     /// These must hold a value once construction finishes (after `client_init`
     /// ran), so the constructor reports an absent one with its chain instead of
     /// letting the first call fail obscurely.
-    pub fn consumed_field_heads(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        let mut push = |head: Option<&str>| {
-            if let Some(head) = head {
-                if !out.iter().any(|h| h == head) {
-                    out.push(head.to_string());
+    pub fn consumed_field_paths(&self) -> Vec<Vec<String>> {
+        let mut out: Vec<Vec<String>> = Vec::new();
+        let mut push = |path: Option<Vec<String>>| {
+            if let Some(path) = path {
+                if !path.is_empty() && !out.contains(&path) {
+                    out.push(path);
                 }
             }
         };
-        let field_head = |v: &serde_json::Value| -> Option<String> {
-            v.get("field")?
-                .as_array()?
-                .first()?
-                .as_str()
-                .map(String::from)
+        let field_path = |v: &serde_json::Value| -> Option<Vec<String>> {
+            Some(
+                v.get("field")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|s| s.as_str().map(String::from))
+                    .collect(),
+            )
         };
         for op in self.operations {
             for t in &op.traits {
                 match t.id.as_str() {
                     "http" => {
                         if let Some(path) = t.value.get("path").and_then(|p| p.as_str()) {
-                            for head in path_placeholder_heads(path) {
-                                push(Some(&head));
+                            for placeholder in path_placeholder_paths(path) {
+                                push(Some(placeholder));
                             }
                         }
                         if let Some(endpoint) = t.value.get("endpoint") {
-                            push(field_head(endpoint).as_deref());
+                            push(field_path(endpoint));
                         }
                     }
-                    "header" => {
+                    "header" | "timeout" | "retry" => {
                         if let Some(items) = t.value.as_array() {
                             for item in items {
-                                push(field_head(item).as_deref());
-                            }
-                        }
-                    }
-                    "timeout" | "retry" => {
-                        if let Some(items) = t.value.as_array() {
-                            for item in items {
-                                push(field_head(item).as_deref());
+                                push(field_path(item));
                             }
                         }
                     }
@@ -489,8 +576,8 @@ impl<'a> EntryModel<'a> {
     }
 }
 
-/// The head field of every `{.a.b}` placeholder in a path template.
-fn path_placeholder_heads(path: &str) -> Vec<String> {
+/// The field path of every `{.a.b}` placeholder in a path template.
+fn path_placeholder_paths(path: &str) -> Vec<Vec<String>> {
     let mut out = Vec::new();
     let mut rest = path;
     while let Some(start) = rest.find("{.") {
@@ -498,10 +585,13 @@ fn path_placeholder_heads(path: &str) -> Vec<String> {
             break;
         };
         let inner = &rest[start + 2..start + end];
-        if let Some(head) = inner.split('.').next() {
-            if !head.is_empty() {
-                out.push(head.to_string());
-            }
+        let segs: Vec<String> = inner
+            .split('.')
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        if !segs.is_empty() {
+            out.push(segs);
         }
         rest = &rest[start + end + 1..];
     }

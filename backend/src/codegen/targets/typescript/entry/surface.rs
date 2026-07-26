@@ -1,7 +1,6 @@
 //! The entry type surface: the construction-only config interfaces, the
 //! Settings and config-object interfaces, the descriptor constants, and
-//! the hook wrappers (split from the entry module to keep files within
-//! the size ceiling; same module surface).
+//! the hook wrappers.
 
 use super::*;
 
@@ -309,8 +308,9 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
              \x20 // trailing-dot (\"1.s\") and leading-dot (\".5s\") forms.\n\
              \x20 // Sticky alone: exec advances lastIndex, and y already anchors\n\
              \x20 // each match to it (g would be redundant).\n\
-             \x20 const re = /(\\d+(?:\\.\\d*)?|\\.\\d+)(ns|us|\\u00b5s|ms|s|m|h)/y;\n\
-             \x20 const unit: Record<string, number> = { ns: 1e-6, us: 1e-3, \"\\u00b5s\": 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };\n\
+             \x20 // Both micro signs Go accepts: U+00B5 (micro) and U+03BC (Greek mu).\n\
+             \x20 const re = /(\\d+(?:\\.\\d*)?|\\.\\d+)(ns|us|\\u00b5s|\\u03bcs|ms|s|m|h)/y;\n\
+             \x20 const unit: Record<string, number> = { ns: 1e-6, us: 1e-3, \"\\u00b5s\": 1e-3, \"\\u03bcs\": 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };\n\
              \x20 let total = 0;\n\
              \x20 let consumed = 0;\n\
              \x20 for (let m = re.exec(rest); m !== null; m = re.exec(rest)) {\n\

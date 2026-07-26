@@ -1,7 +1,6 @@
 //! The generated constructor: source resolution in dependency order, the
 //! client_init bridge, the consumed-chain requires, declared validation,
-//! and the frozen runtime values (split from the entry module to keep
-//! files within the size ceiling; same module surface).
+//! and the frozen runtime values.
 
 use super::*;
 
@@ -72,23 +71,41 @@ pub(super) fn new_decl(
 
     // Consumed chains must hold a value once construction finishes; an absent
     // one reports the chain at this single point instead of failing the first
-    // call obscurely.
-    let heads = entry.consumed_field_heads();
-    for head in &heads {
+    // call obscurely. Every check reads the resolved value (client_init ran
+    // already, bespoke wins), so the why-reason only decorates the error.
+    let mut needs_errors = false;
+    for path in entry.consumed_field_paths() {
+        let Some(head) = path.first() else {
+            continue;
+        };
         let Some(field) = entry.fields.iter().find(|f| f.name == *head) else {
             continue;
         };
-        if entry.is_guaranteed(field) {
+        let shape = entry.field_shape(field, module);
+        if path.len() > 1 && matches!(shape, FieldShape::Config(_) | FieldShape::Structured(_)) {
+            // A consumed member of a composed or decoded field: the leaf value
+            // itself must be there (there is no member-level why to report).
+            let leaf = entry.path_type(&path, module);
+            if !string_like(&leaf) {
+                continue;
+            }
+            needs_errors = true;
+            body.push_str(&format!(
+                "\tif s.{head_ident}.{member_ident} == {zero} {{\n\
+                 \t\treturn nil, errors.New(\"{name}: no value\")\n\
+                 \t}}\n",
+                head_ident = field_pascal(head, config),
+                member_ident = field_pascal(&path[1], config),
+                zero = cast_string(&leaf, "\"\""),
+                name = path.join("."),
+            ));
             continue;
         }
-        if matches!(
-            entry.field_shape(field, module),
-            FieldShape::Config(_) | FieldShape::Structured(_) | FieldShape::Json
-        ) {
+        if !matches!(shape, FieldShape::Scalar) || entry.is_guaranteed(field) {
             continue;
         }
-        refs.push(import("errors", "errors"));
         if string_like(&field.target) {
+            needs_errors = true;
             body.push_str(&format!(
                 "\tif s.{ident} == {zero} {{\n\
                  \t\twhy := {why}\n\
@@ -97,6 +114,18 @@ pub(super) fn new_decl(
                  \t}}\n",
                 ident = field_pascal(head, config),
                 zero = cast_string(&field.target, "\"\""),
+                why = why_var(head),
+                name = head,
+            ));
+        } else if matches!(field.target, Tref::Prim(Prim::Bytes)) {
+            needs_errors = true;
+            body.push_str(&format!(
+                "\tif len(s.{ident}) == 0 {{\n\
+                 \t\twhy := {why}\n\
+                 \t\tif why == \"\" {{\n\t\t\twhy = \"no value\"\n\t\t}}\n\
+                 \t\treturn nil, errors.New(\"{name} <- \" + why)\n\
+                 \t}}\n",
+                ident = field_pascal(head, config),
                 why = why_var(head),
                 name = head,
             ));
@@ -116,7 +145,9 @@ pub(super) fn new_decl(
         ) {
             // A numeric zero can be a legitimate resolved value, so only the
             // combination (chain reported absent, still zero after the
-            // bridge) fails construction.
+            // bridge) fails construction. A bool has no absent-vs-zero
+            // distinction at all, so it carries no require.
+            needs_errors = true;
             body.push_str(&format!(
                 "\tif {why} != \"\" && s.{ident} == 0 {{\n\
                  \t\treturn nil, errors.New(\"{name} <- \" + {why})\n\
@@ -126,6 +157,9 @@ pub(super) fn new_decl(
                 name = head,
             ));
         }
+    }
+    if needs_errors {
+        refs.push(import("errors", "errors"));
     }
 
     // Declared validation runs last, over what bespoke left in place.

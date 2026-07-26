@@ -491,6 +491,7 @@ fn op_method_decl(
 ) -> Decl {
     let en = error_names();
     let (sig, mut refs) = method_signature(op, config);
+    let has_on_error = hook_binding(bound, "on_error").is_some();
     if wire_descriptor(op).is_none() {
         // An operation without a transport binding is bespoke-bound; invoking
         // the bound impl through the generated glue is not wired yet, so the
@@ -504,19 +505,28 @@ fn op_method_decl(
             None => (String::new(), ""),
         };
         refs.push(import("errors", "errors"));
+        // The stub's error leaves the SDK like any other: through the bound
+        // on_error hook when there is one.
+        let contract_err = format!(
+            "&{contract}{{ContractName: {op:?}, Cause: errors.New(\"operation has no transport binding\")}}",
+            contract = en.contract,
+            op = op_local_name(&op.id),
+        );
+        let err_expr = if has_on_error {
+            format!("{}({contract_err})", hook_wrapper_name("on_error"))
+        } else {
+            contract_err
+        };
         return Decl::raw_with(
             format!(
-                "func (c *{client}) {sig} {{\n{zero_decl}\treturn {zero}&{contract}{{ContractName: {op:?}, Cause: errors.New(\"operation has no transport binding\")}}\n}}",
+                "func (c *{client}) {sig} {{\n{zero_decl}\treturn {zero}{err_expr}\n}}",
                 client = n.client,
-                contract = en.contract,
-                op = op_local_name(&op.id),
             ),
             refs,
         );
     }
     refs.push(runtime_symbol());
     let (input, output) = crate::codegen::ops::op_io(op);
-    let has_on_error = hook_binding(bound, "on_error").is_some();
     let fail = |expr: String| {
         if has_on_error {
             format!("{}({expr})", hook_wrapper_name("on_error"))

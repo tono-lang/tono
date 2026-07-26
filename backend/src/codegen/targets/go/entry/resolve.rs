@@ -1,5 +1,6 @@
-//! The per-field resolution emitter (split from the entry module to
-//! keep files within the size ceiling; same module surface).
+//! The per-field resolution emitter: one field of the entry's construction
+//! surface lowered to Go statements, in the field's own idiom (scalar chain,
+//! switch, strict decode, composition).
 
 use super::*;
 
@@ -56,22 +57,38 @@ impl Resolver<'_, '_> {
     }
 
     /// A scalar field: an explicit `@arg`, a match selection, a `@format`
-    /// derivation, or a plain source chain.
+    /// derivation, or a plain source chain. The declared `@str::*` pipeline
+    /// applies to the resolved value whatever idiom produced it (`@format`
+    /// folds it into the template expression itself).
     fn emit_scalar(&mut self, field: &EntryField) {
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            let assign = format!("\t{} = {}\n", self.ident(&field.name), camel(&field.name));
-            self.push(&assign);
-            return;
-        }
-        if field.select.is_some() {
-            self.emit_select(field);
-            return;
-        }
         if field.format.is_some() {
             self.emit_format(field);
             return;
         }
-        self.emit_chain(field);
+        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
+            let assign = format!("\t{} = {}\n", self.ident(&field.name), camel(&field.name));
+            self.push(&assign);
+        } else if field.select.is_some() {
+            self.emit_select(field);
+        } else {
+            self.emit_chain(field);
+        }
+        let dest = self.ident(&field.name);
+        let transforms = self.transforms_stmt(field, &dest);
+        self.push(&transforms);
+    }
+
+    /// The `@str::*` pipeline over an already-resolved destination. An
+    /// unresolved chain holds the zero value, which every transform maps to
+    /// itself, so the application is unconditional.
+    fn transforms_stmt(&mut self, field: &EntryField, dest: &str) -> String {
+        if field.transforms.is_empty() {
+            return String::new();
+        }
+        self.import("strings", "strings");
+        let expr = self.as_string_expr(dest, &field.target);
+        let expr = apply_transforms(expr, &field.transforms, self.helpers);
+        format!("\t{dest} = {}\n", cast_string(&field.target, &expr))
     }
 
     /// The plain source chain of one field, written to its Settings slot.
@@ -274,9 +291,22 @@ impl Resolver<'_, '_> {
             }
             Tref::Prim(Prim::Float) => {
                 self.import("strconv", "strconv");
+                self.import("strings", "strings");
                 self.import("fmt", "fmt");
+                // Decimal notation only: ParseFloat alone also accepts Inf,
+                // NaN, hex floats, and digit separators, which the TypeScript
+                // boundary rejects; the same env value must construct in both.
                 format!(
-                    "\t\tn, err := strconv.ParseFloat(v, 64)\n\t\tif err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n\t\t}}\n\t\t{dest} = n\n"
+                    "\t\tif strings.ContainsFunc(v, func(r rune) bool {{ return !strings.ContainsRune(\"0123456789+-.eE\", r) }}) {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n\t\t}}\n\t\tn, err := strconv.ParseFloat(v, 64)\n\t\tif err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n\t\t}}\n\t\t{dest} = n\n"
+                )
+            }
+            Tref::Prim(Prim::Bytes) => {
+                self.import("base64", "encoding/base64");
+                self.import("fmt", "fmt");
+                // The env boundary carries bytes the same way the wire does:
+                // base64 text.
+                format!(
+                    "\t\tb, err := base64.StdEncoding.DecodeString(v)\n\t\tif err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid base64 %q\", {label}, v)\n\t\t}}\n\t\t{dest} = b\n"
                 )
             }
             Tref::Prim(Prim::Duration) => {
@@ -392,25 +422,7 @@ impl Resolver<'_, '_> {
             return;
         };
         let dest = self.ident(&field.name);
-        let mut concat: Vec<String> = Vec::new();
-        let mut absent_deps: Vec<String> = Vec::new();
-        for part in &format_parts {
-            match part {
-                TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
-                TemplatePart::Field(p) => {
-                    let head = p.first().cloned().unwrap_or_default();
-                    if !self.guaranteed(&head) && !absent_deps.contains(&head) {
-                        absent_deps.push(head.clone());
-                    }
-                    let t = self.path_type(p);
-                    let expr = self.path_expr(p);
-                    concat.push(self.as_string_expr(&expr, &t));
-                }
-                // An op-input placeholder cannot appear in a field template;
-                // the frontend rejects it. Render empty defensively.
-                TemplatePart::Input(_) => concat.push("\"\"".to_string()),
-            }
-        }
+        let (concat, absent_deps) = self.format_pieces(&format_parts);
         if !field.transforms.is_empty() {
             self.import("strings", "strings");
         }
@@ -433,6 +445,32 @@ impl Resolver<'_, '_> {
         chain.push_str(&format!(" else {{\n\t{assign}\t}}\n"));
         out.push_str(&chain);
         self.push(&out);
+    }
+
+    /// The template split for emission: each part as a Go string expression,
+    /// plus the non-guaranteed heads the template depends on (in
+    /// first-appearance order).
+    fn format_pieces(&mut self, parts: &[TemplatePart]) -> (Vec<String>, Vec<String>) {
+        let mut concat: Vec<String> = Vec::new();
+        let mut absent_deps: Vec<String> = Vec::new();
+        for part in parts {
+            match part {
+                TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
+                TemplatePart::Field(p) => {
+                    let head = p.first().cloned().unwrap_or_default();
+                    if !self.guaranteed(&head) && !absent_deps.contains(&head) {
+                        absent_deps.push(head.clone());
+                    }
+                    let t = self.path_type(p);
+                    let expr = self.path_expr(p);
+                    concat.push(self.as_string_expr(&expr, &t));
+                }
+                // An op-input placeholder cannot appear in a field template;
+                // the frontend rejects it. Render empty defensively.
+                TemplatePart::Input(_) => concat.push("\"\"".to_string()),
+            }
+        }
+        (concat, absent_deps)
     }
 
     /// A structured source: an explicit `@arg`/`@with` value passes typed, a
@@ -472,8 +510,11 @@ impl Resolver<'_, '_> {
         let mut required_checks = String::new();
         if let ShapeKind::Structure { members, .. } = &shape.kind {
             for m in members.iter().filter(|m| m.required) {
+                // An explicit null is as absent as a missing key: the typed
+                // decode below would zero it silently, and the TypeScript
+                // decode rejects it, so both targets treat it as missing.
                 required_checks.push_str(&format!(
-                    "\t\tif _, ok := probe[{name:?}]; !ok {{\n\t\t\treturn nil, fmt.Errorf(\"%s: missing field {name}\", {label})\n\t\t}}\n",
+                    "\t\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\t\treturn nil, fmt.Errorf(\"%s: missing field {name}\", {label})\n\t\t}}\n",
                     name = m.name,
                 ));
             }
@@ -586,17 +627,30 @@ impl Resolver<'_, '_> {
         self.push(&block);
     }
 
-    /// A config member's own source chain (only `@env`/`@default` can appear
-    /// inside a config).
+    /// A config member's own resolution: a match, a `@format` derivation, or
+    /// its source chain (`@env`/`@default`), plus its declared `@str::*`
+    /// pipeline. There is no reason tracking inside a composition: an absent
+    /// member keeps its zero value (the entry-level requires cover consumed
+    /// chains), so absence guards read the sibling why-vars directly.
     fn member_sources_stmts(&mut self, member: &EntryField, dest: &str) -> String {
-        let stub = source_stub(member, member.sources.clone());
+        let mut out = if member.select.is_some() {
+            self.member_select_stmts(member, dest)
+        } else if member.format.is_some() {
+            self.member_format_stmts(member, dest)
+        } else {
+            self.member_chain(&source_stub(member, member.sources.clone()), dest)
+        };
+        if member.format.is_none() {
+            out.push_str(&self.transforms_stmt(member, dest));
+        }
+        out
+    }
+
+    fn member_chain(&mut self, stub: &EntryField, dest: &str) -> String {
         let guaranteed = stub.sources.iter().any(|s| matches!(s, Source::Default(_)));
         if guaranteed {
-            self.chain_cascade(&stub, dest)
+            self.chain_cascade(stub, dest)
         } else {
-            // No reason tracking inside a composition: an absent member simply
-            // keeps its zero value (the entry-level requires cover consumed
-            // chains).
             let mut out = String::new();
             for source in &stub.sources {
                 if let Source::Env(name) = source {
@@ -604,12 +658,95 @@ impl Resolver<'_, '_> {
                     let label = self.env_label(name);
                     out.push_str(&format!(
                         "\tif v, ok := {lookup}; ok && v != \"\" {{\n{parse}\t}}\n",
-                        parse = indent(self.env_parse(&stub, dest, &label).trim_end_matches('\n')),
+                        parse = indent(self.env_parse(stub, dest, &label).trim_end_matches('\n')),
                     ));
                 }
             }
             out
         }
+    }
+
+    /// A member's match, lowered like the entry-level one but without a
+    /// why-var: an absent subject or an unmatched value leaves the member's
+    /// zero value.
+    fn member_select_stmts(&mut self, member: &EntryField, dest: &str) -> String {
+        let Some(select) = member.select.clone() else {
+            return String::new();
+        };
+        let subject_head = select.subject.first().cloned().unwrap_or_default();
+        let subject_expr = self.path_expr(&select.subject);
+        let mut arms = String::new();
+        for arm in &select.arms {
+            let stmts = self.member_arm_stmts(member, &arm.value, dest);
+            match &arm.pattern {
+                Some(p) => arms.push_str(&format!(
+                    "\tcase {}:\n{}",
+                    pattern_literal(p),
+                    indent(stmts.trim_end_matches('\n'))
+                )),
+                None => arms.push_str(&format!(
+                    "\tdefault:\n{}",
+                    indent(stmts.trim_end_matches('\n'))
+                )),
+            }
+        }
+        let switch = format!("\tswitch {subject_expr} {{\n{arms}\t}}\n");
+        if self.guaranteed(&subject_head) {
+            switch
+        } else {
+            format!(
+                "\tif {subj_why} == \"\" {{\n{sw}\t}}\n",
+                subj_why = why_var(&subject_head),
+                sw = indent(switch.trim_end_matches('\n')),
+            )
+        }
+    }
+
+    fn member_arm_stmts(&mut self, member: &EntryField, value: &ArmValue, dest: &str) -> String {
+        match value {
+            ArmValue::Lit(v) => format!("\t{dest} = {}\n", literal(&member.target, v)),
+            ArmValue::Field(path) => {
+                let head = path.first().cloned().unwrap_or_default();
+                let expr = self.path_expr(path);
+                if self.guaranteed(&head) {
+                    format!("\t{dest} = {expr}\n")
+                } else {
+                    format!(
+                        "\tif {head_why} == \"\" {{\n\t\t{dest} = {expr}\n\t}}\n",
+                        head_why = why_var(&head),
+                    )
+                }
+            }
+            ArmValue::Sources(sources) => {
+                self.member_chain(&source_stub(member, sources.clone()), dest)
+            }
+        }
+    }
+
+    /// A member's `@format` derivation: assigned only once every
+    /// non-guaranteed head it reads has resolved.
+    fn member_format_stmts(&mut self, member: &EntryField, dest: &str) -> String {
+        let Some(format_parts) = member.format.clone() else {
+            return String::new();
+        };
+        let (concat, absent_deps) = self.format_pieces(&format_parts);
+        if !member.transforms.is_empty() {
+            self.import("strings", "strings");
+        }
+        let expr = apply_transforms(concat.join(" + "), &member.transforms, self.helpers);
+        let assign = format!("\t{dest} = {}\n", cast_string(&member.target, &expr));
+        if absent_deps.is_empty() {
+            return assign;
+        }
+        let cond = absent_deps
+            .iter()
+            .map(|dep| format!("{} == \"\"", why_var(dep)))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        format!(
+            "\tif {cond} {{\n{inner}\t}}\n",
+            inner = indent(assign.trim_end_matches('\n'))
+        )
     }
 }
 

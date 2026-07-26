@@ -129,6 +129,7 @@ fn zero_value(t: &Tref) -> String {
             Prim::I8 | Prim::I16 | Prim::I32 | Prim::U8 | Prim::U16 | Prim::U32 | Prim::Float,
         ) => "0".into(),
         Tref::Prim(Prim::String | Prim::Uuid) => "\"\"".into(),
+        Tref::Prim(Prim::Bytes) => "new Uint8Array()".into(),
         Tref::Map(_, _) => "{}".into(),
         Tref::List(_) => "[]".into(),
         // A named shape starts from an empty object (mirroring Go's zero
@@ -320,23 +321,49 @@ fn class_decl(
         body.push_str("    wrapClientInit(s);\n");
     }
 
-    // Consumed chains must hold a value once construction finishes.
-    for head in entry.consumed_field_heads() {
-        let Some(field) = entry.fields.iter().find(|f| f.name == head) else {
+    // Consumed chains must hold a value once construction finishes. Every
+    // check reads the resolved value (client_init ran already, bespoke wins),
+    // so the why-reason only decorates the error.
+    for path in entry.consumed_field_paths() {
+        let Some(head) = path.first() else {
             continue;
         };
-        if entry.is_guaranteed(field) {
+        let Some(field) = entry.fields.iter().find(|f| f.name == *head) else {
+            continue;
+        };
+        let shape = entry.field_shape(field, module);
+        if path.len() > 1 && matches!(shape, FieldShape::Config(_) | FieldShape::Structured(_)) {
+            // A consumed member of a composed or decoded field: the leaf value
+            // itself must be there (there is no member-level why to report).
+            let leaf = entry.path_type(&path, module);
+            if !string_like(&leaf) {
+                continue;
+            }
+            body.push_str(&format!(
+                "    if ((s.{head_ident}.{member_ident} ?? {zero}) === {zero}) {{\n      throw new Error(\"{name}: no value\");\n    }}\n",
+                head_ident = field_camel(head, config),
+                member_ident = field_camel(&path[1], config),
+                zero = cast_string(&leaf, "\"\""),
+                name = path.join("."),
+            ));
             continue;
         }
-        if !matches!(entry.field_shape(field, module), FieldShape::Scalar) {
+        if !matches!(shape, FieldShape::Scalar) || entry.is_guaranteed(field) {
             continue;
         }
         if string_like(&field.target) {
             body.push_str(&format!(
                 "    if (s.{ident} === {zero}) {{\n      throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n    }}\n",
-                ident = field_camel(&head, config),
+                ident = field_camel(head, config),
                 zero = cast_string(&field.target, "\"\""),
-                why = why_var(&head),
+                why = why_var(head),
+                name = head,
+            ));
+        } else if matches!(field.target, Tref::Prim(Prim::Bytes)) {
+            body.push_str(&format!(
+                "    if (s.{ident}.length === 0) {{\n      throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n    }}\n",
+                ident = field_camel(head, config),
+                why = why_var(head),
                 name = head,
             ));
         } else if matches!(
@@ -355,7 +382,8 @@ fn class_decl(
         ) {
             // A numeric zero can be a legitimate resolved value, so only the
             // combination (chain reported absent, still zero after the
-            // bridge) fails construction.
+            // bridge) fails construction. A bool has no absent-vs-zero
+            // distinction at all, so it carries no require.
             let zero = if matches!(field.target, Tref::Prim(Prim::I64 | Prim::U64)) {
                 "0n"
             } else {
@@ -363,8 +391,8 @@ fn class_decl(
             };
             body.push_str(&format!(
                 "    if ({why} !== \"\" && s.{ident} === {zero}) {{\n      throw new Error(\"{name} <- \" + {why});\n    }}\n",
-                ident = field_camel(&head, config),
-                why = why_var(&head),
+                ident = field_camel(head, config),
+                why = why_var(head),
                 name = head,
             ));
         }
@@ -429,21 +457,27 @@ fn class_decl(
         if value_expr(&vp, config, scalar_ref).is_none() {
             continue;
         }
+        // A member of a structured draft may be undefined (the draft starts
+        // from an empty object); reading it through its zero keeps the frozen
+        // values and the presence guard aligned with Go's zero struct.
+        let expr = if vp.member.is_some() {
+            format!("(s.{} ?? {})", access(&vp, config), zero_value(vp.target))
+        } else {
+            format!("s.{}", access(&vp, config))
+        };
         let assign = if let Tref::Prim(Prim::Duration) = vp.target {
             helpers.duration_ms = true;
             format!(
-                "    try {{\n      values[{path:?}] = durationToMs(String(s.{f}));\n    }} catch {{\n      throw new Error(`{path}: invalid duration ${{JSON.stringify(String(s.{f}))}}`);\n    }}\n",
+                "    try {{\n      values[{path:?}] = durationToMs(String({expr}));\n    }} catch {{\n      throw new Error(`{path}: invalid duration ${{JSON.stringify(String({expr}))}}`);\n    }}\n",
                 path = vp.path,
-                f = access(&vp, config),
             )
         } else {
             format!(
                 "    values[{path:?}] = {value};\n",
                 path = vp.path,
-                value = value_cast(vp.target, &format!("s.{}", access(&vp, config))),
+                value = value_cast(vp.target, &expr),
             )
         };
-        let expr = format!("s.{}", access(&vp, config));
         match presence_guard(entry, &vp, &expr) {
             Some(guard) => body.push_str(&format!("    if ({guard}) {{\n  {assign}    }}\n",)),
             None => body.push_str(&assign),
@@ -480,7 +514,6 @@ fn class_decl(
     let mut methods = String::new();
     for op in entry.operations {
         methods.push_str(&op_method(
-            entry,
             n,
             op,
             module,
@@ -516,7 +549,6 @@ fn class_decl(
 /// One operation method (mirrors the loose-op client's outcome mapping).
 #[allow(clippy::too_many_arguments)]
 fn op_method(
-    entry: &EntryModel<'_>,
     n: &Names,
     op: &Shape,
     module: &Module,
@@ -525,7 +557,6 @@ fn op_method(
     passes_hooks: bool,
     refs: &mut Vec<Symbol>,
 ) -> String {
-    let _ = entry;
     let en = error_names();
     let name = method_name(op, config);
     let (input, output) = crate::codegen::ops::op_io(op);

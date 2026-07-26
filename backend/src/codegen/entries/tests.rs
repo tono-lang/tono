@@ -302,6 +302,51 @@ fn consumed_heads_read_the_raw_protocol_traits() {
 }
 
 #[test]
+fn consumed_paths_keep_the_member_segments() {
+    let op = Shape {
+        id: "m#client.save".into(),
+        kind: ShapeKind::Operation {
+            input: None,
+            output: None,
+            errors: vec![],
+        },
+        traits: vec![
+            crate::ir::Trait {
+                id: "http".into(),
+                value: json!({
+                    "method": "POST",
+                    "path": "/v/{.conf.tenant}/notes",
+                    "endpoint": {"field": ["endpoint"]}
+                }),
+            },
+            crate::ir::Trait {
+                id: "header".into(),
+                value: json!(["X-Key", {"field": ["conf", "api_key"]}]),
+            },
+        ],
+    };
+    let shape = Shape {
+        id: "m#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![],
+            operations: vec![op],
+        },
+        traits: vec![],
+    };
+    let module = module_of(vec![shape]);
+    let entries = module_entries(&module);
+    assert_eq!(
+        entries[0].consumed_field_paths(),
+        vec![
+            vec!["conf".to_string(), "tenant".to_string()],
+            vec!["endpoint".to_string()],
+            vec!["conf".to_string(), "api_key".to_string()],
+        ]
+    );
+    assert_eq!(entries[0].consumed_field_heads(), vec!["conf", "endpoint"]);
+}
+
+#[test]
 fn an_env_ref_inside_a_match_arm_is_a_resolution_edge() {
     // The arm's inline @env(.naming) reads a sibling: the sibling must
     // resolve before the selecting field.
@@ -433,6 +478,56 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     let err =
         validate_entries(&model(vec![entry_shape("m#client", vec![cross])], vec![])).unwrap_err();
     assert!(err.contains("other#credentials"), "{err}");
+    // An @arg named after a constructor local shadows it in the generated
+    // signature.
+    let err = validate_entries(&model(
+        vec![entry_shape(
+            "m#client",
+            vec![field("config", vec![Source::Arg])],
+        )],
+        vec![],
+    ))
+    .unwrap_err();
+    assert!(err.contains("local the generated constructor"), "{err}");
+    // A non-arg field may use those names freely (it only lives as s.<field>).
+    assert!(validate_entries(&model(
+        vec![entry_shape(
+            "m#client",
+            vec![field(
+                "config",
+                vec![Source::Env(EnvName::Name("C".into()))]
+            )],
+        )],
+        vec![],
+    ))
+    .is_ok());
+    // A sibling spelling a derived why/set variable collides with it.
+    let err = validate_entries(&model(
+        vec![entry_shape(
+            "m#client",
+            vec![
+                field("endpoint", vec![Source::Env(EnvName::Name("E".into()))]),
+                field("endpoint_why", vec![Source::Arg]),
+            ],
+        )],
+        vec![],
+    ))
+    .unwrap_err();
+    assert!(err.contains("endpoint_why"), "{err}");
+    // A single entry named new collides with the Go constructor.
+    let err = validate_entries(&model(vec![entry_shape("m#new", vec![])], vec![])).unwrap_err();
+    assert!(err.contains("New constructor"), "{err}");
+    // In a multi-entry module, new_<entry> spells the other entry's
+    // constructor name.
+    let err = validate_entries(&model(
+        vec![
+            entry_shape("m#admin", vec![]),
+            entry_shape("m#new_admin", vec![]),
+        ],
+        vec![],
+    ))
+    .unwrap_err();
+    assert!(err.contains("NewAdmin"), "{err}");
     // A clean single-entry module passes.
     assert!(validate_entries(&model(
         vec![entry_shape(

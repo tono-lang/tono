@@ -1,7 +1,6 @@
 //! The entry type surface: the construction-only config structs, the
 //! resolved Settings, the functional options, the client struct and its
-//! mock interface (split from the entry module to keep files within the
-//! size ceiling; same module surface).
+//! mock interface.
 
 use super::*;
 
