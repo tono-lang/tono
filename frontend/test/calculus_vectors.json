@@ -1,0 +1,155 @@
+{
+  "description": "Reference vectors for the calculus: each vector names an entry function in a program, the argument values, and the value the reference evaluator produces. The evaluator is the truth (the calculus is self-referential), so a lowered target must reproduce these outputs bit for bit; the vectors pin lowering fidelity, not logic. Value encoding: one-key objects tag the type; 64-bit integers travel as decimal strings.",
+  "vectors": [
+    {
+      "name": "wrap_i8_add",
+      "program": "fn f(a: i8) -> i8 = a + 1",
+      "entry": "f",
+      "args": [{ "i8": 127 }],
+      "expected": { "i8": -128 }
+    },
+    {
+      "name": "wrap_u8_sub",
+      "program": "fn f(a: u8) -> u8 = a - 1",
+      "entry": "f",
+      "args": [{ "u8": 0 }],
+      "expected": { "u8": 255 }
+    },
+    {
+      "name": "wrap_i16_mul",
+      "program": "fn f(a: i16) -> i16 = a * 2",
+      "entry": "f",
+      "args": [{ "i16": 32767 }],
+      "expected": { "i16": -2 }
+    },
+    {
+      "name": "trunc_div_negative_dividend",
+      "program": "fn f(a: i64, b: i64) -> i64 = a / b",
+      "entry": "f",
+      "args": [{ "i64": "-7" }, { "i64": "3" }],
+      "expected": { "i64": "-2" }
+    },
+    {
+      "name": "trunc_rem_sign_of_dividend",
+      "program": "fn f(a: i64, b: i64) -> i64 = a % b",
+      "entry": "f",
+      "args": [{ "i64": "-7" }, { "i64": "3" }],
+      "expected": { "i64": "-1" }
+    },
+    {
+      "name": "div_by_zero_is_total_zero",
+      "program": "fn f(a: i64, b: i64) -> i64 = a / b",
+      "entry": "f",
+      "args": [{ "i64": "5" }, { "i64": "0" }],
+      "expected": { "i64": "0" }
+    },
+    {
+      "name": "intmin_div_minus_one_wraps",
+      "program": "fn f(a: i64, b: i64) -> i64 = a / b",
+      "entry": "f",
+      "args": [{ "i64": "-9223372036854775808" }, { "i64": "-1" }],
+      "expected": { "i64": "-9223372036854775808" }
+    },
+    {
+      "name": "unsigned_div_high_bit",
+      "program": "fn f(a: u8, b: u8) -> u8 = a / b",
+      "entry": "f",
+      "args": [{ "u8": 200 }, { "u8": 3 }],
+      "expected": { "u8": 66 }
+    },
+    {
+      "name": "to_int_truncates_toward_zero",
+      "program": "fn f(x: float) -> i64 = to_int(x) ?? -1",
+      "entry": "f",
+      "args": [{ "f64": -3.9 }],
+      "expected": { "i64": "-3" }
+    },
+    {
+      "name": "to_float_lossy_above_2p53",
+      "program": "fn f(a: i64) -> float = to_float(a)",
+      "entry": "f",
+      "args": [{ "i64": "9007199254740993" }],
+      "expected": { "f64": 9007199254740992 }
+    },
+    {
+      "name": "concat_strings",
+      "program": "fn f(a: string, b: string) -> string = a ++ b",
+      "entry": "f",
+      "args": [{ "str": "ab" }, { "str": "cd" }],
+      "expected": { "str": "abcd" }
+    },
+    {
+      "name": "short_circuit_and",
+      "program": "fn f(a: i64) -> bool = let y = a in y > 0 && y < 10",
+      "entry": "f",
+      "args": [{ "i64": "50" }],
+      "expected": { "bool": false }
+    },
+    {
+      "name": "map_filter_fold",
+      "program": "fn dbl(x: i64) -> i64 = x * 2\nfn pos(x: i64) -> bool = x > 0\nfn add(a: i64, x: i64) -> i64 = a + x\nfn f(xs: []i64) -> i64 = fold(filter(map(xs, dbl), pos), 0, add)",
+      "entry": "f",
+      "args": [{ "list": [{ "i64": "1" }, { "i64": "2" }, { "i64": "3" }] }],
+      "expected": { "i64": "12" }
+    },
+    {
+      "name": "list_builtins",
+      "program": "fn lt2(x: i64) -> bool = x < 2\nfn f(xs: []i64) -> i64 = length(xs) + (head(xs) ?? 0) + (get(xs, 1) ?? 0) + (find(xs, lt2) ?? -1)",
+      "entry": "f",
+      "args": [{ "list": [{ "i64": "10" }, { "i64": "3" }] }],
+      "expected": { "i64": "14" }
+    },
+    {
+      "name": "map_builtins",
+      "program": "fn f(m: map[string]i64, k: string) -> i64 = get_or(m, k, 0) + (lookup(m, k) ?? 0)",
+      "entry": "f",
+      "args": [
+        { "map": [[{ "str": "a" }, { "i64": "42" }]] },
+        { "str": "a" }
+      ],
+      "expected": { "i64": "84" }
+    },
+    {
+      "name": "match_known_arm",
+      "program": "fn f(p: pm) -> string = match p { card(c) => \"C\" pix(x) => \"P\" Unknown(u) => u }",
+      "entry": "f",
+      "args": [{ "variant": ["card", { "struct": {} }] }],
+      "expected": { "str": "C" }
+    },
+    {
+      "name": "match_unknown_arm",
+      "program": "fn f(p: pm) -> string = match p { card(c) => \"C\" pix(x) => \"P\" Unknown(u) => u }",
+      "entry": "f",
+      "args": [{ "variant": ["wire", { "struct": {} }] }],
+      "expected": { "str": "wire" }
+    },
+    {
+      "name": "optional_some",
+      "program": "fn f(a: i64) -> i64? = if a > 0 then Some(a) else None",
+      "entry": "f",
+      "args": [{ "i64": "5" }],
+      "expected": { "opt": { "i64": "5" } }
+    },
+    {
+      "name": "optional_none",
+      "program": "fn f(a: i64) -> i64? = if a > 0 then Some(a) else None",
+      "entry": "f",
+      "args": [{ "i64": "-5" }],
+      "expected": { "opt": null }
+    },
+    {
+      "name": "struct_ctor",
+      "program": "fn f() -> card = card { last4: \"1234\" }",
+      "entry": "f",
+      "args": [],
+      "expected": { "struct": { "last4": { "str": "1234" } } }
+    },
+    {
+      "name": "coalesce_absent",
+      "program": "fn f(x: i64?) -> i64 = x ?? 7",
+      "entry": "f",
+      "args": [{ "opt": null }],
+      "expected": { "i64": "7" }
+    }
+  ]
+}

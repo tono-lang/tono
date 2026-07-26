@@ -1,0 +1,370 @@
+{
+  "reference": "rust",
+  "vectors": [
+    {
+      "name": "canonical_matrix",
+      "input": {
+        "account_id": "9007199254740993",
+        "code": 200,
+        "counts": [
+          [
+            7,
+            "a"
+          ],
+          [
+            3,
+            "b"
+          ]
+        ],
+        "method": {
+          "last4": "4242",
+          "type": "card"
+        },
+        "secret": "AQID/g==",
+        "status": "active",
+        "tip": "500"
+      },
+      "expected": {
+        "account_id": "9007199254740993",
+        "code": 200,
+        "counts": [
+          [
+            7,
+            "a"
+          ],
+          [
+            3,
+            "b"
+          ]
+        ],
+        "method": {
+          "last4": "4242",
+          "type": "card"
+        },
+        "secret": "AQID/g==",
+        "status": "active",
+        "tip": "500"
+      }
+    },
+    {
+      "name": "optional_absent",
+      "input": {
+        "account_id": "1",
+        "code": 404,
+        "counts": [
+          [
+            1,
+            "x"
+          ]
+        ],
+        "method": {
+          "last4": "0000",
+          "type": "card"
+        },
+        "secret": "AQ==",
+        "status": "closed"
+      },
+      "expected": {
+        "account_id": "1",
+        "code": 404,
+        "counts": [
+          [
+            1,
+            "x"
+          ]
+        ],
+        "method": {
+          "last4": "0000",
+          "type": "card"
+        },
+        "secret": "AQ==",
+        "status": "closed"
+      }
+    },
+    {
+      "name": "unknown_string_enum",
+      "input": {
+        "account_id": "42",
+        "code": 200,
+        "counts": [],
+        "method": {
+          "last4": "1111",
+          "type": "card"
+        },
+        "secret": "AQID",
+        "status": "suspended",
+        "tip": "0"
+      },
+      "expected": {
+        "account_id": "42",
+        "code": 200,
+        "counts": [],
+        "method": {
+          "last4": "1111",
+          "type": "card"
+        },
+        "secret": "AQID",
+        "status": "suspended",
+        "tip": "0"
+      }
+    },
+    {
+      "name": "unknown_int_enum",
+      "input": {
+        "account_id": "42",
+        "code": 777,
+        "counts": [],
+        "method": {
+          "last4": "2222",
+          "type": "card"
+        },
+        "secret": "AQID",
+        "status": "active",
+        "tip": "1"
+      },
+      "expected": {
+        "account_id": "42",
+        "code": 777,
+        "counts": [],
+        "method": {
+          "last4": "2222",
+          "type": "card"
+        },
+        "secret": "AQID",
+        "status": "active",
+        "tip": "1"
+      }
+    },
+    {
+      "name": "bank_union_arm",
+      "input": {
+        "account_id": "7",
+        "code": 500,
+        "counts": [
+          [
+            9,
+            "z"
+          ]
+        ],
+        "method": {
+          "iban": "DE00123456",
+          "type": "bank"
+        },
+        "secret": "/w==",
+        "status": "active",
+        "tip": "10"
+      },
+      "expected": {
+        "account_id": "7",
+        "code": 500,
+        "counts": [
+          [
+            9,
+            "z"
+          ]
+        ],
+        "method": {
+          "iban": "DE00123456",
+          "type": "bank"
+        },
+        "secret": "/w==",
+        "status": "active",
+        "tip": "10"
+      }
+    },
+    {
+      "name": "empty_entries",
+      "input": {
+        "account_id": "8",
+        "code": 200,
+        "counts": [],
+        "method": {
+          "last4": "3333",
+          "type": "card"
+        },
+        "secret": "AA==",
+        "status": "closed",
+        "tip": "2"
+      },
+      "expected": {
+        "account_id": "8",
+        "code": 200,
+        "counts": [],
+        "method": {
+          "last4": "3333",
+          "type": "card"
+        },
+        "secret": "AA==",
+        "status": "closed",
+        "tip": "2"
+      }
+    },
+    {
+      "name": "i64_extremes",
+      "input": {
+        "account_id": "-9223372036854775808",
+        "code": 200,
+        "counts": [],
+        "method": {
+          "last4": "4444",
+          "type": "card"
+        },
+        "secret": "AQ==",
+        "status": "active",
+        "tip": "9223372036854775807"
+      },
+      "expected": {
+        "account_id": "-9223372036854775808",
+        "code": 200,
+        "counts": [],
+        "method": {
+          "last4": "4444",
+          "type": "card"
+        },
+        "secret": "AQ==",
+        "status": "active",
+        "tip": "9223372036854775807"
+      }
+    },
+    {
+      "name": "empty_bytes",
+      "input": {
+        "account_id": "0",
+        "code": 200,
+        "counts": [],
+        "method": {
+          "last4": "5555",
+          "type": "card"
+        },
+        "secret": "",
+        "status": "active"
+      },
+      "expected": {
+        "account_id": "0",
+        "code": 200,
+        "counts": [],
+        "method": {
+          "last4": "5555",
+          "type": "card"
+        },
+        "secret": "",
+        "status": "active"
+      }
+    },
+    {
+      "name": "negative_entry_key",
+      "input": {
+        "account_id": "-1",
+        "code": 404,
+        "counts": [
+          [
+            -5,
+            "neg"
+          ],
+          [
+            0,
+            "zero"
+          ],
+          [
+            2147483647,
+            "max"
+          ]
+        ],
+        "method": {
+          "last4": "6666",
+          "type": "card"
+        },
+        "secret": "AQ==",
+        "status": "active",
+        "tip": "-500"
+      },
+      "expected": {
+        "account_id": "-1",
+        "code": 404,
+        "counts": [
+          [
+            -5,
+            "neg"
+          ],
+          [
+            0,
+            "zero"
+          ],
+          [
+            2147483647,
+            "max"
+          ]
+        ],
+        "method": {
+          "last4": "6666",
+          "type": "card"
+        },
+        "secret": "AQ==",
+        "status": "active",
+        "tip": "-500"
+      }
+    },
+    {
+      "name": "non_ascii_string",
+      "input": {
+        "account_id": "3",
+        "code": 200,
+        "counts": [
+          [
+            1,
+            "ação"
+          ]
+        ],
+        "method": {
+          "iban": "BR12café",
+          "type": "bank"
+        },
+        "secret": "AQID",
+        "status": "active",
+        "tip": "3"
+      },
+      "expected": {
+        "account_id": "3",
+        "code": 200,
+        "counts": [
+          [
+            1,
+            "ação"
+          ]
+        ],
+        "method": {
+          "iban": "BR12café",
+          "type": "bank"
+        },
+        "secret": "AQID",
+        "status": "active",
+        "tip": "3"
+      }
+    },
+    {
+      "name": "unknowns_everywhere",
+      "input": {
+        "account_id": "99",
+        "code": 42,
+        "counts": [],
+        "method": {
+          "iban": "NL99",
+          "type": "bank"
+        },
+        "secret": "AQID/g==",
+        "status": "pending_review"
+      },
+      "expected": {
+        "account_id": "99",
+        "code": 42,
+        "counts": [],
+        "method": {
+          "iban": "NL99",
+          "type": "bank"
+        },
+        "secret": "AQID/g==",
+        "status": "pending_review"
+      }
+    }
+  ]
+}

@@ -10,8 +10,8 @@ is strong on the hand-written (bespoke) seam.
 | Layer | Technique | Gate | Where |
 |---|---|---|---|
 | Types / serialization | property (round-trip + idempotence) | light | `frontend/test/test_property.ml` (QCheck), `backend/tests/property_ir.rs` (proptest) |
-| Calculus | golden | light | `frontend/test/calculus_test.ml` |
-| Bespoke (codecs + error taxonomy) | golden + differential + **mutation** | **strong** | `backend/tests/conformance.rs`, `.cargo/mutants.toml` |
+| Calculus | golden (self-referential vectors) | light | `frontend/test/calculus_vectors.json`, `frontend/test/calculus_vectors_test.ml`, `frontend/test/calculus_test.ml` |
+| Bespoke (codecs + error taxonomy) | golden (N vs 1) + differential + **mutation** | **strong** | `backend/tests/golden_wire.rs` + `backend/tests/golden/wire_vectors.json`, `backend/tests/conformance.rs`, `.cargo/mutants.toml` |
 | Bespoke runtime (HTTP transport) | property + **mutation** | **strong** | `runtimes/http-ts/test`, `runtimes/http-ts/stryker.config.json`, `runtimes/http-go/*_test.go`, `runtimes/http-go/.gremlins.yaml` |
 | Runtime parity (retry/timeout/errors) | shared behavior vectors | breaks build | `runtimes/parity/vectors.json`, run by every HTTP runtime's test suite |
 | Generator (codegen) | snapshot | review | `backend/tests/snapshot_codegen.rs` |
@@ -30,11 +30,41 @@ breaks the build unconditionally), and the codegen snapshot is a **review** gate
 
 Run: `cargo test --test property_ir` (Rust) and `dune runtest` (OCaml).
 
+## Calculus (self-referential golden)
+
+The calculus needs no external reference: the frontend evaluator *is* the truth,
+and a well-typed program compiles into equivalent total code by construction.
+The committed vectors in `frontend/test/calculus_vectors.json` pin the
+evaluator's input-to-output relation (wrapping, truncated division, coercions,
+collection builtins, match with the `Unknown` arm); a target that lowers the
+calculus must reproduce the same outputs from the same file. Because only the
+lowering needs pinning, the gate is light: golden vectors, no mutation.
+
+Run: `dune runtest` (the `calculus_vectors` suite).
+
+## Golden (N versus 1, designated reference)
+
+The bespoke wire behavior elects one designated reference port (Rust). The
+vectors in `backend/tests/golden/wire_vectors.json` carry, for each wire input,
+the output the reference produced; every generated port re-encodes the same
+inputs and must match. This collapses "which of N is right?" into "all agree
+with the reference". The reference is also checked against its own committed
+vectors, so reference drift is visible too; an intended change is regenerated
+deliberately and reviewed as a diff:
+
+```
+cargo test --test golden_wire                          # every port vs the vectors
+TONO_UPDATE_GOLDEN_WIRE=1 cargo test --test golden_wire  # regenerate from the reference
+```
+
 ## Differential
 
-The same IR through the TypeScript, Rust, and Go targets must produce canonically
-equal wire JSON. This collapses "which of N is right?" into "do all N agree?" and
-catches drift between ports.
+The same batch of wire documents (the canonical fixture plus seeded
+pseudo-random documents) runs through the TypeScript, Rust, and Go ports, and
+the re-encoded JSON must agree pairwise. Unlike the golden harness this does not
+say which port is right; it catches drift between ports on inputs nobody
+hand-picked. The batch is deterministic (fixed seed) so CI is reproducible;
+`TONO_DIFFERENTIAL_SEED` explores other batches locally.
 
 Run: `cargo test --test conformance` (needs the Go/Node toolchains).
 

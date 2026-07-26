@@ -123,7 +123,9 @@ jobs:
       - name: Install the TypeScript toolchain
         run: npm ci --ignore-scripts
         working-directory: backend/codegen-tests/typescript
-      - name: Check that all three targets agree on the wire
+      - name: Check every port against the reference golden vectors
+        run: cargo test --test golden_wire
+      - name: Check that all targets agree on shared random input
         run: cargo test --test conformance
 
   e2e:

@@ -1,225 +1,171 @@
-//! Cross-language wire conformance: the same IR through the TypeScript, Rust, and
-//! Go targets must produce JSON that is canonically equal (parse to `Value`, then
-//! compare — key order is insignificant) for a shared fixture.
+//! Cross-language differential harness: every generated port decodes and
+//! re-encodes the same shared batch of wire documents (the canonical fixture
+//! plus seeded pseudo-random documents), and the re-encoded JSON of all present
+//! ports must be canonically equal pairwise (parse to `Value`, then compare, so
+//! key order is insignificant). Mutual agreement catches drift between ports
+//! without electing a winner; the golden harness is what says which output is
+//! right (RFC's N-versus-1 role).
 //!
-//! Each language is generated from one shared module, then a conformance driver
-//! decodes a canonical wire document from stdin and re-encodes it. The re-encoded
-//! JSON of every available language must equal the canonical input (and thus each
-//! other). A language whose toolchain is absent is skipped; the test still
-//! asserts conformance across whatever is present. Skipped under coverage.
+//! The random batch is deterministic: a fixed default seed keeps CI
+//! reproducible, and `TONO_DIFFERENTIAL_SEED` explores other batches locally.
+//! A language whose toolchain is absent is skipped; the test still asserts
+//! agreement across whatever is present. Skipped under coverage.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-
-use serde_json::Value;
-use tono_backend::codegen::render::render_file_with_companion;
-use tono_backend::codegen::targets::{go, rust, typescript};
-use tono_backend::codegen::Formatter;
+use serde_json::{json, Value};
 
 mod common;
-use common::{matrix_module as shared_module, CANONICAL_WIRE as CANONICAL};
+use common::{ports, CANONICAL_WIRE as CANONICAL};
 
-fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests")
+const DEFAULT_SEED: u64 = 0x746f_6e6f_2d64_6966; // "tono-dif" as bytes
+const RANDOM_DOCS: usize = 32;
+
+/// xorshift64*: small, seedable, and stable across platforms, which is all the
+/// shared-input contract needs.
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Rng(if seed == 0 { DEFAULT_SEED } else { seed })
+    }
+
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn chance(&mut self, percent: u64) -> bool {
+        self.below(100) < percent
+    }
+
+    fn token(&mut self, max_len: u64) -> String {
+        const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+        let len = 1 + self.below(max_len);
+        (0..len)
+            .map(|i| {
+                let pool = if i == 0 { 26 } else { ALPHABET.len() as u64 };
+                ALPHABET[self.below(pool) as usize] as char
+            })
+            .collect()
+    }
 }
 
-fn have(tool: &str, probe: &str) -> bool {
-    Command::new(tool)
-        .arg(probe)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+/// Standard base64 with padding, matching what every port emits for bytes.
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(TABLE[(n >> (18 - 6 * i)) as usize & 0x3F] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
-/// Run a command in `dir`, optionally piping `input` to its stdin, and return its
-/// stdout on success.
-fn run(dir: &Path, program: &str, args: &[&str], input: Option<&str>) -> String {
-    let mut child = Command::new(program)
-        .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn driver");
-    if let Some(input) = input {
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(input.as_bytes())
-            .expect("write stdin");
+/// A pseudo-random wire document for the shared matrix module. Every axis of the
+/// wire matrix varies: full-range i64 as string, random bytes as base64, the
+/// optional field present or absent, known and unknown values for both open
+/// enums, both union arms, and an `@entries` pairs array with unique keys (key
+/// order matters on the wire, duplicate semantics do not).
+fn random_wire_doc(rng: &mut Rng) -> Value {
+    let mut doc = serde_json::Map::new();
+    doc.insert("account_id".into(), json!((rng.next() as i64).to_string()));
+    let secret: Vec<u8> = (0..rng.below(13)).map(|_| rng.next() as u8).collect();
+    doc.insert("secret".into(), json!(base64(&secret)));
+    if rng.chance(50) {
+        doc.insert(
+            "tip".into(),
+            json!((rng.next() as i64 % 10_000).to_string()),
+        );
     }
-    let out = child.wait_with_output().expect("wait driver");
-    assert!(
-        out.status.success(),
-        "{program} {args:?} failed:\n{}\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf8 stdout")
-}
-
-fn rust_output() -> Option<Value> {
-    if !have("cargo", "--version") {
-        return None;
+    let status = match rng.below(3) {
+        0 => "active".to_string(),
+        1 => "closed".to_string(),
+        _ => rng.token(8),
+    };
+    doc.insert("status".into(), json!(status));
+    let code = match rng.below(4) {
+        0 => 200,
+        1 => 404,
+        2 => 500,
+        _ => rng.below(100_000) as i64,
+    };
+    doc.insert("code".into(), json!(code));
+    let method = if rng.chance(50) {
+        json!({"type": "card", "last4": rng.token(6)})
+    } else {
+        json!({"type": "bank", "iban": rng.token(12)})
+    };
+    doc.insert("method".into(), method);
+    let n_counts = rng.below(6) as usize;
+    let mut keys: Vec<i32> = Vec::new();
+    while keys.len() < n_counts {
+        let k = rng.next() as i32;
+        if !keys.contains(&k) {
+            keys.push(k);
+        }
     }
-    let dir = tests_dir().join("rust");
-    // Rust splits the module into types and serde files; write both as the
-    // `models`/`models_serde` modules the harness crate declares.
-    for module_file in rust::emit::emit_module(&shared_module(), &rust::types::rust_casing()) {
-        let text = render_file_with_companion(
-            &module_file.file,
-            module_file.imports_companion.as_deref(),
-            &rust::RustRules,
-            &Formatter::new("cat", vec![]),
-        )
-        .text;
-        std::fs::write(
-            dir.join(format!("src/models{}.rs", module_file.suffix)),
-            text,
-        )
-        .expect("write rust models source");
-    }
-    let out = run(
-        &dir,
-        "cargo",
-        &["run", "--quiet", "--bin", "conformance"],
-        Some(CANONICAL),
-    );
-    Some(serde_json::from_str(out.trim()).expect("rust output is json"))
-}
-
-fn go_output() -> Option<Value> {
-    if !have("go", "version") {
-        return None;
-    }
-    let dir = tests_dir().join("go");
-    // Go emits separate types and serde files; both compile in one `package main`,
-    // so write each into the harness dir before `go run .`.
-    let module = shared_module();
-    let union_ids: std::collections::HashSet<String> = module
-        .shapes
-        .iter()
-        .filter(|s| matches!(s.kind, tono_backend::ir::ShapeKind::Union { .. }))
-        .map(|s| s.id.clone())
-        .collect();
-    for module_file in go::emit::emit_module(&module, &go::types::go_casing(), &union_ids) {
-        let rough = render_file_with_companion(
-            &module_file.file,
-            module_file.imports_companion.as_deref(),
-            &go::GoRules::default(),
-            &Formatter::new("cat", vec![]),
-        )
-        .text;
-        let source = format!("{}\n{}", go::emit::package_clause("main"), rough);
-        let formatted = Formatter::new("gofmt", vec![]).run(&source);
-        std::fs::write(
-            dir.join(format!("models{}.go", module_file.suffix)),
-            formatted.text,
-        )
-        .expect("write go source");
-    }
-    let out = run(
-        &dir,
-        "go",
-        &["run", "-tags", "conformance", "."],
-        Some(CANONICAL),
-    );
-    Some(serde_json::from_str(out.trim()).expect("go output is json"))
-}
-
-/// The TypeScript conformance driver. The canonical input is embedded (so the
-/// driver needs no Node type declarations to read stdin); it decodes then
-/// re-encodes and prints the wire JSON.
-fn ts_driver() -> String {
-    format!(
-        "import {{ decodeAccount, encodeAccount }} from \"./models_serde\";\n\
-         const input: any = {CANONICAL};\n\
-         console.log(JSON.stringify(encodeAccount(decodeAccount(input))));\n"
-    )
-}
-
-fn ts_output() -> Option<Value> {
-    let ws = tests_dir().join("typescript");
-    let tsc = ws.join("node_modules/.bin/tsc");
-    if !tsc.exists() || !have("node", "--version") {
-        return None;
-    }
-    let work = ws.join("work-conformance");
-    std::fs::create_dir_all(&work).expect("create work-conformance");
-    // TypeScript splits the module into a types file and a serde file; write both,
-    // then compile both alongside the driver.
-    for module_file in
-        typescript::emit::emit_module(&shared_module(), &typescript::types::ts_casing())
-    {
-        let text = render_file_with_companion(
-            &module_file.file,
-            module_file.imports_companion.as_deref(),
-            &typescript::TsRules,
-            &Formatter::new("cat", vec![]),
-        )
-        .text;
-        std::fs::write(work.join(format!("models{}.ts", module_file.suffix)), text)
-            .expect("write ts models source");
-    }
-    std::fs::write(work.join("conformance.ts"), ts_driver()).expect("write conformance.ts");
-    let compile = Command::new(&tsc)
-        .args([
-            "work-conformance/models.ts",
-            "work-conformance/models_serde.ts",
-            "work-conformance/conformance.ts",
-            "--outDir",
-            "work-conformance/dist",
-            "--target",
-            "ES2020",
-            "--module",
-            "commonjs",
-            "--lib",
-            "ES2020,DOM",
-        ])
-        .current_dir(&ws)
-        .output()
-        .expect("run tsc");
-    assert!(
-        compile.status.success(),
-        "tsc failed:\n{}\n{}",
-        String::from_utf8_lossy(&compile.stdout),
-        String::from_utf8_lossy(&compile.stderr)
-    );
-    let out = run(&ws, "node", &["work-conformance/dist/conformance.js"], None);
-    Some(serde_json::from_str(out.trim()).expect("ts output is json"))
+    let counts: Vec<Value> = keys.into_iter().map(|k| json!([k, rng.token(6)])).collect();
+    doc.insert("counts".into(), json!(counts));
+    Value::Object(doc)
 }
 
 #[test]
-fn the_three_targets_agree_on_the_wire() {
+fn the_targets_agree_on_shared_random_input() {
     if std::env::var_os("CARGO_LLVM_COV").is_some() {
         eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test conformance`");
         return;
     }
-    let canonical: Value = serde_json::from_str(CANONICAL).expect("canonical fixture is json");
+    let seed = std::env::var("TONO_DIFFERENTIAL_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_SEED);
+    eprintln!("differential seed: {seed:#x}");
+    let mut rng = Rng::new(seed);
 
-    let outputs = [
-        ("rust", rust_output()),
-        ("go", go_output()),
-        ("typescript", ts_output()),
-    ];
-    let present: Vec<&str> = outputs
+    let canonical: Value = serde_json::from_str(CANONICAL).expect("canonical fixture is json");
+    let mut inputs = vec![canonical];
+    inputs.extend((0..RANDOM_DOCS).map(|_| random_wire_doc(&mut rng)));
+
+    let outputs = ports::all_port_outputs(&inputs, "conformance");
+    let present: Vec<(&str, &Vec<Value>)> = outputs
         .iter()
-        .filter_map(|(name, v)| v.as_ref().map(|_| *name))
+        .filter_map(|(name, v)| v.as_ref().map(|v| (*name, v)))
         .collect();
     assert!(
         !present.is_empty(),
         "no language toolchain available to check conformance"
     );
-    eprintln!("conformance checked across: {present:?}");
+    eprintln!(
+        "differential checked across: {:?}",
+        present.iter().map(|(n, _)| *n).collect::<Vec<_>>()
+    );
 
-    for (name, output) in &outputs {
-        if let Some(value) = output {
+    let (first_name, first_outputs) = present[0];
+    for (name, port_outputs) in &present[1..] {
+        for (i, (a, b)) in first_outputs.iter().zip(port_outputs.iter()).enumerate() {
             assert_eq!(
-                value, &canonical,
-                "{name} re-encoded JSON is not canonically equal to the fixture"
+                a, b,
+                "{first_name} and {name} disagree on document {i} (seed {seed:#x})\n\
+                 input: {}",
+                inputs[i]
             );
         }
     }

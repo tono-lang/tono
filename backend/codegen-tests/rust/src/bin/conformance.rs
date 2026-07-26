@@ -1,7 +1,7 @@
-// The conformance driver: read a canonical wire JSON from stdin, decode it into
-// the generated types, re-encode it, and print the result. The conformance
-// harness pipes the same fixture to every language and asserts the re-encoded
-// JSON is Value-equal across all of them.
+// The conformance driver: read a batch of wire JSON documents from stdin (one
+// per line), decode each into the generated types, re-encode it, and print one
+// document per line. The harnesses pipe the same batch to every language and
+// compare the re-encoded JSON Value-wise across all of them.
 #![allow(dead_code)]
 
 #[path = "../models.rs"]
@@ -19,7 +19,9 @@ fn main() {
     std::io::stdin()
         .read_to_string(&mut input)
         .expect("read stdin");
-    let account: Account = serde_json::from_str(&input).expect("decode");
-    let out = serde_json::to_string(&account).expect("encode");
-    println!("{out}");
+    for line in input.lines().filter(|l| !l.trim().is_empty()) {
+        let account: Account = serde_json::from_str(line).expect("decode");
+        let out = serde_json::to_string(&account).expect("encode");
+        println!("{out}");
+    }
 }

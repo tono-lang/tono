@@ -6,6 +6,8 @@
 //! helpers, so unused items per binary are expected.
 #![allow(dead_code)]
 
+pub mod ports;
+
 use tono_backend::ir::{
     EnumBacking, EnumValue, Member, Module, Prim, Shape, ShapeKind, Trait, Tref,
 };
