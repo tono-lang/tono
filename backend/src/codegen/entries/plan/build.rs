@@ -14,6 +14,44 @@ fn has_arg(field: &EntryField) -> bool {
     field.sources.iter().any(|s| matches!(s, Source::Arg))
 }
 
+/// The logical why-var name tracking a composed member's resolution, distinct
+/// from any entry field's own reason variable.
+fn member_why_name(field: &EntryField, member: &EntryField) -> String {
+    format!("{}_{}", field.name, member.name)
+}
+
+/// Whether a composed config member needs a hoisted reason variable so a
+/// consumed non-string member can be required at construction instead of being
+/// frozen at its silent zero (a legitimately resolved `0`/`false` is
+/// indistinguishable from absence by value alone). Scoped to the plain
+/// non-guaranteed numeric/bool chain that a descriptor consumes: bound members
+/// and derivations keep their zero, out of this first cut. Returns the logical
+/// why name when tracking is needed.
+fn member_needs_why(field: &EntryField, member: &EntryField, entry: &EntryModel) -> Option<String> {
+    if member.select.is_some() || member.format.is_some() {
+        return None;
+    }
+    if field.binds.iter().any(|b| b.field == member.name) {
+        return None;
+    }
+    if member
+        .sources
+        .iter()
+        .any(|s| matches!(s, Source::Arg | Source::Default(_)))
+    {
+        return None;
+    }
+    let leaf = &member.target;
+    if !is_numeric(leaf) && !matches!(leaf, Tref::Prim(Prim::Bool)) {
+        return None;
+    }
+    let consumed = entry
+        .consumed_field_paths()
+        .iter()
+        .any(|p| p.len() == 2 && p[0] == field.name && p[1] == member.name);
+    consumed.then(|| member_why_name(field, member))
+}
+
 /// Build the resolution plan for one entry field, dispatching on its shape.
 pub fn build_field<'a>(
     field: &'a EntryField,
@@ -92,15 +130,29 @@ pub fn build_requires(entry: &EntryModel, module: &Module, e: &mut dyn Emitter) 
         let shape = entry.field_shape(field, module);
         if path.len() > 1 && matches!(shape, FieldShape::Config(_) | FieldShape::Structured(_)) {
             let leaf = entry.path_type(&path, module);
-            if !string_like(&leaf) {
+            if string_like(&leaf) {
+                out.push(Stmt::Leaf(Leaf(e.require_member(
+                    head,
+                    &path[1],
+                    &leaf,
+                    &path.join("."),
+                ))));
                 continue;
             }
-            out.push(Stmt::Leaf(Leaf(e.require_member(
-                head,
-                &path[1],
-                &leaf,
-                &path.join("."),
-            ))));
+            // A consumed numeric/bool config member carries a hoisted reason var
+            // (a resolved zero is not absence), so its require reads the reason,
+            // not the value. Members without one keep their zero, as before.
+            if let FieldShape::Config(cfg) = shape {
+                if let ShapeKind::Config { fields } = &cfg.kind {
+                    if let Some(member) = fields.iter().find(|m| m.name == path[1]) {
+                        if let Some(why) = member_needs_why(field, member, entry) {
+                            out.push(Stmt::Leaf(Leaf(
+                                e.require_member_deferred(&path.join("."), &why),
+                            )));
+                        }
+                    }
+                }
+            }
             continue;
         }
         if !matches!(shape, FieldShape::Scalar) || entry.is_guaranteed(field) {
@@ -240,10 +292,20 @@ fn build_config(
     let ShapeKind::Config { fields } = &shape.kind else {
         return Stmt::Nop;
     };
+    // A consumed non-string member's reason variable must outlive the config
+    // brace scope so the post-construction require can read it; hoist it above
+    // the block that resolves the member.
+    let mut hoisted: Vec<Stmt> = Vec::new();
+    for member in fields {
+        if let Some(why) = member_needs_why(field, member, entry) {
+            hoisted.push(Stmt::Leaf(e.why_open(&why, "no source")));
+        }
+    }
     let open = e.config_open(field, shape);
     let mut members: Vec<Stmt> = Vec::new();
     for member in fields {
         let member_dest = e.member_dest(&member.name);
+        let why = member_needs_why(field, member, entry);
         let bind = field.binds.iter().find(|b| b.field == member.name);
         members.push(match bind {
             Some(bind) => {
@@ -259,27 +321,53 @@ fn build_config(
                             e.cond_why_resolved(&head),
                             Stmt::Leaf(e.member_bind_assign(&member_dest, &expr)),
                         )],
-                        otherwise: Some(Box::new(build_member(member, entry, e, &member_dest))),
+                        otherwise: Some(Box::new(build_member(
+                            member,
+                            entry,
+                            e,
+                            &member_dest,
+                            why.as_deref(),
+                        ))),
                     }
                 }
             }
-            None => build_member(member, entry, e, &member_dest),
+            None => build_member(member, entry, e, &member_dest, why.as_deref()),
         });
     }
-    Stmt::Block {
+    let block = Stmt::Block {
         open,
         body: Box::new(seq(members)),
         close: e.config_close(&e.dest(&field.name)),
+    };
+    if hoisted.is_empty() {
+        block
+    } else {
+        hoisted.push(block);
+        seq(hoisted)
     }
 }
 
 /// A config member's own resolution: a match, a `@format` derivation, or its
-/// source chain, plus its `@str::*` pipeline (`@format` folds it in).
-fn build_member(member: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, dest: &str) -> Stmt {
+/// source chain, plus its `@str::*` pipeline (`@format` folds it in). `why` is
+/// the hoisted reason variable a consumed non-string member tracks (see
+/// [`member_needs_why`]); its absence keeps the reason-less cascade.
+fn build_member(
+    member: &EntryField,
+    entry: &EntryModel,
+    e: &mut dyn Emitter,
+    dest: &str,
+    why: Option<&str>,
+) -> Stmt {
     let head = if member.select.is_some() {
         build_member_select(member, entry, e, dest)
     } else if member.format.is_some() {
         build_format(member, entry, e, dest)
+    } else if let Some(why) = why {
+        // A consumed non-string member tracks a reason so its absence can be
+        // required at construction (a resolved `0`/`false` is not absence). The
+        // why-var is opened by the caller above the config block; here each
+        // source is a still-absent fallback step, as in a scalar chain.
+        chain_sequential(&arm_sources(member, &member.sources), e, dest, why)
     } else {
         // A member resolves through the same ordered cascade as a field chain
         // (first present source wins, an optional @default closes it); it carries

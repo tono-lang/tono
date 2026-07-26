@@ -496,6 +496,14 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
+    fn require_member_deferred(&mut self, name: &str, why: &str) -> String {
+        self.import("errors", "errors");
+        format!(
+            "if {why} != \"\" {{\n\treturn nil, errors.New(\"{name} <- \" + {why})\n}}",
+            why = why_var(why),
+        )
+    }
+
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         self.import("errors", "errors");
         format!(

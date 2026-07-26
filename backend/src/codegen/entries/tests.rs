@@ -1,5 +1,5 @@
 use super::*;
-use crate::ir::{FieldRef, Select, SelectArm};
+use crate::ir::{EnvName, FieldRef, Select, SelectArm};
 use serde_json::json;
 
 fn field(name: &str, sources: Vec<Source>) -> EntryField {

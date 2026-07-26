@@ -285,6 +285,10 @@ pub trait Emitter {
     //     check itself (comparison, error construction, import side effect) ---
     /// A consumed member of a composed/decoded field must hold a value.
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String;
+    /// A consumed numeric/bool config member fails when its hoisted reason var
+    /// reports absence (a resolved zero is not absence, so the value is not
+    /// consulted). `why` is the logical reason-var name (see [`build`]).
+    fn require_member_deferred(&mut self, name: &str, why: &str) -> String;
     /// A consumed string-like scalar must be non-empty (why-decorated error).
     fn require_string(&mut self, head: &str, target: &Tref) -> String;
     /// A consumed bytes scalar must be non-empty (why-decorated error).

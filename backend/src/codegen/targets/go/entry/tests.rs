@@ -2,9 +2,10 @@ use super::*;
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::{
-    bare_entry_field, push_entry_field, push_entry_op_trait, rendered, set_entry_op_outputs,
-    with_bytes_and_constrained_port, with_derived_config_members, with_enum_config_member,
-    with_member_select_on_absent_subject, with_structured_sources, with_transformed_chain_field,
+    bare_entry_field, push_config_member, push_entry_field, push_entry_op_trait, rendered,
+    set_entry_op_outputs, with_bytes_and_constrained_port, with_derived_config_members,
+    with_enum_config_member, with_member_select_on_absent_subject, with_structured_sources,
+    with_transformed_chain_field,
 };
 use crate::ir::decode_model;
 
@@ -395,6 +396,36 @@ fn a_consumed_config_member_requires_a_value_at_construction() {
     // The leaf value itself is checked (there is no member-level why).
     assert!(serde.contains("if s.Settings.APIKey == \"\" {"));
     assert!(serde.contains("errors.New(\"settings.api_key: no value\")"));
+}
+
+#[test]
+fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
+    let mut module = fixture_module();
+    // A numeric config member fed only by an env: a resolved 0 is a value, so
+    // absence cannot be read off the zero. It carries a hoisted reason var and
+    // the consumed require reads that, not the value.
+    push_config_member(
+        &mut module,
+        bare_entry_field(
+            "max_conns",
+            Tref::Prim(Prim::I32),
+            vec![Source::Env(EnvName::Name("MAX_CONNS".into()))],
+        ),
+    );
+    push_entry_op_trait(
+        &mut module,
+        "header",
+        serde_json::json!(["X-Max", {"field": ["settings", "max_conns"]}]),
+    );
+    let serde = serde_text(&module);
+    // The reason var is hoisted above the config block (so the post-construction
+    // require can read it) and the member resolves through the tracked chain.
+    assert!(serde.contains("settingsMaxConnsWhy := \"no source\""));
+    // The require reads the reason, never the (possibly legitimately zero) value.
+    assert!(serde.contains("if settingsMaxConnsWhy != \"\" {"));
+    assert!(serde.contains("errors.New(\"settings.max_conns <- \" + settingsMaxConnsWhy)"));
+    // It is not compared against the numeric zero (that would reject a real 0).
+    assert!(!serde.contains("s.Settings.MaxConns == 0"));
 }
 
 #[test]

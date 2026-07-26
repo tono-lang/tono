@@ -2,9 +2,10 @@ use super::*;
 use crate::codegen::targets::typescript::types::ts_casing;
 use crate::codegen::targets::typescript::TsRules;
 use crate::codegen::test_support::{
-    bare_entry_field, push_entry_field, push_entry_op_trait, rendered, set_entry_op_outputs,
-    with_bytes_and_constrained_port, with_derived_config_members, with_enum_config_member,
-    with_member_select_on_absent_subject, with_structured_sources, with_transformed_chain_field,
+    bare_entry_field, push_config_member, push_entry_field, push_entry_op_trait, rendered,
+    set_entry_op_outputs, with_bytes_and_constrained_port, with_derived_config_members,
+    with_enum_config_member, with_member_select_on_absent_subject, with_structured_sources,
+    with_transformed_chain_field,
 };
 use crate::ir::decode_model;
 
@@ -159,6 +160,35 @@ fn a_structured_source_falls_back_across_multiple_envs() {
         .find("readEnv(\"SERVICE_CREDENTIALS\")")
         .expect("primary lookup");
     assert!(primary < guard && guard < fallback);
+}
+
+#[test]
+fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
+    let mut module = with_descriptors(fixture_module());
+    // A numeric config member fed only by an env: a resolved 0 is a value, so
+    // absence cannot be read off the zero. It carries a hoisted reason var and
+    // the consumed require reads that, not the value.
+    push_config_member(
+        &mut module,
+        bare_entry_field(
+            "max_conns",
+            Tref::Prim(Prim::I32),
+            vec![Source::Env(EnvName::Name("MAX_CONNS".into()))],
+        ),
+    );
+    push_entry_op_trait(
+        &mut module,
+        "header",
+        serde_json::json!(["X-Max", {"field": ["settings", "max_conns"]}]),
+    );
+    let out = text(&module);
+    // The reason var is hoisted above the config block so the require can read it.
+    assert!(out.contains("let settingsMaxConnsWhy = \"no source\";"));
+    // The require reads the reason, never the (possibly legitimately zero) value.
+    assert!(out.contains("if (settingsMaxConnsWhy !== \"\") {"));
+    assert!(out.contains("throw new Error(\"settings.max_conns <- \" + settingsMaxConnsWhy);"));
+    // It is not compared against the numeric zero (that would reject a real 0).
+    assert!(!out.contains("s.settings.maxConns === 0"));
 }
 
 #[test]

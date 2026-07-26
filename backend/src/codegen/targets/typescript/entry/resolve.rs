@@ -533,6 +533,13 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
+    fn require_member_deferred(&mut self, name: &str, why: &str) -> String {
+        format!(
+            "if ({why} !== \"\") {{\n  throw new Error(\"{name} <- \" + {why});\n}}",
+            why = why_var(why),
+        )
+    }
+
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         format!(
             "if (s.{ident} === {zero}) {{\n  throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n}}",
