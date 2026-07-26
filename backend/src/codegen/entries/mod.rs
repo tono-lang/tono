@@ -11,11 +11,29 @@
 
 use std::collections::HashSet;
 
+use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
+use crate::codegen::symbol::SymbolKind;
 use crate::ir::{
     ArmValue, Bind, EntryField, EnvName, Module, Shape, ShapeKind, Source, TemplatePart, Tref,
 };
 
 pub mod plan;
+
+/// The camelCase spelling of a canonical name, for the constructor parameters
+/// and reason variables that read identically in every target.
+pub(crate) fn camel(name: &str) -> String {
+    transform(
+        name,
+        SymbolKind::Field,
+        &CasingConfig::new(CaseStyle::Camel),
+        None,
+    )
+}
+
+/// The reason ("why") variable tracking a field's deferred resolution.
+pub(crate) fn why_var(field: &str) -> String {
+    camel(&format!("{field}_why"))
+}
 
 /// One entry of a module with its fields in resolution order: every field a
 /// step depends on (a `@env(.ref)` variable name, a `@format` placeholder, a

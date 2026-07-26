@@ -14,7 +14,7 @@ use crate::ir::{
     ArmValue, EntryField, EnvName, Module, Select, Shape, ShapeKind, Source, TemplatePart, Tref,
 };
 
-use super::{source_stub, EntryModel, FieldShape};
+use super::{camel, source_stub, why_var, EntryModel, FieldShape};
 
 /// An already-spelled run of target statements, indented relative to its own
 /// column zero (the walker adds the enclosing depth). No trailing newline.
@@ -77,19 +77,42 @@ pub trait Emitter {
     /// The equality / inequality operators (`"=="`/`"!="` vs `"==="`/`"!=="`).
     fn eq(&self) -> &'static str;
     fn neq(&self) -> &'static str;
-    /// The read expression of a field / member destination.
-    fn dest(&self, field_name: &str) -> String;
-    fn member_dest(&self, member_name: &str) -> String;
-    /// The why-var identifier for a field.
-    fn why_ident(&self, field_name: &str) -> String;
-    /// The constructor parameter name of an `@arg` field.
-    fn arg_ident(&self, field: &EntryField) -> String;
+
+    // --- the per-target primitives the delegating atoms below build on: how a
+    //     field name and a sibling path spell in the target's casing, and how a
+    //     literal reads in its syntax ---
+    /// The settings-field read for a canonical field name (`s.Field` / `s.field`).
+    fn ident(&self, name: &str) -> String;
+    /// The read expression of a sibling-field path (`s.Creds.Token`).
+    fn path_expr(&self, path: &[String]) -> String;
+    /// The declared type at a sibling-field path.
+    fn path_type(&self, path: &[String]) -> Tref;
     /// A `@default`/match-arm literal in the field's type.
     fn literal_of(&self, target: &Tref, value: &serde_json::Value) -> String;
+    fn member_dest(&self, member_name: &str) -> String;
+
+    // --- delegating atoms shared across targets (the spelling lives in the
+    //     primitives above and the shared naming helpers) ---
+    /// The read expression of a field destination.
+    fn dest(&self, field_name: &str) -> String {
+        self.ident(field_name)
+    }
+    /// The why-var identifier for a field.
+    fn why_ident(&self, field_name: &str) -> String {
+        why_var(field_name)
+    }
+    /// The constructor parameter name of an `@arg` field.
+    fn arg_ident(&self, field: &EntryField) -> String {
+        camel(&field.name)
+    }
     /// The read expression of a sibling-field path (`creds.token`).
-    fn path_read(&self, path: &[String]) -> String;
+    fn path_read(&self, path: &[String]) -> String {
+        self.path_expr(path)
+    }
     /// The declared type at a sibling-field path.
-    fn path_type_of(&self, path: &[String]) -> Tref;
+    fn path_type_of(&self, path: &[String]) -> Tref {
+        self.path_type(path)
+    }
     /// Render an expression of type `t` as a target string (for env-name and
     /// error-label interpolation); pulls any import the spelling needs.
     fn to_string_expr(&mut self, expr: &str, t: &Tref) -> String;
@@ -212,7 +235,9 @@ pub trait Emitter {
     fn config_close(&self, dest: &str) -> Leaf {
         Leaf(format!("{dest} = composed{}", self.term()))
     }
-    fn bind_expr(&self, source: &[String]) -> String;
+    fn bind_expr(&self, source: &[String]) -> String {
+        self.path_expr(source)
+    }
     fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{member_dest} = {expr}{}", self.term()))
     }

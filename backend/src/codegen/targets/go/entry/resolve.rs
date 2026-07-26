@@ -25,25 +25,6 @@ impl Resolver<'_, '_> {
         self.refs.push(import(name, module));
     }
 
-    fn ident(&self, name: &str) -> String {
-        format!("s.{}", field_pascal(name, self.config))
-    }
-
-    /// The read expression of a sibling-field path (`creds.token` ->
-    /// `s.Creds.Token`).
-    fn path_expr(&self, path: &[String]) -> String {
-        let mut out = "s".to_string();
-        for seg in path {
-            out.push('.');
-            out.push_str(&field_pascal(seg, self.config));
-        }
-        out
-    }
-
-    fn path_type(&self, path: &[String]) -> Tref {
-        self.entry.path_type(path, self.module)
-    }
-
     fn guaranteed(&self, name: &str) -> bool {
         self.entry.field_guaranteed(name)
     }
@@ -226,32 +207,29 @@ impl Emitter for Resolver<'_, '_> {
         format!("if {}", cond.0)
     }
 
-    fn dest(&self, field_name: &str) -> String {
-        self.ident(field_name)
+    fn ident(&self, name: &str) -> String {
+        format!("s.{}", field_pascal(name, self.config))
+    }
+
+    fn path_expr(&self, path: &[String]) -> String {
+        let mut out = "s".to_string();
+        for seg in path {
+            out.push('.');
+            out.push_str(&field_pascal(seg, self.config));
+        }
+        out
+    }
+
+    fn path_type(&self, path: &[String]) -> Tref {
+        self.entry.path_type(path, self.module)
     }
 
     fn member_dest(&self, member_name: &str) -> String {
         format!("composed.{}", field_pascal(member_name, self.config))
     }
 
-    fn why_ident(&self, field_name: &str) -> String {
-        why_var(field_name)
-    }
-
-    fn arg_ident(&self, field: &EntryField) -> String {
-        camel(&field.name)
-    }
-
     fn literal_of(&self, target: &Tref, value: &serde_json::Value) -> String {
         literal(target, value)
-    }
-
-    fn path_read(&self, path: &[String]) -> String {
-        self.path_expr(path)
-    }
-
-    fn path_type_of(&self, path: &[String]) -> Tref {
-        self.path_type(path)
     }
 
     fn to_string_expr(&mut self, expr: &str, t: &Tref) -> String {
@@ -269,10 +247,6 @@ impl Emitter for Resolver<'_, '_> {
 
     fn config_open(&mut self, _field: &EntryField, shape: &Shape) -> Leaf {
         Leaf(format!("var composed {}", type_ident_from_id(&shape.id)))
-    }
-
-    fn bind_expr(&self, source: &[String]) -> String {
-        self.path_expr(source)
     }
 
     /// The `@with` presence step of a non-guaranteed chain, relative to column
