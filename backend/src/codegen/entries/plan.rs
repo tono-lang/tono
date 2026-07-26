@@ -166,25 +166,26 @@ pub trait Emitter {
 
     // --- the source steps of a NON-guaranteed chain: each owns its guard
     //     idiom, so the sequential ordering is shared while the spelling stays
-    //     per-target ---
-    fn with_step(&mut self, field: &EntryField, dest: &str, why_field: &str) -> Leaf;
-    fn env_step(
+    //     per-target. `why` is the already-spelled reason variable. ---
+    fn with_step_body(&self, field: &EntryField, dest: &str, why: &str) -> String;
+    fn env_step_body(
         &mut self,
         field: &EntryField,
-        source: &Source,
+        name: &EnvName,
         dest: &str,
-        why_field: &str,
-    ) -> Leaf;
+        why: &str,
+    ) -> String;
 
-    // --- the whole-construct leaves that already differ per target (a
+    // --- the whole-construct bodies that already differ per target (a
     //     guaranteed chain diverges algorithmically: Go emits an if/else-if
-    //     cascade, TypeScript a set-flag sequence, so neither is shared) ---
-    fn chain_guaranteed_leaf(&mut self, field: &EntryField, dest: &str) -> Leaf;
-    fn select_leaf(&mut self, field: &EntryField, dest: &str) -> Leaf;
-    fn format_leaf(&mut self, field: &EntryField, dest: &str) -> Leaf;
-    fn transforms_leaf(&mut self, field: &EntryField, dest: &str) -> Option<Leaf>;
-    fn structured_leaf(&mut self, field: &EntryField, shape: &Shape) -> Stmt;
-    fn json_leaf(&mut self, field: &EntryField) -> Stmt;
+    //     cascade, TypeScript a set-flag sequence, so neither is shared). Each
+    //     returns already-spelled statements the builders wrap into the tree. ---
+    fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String;
+    fn select_body(&mut self, field: &EntryField, dest: &str) -> String;
+    fn format_body(&mut self, field: &EntryField, dest: &str) -> String;
+    fn transforms_body(&mut self, field: &EntryField, dest: &str) -> Option<String>;
+    fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String;
+    fn json_body(&mut self, field: &EntryField) -> String;
     fn config_open(&mut self, field: &EntryField, shape: &Shape) -> Leaf;
     fn config_close(&self, dest: &str) -> Leaf {
         Leaf(format!("{dest} = composed{}", self.term()))
@@ -193,10 +194,8 @@ pub trait Emitter {
     fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{member_dest} = {expr}{}", self.term()))
     }
-    fn member_select_leaf(&mut self, member: &EntryField, dest: &str) -> Leaf;
-    fn member_format_leaf(&mut self, member: &EntryField, dest: &str) -> Leaf;
-    fn member_chain(&mut self, member: &EntryField, sources: &[Source], dest: &str) -> Stmt;
-    fn member_transforms_leaf(&mut self, member: &EntryField, dest: &str) -> Option<Leaf>;
+    fn member_select_body(&mut self, member: &EntryField, dest: &str) -> String;
+    fn member_chain_body(&mut self, stub: &EntryField, dest: &str) -> String;
 }
 
 fn has_arg(field: &EntryField) -> bool {
@@ -212,8 +211,8 @@ pub fn build_field<'a>(
 ) -> Stmt {
     match entry.field_shape(field, module) {
         FieldShape::Config(shape) => build_config(field, shape, entry, e),
-        FieldShape::Structured(shape) => e.structured_leaf(field, shape),
-        FieldShape::Json => e.json_leaf(field),
+        FieldShape::Structured(shape) => Stmt::Leaf(Leaf(e.structured_body(field, shape))),
+        FieldShape::Json => Stmt::Leaf(Leaf(e.json_body(field))),
         FieldShape::Scalar => build_scalar(field, entry, e),
     }
 }
@@ -224,16 +223,19 @@ pub fn build_field<'a>(
 fn build_scalar(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter) -> Stmt {
     let dest = e.dest(&field.name);
     if field.format.is_some() {
-        return Stmt::Leaf(e.format_leaf(field, &dest));
+        return Stmt::Leaf(Leaf(e.format_body(field, &dest)));
     }
     let head = if has_arg(field) {
         Stmt::Leaf(e.assign_arg(field, &dest))
     } else if field.select.is_some() {
-        Stmt::Leaf(e.select_leaf(field, &dest))
+        Stmt::Leaf(Leaf(e.select_body(field, &dest)))
     } else {
         build_chain(field, entry, e, &dest)
     };
-    seq(vec![head, opt_leaf(e.transforms_leaf(field, &dest))])
+    seq(vec![
+        head,
+        opt_leaf(e.transforms_body(field, &dest).map(Leaf)),
+    ])
 }
 
 /// The plain source chain of one field. A guaranteed chain is a per-target
@@ -242,7 +244,7 @@ fn build_scalar(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter) -> 
 /// the sequential-fallback shape.
 fn build_chain(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, dest: &str) -> Stmt {
     if entry.is_guaranteed(field) {
-        Stmt::Leaf(e.chain_guaranteed_leaf(field, dest))
+        Stmt::Leaf(Leaf(e.chain_guaranteed(field, dest)))
     } else {
         let why = field.name.clone();
         seq(vec![
@@ -260,8 +262,14 @@ fn chain_sequential(field: &EntryField, e: &mut dyn Emitter, dest: &str, why: &s
     let mut first = true;
     for source in &field.sources {
         let step = match source {
-            Source::With => Stmt::Leaf(e.with_step(field, dest, why)),
-            Source::Env(_) => Stmt::Leaf(e.env_step(field, source, dest, why)),
+            Source::With => {
+                let w = e.why_ident(why);
+                Stmt::Leaf(Leaf(e.with_step_body(field, dest, &w)))
+            }
+            Source::Env(name) => {
+                let w = e.why_ident(why);
+                Stmt::Leaf(Leaf(e.env_step_body(field, name, dest, &w)))
+            }
             Source::Default(v) => seq(vec![
                 Stmt::Leaf(e.assign_default(field, v, dest)),
                 Stmt::Leaf(e.why_set(why, "")),
@@ -333,16 +341,21 @@ fn build_config(
 /// source chain, plus its `@str::*` pipeline (`@format` folds it in).
 fn build_member(member: &EntryField, e: &mut dyn Emitter, dest: &str) -> Stmt {
     let head = if member.select.is_some() {
-        Stmt::Leaf(e.member_select_leaf(member, dest))
+        Stmt::Leaf(Leaf(e.member_select_body(member, dest)))
     } else if member.format.is_some() {
-        Stmt::Leaf(e.member_format_leaf(member, dest))
+        Stmt::Leaf(Leaf(e.format_body(member, dest)))
     } else {
-        e.member_chain(member, &member.sources, dest)
+        Stmt::Leaf(Leaf(
+            e.member_chain_body(&arm_sources(member, &member.sources), dest),
+        ))
     };
     if member.format.is_some() {
         head
     } else {
-        seq(vec![head, opt_leaf(e.member_transforms_leaf(member, dest))])
+        seq(vec![
+            head,
+            opt_leaf(e.transforms_body(member, dest).map(Leaf)),
+        ])
     }
 }
 
