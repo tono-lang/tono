@@ -70,7 +70,7 @@ pub fn module_entries<'a>(module: &'a Module) -> Vec<EntryModel<'a>> {
             ShapeKind::Entry { fields, operations } => Some(EntryModel {
                 shape,
                 name: local_name(&shape.id),
-                fields: resolution_order(fields),
+                fields: resolution_order(fields, module),
                 operations,
             }),
             _ => None,
@@ -715,11 +715,10 @@ fn path_placeholder_paths(path: &str) -> Vec<Vec<String>> {
     out
 }
 
-/// The sibling fields a field's resolution reads, i.e. its dependency edges in
-/// the resolution DAG: `@env(.ref)` variable names, `@format` placeholders,
-/// the match subject and its arms' references, and `@bind` sources. Paths into
-/// a composed field depend on its head field only.
-fn dependencies(field: &EntryField) -> Vec<&str> {
+/// The sibling entry fields one field's resolution reads directly (its own
+/// `@env(.ref)`, `@format`, `match`, and `@bind` heads), without descending into
+/// a composed config's members.
+fn own_dep_heads(field: &EntryField) -> Vec<&str> {
     fn head(p: &[String]) -> Option<&str> {
         p.first().map(String::as_str)
     }
@@ -756,11 +755,33 @@ fn dependencies(field: &EntryField) -> Vec<&str> {
     deps
 }
 
+/// The sibling fields a field's resolution reads, i.e. its dependency edges in
+/// the resolution DAG: `@env(.ref)` variable names, `@format` placeholders,
+/// the match subject and its arms' references, and `@bind` sources. Paths into
+/// a composed field depend on its head field only.
+///
+/// A composed config also reads whatever its own members read: each member's
+/// `@env(.ref)`/`@format`/`match` resolves against the same sibling scope, so
+/// the config must be ordered after every entry field those members reach.
+fn dependencies<'a>(field: &'a EntryField, module: &'a Module) -> Vec<&'a str> {
+    let mut deps = own_dep_heads(field);
+    if let Tref::Ref { id, .. } = &field.target {
+        if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+            if let ShapeKind::Config { fields } = &shape.kind {
+                for member in fields {
+                    deps.extend(own_dep_heads(member));
+                }
+            }
+        }
+    }
+    deps
+}
+
 /// Order fields so every dependency resolves before its dependents (Kahn over
 /// the sibling-reference edges), keeping declaration order among ready fields.
 /// The frontend already rejected cycles; if malformed input still has one, the
 /// remaining fields append in declaration order rather than dropping.
-fn resolution_order(fields: &[EntryField]) -> Vec<&EntryField> {
+fn resolution_order<'a>(fields: &'a [EntryField], module: &'a Module) -> Vec<&'a EntryField> {
     let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
     let mut placed: HashSet<&str> = HashSet::new();
     let mut out: Vec<&EntryField> = Vec::new();
@@ -770,7 +791,7 @@ fn resolution_order(fields: &[EntryField]) -> Vec<&EntryField> {
             if placed.contains(field.name.as_str()) {
                 continue;
             }
-            let ready = dependencies(field)
+            let ready = dependencies(field, module)
                 .into_iter()
                 .filter(|d| names.contains(d))
                 .all(|d| placed.contains(d));

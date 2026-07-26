@@ -82,6 +82,40 @@ fn fields_order_by_resolution_dependencies_keeping_declaration_order() {
 }
 
 #[test]
+fn a_config_orders_after_the_fields_its_members_read() {
+    // The config field is declared first, but one of its members formats from
+    // the sibling `region`, so resolution must place `region` before the config.
+    let mut label = field("label", vec![]);
+    label.format = Some(vec![
+        TemplatePart::Lit("r-".into()),
+        TemplatePart::Field(vec!["region".into()]),
+    ]);
+    let config_shape = Shape {
+        id: "m#conf".into(),
+        kind: ShapeKind::Config {
+            fields: vec![label],
+        },
+        traits: vec![],
+    };
+    let mut conf = field("conf", vec![]);
+    conf.target = Tref::Ref {
+        id: "m#conf".into(),
+        args: vec![],
+    };
+    let region = field("region", vec![Source::Env(EnvName::Name("REGION".into()))]);
+    let module = module_of(vec![
+        entry_shape("m#client", vec![conf, region]),
+        config_shape,
+    ]);
+    let order: Vec<&str> = module_entries(&module)[0]
+        .fields
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    assert_eq!(order, vec!["region", "conf"]);
+}
+
+#[test]
 fn a_cycle_appends_the_rest_in_declaration_order_instead_of_dropping() {
     let mut a = field("a", vec![]);
     a.format = Some(vec![TemplatePart::Field(vec!["b".into()])]);
