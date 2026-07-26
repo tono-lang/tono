@@ -466,26 +466,6 @@ impl Emitter for Resolver<'_, '_> {
         out
     }
 
-    fn member_chain_body(&mut self, stub: &EntryField, dest: &str) -> String {
-        let guaranteed = stub.sources.iter().any(|s| matches!(s, Source::Default(_)));
-        if guaranteed {
-            return self.chain_guaranteed(stub, dest);
-        }
-        let mut out = String::new();
-        for source in &stub.sources {
-            if let Source::Env(name) = source {
-                let lookup = self.env_lookup(name);
-                let label = self.env_label(name);
-                let parse = self.env_parse(stub, dest, &label);
-                out.push_str(&format!(
-                    "if v, ok := {lookup}; ok && v != \"\" {{\n{}\n}}",
-                    nest(&parse, 1),
-                ));
-            }
-        }
-        out
-    }
-
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
         self.import("errors", "errors");
         format!(

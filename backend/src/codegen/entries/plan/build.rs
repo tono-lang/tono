@@ -281,8 +281,11 @@ fn build_member(member: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, de
     } else if member.format.is_some() {
         build_format(member, entry, e, dest)
     } else {
+        // A member resolves through the same ordered cascade as a field chain
+        // (first present source wins, an optional @default closes it); it carries
+        // no reason var, so an unresolved optional member keeps its zero value.
         Stmt::Leaf(Leaf(
-            e.member_chain_body(&arm_sources(member, &member.sources), dest),
+            e.chain_guaranteed(&arm_sources(member, &member.sources), dest),
         ))
     };
     if member.format.is_some() {
@@ -469,7 +472,7 @@ fn build_member_arm(
             }
         }
         ArmValue::Sources(sources) => Stmt::Leaf(Leaf(
-            e.member_chain_body(&arm_sources(member, sources), dest),
+            e.chain_guaranteed(&arm_sources(member, sources), dest),
         )),
     }
 }

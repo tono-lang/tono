@@ -279,7 +279,6 @@ pub trait Emitter {
     fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{member_dest} = {expr}{}", self.term()))
     }
-    fn member_chain_body(&mut self, stub: &EntryField, dest: &str) -> String;
 
     // --- consumed-chain requires: the shared dispatch (see [`build_requires`])
     //     picks which fields need a check and which kind; each target spells the

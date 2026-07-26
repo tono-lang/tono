@@ -500,28 +500,6 @@ impl Emitter for Resolver<'_, '_> {
         out
     }
 
-    /// A config member's own resolution (no reason tracking: an absent member
-    /// keeps its zero value), relative to column zero.
-    fn member_chain_body(&mut self, stub: &EntryField, dest: &str) -> String {
-        let guaranteed = stub.sources.iter().any(|s| matches!(s, Source::Default(_)));
-        if guaranteed {
-            return self.chain_guaranteed(stub, dest);
-        }
-        let mut out = String::new();
-        for source in &stub.sources {
-            if let Source::Env(name) = source {
-                let lookup = self.env_lookup(name);
-                let label = self.env_label(name);
-                let parse = self.env_parse(stub, dest, &label);
-                out.push_str(&format!(
-                    "{{\n  const v = {lookup};\n  if (v !== undefined) {{\n{}\n  }}\n}}\n",
-                    nest(&parse, 2),
-                ));
-            }
-        }
-        out.trim_end_matches('\n').to_string()
-    }
-
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
         format!(
             "if ((s.{head}.{member} ?? {zero}) === {zero}) {{\n  throw new Error(\"{name}: no value\");\n}}",
