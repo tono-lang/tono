@@ -16,7 +16,7 @@ use crate::ir::{ArmValue, EntryField, EnvName, Prim, Shape, Source, TemplatePart
 use super::{source_stub, EntryModel};
 
 mod build;
-pub use build::{build_field, build_requires};
+pub use build::{build_field, build_requires, presence_kind, Presence};
 
 /// The camelCase spelling of a canonical name, for the constructor parameters
 /// and reason variables that read identically in every target.

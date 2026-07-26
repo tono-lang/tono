@@ -46,6 +46,35 @@ fn is_numeric(t: &Tref) -> bool {
     )
 }
 
+/// How a resolved value must be probed for presence before a declared
+/// validation guard runs over it (the guard must not reject a legitimately
+/// resolved zero/empty). A guaranteed or composed field is always present; a
+/// bool has no absent-vs-zero distinction so it needs no probe either.
+pub enum Presence {
+    Always,
+    String,
+    Bytes,
+    Numeric,
+}
+
+/// Classify a field's presence probe for the declared-validation guards. The
+/// dispatch is shared; each target spells the resulting probe in its own syntax.
+pub fn presence_kind(field: &EntryField, entry: &EntryModel, module: &Module) -> Presence {
+    if entry.is_guaranteed(field)
+        || matches!(entry.field_shape(field, module), FieldShape::Config(_))
+    {
+        Presence::Always
+    } else if string_like(&field.target) {
+        Presence::String
+    } else if matches!(field.target, Tref::Prim(Prim::Bytes)) {
+        Presence::Bytes
+    } else if is_numeric(&field.target) {
+        Presence::Numeric
+    } else {
+        Presence::Always
+    }
+}
+
 /// The consumed-chain requires: for every consumed field path, whether a
 /// post-construction presence check is needed and of which kind. The selection
 /// (skip guaranteed scalars, bools, and non-string decoded members) is shared;

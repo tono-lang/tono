@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{doc_of, prim_spelling, rename_of, type_ident_from_id};
 use crate::codegen::entries::{
-    companion_name, module_entries, op_local_name, ref_is_enum, EntryModel, FieldShape,
+    companion_name, module_entries, op_local_name, ref_is_enum, EntryModel,
 };
 use crate::codegen::extensions::{bound_extensions, hook_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};

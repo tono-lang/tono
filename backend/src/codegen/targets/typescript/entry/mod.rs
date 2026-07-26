@@ -350,56 +350,38 @@ fn class_decl(
             constraints: field.constraints.clone(),
             traits: field.traits.clone(),
         };
-        let composed = matches!(entry.field_shape(field, module), FieldShape::Config(_));
         for line in validation::guard_lines(&[member], &TsVal, "s.", config, LANG) {
-            // The check reads the value bespoke left in place (client_init
-            // ran already, bespoke wins), so presence is judged off the value
-            // itself, never the declared chain's why-reason.
-            let guard = if entry.is_guaranteed(field) || composed {
-                line.condition.clone()
-            } else if string_like(&field.target) {
-                format!(
+            // The check reads the value bespoke left in place (client_init ran
+            // already, bespoke wins), so presence is judged off the value
+            // itself, never the declared chain's why-reason. A numeric zero can
+            // be a legitimately resolved value, so its guard only skips when the
+            // chain reported absent AND the bridge left the zero in place.
+            let guard = match plan::presence_kind(field, entry, module) {
+                plan::Presence::Always => line.condition.clone(),
+                plan::Presence::String => format!(
                     "s.{} !== {} && {}",
                     field_camel(&field.name, config),
                     cast_string(&field.target, "\"\""),
                     line.condition
-                )
-            } else if matches!(field.target, Tref::Prim(Prim::Bytes)) {
-                format!(
+                ),
+                plan::Presence::Bytes => format!(
                     "s.{}.length !== 0 && {}",
                     field_camel(&field.name, config),
                     line.condition
-                )
-            } else if matches!(
-                field.target,
-                Tref::Prim(
-                    Prim::I8
-                        | Prim::I16
-                        | Prim::I32
-                        | Prim::I64
-                        | Prim::U8
-                        | Prim::U16
-                        | Prim::U32
-                        | Prim::U64
-                        | Prim::Float
-                )
-            ) {
-                // A numeric zero can be a legitimate resolved value, so the
-                // check only skips when the chain reported absent AND the
-                // bridge left the zero in place (same rule as the requires).
-                let zero = if matches!(field.target, Tref::Prim(Prim::I64 | Prim::U64)) {
-                    "0n"
-                } else {
-                    "0"
-                };
-                format!(
-                    "({why} === \"\" || s.{ident} !== {zero}) && {}",
-                    line.condition,
-                    why = why_var(&field.name),
-                    ident = field_camel(&field.name, config),
-                )
-            } else {
-                line.condition.clone()
+                ),
+                plan::Presence::Numeric => {
+                    let zero = if matches!(field.target, Tref::Prim(Prim::I64 | Prim::U64)) {
+                        "0n"
+                    } else {
+                        "0"
+                    };
+                    format!(
+                        "({why} === \"\" || s.{ident} !== {zero}) && {}",
+                        line.condition,
+                        why = why_var(&field.name),
+                        ident = field_camel(&field.name, config),
+                    )
+                }
             };
             guards.push_str(&format!(
                 "    if ({guard}) {{\n      violations.push({{ field: {field:?}, constraint: {constraint:?}, message: {message:?} }});\n    }}\n",
