@@ -62,13 +62,6 @@ pub(super) fn presence_guard(
     Some(format!("{expr} !== {}", cast_string(vp.target, "\"\"")))
 }
 
-pub(super) fn indent2(block: &str) -> String {
-    block
-        .lines()
-        .map(|l| format!("  {l}\n"))
-        .collect::<String>()
-}
-
 /// The inclusive range of a narrow integer, for the boundary check that
 /// mirrors Go's strconv bit-size enforcement.
 pub(super) fn int_bounds(p: &Prim) -> (&'static str, &'static str) {
@@ -120,40 +113,39 @@ fn scalar_expectation(t: &Tref) -> Option<(&'static str, &'static str, bool)> {
     }
 }
 
-/// The container and element checks for a whole-JSON env value, emitted
-/// between the parse and the wire decode. Go's typed unmarshal rejects a
-/// mistyped element, so this boundary must too or the same env value would
-/// construct in one target and not the other.
+/// The container and element checks for a whole-JSON env value, emitted between
+/// the parse and the wire decode. Go's typed unmarshal rejects a mistyped
+/// element, so this boundary must too or the same env value would construct in
+/// one target and not the other. Relative to column zero; the caller nests it.
 pub(super) fn json_shape_checks(t: &Tref, label: &str) -> String {
+    let int_guard = |int: bool| {
+        if int {
+            " || !Number.isInteger(val)"
+        } else {
+            ""
+        }
+    };
     match t {
         Tref::Map(_, v) => {
             let mut out = format!(
-                "        if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n          throw new Error(`${{{label}}}: expected an object`);\n        }}\n"
+                "if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n  throw new Error(`${{{label}}}: expected an object`);\n}}"
             );
             if let Some((ts_typeof, describe, int)) = scalar_expectation(v) {
-                let int_check = if int {
-                    " || !Number.isInteger(val)"
-                } else {
-                    ""
-                };
                 out.push_str(&format!(
-                    "        for (const [key, val] of Object.entries(parsed)) {{\n          if (typeof val !== {ts_typeof:?}{int_check}) {{\n            throw new Error(`${{{label}}}: field ${{key}} must be {describe}`);\n          }}\n        }}\n"
+                    "\nfor (const [key, val] of Object.entries(parsed)) {{\n  if (typeof val !== {ts_typeof:?}{ic}) {{\n    throw new Error(`${{{label}}}: field ${{key}} must be {describe}`);\n  }}\n}}",
+                    ic = int_guard(int),
                 ));
             }
             out
         }
         Tref::List(v) => {
             let mut out = format!(
-                "        if (!Array.isArray(parsed)) {{\n          throw new Error(`${{{label}}}: expected an array`);\n        }}\n"
+                "if (!Array.isArray(parsed)) {{\n  throw new Error(`${{{label}}}: expected an array`);\n}}"
             );
             if let Some((ts_typeof, describe, int)) = scalar_expectation(v) {
-                let int_check = if int {
-                    " || !Number.isInteger(val)"
-                } else {
-                    ""
-                };
                 out.push_str(&format!(
-                    "        (parsed as unknown[]).forEach((val, i) => {{\n          if (typeof val !== {ts_typeof:?}{int_check}) {{\n            throw new Error(`${{{label}}}: element ${{i}} must be {describe}`);\n          }}\n        }});\n"
+                    "\n(parsed as unknown[]).forEach((val, i) => {{\n  if (typeof val !== {ts_typeof:?}{ic}) {{\n    throw new Error(`${{{label}}}: element ${{i}} must be {describe}`);\n  }}\n}});",
+                    ic = int_guard(int),
                 ));
             }
             out

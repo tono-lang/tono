@@ -1,11 +1,16 @@
-//! The per-field resolution emitter: one field of the entry's construction
-//! surface lowered to Go statements, in the field's own idiom (scalar chain,
-//! switch, strict decode, composition).
+//! The Go leaf spellings for the shared resolution plan.
+//!
+//! The control flow (source ordering, absence tracking, config composition)
+//! lives once in `codegen::entries::plan`; this file only says how each leaf
+//! statement reads in Go and keeps the genuinely Go-specific constructs (the
+//! `if v, ok := os.LookupEnv` env boundary, the typed `strconv`/`json.Decoder`
+//! parses, the branded-string casts) that no other target shares.
 
 use super::*;
+use crate::codegen::entries::plan::{self, Cond, Emitter, Leaf, Stmt};
 
-/// The per-field resolution emitter: one field, one block of statements, in
-/// the field's own idiom (scalar chain, switch, strict decode, composition).
+/// The Go resolution emitter: holds the entry model and collects imports as the
+/// plan is built. `body` receives the rendered plan for each field.
 pub(super) struct Resolver<'a, 'b> {
     pub(super) entry: &'a EntryModel<'a>,
     pub(super) module: &'a Module,
@@ -16,10 +21,6 @@ pub(super) struct Resolver<'a, 'b> {
 }
 
 impl Resolver<'_, '_> {
-    fn push(&mut self, s: &str) {
-        self.body.push_str(s);
-    }
-
     fn import(&mut self, name: &str, module: &str) {
         self.refs.push(import(name, module));
     }
@@ -47,163 +48,18 @@ impl Resolver<'_, '_> {
         self.entry.field_guaranteed(name)
     }
 
+    /// Build the plan for every field and render it into `body`.
     pub(super) fn emit_field(&mut self, field: &EntryField) {
-        match self.entry.field_shape(field, self.module) {
-            FieldShape::Config(shape) => self.emit_config(field, shape),
-            FieldShape::Structured(shape) => self.emit_structured(field, shape),
-            FieldShape::Json => self.emit_json(field),
-            FieldShape::Scalar => self.emit_scalar(field),
-        }
-    }
-
-    /// A scalar field: an explicit `@arg`, a match selection, a `@format`
-    /// derivation, or a plain source chain. The declared `@str::*` pipeline
-    /// applies to the resolved value whatever idiom produced it (`@format`
-    /// folds it into the template expression itself).
-    fn emit_scalar(&mut self, field: &EntryField) {
-        if field.format.is_some() {
-            self.emit_format(field);
-            return;
-        }
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            let assign = format!("\t{} = {}\n", self.ident(&field.name), camel(&field.name));
-            self.push(&assign);
-        } else if field.select.is_some() {
-            self.emit_select(field);
-        } else {
-            self.emit_chain(field);
-        }
-        let dest = self.ident(&field.name);
-        let transforms = self.transforms_stmt(field, &dest);
-        self.push(&transforms);
-    }
-
-    /// The `@str::*` pipeline over an already-resolved destination. An
-    /// unresolved chain holds the zero value, which every transform maps to
-    /// itself, so the application is unconditional.
-    fn transforms_stmt(&mut self, field: &EntryField, dest: &str) -> String {
-        if field.transforms.is_empty() {
-            return String::new();
-        }
-        self.import("strings", "strings");
-        let expr = self.as_string_expr(dest, &field.target);
-        let expr = apply_transforms(expr, &field.transforms, self.helpers);
-        format!("\t{dest} = {}\n", cast_string(&field.target, &expr))
-    }
-
-    /// The plain source chain of one field, written to its Settings slot.
-    fn emit_chain(&mut self, field: &EntryField) {
-        let dest = self.ident(&field.name);
-        if self.entry.is_guaranteed(field) {
-            let stmts = self.chain_cascade(field, &dest);
-            self.push(&stmts);
-        } else {
-            let why = why_var(&field.name);
-            let opener = format!("\t{why} := \"no source\"\n");
-            self.push(&opener);
-            let stmts = self.chain_sequential(field, &dest, &why);
-            self.push(&stmts);
-        }
-    }
-
-    /// A guaranteed chain as an if/else cascade ending in `@default`.
-    fn chain_cascade(&mut self, field: &EntryField, dest: &str) -> String {
-        let mut out = String::new();
-        let mut first = true;
-        for source in &field.sources {
-            match source {
-                Source::With => {
-                    out.push_str(&format!(
-                        "{}if w.{carrier} != nil {{\n\t\t{dest} = *w.{carrier}\n\t}}",
-                        if first { "\t" } else { " else " },
-                        carrier = camel(&field.name),
-                    ));
-                    first = false;
-                }
-                Source::Env(name) => {
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    out.push_str(&format!(
-                        "{}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\t}}",
-                        if first { "\t" } else { " else " },
-                        parse = self.env_parse(field, dest, &label),
-                    ));
-                    first = false;
-                }
-                Source::Default(v) => {
-                    let lit = literal(&field.target, v);
-                    if first {
-                        out.push_str(&format!("\t{dest} = {lit}\n"));
-                    } else {
-                        out.push_str(&format!(" else {{\n\t\t{dest} = {lit}\n\t}}\n"));
-                    }
-                    return out;
-                }
-                Source::Arg => {}
-            }
-        }
-        if !first {
-            out.push('\n');
-        }
-        out
-    }
-
-    /// A non-guaranteed chain as sequential "still absent" steps carrying the
-    /// why-reason of the last source tried.
-    fn chain_sequential(&mut self, field: &EntryField, dest: &str, why: &str) -> String {
-        let mut out = String::new();
-        let mut first = true;
-        for source in &field.sources {
-            let step = match source {
-                Source::With => format!(
-                    "if w.{carrier} != nil {{\n\t\t{dest} = *w.{carrier}\n\t\t{why} = \"\"\n\t}} else {{\n\t\t{why} = \"not configured\"\n\t}}\n",
-                    carrier = camel(&field.name),
-                ),
-                Source::Env(name) => {
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    let miss = self.env_miss_reason(name);
-                    let pre = self.env_name_prereq(name, why);
-                    // The prereq ends in "else ", chaining straight into
-                    // this if: the whole run is one balanced if/else-if/else.
-                    // env_parse already speaks at if-body depth; the wrapper
-                    // below indents the whole step when it is not the first.
-                    format!(
-                        "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\t\t{why} = \"\"\n\t}} else {{\n\t\t{why} = {miss}\n\t}}\n",
-                        parse = self.env_parse(field, dest, &label),
-                    )
-                }
-                // Both lines sit at the step's own depth (no internal tab):
-                // the wrapper below owns the indentation, first or nested.
-                Source::Default(v) => format!(
-                    "{dest} = {lit}\n{why} = \"\"\n",
-                    lit = literal(&field.target, v),
-                ),
-                Source::Arg => continue,
-            };
-            let flat = matches!(source, Source::Default(_));
-            if first {
-                if flat {
-                    out.push_str(&indent(step.trim_end_matches('\n')));
-                } else {
-                    out.push_str(&format!("\t{step}"));
-                }
-                first = false;
-            } else {
-                let body = if flat {
-                    indent(indent(step.trim_end_matches('\n')).trim_end_matches('\n'))
-                } else {
-                    indent(step.trim_end_matches('\n'))
-                };
-                out.push_str(&format!("\tif {why} != \"\" {{\n{body}\t}}\n"));
-            }
-        }
-        out
+        let entry = self.entry;
+        let module = self.module;
+        let stmt = plan::build_field(field, entry, module, self);
+        let text = plan::render(&stmt, 1, self);
+        self.body.push_str(&text);
     }
 
     /// The prereq guard when the env variable's own name comes from a sibling
-    /// field that may itself be absent. Returns the opened guard text (the
-    /// caller closes it).
+    /// field that may itself be absent. Returns the opened guard text (the env
+    /// step closes it), or empty when the name is guaranteed.
     fn env_name_prereq(&self, name: &EnvName, why: &str) -> String {
         let EnvName::Field(fr) = name else {
             return String::new();
@@ -215,9 +71,8 @@ impl Resolver<'_, '_> {
             return String::new();
         }
         format!(
-            "if {head_why} != \"\" {{\n\t\t{why} = \"{head} <- \" + {head_why}\n\t}} else ",
+            "if {head_why} != \"\" {{\n\t{why} = \"{head} <- \" + {head_why}\n}} else ",
             head_why = why_var(head),
-            head = head,
         )
     }
 
@@ -241,7 +96,6 @@ impl Resolver<'_, '_> {
         as_string(expr, t)
     }
 
-    /// The label naming the variable in a parse error.
     fn env_label(&mut self, name: &EnvName) -> String {
         match name {
             EnvName::Name(n) => format!("{n:?}"),
@@ -266,24 +120,24 @@ impl Resolver<'_, '_> {
         }
     }
 
-    /// The statements parsing a raw env string `v` into the destination, by
-    /// the field's declared type; a parse failure fails construction naming
-    /// the variable and the type.
+    /// The statements parsing a raw env string `v` into the destination, by the
+    /// field's declared type; a parse failure fails construction naming the
+    /// variable and the type. Relative to column zero (nested by the caller).
     fn env_parse(&mut self, field: &EntryField, dest: &str, label: &str) -> String {
         let t = &field.target;
         match t {
             Tref::Prim(Prim::Bool) => {
                 self.import("fmt", "fmt");
                 format!(
-                    "\t\tswitch v {{\n\t\tcase \"true\", \"1\":\n\t\t\t{dest} = true\n\t\tcase \"false\", \"0\":\n\t\t\t{dest} = false\n\t\tdefault:\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid bool %q (want true/false/1/0)\", {label}, v)\n\t\t}}\n"
+                    "switch v {{\ncase \"true\", \"1\":\n\t{dest} = true\ncase \"false\", \"0\":\n\t{dest} = false\ndefault:\n\treturn nil, fmt.Errorf(\"%s: invalid bool %q (want true/false/1/0)\", {label}, v)\n}}"
                 )
             }
             Tref::Prim(p @ (Prim::I8 | Prim::I16 | Prim::I32 | Prim::I64)) => {
                 self.import("strconv", "strconv");
                 self.import("fmt", "fmt");
-                let bits = int_bits(p);
                 format!(
-                    "\t\tn, err := strconv.ParseInt(v, 10, {bits})\n\t\tif err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid {prim} %q\", {label}, v)\n\t\t}}\n\t\t{dest} = {cast}(n)\n",
+                    "n, err := strconv.ParseInt(v, 10, {bits})\nif err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid {prim} %q\", {label}, v)\n}}\n{dest} = {cast}(n)",
+                    bits = int_bits(p),
                     prim = prim_name(p),
                     cast = prim_spelling(p).go,
                 )
@@ -291,9 +145,9 @@ impl Resolver<'_, '_> {
             Tref::Prim(p @ (Prim::U8 | Prim::U16 | Prim::U32 | Prim::U64)) => {
                 self.import("strconv", "strconv");
                 self.import("fmt", "fmt");
-                let bits = int_bits(p);
                 format!(
-                    "\t\tn, err := strconv.ParseUint(v, 10, {bits})\n\t\tif err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid {prim} %q\", {label}, v)\n\t\t}}\n\t\t{dest} = {cast}(n)\n",
+                    "n, err := strconv.ParseUint(v, 10, {bits})\nif err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid {prim} %q\", {label}, v)\n}}\n{dest} = {cast}(n)",
+                    bits = int_bits(p),
                     prim = prim_name(p),
                     cast = prim_spelling(p).go,
                 )
@@ -306,7 +160,7 @@ impl Resolver<'_, '_> {
                 // NaN, hex floats, and digit separators, which the TypeScript
                 // boundary rejects; the same env value must construct in both.
                 format!(
-                    "\t\tif strings.ContainsFunc(v, func(r rune) bool {{ return !strings.ContainsRune(\"0123456789+-.eE\", r) }}) {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n\t\t}}\n\t\tn, err := strconv.ParseFloat(v, 64)\n\t\tif err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n\t\t}}\n\t\t{dest} = n\n"
+                    "if strings.ContainsFunc(v, func(r rune) bool {{ return !strings.ContainsRune(\"0123456789+-.eE\", r) }}) {{\n\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n}}\nn, err := strconv.ParseFloat(v, 64)\nif err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n}}\n{dest} = n"
                 )
             }
             Tref::Prim(Prim::Bytes) => {
@@ -315,49 +169,107 @@ impl Resolver<'_, '_> {
                 // The env boundary carries bytes the same way the wire does:
                 // base64 text.
                 format!(
-                    "\t\tb, err := base64.StdEncoding.DecodeString(v)\n\t\tif err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid base64 %q\", {label}, v)\n\t\t}}\n\t\t{dest} = b\n"
+                    "b, err := base64.StdEncoding.DecodeString(v)\nif err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid base64 %q\", {label}, v)\n}}\n{dest} = b"
                 )
             }
             Tref::Prim(Prim::Duration) => {
                 self.import("time", "time");
                 self.import("fmt", "fmt");
                 format!(
-                    "\t\tif _, err := time.ParseDuration(v); err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: invalid duration %q\", {label}, v)\n\t\t}}\n\t\t{dest} = Duration(v)\n"
+                    "if _, err := time.ParseDuration(v); err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid duration %q\", {label}, v)\n}}\n{dest} = Duration(v)"
                 )
             }
-            _ => format!("\t\t{dest} = {}\n", cast_string(t, "v")),
+            _ => format!("{dest} = {}", cast_string(t, "v")),
         }
     }
 
-    /// `field: T = match .subject { ... }` lowered to the native switch.
-    fn emit_select(&mut self, field: &EntryField) {
+    /// The env presence step: `if v, ok := lookup; ok && v != "" { parse } else
+    /// { miss }`, prefixed by the name prereq when the variable name is itself a
+    /// non-guaranteed sibling. Relative to column zero.
+    fn env_step_body(
+        &mut self,
+        field: &EntryField,
+        name: &EnvName,
+        dest: &str,
+        why: &str,
+    ) -> String {
+        let lookup = self.env_lookup(name);
+        let label = self.env_label(name);
+        let miss = self.env_miss_reason(name);
+        let pre = self.env_name_prereq(name, why);
+        let parse = self.env_parse(field, dest, &label);
+        format!(
+            "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t{why} = \"\"\n}} else {{\n\t{why} = {miss}\n}}",
+            parse = nest(&parse, 1),
+        )
+    }
+
+    /// A guaranteed chain as an if/else cascade ending in `@default`, relative
+    /// to column zero.
+    fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String {
+        let mut out = String::new();
+        let mut first = true;
+        for source in &field.sources {
+            match source {
+                Source::With => {
+                    out.push_str(&format!(
+                        "{}if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n}}",
+                        if first { "" } else { " else " },
+                        carrier = camel(&field.name),
+                    ));
+                    first = false;
+                }
+                Source::Env(name) => {
+                    let lookup = self.env_lookup(name);
+                    let label = self.env_label(name);
+                    let parse = self.env_parse(field, dest, &label);
+                    out.push_str(&format!(
+                        "{}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n}}",
+                        if first { "" } else { " else " },
+                        parse = nest(&parse, 1),
+                    ));
+                    first = false;
+                }
+                Source::Default(v) => {
+                    let lit = literal(&field.target, v);
+                    if first {
+                        out.push_str(&format!("{dest} = {lit}"));
+                    } else {
+                        out.push_str(&format!(" else {{\n\t{dest} = {lit}\n}}"));
+                    }
+                    return out;
+                }
+                Source::Arg => {}
+            }
+        }
+        out
+    }
+
+    /// `field: T = match .subject { ... }` lowered to the native switch,
+    /// relative to column zero.
+    fn select_body(&mut self, field: &EntryField, dest: &str) -> String {
         let Some(select) = field.select.clone() else {
-            return;
+            return String::new();
         };
-        let dest = self.ident(&field.name);
         let guaranteed = self.entry.is_guaranteed(field);
         let why = why_var(&field.name);
-        if !guaranteed {
-            self.push(&format!("\t{why} := \"\"\n"));
-        }
         let subject_head = select.subject.first().cloned().unwrap_or_default();
         let subject_expr = self.path_expr(&select.subject);
         let mut arms = String::new();
         let mut saw_wildcard = false;
         for arm in &select.arms {
-            let stmts = self.arm_stmts(field, &arm.value, &dest, &why, guaranteed);
+            let stmts = self.arm_stmts(field, &arm.value, dest, &why, guaranteed);
             match &arm.pattern {
-                Some(p) => arms.push_str(&format!(
-                    "\tcase {}:\n{}",
-                    pattern_literal(p),
-                    indent(stmts.trim_end_matches('\n'))
-                )),
+                Some(p) => {
+                    arms.push_str(&format!(
+                        "case {}:\n{}\n",
+                        pattern_literal(p),
+                        nest(&stmts, 1)
+                    ));
+                }
                 None => {
                     saw_wildcard = true;
-                    arms.push_str(&format!(
-                        "\tdefault:\n{}",
-                        indent(stmts.trim_end_matches('\n'))
-                    ));
+                    arms.push_str(&format!("default:\n{}\n", nest(&stmts, 1)));
                 }
             }
         }
@@ -368,24 +280,29 @@ impl Resolver<'_, '_> {
             let miss = if guaranteed {
                 self.import("fmt", "fmt");
                 format!(
-                    "\t\treturn nil, fmt.Errorf(\"{field}: match on {subject}: unmatched value %v\", {subject_expr})\n",
+                    "return nil, fmt.Errorf(\"{field}: match on {subject}: unmatched value %v\", {subject_expr})",
                     field = field.name,
                     subject = subject_head,
                 )
             } else {
-                format!("\t\t{why} = \"match: unmatched value\"\n")
+                format!("{why} = \"match: unmatched value\"")
             };
-            arms.push_str(&format!("\tdefault:\n{miss}"));
+            arms.push_str(&format!("default:\n{}\n", nest(&miss, 1)));
         }
-        let switch = format!("\tswitch {subject_expr} {{\n{arms}\t}}\n");
-        if !self.guaranteed(&subject_head) {
-            self.push(&format!(
-                "\tif {subj_why} != \"\" {{\n\t\t{why} = \"{subject_head} <- \" + {subj_why}\n\t}} else {{\n{sw}\t}}\n",
-                subj_why = why_var(&subject_head),
-                sw = indent(switch.trim_end_matches('\n')),
-            ));
+        let switch = format!("switch {subject_expr} {{\n{arms}}}");
+        let guarded = if self.guaranteed(&subject_head) {
+            switch
         } else {
-            self.push(&switch);
+            format!(
+                "if {subj_why} != \"\" {{\n\t{why} = \"{subject_head} <- \" + {subj_why}\n}} else {{\n{sw}\n}}",
+                subj_why = why_var(&subject_head),
+                sw = nest(&switch, 1),
+            )
+        };
+        if guaranteed {
+            guarded
+        } else {
+            format!("{why} := \"\"\n{guarded}")
         }
     }
 
@@ -398,26 +315,26 @@ impl Resolver<'_, '_> {
         guaranteed: bool,
     ) -> String {
         match value {
-            ArmValue::Lit(v) => format!("\t{dest} = {}\n", literal(&field.target, v)),
+            ArmValue::Lit(v) => format!("{dest} = {}", literal(&field.target, v)),
             ArmValue::Field(path) => {
                 let head = path.first().cloned().unwrap_or_default();
                 let expr = self.path_expr(path);
                 if self.guaranteed(&head) {
-                    format!("\t{dest} = {expr}\n")
+                    format!("{dest} = {expr}")
                 } else {
                     format!(
-                        "\tif {head_why} != \"\" {{\n\t\t{why} = \"{head} <- \" + {head_why}\n\t}} else {{\n\t\t{dest} = {expr}\n\t}}\n",
+                        "if {head_why} != \"\" {{\n\t{why} = \"{head} <- \" + {head_why}\n}} else {{\n\t{dest} = {expr}\n}}",
                         head_why = why_var(&head),
                     )
                 }
             }
             ArmValue::Sources(sources) => {
-                let stub = source_stub(field, sources.clone());
+                let stub = plan::arm_sources(field, sources);
                 if guaranteed {
-                    self.chain_cascade(&stub, dest)
+                    self.chain_guaranteed(&stub, dest)
                 } else {
                     format!(
-                        "\t{why} = \"no source\"\n{}",
+                        "{why} = \"no source\"\n{}",
                         self.chain_sequential(&stub, dest, why)
                     )
                 }
@@ -425,51 +342,77 @@ impl Resolver<'_, '_> {
         }
     }
 
-    /// `@format` template plus the `@str::*` transform pipeline.
-    fn emit_format(&mut self, field: &EntryField) {
-        let Some(format_parts) = field.format.clone() else {
-            return;
+    /// A non-guaranteed chain body (used inside a match arm), relative to column
+    /// zero: the first source runs unconditionally, later ones guard on the
+    /// why-var.
+    fn chain_sequential(&mut self, field: &EntryField, dest: &str, why: &str) -> String {
+        let mut out = String::new();
+        let mut first = true;
+        for source in &field.sources {
+            let step = match source {
+                Source::With => self.with_step_body(field, dest, why),
+                Source::Env(name) => self.env_step_body(field, name, dest, why),
+                Source::Default(v) => {
+                    format!("{dest} = {}\n{why} = \"\"", literal(&field.target, v))
+                }
+                Source::Arg => continue,
+            };
+            if first {
+                out.push_str(&step);
+                out.push('\n');
+                first = false;
+            } else {
+                out.push_str(&format!("if {why} != \"\" {{\n{}\n}}\n", nest(&step, 1)));
+            }
+        }
+        out
+    }
+
+    /// The `@with` presence step of a non-guaranteed chain, relative to column
+    /// zero.
+    fn with_step_body(&self, field: &EntryField, dest: &str, why: &str) -> String {
+        format!(
+            "if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{why} = \"\"\n}} else {{\n\t{why} = \"not configured\"\n}}",
+            carrier = camel(&field.name),
+        )
+    }
+
+    /// `@format` template plus the `@str::*` pipeline, relative to column zero.
+    fn format_body(&mut self, field: &EntryField, dest: &str) -> String {
+        let Some(parts) = field.format.clone() else {
+            return String::new();
         };
-        let dest = self.ident(&field.name);
-        let (concat, absent_deps) = self.format_pieces(&format_parts);
+        let (concat, absent_deps) = self.format_pieces(&parts);
         if !field.transforms.is_empty() {
             self.import("strings", "strings");
         }
         let expr = apply_transforms(concat.join(" + "), &field.transforms, self.helpers);
-        let assign = format!("\t{dest} = {}\n", cast_string(&field.target, &expr));
+        let assign = format!("{dest} = {}", cast_string(&field.target, &expr));
         if absent_deps.is_empty() {
-            self.push(&assign);
-            return;
+            return assign;
         }
         let why = why_var(&field.name);
-        let mut out = format!("\t{why} := \"\"\n");
         let mut chain = String::new();
         for (i, dep) in absent_deps.iter().enumerate() {
             chain.push_str(&format!(
-                "{}if {dep_why} != \"\" {{\n\t\t{why} = \"{dep} <- \" + {dep_why}\n\t}}",
-                if i == 0 { "\t" } else { " else " },
+                "{}if {dep_why} != \"\" {{\n\t{why} = \"{dep} <- \" + {dep_why}\n}}",
+                if i == 0 { "" } else { " else " },
                 dep_why = why_var(dep),
             ));
         }
-        chain.push_str(&format!(" else {{\n\t{assign}\t}}\n"));
-        out.push_str(&chain);
-        self.push(&out);
+        chain.push_str(&format!(" else {{\n\t{assign}\n}}"));
+        format!("{why} := \"\"\n{chain}")
     }
 
-    /// The template split for emission: each part as a Go string expression,
-    /// plus the non-guaranteed heads the template depends on (in
-    /// first-appearance order).
+    /// The template split: each part as a Go string expression, plus the
+    /// non-guaranteed heads it reads (first-appearance order).
     fn format_pieces(&mut self, parts: &[TemplatePart]) -> (Vec<String>, Vec<String>) {
+        let absent_deps = plan::format_absent_deps(self.entry, parts);
         let mut concat: Vec<String> = Vec::new();
-        let mut absent_deps: Vec<String> = Vec::new();
         for part in parts {
             match part {
                 TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
                 TemplatePart::Field(p) => {
-                    let head = p.first().cloned().unwrap_or_default();
-                    if !self.guaranteed(&head) && !absent_deps.contains(&head) {
-                        absent_deps.push(head.clone());
-                    }
                     let t = self.path_type(p);
                     let expr = self.path_expr(p);
                     concat.push(self.as_string_expr(&expr, &t));
@@ -482,30 +425,28 @@ impl Resolver<'_, '_> {
         (concat, absent_deps)
     }
 
-    /// The shared opening of a decoded field (structured or whole-JSON): an
-    /// explicit `@arg` value passes typed, the why-var opens the chain
-    /// (without `@arg` such a field is never guaranteed, `@default` does not
-    /// apply to it), an optional `@with` layer wins over the env decode, and
-    /// the env source (when there is one) yields its destination, why-var,
-    /// lookup, label, and miss reason.
+    /// The `@arg`/`@with` opening shared by the structured and whole-JSON
+    /// decodes: an `@arg` value passes typed (returns `None`, having written the
+    /// assignment), otherwise the why-var opens and an optional `@with` layer
+    /// wins, and the env source's `(dest, why, lookup, label, miss)` are
+    /// returned for the decode body.
     fn decode_opening(
         &mut self,
         field: &EntryField,
+        out: &mut String,
     ) -> Option<(String, String, String, String, String)> {
         let dest = self.ident(&field.name);
         if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            let assign = format!("\t{dest} = {}\n", camel(&field.name));
-            self.push(&assign);
+            out.push_str(&format!("{dest} = {}", camel(&field.name)));
             return None;
         }
         let why = why_var(&field.name);
-        self.push(&format!("\t{why} := \"no source\"\n"));
+        out.push_str(&format!("{why} := \"no source\"\n"));
         if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            let step = format!(
-                "\tif w.{carrier} != nil {{\n\t\t{dest} = *w.{carrier}\n\t\t{why} = \"\"\n\t}} else {{\n\t\t{why} = \"not configured\"\n\t}}\n",
+            out.push_str(&format!(
+                "if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{why} = \"\"\n}} else {{\n\t{why} = \"not configured\"\n}}\n",
                 carrier = camel(&field.name),
-            );
-            self.push(&step);
+            ));
         }
         let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
         else {
@@ -520,13 +461,12 @@ impl Resolver<'_, '_> {
         Some((dest, why, lookup, label, miss))
     }
 
-    /// A structured source: an explicit `@arg`/`@with` value passes typed, a
-    /// JSON env value decodes strictly into the wire struct (required members
-    /// checked by name, unknown fields rejected), and declared validation runs
-    /// at construction. The error carries the variable's name as context.
-    fn emit_structured(&mut self, field: &EntryField, shape: &Shape) {
-        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field) else {
-            return;
+    /// A structured source: an `@arg`/`@with` value passes typed, a JSON env
+    /// value decodes strictly into the wire struct. Relative to column zero.
+    fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String {
+        let mut out = String::new();
+        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field, &mut out) else {
+            return out;
         };
         self.import("bytes", "bytes");
         let ty = type_ident_from_id(&shape.id);
@@ -534,10 +474,10 @@ impl Resolver<'_, '_> {
         if let ShapeKind::Structure { members, .. } = &shape.kind {
             for m in members.iter().filter(|m| m.required) {
                 // An explicit null is as absent as a missing key: the typed
-                // decode below would zero it silently, and the TypeScript
-                // decode rejects it, so both targets treat it as missing.
+                // decode below would zero it silently, and the TypeScript decode
+                // rejects it, so both targets treat it as missing.
                 required_checks.push_str(&format!(
-                    "\t\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\t\treturn nil, fmt.Errorf(\"%s: missing field {name}\", {label})\n\t\t}}\n",
+                    "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn nil, fmt.Errorf(\"%s: missing field {name}\", {label})\n\t}}\n",
                     name = m.name,
                 ));
             }
@@ -545,132 +485,71 @@ impl Resolver<'_, '_> {
         let validate = if validation::shape_has_checks(shape) {
             let en = error_names();
             format!(
-                "\t\tif vs := Validate{ty}(decoded); len(vs) > 0 {{\n\t\t\treturn nil, &{validation}{{Violations: vs}}\n\t\t}}\n",
+                "\tif vs := Validate{ty}(decoded); len(vs) > 0 {{\n\t\treturn nil, &{validation}{{Violations: vs}}\n\t}}\n",
                 validation = en.validation,
             )
         } else {
             String::new()
         };
         let block = format!(
-            "\tif raw, ok := {lookup}; ok && raw != \"\" {{\n\
-             \t\tvar probe map[string]json.RawMessage\n\
-             \t\tif err := json.Unmarshal([]byte(raw), &probe); err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t\t}}\n\
+            "if raw, ok := {lookup}; ok && raw != \"\" {{\n\
+             \tvar probe map[string]json.RawMessage\n\
+             \tif err := json.Unmarshal([]byte(raw), &probe); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
              {required_checks}\
-             \t\tdec := json.NewDecoder(bytes.NewReader([]byte(raw)))\n\
-             \t\tdec.DisallowUnknownFields()\n\
-             \t\tvar decoded {ty}\n\
-             \t\tif err := dec.Decode(&decoded); err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t\t}}\n\
+             \tdec := json.NewDecoder(bytes.NewReader([]byte(raw)))\n\
+             \tdec.DisallowUnknownFields()\n\
+             \tvar decoded {ty}\n\
+             \tif err := dec.Decode(&decoded); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
              {validate}\
-             \t\t{dest} = decoded\n\
-             \t\t{why} = \"\"\n\
-             \t}} else {{\n\t\t{why} = {miss}\n\t}}\n"
+             \t{dest} = decoded\n\
+             \t{why} = \"\"\n\
+             }} else {{\n\t{why} = {miss}\n}}"
         );
         // An explicit @with value wins: the decode runs only while unset.
-        self.push(&format!(
-            "\tif {why} != \"\" {{\n{inner}\t}}\n",
-            inner = indent(block.trim_end_matches('\n')),
-        ));
+        out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
+        out
     }
 
-    /// A map/list field: an explicit `@arg`/`@with` value passes typed, an env
-    /// value decodes as JSON whole.
-    fn emit_json(&mut self, field: &EntryField) {
-        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field) else {
-            return;
+    /// A map/list field: an `@arg`/`@with` value passes typed, an env value
+    /// decodes as JSON whole. Relative to column zero.
+    fn json_body(&mut self, field: &EntryField) -> String {
+        let mut out = String::new();
+        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field, &mut out) else {
+            return out;
         };
         let block = format!(
-            "\tif raw, ok := {lookup}; ok && raw != \"\" {{\n\
-             \t\tif err := json.Unmarshal([]byte(raw), &{dest}); err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t\t}}\n\
-             \t\t{why} = \"\"\n\
-             \t}} else {{\n\t\t{why} = {miss}\n\t}}\n"
+            "if raw, ok := {lookup}; ok && raw != \"\" {{\n\
+             \tif err := json.Unmarshal([]byte(raw), &{dest}); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
+             \t{why} = \"\"\n\
+             }} else {{\n\t{why} = {miss}\n}}"
         );
-        self.push(&format!(
-            "\tif {why} != \"\" {{\n{inner}\t}}\n",
-            inner = indent(block.trim_end_matches('\n')),
-        ));
+        out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
+        out
     }
 
-    /// A composed config: per member, an entry `@bind` wins over the member's
-    /// own sources.
-    fn emit_config(&mut self, field: &EntryField, shape: &Shape) {
-        let ShapeKind::Config { fields } = &shape.kind else {
-            return;
-        };
-        let ty = type_ident_from_id(&shape.id);
-        let dest = self.ident(&field.name);
-        let mut block = format!("\t{{\n\t\tvar composed {ty}\n");
-        for member in fields {
-            let member_dest = format!("composed.{}", field_pascal(&member.name, self.config));
-            let bind = field.binds.iter().find(|b| b.field == member.name);
-            let mut member_stmts = String::new();
-            if let Some(bind) = bind {
-                let head = bind.source.first().cloned().unwrap_or_default();
-                let expr = self.path_expr(&bind.source);
-                if self.guaranteed(&head) {
-                    member_stmts.push_str(&format!("\t{member_dest} = {expr}\n"));
-                } else {
-                    // The bound entry value wins when resolved; otherwise the
-                    // member falls back to its own sources.
-                    member_stmts.push_str(&format!(
-                        "\tif {head_why} == \"\" {{\n\t\t{member_dest} = {expr}\n\t}} else {{\n{fallback}\t}}\n",
-                        head_why = why_var(&head),
-                        fallback = indent(
-                            self.member_sources_stmts(member, &member_dest).trim_end_matches('\n')
-                        ),
-                    ));
-                }
-            } else {
-                member_stmts.push_str(&self.member_sources_stmts(member, &member_dest));
-            }
-            block.push_str(&indent(member_stmts.trim_end_matches('\n')));
+    fn member_chain_body(&mut self, stub: &EntryField, dest: &str) -> String {
+        let guaranteed = stub.sources.iter().any(|s| matches!(s, Source::Default(_)));
+        if guaranteed {
+            return self.chain_guaranteed(stub, dest);
         }
-        block.push_str(&format!("\t\t{dest} = composed\n\t}}\n"));
-        self.push(&block);
-    }
-
-    /// A config member's own resolution: a match, a `@format` derivation, or
-    /// its source chain (`@env`/`@default`), plus its declared `@str::*`
-    /// pipeline. There is no reason tracking inside a composition: an absent
-    /// member keeps its zero value (the entry-level requires cover consumed
-    /// chains), so absence guards read the sibling why-vars directly.
-    fn member_sources_stmts(&mut self, member: &EntryField, dest: &str) -> String {
-        let mut out = if member.select.is_some() {
-            self.member_select_stmts(member, dest)
-        } else if member.format.is_some() {
-            self.member_format_stmts(member, dest)
-        } else {
-            self.member_chain(&source_stub(member, member.sources.clone()), dest)
-        };
-        if member.format.is_none() {
-            out.push_str(&self.transforms_stmt(member, dest));
+        let mut out = String::new();
+        for source in &stub.sources {
+            if let Source::Env(name) = source {
+                let lookup = self.env_lookup(name);
+                let label = self.env_label(name);
+                let parse = self.env_parse(stub, dest, &label);
+                out.push_str(&format!(
+                    "if v, ok := {lookup}; ok && v != \"\" {{\n{}\n}}",
+                    nest(&parse, 1),
+                ));
+            }
         }
         out
     }
 
-    fn member_chain(&mut self, stub: &EntryField, dest: &str) -> String {
-        let guaranteed = stub.sources.iter().any(|s| matches!(s, Source::Default(_)));
-        if guaranteed {
-            self.chain_cascade(stub, dest)
-        } else {
-            let mut out = String::new();
-            for source in &stub.sources {
-                if let Source::Env(name) = source {
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    out.push_str(&format!(
-                        "\tif v, ok := {lookup}; ok && v != \"\" {{\n{parse}\t}}\n",
-                        parse = indent(self.env_parse(stub, dest, &label).trim_end_matches('\n')),
-                    ));
-                }
-            }
-            out
-        }
-    }
-
-    /// A member's match, lowered like the entry-level one but without a
-    /// why-var: an absent subject or an unmatched value leaves the member's
-    /// zero value.
-    fn member_select_stmts(&mut self, member: &EntryField, dest: &str) -> String {
+    /// A member match, lowered without a why-var: an absent subject or an
+    /// unmatched value leaves the member's zero value. Relative to column zero.
+    fn member_select_body(&mut self, member: &EntryField, dest: &str) -> String {
         let Some(select) = member.select.clone() else {
             return String::new();
         };
@@ -678,77 +557,201 @@ impl Resolver<'_, '_> {
         let subject_expr = self.path_expr(&select.subject);
         let mut arms = String::new();
         for arm in &select.arms {
-            let stmts = self.member_arm_stmts(member, &arm.value, dest);
+            let stmts = self.member_arm_body(member, &arm.value, dest);
             match &arm.pattern {
-                Some(p) => arms.push_str(&format!(
-                    "\tcase {}:\n{}",
-                    pattern_literal(p),
-                    indent(stmts.trim_end_matches('\n'))
-                )),
-                None => arms.push_str(&format!(
-                    "\tdefault:\n{}",
-                    indent(stmts.trim_end_matches('\n'))
-                )),
+                Some(p) => {
+                    arms.push_str(&format!(
+                        "case {}:\n{}\n",
+                        pattern_literal(p),
+                        nest(&stmts, 1)
+                    ));
+                }
+                None => arms.push_str(&format!("default:\n{}\n", nest(&stmts, 1))),
             }
         }
-        let switch = format!("\tswitch {subject_expr} {{\n{arms}\t}}\n");
+        let switch = format!("switch {subject_expr} {{\n{arms}}}");
         if self.guaranteed(&subject_head) {
             switch
         } else {
             format!(
-                "\tif {subj_why} == \"\" {{\n{sw}\t}}\n",
+                "if {subj_why} == \"\" {{\n{}\n}}",
+                nest(&switch, 1),
                 subj_why = why_var(&subject_head),
-                sw = indent(switch.trim_end_matches('\n')),
             )
         }
     }
 
-    fn member_arm_stmts(&mut self, member: &EntryField, value: &ArmValue, dest: &str) -> String {
+    fn member_arm_body(&mut self, member: &EntryField, value: &ArmValue, dest: &str) -> String {
         match value {
-            ArmValue::Lit(v) => format!("\t{dest} = {}\n", literal(&member.target, v)),
+            ArmValue::Lit(v) => format!("{dest} = {}", literal(&member.target, v)),
             ArmValue::Field(path) => {
                 let head = path.first().cloned().unwrap_or_default();
                 let expr = self.path_expr(path);
                 if self.guaranteed(&head) {
-                    format!("\t{dest} = {expr}\n")
+                    format!("{dest} = {expr}")
                 } else {
                     format!(
-                        "\tif {head_why} == \"\" {{\n\t\t{dest} = {expr}\n\t}}\n",
+                        "if {head_why} == \"\" {{\n\t{dest} = {expr}\n}}",
                         head_why = why_var(&head),
                     )
                 }
             }
             ArmValue::Sources(sources) => {
-                self.member_chain(&source_stub(member, sources.clone()), dest)
+                self.member_chain_body(&plan::arm_sources(member, sources), dest)
             }
         }
     }
 
-    /// A member's `@format` derivation: assigned only once every
-    /// non-guaranteed head it reads has resolved.
-    fn member_format_stmts(&mut self, member: &EntryField, dest: &str) -> String {
-        let Some(format_parts) = member.format.clone() else {
-            return String::new();
-        };
-        let (concat, absent_deps) = self.format_pieces(&format_parts);
-        if !member.transforms.is_empty() {
-            self.import("strings", "strings");
+    /// The `@str::*` pipeline over an already-resolved destination, relative to
+    /// column zero, or `None` when the field declares no transforms.
+    fn transforms_body(&mut self, field: &EntryField, dest: &str) -> Option<String> {
+        if field.transforms.is_empty() {
+            return None;
         }
-        let expr = apply_transforms(concat.join(" + "), &member.transforms, self.helpers);
-        let assign = format!("\t{dest} = {}\n", cast_string(&member.target, &expr));
-        if absent_deps.is_empty() {
-            return assign;
-        }
-        let cond = absent_deps
-            .iter()
-            .map(|dep| format!("{} == \"\"", why_var(dep)))
-            .collect::<Vec<_>>()
-            .join(" && ");
-        format!(
-            "\tif {cond} {{\n{inner}\t}}\n",
-            inner = indent(assign.trim_end_matches('\n'))
-        )
+        self.import("strings", "strings");
+        let expr = self.as_string_expr(dest, &field.target);
+        let expr = apply_transforms(expr, &field.transforms, self.helpers);
+        Some(format!("{dest} = {}", cast_string(&field.target, &expr)))
     }
+}
+
+impl Emitter for Resolver<'_, '_> {
+    fn indent_unit(&self) -> &'static str {
+        "\t"
+    }
+
+    fn if_header(&self, cond: &Cond) -> String {
+        format!("if {}", cond.0)
+    }
+
+    fn dest(&self, field_name: &str) -> String {
+        self.ident(field_name)
+    }
+
+    fn member_dest(&self, member_name: &str) -> String {
+        format!("composed.{}", field_pascal(member_name, self.config))
+    }
+
+    fn assign_arg(&mut self, field: &EntryField, dest: &str) -> Leaf {
+        Leaf(format!("{dest} = {}", camel(&field.name)))
+    }
+
+    fn assign_default(
+        &mut self,
+        field: &EntryField,
+        value: &serde_json::Value,
+        dest: &str,
+    ) -> Leaf {
+        Leaf(format!("{dest} = {}", literal(&field.target, value)))
+    }
+
+    fn why_open(&self, field_name: &str, initial: &str) -> Leaf {
+        Leaf(format!("{} := {initial:?}", why_var(field_name)))
+    }
+
+    fn why_set(&self, why_field: &str, reason: &str) -> Leaf {
+        Leaf(format!("{} = {reason:?}", why_var(why_field)))
+    }
+
+    fn cond_why_absent(&self, field_name: &str) -> Cond {
+        Cond(format!("{} != \"\"", why_var(field_name)))
+    }
+
+    fn cond_why_resolved(&self, field_name: &str) -> Cond {
+        Cond(format!("{} == \"\"", why_var(field_name)))
+    }
+
+    fn with_step(&mut self, field: &EntryField, dest: &str, why_field: &str) -> Leaf {
+        Leaf(self.with_step_body(field, dest, &why_var(why_field)))
+    }
+
+    fn env_step(
+        &mut self,
+        field: &EntryField,
+        source: &Source,
+        dest: &str,
+        why_field: &str,
+    ) -> Leaf {
+        let Source::Env(name) = source else {
+            return Leaf(String::new());
+        };
+        Leaf(self.env_step_body(field, name, dest, &why_var(why_field)))
+    }
+
+    fn chain_guaranteed_leaf(&mut self, field: &EntryField, dest: &str) -> Leaf {
+        Leaf(self.chain_guaranteed(field, dest))
+    }
+
+    fn select_leaf(&mut self, field: &EntryField, dest: &str) -> Leaf {
+        Leaf(self.select_body(field, dest))
+    }
+
+    fn format_leaf(&mut self, field: &EntryField, dest: &str) -> Leaf {
+        Leaf(self.format_body(field, dest))
+    }
+
+    fn transforms_leaf(&mut self, field: &EntryField, dest: &str) -> Option<Leaf> {
+        self.transforms_body(field, dest).map(Leaf)
+    }
+
+    fn structured_leaf(&mut self, field: &EntryField, shape: &Shape) -> Stmt {
+        Stmt::Leaf(Leaf(self.structured_body(field, shape)))
+    }
+
+    fn json_leaf(&mut self, field: &EntryField) -> Stmt {
+        Stmt::Leaf(Leaf(self.json_body(field)))
+    }
+
+    fn config_open(&mut self, _field: &EntryField, shape: &Shape) -> Leaf {
+        Leaf(format!("var composed {}", type_ident_from_id(&shape.id)))
+    }
+
+    fn config_close(&self, dest: &str) -> Leaf {
+        Leaf(format!("{dest} = composed"))
+    }
+
+    fn bind_expr(&self, source: &[String]) -> String {
+        self.path_expr(source)
+    }
+
+    fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf {
+        Leaf(format!("{member_dest} = {expr}"))
+    }
+
+    fn member_select_leaf(&mut self, member: &EntryField, dest: &str) -> Leaf {
+        Leaf(self.member_select_body(member, dest))
+    }
+
+    fn member_format_leaf(&mut self, member: &EntryField, dest: &str) -> Leaf {
+        Leaf(self.format_body(member, dest))
+    }
+
+    fn member_chain(&mut self, member: &EntryField, sources: &[Source], dest: &str) -> Stmt {
+        Stmt::Leaf(Leaf(
+            self.member_chain_body(&plan::arm_sources(member, sources), dest),
+        ))
+    }
+
+    fn member_transforms_leaf(&mut self, member: &EntryField, dest: &str) -> Option<Leaf> {
+        self.transforms_body(member, dest).map(Leaf)
+    }
+}
+
+/// Indent every non-empty line of `s` by `n` tabs, dropping any trailing
+/// newline so callers control the separator.
+fn nest(s: &str, n: usize) -> String {
+    let pad = "\t".repeat(n);
+    s.trim_end_matches('\n')
+        .split('\n')
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("{pad}{l}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn int_bits(p: &Prim) -> u32 {

@@ -199,178 +199,178 @@ export class Client {
   private readonly options: ClientOptions;
   constructor(apiKey: string, config: ClientConfig = {}) {
     const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, headers: {} };
-    s.apiKey = apiKey;
-    let clientNameSet = false;
-    if (!clientNameSet && config.clientName !== undefined) {
-      s.clientName = config.clientName;
-      clientNameSet = true;
+  s.apiKey = apiKey;
+  let clientNameSet = false;
+  if (!clientNameSet && config.clientName !== undefined) {
+    s.clientName = config.clientName;
+    clientNameSet = true;
+  }
+  if (!clientNameSet) {
+    s.clientName = "demo";
+  }
+  s.clientKey = strUpperSnake((s.clientName).trim());
+  s.endpointEnv = "ENDPOINT_" + s.clientKey + "_V2";
+  let endpointVersionSet = false;
+  if (!endpointVersionSet) {
+    const v = readEnv("ENDPOINT_VERSION");
+    if (v !== undefined) {
+      s.endpointVersion = v;
+      endpointVersionSet = true;
     }
-    if (!clientNameSet) {
-      s.clientName = "demo";
+  }
+  if (!endpointVersionSet) {
+    s.endpointVersion = "v2";
+  }
+  let endpointV1Why = "no source";
+  {
+    const v = readEnv("ENDPOINT");
+    if (v !== undefined) {
+      s.endpointV1 = v;
+      endpointV1Why = "";
+    } else {
+      endpointV1Why = "env ENDPOINT: empty";
     }
-    s.clientKey = strUpperSnake((s.clientName).trim());
-    s.endpointEnv = "ENDPOINT_" + s.clientKey + "_V2";
-    let endpointVersionSet = false;
-    if (!endpointVersionSet) {
-      const v = readEnv("ENDPOINT_VERSION");
-      if (v !== undefined) {
-        s.endpointVersion = v;
-        endpointVersionSet = true;
-      }
+  }
+  let endpointV2Why = "no source";
+  {
+    const v = readEnv(s.endpointEnv);
+    if (v !== undefined) {
+      s.endpointV2 = v;
+      endpointV2Why = "";
+    } else {
+      endpointV2Why = "env " + s.endpointEnv + ": empty";
     }
-    if (!endpointVersionSet) {
-      s.endpointVersion = "v2";
+  }
+  let endpointWhy = "";
+  switch (s.endpointVersion) {
+  case "v1": {
+    if (endpointV1Why !== "") {
+      endpointWhy = "endpoint_v1 <- " + endpointV1Why;
+    } else {
+      s.endpoint = s.endpointV1;
     }
-    let endpointV1Why = "no source";
+    break;
+  }
+  case "legacy": {
+    s.endpoint = "https://old.example.com";
+    break;
+  }
+  default: {
+    endpointWhy = "no source";
     {
-      const v = readEnv("ENDPOINT");
+      const v = readEnv("ENDPOINT_V2");
       if (v !== undefined) {
-        s.endpointV1 = v;
-        endpointV1Why = "";
+        s.endpoint = v;
+        endpointWhy = "";
       } else {
-        endpointV1Why = "env ENDPOINT: empty";
+        endpointWhy = "env ENDPOINT_V2: empty";
       }
     }
-    let endpointV2Why = "no source";
-    {
-      const v = readEnv(s.endpointEnv);
+    if (endpointWhy !== "") {
+      s.endpoint = "https://example.com";
+      endpointWhy = "";
+    }
+    break;
+  }
+  }
+  let timeoutSet = false;
+  if (!timeoutSet && config.timeout !== undefined) {
+    s.timeout = config.timeout;
+    timeoutSet = true;
+  }
+  if (!timeoutSet) {
+    s.timeout = "10s" as Duration;
+  }
+  let maxRetriesSet = false;
+  if (!maxRetriesSet && config.maxRetries !== undefined) {
+    s.maxRetries = config.maxRetries;
+    maxRetriesSet = true;
+  }
+  if (!maxRetriesSet) {
+    s.maxRetries = 3;
+  }
+  {
+    const composed = {} as Conf;
+    composed.apiKey = s.apiKey;
+    let regionSet = false;
+    if (!regionSet) {
+      const v = readEnv("REGION");
       if (v !== undefined) {
-        s.endpointV2 = v;
-        endpointV2Why = "";
-      } else {
-        endpointV2Why = "env " + s.endpointEnv + ": empty";
+        composed.region = v;
+        regionSet = true;
       }
     }
-    let endpointWhy = "";
-    switch (s.endpointVersion) {
-      case "v1": {
-        if (endpointV1Why !== "") {
-          endpointWhy = "endpoint_v1 <- " + endpointV1Why;
-        } else {
-          s.endpoint = s.endpointV1;
-        }
-        break;
+    if (!regionSet) {
+      composed.region = "us";
+    }
+    s.settings = composed;
+  }
+  let credsWhy = "no source";
+  if (credsWhy !== "") {
+    const raw = readEnv("SERVICE_CREDENTIALS");
+    if (raw !== undefined) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        throw new Error(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
       }
-      case "legacy": {
-        s.endpoint = "https://old.example.com";
-        break;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error(`${"SERVICE_CREDENTIALS"}: expected an object`);
       }
-      default: {
-        endpointWhy = "no source";
-        {
-          const v = readEnv("ENDPOINT_V2");
-          if (v !== undefined) {
-            s.endpoint = v;
-            endpointWhy = "";
-          } else {
-            endpointWhy = "env ENDPOINT_V2: empty";
-          }
-        }
-        if (endpointWhy !== "") {
-          s.endpoint = "https://example.com";
-          endpointWhy = "";
-        }
-        break;
+      const record = parsed as Record<string, unknown>;
+      if (!("token" in parsed) || record["token"] === null) {
+        throw new Error(`${"SERVICE_CREDENTIALS"}: missing field token`);
       }
-    }
-    let timeoutSet = false;
-    if (!timeoutSet && config.timeout !== undefined) {
-      s.timeout = config.timeout;
-      timeoutSet = true;
-    }
-    if (!timeoutSet) {
-      s.timeout = "10s" as Duration;
-    }
-    let maxRetriesSet = false;
-    if (!maxRetriesSet && config.maxRetries !== undefined) {
-      s.maxRetries = config.maxRetries;
-      maxRetriesSet = true;
-    }
-    if (!maxRetriesSet) {
-      s.maxRetries = 3;
-    }
-    {
-      const composed = {} as Conf;
-      composed.apiKey = s.apiKey;
-      let regionSet = false;
-      if (!regionSet) {
-        const v = readEnv("REGION");
-        if (v !== undefined) {
-          composed.region = v;
-          regionSet = true;
+      if (!("account_id" in parsed) || record["account_id"] === null) {
+        throw new Error(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
+      }
+      for (const key of Object.keys(parsed)) {
+        if (!["token", "account_id"].includes(key)) {
+          throw new Error(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
         }
       }
-      if (!regionSet) {
-        composed.region = "us";
+      if ("token" in parsed && typeof record["token"] !== "string") {
+        throw new Error(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
       }
-      s.settings = composed;
-    }
-    let credsWhy = "no source";
-    if (credsWhy !== "") {
-      const raw = readEnv("SERVICE_CREDENTIALS");
-      if (raw !== undefined) {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw);
-        } catch (e) {
-          throw new Error(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
-        }
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-          throw new Error(`${"SERVICE_CREDENTIALS"}: expected an object`);
-        }
-        const record = parsed as Record<string, unknown>;
-        if (!("token" in parsed) || record["token"] === null) {
-          throw new Error(`${"SERVICE_CREDENTIALS"}: missing field token`);
-        }
-        if (!("account_id" in parsed) || record["account_id"] === null) {
-          throw new Error(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
-        }
-        for (const key of Object.keys(parsed)) {
-          if (!["token", "account_id"].includes(key)) {
-            throw new Error(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
-          }
-        }
-        if ("token" in parsed && typeof record["token"] !== "string") {
-          throw new Error(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
-        }
-        if ("account_id" in parsed && typeof record["account_id"] !== "string") {
-          throw new Error(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
-        }
-        const decoded = decodeCredentials(parsed);
-        const vs = validateCredentials(decoded);
-        if (vs.length > 0) {
-          throw new ValidationError(vs);
-        }
-        s.creds = decoded;
-        credsWhy = "";
-      } else {
-        credsWhy = "env SERVICE_CREDENTIALS: empty";
+      if ("account_id" in parsed && typeof record["account_id"] !== "string") {
+        throw new Error(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
       }
-    }
-    let labelsWhy = "no source";
-    if (labelsWhy !== "") {
-      const raw = readEnv("SERVICE_LABELS");
-      if (raw !== undefined) {
-        let parsed: any;
-        try {
-          parsed = JSON.parse(raw);
-        } catch (e) {
-          throw new Error(`${"SERVICE_LABELS"}: ${String(e)}`);
-        }
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-          throw new Error(`${"SERVICE_LABELS"}: expected an object`);
-        }
-        for (const [key, val] of Object.entries(parsed)) {
-          if (typeof val !== "string") {
-            throw new Error(`${"SERVICE_LABELS"}: field ${key} must be a string`);
-          }
-        }
-        s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
-        labelsWhy = "";
-      } else {
-        labelsWhy = "env SERVICE_LABELS: empty";
+      const decoded = decodeCredentials(parsed);
+      const vs = validateCredentials(decoded);
+      if (vs.length > 0) {
+        throw new ValidationError(vs);
       }
+      s.creds = decoded;
+      credsWhy = "";
+    } else {
+      credsWhy = "env SERVICE_CREDENTIALS: empty";
     }
+  }
+  let labelsWhy = "no source";
+  if (labelsWhy !== "") {
+    const raw = readEnv("SERVICE_LABELS");
+    if (raw !== undefined) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        throw new Error(`${"SERVICE_LABELS"}: ${String(e)}`);
+      }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error(`${"SERVICE_LABELS"}: expected an object`);
+      }
+      for (const [key, val] of Object.entries(parsed)) {
+        if (typeof val !== "string") {
+          throw new Error(`${"SERVICE_LABELS"}: field ${key} must be a string`);
+        }
+      }
+      s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
+      labelsWhy = "";
+    } else {
+      labelsWhy = "env SERVICE_LABELS: empty";
+    }
+  }
     if (s.endpoint === "") {
       throw new Error("endpoint <- " + (endpointWhy || "no value"));
     }

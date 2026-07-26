@@ -15,6 +15,8 @@ use crate::ir::{
     ArmValue, Bind, EntryField, EnvName, Module, Shape, ShapeKind, Source, TemplatePart, Tref,
 };
 
+pub mod plan;
+
 /// One entry of a module with its fields in resolution order: every field a
 /// step depends on (a `@env(.ref)` variable name, a `@format` placeholder, a
 /// match subject or arm, a `@bind` source) is resolved before it.
