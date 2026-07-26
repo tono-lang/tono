@@ -267,6 +267,36 @@ fn structured_sources_decode_strictly_and_honor_explicit_values() {
 }
 
 #[test]
+fn a_structured_source_falls_back_across_multiple_envs() {
+    let mut module = fixture_module();
+    // Two @env sources: the second is a fallback tried only while the first is
+    // still absent (a first-present-wins cascade, not first-only).
+    with_structured_sources(
+        &mut module,
+        vec![
+            Source::Env(EnvName::Name("SERVICE_CREDENTIALS".into())),
+            Source::Env(EnvName::Name("SERVICE_CREDENTIALS_FALLBACK".into())),
+        ],
+    );
+    let serde = serde_text(&module);
+    // Both variables are read (the fallback is not dropped).
+    assert!(serde.contains("os.LookupEnv(\"SERVICE_CREDENTIALS\")"));
+    assert!(serde.contains("os.LookupEnv(\"SERVICE_CREDENTIALS_FALLBACK\")"));
+    // The fallback runs only while the first source stayed unresolved.
+    let fallback = serde
+        .find("os.LookupEnv(\"SERVICE_CREDENTIALS_FALLBACK\")")
+        .expect("fallback lookup");
+    let guard = serde[..fallback]
+        .rfind("if credsWhy != \"\" {")
+        .expect("fallback guard");
+    let primary = serde
+        .find("os.LookupEnv(\"SERVICE_CREDENTIALS\")")
+        .expect("primary lookup");
+    // The guard sits between the primary decode and the fallback decode.
+    assert!(primary < guard && guard < fallback);
+}
+
+#[test]
 fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     let mut module = fixture_module();
     let mut choice = bare_entry_field("choice", Tref::Prim(Prim::String), vec![]);

@@ -133,6 +133,35 @@ fn structured_sources_decode_strictly_with_context() {
 }
 
 #[test]
+fn a_structured_source_falls_back_across_multiple_envs() {
+    let mut module = with_descriptors(fixture_module());
+    // Two @env sources: the second is a fallback tried only while the first is
+    // still absent (a first-present-wins cascade, not first-only).
+    with_structured_sources(
+        &mut module,
+        vec![
+            Source::Env(EnvName::Name("SERVICE_CREDENTIALS".into())),
+            Source::Env(EnvName::Name("SERVICE_CREDENTIALS_FALLBACK".into())),
+        ],
+    );
+    let out = text(&module);
+    // Both variables are read (the fallback is not dropped).
+    assert!(out.contains("readEnv(\"SERVICE_CREDENTIALS\")"));
+    assert!(out.contains("readEnv(\"SERVICE_CREDENTIALS_FALLBACK\")"));
+    // The fallback decode runs only while the first source stayed unresolved.
+    let fallback = out
+        .find("readEnv(\"SERVICE_CREDENTIALS_FALLBACK\")")
+        .expect("fallback lookup");
+    let guard = out[..fallback]
+        .rfind("if (credsWhy !== \"\") {")
+        .expect("fallback guard");
+    let primary = out
+        .find("readEnv(\"SERVICE_CREDENTIALS\")")
+        .expect("primary lookup");
+    assert!(primary < guard && guard < fallback);
+}
+
+#[test]
 fn a_bespoke_stub_keeps_the_declared_signature() {
     // No descriptor on the op (the fixture is pre-protocol): the stub
     // still takes the declared input.

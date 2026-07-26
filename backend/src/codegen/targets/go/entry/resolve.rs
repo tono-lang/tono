@@ -140,16 +140,11 @@ impl Resolver<'_, '_> {
         (concat, absent_deps)
     }
 
-    /// The `@arg`/`@with` opening shared by the structured and whole-JSON
+    /// The `@arg`/why-var opening shared by the structured and whole-JSON
     /// decodes: an `@arg` value passes typed (returns `None`, having written the
-    /// assignment), otherwise the why-var opens and an optional `@with` layer
-    /// wins, and the env source's `(dest, why, lookup, label, miss)` are
-    /// returned for the decode body.
-    fn decode_opening(
-        &mut self,
-        field: &EntryField,
-        out: &mut String,
-    ) -> Option<(String, String, String, String, String)> {
+    /// assignment), otherwise the why-var opens and `(dest, why)` are returned so
+    /// the caller can lay out the `@with`/`@env`/`@default` fallback cascade.
+    fn decode_opening(&mut self, field: &EntryField, out: &mut String) -> Option<(String, String)> {
         let dest = self.ident(&field.name);
         if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
             out.push_str(&format!("{dest} = {}", camel(&field.name)));
@@ -157,23 +152,54 @@ impl Resolver<'_, '_> {
         }
         let why = why_var(&field.name);
         out.push_str(&format!("{why} := \"no source\"\n"));
-        if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            out.push_str(&format!(
-                "if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{why} = \"\"\n}} else {{\n\t{why} = \"not configured\"\n}}\n",
-                carrier = camel(&field.name),
-            ));
+        Some((dest, why))
+    }
+
+    /// Lay out a decode field's source cascade below the why-var opening: the
+    /// first source runs unconditionally, every later one only while the why-var
+    /// is still set (a first-present-wins fallback). Each `@env` step is built by
+    /// `env_block` from its own `(lookup, label, miss, prereq)`; `@with` and
+    /// `@default` are spelled inline.
+    fn decode_cascade(
+        &mut self,
+        field: &EntryField,
+        dest: &str,
+        why: &str,
+        mut env_block: impl FnMut(&mut Self, &str, &str, &str, &str) -> String,
+    ) -> String {
+        let mut steps: Vec<String> = Vec::new();
+        for source in &field.sources {
+            match source {
+                Source::With => steps.push(self.with_step_body(field, dest, why)),
+                Source::Env(name) => {
+                    self.import("os", "os");
+                    self.import("json", "encoding/json");
+                    self.import("fmt", "fmt");
+                    let lookup = self.env_lookup(name);
+                    let label = self.env_label(name);
+                    let miss = self.env_miss_reason(name);
+                    let pre = self.env_name_prereq(name, why);
+                    steps.push(env_block(self, &lookup, &label, &miss, &pre));
+                }
+                Source::Default(v) => steps.push(format!(
+                    "{dest} = {}\n{why} = \"\"",
+                    literal(&field.target, v)
+                )),
+                Source::Arg => {}
+            }
         }
-        let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
-        else {
-            return None;
-        };
-        self.import("os", "os");
-        self.import("json", "encoding/json");
-        self.import("fmt", "fmt");
-        let lookup = self.env_lookup(name);
-        let label = self.env_label(name);
-        let miss = self.env_miss_reason(name);
-        Some((dest, why, lookup, label, miss))
+        steps
+            .iter()
+            .enumerate()
+            .map(|(i, step)| {
+                if i == 0 {
+                    step.clone()
+                } else {
+                    format!("if {why} != \"\" {{\n{}\n}}", nest(step, 1))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -390,7 +416,7 @@ impl Emitter for Resolver<'_, '_> {
     /// value decodes strictly into the wire struct. Relative to column zero.
     fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String {
         let mut out = String::new();
-        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
             return out;
         };
         self.import("bytes", "bytes");
@@ -402,7 +428,7 @@ impl Emitter for Resolver<'_, '_> {
                 // decode below would zero it silently, and the TypeScript decode
                 // rejects it, so both targets treat it as missing.
                 required_checks.push_str(&format!(
-                    "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn nil, fmt.Errorf(\"%s: missing field {name}\", {label})\n\t}}\n",
+                    "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn nil, fmt.Errorf(\"%s: missing field {name}\", {{LABEL}})\n\t}}\n",
                     name = m.name,
                 ));
             }
@@ -416,29 +442,27 @@ impl Emitter for Resolver<'_, '_> {
         } else {
             String::new()
         };
-        let block = format!(
-            "if raw, ok := {lookup}; ok && raw != \"\" {{\n\
-             \tvar probe map[string]json.RawMessage\n\
-             \tif err := json.Unmarshal([]byte(raw), &probe); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
-             {required_checks}\
-             \tdec := json.NewDecoder(bytes.NewReader([]byte(raw)))\n\
-             \tdec.DisallowUnknownFields()\n\
-             \tvar decoded {ty}\n\
-             \tif err := dec.Decode(&decoded); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
-             {validate}\
-             \t{dest} = decoded\n\
-             \t{why} = \"\"\n\
-             }} else {{\n\t{why} = {miss}\n}}"
-        );
-        // An explicit @with value wins: the decode runs only while unset.
-        if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            // The decode runs only if an explicit @with value did not already win.
-            out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
-        } else {
-            // No @with layer: the reason is always open here, so the guard would
-            // be statically true; emit the decode directly.
-            out.push_str(&block);
-        }
+        // The decode body varies only by the env label; the cascade fills each
+        // source's own `(lookup, label, miss)` in around this shared shape.
+        let (dc, wc) = (dest.clone(), why.clone());
+        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+            let required = required_checks.replace("{LABEL}", label);
+            format!(
+                "{pre}if raw, ok := {lookup}; ok && raw != \"\" {{\n\
+                 \tvar probe map[string]json.RawMessage\n\
+                 \tif err := json.Unmarshal([]byte(raw), &probe); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
+                 {required}\
+                 \tdec := json.NewDecoder(bytes.NewReader([]byte(raw)))\n\
+                 \tdec.DisallowUnknownFields()\n\
+                 \tvar decoded {ty}\n\
+                 \tif err := dec.Decode(&decoded); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
+                 {validate}\
+                 \t{dc} = decoded\n\
+                 \t{wc} = \"\"\n\
+                 }} else {{\n\t{wc} = {miss}\n}}"
+            )
+        });
+        out.push_str(&body);
         out
     }
 
@@ -446,23 +470,19 @@ impl Emitter for Resolver<'_, '_> {
     /// decodes as JSON whole. Relative to column zero.
     fn json_body(&mut self, field: &EntryField) -> String {
         let mut out = String::new();
-        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
             return out;
         };
-        let block = format!(
-            "if raw, ok := {lookup}; ok && raw != \"\" {{\n\
-             \tif err := json.Unmarshal([]byte(raw), &{dest}); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
-             \t{why} = \"\"\n\
-             }} else {{\n\t{why} = {miss}\n}}"
-        );
-        if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            // The decode runs only if an explicit @with value did not already win.
-            out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
-        } else {
-            // No @with layer: the reason is always open here, so the guard would
-            // be statically true; emit the decode directly.
-            out.push_str(&block);
-        }
+        let (dc, wc) = (dest.clone(), why.clone());
+        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+            format!(
+                "{pre}if raw, ok := {lookup}; ok && raw != \"\" {{\n\
+                 \tif err := json.Unmarshal([]byte(raw), &{dc}); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
+                 \t{wc} = \"\"\n\
+                 }} else {{\n\t{wc} = {miss}\n}}"
+            )
+        });
+        out.push_str(&body);
         out
     }
 

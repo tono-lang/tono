@@ -130,11 +130,7 @@ impl Resolver<'_, '_> {
     /// decodes: an `@arg` value passes typed (returns `None`, having pushed the
     /// assignment onto `out`), otherwise the why-var opens and an optional
     /// `@with` layer wins, and the env source's parts are returned.
-    fn decode_opening(
-        &mut self,
-        field: &EntryField,
-        out: &mut String,
-    ) -> Option<(String, String, String, String, String)> {
+    fn decode_opening(&mut self, field: &EntryField, out: &mut String) -> Option<(String, String)> {
         let dest = self.ident(&field.name);
         if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
             out.push_str(&format!("{dest} = {};", camel(&field.name)));
@@ -142,20 +138,51 @@ impl Resolver<'_, '_> {
         }
         let why = why_var(&field.name);
         out.push_str(&format!("let {why} = \"no source\";\n"));
-        if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            let acc = self.with_access(field);
-            out.push_str(&format!(
-                "if ({acc} !== undefined) {{\n  {dest} = {acc};\n  {why} = \"\";\n}} else {{\n  {why} = \"not configured\";\n}}\n"
-            ));
+        Some((dest, why))
+    }
+
+    /// Lay out a decode field's source cascade below the why-var opening: the
+    /// first source runs unconditionally, every later one only while the why-var
+    /// is still set (a first-present-wins fallback). Each `@env` step is built by
+    /// `env_block` from its own `(lookup, label, miss, prereq)`; `@with` and
+    /// `@default` are spelled inline.
+    fn decode_cascade(
+        &mut self,
+        field: &EntryField,
+        dest: &str,
+        why: &str,
+        mut env_block: impl FnMut(&mut Self, &str, &str, &str, &str) -> String,
+    ) -> String {
+        let mut steps: Vec<String> = Vec::new();
+        for source in &field.sources {
+            match source {
+                Source::With => steps.push(self.with_step_body(field, dest, why)),
+                Source::Env(name) => {
+                    let lookup = self.env_lookup(name);
+                    let label = self.env_label(name);
+                    let miss = self.env_miss_reason(name);
+                    let pre = self.env_name_prereq(name, why);
+                    steps.push(env_block(self, &lookup, &label, &miss, &pre));
+                }
+                Source::Default(v) => steps.push(format!(
+                    "{dest} = {};\n{why} = \"\";",
+                    literal(&field.target, v)
+                )),
+                Source::Arg => {}
+            }
         }
-        let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
-        else {
-            return None;
-        };
-        let lookup = self.env_lookup(name);
-        let label = self.env_label(name);
-        let miss = self.env_miss_reason(name);
-        Some((dest, why, lookup, label, miss))
+        steps
+            .iter()
+            .enumerate()
+            .map(|(i, step)| {
+                if i == 0 {
+                    step.clone()
+                } else {
+                    format!("if ({why} !== \"\") {{\n{}\n}}", nest(step, 1))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -369,7 +396,7 @@ impl Emitter for Resolver<'_, '_> {
     /// order), plus declared validation. Relative to column zero.
     fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String {
         let mut out = String::new();
-        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
             return out;
         };
         let ty = type_ident_from_id(&shape.id);
@@ -383,7 +410,7 @@ impl Emitter for Resolver<'_, '_> {
                     // An explicit null is as absent as a missing key, the same
                     // rule the Go probe applies.
                     required_checks.push_str(&format!(
-                        "if (!({name:?} in parsed) || record[{name:?}] === null) {{\n  throw new Error(`${{{label}}}: missing field {name}`);\n}}\n",
+                        "if (!({name:?} in parsed) || record[{name:?}] === null) {{\n  throw new Error(`${{__LABEL__}}: missing field {name}`);\n}}\n",
                         name = m.name,
                     ));
                 }
@@ -423,7 +450,7 @@ impl Emitter for Resolver<'_, '_> {
                         )
                     };
                     type_checks.push_str(&format!(
-                        "if ({guard}{present}typeof record[{name:?}] !== {ts_typeof:?}) {{\n  throw new Error(`${{{label}}}: field {name} must be {describe}`);\n}}\n",
+                        "if ({guard}{present}typeof record[{name:?}] !== {ts_typeof:?}) {{\n  throw new Error(`${{__LABEL__}}: field {name} must be {describe}`);\n}}\n",
                         present = if m.required {
                             format!("{name:?} in parsed && ", name = m.name)
                         } else {
@@ -443,33 +470,33 @@ impl Emitter for Resolver<'_, '_> {
         } else {
             String::new()
         };
-        let inner = format!(
-            "const raw = {lookup};\nif (raw !== undefined) {{\n\
-             \x20 let parsed: unknown;\n\
-             \x20 try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    throw new Error(`${{{label}}}: ${{String(e)}}`);\n  }}\n\
-             \x20 if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n    throw new Error(`${{{label}}}: expected an object`);\n  }}\n\
-             \x20 const record = parsed as Record<string, unknown>;\n\
-             {required}\
-             \x20 for (const key of Object.keys(parsed)) {{\n    if (![{known}].includes(key)) {{\n      throw new Error(`${{{label}}}: unknown field ${{key}}`);\n    }}\n  }}\n\
-             {types}\
-             \x20 const decoded = decode{ty}(parsed);\n\
-             {validate}\
-             \x20 {dest} = decoded;\n\
-             \x20 {why} = \"\";\n\
-             }} else {{\n  {why} = {miss};\n}}",
-            known = known.join(", "),
-            required = block1(&required_checks),
-            types = block1(&type_checks),
-            validate = block1(&validate),
-        );
-        if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            // The decode runs only if an explicit @with value did not already win.
-            out.push_str(&format!("if ({why} !== \"\") {{\n{}\n}}", nest(&inner, 1)));
-        } else {
-            // No @with layer: the reason is always open here, so the guard would
-            // be statically true; emit the decode directly.
-            out.push_str(&inner);
-        }
+        let known = known.join(", ");
+        let required_tpl = block1(&required_checks);
+        let types_tpl = block1(&type_checks);
+        let validate = block1(&validate);
+        let (dc, wc) = (dest.clone(), why.clone());
+        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+            // The required/type guards carry a `__LABEL__` slot so each source in
+            // the cascade renders them against its own env label.
+            let required = required_tpl.replace("__LABEL__", label);
+            let types = types_tpl.replace("__LABEL__", label);
+            format!(
+                "{pre}const raw = {lookup};\nif (raw !== undefined) {{\n\
+                 \x20 let parsed: unknown;\n\
+                 \x20 try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    throw new Error(`${{{label}}}: ${{String(e)}}`);\n  }}\n\
+                 \x20 if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n    throw new Error(`${{{label}}}: expected an object`);\n  }}\n\
+                 \x20 const record = parsed as Record<string, unknown>;\n\
+                 {required}\
+                 \x20 for (const key of Object.keys(parsed)) {{\n    if (![{known}].includes(key)) {{\n      throw new Error(`${{{label}}}: unknown field ${{key}}`);\n    }}\n  }}\n\
+                 {types}\
+                 \x20 const decoded = decode{ty}(parsed);\n\
+                 {validate}\
+                 \x20 {dc} = decoded;\n\
+                 \x20 {wc} = \"\";\n\
+                 }} else {{\n  {wc} = {miss};\n}}"
+            )
+        });
+        out.push_str(&body);
         out
     }
 
@@ -477,26 +504,23 @@ impl Emitter for Resolver<'_, '_> {
     /// i64 map or union field lands typed. Relative to column zero.
     fn json_body(&mut self, field: &EntryField) -> String {
         let mut out = String::new();
-        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
             return out;
         };
         let ty = ts_type(&field.target);
         let decode =
             crate::codegen::targets::typescript::codecs::decode_expr("parsed", &field.target);
-        // Container and element checks keep the boundary as strict as Go's typed
-        // unmarshal: the same env value must construct in both targets.
-        let checks = block1(&json_shape_checks(&field.target, &label));
-        let inner = format!(
-            "const raw = {lookup};\nif (raw !== undefined) {{\n  let parsed: any;\n  try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    throw new Error(`${{{label}}}: ${{String(e)}}`);\n  }}\n{checks}  {dest} = {decode} as {ty};\n  {why} = \"\";\n}} else {{\n  {why} = {miss};\n}}"
-        );
-        if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            // The decode runs only if an explicit @with value did not already win.
-            out.push_str(&format!("if ({why} !== \"\") {{\n{}\n}}", nest(&inner, 1)));
-        } else {
-            // No @with layer: the reason is always open here, so the guard would
-            // be statically true; emit the decode directly.
-            out.push_str(&inner);
-        }
+        let target = field.target.clone();
+        let (dc, wc) = (dest.clone(), why.clone());
+        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+            // Container and element checks keep the boundary as strict as Go's
+            // typed unmarshal: the same env value must construct in both targets.
+            let checks = block1(&json_shape_checks(&target, label));
+            format!(
+                "{pre}const raw = {lookup};\nif (raw !== undefined) {{\n  let parsed: any;\n  try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    throw new Error(`${{{label}}}: ${{String(e)}}`);\n  }}\n{checks}  {dc} = {decode} as {ty};\n  {wc} = \"\";\n}} else {{\n  {wc} = {miss};\n}}"
+            )
+        });
+        out.push_str(&body);
         out
     }
 
