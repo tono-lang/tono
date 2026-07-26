@@ -480,6 +480,47 @@ impl Emitter for Resolver<'_, '_> {
         }
         out
     }
+
+    fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
+        self.import("errors", "errors");
+        format!(
+            "if s.{head_ident}.{member_ident} == {zero} {{\n\treturn nil, errors.New(\"{name}: no value\")\n}}",
+            head_ident = field_pascal(head, self.config),
+            member_ident = field_pascal(member, self.config),
+            zero = cast_string(leaf, "\"\""),
+        )
+    }
+
+    fn require_string(&mut self, head: &str, target: &Tref) -> String {
+        self.import("errors", "errors");
+        format!(
+            "if s.{ident} == {zero} {{\n\twhy := {why}\n\tif why == \"\" {{\n\t\twhy = \"no value\"\n\t}}\n\treturn nil, errors.New(\"{name} <- \" + why)\n}}",
+            ident = field_pascal(head, self.config),
+            zero = cast_string(target, "\"\""),
+            why = why_var(head),
+            name = head,
+        )
+    }
+
+    fn require_bytes(&mut self, head: &str) -> String {
+        self.import("errors", "errors");
+        format!(
+            "if len(s.{ident}) == 0 {{\n\twhy := {why}\n\tif why == \"\" {{\n\t\twhy = \"no value\"\n\t}}\n\treturn nil, errors.New(\"{name} <- \" + why)\n}}",
+            ident = field_pascal(head, self.config),
+            why = why_var(head),
+            name = head,
+        )
+    }
+
+    fn require_numeric(&mut self, head: &str, _target: &Tref) -> String {
+        self.import("errors", "errors");
+        format!(
+            "if {why} != \"\" && s.{ident} == 0 {{\n\treturn nil, errors.New(\"{name} <- \" + {why})\n}}",
+            ident = field_pascal(head, self.config),
+            why = why_var(head),
+            name = head,
+        )
+    }
 }
 
 /// Indent every non-empty line of `s` by `n` tabs, dropping any trailing

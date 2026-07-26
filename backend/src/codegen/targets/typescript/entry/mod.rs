@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{doc_of, rename_of, type_ident_from_id};
 use crate::codegen::entries::{
-    companion_name, module_entries, op_local_name, ref_is_enum, EntryModel, FieldShape,
+    companion_name, module_entries, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
 };
 use crate::codegen::extensions::{bound_extensions, hook_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
@@ -320,81 +320,20 @@ fn class_decl(
         body.push_str("    wrapClientInit(s);\n");
     }
 
-    // Consumed chains must hold a value once construction finishes. Every
-    // check reads the resolved value (client_init ran already, bespoke wins),
-    // so the why-reason only decorates the error.
-    for path in entry.consumed_field_paths() {
-        let Some(head) = path.first() else {
-            continue;
+    // Consumed chains must hold a value once construction finishes. The shared
+    // plan picks which fields need a check (client_init ran already, bespoke
+    // wins, so each check reads the resolved value); this target spells them.
+    {
+        let mut r = Resolver {
+            entry,
+            module,
+            config,
+            helpers,
+            body: &mut body,
         };
-        let Some(field) = entry.fields.iter().find(|f| f.name == *head) else {
-            continue;
-        };
-        let shape = entry.field_shape(field, module);
-        if path.len() > 1 && matches!(shape, FieldShape::Config(_) | FieldShape::Structured(_)) {
-            // A consumed member of a composed or decoded field: the leaf value
-            // itself must be there (there is no member-level why to report).
-            let leaf = entry.path_type(&path, module);
-            if !string_like(&leaf) {
-                continue;
-            }
-            body.push_str(&format!(
-                "    if ((s.{head_ident}.{member_ident} ?? {zero}) === {zero}) {{\n      throw new Error(\"{name}: no value\");\n    }}\n",
-                head_ident = field_camel(head, config),
-                member_ident = field_camel(&path[1], config),
-                zero = cast_string(&leaf, "\"\""),
-                name = path.join("."),
-            ));
-            continue;
-        }
-        if !matches!(shape, FieldShape::Scalar) || entry.is_guaranteed(field) {
-            continue;
-        }
-        if string_like(&field.target) {
-            body.push_str(&format!(
-                "    if (s.{ident} === {zero}) {{\n      throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n    }}\n",
-                ident = field_camel(head, config),
-                zero = cast_string(&field.target, "\"\""),
-                why = why_var(head),
-                name = head,
-            ));
-        } else if matches!(field.target, Tref::Prim(Prim::Bytes)) {
-            body.push_str(&format!(
-                "    if (s.{ident}.length === 0) {{\n      throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n    }}\n",
-                ident = field_camel(head, config),
-                why = why_var(head),
-                name = head,
-            ));
-        } else if matches!(
-            field.target,
-            Tref::Prim(
-                Prim::I8
-                    | Prim::I16
-                    | Prim::I32
-                    | Prim::I64
-                    | Prim::U8
-                    | Prim::U16
-                    | Prim::U32
-                    | Prim::U64
-                    | Prim::Float
-            )
-        ) {
-            // A numeric zero can be a legitimate resolved value, so only the
-            // combination (chain reported absent, still zero after the
-            // bridge) fails construction. A bool has no absent-vs-zero
-            // distinction at all, so it carries no require.
-            let zero = if matches!(field.target, Tref::Prim(Prim::I64 | Prim::U64)) {
-                "0n"
-            } else {
-                "0"
-            };
-            body.push_str(&format!(
-                "    if ({why} !== \"\" && s.{ident} === {zero}) {{\n      throw new Error(\"{name} <- \" + {why});\n    }}\n",
-                ident = field_camel(head, config),
-                why = why_var(head),
-                name = head,
-            ));
-        }
+        let requires = plan::build_requires(entry, module, &mut r);
+        let text = plan::render(&requires, 1, &r);
+        r.body.push_str(&text);
     }
 
     // Declared validation runs last, over what bespoke left in place.

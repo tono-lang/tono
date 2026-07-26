@@ -516,6 +516,48 @@ impl Emitter for Resolver<'_, '_> {
         }
         out.trim_end_matches('\n').to_string()
     }
+
+    fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
+        format!(
+            "if ((s.{head}.{member} ?? {zero}) === {zero}) {{\n  throw new Error(\"{name}: no value\");\n}}",
+            head = field_camel(head, self.config),
+            member = field_camel(member, self.config),
+            zero = cast_string(leaf, "\"\""),
+        )
+    }
+
+    fn require_string(&mut self, head: &str, target: &Tref) -> String {
+        format!(
+            "if (s.{ident} === {zero}) {{\n  throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n}}",
+            ident = field_camel(head, self.config),
+            zero = cast_string(target, "\"\""),
+            why = why_var(head),
+            name = head,
+        )
+    }
+
+    fn require_bytes(&mut self, head: &str) -> String {
+        format!(
+            "if (s.{ident}.length === 0) {{\n  throw new Error(\"{name} <- \" + ({why} || \"no value\"));\n}}",
+            ident = field_camel(head, self.config),
+            why = why_var(head),
+            name = head,
+        )
+    }
+
+    fn require_numeric(&mut self, head: &str, target: &Tref) -> String {
+        let zero = if matches!(target, Tref::Prim(Prim::I64 | Prim::U64)) {
+            "0n"
+        } else {
+            "0"
+        };
+        format!(
+            "if ({why} !== \"\" && s.{ident} === {zero}) {{\n  throw new Error(\"{name} <- \" + {why});\n}}",
+            ident = field_camel(head, self.config),
+            why = why_var(head),
+            name = head,
+        )
+    }
 }
 
 /// Indent every non-empty line of `s` by `n` two-space units, dropping any

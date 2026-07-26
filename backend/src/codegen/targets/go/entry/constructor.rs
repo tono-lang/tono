@@ -3,6 +3,7 @@
 //! and the frozen runtime values.
 
 use super::*;
+use crate::codegen::entries::plan;
 
 /// The generated constructor. The body follows the declared order exactly:
 /// sources resolve top-down, `client_init` runs over the result (bespoke
@@ -72,94 +73,21 @@ pub(super) fn new_decl(
     // Consumed chains must hold a value once construction finishes; an absent
     // one reports the chain at this single point instead of failing the first
     // call obscurely. Every check reads the resolved value (client_init ran
-    // already, bespoke wins), so the why-reason only decorates the error.
-    let mut needs_errors = false;
-    for path in entry.consumed_field_paths() {
-        let Some(head) = path.first() else {
-            continue;
+    // already, bespoke wins), so the why-reason only decorates the error. The
+    // selection of which fields need a check lives in the shared plan; this
+    // target only spells each check (and pulls the errors import it needs).
+    {
+        let mut r = Resolver {
+            entry,
+            module,
+            config,
+            helpers,
+            refs: &mut refs,
+            body: &mut body,
         };
-        let Some(field) = entry.fields.iter().find(|f| f.name == *head) else {
-            continue;
-        };
-        let shape = entry.field_shape(field, module);
-        if path.len() > 1 && matches!(shape, FieldShape::Config(_) | FieldShape::Structured(_)) {
-            // A consumed member of a composed or decoded field: the leaf value
-            // itself must be there (there is no member-level why to report).
-            let leaf = entry.path_type(&path, module);
-            if !string_like(&leaf) {
-                continue;
-            }
-            needs_errors = true;
-            body.push_str(&format!(
-                "\tif s.{head_ident}.{member_ident} == {zero} {{\n\
-                 \t\treturn nil, errors.New(\"{name}: no value\")\n\
-                 \t}}\n",
-                head_ident = field_pascal(head, config),
-                member_ident = field_pascal(&path[1], config),
-                zero = cast_string(&leaf, "\"\""),
-                name = path.join("."),
-            ));
-            continue;
-        }
-        if !matches!(shape, FieldShape::Scalar) || entry.is_guaranteed(field) {
-            continue;
-        }
-        if string_like(&field.target) {
-            needs_errors = true;
-            body.push_str(&format!(
-                "\tif s.{ident} == {zero} {{\n\
-                 \t\twhy := {why}\n\
-                 \t\tif why == \"\" {{\n\t\t\twhy = \"no value\"\n\t\t}}\n\
-                 \t\treturn nil, errors.New(\"{name} <- \" + why)\n\
-                 \t}}\n",
-                ident = field_pascal(head, config),
-                zero = cast_string(&field.target, "\"\""),
-                why = why_var(head),
-                name = head,
-            ));
-        } else if matches!(field.target, Tref::Prim(Prim::Bytes)) {
-            needs_errors = true;
-            body.push_str(&format!(
-                "\tif len(s.{ident}) == 0 {{\n\
-                 \t\twhy := {why}\n\
-                 \t\tif why == \"\" {{\n\t\t\twhy = \"no value\"\n\t\t}}\n\
-                 \t\treturn nil, errors.New(\"{name} <- \" + why)\n\
-                 \t}}\n",
-                ident = field_pascal(head, config),
-                why = why_var(head),
-                name = head,
-            ));
-        } else if matches!(
-            field.target,
-            Tref::Prim(
-                Prim::I8
-                    | Prim::I16
-                    | Prim::I32
-                    | Prim::I64
-                    | Prim::U8
-                    | Prim::U16
-                    | Prim::U32
-                    | Prim::U64
-                    | Prim::Float
-            )
-        ) {
-            // A numeric zero can be a legitimate resolved value, so only the
-            // combination (chain reported absent, still zero after the
-            // bridge) fails construction. A bool has no absent-vs-zero
-            // distinction at all, so it carries no require.
-            needs_errors = true;
-            body.push_str(&format!(
-                "\tif {why} != \"\" && s.{ident} == 0 {{\n\
-                 \t\treturn nil, errors.New(\"{name} <- \" + {why})\n\
-                 \t}}\n",
-                ident = field_pascal(head, config),
-                why = why_var(head),
-                name = head,
-            ));
-        }
-    }
-    if needs_errors {
-        refs.push(import("errors", "errors"));
+        let requires = plan::build_requires(entry, module, &mut r);
+        let text = plan::render(&requires, 1, &r);
+        r.body.push_str(&text);
     }
 
     // Declared validation runs last, over what bespoke left in place.

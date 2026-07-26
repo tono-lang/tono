@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 206
 expression: "render_files(files, &typescript::TsRules, \"ts\", None)"
 ---
 // ==== models.ts ====
@@ -371,9 +370,9 @@ export class Client {
       labelsWhy = "env SERVICE_LABELS: empty";
     }
   }
-    if (s.endpoint === "") {
-      throw new Error("endpoint <- " + (endpointWhy || "no value"));
-    }
+  if (s.endpoint === "") {
+    throw new Error("endpoint <- " + (endpointWhy || "no value"));
+  }
     const violations: Violation[] = [];
     if ([...s.apiKey].length < 1) {
       violations.push({ field: "api_key", constraint: "length", message: "api_key length must be >= 1" });
