@@ -1,5 +1,8 @@
 //! The language-neutral constraint-check model every target reuses to turn a
-//! member's declared `@range`/`@length` constraints into real validation.
+//! member's declared `@range`/`@length` constraints into real validation. A
+//! failed validation surfaces as the taxonomy's Validation category (each
+//! target's `ValidationError` carrying the collected `Violation`s), never as a
+//! bare list disconnected from the closed error model.
 //!
 //! A [`Check`] is one atomic guard over a single field: what is compared (the
 //! value itself, or its length in the unit its type dictates), the comparison
@@ -304,9 +307,10 @@ pub fn validator_body(
 }
 
 /// A free-function validator declaration shared by the targets that spell one that
-/// way (TypeScript, Go): `fn(value: <Ty>) -> Vec<Violation>` over the given body.
+/// way (TypeScript, Go): `fn(value: <Ty>) -> <ret>` over the given body, where
+/// `ret` is the target's spelling of "the Validation category error, or nothing".
 /// Rust instead emits an inherent method, so it builds its own declaration.
-pub fn validator_function(name: String, ty: String, violation: String, body: String) -> Decl {
+pub fn validator_function(name: String, ty: String, ret: TypeExpr, body: String) -> Decl {
     Decl::Function(Function {
         name: Symbol::builtin(name),
         params: vec![Field {
@@ -317,7 +321,7 @@ pub fn validator_function(name: String, ty: String, violation: String, body: Str
             deprecated: None,
             doc: None,
         }],
-        ret: Some(TypeExpr::list(TypeExpr::Ref(Symbol::builtin(violation)))),
+        ret: Some(ret),
         body: FnBody::Raw {
             text: body,
             refs: Vec::new(),

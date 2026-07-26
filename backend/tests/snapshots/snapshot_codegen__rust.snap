@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-expression: out
+expression: "render_files(files, &rust::RustRules, \"rs\", None)"
 ---
 // ==== models.rs ====
 use crate::models_serde::{i64_string, base64_bytes};
@@ -31,6 +31,26 @@ pub struct Account {
     pub counts: Vec<(i32, String)>,
 }
 
+impl Account {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        let mut violations = Vec::new();
+        if self.account_id < 0 {
+            violations.push(Violation { field: "account_id".to_string(), constraint: "range".to_string(), message: "account_id must be >= 0".to_string() });
+        }
+        if self.secret.len() > 64 {
+            violations.push(Violation { field: "secret".to_string(), constraint: "length".to_string(), message: "secret length must be <= 64".to_string() });
+        }
+        if self.counts.len() < 1 {
+            violations.push(Violation { field: "counts".to_string(), constraint: "length".to_string(), message: "counts length must be >= 1".to_string() });
+        }
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationError { violations })
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Status {
     Active,
@@ -58,6 +78,23 @@ pub enum Method {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct CardData {
     pub last4: String,
+}
+
+impl CardData {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        let mut violations = Vec::new();
+        if self.last4.chars().count() < 4 {
+            violations.push(Violation { field: "last4".to_string(), constraint: "length".to_string(), message: "last4 length must be >= 4".to_string() });
+        }
+        if self.last4.chars().count() > 4 {
+            violations.push(Violation { field: "last4".to_string(), constraint: "length".to_string(), message: "last4 length must be <= 4".to_string() });
+        }
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationError { violations })
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

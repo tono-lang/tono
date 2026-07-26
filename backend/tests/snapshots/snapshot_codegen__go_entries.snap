@@ -30,12 +30,15 @@ type Credentials struct {
 	AccountID string `json:"account_id"`
 }
 
-func ValidateCredentials(value Credentials) []Violation {
+func ValidateCredentials(value Credentials) error {
 	violations := []Violation{}
 	if len([]rune(value.Token)) < 1 {
 		violations = append(violations, Violation{Field: "token", Constraint: "length", Message: "token length must be >= 1"})
 	}
-	return violations
+	if len(violations) > 0 {
+		return &ValidationError{Violations: violations}
+	}
+	return nil
 }
 
 type Violation struct {
@@ -314,8 +317,8 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		if err := dec.Decode(&decoded); err != nil {
 			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_CREDENTIALS", err)}
 		}
-		if vs := ValidateCredentials(decoded); len(vs) > 0 {
-			return nil, &ValidationError{Violations: vs}
+		if invalid := ValidateCredentials(decoded); invalid != nil {
+			return nil, invalid
 		}
 		s.Creds = decoded
 		credsWhy = ""

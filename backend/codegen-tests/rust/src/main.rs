@@ -107,5 +107,47 @@ fn main() {
         "an undeclared response must fall back to APIError"
     );
 
+    // Constraint validation: a valid value passes; a violated @range or @length
+    // surfaces as the taxonomy's Validation category carrying one violation per
+    // failed check, in member order.
+    account.validate().expect("a valid account must pass validation");
+    let invalid = Account {
+        account_id: -1,
+        secret: vec![0; 65],
+        tip: None,
+        status: Status::Active,
+        code: HTTPCode::Ok,
+        method: Method::Card(CardData {
+            last4: "4242".into(),
+        }),
+        counts: vec![],
+    };
+    let err = invalid
+        .validate()
+        .expect_err("an out-of-bounds account must fail validation");
+    let constraints: Vec<&str> = err.violations.iter().map(|v| v.constraint.as_str()).collect();
+    assert_eq!(
+        constraints,
+        ["range", "length", "length"],
+        "account_id below @range(min), secret over @length(max) bytes, counts under @length(min) entries"
+    );
+    let rooted = TonoError::Validation(err);
+    assert!(
+        matches!(rooted, TonoError::Validation(_)) && !rooted.retryable(),
+        "a validation failure must be the non-retryable Validation category"
+    );
+
+    // A string @length counts code points, so a short last4 fails with one violation.
+    let err = CardData { last4: "42".into() }
+        .validate()
+        .expect_err("a short last4 must fail");
+    assert_eq!(err.violations.len(), 1);
+    assert_eq!(err.violations[0].constraint, "length");
+    assert_eq!(err.violations[0].field, "last4");
+    assert!(
+        CardData { last4: "𝟜𝟜𝟜𝟜".into() }.validate().is_ok(),
+        "length must count code points, not bytes"
+    );
+
     println!("ROUNDTRIP_OK");
 }

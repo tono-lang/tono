@@ -88,20 +88,25 @@ impl ValSyntax for GoVal {
 }
 
 /// Emit the validator for a structure whose members carry `@range`/`@length`
-/// constraints: a `Validate<Type>(value <Type>) []Violation` that collects one
-/// violation per failed check. It belongs in the types file, in the same package
-/// as the `Violation` record it references. A shape with no lowerable constraint
-/// (or a generic one, unmodeled here) emits nothing.
+/// constraints: a `Validate<Type>(value <Type>) error` that collects one
+/// violation per failed check and returns the taxonomy's Validation category
+/// (`*ValidationError`) when any check fails, nil otherwise. It belongs in the
+/// types file, in the same package as the error types it references. A shape with
+/// no lowerable constraint (or a generic one, unmodeled here) emits nothing.
 pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     let Some(lines) = validation::structure_guard_lines(shape, &GoVal, "value.", config, LANG)
     else {
         return Vec::new();
     };
-    let violation = error_names().violation;
+    let n = error_names();
+    let violation = &n.violation;
     let body = validation::validator_body(
         &lines,
         &format!("\tviolations := []{violation}{{}}\n"),
-        "\treturn violations",
+        &format!(
+            "\tif len(violations) > 0 {{\n\t\treturn &{}{{Violations: violations}}\n\t}}\n\treturn nil",
+            n.validation
+        ),
         |l| {
             format!(
                 "\tif {} {{\n\t\tviolations = append(violations, {violation}{{Field: {:?}, Constraint: {:?}, Message: {:?}}})\n\t}}\n",
@@ -113,7 +118,7 @@ pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     vec![validation::validator_function(
         format!("Validate{ty}"),
         ty.clone(),
-        violation,
+        TypeExpr::Ref(Symbol::builtin("error".to_string())),
         body,
     )]
 }
@@ -155,7 +160,7 @@ mod tests {
             ],
         );
         let out = GoRules::default().render_decl(&emit_validators(&shape, &go_casing())[0]);
-        assert!(out.contains("func ValidateCharge(value Charge) []Violation {"));
+        assert!(out.contains("func ValidateCharge(value Charge) error {"));
         assert!(out.contains("violations := []Violation{}"));
         assert!(out.contains("if value.Amount < 0 {"));
         assert!(out.contains(
@@ -164,7 +169,10 @@ mod tests {
         // A string length counts code points through []rune (no import needed).
         assert!(out.contains("if len([]rune(value.Currency)) < 3 {"));
         assert!(out.contains("if len([]rune(value.Currency)) > 3 {"));
-        assert!(out.contains("return violations"));
+        // A failed validation is the taxonomy's Validation category; a valid value
+        // yields a literal nil (never a typed-nil error).
+        assert!(out.contains("return &ValidationError{Violations: violations}"));
+        assert!(out.contains("return nil"));
     }
 
     #[test]

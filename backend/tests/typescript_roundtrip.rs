@@ -29,7 +29,7 @@ fn tool(ws: &Path, name: &str) -> Option<PathBuf> {
 }
 
 const DRIVER: &str = r#"
-import { Account, APIError, PaymentDeclinedError, RateLimitedError, TonoError } from "./models";
+import { Account, APIError, PaymentDeclinedError, RateLimitedError, TonoError, ValidationError, validateAccount, validateCardData } from "./models";
 import { encodeAccount, decodeAccount, decodeCreateChargeError } from "./models_serde";
 
 const big = 9007199254740993n; // 2^53 + 1, not representable as a JS number
@@ -91,6 +91,31 @@ if (wrongCode instanceof PaymentDeclinedError || !(wrongCode instanceof APIError
 const undeclared = decodeCreateChargeError(500, "not json");
 if (!(undeclared instanceof APIError)) throw new Error("an undeclared response must fall back to APIError");
 if (undeclared.status !== 500 || undeclared.body !== "not json") throw new Error("the fallback must keep the status and raw body");
+
+// Constraint validation: a valid value passes; a violated @range or @length
+// surfaces as the taxonomy's Validation category carrying one violation per
+// failed check, in member order.
+if (validateAccount(account) !== null) throw new Error("a valid account must pass validation");
+const invalid: Account = {
+  accountID: -1n,
+  secret: new Uint8Array(65),
+  status: "active",
+  code: 200,
+  method: { type: "card", last4: "4242" },
+  counts: [],
+};
+const verr = validateAccount(invalid);
+if (!(verr instanceof ValidationError) || !(verr instanceof TonoError)) throw new Error("an out-of-bounds account must fail as the Validation category");
+const kinds = verr.violations.map((v) => v.constraint).join(",");
+if (kinds !== "range,length,length") throw new Error("expected range+length+length violations, got " + kinds);
+if (verr.retryable()) throw new Error("a validation failure must not be retryable");
+
+// A string @length counts code points, so a short last4 fails with one
+// violation while four astral digits (eight UTF-16 units) pass.
+const short = validateCardData({ last4: "42" });
+if (!(short instanceof ValidationError) || short.violations.length !== 1) throw new Error("a short last4 must fail the length constraint");
+if (short.violations[0].constraint !== "length" || short.violations[0].field !== "last4") throw new Error("the violation must name the constraint and field");
+if (validateCardData({ last4: "\u{1D7DC}\u{1D7DC}\u{1D7DC}\u{1D7DC}" }) !== null) throw new Error("length must count code points, not UTF-16 units");
 
 console.log("ROUNDTRIP_OK");
 "#;

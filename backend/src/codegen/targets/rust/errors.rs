@@ -61,6 +61,23 @@ pub fn violation_decl() -> Decl {
     ))
 }
 
+/// The `Validation` category struct a validator returns, carrying its
+/// collected violations.
+fn validation_category_decl() -> Decl {
+    let n = error_names();
+    Decl::raw(format!(
+        "#[derive(Debug)]\npub struct {} {{\n    pub violations: Vec<{}>,\n}}",
+        n.validation, n.violation
+    ))
+}
+
+/// The declarations a validator needs when the module has constraints but no
+/// operations (hence no full taxonomy): the `Violation` record and the
+/// `Validation` category itself.
+pub fn standalone_validation_decls() -> Vec<Decl> {
+    vec![violation_decl(), validation_category_decl()]
+}
+
 /// The closed error taxonomy plus the module's `Api` payload enum. The
 /// category structs are plain data; the `TonoError` enum carries exactly one
 /// variant per category and implements `Display`/`Error` (with the transport
@@ -74,10 +91,7 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
     };
     let mut decls = vec![
         violation_decl(),
-        data_struct(
-            &n.validation,
-            &format!("    pub violations: Vec<{}>,\n", n.violation),
-        ),
+        validation_category_decl(),
         data_struct(
             &n.transport,
             "    pub cause: Box<dyn std::error::Error + Send + Sync>,\n",

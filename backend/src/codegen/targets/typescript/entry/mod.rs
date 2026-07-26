@@ -631,10 +631,9 @@ fn op_method(
         {
             let ty = type_ident_from_id(&shape.id);
             refs.push(module_symbol(&format!("validate{ty}"), module));
-            refs.push(module_symbol(&en.validation, module));
             validate_block = format!(
-                "    const vs = validate{ty}(input);\n    if (vs.length > 0) {{\n      throw new {v}(vs);\n    }}\n",
-                v = en.validation,
+                "    const invalid = validate{ty}(input);\n    if (invalid) {{\n      {t}\n    }}\n",
+                t = throw("invalid".to_string()),
             );
         }
     }

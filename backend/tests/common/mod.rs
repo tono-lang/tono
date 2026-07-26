@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use tono_backend::ir::{
-    EnumBacking, EnumValue, Member, Module, Prim, Shape, ShapeKind, Trait, Tref,
+    Constraint, EnumBacking, EnumValue, Member, Module, Prim, Shape, ShapeKind, Trait, Tref,
 };
 
 /// A bagless enum value with an optional integer discriminant.
@@ -29,6 +29,13 @@ pub fn member(name: &str, target: Tref, required: bool, traits: Vec<Trait>) -> M
         constraints: vec![],
         traits,
     }
+}
+
+/// A member with the given constraints attached, so the harnesses exercise the
+/// generated validators alongside the wire matrix.
+pub fn constrained(mut member: Member, constraints: Vec<Constraint>) -> Member {
+    member.constraints = constraints;
+    member
 }
 
 /// A nominal type reference with no generic arguments.
@@ -62,23 +69,46 @@ pub fn matrix_module() -> Module {
     Module {
         name: "models".into(),
         shapes: vec![
+            // The constraints cover a value range plus every length measure
+            // (bytes, elements here; chars on card_data below), so each harness
+            // exercises the generated validators without changing the wire.
             structure(
                 "models#Account",
                 vec![
-                    member("account_id", Tref::Prim(Prim::I64), true, vec![]),
-                    member("secret", Tref::Prim(Prim::Bytes), true, vec![]),
+                    constrained(
+                        member("account_id", Tref::Prim(Prim::I64), true, vec![]),
+                        vec![Constraint::Range {
+                            min: Some(0.0),
+                            max: None,
+                            excl_min: false,
+                            excl_max: false,
+                        }],
+                    ),
+                    constrained(
+                        member("secret", Tref::Prim(Prim::Bytes), true, vec![]),
+                        vec![Constraint::Length {
+                            min: None,
+                            max: Some(64),
+                        }],
+                    ),
                     member("tip", Tref::Prim(Prim::I64), false, vec![]),
                     member("status", reference("models#Status"), true, vec![]),
                     member("code", reference("models#http_code"), true, vec![]),
                     member("method", reference("models#Method"), true, vec![]),
-                    member(
-                        "counts",
-                        Tref::Map(
-                            Box::new(Tref::Prim(Prim::I32)),
-                            Box::new(Tref::Prim(Prim::String)),
+                    constrained(
+                        member(
+                            "counts",
+                            Tref::Map(
+                                Box::new(Tref::Prim(Prim::I32)),
+                                Box::new(Tref::Prim(Prim::String)),
+                            ),
+                            true,
+                            entries,
                         ),
-                        true,
-                        entries,
+                        vec![Constraint::Length {
+                            min: Some(1),
+                            max: None,
+                        }],
                     ),
                 ],
             ),
@@ -116,7 +146,13 @@ pub fn matrix_module() -> Module {
             },
             structure(
                 "models#card_data",
-                vec![member("last4", Tref::Prim(Prim::String), true, vec![])],
+                vec![constrained(
+                    member("last4", Tref::Prim(Prim::String), true, vec![]),
+                    vec![Constraint::Length {
+                        min: Some(4),
+                        max: Some(4),
+                    }],
+                )],
             ),
             structure(
                 "models#bank_data",

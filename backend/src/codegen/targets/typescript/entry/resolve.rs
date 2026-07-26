@@ -521,10 +521,8 @@ impl Emitter for Resolver<'_, '_> {
             }
         }
         let validate = if validation::shape_has_checks(shape) {
-            let en = error_names();
             format!(
-                "const vs = validate{ty}(decoded);\nif (vs.length > 0) {{\n  throw new {validation}(vs);\n}}\n",
-                validation = en.validation,
+                "const invalid = validate{ty}(decoded);\nif (invalid) {{\n  throw invalid;\n}}\n"
             )
         } else {
             String::new()

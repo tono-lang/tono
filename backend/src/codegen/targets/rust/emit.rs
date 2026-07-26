@@ -65,9 +65,10 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         // on it) even though the Rust construction surface has not landed.
         type_decls.extend(errors::taxonomy_and_declared_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
-        // Constraints without operations still need the `Violation` record a
-        // validator references, which the taxonomy would otherwise have carried.
-        type_decls.push(errors::violation_decl());
+        // Constraints without operations still need the Validation category a
+        // validator returns (`Violation`, `ValidationError`), which the taxonomy
+        // would otherwise have carried.
+        type_decls.extend(errors::standalone_validation_decls());
     }
 
     // The serde file holds the used helper modules, the open enums' impls, and
@@ -159,12 +160,27 @@ mod tests {
     use crate::codegen::render::render_file;
     use crate::codegen::targets::rust::types::rust_casing;
     use crate::codegen::targets::rust::RustRules;
-    use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
+    use crate::codegen::test_support::{
+        constrained_module, enum_shape, member, structure, union_shape,
+    };
     use crate::codegen::Formatter;
     use crate::ir::{Prim, Tref};
 
     fn passthrough() -> Formatter {
         Formatter::new("cat", vec![])
+    }
+
+    #[test]
+    fn constraints_without_operations_still_carry_the_validation_category() {
+        // No operation means no taxonomy, but the validator returns the Validation
+        // category, so its types must still be emitted or the module cannot compile.
+        let types = rendered(&constrained_module(), "");
+        assert!(types.contains("pub struct Violation {"));
+        assert!(types.contains("pub struct ValidationError {"));
+        assert!(types.contains("pub violations: Vec<Violation>,"));
+        assert!(types.contains("pub fn validate(&self) -> Result<(), ValidationError> {"));
+        // Only the category the validator needs, not the rest of the taxonomy.
+        assert!(!types.contains("pub enum TonoError"));
     }
 
     /// Render the text of the file with the given basename suffix ("" types,

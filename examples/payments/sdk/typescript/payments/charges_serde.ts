@@ -232,9 +232,9 @@ export class Client {
   }
 
   async createCharge(input: Charge): Promise<Charge> {
-    const vs = validateCharge(input);
-    if (vs.length > 0) {
-      throw new ValidationError(vs);
+    const invalid = validateCharge(input);
+    if (invalid) {
+      throw invalid;
     }
     const outcome = await execute(
       createChargeDescriptor,

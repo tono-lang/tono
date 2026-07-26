@@ -66,26 +66,50 @@ fn declared_class_name(err: &DeclaredError) -> String {
     format!("{}Error", error_type_name(err))
 }
 
+/// The abstract taxonomy root on its own, so it can anchor the standalone
+/// Validation category as well as the full taxonomy.
+fn root_decl() -> Decl {
+    let n = error_names();
+    Decl::raw(format!(
+        "export abstract class {} extends Error {{\n  retryable(): boolean {{\n    return false;\n  }}\n}}",
+        n.root
+    ))
+}
+
+/// One taxonomy category class extending the root.
+fn category_decl(name: &str, ctor_params: &str, message: &str) -> Decl {
+    let root = error_names().root;
+    Decl::raw(format!(
+        "export class {name} extends {root} {{\n  constructor({ctor_params}) {{\n    super({message});\n    this.name = \"{name}\";\n  }}\n}}"
+    ))
+}
+
+/// The `Validation` category class a validator returns.
+fn validation_category_decl() -> Decl {
+    let n = error_names();
+    category_decl(
+        &n.validation,
+        &format!("readonly violations: {}[]", n.violation),
+        "\"validation failed\"",
+    )
+}
+
+/// The declarations a validator needs when the module has constraints but no
+/// operations (hence no full taxonomy): the root the category descends from,
+/// the `Violation` record, and the `Validation` category itself.
+pub fn standalone_validation_decls() -> Vec<Decl> {
+    vec![root_decl(), violation_decl(), validation_category_decl()]
+}
+
 /// The closed error taxonomy: the abstract root, the `Violation` record, and
 /// the five category classes.
 fn taxonomy_decls() -> Vec<Decl> {
     let n = error_names();
-    let root = &n.root;
-    let category = |name: &str, ctor_params: &str, message: &str| {
-        Decl::raw(format!(
-            "export class {name} extends {root} {{\n  constructor({ctor_params}) {{\n    super({message});\n    this.name = \"{name}\";\n  }}\n}}"
-        ))
-    };
+    let category = category_decl;
     vec![
-        Decl::raw(format!(
-            "export abstract class {root} extends Error {{\n  retryable(): boolean {{\n    return false;\n  }}\n}}"
-        )),
+        root_decl(),
         violation_decl(),
-        category(
-            &n.validation,
-            &format!("readonly violations: {}[]", n.violation),
-            "\"validation failed\"",
-        ),
+        validation_category_decl(),
         category(
             &n.transport,
             "readonly cause: unknown",

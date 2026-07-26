@@ -128,8 +128,8 @@ fn structured_sources_decode_strictly_with_context() {
     assert!(out.contains("if (!(\"token\" in parsed) || record[\"token\"] === null) {"));
     assert!(out.contains("unknown field ${key}"));
     assert!(out.contains("const decoded = decodeCredentials(parsed);"));
-    assert!(out.contains("const vs = validateCredentials(decoded);"));
-    assert!(out.contains("throw new ValidationError(vs);"));
+    assert!(out.contains("const invalid = validateCredentials(decoded);"));
+    assert!(out.contains("throw invalid;"));
     // Required members are checked before unknown fields (Go's order), and
     // scalar wire types are checked so a mistyped member fails the same
     // way the typed Go decode does.
@@ -255,9 +255,10 @@ fn a_constrained_op_input_is_validated_before_transport() {
         }
     }
     let out = text(&module);
-    // The input is validated and a violation surfaces as a ValidationError.
-    assert!(out.contains("const vs = validateNote(input);"));
-    assert!(out.contains("throw new ValidationError(vs);"));
+    // The input is validated and a violation surfaces as the Validation category
+    // the validator itself returns.
+    assert!(out.contains("const invalid = validateNote(input);"));
+    assert!(out.contains("throw invalid;"));
     // The check runs before the transport call, not after.
     let val = out.find("validateNote(input)").expect("validate call");
     let exec = out.find("await execute(").expect("execute call");

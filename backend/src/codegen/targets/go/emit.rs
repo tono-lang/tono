@@ -113,9 +113,10 @@ pub fn emit_module(
         type_decls.extend(errors::taxonomy_and_declared_decls(module));
         type_decls.extend(crate::codegen::targets::go::client::wrapper_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
-        // Constraints without operations still need the `Violation` record a
-        // validator references, which the taxonomy would otherwise have carried.
-        type_decls.push(errors::violation_decl());
+        // Constraints without operations still need the Validation category a
+        // validator returns (`Violation`, `ValidationError`), which the taxonomy
+        // would otherwise have carried.
+        type_decls.extend(errors::standalone_validation_decls());
     }
     if module_has_entries {
         type_decls.extend(crate::codegen::targets::go::entry::type_decls(
@@ -183,6 +184,22 @@ mod tests {
             .find(|f| f.suffix == suffix)
             .unwrap_or_else(|| panic!("module did not emit a {suffix:?} file"));
         render_file(&mf.file, &GoRules::default(), &passthrough()).text
+    }
+
+    #[test]
+    fn constraints_without_operations_still_carry_the_validation_category() {
+        // No operation means no taxonomy, but the validator returns the Validation
+        // category, so its types must still be emitted or the package cannot compile.
+        let module = crate::codegen::test_support::constrained_module();
+        let types = rendered(&emit_module(&module, &go_casing(), &union_ids(&module)), "");
+        assert!(types.contains("type Violation struct {"));
+        assert!(types.contains("type ValidationError struct {"));
+        assert!(types.contains("func (e *ValidationError) Error() string"));
+        // The category stays inside the sealed taxonomy a bound hook matches on.
+        assert!(types.contains("func (e *ValidationError) sdkError() {}"));
+        assert!(types.contains("func ValidateCharge(value Charge) error {"));
+        // Only the category the validator needs, not the rest of the taxonomy.
+        assert!(!types.contains("type TransportError struct"));
     }
 
     #[test]

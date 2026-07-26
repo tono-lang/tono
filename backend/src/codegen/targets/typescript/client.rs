@@ -290,6 +290,15 @@ fn op_method(
     let name = method_ident(op, config, LANG);
     let (input, output) = op_io(op);
 
+    // A bound `on_error` intercepts every thrown error before it leaves the SDK.
+    let throw = |expr: String| {
+        if life.on_error {
+            format!("throw {}({expr});", wrapper_name("on_error"))
+        } else {
+            format!("throw {expr};")
+        }
+    };
+
     let (param, input_expr) = match input {
         Some(t) => {
             let ty = render_type(&type_expr_of(t), &TsRules);
@@ -302,20 +311,33 @@ fn op_method(
         None => (String::new(), "{}".to_string()),
     };
 
+    // An input whose shape carries lowerable constraints is rejected before it
+    // reaches the transport: the generated validator runs first and its
+    // ValidationError is raised like every other taxonomy error (through
+    // `on_error` when bound).
+    let validate_stmt = match input {
+        Some(Tref::Ref { id, .. }) => module
+            .shapes
+            .iter()
+            .find(|s| s.id == *id)
+            .filter(|s| crate::codegen::validation::shape_has_checks(s))
+            .map(|_| {
+                let input_name = type_ident_from_id(id);
+                refs.push(module_symbol(&format!("validate{input_name}"), module));
+                format!(
+                    "\x20   const invalid = validate{input_name}(input);\n\x20   if (invalid) {{\n\x20     {}\n\x20   }}\n",
+                    throw("invalid".to_string())
+                )
+            })
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+
     let ret = output
         .map(|t| render_type(&type_expr_of(t), &TsRules))
         .unwrap_or_else(|| "void".to_string());
 
     let desc_const = format!("{name}Descriptor");
-
-    // A bound `on_error` intercepts every thrown error before it leaves the SDK.
-    let throw = |expr: String| {
-        if life.on_error {
-            format!("throw {}({expr});", wrapper_name("on_error"))
-        } else {
-            format!("throw {expr};")
-        }
-    };
 
     // Non-2xx mapping: the generated discriminator when the op declares errors,
     // otherwise the generic fallback.
@@ -356,6 +378,7 @@ fn op_method(
 
     format!(
         "  async {name}({param}): Promise<{ret}> {{\n\
+         {validate_stmt}\
          \x20   const outcome = await execute({desc_const}, {input_expr}, this.options{hooks_arg});\n\
          \x20   if (outcome.outcome === \"transport\") {{\n\
          \x20     {transport_throw}\n\
@@ -535,6 +558,70 @@ mod tests {
             embed(&descriptor)
         )));
         assert!(out.contains("mystery_field"));
+    }
+
+    #[test]
+    fn a_constrained_input_is_validated_before_the_transport() {
+        use crate::codegen::test_support::member_constrained;
+        let mut module = http_module(json!({"http_method": "POST", "uri": "/charges"}));
+        module.shapes[0] = structure(
+            "m#charge_input",
+            vec![member_constrained(
+                "amount",
+                Tref::Prim(Prim::I64),
+                vec![crate::ir::Constraint::Range {
+                    min: Some(0.0),
+                    max: None,
+                    excl_min: false,
+                    excl_max: false,
+                }],
+            )],
+        );
+        let out = client_text(&module);
+        // The generated validator runs first and its ValidationError is raised
+        // like every other taxonomy error, before anything reaches the transport.
+        assert!(out.contains("const invalid = validateChargeInput(input);"));
+        assert!(out.contains("throw invalid;"));
+        let validate_at = out
+            .find("const invalid = validateChargeInput(input);")
+            .expect("validate call");
+        let execute_at = out
+            .find("await execute(createChargeDescriptor")
+            .expect("execute call");
+        assert!(
+            validate_at < execute_at,
+            "validation must precede the transport call"
+        );
+    }
+
+    #[test]
+    fn an_unconstrained_input_skips_validation() {
+        let out = client_text(&http_module(
+            json!({"http_method": "POST", "uri": "/charges"}),
+        ));
+        assert!(!out.contains("validateChargeInput"));
+    }
+
+    #[test]
+    fn a_bound_on_error_routes_the_validation_rejection() {
+        use crate::codegen::test_support::member_constrained;
+        let mut module = http_module(json!({"http_method": "POST", "uri": "/charges"}));
+        module.shapes[0] = structure(
+            "m#charge_input",
+            vec![member_constrained(
+                "amount",
+                Tref::Prim(Prim::I64),
+                vec![crate::ir::Constraint::Range {
+                    min: Some(0.0),
+                    max: None,
+                    excl_min: false,
+                    excl_max: false,
+                }],
+            )],
+        );
+        module.extensions = vec![hook("on_error", "ext/ts/errors.ts#mapError")];
+        let out = client_text(&module);
+        assert!(out.contains("throw wrapOnError(invalid);"));
     }
 
     #[test]

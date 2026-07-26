@@ -30,7 +30,7 @@ type Charge struct {
 	Method   common.PaymentMethod `json:"method"`
 }
 
-func ValidateCharge(value Charge) []Violation {
+func ValidateCharge(value Charge) error {
 	violations := []Violation{}
 	if value.Amount < 0 {
 		violations = append(violations, Violation{Field: "amount", Constraint: "range", Message: "amount must be >= 0"})
@@ -41,7 +41,10 @@ func ValidateCharge(value Charge) []Violation {
 	if len([]rune(value.Currency)) > 3 {
 		violations = append(violations, Violation{Field: "currency", Constraint: "length", Message: "currency length must be <= 3"})
 	}
-	return violations
+	if len(violations) > 0 {
+		return &ValidationError{Violations: violations}
+	}
+	return nil
 }
 
 type HTTPCode int

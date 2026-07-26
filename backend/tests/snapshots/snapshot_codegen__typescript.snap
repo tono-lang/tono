@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 81
 expression: "render_files(files, &typescript::TsRules, \"ts\", None)"
 ---
 // ==== models.ts ====
@@ -20,6 +19,20 @@ export interface Account {
   counts: [number, string][];
 }
 
+export function validateAccount(value: Account): ValidationError | null {
+  const violations: Violation[] = [];
+  if (value.accountID < 0n) {
+    violations.push({ field: "account_id", constraint: "range", message: "account_id must be >= 0" });
+  }
+  if (value.secret.length > 64) {
+    violations.push({ field: "secret", constraint: "length", message: "secret length must be <= 64" });
+  }
+  if (value.counts.length < 1) {
+    violations.push({ field: "counts", constraint: "length", message: "counts length must be >= 1" });
+  }
+  return violations.length > 0 ? new ValidationError(violations) : null;
+}
+
 export type Status = "active" | "closed" | (string & {});
 
 export type HTTPCode = 200 | 404 | 500 | (number & {});
@@ -28,6 +41,17 @@ export type Method = ({ type: "card" } & CardData) | ({ type: "bank" } & BankDat
 
 export interface CardData {
   last4: string;
+}
+
+export function validateCardData(value: CardData): ValidationError | null {
+  const violations: Violation[] = [];
+  if ([...value.last4].length < 4) {
+    violations.push({ field: "last4", constraint: "length", message: "last4 length must be >= 4" });
+  }
+  if ([...value.last4].length > 4) {
+    violations.push({ field: "last4", constraint: "length", message: "last4 length must be <= 4" });
+  }
+  return violations.length > 0 ? new ValidationError(violations) : null;
 }
 
 export interface BankData {

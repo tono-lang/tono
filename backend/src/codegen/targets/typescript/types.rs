@@ -93,20 +93,24 @@ impl ValSyntax for TsVal {
 }
 
 /// Emit the validator for a structure whose members carry `@range`/`@length`
-/// constraints: a `validate<Type>(value: <Type>): Violation[]` that collects one
-/// violation per failed check. It belongs in the types file, next to the interface
-/// and the `Violation` record it references. A shape with no lowerable constraint
-/// (or a generic one, unmodeled here) emits nothing.
+/// constraints: a `validate<Type>(value: <Type>): ValidationError | null` that
+/// collects one violation per failed check and returns the taxonomy's Validation
+/// category when any check fails. It belongs in the types file, next to the
+/// interface and the error classes it references. A shape with no lowerable
+/// constraint (or a generic one, unmodeled here) emits nothing.
 pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     let Some(lines) = validation::structure_guard_lines(shape, &TsVal, "value.", config, LANG)
     else {
         return Vec::new();
     };
-    let violation = error_names().violation;
+    let n = error_names();
     let body = validation::validator_body(
         &lines,
-        &format!("  const violations: {violation}[] = [];\n"),
-        "  return violations;",
+        &format!("  const violations: {}[] = [];\n", n.violation),
+        &format!(
+            "  return violations.length > 0 ? new {}(violations) : null;",
+            n.validation
+        ),
         |l| {
             format!(
                 "  if ({}) {{\n    violations.push({{ field: {:?}, constraint: {:?}, message: {:?} }});\n  }}\n",
@@ -118,7 +122,7 @@ pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     vec![validation::validator_function(
         format!("validate{ty}"),
         ty.clone(),
-        violation,
+        TypeExpr::nullable(TypeExpr::Ref(Symbol::builtin(n.validation))),
         body,
     )]
 }
@@ -160,7 +164,9 @@ mod tests {
             ],
         );
         let out = TsRules.render_decl(&emit_validators(&shape, &ts_casing())[0]);
-        assert!(out.contains("export function validateCharge(value: Charge): Violation[] {"));
+        assert!(
+            out.contains("export function validateCharge(value: Charge): ValidationError | null {")
+        );
         assert!(out.contains("const violations: Violation[] = [];"));
         // An i64 is a bigint, so the bound carries the `n` suffix.
         assert!(out.contains("if (value.amount < 0n) {"));
@@ -170,7 +176,10 @@ mod tests {
         // A string length counts code points via spread.
         assert!(out.contains("if ([...value.currency].length < 3) {"));
         assert!(out.contains("if ([...value.currency].length > 3) {"));
-        assert!(out.contains("return violations;"));
+        // A failed validation is the taxonomy's Validation category, not a bare list.
+        assert!(
+            out.contains("return violations.length > 0 ? new ValidationError(violations) : null;")
+        );
     }
 
     #[test]

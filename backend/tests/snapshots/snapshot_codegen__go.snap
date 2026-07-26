@@ -30,6 +30,23 @@ type Account struct {
 	Counts Entries[int32, string] `json:"counts"`
 }
 
+func ValidateAccount(value Account) error {
+	violations := []Violation{}
+	if value.AccountID < 0 {
+		violations = append(violations, Violation{Field: "account_id", Constraint: "range", Message: "account_id must be >= 0"})
+	}
+	if len(value.Secret) > 64 {
+		violations = append(violations, Violation{Field: "secret", Constraint: "length", Message: "secret length must be <= 64"})
+	}
+	if len(value.Counts) < 1 {
+		violations = append(violations, Violation{Field: "counts", Constraint: "length", Message: "counts length must be >= 1"})
+	}
+	if len(violations) > 0 {
+		return &ValidationError{Violations: violations}
+	}
+	return nil
+}
+
 type Status string
 
 const (
@@ -58,6 +75,20 @@ func (MethodBank) isMethod() {}
 
 type CardData struct {
 	Last4 string `json:"last4"`
+}
+
+func ValidateCardData(value CardData) error {
+	violations := []Violation{}
+	if len([]rune(value.Last4)) < 4 {
+		violations = append(violations, Violation{Field: "last4", Constraint: "length", Message: "last4 length must be >= 4"})
+	}
+	if len([]rune(value.Last4)) > 4 {
+		violations = append(violations, Violation{Field: "last4", Constraint: "length", Message: "last4 length must be <= 4"})
+	}
+	if len(violations) > 0 {
+		return &ValidationError{Violations: violations}
+	}
+	return nil
 }
 
 type BankData struct {
