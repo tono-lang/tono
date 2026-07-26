@@ -23,30 +23,8 @@ pub(super) struct Resolver<'a, 'b> {
 }
 
 impl Resolver<'_, '_> {
-    fn guaranteed(&self, name: &str) -> bool {
-        self.entry.field_guaranteed(name)
-    }
-
     fn with_access(&self, field: &EntryField) -> String {
         format!("config.{}", field_camel(&field.name, self.config))
-    }
-
-    /// The prereq guard when the env variable's own name comes from a sibling
-    /// field that may itself be absent; the env step chains onto its `else`.
-    fn env_name_prereq(&self, name: &EnvName, why: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        format!(
-            "if ({head_why} !== \"\") {{\n  {why} = \"{head} <- \" + {head_why};\n}} else ",
-            head_why = why_var(head),
-        )
     }
 
     /// Parse a raw env string `v` into the destination, by the declared type; a
@@ -234,6 +212,13 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
+    fn name_prereq_line(&self, head: &str, why: &str) -> String {
+        format!(
+            "if ({head_why} !== \"\") {{\n  {why} = \"{head} <- \" + {head_why};\n}} else ",
+            head_why = why_var(head),
+        )
+    }
+
     /// The env presence step of a non-guaranteed chain: `{ const v = lookup; if
     /// (v !== undefined) { parse } else { miss } }`, prefixed by the name
     /// prereq when the variable name is itself a non-guaranteed sibling.
@@ -247,7 +232,8 @@ impl Emitter for Resolver<'_, '_> {
         let lookup = self.env_lookup(name);
         let label = self.env_label(name);
         let miss = self.env_miss_reason(name);
-        let pre = self.env_name_prereq(name, why);
+        let entry = self.entry;
+        let pre = plan::env_name_prereq(name, why, entry, self);
         let parse = self.env_parse(field, dest, &label);
         format!(
             "{pre}{{\n  const v = {lookup};\n  if (v !== undefined) {{\n{parse}\n    {why} = \"\";\n  }} else {{\n    {why} = {miss};\n  }}\n}}",

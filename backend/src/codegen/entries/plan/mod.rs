@@ -16,7 +16,7 @@ use crate::ir::{ArmValue, EntryField, EnvName, Module, Prim, Shape, Source, Temp
 use super::{source_stub, EntryModel};
 
 mod build;
-pub use build::{build_field, build_requires, presence_kind, Presence};
+pub use build::{build_field, build_requires, env_name_prereq, presence_kind, Presence};
 
 /// Render every entry field's resolution plan, in dependency order, into one
 /// block of target source (each field indented one level).
@@ -257,6 +257,10 @@ pub trait Emitter {
         dest: &str,
         why: &str,
     ) -> String;
+    /// The opened guard an env step chains onto when the variable's own name is
+    /// a still-deferred sibling `head` (`if headWhy != "" { .. } else `); the
+    /// scaffold that decides when it is needed lives in [`env_name_prereq`].
+    fn name_prereq_line(&self, head: &str, why: &str) -> String;
 
     // --- the whole-construct bodies that already differ per target (a
     //     guaranteed chain diverges algorithmically: Go emits an if/else-if

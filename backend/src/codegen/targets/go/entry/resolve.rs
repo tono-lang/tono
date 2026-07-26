@@ -25,29 +25,6 @@ impl Resolver<'_, '_> {
         self.refs.push(import(name, module));
     }
 
-    fn guaranteed(&self, name: &str) -> bool {
-        self.entry.field_guaranteed(name)
-    }
-
-    /// The prereq guard when the env variable's own name comes from a sibling
-    /// field that may itself be absent. Returns the opened guard text (the env
-    /// step closes it), or empty when the name is guaranteed.
-    fn env_name_prereq(&self, name: &EnvName, why: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        format!(
-            "if {head_why} != \"\" {{\n\t{why} = \"{head} <- \" + {head_why}\n}} else ",
-            head_why = why_var(head),
-        )
-    }
-
     /// [`as_string`] plus the fmt import its non-string spelling needs.
     fn as_string_expr(&mut self, expr: &str, t: &Tref) -> String {
         if as_string_needs_fmt(t) {
@@ -249,6 +226,13 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
+    fn name_prereq_line(&self, head: &str, why: &str) -> String {
+        format!(
+            "if {head_why} != \"\" {{\n\t{why} = \"{head} <- \" + {head_why}\n}} else ",
+            head_why = why_var(head),
+        )
+    }
+
     /// The env presence step: `if v, ok := lookup; ok && v != "" { parse } else
     /// { miss }`, prefixed by the name prereq when the variable name is itself a
     /// non-guaranteed sibling. Relative to column zero.
@@ -262,7 +246,8 @@ impl Emitter for Resolver<'_, '_> {
         let lookup = self.env_lookup(name);
         let label = self.env_label(name);
         let miss = self.env_miss_reason(name);
-        let pre = self.env_name_prereq(name, why);
+        let entry = self.entry;
+        let pre = plan::env_name_prereq(name, why, entry, self);
         let parse = self.env_parse(field, dest, &label);
         format!(
             "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t{why} = \"\"\n}} else {{\n\t{why} = {miss}\n}}",
