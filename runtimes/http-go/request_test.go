@@ -347,3 +347,32 @@ func TestDeclaredHeadersEmptyDeclaration(t *testing.T) {
 		t.Fatalf("no declaration must yield nil: %+v", got)
 	}
 }
+
+func TestHeaderLayersOverrideAcrossCasings(t *testing.T) {
+	d := desc(func(d *WireDescriptor) {
+		d.Bindings = []Binding{binding("trace", "header", "x-trace")}
+		d.RequestHeaders = []RequestHeader{
+			{Key: []TemplatePart{tpLit("Authorization")}, Value: ValueExpr{Lit: "declared"}},
+			{Key: []TemplatePart{tpLit("X-Trace")}, Value: ValueExpr{Lit: "declared"}},
+		}
+	})
+	// The bespoke base header wins over the declared one even under a
+	// different casing, and the per-call binding wins over both.
+	base := map[string]string{"authorization": "Bearer bespoke"}
+	headers := buildHeaders(d, map[string]any{"trace": "t1"}, base, nil)
+	if _, ok := headers["Authorization"]; ok {
+		t.Fatalf("declared casing must not survive the bespoke override: %+v", headers)
+	}
+	if headers["authorization"] != "Bearer bespoke" {
+		t.Fatalf("bespoke header lost: %+v", headers)
+	}
+	if _, ok := headers["X-Trace"]; ok {
+		t.Fatalf("declared casing must not survive the binding override: %+v", headers)
+	}
+	if headers["x-trace"] != "t1" {
+		t.Fatalf("binding header lost: %+v", headers)
+	}
+	if len(headers) != 2 {
+		t.Fatalf("unexpected headers: %+v", headers)
+	}
+}

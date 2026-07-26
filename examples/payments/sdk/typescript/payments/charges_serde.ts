@@ -151,7 +151,7 @@ export class Client {
     const s: Settings = {
       apiKey: "",
       endpoint: "",
-      timeout: "" as unknown as Duration,
+      timeout: "" as Duration,
       maxRetries: 0,
       headers: {},
     };
@@ -168,7 +168,7 @@ export class Client {
       s.endpoint = "https://api.payments.example.com";
     }
     let timeoutSet = false;
-    if (config.timeout !== undefined) {
+    if (!timeoutSet && config.timeout !== undefined) {
       s.timeout = config.timeout;
       timeoutSet = true;
     }
@@ -176,7 +176,7 @@ export class Client {
       s.timeout = "10s" as Duration;
     }
     let maxRetriesSet = false;
-    if (config.maxRetries !== undefined) {
+    if (!maxRetriesSet && config.maxRetries !== undefined) {
       s.maxRetries = config.maxRetries;
       maxRetriesSet = true;
     }
@@ -283,7 +283,9 @@ function durationToMs(v: string): number {
   if (rest === "0") {
     return 0;
   }
-  const re = /(\d+(?:\.\d+)?)(ns|us|\u00b5s|ms|s|m|h)/gy;
+  // The number grammar matches Go's: digits, digits.digits,
+  // trailing-dot ("1.s") and leading-dot (".5s") forms.
+  const re = /(\d+(?:\.\d*)?|\.\d+)(ns|us|\u00b5s|ms|s|m|h)/gy;
   const unit: Record<string, number> = {
     ns: 1e-6,
     us: 1e-3,

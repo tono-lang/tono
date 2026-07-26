@@ -61,7 +61,7 @@ var createChargeDescriptor = mustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"
 // declared sources resolved top-down, client_init on top (bespoke wins),
 // then the declared validation.
 func New(apiKey string, opts ...ClientOption) (*Client, error) {
-	w := clientWiths{}
+	w := clientOptions{}
 	for _, opt := range opts {
 		opt(&w)
 	}

@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 139
+assertion_line: 206
 expression: "render_files(files, &typescript::TsRules, \"ts\", None)"
 ---
 // ==== models.ts ====
@@ -17,6 +17,19 @@ export interface Note {
 
 export interface Overloaded {
   message: string;
+}
+
+export interface Credentials {
+  token: string;
+  accountID: string;
+}
+
+export function validateCredentials(value: Credentials): Violation[] {
+  const violations: Violation[] = [];
+  if ([...value.token].length < 1) {
+    violations.push({ field: "token", constraint: "length", message: "token length must be >= 1" });
+  }
+  return violations;
 }
 
 export abstract class TonoError extends Error {
@@ -78,7 +91,7 @@ export class OverloadedError extends APIError {
 
 // ==== models_serde.ts ====
 import { CanonicalTransport, ClientOptions, WireDescriptor, execute } from "@tono/http-runtime-ts";
-import { APIError, DecodeError, Duration, Note, Overloaded, OverloadedError, TonoError, TransportError, ValidationError, Violation } from "./notes";
+import { APIError, Credentials, DecodeError, Duration, Note, Overloaded, OverloadedError, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./notes";
 
 export function encodeI64(v: bigint): string {
   return v.toString();
@@ -122,6 +135,20 @@ export function decodeOverloaded(raw: any): Overloaded {
   };
 }
 
+export function encodeCredentials(value: Credentials): unknown {
+  return {
+    token: value.token,
+    account_id: value.accountID,
+  };
+}
+
+export function decodeCredentials(raw: any): Credentials {
+  return {
+    token: raw.token,
+    accountID: raw.account_id,
+  };
+}
+
 // Conf is a construction-only composition of the entry surface; it
 // never crosses the wire.
 export interface Conf {
@@ -147,6 +174,8 @@ export interface Settings {
   timeout: Duration;
   maxRetries: number;
   settings: Conf;
+  creds: Credentials;
+  labels: Record<string, string>;
   fetch?: typeof fetch;
   transport?: CanonicalTransport;
   headers: Record<string, string>;
@@ -169,10 +198,10 @@ export class Client {
   readonly settings: Settings;
   private readonly options: ClientOptions;
   constructor(apiKey: string, config: ClientConfig = {}) {
-    const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as unknown as Duration, maxRetries: 0, settings: "" as unknown as Conf, headers: {} };
+    const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, headers: {} };
     s.apiKey = apiKey;
     let clientNameSet = false;
-    if (config.clientName !== undefined) {
+    if (!clientNameSet && config.clientName !== undefined) {
       s.clientName = config.clientName;
       clientNameSet = true;
     }
@@ -245,7 +274,7 @@ export class Client {
       }
     }
     let timeoutSet = false;
-    if (config.timeout !== undefined) {
+    if (!timeoutSet && config.timeout !== undefined) {
       s.timeout = config.timeout;
       timeoutSet = true;
     }
@@ -253,7 +282,7 @@ export class Client {
       s.timeout = "10s" as Duration;
     }
     let maxRetriesSet = false;
-    if (config.maxRetries !== undefined) {
+    if (!maxRetriesSet && config.maxRetries !== undefined) {
       s.maxRetries = config.maxRetries;
       maxRetriesSet = true;
     }
@@ -276,6 +305,62 @@ export class Client {
       }
       s.settings = composed;
     }
+    let credsWhy = "no source";
+    if (credsWhy !== "") {
+      const raw = readEnv("SERVICE_CREDENTIALS");
+      if (raw !== undefined) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (e) {
+          throw new Error(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
+        }
+        if (typeof parsed !== "object" || parsed === null) {
+          throw new Error(`${"SERVICE_CREDENTIALS"}: expected an object`);
+        }
+        const record = parsed as Record<string, unknown>;
+        if (!("token" in parsed)) {
+          throw new Error(`${"SERVICE_CREDENTIALS"}: missing field token`);
+        }
+        if (!("account_id" in parsed)) {
+          throw new Error(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
+        }
+        for (const key of Object.keys(parsed)) {
+          if (!["token", "account_id"].includes(key)) {
+            throw new Error(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
+          }
+        }
+        if ("token" in parsed && typeof record["token"] !== "string") {
+          throw new Error(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
+        }
+        if ("account_id" in parsed && typeof record["account_id"] !== "string") {
+          throw new Error(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
+        }
+        const decoded = decodeCredentials(parsed);
+        const vs = validateCredentials(decoded);
+        if (vs.length > 0) {
+          throw new ValidationError(vs);
+        }
+        s.creds = decoded;
+        credsWhy = "";
+      } else {
+        credsWhy = "env SERVICE_CREDENTIALS: empty";
+      }
+    }
+    let labelsWhy = "no source";
+    if (labelsWhy !== "") {
+      const raw = readEnv("SERVICE_LABELS");
+      if (raw !== undefined) {
+        try {
+          s.labels = JSON.parse(raw) as Record<string, string>;
+        } catch (e) {
+          throw new Error(`${"SERVICE_LABELS"}: ${String(e)}`);
+        }
+        labelsWhy = "";
+      } else {
+        labelsWhy = "env SERVICE_LABELS: empty";
+      }
+    }
     if (s.endpoint === "") {
       throw new Error("endpoint <- " + (endpointWhy || "no value"));
     }
@@ -292,13 +377,13 @@ export class Client {
     values["client_key"] = s.clientKey;
     values["endpoint_env"] = s.endpointEnv;
     values["endpoint_version"] = s.endpointVersion;
-    if (endpointV1Why === "") {
+    if (s.endpointV1 !== "") {
       values["endpoint_v1"] = s.endpointV1;
     }
-    if (endpointV2Why === "") {
+    if (s.endpointV2 !== "") {
       values["endpoint_v2"] = s.endpointV2;
     }
-    if (endpointWhy === "") {
+    if (s.endpoint !== "") {
       values["endpoint"] = s.endpoint;
     }
     try {
@@ -307,8 +392,18 @@ export class Client {
       throw new Error(`timeout: invalid duration ${JSON.stringify(String(s.timeout))}`);
     }
     values["max_retries"] = s.maxRetries;
-    values["settings.api_key"] = s.settings.apiKey;
-    values["settings.region"] = s.settings.region;
+    if (s.settings.apiKey !== "") {
+      values["settings.api_key"] = s.settings.apiKey;
+    }
+    if (s.settings.region !== "") {
+      values["settings.region"] = s.settings.region;
+    }
+    if (s.creds.token !== "") {
+      values["creds.token"] = s.creds.token;
+    }
+    if (s.creds.accountID !== "") {
+      values["creds.account_id"] = s.creds.accountID;
+    }
     this.settings = s;
     this.options = { baseUrl: "", fetch: s.fetch, transport: s.transport, headers: s.headers, values };
   }
@@ -368,7 +463,9 @@ function durationToMs(v: string): number {
   if (rest === "0") {
     return 0;
   }
-  const re = /(\d+(?:\.\d+)?)(ns|us|\u00b5s|ms|s|m|h)/gy;
+  // The number grammar matches Go's: digits, digits.digits,
+  // trailing-dot ("1.s") and leading-dot (".5s") forms.
+  const re = /(\d+(?:\.\d*)?|\.\d+)(ns|us|\u00b5s|ms|s|m|h)/gy;
   const unit: Record<string, number> = { ns: 1e-6, us: 1e-3, "\u00b5s": 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };
   let total = 0;
   let consumed = 0;

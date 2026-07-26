@@ -138,21 +138,21 @@ type Settings struct {
 }
 
 // ClientOption configures an optional (@with) construction value of Client.
-type ClientOption func(*clientWiths)
+type ClientOption func(*clientOptions)
 
-type clientWiths struct {
+type clientOptions struct {
 	timeout    *Duration
 	maxRetries *int32
 }
 
 // WithTimeout sets the timeout construction value.
 func WithTimeout(v Duration) ClientOption {
-	return func(w *clientWiths) { w.timeout = &v }
+	return func(w *clientOptions) { w.timeout = &v }
 }
 
 // WithMaxRetries sets the max_retries construction value.
 func WithMaxRetries(v int32) ClientOption {
-	return func(w *clientWiths) { w.maxRetries = &v }
+	return func(w *clientOptions) { w.maxRetries = &v }
 }
 
 // The payments SDK entry: the construction surface and its operations.

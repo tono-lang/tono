@@ -264,3 +264,26 @@ describe("the declared request headers", () => {
     expect(saw?.headers["Authorization"]).toBe("Bearer t0");
   });
 });
+
+describe("header layering across casings", () => {
+  it("lets a bespoke or per-call header override a declared one under any casing", async () => {
+    const { calls, fetchImpl } = recorder();
+    await execute(
+      descriptor({
+        bindings: [["trace", { kind: "header", name: "x-trace" }]],
+        request_headers: [
+          [[{ lit: "Authorization" }], { lit: "declared" }],
+          [[{ lit: "X-Trace" }], { lit: "declared" }],
+        ],
+      }),
+      { trace: "t1" },
+      { baseUrl: "https://b.test", fetch: fetchImpl, headers: { authorization: "Bearer bespoke" } },
+    );
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["authorization"]).toBe("Bearer bespoke");
+    expect("Authorization" in headers).toBe(false);
+    expect(headers["x-trace"]).toBe("t1");
+    expect("X-Trace" in headers).toBe(false);
+    expect(Object.keys(headers).length).toBe(2);
+  });
+});

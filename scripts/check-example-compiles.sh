@@ -89,10 +89,11 @@ func main() {
 EOF
 # The generated entry client drives the hand-written Go HTTP runtime; the
 # throwaway module resolves it from this repo, the way a consumer pins it.
+# tidy keeps stderr so a resolution failure names its cause.
 (cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 \
     && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
     && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
-    && go mod tidy >/dev/null 2>&1 \
+    && go mod tidy >/dev/null \
     && go build ./... && go run ./verify)
 
 echo "typescript..."
@@ -122,4 +123,33 @@ cat >"$work/ts/tsconfig.json" <<EOF
 EOF
 (cd "$work/ts" && "$tsc" -p tsconfig.json)
 
-echo "all three generated SDKs compile"
+echo "auth-bearer (typescript)..."
+# The recipe is source only, so its Settings bridge only exists after a
+# regeneration; this is its compile gate: frontend -> gen -> hook -> tsc.
+frontend="$root/_build/default/frontend/bin/tono_frontend.exe"
+if [ ! -x "$frontend" ]; then
+    (cd "$root" && opam exec -- dune build frontend/bin/tono_frontend.exe)
+fi
+mkdir -p "$work/auth"
+"$frontend" compile "$root/examples/auth-bearer/auth.tono" --module auth >"$work/auth/ir.json"
+"$root/target/debug/tono" gen --target typescript --out "$work/auth/out" "$work/auth/ir.json"
+cp -R "$root/examples/auth-bearer/ext" "$work/auth/out/typescript/"
+cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2020",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM"],
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
+  },
+  "include": ["**/*.ts"]
+}
+EOF
+(cd "$work/auth/out/typescript" && "$tsc" -p tsconfig.json)
+
+echo "all generated SDKs compile"

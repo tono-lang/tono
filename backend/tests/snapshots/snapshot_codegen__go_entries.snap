@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 129
+assertion_line: 196
 expression: "render_files(files, &go::GoRules::default(), \"go\", Some(&header))"
 ---
 // ==== models.go ====
@@ -24,6 +24,19 @@ type Note struct {
 
 type Overloaded struct {
 	Message string `json:"message"`
+}
+
+type Credentials struct {
+	Token string `json:"token"`
+	AccountID string `json:"account_id"`
+}
+
+func ValidateCredentials(value Credentials) []Violation {
+	violations := []Violation{}
+	if len([]rune(value.Token)) < 1 {
+		violations = append(violations, Violation{Field: "token", Constraint: "length", Message: "token length must be >= 1"})
+	}
+	return violations
 }
 
 type Violation struct {
@@ -99,6 +112,8 @@ type Settings struct {
 	Timeout Duration
 	MaxRetries int32
 	Settings Conf
+	Creds Credentials
+	Labels map[string]string
 
 	HTTPClient *http.Client
 	Transport  tonohttp.Transport
@@ -106,9 +121,9 @@ type Settings struct {
 }
 
 // ClientOption configures an optional (@with) construction value of Client.
-type ClientOption func(*clientWiths)
+type ClientOption func(*clientOptions)
 
-type clientWiths struct {
+type clientOptions struct {
 	clientName *string
 	timeout *Duration
 	maxRetries *int32
@@ -116,17 +131,17 @@ type clientWiths struct {
 
 // WithClientName sets the client_name construction value.
 func WithClientName(v string) ClientOption {
-	return func(w *clientWiths) { w.clientName = &v }
+	return func(w *clientOptions) { w.clientName = &v }
 }
 
 // WithTimeout sets the timeout construction value.
 func WithTimeout(v Duration) ClientOption {
-	return func(w *clientWiths) { w.timeout = &v }
+	return func(w *clientOptions) { w.timeout = &v }
 }
 
 // WithMaxRetries sets the max_retries construction value.
 func WithMaxRetries(v int32) ClientOption {
-	return func(w *clientWiths) { w.maxRetries = &v }
+	return func(w *clientOptions) { w.maxRetries = &v }
 }
 
 // Client is the generated SDK client the client entry declares.
@@ -146,6 +161,7 @@ var _ ClientAPI = (*Client)(nil)
 // ==== models_serde.go ====
 package notes
 
+import "bytes"
 import "context"
 import "encoding/json"
 import "errors"
@@ -185,7 +201,7 @@ var saveNoteDescriptor = mustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"labe
 // declared sources resolved top-down, client_init on top (bespoke wins),
 // then the declared validation.
 func New(apiKey string, opts ...ClientOption) (*Client, error) {
-	w := clientWiths{}
+	w := clientOptions{}
 	for _, opt := range opts {
 		opt(&w)
 	}
@@ -205,14 +221,14 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	}
 	endpointV1Why := "no source"
 	if v, ok := os.LookupEnv("ENDPOINT"); ok && v != "" {
-			s.EndpointV1 = v
+		s.EndpointV1 = v
 		endpointV1Why = ""
 	} else {
 		endpointV1Why = "env ENDPOINT: empty"
 	}
 	endpointV2Why := "no source"
 	if v, ok := os.LookupEnv(s.EndpointEnv); ok && v != "" {
-			s.EndpointV2 = v
+		s.EndpointV2 = v
 		endpointV2Why = ""
 	} else {
 		endpointV2Why = "env " + s.EndpointEnv + ": empty"
@@ -230,7 +246,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	default:
 		endpointWhy = "no source"
 		if v, ok := os.LookupEnv("ENDPOINT_V2"); ok && v != "" {
-				s.Endpoint = v
+			s.Endpoint = v
 			endpointWhy = ""
 		} else {
 			endpointWhy = "env ENDPOINT_V2: empty"
@@ -260,6 +276,45 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		}
 		s.Settings = composed
 	}
+	credsWhy := "no source"
+	if credsWhy != "" {
+		if raw, ok := os.LookupEnv("SERVICE_CREDENTIALS"); ok && raw != "" {
+			var probe map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+				return nil, fmt.Errorf("%s: %v", "SERVICE_CREDENTIALS", err)
+			}
+			if _, ok := probe["token"]; !ok {
+				return nil, fmt.Errorf("%s: missing field token", "SERVICE_CREDENTIALS")
+			}
+			if _, ok := probe["account_id"]; !ok {
+				return nil, fmt.Errorf("%s: missing field account_id", "SERVICE_CREDENTIALS")
+			}
+			dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
+			dec.DisallowUnknownFields()
+			var decoded Credentials
+			if err := dec.Decode(&decoded); err != nil {
+				return nil, fmt.Errorf("%s: %v", "SERVICE_CREDENTIALS", err)
+			}
+			if vs := ValidateCredentials(decoded); len(vs) > 0 {
+				return nil, &ValidationError{Violations: vs}
+			}
+			s.Creds = decoded
+			credsWhy = ""
+		} else {
+			credsWhy = "env SERVICE_CREDENTIALS: empty"
+		}
+	}
+	labelsWhy := "no source"
+	if labelsWhy != "" {
+		if raw, ok := os.LookupEnv("SERVICE_LABELS"); ok && raw != "" {
+			if err := json.Unmarshal([]byte(raw), &s.Labels); err != nil {
+				return nil, fmt.Errorf("%s: %v", "SERVICE_LABELS", err)
+			}
+			labelsWhy = ""
+		} else {
+			labelsWhy = "env SERVICE_LABELS: empty"
+		}
+	}
 	if s.Endpoint == "" {
 		why := endpointWhy
 		if why == "" {
@@ -280,13 +335,13 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	values["client_key"] = s.ClientKey
 	values["endpoint_env"] = s.EndpointEnv
 	values["endpoint_version"] = s.EndpointVersion
-	if endpointV1Why == "" {
+	if s.EndpointV1 != "" {
 		values["endpoint_v1"] = s.EndpointV1
 	}
-	if endpointV2Why == "" {
+	if s.EndpointV2 != "" {
 		values["endpoint_v2"] = s.EndpointV2
 	}
-	if endpointWhy == "" {
+	if s.Endpoint != "" {
 		values["endpoint"] = s.Endpoint
 	}
 	{
@@ -297,8 +352,18 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		values["timeout"] = ms
 	}
 	values["max_retries"] = int64(s.MaxRetries)
-	values["settings.api_key"] = s.Settings.APIKey
-	values["settings.region"] = s.Settings.Region
+	if s.Settings.APIKey != "" {
+		values["settings.api_key"] = s.Settings.APIKey
+	}
+	if s.Settings.Region != "" {
+		values["settings.region"] = s.Settings.Region
+	}
+	if s.Creds.Token != "" {
+		values["creds.token"] = s.Creds.Token
+	}
+	if s.Creds.AccountID != "" {
+		values["creds.account_id"] = s.Creds.AccountID
+	}
 	runtime, err := tonohttp.New(tonohttp.Options{Client: s.HTTPClient, Transport: s.Transport, Headers: s.Headers, Values: values})
 	if err != nil {
 		return nil, err

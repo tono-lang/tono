@@ -97,6 +97,73 @@ fn entries_module() -> tono_backend::ir::Module {
     .expect("fixture");
     let model = tono_backend::ir::decode_model(&text).expect("fixture decodes");
     let mut module = model.modules.into_iter().next().expect("one module");
+    // A structured source (JSON in an env variable) and a whole-JSON map, so
+    // the golden pins the strict decode path (required probe, unknown-field
+    // rejection, declared validation) in both targets.
+    module.shapes.push(tono_backend::ir::Shape {
+        id: "notes#credentials".into(),
+        kind: tono_backend::ir::ShapeKind::Structure {
+            params: vec![],
+            members: vec![
+                tono_backend::ir::Member {
+                    name: "token".into(),
+                    target: tono_backend::ir::Tref::Prim(tono_backend::ir::Prim::String),
+                    required: true,
+                    default: None,
+                    constraints: vec![tono_backend::ir::Constraint::Length {
+                        min: Some(1),
+                        max: None,
+                    }],
+                    traits: vec![],
+                },
+                tono_backend::ir::Member {
+                    name: "account_id".into(),
+                    target: tono_backend::ir::Tref::Prim(tono_backend::ir::Prim::String),
+                    required: true,
+                    default: None,
+                    constraints: vec![],
+                    traits: vec![],
+                },
+            ],
+        },
+        traits: vec![],
+    });
+    for shape in &mut module.shapes {
+        if let tono_backend::ir::ShapeKind::Entry { fields, .. } = &mut shape.kind {
+            fields.push(tono_backend::ir::EntryField {
+                name: "creds".into(),
+                target: tono_backend::ir::Tref::Ref {
+                    id: "notes#credentials".into(),
+                    args: vec![],
+                },
+                sources: vec![tono_backend::ir::Source::Env(
+                    tono_backend::ir::EnvName::Name("SERVICE_CREDENTIALS".into()),
+                )],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+            fields.push(tono_backend::ir::EntryField {
+                name: "labels".into(),
+                target: tono_backend::ir::Tref::Map(
+                    Box::new(tono_backend::ir::Tref::Prim(tono_backend::ir::Prim::String)),
+                    Box::new(tono_backend::ir::Tref::Prim(tono_backend::ir::Prim::String)),
+                ),
+                sources: vec![tono_backend::ir::Source::Env(
+                    tono_backend::ir::EnvName::Name("SERVICE_LABELS".into()),
+                )],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+        }
+    }
     for shape in &mut module.shapes {
         if let tono_backend::ir::ShapeKind::Entry { operations, .. } = &mut shape.kind {
             for op in operations {

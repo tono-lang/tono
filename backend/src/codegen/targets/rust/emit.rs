@@ -179,6 +179,30 @@ mod tests {
     }
 
     #[test]
+    fn a_module_whose_operations_live_in_an_entry_keeps_the_error_taxonomy() {
+        // The Rust construction surface has not landed, but consumers keep
+        // the error types the other targets' clients raise; only the loose-op
+        // client trait stays out.
+        let module = Module {
+            name: "notes".into(),
+            shapes: vec![crate::ir::Shape {
+                id: "notes#client".into(),
+                kind: crate::ir::ShapeKind::Entry {
+                    fields: vec![],
+                    operations: vec![],
+                },
+                traits: vec![],
+            }],
+            operations: vec![],
+            extensions: vec![],
+        };
+        let types = rendered(&module, "");
+        assert!(types.contains("pub enum TonoError"));
+        assert!(types.contains("pub struct TransportError"));
+        assert!(!types.contains("pub trait Client"));
+    }
+
+    #[test]
     fn a_module_with_a_wide_integer_field_splits_helpers_into_the_serde_file() {
         let module = Module {
             name: "billing".into(),

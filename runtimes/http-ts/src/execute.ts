@@ -185,13 +185,25 @@ function buildHeaders(
   base: Readonly<Record<string, string>>,
   values: Values,
 ): Record<string, string> {
-  const headers: Record<string, string> = { ...declaredHeaders(descriptor, values, record), ...base };
+  const headers: Record<string, string> = declaredHeaders(descriptor, values, record);
+  for (const [name, value] of Object.entries(base)) setHeader(headers, name, value);
   for (const [name, part] of descriptor.bindings) {
     if (part.kind !== "header") continue;
     const value = record[name];
-    if (value !== undefined && value !== null) headers[part.name] = String(value);
+    if (value !== undefined && value !== null) setHeader(headers, part.name, String(value));
   }
   return headers;
+}
+
+// Override across casings: header names are case-insensitive, so a bespoke
+// "authorization" must replace a declared "Authorization" rather than ride
+// beside it.
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const lower = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lower) delete headers[key];
+  }
+  headers[name] = value;
 }
 
 // The request body: a single @httpPayload member as the whole body, otherwise

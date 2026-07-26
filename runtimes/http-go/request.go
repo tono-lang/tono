@@ -201,17 +201,29 @@ func buildHeaders(d *WireDescriptor, record map[string]any, base map[string]stri
 		headers = make(map[string]string, len(base))
 	}
 	for k, v := range base {
-		headers[k] = v
+		setHeader(headers, k, v)
 	}
 	for _, b := range d.Bindings {
 		if b.Part.Kind != "header" {
 			continue
 		}
 		if v, ok := record[b.Member]; ok && v != nil {
-			headers[b.Part.Name] = formatScalar(v)
+			setHeader(headers, b.Part.Name, formatScalar(v))
 		}
 	}
 	return headers
+}
+
+// setHeader overrides across casings: header names are case-insensitive, so a
+// bespoke "authorization" must replace a declared "Authorization" rather than
+// ride beside it.
+func setHeader(headers map[string]string, name, value string) {
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			delete(headers, key)
+		}
+	}
+	headers[name] = value
 }
 
 // buildBody produces the request body: a single payload member as the whole
