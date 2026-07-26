@@ -61,7 +61,7 @@ pub(crate) fn why_var(field: &str) -> String {
 /// transforms lower to the same generated `str*` helper). Returns `None` for the
 /// language-specific transforms (`trim`/`lower`/`upper`) each target spells
 /// itself. The key is the transform's own name.
-pub(crate) fn casing_transform(t: &str, out: &str) -> Option<(&'static str, String)> {
+fn casing_transform(t: &str, out: &str) -> Option<(&'static str, String)> {
     let (key, name) = match t {
         "upper_snake" => ("upper_snake", "strUpperSnake"),
         "snake" => ("snake", "strSnake"),
@@ -70,6 +70,30 @@ pub(crate) fn casing_transform(t: &str, out: &str) -> Option<(&'static str, Stri
         _ => return None,
     };
     Some((key, format!("{name}({out})")))
+}
+
+/// Fold an `@str::*` pipeline over `expr`, innermost first: `simple` spells the
+/// language-specific transforms (`trim`/`lower`/`upper`) and the shared casing
+/// transforms lower to the generated `str*` helpers, recording each used key in
+/// `used`. The loop is language-neutral; only `simple` differs per target.
+pub(crate) fn apply_transforms(
+    expr: String,
+    transforms: &[String],
+    used: &mut std::collections::BTreeSet<&'static str>,
+    simple: impl Fn(&str, &str) -> Option<String>,
+) -> String {
+    let mut out = expr;
+    for t in transforms {
+        out = if let Some(s) = simple(t, &out) {
+            s
+        } else if let Some((key, e)) = casing_transform(t, &out) {
+            used.insert(key);
+            e
+        } else {
+            out
+        };
+    }
+    out
 }
 
 /// A type carried as a (branded) string at rest, so its zero value is the empty

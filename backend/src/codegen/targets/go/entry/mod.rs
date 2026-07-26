@@ -346,23 +346,20 @@ fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
 }
 
 /// The transform-application expression, innermost first in declared order.
+/// Only the language-specific `trim`/`lower`/`upper` spellings are Go's; the
+/// shared pipeline folds them and the case-fold helpers.
 fn apply_transforms(expr: String, transforms: &[String], helpers: &mut Helpers) -> String {
-    let mut out = expr;
-    for t in transforms {
-        out = match t.as_str() {
-            "trim" => format!("strings.TrimSpace({out})"),
-            "lower" => format!("strings.ToLower({out})"),
-            "upper" => format!("strings.ToUpper({out})"),
-            other => match crate::codegen::entries::plan::casing_transform(other, &out) {
-                Some((key, expr)) => {
-                    helpers.transforms.insert(key);
-                    expr
-                }
-                None => out,
-            },
-        };
-    }
-    out
+    crate::codegen::entries::plan::apply_transforms(
+        expr,
+        transforms,
+        &mut helpers.transforms,
+        |t, out| match t {
+            "trim" => Some(format!("strings.TrimSpace({out})")),
+            "lower" => Some(format!("strings.ToLower({out})")),
+            "upper" => Some(format!("strings.ToUpper({out})")),
+            _ => None,
+        },
+    )
 }
 
 /// One `var <op>Descriptor = mustDescriptor(...)` per operation. The literal

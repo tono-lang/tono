@@ -369,20 +369,15 @@ pub(super) fn apply_transforms(
     transforms: &[String],
     helpers: &mut Helpers,
 ) -> String {
-    let mut out = expr;
-    for t in transforms {
-        out = match t.as_str() {
-            "trim" => format!("({out}).trim()"),
-            "lower" => format!("({out}).toLowerCase()"),
-            "upper" => format!("({out}).toUpperCase()"),
-            other => match crate::codegen::entries::plan::casing_transform(other, &out) {
-                Some((key, expr)) => {
-                    helpers.transforms.insert(key);
-                    expr
-                }
-                None => out,
-            },
-        };
-    }
-    out
+    crate::codegen::entries::plan::apply_transforms(
+        expr,
+        transforms,
+        &mut helpers.transforms,
+        |t, out| match t {
+            "trim" => Some(format!("({out}).trim()")),
+            "lower" => Some(format!("({out}).toLowerCase()")),
+            "upper" => Some(format!("({out}).toUpperCase()")),
+            _ => None,
+        },
+    )
 }
