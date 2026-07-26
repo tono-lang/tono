@@ -156,20 +156,31 @@ export class Client {
       headers: {},
     };
     s.apiKey = apiKey;
-    if (readEnv("PAYMENTS_ENDPOINT") !== undefined) {
-      const v = readEnv("PAYMENTS_ENDPOINT") as string;
-      s.endpoint = v;
-    } else {
+    let endpointSet = false;
+    if (!endpointSet) {
+      const v = readEnv("PAYMENTS_ENDPOINT");
+      if (v !== undefined) {
+        s.endpoint = v;
+        endpointSet = true;
+      }
+    }
+    if (!endpointSet) {
       s.endpoint = "https://api.payments.example.com";
     }
+    let timeoutSet = false;
     if (config.timeout !== undefined) {
       s.timeout = config.timeout;
-    } else {
+      timeoutSet = true;
+    }
+    if (!timeoutSet) {
       s.timeout = "10s" as Duration;
     }
+    let maxRetriesSet = false;
     if (config.maxRetries !== undefined) {
       s.maxRetries = config.maxRetries;
-    } else {
+      maxRetriesSet = true;
+    }
+    if (!maxRetriesSet) {
       s.maxRetries = 2;
     }
     const violations: Violation[] = [];
@@ -258,8 +269,20 @@ function readEnv(name: string): string | undefined {
 }
 
 // durationToMs parses the duration spelling shared across targets
-// (Go's ParseDuration grammar) into the runtime's millisecond values.
+// (Go's ParseDuration grammar: optional sign, bare zero, unit runs)
+// into the runtime's millisecond values.
 function durationToMs(v: string): number {
+  let rest = v;
+  let sign = 1;
+  if (rest.startsWith("-")) {
+    sign = -1;
+    rest = rest.slice(1);
+  } else if (rest.startsWith("+")) {
+    rest = rest.slice(1);
+  }
+  if (rest === "0") {
+    return 0;
+  }
   const re = /(\d+(?:\.\d+)?)(ns|us|\u00b5s|ms|s|m|h)/gy;
   const unit: Record<string, number> = {
     ns: 1e-6,
@@ -272,12 +295,12 @@ function durationToMs(v: string): number {
   };
   let total = 0;
   let consumed = 0;
-  for (let m = re.exec(v); m !== null; m = re.exec(v)) {
+  for (let m = re.exec(rest); m !== null; m = re.exec(rest)) {
     total += Number(m[1]) * unit[m[2]];
     consumed = re.lastIndex;
   }
-  if (consumed !== v.length || v.length === 0) {
+  if (consumed !== rest.length || rest.length === 0) {
     throw new Error(`invalid duration ${JSON.stringify(v)}`);
   }
-  return total;
+  return sign * total;
 }

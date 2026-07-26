@@ -216,7 +216,15 @@ pub fn entry_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
         decls.push(settings_interface(entry, &n, config, module));
         decls.extend(config_object_interface(entry, &n, config, module));
         decls.extend(descriptor_decls(entry, &n));
-        decls.push(class_decl(entry, &n, module, config, &bound, &mut helpers));
+        decls.push(class_decl(
+            entry,
+            &n,
+            module,
+            config,
+            &bound,
+            &mut helpers,
+            multi,
+        ));
         decls.extend(discriminator_decls_for(entry, &n, module));
     }
     decls.extend(helper_decls(&helpers));
@@ -263,7 +271,7 @@ fn settings_interface(
 ) -> Decl {
     let mut fields = String::new();
     let mut refs = vec![runtime_import("CanonicalTransport")];
-    for f in &entry.fields {
+    for f in entry.declared() {
         fields.push_str(&format!(
             "  {}: {};\n",
             field_camel(&f.name, config),
@@ -501,20 +509,32 @@ fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
     if helpers.duration_ms {
         decls.push(Decl::raw(
             "// durationToMs parses the duration spelling shared across targets\n\
-             // (Go's ParseDuration grammar) into the runtime's millisecond values.\n\
+             // (Go's ParseDuration grammar: optional sign, bare zero, unit runs)\n\
+             // into the runtime's millisecond values.\n\
              function durationToMs(v: string): number {\n\
+             \x20 let rest = v;\n\
+             \x20 let sign = 1;\n\
+             \x20 if (rest.startsWith(\"-\")) {\n\
+             \x20   sign = -1;\n\
+             \x20   rest = rest.slice(1);\n\
+             \x20 } else if (rest.startsWith(\"+\")) {\n\
+             \x20   rest = rest.slice(1);\n\
+             \x20 }\n\
+             \x20 if (rest === \"0\") {\n\
+             \x20   return 0;\n\
+             \x20 }\n\
              \x20 const re = /(\\d+(?:\\.\\d+)?)(ns|us|\\u00b5s|ms|s|m|h)/gy;\n\
              \x20 const unit: Record<string, number> = { ns: 1e-6, us: 1e-3, \"\\u00b5s\": 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };\n\
              \x20 let total = 0;\n\
              \x20 let consumed = 0;\n\
-             \x20 for (let m = re.exec(v); m !== null; m = re.exec(v)) {\n\
+             \x20 for (let m = re.exec(rest); m !== null; m = re.exec(rest)) {\n\
              \x20   total += Number(m[1]) * unit[m[2]];\n\
              \x20   consumed = re.lastIndex;\n\
              \x20 }\n\
-             \x20 if (consumed !== v.length || v.length === 0) {\n\
+             \x20 if (consumed !== rest.length || rest.length === 0) {\n\
              \x20   throw new Error(`invalid duration ${JSON.stringify(v)}`);\n\
              \x20 }\n\
-             \x20 return total;\n\
+             \x20 return sign * total;\n\
              }"
             .to_string(),
         ));
@@ -587,6 +607,7 @@ fn class_decl(
     config: &CasingConfig,
     bound: &[BoundExtension<'_>],
     helpers: &mut Helpers,
+    multi: bool,
 ) -> Decl {
     let en = error_names();
     let mut refs = vec![
@@ -622,7 +643,7 @@ fn class_decl(
         "    const s: {settings} = {{ {zeros}headers: {{}} }};\n",
         settings = n.settings,
         zeros = entry
-            .fields
+            .declared()
             .iter()
             .map(|f| format!(
                 "{}: {}, ",
@@ -643,7 +664,6 @@ fn class_decl(
         r.emit_field(field);
     }
 
-    let multi = false;
     if hook_binding(bound, "client_init").is_some() && !multi {
         body.push_str("    wrapClientInit(s);\n");
     }
@@ -682,8 +702,9 @@ fn class_decl(
             constraints: field.constraints.clone(),
             traits: field.traits.clone(),
         };
+        let composed = matches!(entry.field_shape(field, module), FieldShape::Config(_));
         for line in validation::guard_lines(&[member], &TsVal, "s.", config, LANG) {
-            let guard = if entry.is_guaranteed(field) {
+            let guard = if entry.is_guaranteed(field) || composed {
                 line.condition.clone()
             } else {
                 format!("{} === \"\" && {}", why_var(&field.name), line.condition)
@@ -823,13 +844,24 @@ fn op_method(
 
     if wire_descriptor(op).is_none() {
         // A bespoke-bound operation: invoking the bound impl through the
-        // generated glue is not wired yet, so the method reports that plainly.
+        // generated glue is not wired yet, so the method reports that plainly
+        // while keeping the declared signature.
         refs.push(module_symbol(&en.contract, module));
+        let param = match input {
+            Some(t) => {
+                refs.extend(type_refs(t, module));
+                format!("input: {}", render_type(&type_expr_of(t), &TsRules))
+            }
+            None => String::new(),
+        };
+        if let Some(t) = output {
+            refs.extend(type_refs(t, module));
+        }
         let ret = output
             .map(|t| render_type(&type_expr_of(t), &TsRules))
             .unwrap_or_else(|| "void".to_string());
         return format!(
-            "  async {name}(): Promise<{ret}> {{\n    {t}\n  }}",
+            "  async {name}({param}): Promise<{ret}> {{\n    {t}\n  }}",
             t = throw(format!(
                 "new {}({:?}, new Error(\"operation has no transport binding\"))",
                 en.contract,
@@ -840,6 +872,7 @@ fn op_method(
 
     let (param, input_expr) = match input {
         Some(t) => {
+            refs.extend(type_refs(t, module));
             let ty = render_type(&type_expr_of(t), &TsRules);
             let expr = match t {
                 Tref::Ref { id, .. } => {
@@ -851,6 +884,9 @@ fn op_method(
         }
         None => (String::new(), "{}".to_string()),
     };
+    if let Some(t) = output {
+        refs.extend(type_refs(t, module));
+    }
     let ret = output
         .map(|t| render_type(&type_expr_of(t), &TsRules))
         .unwrap_or_else(|| "void".to_string());
@@ -1062,42 +1098,43 @@ impl Resolver<'_, '_> {
         format!("config.{}", field_camel(&field.name, self.config))
     }
 
+    /// A guaranteed chain, spelled with a set-flag so every env variable is
+    /// read exactly once and the `@default` closes the chain.
     fn chain_cascade(&mut self, field: &EntryField, dest: &str) -> String {
-        let mut out = String::new();
-        let mut first = true;
+        // A chain that is just the default needs no flag.
+        if let [Source::Default(v)] = field.sources.as_slice() {
+            return format!("    {dest} = {};\n", literal(&field.target, v));
+        }
+        let flag = camel(&format!("{}_set", field.name));
+        let mut out = format!("    let {flag} = false;\n");
         for source in &field.sources {
             match source {
                 Source::With => {
                     let acc = self.with_access(field);
                     out.push_str(&format!(
-                        "{}if ({acc} !== undefined) {{\n      {dest} = {acc};\n    }}",
-                        if first { "    " } else { " else " },
+                        "    if ({acc} !== undefined) {{\n      {dest} = {acc};\n      {flag} = true;\n    }}\n"
                     ));
-                    first = false;
                 }
                 Source::Env(name) => {
                     let lookup = self.env_lookup(name);
                     out.push_str(&format!(
-                        "{}if (({lookup}) !== undefined) {{\n      const v = ({lookup}) as string;\n{parse}    }}",
-                        if first { "    " } else { " else " },
-                        parse = self.env_parse(field, dest, &self.env_label(name)),
+                        "    if (!{flag}) {{\n      const v = {lookup};\n      if (v !== undefined) {{\n{parse}        {flag} = true;\n      }}\n    }}\n",
+                        parse = self
+                            .env_parse(field, dest, &self.env_label(name))
+                            .lines()
+                            .map(|l| format!("  {l}\n"))
+                            .collect::<String>(),
                     ));
-                    first = false;
                 }
                 Source::Default(v) => {
-                    let lit = literal(&field.target, v);
-                    if first {
-                        out.push_str(&format!("    {dest} = {lit};\n"));
-                    } else {
-                        out.push_str(&format!(" else {{\n      {dest} = {lit};\n    }}\n"));
-                    }
+                    out.push_str(&format!(
+                        "    if (!{flag}) {{\n      {dest} = {};\n    }}\n",
+                        literal(&field.target, v),
+                    ));
                     return out;
                 }
                 Source::Arg => {}
             }
-        }
-        if !first {
-            out.push('\n');
         }
         out
     }
@@ -1370,10 +1407,27 @@ impl Resolver<'_, '_> {
     /// A structured source: JSON in an env variable decoded strictly (unknown
     /// fields rejected, required members checked by name), validated at
     /// construction. The error carries the variable's name as context.
+    /// A structured source: an explicit `@arg`/`@with` value passes typed, a
+    /// JSON env value decodes strictly (required members first, then unknown
+    /// fields, then per-member scalar type checks, mirroring the Go order and
+    /// strictness), and declared validation runs at construction.
     fn emit_structured(&mut self, field: &EntryField, shape: &Shape) {
         let dest = self.ident(&field.name);
-        let guaranteed = self.entry.is_guaranteed(field);
+        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
+            let assign = format!("    {dest} = {};\n", camel(&field.name));
+            self.push(&assign);
+            return;
+        }
+        // Without @arg a structured field can never be guaranteed (@default
+        // does not apply to it), so the chain is always why-tracked.
         let why = why_var(&field.name);
+        self.push(&format!("    let {why} = \"no source\";\n"));
+        if field.sources.iter().any(|s| matches!(s, Source::With)) {
+            let acc = self.with_access(field);
+            self.push(&format!(
+                "    if ({acc} !== undefined) {{\n      {dest} = {acc};\n      {why} = \"\";\n    }} else {{\n      {why} = \"not configured\";\n    }}\n"
+            ));
+        }
         let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
         else {
             return;
@@ -1384,12 +1438,58 @@ impl Resolver<'_, '_> {
         let ty = type_ident_from_id(&shape.id);
         let mut known = Vec::new();
         let mut required_checks = String::new();
+        let mut type_checks = String::new();
         if let ShapeKind::Structure { members, .. } = &shape.kind {
             for m in members {
                 known.push(format!("{:?}", m.name));
                 if m.required {
                     required_checks.push_str(&format!(
                         "      if (!({name:?} in parsed)) {{\n        throw new Error(`${{{label}}}: missing field {name}`);\n      }}\n",
+                        name = m.name,
+                    ));
+                }
+                // Scalar wire-type checks keep the strictness on par with the
+                // Go decoder (which is typed); containers and refs decode as
+                // the wire codec always has.
+                let expected = match &m.target {
+                    Tref::Prim(
+                        Prim::String
+                        | Prim::Uuid
+                        | Prim::Timestamp
+                        | Prim::Date
+                        | Prim::Duration
+                        | Prim::Bytes
+                        | Prim::I64
+                        | Prim::U64,
+                    ) => Some(("string", "a string")),
+                    Tref::Prim(
+                        Prim::I8
+                        | Prim::I16
+                        | Prim::I32
+                        | Prim::U8
+                        | Prim::U16
+                        | Prim::U32
+                        | Prim::Float,
+                    ) => Some(("number", "a number")),
+                    Tref::Prim(Prim::Bool) => Some(("boolean", "a boolean")),
+                    _ => None,
+                };
+                if let Some((ts_typeof, describe)) = expected {
+                    let guard = if m.required {
+                        String::new()
+                    } else {
+                        format!(
+                            "record[{name:?}] !== undefined && record[{name:?}] !== null && ",
+                            name = m.name
+                        )
+                    };
+                    type_checks.push_str(&format!(
+                        "      if ({guard}{present}typeof record[{name:?}] !== {ts_typeof:?}) {{\n        throw new Error(`${{{label}}}: field {name} must be {describe}`);\n      }}\n",
+                        present = if m.required {
+                            format!("{name:?} in parsed && ", name = m.name)
+                        } else {
+                            String::new()
+                        },
                         name = m.name,
                     ));
                 }
@@ -1404,37 +1504,45 @@ impl Resolver<'_, '_> {
         } else {
             String::new()
         };
-        let mut block = format!(
-            "    {{\n      const raw = {lookup};\n      if (raw !== undefined) {{\n\
-             {open}\
+        let block = format!(
+            "    if ({why} !== \"\") {{\n      const raw = {lookup};\n      if (raw !== undefined) {{\n\
              \x20       let parsed: unknown;\n\
              \x20       try {{\n          parsed = JSON.parse(raw);\n        }} catch (e) {{\n          throw new Error(`${{{label}}}: ${{String(e)}}`);\n        }}\n\
              \x20       if (typeof parsed !== \"object\" || parsed === null) {{\n          throw new Error(`${{{label}}}: expected an object`);\n        }}\n\
-             \x20       for (const key of Object.keys(parsed)) {{\n          if (![{known}].includes(key)) {{\n            throw new Error(`${{{label}}}: unknown field ${{key}}`);\n          }}\n        }}\n\
+             \x20       const record = parsed as Record<string, unknown>;\n\
              {required}\
+             \x20       for (const key of Object.keys(parsed)) {{\n          if (![{known}].includes(key)) {{\n            throw new Error(`${{{label}}}: unknown field ${{key}}`);\n          }}\n        }}\n\
+             {types}\
              \x20       const decoded = decode{ty}(parsed);\n\
              {validate}\
-             \x20       {dest} = decoded;\n",
-            open = "",
+             \x20       {dest} = decoded;\n\
+             \x20       {why} = \"\";\n\
+             \x20     }} else {{\n        {why} = {miss};\n      }}\n    }}\n",
             known = known.join(", "),
             required = indent2(&required_checks),
+            types = indent2(&type_checks),
             validate = indent2(&validate),
         );
-        if guaranteed {
-            block.push_str("      }\n    }\n");
-        } else {
-            self.push(&format!("    let {why} = \"\";\n"));
-            block.push_str(&format!(
-                "      }} else {{\n        {why} = {miss};\n      }}\n    }}\n"
-            ));
-        }
         self.push(&block);
     }
 
+    /// A map/list field: an explicit `@arg`/`@with` value passes typed, an env
+    /// value decodes as JSON whole.
     fn emit_json(&mut self, field: &EntryField) {
         let dest = self.ident(&field.name);
-        let guaranteed = self.entry.is_guaranteed(field);
+        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
+            let assign = format!("    {dest} = {};\n", camel(&field.name));
+            self.push(&assign);
+            return;
+        }
         let why = why_var(&field.name);
+        self.push(&format!("    let {why} = \"no source\";\n"));
+        if field.sources.iter().any(|s| matches!(s, Source::With)) {
+            let acc = self.with_access(field);
+            self.push(&format!(
+                "    if ({acc} !== undefined) {{\n      {dest} = {acc};\n      {why} = \"\";\n    }} else {{\n      {why} = \"not configured\";\n    }}\n"
+            ));
+        }
         let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
         else {
             return;
@@ -1443,17 +1551,9 @@ impl Resolver<'_, '_> {
         let label = self.env_label(name);
         let miss = self.env_miss_reason(name);
         let ty = ts_type(&field.target);
-        let mut block = format!(
-            "    {{\n      const raw = {lookup};\n      if (raw !== undefined) {{\n        try {{\n          {dest} = JSON.parse(raw) as {ty};\n        }} catch (e) {{\n          throw new Error(`${{{label}}}: ${{String(e)}}`);\n        }}\n"
+        let block = format!(
+            "    if ({why} !== \"\") {{\n      const raw = {lookup};\n      if (raw !== undefined) {{\n        try {{\n          {dest} = JSON.parse(raw) as {ty};\n        }} catch (e) {{\n          throw new Error(`${{{label}}}: ${{String(e)}}`);\n        }}\n        {why} = \"\";\n      }} else {{\n        {why} = {miss};\n      }}\n    }}\n"
         );
-        if guaranteed {
-            block.push_str("      }\n    }\n");
-        } else {
-            self.push(&format!("    let {why} = \"\";\n"));
-            block.push_str(&format!(
-                "      }} else {{\n        {why} = {miss};\n      }}\n    }}\n"
-            ));
-        }
         self.push(&block);
     }
 
@@ -1712,6 +1812,50 @@ mod tests {
         assert!(out.contains("const decoded = decodeCredentials(parsed);"));
         assert!(out.contains("const vs = validateCredentials(decoded);"));
         assert!(out.contains("throw new ValidationError(vs);"));
+        // Required members are checked before unknown fields (Go's order), and
+        // scalar wire types are checked so a mistyped member fails the same
+        // way the typed Go decode does.
+        let required = out.find("missing field token").unwrap();
+        let unknown = out.find("unknown field ${key}").unwrap();
+        assert!(required < unknown);
+        assert!(out.contains("field token must be a string"));
+    }
+
+    #[test]
+    fn a_bespoke_stub_keeps_the_declared_signature() {
+        // No descriptor on the op (the fixture is pre-protocol): the stub
+        // still takes the declared input.
+        let module = fixture_module();
+        let out = text(&module);
+        assert!(out.contains("async saveNote(input: Note): Promise<Note> {"));
+        assert!(out.contains("operation has no transport binding"));
+    }
+
+    #[test]
+    fn a_guaranteed_chain_reads_each_env_variable_once() {
+        let mut module = with_descriptors(fixture_module());
+        for shape in &mut module.shapes {
+            if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
+                fields.push(EntryField {
+                    name: "my_region".into(),
+                    target: Tref::Prim(Prim::String),
+                    sources: vec![
+                        Source::Env(EnvName::Name("MY_REGION".into())),
+                        Source::Default(serde_json::json!("us")),
+                    ],
+                    format: None,
+                    transforms: vec![],
+                    select: None,
+                    binds: vec![],
+                    constraints: vec![],
+                    traits: vec![],
+                });
+            }
+        }
+        let out = text(&module);
+        assert_eq!(out.matches("readEnv(\"MY_REGION\")").count(), 1);
+        assert!(out.contains("let myRegionSet = false;"));
+        assert!(out.contains("if (!myRegionSet) {"));
     }
 
     #[test]

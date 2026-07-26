@@ -89,8 +89,10 @@ impl<'a> EntryModel<'a> {
             .collect()
     }
 
-    /// Fields in declaration order (as written in the IR).
-    fn declared(&self) -> Vec<&'a EntryField> {
+    /// Fields in declaration order (as written in the IR). The generated
+    /// public surface (Settings, config objects) follows this order; only the
+    /// constructor body follows the resolution order.
+    pub fn declared(&self) -> Vec<&'a EntryField> {
         let ShapeKind::Entry { fields, .. } = &self.shape.kind else {
             return Vec::new();
         };
@@ -176,6 +178,66 @@ pub struct ValuePath<'a> {
 pub fn op_local_name(id: &str) -> &str {
     let local = local_name(id);
     local.rsplit('.').next().unwrap_or(local)
+}
+
+/// The construction-surface names the generated Settings reserves for its
+/// transport slots, per binding language key. An entry field with one of
+/// these canonical names would collide with the slot member.
+const RESERVED_SLOT_FIELDS: [&str; 4] = ["headers", "transport", "http_client", "fetch"];
+
+/// Generation-time validation of the entry surface: the cases the frontend
+/// cannot see (they are target rules) and that would otherwise produce
+/// uncompilable or silently wrong output. Returns the first offense.
+pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
+    for module in &model.modules {
+        let entries = module_entries(module);
+        if entries.is_empty() {
+            continue;
+        }
+        for entry in &entries {
+            for field in entry.declared() {
+                if RESERVED_SLOT_FIELDS.contains(&field.name.as_str()) {
+                    return Err(format!(
+                        "module {}: entry {} field {} collides with the generated Settings transport slot of the same name; rename the field",
+                        module.name, entry.name, field.name
+                    ));
+                }
+            }
+        }
+        // client_init bridges one Settings type; with several entries the
+        // bespoke symbol cannot have both signatures, and skipping it
+        // silently would drop declared behavior.
+        if entries.len() > 1
+            && module
+                .extensions
+                .iter()
+                .any(|e| e.kind == crate::ir::ExtKind::Hook && e.name == "client_init")
+        {
+            return Err(format!(
+                "module {}: client_init is bound but the module declares {} entries; the hook bridges one Settings type, so keep one entry per module (or drop the binding)",
+                module.name,
+                entries.len()
+            ));
+        }
+        // A loose op and an entry op sharing a local name would emit two
+        // descriptors/discriminators under the same generated identifier.
+        for entry in &entries {
+            for op in entry.operations {
+                let local = op_local_name(&op.id);
+                if module
+                    .operations
+                    .iter()
+                    .any(|loose| local_name(&loose.id) == local)
+                {
+                    return Err(format!(
+                        "module {}: operation {} is declared both loose and in entry {}; the generated companions would collide, rename one",
+                        module.name, local, entry.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The base (canonical snake) name of a per-entry companion declaration:
@@ -346,8 +408,16 @@ fn dependencies(field: &EntryField) -> Vec<&str> {
     if let Some(select) = &field.select {
         deps.extend(head(&select.subject));
         for arm in &select.arms {
-            if let ArmValue::Field(p) = &arm.value {
-                deps.extend(head(p));
+            match &arm.value {
+                ArmValue::Field(p) => deps.extend(head(p)),
+                ArmValue::Sources(sources) => {
+                    for source in sources {
+                        if let Source::Env(EnvName::Field(fr)) = source {
+                            deps.extend(head(&fr.field));
+                        }
+                    }
+                }
+                ArmValue::Lit(_) => {}
             }
         }
     }
@@ -691,6 +761,124 @@ mod tests {
                 "max_retries"
             ]
         );
+    }
+
+    #[test]
+    fn an_env_ref_inside_a_match_arm_is_a_resolution_edge() {
+        // The arm's inline @env(.naming) reads a sibling: the sibling must
+        // resolve before the selecting field.
+        let mut selector = field("selector", vec![]);
+        selector.select = Some(Select {
+            subject: vec!["version".into()],
+            arms: vec![
+                SelectArm {
+                    pattern: Some(json!("v1")),
+                    value: ArmValue::Lit(json!("x")),
+                },
+                SelectArm {
+                    pattern: None,
+                    value: ArmValue::Sources(vec![Source::Env(EnvName::Field(FieldRef {
+                        field: vec!["naming".into()],
+                    }))]),
+                },
+            ],
+        });
+        let naming = field("naming", vec![Source::Env(EnvName::Name("N".into()))]);
+        let version = field("version", vec![Source::Default(json!("v1"))]);
+        let module = module_of(vec![entry_shape(
+            "m#client",
+            vec![selector, naming, version],
+        )]);
+        let order: Vec<&str> = module_entries(&module)[0]
+            .fields
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(order, vec!["naming", "version", "selector"]);
+    }
+
+    #[test]
+    fn validation_rejects_the_cases_no_layer_would_diagnose() {
+        let model = |shapes: Vec<Shape>, extensions: Vec<crate::ir::Extension>| crate::ir::Model {
+            tono_ir_version: crate::ir::TONO_IR_VERSION,
+            modules: vec![Module {
+                name: "m".into(),
+                shapes,
+                operations: vec![],
+                extensions,
+            }],
+        };
+        // A field named after a transport slot collides with the Settings member.
+        let err = validate_entries(&model(
+            vec![entry_shape(
+                "m#client",
+                vec![field("headers", vec![Source::Arg])],
+            )],
+            vec![],
+        ))
+        .unwrap_err();
+        assert!(err.contains("transport slot"), "{err}");
+        // client_init cannot bridge two Settings types.
+        let hook = crate::ir::Extension {
+            name: "client_init".into(),
+            kind: crate::ir::ExtKind::Hook,
+            signature: None,
+            bindings: [("go".to_string(), "ext/go/i.go#I".to_string())]
+                .into_iter()
+                .collect(),
+            conformance: None,
+        };
+        let err = validate_entries(&model(
+            vec![
+                entry_shape("m#client", vec![]),
+                entry_shape("m#admin", vec![]),
+            ],
+            vec![hook],
+        ))
+        .unwrap_err();
+        assert!(err.contains("client_init"), "{err}");
+        // A loose op and an entry op sharing a local name would collide.
+        let entry_op = Shape {
+            id: "m#client.save".into(),
+            kind: ShapeKind::Operation {
+                input: None,
+                output: None,
+                errors: vec![],
+            },
+            traits: vec![],
+        };
+        let loose_op = Shape {
+            id: "m#save".into(),
+            kind: ShapeKind::Operation {
+                input: None,
+                output: None,
+                errors: vec![],
+            },
+            traits: vec![],
+        };
+        let mut m = model(
+            vec![Shape {
+                id: "m#client".into(),
+                kind: ShapeKind::Entry {
+                    fields: vec![],
+                    operations: vec![entry_op],
+                },
+                traits: vec![],
+            }],
+            vec![],
+        );
+        m.modules[0].operations = vec![loose_op];
+        let err = validate_entries(&m).unwrap_err();
+        assert!(err.contains("declared both loose and in entry"), "{err}");
+        // A clean single-entry module passes.
+        assert!(validate_entries(&model(
+            vec![entry_shape(
+                "m#client",
+                vec![field("token", vec![Source::Arg])]
+            )],
+            vec![],
+        ))
+        .is_ok());
     }
 
     #[test]

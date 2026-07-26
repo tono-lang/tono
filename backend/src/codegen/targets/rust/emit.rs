@@ -59,6 +59,11 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         // module still trips the conformance gate, it just emits no wrapper until an
         // operation gives it the error surface (or the concrete client lands).
         type_decls.extend(crate::codegen::targets::rust::client::wrapper_decls(module));
+    } else if crate::codegen::entries::has_entries(module) {
+        // A module whose operations live in an entry keeps the error taxonomy
+        // (the wire error shapes reference it, and downstream consumers match
+        // on it) even though the Rust construction surface has not landed.
+        type_decls.extend(errors::taxonomy_and_declared_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the `Violation` record a
         // validator references, which the taxonomy would otherwise have carried.

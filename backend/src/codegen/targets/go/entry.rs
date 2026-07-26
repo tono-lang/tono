@@ -81,6 +81,9 @@ fn names(entry: &EntryModel<'_>, multi: bool) -> Names {
     Names {
         client: pascal(entry.name),
         settings: pascal(&companion_name(entry.name, "settings", multi)),
+        // The option type (and its private carrier) is always entry-prefixed:
+        // a bare "Option" reads like a general-purpose type in godoc, and the
+        // per-field With* names already carry the collision rule.
         option: pascal(&format!("{}_option", entry.name)),
         withs: camel(&format!("{}_withs", entry.name)),
         new_fn: if multi {
@@ -99,6 +102,29 @@ fn names(entry: &EntryModel<'_>, multi: bool) -> Names {
 
 fn go_type(t: &Tref) -> String {
     render_type(&type_expr_of(t), &GoRules::default())
+}
+
+/// The symbols a declared type references (for transitive import collection
+/// off a raw declaration): the cross-module refs a nominal type carries.
+fn push_type_symbols(t: &Tref, refs: &mut Vec<Symbol>) {
+    fn walk(e: &crate::codegen::tree::TypeExpr, refs: &mut Vec<Symbol>) {
+        use crate::codegen::tree::TypeExpr;
+        match e {
+            TypeExpr::Ref(s) => refs.push(s.clone()),
+            TypeExpr::List(inner) | TypeExpr::Nullable(inner) => walk(inner, refs),
+            TypeExpr::Map(k, v) | TypeExpr::Entries(k, v) => {
+                walk(k, refs);
+                walk(v, refs);
+            }
+            TypeExpr::Generic(s, args) => {
+                refs.push(s.clone());
+                for a in args {
+                    walk(a, refs);
+                }
+            }
+        }
+    }
+    walk(&type_expr_of(t), refs);
 }
 
 fn field_pascal(name: &str, config: &CasingConfig) -> String {
@@ -207,7 +233,7 @@ fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl> {
 /// transport, and the base headers a bespoke auth writes into).
 fn settings_decl(entry: &EntryModel<'_>, n: &Names, config: &CasingConfig) -> Decl {
     let mut fields = String::new();
-    for f in &entry.fields {
+    for f in entry.declared() {
         fields.push_str(&format!(
             "\t{} {}\n",
             field_pascal(&f.name, config),
@@ -269,12 +295,7 @@ fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Vec<Decl> {
 
 /// The client struct, its mock interface (one method per operation, `ctx`
 /// first), and the compile-time conformance assertion.
-fn client_decls(
-    entry: &EntryModel<'_>,
-    n: &Names,
-    config: &CasingConfig,
-    module: &Module,
-) -> Vec<Decl> {
+fn client_decls(entry: &EntryModel<'_>, n: &Names, config: &CasingConfig) -> Vec<Decl> {
     let mut methods = String::new();
     let mut refs = vec![import("context", "context")];
     for op in entry.operations {
@@ -285,7 +306,6 @@ fn client_decls(
     let doc = doc_of(&entry.shape.traits)
         .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
         .unwrap_or_default();
-    let _ = module;
     vec![
         Decl::raw_with(
             format!(
@@ -318,13 +338,16 @@ fn method_signature(op: &Shape, config: &CasingConfig) -> (String, Vec<Symbol>) 
     let mut refs = vec![import("context", "context")];
     let param = match input {
         Some(t) => {
-            refs.push(Symbol::builtin(go_type(t)));
+            push_type_symbols(t, &mut refs);
             format!(", input {}", go_type(t))
         }
         None => String::new(),
     };
     let ret = match output {
-        Some(t) => format!("({}, error)", go_type(t)),
+        Some(t) => {
+            push_type_symbols(t, &mut refs);
+            format!("({}, error)", go_type(t))
+        }
         None => "error".to_string(),
     };
     (format!("{name}(ctx context.Context{param}) {ret}"), refs)
@@ -352,7 +375,7 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
         let n = names(entry, multi);
         decls.push(settings_decl(entry, &n, config));
         decls.extend(option_decls(entry, &n, multi));
-        decls.extend(client_decls(entry, &n, config, module));
+        decls.extend(client_decls(entry, &n, config));
     }
     decls
 }
@@ -382,7 +405,7 @@ pub fn serde_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
             multi,
         ));
         for op in entry.operations {
-            decls.push(op_method_decl(entry, &n, op, module, config, &bound));
+            decls.push(op_method_decl(&n, op, module, config, &bound));
         }
         decls.extend(discriminator_decls_for(entry, &n, module));
     }
@@ -492,15 +515,14 @@ fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
             let json = serde_json::to_string(descriptor).unwrap_or_else(|_| "null".into());
             Some(Decl::raw(format!(
                 "var {var} = mustDescriptor({literal})",
-                var = descriptor_var(entry, n, op),
+                var = descriptor_var(n, op),
                 literal = go_string_literal(&json),
             )))
         })
         .collect()
 }
 
-fn descriptor_var(entry: &EntryModel<'_>, n: &Names, op: &Shape) -> String {
-    let _ = entry;
+fn descriptor_var(n: &Names, op: &Shape) -> String {
     camel(&format!(
         "{}{}_descriptor",
         n.op_prefix,
@@ -635,7 +657,6 @@ fn hook_wrapper_name(slot: &str) -> String {
 /// One concrete client method: encode the input record, hand the descriptor to
 /// the runtime, and map the raw outcome onto the generated taxonomy.
 fn op_method_decl(
-    entry: &EntryModel<'_>,
     n: &Names,
     op: &Shape,
     module: &Module,
@@ -675,15 +696,10 @@ fn op_method_decl(
             expr
         }
     };
-    let (zero_decl, zero, ret_zero) = match output {
-        Some(t) => (
-            format!("\tvar zero {}\n", go_type(t)),
-            "zero, ".to_string(),
-            "zero, ",
-        ),
-        None => (String::new(), String::new(), ""),
+    let (zero_decl, ret_zero) = match output {
+        Some(t) => (format!("\tvar zero {}\n", go_type(t)), "zero, "),
+        None => (String::new(), ""),
     };
-    let _ = zero;
     let record = match input {
         Some(_) => format!(
             "\trecord, err := encodeRecord(input)\n\
@@ -736,7 +752,7 @@ fn op_method_decl(
          {success}\n\
          }}",
         client = n.client,
-        descriptor = descriptor_var(entry, n, op),
+        descriptor = descriptor_var(n, op),
         fail_hook = fail("err".to_string()),
         fail_transport = fail(format!(
             "&{transport}{{Cause: outcome.Cause}}",
@@ -857,8 +873,9 @@ fn new_decl(
             constraints: field.constraints.clone(),
             traits: field.traits.clone(),
         };
+        let composed = matches!(entry.field_shape(field, module), FieldShape::Config(_));
         for line in validation::guard_lines(&[member], &GoVal, "s.", config, LANG) {
-            let guard = if entry.is_guaranteed(field) {
+            let guard = if entry.is_guaranteed(field) || composed {
                 line.condition.clone()
             } else {
                 format!("{} == \"\" && {}", why_var(&field.name), line.condition)
@@ -1200,10 +1217,11 @@ impl Resolver<'_, '_> {
                     let label = self.env_label(name);
                     let miss = self.env_miss_reason(name);
                     let pre = self.env_name_prereq(name, why);
+                    // The prereq ends in "else ", chaining straight into
+                    // this if: the whole run is one balanced if/else-if/else.
                     format!(
-                        "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\t\t{why} = \"\"\n\t}} else {{\n\t\t{why} = {miss}\n\t}}{post}\n",
+                        "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\t\t{why} = \"\"\n\t}} else {{\n\t\t{why} = {miss}\n\t}}\n",
                         parse = indent(&self.env_parse(field, dest, &label)),
-                        post = if pre.is_empty() { "" } else { "\n\t}" },
                     )
                 }
                 Source::Default(v) => format!(
@@ -1365,13 +1383,16 @@ impl Resolver<'_, '_> {
             }
         }
         if !saw_wildcard {
-            // An open enum can carry an undeclared value at run time even when
-            // the declared values are all covered.
+            // Every enum is open, so an undeclared value can still arrive at
+            // run time even with total declared coverage. Failing construction
+            // beats freezing a silent zero value into the resolved settings.
             let miss = if guaranteed {
-                // A guaranteed selection with total coverage still needs a
-                // default arm for the compiler; it can only be reached with an
-                // undeclared open-enum value, which resolves to the zero value.
-                String::new()
+                self.import("fmt", "fmt");
+                format!(
+                    "\t\treturn nil, fmt.Errorf(\"{field}: match on {subject}: unmatched value %v\", {subject_expr})\n",
+                    field = field.name,
+                    subject = subject_head,
+                )
             } else {
                 format!("\t\t{why} = \"match: unmatched value\"\n")
             };
@@ -1484,13 +1505,28 @@ impl Resolver<'_, '_> {
         self.push(&out);
     }
 
-    /// A structured source: JSON in an env variable decoded strictly into the
-    /// wire struct, required members checked by name, declared validation run
+    /// A structured source: an explicit `@arg`/`@with` value passes typed, a
+    /// JSON env value decodes strictly into the wire struct (required members
+    /// checked by name, unknown fields rejected), and declared validation runs
     /// at construction. The error carries the variable's name as context.
     fn emit_structured(&mut self, field: &EntryField, shape: &Shape) {
         let dest = self.ident(&field.name);
-        let guaranteed = self.entry.is_guaranteed(field);
+        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
+            let assign = format!("\t{dest} = {}\n", camel(&field.name));
+            self.push(&assign);
+            return;
+        }
+        // Without @arg a structured field can never be guaranteed (@default
+        // does not apply to it), so the chain is always why-tracked.
         let why = why_var(&field.name);
+        self.push(&format!("\t{why} := \"no source\"\n"));
+        if field.sources.iter().any(|s| matches!(s, Source::With)) {
+            let step = format!(
+                "\tif w.{carrier} != nil {{\n\t\t{dest} = *w.{carrier}\n\t\t{why} = \"\"\n\t}} else {{\n\t\t{why} = \"not configured\"\n\t}}\n",
+                carrier = camel(&field.name),
+            );
+            self.push(&step);
+        }
         let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
         else {
             return;
@@ -1521,7 +1557,7 @@ impl Resolver<'_, '_> {
         } else {
             String::new()
         };
-        let mut block = format!(
+        let block = format!(
             "\tif raw, ok := {lookup}; ok && raw != \"\" {{\n\
              \t\tvar probe map[string]json.RawMessage\n\
              \t\tif err := json.Unmarshal([]byte(raw), &probe); err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t\t}}\n\
@@ -1532,21 +1568,34 @@ impl Resolver<'_, '_> {
              \t\tif err := dec.Decode(&decoded); err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t\t}}\n\
              {validate}\
              \t\t{dest} = decoded\n\
-             \t}}"
+             \t\t{why} = \"\"\n\
+             \t}} else {{\n\t\t{why} = {miss}\n\t}}\n"
         );
-        if guaranteed {
-            block.push('\n');
-        } else {
-            block = format!("\t{why} := \"\"\n{block} else {{\n\t\t{why} = {miss}\n\t}}\n");
-        }
-        self.push(&block);
+        // An explicit @with value wins: the decode runs only while unset.
+        self.push(&format!(
+            "\tif {why} != \"\" {{\n{inner}\t}}\n",
+            inner = indent(block.trim_end_matches('\n')),
+        ));
     }
 
-    /// A map/list field decoded as JSON whole from its env source.
+    /// A map/list field: an explicit `@arg`/`@with` value passes typed, an env
+    /// value decodes as JSON whole.
     fn emit_json(&mut self, field: &EntryField) {
         let dest = self.ident(&field.name);
-        let guaranteed = self.entry.is_guaranteed(field);
+        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
+            let assign = format!("\t{dest} = {}\n", camel(&field.name));
+            self.push(&assign);
+            return;
+        }
         let why = why_var(&field.name);
+        self.push(&format!("\t{why} := \"no source\"\n"));
+        if field.sources.iter().any(|s| matches!(s, Source::With)) {
+            let step = format!(
+                "\tif w.{carrier} != nil {{\n\t\t{dest} = *w.{carrier}\n\t\t{why} = \"\"\n\t}} else {{\n\t\t{why} = \"not configured\"\n\t}}\n",
+                carrier = camel(&field.name),
+            );
+            self.push(&step);
+        }
         let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
         else {
             return;
@@ -1557,17 +1606,16 @@ impl Resolver<'_, '_> {
         let lookup = self.env_lookup(name);
         let label = self.env_label(name);
         let miss = self.env_miss_reason(name);
-        let mut block = format!(
+        let block = format!(
             "\tif raw, ok := {lookup}; ok && raw != \"\" {{\n\
              \t\tif err := json.Unmarshal([]byte(raw), &{dest}); err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t\t}}\n\
-             \t}}"
+             \t\t{why} = \"\"\n\
+             \t}} else {{\n\t\t{why} = {miss}\n\t}}\n"
         );
-        if guaranteed {
-            block.push('\n');
-        } else {
-            block = format!("\t{why} := \"\"\n{block} else {{\n\t\t{why} = {miss}\n\t}}\n");
-        }
-        self.push(&block);
+        self.push(&format!(
+            "\tif {why} != \"\" {{\n{inner}\t}}\n",
+            inner = indent(block.trim_end_matches('\n')),
+        ));
     }
 
     /// A composed config: per member, an entry `@bind` wins over the member's
@@ -1873,6 +1921,170 @@ mod tests {
         assert!(serde.contains("&TransportError{Cause: outcome.Cause}"));
         assert!(serde.contains("DecodeSaveNoteError(outcome.Status, []byte(outcome.Body))"));
         assert!(serde.contains("&DecodeError{Path: \"$\", Expected: \"Note\", Raw: outcome.Body}"));
+    }
+
+    #[test]
+    fn a_dynamic_env_name_off_an_absent_chain_emits_balanced_braces() {
+        // A non-guaranteed chain whose env name comes from a sibling that may
+        // itself be absent: the emitted run must be one balanced
+        // if/else-if/else (the else chains straight into the lookup).
+        let mut module = fixture_module();
+        for shape in &mut module.shapes {
+            if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
+                // naming is env-only (not guaranteed); reader looks its value up.
+                fields.push(EntryField {
+                    name: "naming".into(),
+                    target: Tref::Prim(Prim::String),
+                    sources: vec![Source::Env(EnvName::Name("NAMING".into()))],
+                    format: None,
+                    transforms: vec![],
+                    select: None,
+                    binds: vec![],
+                    constraints: vec![],
+                    traits: vec![],
+                });
+                fields.push(EntryField {
+                    name: "reader".into(),
+                    target: Tref::Prim(Prim::String),
+                    sources: vec![Source::Env(EnvName::Field(crate::ir::FieldRef {
+                        field: vec!["naming".into()],
+                    }))],
+                    format: None,
+                    transforms: vec![],
+                    select: None,
+                    binds: vec![],
+                    constraints: vec![],
+                    traits: vec![],
+                });
+            }
+        }
+        let serde = serde_text(&module);
+        assert!(serde.contains("readerWhy = \"naming <- \" + namingWhy"));
+        let new_fn = serde
+            .split("func New(")
+            .nth(1)
+            .and_then(|rest| rest.split("\nfunc ").next())
+            .expect("New body");
+        assert_eq!(
+            new_fn.matches('{').count(),
+            new_fn.matches('}').count(),
+            "unbalanced braces in the generated constructor:\n{new_fn}"
+        );
+    }
+
+    #[test]
+    fn structured_sources_decode_strictly_and_honor_explicit_values() {
+        let mut module = fixture_module();
+        let creds = Shape {
+            id: "notes#credentials".into(),
+            kind: ShapeKind::Structure {
+                params: vec![],
+                members: vec![
+                    Member {
+                        name: "token".into(),
+                        target: Tref::Prim(Prim::String),
+                        required: true,
+                        default: None,
+                        constraints: vec![crate::ir::Constraint::Length {
+                            min: Some(1),
+                            max: None,
+                        }],
+                        traits: vec![],
+                    },
+                    Member {
+                        name: "account_id".into(),
+                        target: Tref::Prim(Prim::String),
+                        required: true,
+                        default: None,
+                        constraints: vec![],
+                        traits: vec![],
+                    },
+                ],
+            },
+            traits: vec![],
+        };
+        module.shapes.push(creds);
+        for shape in &mut module.shapes {
+            if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
+                // @with layers over the env decode; a labels map decodes whole.
+                fields.push(EntryField {
+                    name: "creds".into(),
+                    target: Tref::Ref {
+                        id: "notes#credentials".into(),
+                        args: vec![],
+                    },
+                    sources: vec![
+                        Source::With,
+                        Source::Env(EnvName::Name("SERVICE_CREDENTIALS".into())),
+                    ],
+                    format: None,
+                    transforms: vec![],
+                    select: None,
+                    binds: vec![],
+                    constraints: vec![],
+                    traits: vec![],
+                });
+                fields.push(EntryField {
+                    name: "labels".into(),
+                    target: Tref::Map(
+                        Box::new(Tref::Prim(Prim::String)),
+                        Box::new(Tref::Prim(Prim::String)),
+                    ),
+                    sources: vec![Source::Env(EnvName::Name("SERVICE_LABELS".into()))],
+                    format: None,
+                    transforms: vec![],
+                    select: None,
+                    binds: vec![],
+                    constraints: vec![],
+                    traits: vec![],
+                });
+            }
+        }
+        let serde = serde_text(&module);
+        // Strict decode: probe for required members, unknown fields rejected,
+        // declared validation at construction, the env name as context.
+        assert!(serde.contains("fmt.Errorf(\"%s: missing field token\", \"SERVICE_CREDENTIALS\")"));
+        assert!(serde.contains("dec.DisallowUnknownFields()"));
+        assert!(serde.contains("ValidateCredentials(decoded)"));
+        // The explicit @with value wins: the decode runs only while unset.
+        assert!(serde.contains("if w.creds != nil {"));
+        assert!(serde.contains("if credsWhy != \"\" {"));
+        // The whole-JSON map field decodes with its env name as context.
+        assert!(serde.contains("json.Unmarshal([]byte(raw), &s.Labels)"));
+        let types = types_text(&module);
+        assert!(types.contains("func WithCreds(v Credentials) ClientOption {"));
+    }
+
+    #[test]
+    fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
+        let mut module = fixture_module();
+        for shape in &mut module.shapes {
+            if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
+                let mut choice = EntryField {
+                    name: "choice".into(),
+                    target: Tref::Prim(Prim::String),
+                    sources: vec![],
+                    format: None,
+                    transforms: vec![],
+                    select: None,
+                    binds: vec![],
+                    constraints: vec![],
+                    traits: vec![],
+                };
+                choice.select = Some(crate::ir::Select {
+                    subject: vec!["client_name".into()],
+                    arms: vec![crate::ir::SelectArm {
+                        pattern: Some(serde_json::json!("demo")),
+                        value: crate::ir::ArmValue::Lit(serde_json::json!("d")),
+                    }],
+                });
+                fields.push(choice);
+            }
+        }
+        let serde = serde_text(&module);
+        assert!(serde.contains(
+            "return nil, fmt.Errorf(\"choice: match on client_name: unmatched value %v\", s.ClientName)"
+        ));
     }
 
     #[test]
