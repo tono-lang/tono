@@ -469,6 +469,34 @@ fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
 }
 
 #[test]
+fn a_constrained_op_input_is_validated_before_transport() {
+    let mut module = with_descriptors(fixture_module());
+    // Give the op input struct a constraint so it gains a validator.
+    for shape in &mut module.shapes {
+        if shape.id == "notes#note" {
+            if let ShapeKind::Structure { members, .. } = &mut shape.kind {
+                if let Some(m) = members.iter_mut().find(|m| m.name == "body") {
+                    m.constraints = vec![crate::ir::Constraint::Length {
+                        min: Some(1),
+                        max: None,
+                    }];
+                }
+            }
+        }
+    }
+    let serde = serde_text(&module);
+    // The input is validated and a violation surfaces as a ValidationError.
+    assert!(serde.contains("if vs := ValidateNote(input); len(vs) > 0 {"));
+    assert!(serde.contains("return zero, &ValidationError{Violations: vs}"));
+    // The check runs before the transport call, not after.
+    let val = serde.find("ValidateNote(input)").expect("validate call");
+    let exec = serde
+        .find("c.runtime.Execute(ctx, saveNoteDescriptor")
+        .expect("execute call");
+    assert!(val < exec);
+}
+
+#[test]
 fn the_bespoke_stub_error_passes_through_the_bound_on_error_hook() {
     let mut module = fixture_module();
     module.extensions = vec![crate::ir::Extension {

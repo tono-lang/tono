@@ -21,6 +21,7 @@ import {
   TransportError,
   ValidationError,
   Violation,
+  validateCharge,
 } from "./charges";
 import {
   decodePaymentMethod,
@@ -228,6 +229,10 @@ export class Client {
   }
 
   async createCharge(input: Charge): Promise<Charge> {
+    const vs = validateCharge(input);
+    if (vs.length > 0) {
+      throw new ValidationError(vs);
+    }
     const outcome = await execute(
       createChargeDescriptor,
       encodeCharge(input),

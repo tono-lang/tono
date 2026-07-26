@@ -232,6 +232,31 @@ fn a_structured_decode_probes_the_wire_key_not_the_member_name() {
 }
 
 #[test]
+fn a_constrained_op_input_is_validated_before_transport() {
+    let mut module = with_descriptors(fixture_module());
+    for shape in &mut module.shapes {
+        if shape.id == "notes#note" {
+            if let ShapeKind::Structure { members, .. } = &mut shape.kind {
+                if let Some(m) = members.iter_mut().find(|m| m.name == "body") {
+                    m.constraints = vec![crate::ir::Constraint::Length {
+                        min: Some(1),
+                        max: None,
+                    }];
+                }
+            }
+        }
+    }
+    let out = text(&module);
+    // The input is validated and a violation surfaces as a ValidationError.
+    assert!(out.contains("const vs = validateNote(input);"));
+    assert!(out.contains("throw new ValidationError(vs);"));
+    // The check runs before the transport call, not after.
+    let val = out.find("validateNote(input)").expect("validate call");
+    let exec = out.find("await execute(").expect("execute call");
+    assert!(val < exec);
+}
+
+#[test]
 fn a_bespoke_stub_keeps_the_declared_signature() {
     // No descriptor on the op (the fixture is pre-protocol): the stub
     // still takes the declared input.

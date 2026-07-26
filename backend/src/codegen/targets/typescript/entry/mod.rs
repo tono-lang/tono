@@ -569,6 +569,26 @@ fn op_method(
         .map(|t| render_type(&type_expr_of(t), &TsRules))
         .unwrap_or_else(|| "void".to_string());
 
+    // A constrained input is validated before it leaves the process, so a bad
+    // request surfaces as a ValidationError instead of a server round trip.
+    let mut validate_block = String::new();
+    if let Some(Tref::Ref { id, .. }) = input {
+        if let Some(shape) = module
+            .shapes
+            .iter()
+            .find(|s| s.id == *id)
+            .filter(|s| validation::shape_has_checks(s))
+        {
+            let ty = type_ident_from_id(&shape.id);
+            refs.push(module_symbol(&format!("validate{ty}"), module));
+            refs.push(module_symbol(&en.validation, module));
+            validate_block = format!(
+                "    const vs = validate{ty}(input);\n    if (vs.length > 0) {{\n      throw new {v}(vs);\n    }}\n",
+                v = en.validation,
+            );
+        }
+    }
+
     let error_line = if declared_errors(op, module).is_empty() {
         refs.push(module_symbol(&en.api, module));
         throw(format!("new {}(outcome.status, outcome.body)", en.api))
@@ -620,6 +640,7 @@ fn op_method(
         .unwrap_or_default();
     format!(
         "{doc}  async {name}({param}): Promise<{ret}> {{\n\
+         {validate_block}\
          \x20   const outcome = await execute({descriptor}, {input_expr}, this.options{hooks_arg});\n\
          \x20   if (outcome.outcome === \"transport\") {{\n\
          \x20     {transport_throw}\n\

@@ -527,6 +527,24 @@ fn op_method_decl(
         Some(t) => (format!("\tvar zero {}\n", go_type(t)), "zero, "),
         None => (String::new(), ""),
     };
+    // A constrained input is validated before it leaves the process, so a bad
+    // request surfaces as a ValidationError instead of a server round trip.
+    let validate_input = match input {
+        Some(Tref::Ref { id, .. }) => module
+            .shapes
+            .iter()
+            .find(|s| s.id == *id)
+            .filter(|s| validation::shape_has_checks(s))
+            .map(|s| type_ident_from_id(&s.id)),
+        _ => None,
+    };
+    let validate_block = match &validate_input {
+        Some(ty) => format!(
+            "\tif vs := Validate{ty}(input); len(vs) > 0 {{\n\t\treturn {ret_zero}{fail_val}\n\t}}\n",
+            fail_val = fail(format!("&{}{{Violations: vs}}", en.validation)),
+        ),
+        None => String::new(),
+    };
     let record = match input {
         Some(_) => format!(
             "\trecord, err := encodeRecord(input)\n\
@@ -594,7 +612,7 @@ fn op_method_decl(
         .unwrap_or_default();
     let text = format!(
         "{doc}func (c *{client}) {sig} {{\n\
-         {zero_decl}{record}\
+         {zero_decl}{validate_block}{record}\
          \toutcome, err := c.runtime.Execute(ctx, {descriptor}, record, c.hooks)\n\
          \tif err != nil {{\n\t\treturn {ret_zero}{fail_hook}\n\t}}\n\
          \tswitch outcome.Kind {{\n\

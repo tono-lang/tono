@@ -109,6 +109,9 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 
 func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error) {
 	var zero Charge
+	if vs := ValidateCharge(input); len(vs) > 0 {
+		return zero, &ValidationError{Violations: vs}
+	}
 	record, err := encodeRecord(input)
 	if err != nil {
 		return zero, err
