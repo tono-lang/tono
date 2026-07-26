@@ -392,21 +392,25 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                         module.name, entry.name, field.name
                     ));
                 }
-                if RESERVED_ARG_NAMES.contains(&field.name.as_str())
-                    && has_source(field, |s| matches!(s, Source::Arg))
-                {
-                    return Err(format!(
-                        "module {}: entry {} field {} is an @arg but its name is a local the generated constructor already declares; rename the field",
-                        module.name, entry.name, field.name
-                    ));
-                }
-                if RESERVED_ARG_KEYWORDS.contains(&field.name.as_str())
-                    && has_source(field, |s| matches!(s, Source::Arg))
-                {
-                    return Err(format!(
-                        "module {}: entry {} field {} is an @arg but its name is a keyword in a target language; rename the field",
-                        module.name, entry.name, field.name
-                    ));
+                if has_source(field, |s| matches!(s, Source::Arg)) {
+                    // The generated @arg parameter is the canonical name cased, or
+                    // its @rename(lang) override verbatim: every spelling the
+                    // parameter can take must clear the reserved lists, not just
+                    // the canonical one.
+                    for candidate in arg_identifiers(field) {
+                        if RESERVED_ARG_NAMES.contains(&candidate.as_str()) {
+                            return Err(format!(
+                                "module {}: entry {} field {} is an @arg but its generated parameter {} is a local the generated constructor already declares; rename the field or its @rename",
+                                module.name, entry.name, field.name, candidate
+                            ));
+                        }
+                        if RESERVED_ARG_KEYWORDS.contains(&candidate.as_str()) {
+                            return Err(format!(
+                                "module {}: entry {} field {} is an @arg but its generated parameter {} is a keyword in a target language; rename the field or its @rename",
+                                module.name, entry.name, field.name, candidate
+                            ));
+                        }
+                    }
                 }
                 // The generated resolution derives a `<field>_why` reason
                 // variable and a `<field>_set` flag per field; a sibling
@@ -580,6 +584,24 @@ pub fn companion_name(entry: &str, base: &str, multi: bool) -> String {
 
 fn has_source(field: &EntryField, pred: impl Fn(&Source) -> bool) -> bool {
     field.sources.iter().any(pred)
+}
+
+/// Every spelling an `@arg` field's generated parameter can take: the canonical
+/// name (the reserved lists are single-word, so casing does not change them) and
+/// each `@rename(lang)` override, which is used verbatim. The collision checks
+/// clear all of them, not just the canonical name.
+fn arg_identifiers(field: &EntryField) -> Vec<String> {
+    let mut out = vec![field.name.clone()];
+    if let Some(t) = field.traits.iter().find(|t| t.id == "core#rename") {
+        if let Some(map) = t.value.as_object() {
+            for v in map.values() {
+                if let Some(s) = v.as_str() {
+                    out.push(s.to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 impl<'a> EntryModel<'a> {

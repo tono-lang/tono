@@ -540,6 +540,16 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     ))
     .unwrap_err();
     assert!(err.contains("NewAdmin"), "{err}");
+    // An @arg whose canonical name is clean but whose @rename(go) override is a
+    // keyword is rejected on the rendered parameter, not just the canonical name.
+    let mut renamed = field("kind", vec![Source::Arg]);
+    renamed.traits = vec![crate::ir::Trait {
+        id: "core#rename".into(),
+        value: json!({"go": "type"}),
+    }];
+    let err =
+        validate_entries(&model(vec![entry_shape("m#client", vec![renamed])], vec![])).unwrap_err();
+    assert!(err.contains("keyword") && err.contains("type"), "{err}");
     // A clean single-entry module passes.
     assert!(validate_entries(&model(
         vec![entry_shape(
