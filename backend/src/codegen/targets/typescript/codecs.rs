@@ -26,7 +26,15 @@ pub fn runtime_helpers() -> Vec<Decl> {
             "decodeI64",
             &[("s", "string")],
             "bigint",
-            "  return BigInt(s);",
+            "  const n = BigInt(s);\n  if (n < -9223372036854775808n || n > 9223372036854775807n) {\n    throw new RangeError(`i64 out of range: ${s}`);\n  }\n  return n;",
+        ),
+        // A separate u64 decoder so the wire boundary rejects a negative or an
+        // over-range value, matching Go's `encoding/json` on a `uint64` field.
+        function(
+            "decodeU64",
+            &[("s", "string")],
+            "bigint",
+            "  const n = BigInt(s);\n  if (n < 0n || n > 18446744073709551615n) {\n    throw new RangeError(`u64 out of range: ${s}`);\n  }\n  return n;",
         ),
         function(
             "encodeBytes",
@@ -350,7 +358,8 @@ fn encode_expr(value: &str, t: &Tref) -> String {
 /// same shape arriving on the wire.
 pub(crate) fn decode_expr(value: &str, t: &Tref) -> String {
     match t {
-        Tref::Prim(Prim::I64 | Prim::U64) => format!("decodeI64({value})"),
+        Tref::Prim(Prim::I64) => format!("decodeI64({value})"),
+        Tref::Prim(Prim::U64) => format!("decodeU64({value})"),
         Tref::Prim(Prim::Bytes) => format!("decodeBytes({value})"),
         Tref::Prim(Prim::Timestamp) => format!("({value} as Timestamp)"),
         Tref::Prim(Prim::Date) => format!("({value} as LocalDate)"),
@@ -424,7 +433,11 @@ mod tests {
         assert!(out.contains("export function encodeI64(v: bigint): string {"));
         assert!(out.contains("return v.toString();"));
         assert!(out.contains("export function decodeI64(s: string): bigint {"));
-        assert!(out.contains("return BigInt(s);"));
+        // i64 and u64 decoders enforce their ranges (u64 also rejects negatives),
+        // matching Go's encoding/json on a `,string` 64-bit field.
+        assert!(out.contains("n > 9223372036854775807n"));
+        assert!(out.contains("export function decodeU64(s: string): bigint {"));
+        assert!(out.contains("n < 0n || n > 18446744073709551615n"));
         assert!(out.contains("export function encodeBytes(b: Uint8Array): string {"));
         assert!(out.contains("export function decodeBytes(s: string): Uint8Array {"));
     }
@@ -645,6 +658,13 @@ mod tests {
         assert_eq!(
             decode_expr("xs", &Tref::List(Box::new(Tref::Prim(Prim::I64)))),
             "xs.map((x: any) => decodeI64(x))"
+        );
+        // u64 decodes through its own bounds-checking helper, so a list/map of
+        // u64 rejects a negative or over-range element per item.
+        assert_eq!(decode_expr("x", &Tref::Prim(Prim::U64)), "decodeU64(x)");
+        assert_eq!(
+            decode_expr("xs", &Tref::List(Box::new(Tref::Prim(Prim::U64)))),
+            "xs.map((x: any) => decodeU64(x))"
         );
         assert!(encode_expr("m", &bytes_map()).contains("encodeBytes(v)"));
         assert!(decode_expr("m", &bytes_map()).contains("decodeBytes(v)"));

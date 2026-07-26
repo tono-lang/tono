@@ -7,7 +7,19 @@ export function encodeI64(v: bigint): string {
 }
 
 export function decodeI64(s: string): bigint {
-  return BigInt(s);
+  const n = BigInt(s);
+  if (n < -9223372036854775808n || n > 9223372036854775807n) {
+    throw new RangeError(`i64 out of range: ${s}`);
+  }
+  return n;
+}
+
+export function decodeU64(s: string): bigint {
+  const n = BigInt(s);
+  if (n < 0n || n > 18446744073709551615n) {
+    throw new RangeError(`u64 out of range: ${s}`);
+  }
+  return n;
 }
 
 export function encodeBytes(b: Uint8Array): string {
