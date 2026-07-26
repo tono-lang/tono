@@ -108,12 +108,15 @@ let rec print_ty (t : Ast.ty) : string =
   | Ast.TNullable (inner, _) -> print_ty inner ^ "?"
   | Ast.TError _ -> "_"
 
+let print_ref (r : Ast.ref_path) : string = "." ^ String.concat "." r.Ast.segs
+
 let rec print_trait_arg (a : Ast.trait_arg) : string =
   match a with
   | Ast.AString s -> string_literal s
   | Ast.AInt n -> string_of_int n
   | Ast.AFloat f -> float_literal f
   | Ast.AName n -> n
+  | Ast.ARef r -> print_ref r
   | Ast.AKv (k, v) -> k ^ ": " ^ print_trait_arg v
 
 let print_trait (t : Ast.trait) : string =
@@ -129,8 +132,37 @@ let trailing_traits (ts : Ast.trait list) : string =
 
 let print_params = function [] -> "" | ps -> "[" ^ String.concat ", " ps ^ "]"
 
+let print_pattern (p : Ast.match_pattern) : string =
+  match p with
+  | Ast.PString s -> string_literal s
+  | Ast.PInt n -> string_of_int n
+  | Ast.PName n -> n
+  | Ast.PWildcard -> "_"
+
+let print_arm_value (v : Ast.arm_value) : string =
+  match v with
+  | Ast.AVRef r -> print_ref r
+  | Ast.AVString s -> string_literal s
+  | Ast.AVInt n -> string_of_int n
+  | Ast.AVName n -> n
+  | Ast.AVSources ts -> String.concat " " (List.map (fun t -> print_trait t) ts)
+
+let print_field_match (m : Ast.field_match) : string =
+  let arm (a : Ast.match_arm) =
+    "    " ^ print_pattern a.Ast.pat ^ " => " ^ print_arm_value a.Ast.value
+  in
+  match m.Ast.arms with
+  | [] -> "match " ^ print_ref m.Ast.subject ^ " {}"
+  | arms ->
+      "match " ^ print_ref m.Ast.subject ^ " {\n"
+      ^ String.concat "\n" (List.map arm arms)
+      ^ "\n  }"
+
 let print_member (m : Ast.member) : string =
   "  " ^ m.Ast.mname ^ ": " ^ print_ty m.Ast.mtype
+  ^ (match m.Ast.mmatch with
+    | Some fm -> " = " ^ print_field_match fm
+    | None -> "")
   ^ trailing_traits m.Ast.mtraits
 
 let print_enum_case (c : Ast.enum_case) : string =
@@ -149,17 +181,26 @@ let braced (header : string) (lines : string list) : string =
   | [] -> header ^ " {}"
   | ls -> header ^ " {\n" ^ String.concat "\n" ls ^ "\n}"
 
-let print_decl (d : Ast.decl) : string =
-  let pub = if d.Ast.pub then "pub " else "" in
+(* The single-line op form, shared by top-level ops and ops nested in a struct
+   body (where [indent] is the body indentation). *)
+let print_op ~indent (d : Ast.decl) : string =
   match d.Ast.dkind with
   | Ast.DOp { input; output } ->
-      (* Op traits print trailing: whitespace is not significant, so any trait
-         between an op and the next declaration binds to the op regardless. *)
-      pub ^ "op " ^ d.Ast.dname ^ "("
+      let pub = if d.Ast.pub then "pub " else "" in
+      indent ^ pub ^ "op " ^ d.Ast.dname ^ "("
       ^ (match input with Some t -> print_ty t | None -> "")
       ^ ")"
       ^ (match output with Some t -> ": " ^ print_ty t | None -> "")
       ^ trailing_traits d.Ast.dtraits
+  | _ -> assert false
+
+let print_decl (d : Ast.decl) : string =
+  let pub = if d.Ast.pub then "pub " else "" in
+  match d.Ast.dkind with
+  | Ast.DOp _ ->
+      (* Op traits print trailing: whitespace is not significant, so any trait
+         between an op and the next declaration binds to the op regardless. *)
+      print_op ~indent:"" d
   | kind ->
       let above =
         String.concat ""
@@ -167,10 +208,18 @@ let print_decl (d : Ast.decl) : string =
       in
       let body =
         match kind with
-        | Ast.DStruct { params; members } ->
-            braced
-              (pub ^ "struct " ^ d.Ast.dname ^ print_params params)
-              (List.map print_member members)
+        | Ast.DStruct { params; members; ops } ->
+            (* An entry prints its ops after the fields, separated by a blank
+               line so the construction surface reads apart from the methods. *)
+            let member_lines = List.map print_member members in
+            let op_lines = List.map (print_op ~indent:"  ") ops in
+            let lines =
+              match (member_lines, op_lines) with
+              | ms, [] -> ms
+              | [], os -> os
+              | ms, os -> ms @ ("" :: os)
+            in
+            braced (pub ^ "struct " ^ d.Ast.dname ^ print_params params) lines
         | Ast.DEnum { cases } ->
             braced
               (pub ^ "enum " ^ d.Ast.dname)

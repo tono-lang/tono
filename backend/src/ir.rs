@@ -15,7 +15,11 @@ use serde_json::Value;
 /// v3 added the module `extensions` table (bespoke hooks/contracts/constraints).
 /// v4 made an enum value an object carrying a trait bag (documentation rides it),
 /// replacing the `[name, intOrNull]` pair.
-pub const TONO_IR_VERSION: u32 = 4;
+/// v5 added the entry model: `entry`/`config` shape kinds whose fields carry
+/// value sources, `@format` templates, transform pipelines, match selection,
+/// and `@bind` composition; entry ops nest inside the entry shape and their
+/// trait values may carry field references (`{"field": [...]}`).
+pub const TONO_IR_VERSION: u32 = 5;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,6 +241,98 @@ pub struct EnumValue {
     pub traits: Vec<Trait>,
 }
 
+/// Where an entry/config field's value can come from; the declared order is
+/// the fallback chain. Wire form: `"arg"`, `"with"`, `{"env": <name>}`, or
+/// `{"default": <json>}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    Arg,
+    With,
+    Env(EnvName),
+    Default(Value),
+}
+
+/// The `@env` argument: a literal variable name, or a sibling-field reference
+/// whose resolved value names the variable (`{"field": [...]}`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EnvName {
+    Name(String),
+    Field(FieldRef),
+}
+
+/// A structured entry-field reference, `{"field": ["a", "b"]}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldRef {
+    pub field: Vec<String>,
+}
+
+/// One piece of a parsed template: a literal run, an entry-field placeholder
+/// (`{.x}`), or an operation-input member placeholder (`{id}`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TemplatePart {
+    Lit(String),
+    Field(Vec<String>),
+    Input(String),
+}
+
+/// What a selected match arm yields: another field, a literal, or a stack of
+/// sources resolved in place.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArmValue {
+    Field(Vec<String>),
+    Lit(Value),
+    Sources(Vec<Source>),
+}
+
+/// One arm of a match selection; an absent `pattern` is the wildcard arm.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectArm {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<Value>,
+    pub value: ArmValue,
+}
+
+/// The selection table of `field: T = match .subject { ... }`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Select {
+    pub subject: Vec<String>,
+    #[serde(default)]
+    pub arms: Vec<SelectArm>,
+}
+
+/// One `@bind(target, .source)` at a composition point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bind {
+    pub field: String,
+    pub source: Vec<String>,
+}
+
+/// One field of an entry or config. Presence is governed by the sources, so
+/// there is no required/default pair here (`@default` is a source).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntryField {
+    pub name: String,
+    pub target: Tref,
+    #[serde(default)]
+    pub sources: Vec<Source>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<Vec<TemplatePart>>,
+    #[serde(default)]
+    pub transforms: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<Select>,
+    #[serde(default)]
+    pub binds: Vec<Bind>,
+    #[serde(default)]
+    pub constraints: Vec<Constraint>,
+    #[serde(default)]
+    pub traits: Vec<Trait>,
+}
+
 /// Shape kind, internally tagged by `kind` and flattened next to a shape's
 /// `id` and `traits`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -273,6 +369,20 @@ pub enum ShapeKind {
         output: Option<Tref>,
         #[serde(default)]
         errors: Vec<Tref>,
+    },
+    /// A struct with ops in its body: the SDK construction surface plus its
+    /// methods; never a wire type.
+    Entry {
+        #[serde(default)]
+        fields: Vec<EntryField>,
+        #[serde(default)]
+        operations: Vec<Shape>,
+    },
+    /// A construction-only struct (its fields carry sources, or an entry
+    /// composes it via `@bind`); never a wire type.
+    Config {
+        #[serde(default)]
+        fields: Vec<EntryField>,
     },
 }
 

@@ -25,11 +25,13 @@ type kind =
   | LParen
   | RParen
   | Colon
+  | ColonColon
   | Question
   | Comma
   | Dot
   | Eq
   | Arrow
+  | FatArrow
   | Eof
 
 type t = { kind : kind; span : Span.span }
@@ -59,9 +61,11 @@ let describe (k : kind) : string =
   | LParen -> "'('"
   | RParen -> "')'"
   | Colon -> "':'"
+  | ColonColon -> "'::'"
   | Question -> "'?'"
   | Comma -> "','"
   | Dot -> "'.'"
   | Eq -> "'='"
   | Arrow -> "'->'"
+  | FatArrow -> "'=>'"
   | Eof -> "end of file"

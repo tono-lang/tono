@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 4, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 5, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **4**.
+The current version is **5**.
 
 ## Modules
 
@@ -116,7 +116,8 @@ contract.
 ## Shapes
 
 A shape is internally tagged by a `kind` field, flattened next to `id` and
-`traits`. There are exactly five kinds.
+`traits`. There are exactly seven kinds: five wire kinds plus the two
+construction kinds (`entry` and `config`, below).
 
 ```json
 { "id": "payments#Charge", "kind": "structure",
@@ -150,6 +151,59 @@ A shape is internally tagged by a `kind` field, flattened next to `id` and
 - `operation` carries `input`/`output` as a type reference or `null`, and
   `errors` as an array of type references. They are type references (not bare
   ids) so an operation can return an applied generic directly.
+
+## Entries and configs (v5)
+
+A struct with ops in its body is an `entry` (the SDK construction surface plus
+its methods); a struct that only participates in construction is a `config`.
+Neither is a wire type. An entry nests its operations as full shape objects,
+identified `module#entry.op` so they never collide with top-level shapes:
+
+```json
+{ "id": "notes#client", "kind": "entry",
+  "fields": [ /* entry fields */ ],
+  "operations": [ /* operation shapes */ ], "traits": [] }
+
+{ "id": "notes#conf", "kind": "config",
+  "fields": [ /* entry fields */ ], "traits": [] }
+```
+
+An entry field replaces the member's `required`/`default` pair with declared
+value sources (presence is governed by the sources):
+
+```json
+{ "name": "endpoint_v2",
+  "target": { "prim": "string" },
+  "sources": [ "with", { "env": "ENDPOINT" },
+               { "env": { "field": ["endpoint_env"] } }, { "default": "v2" } ],
+  "format": [ { "lit": "ENDPOINT_" }, { "field": ["client_key"] }, { "lit": "_V2" } ],
+  "transforms": [ "trim", "upper_snake" ],
+  "select": { "subject": ["endpoint_version"],
+              "arms": [ { "pattern": "v1", "value": { "field": ["endpoint_v1"] } },
+                        { "value": { "sources": [ { "env": "ENDPOINT_V2" } ] } } ] },
+  "binds": [ { "field": "api_key", "source": ["api_key"] } ],
+  "constraints": [], "traits": [] }
+```
+
+- `sources` is the declared fallback chain, in order. The forms are `"arg"`,
+  `"with"`, `{ "env": <string | {"field": [...]}> }`, and
+  `{ "default": <json> }`; `"arg"` is exclusive and never stacks with the
+  others (the typechecker rejects the combination as dead sources).
+- `format` (omitted when absent) is the parsed `@format` template: `lit`
+  literal runs, `field` entry-field placeholders (`{.x}`), and `input`
+  operation-input placeholders (`{id}`, protocol trait positions only).
+- `transforms` is the `@str::*` pipeline in declared order (bare names,
+  e.g. `"trim"`).
+- `select` (omitted when absent) is the `= match` table: `subject` is a field
+  path; each arm carries a scalar JSON `pattern` (absent = wildcard) and a
+  `value` that is one of `{"field": [...]}`, `{"lit": <json>}`, or
+  `{"sources": [...]}`.
+- `binds` are the `@bind(target, .source)` pairs of a composed config field.
+
+A field reference inside an operation trait value is the structured object
+`{"field": ["a", "b"]}` (e.g. `@http`'s `endpoint:`, `@header` values,
+`@timeout`/`@retry`); path templates keep both placeholder scopes verbatim in
+the string (`"/notes/{.x}/{id}"`).
 
 ## Numbers
 

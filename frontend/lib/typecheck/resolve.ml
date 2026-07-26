@@ -86,13 +86,15 @@ let rec resolve_ty ~params ~(tbl : Symtab.t) ~(qualified : qualified)
       in
       qualified ~qualifier ~name ~n_args:(List.length args) span @ arg_diags
 
-let resolve_decl ~(qualified : qualified) (tbl : Symtab.t) (d : Ast.decl) :
+let rec resolve_decl ~(qualified : qualified) (tbl : Symtab.t) (d : Ast.decl) :
     Diagnostic.t list =
   match d.dkind with
-  | Ast.DStruct { params; members } ->
+  | Ast.DStruct { params; members; ops } ->
       List.concat_map
         (fun (m : Ast.member) -> resolve_ty ~params ~tbl ~qualified m.mtype)
         members
+      (* Ops nested in an entry body resolve exactly like top-level ops. *)
+      @ List.concat_map (resolve_decl ~qualified tbl) ops
   | Ast.DUnion { params; variants } ->
       List.concat_map
         (fun (v : Ast.union_variant) ->

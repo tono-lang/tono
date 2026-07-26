@@ -130,7 +130,7 @@ export function decodeCreateChargeError(
 }
 
 const createChargeDescriptor: WireDescriptor = JSON.parse(
-  '{"bindings":[["id",{"kind":"body"}],["amount",{"kind":"body"}],["fee",{"kind":"body"}],["receipt",{"kind":"body"}],["currency",{"kind":"body"}],["note",{"kind":"body"}],["tags",{"kind":"body"}],["metadata",{"kind":"body"}],["created",{"kind":"body"}],["status",{"kind":"body"}],["method",{"kind":"body"}]],"errors":[[402,"payments.charges#card_declined","card_declined"],[404,"payments.charges#not_found",null]],"http_method":"POST","response_bindings":[],"success":[[200,{"args":[],"ref":"payments.charges#charge"}]],"uri":"/charges"}',
+  '{"bindings":[["id",{"kind":"body"}],["amount",{"kind":"body"}],["fee",{"kind":"body"}],["receipt",{"kind":"body"}],["currency",{"kind":"body"}],["note",{"kind":"body"}],["tags",{"kind":"body"}],["metadata",{"kind":"body"}],["created",{"kind":"body"}],["status",{"kind":"body"}],["method",{"kind":"body"}]],"errors":[[402,"payments.charges#card_declined","card_declined",true],[404,"payments.charges#not_found",null]],"http_method":"POST","response_bindings":[],"success":[[200,{"args":[],"ref":"payments.charges#charge"}]],"uri":"/charges"}',
 );
 export class HttpClient implements Client {
   constructor(private readonly options: ClientOptions) {}

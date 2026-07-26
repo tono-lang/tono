@@ -101,98 +101,96 @@ and parse_type_list st =
 
 (* ── Traits ────────────────────────────────────────────────────────────── *)
 
-(* A scalar trait-argument value (the part after "key:"). *)
-let parse_trait_value st : Ast.trait_arg =
-  let t = P.peek st in
-  match t.kind with
-  | Token.Str s ->
-      ignore (P.advance st);
-      Ast.AString s
-  | Token.Int n ->
-      ignore (P.advance st);
-      Ast.AInt n
-  | Token.Float f ->
-      ignore (P.advance st);
-      Ast.AFloat f
-  | Token.Ident n ->
-      ignore (P.advance st);
-      Ast.AName n
-  | _ ->
-      P.error st t.span "expected a value after ':'";
-      Ast.AName ""
-
-let parse_trait_arg st : Ast.trait_arg =
-  let t = P.peek st in
-  match t.kind with
-  | Token.Str s ->
-      ignore (P.advance st);
-      Ast.AString s
-  | Token.Int n ->
-      ignore (P.advance st);
-      Ast.AInt n
-  | Token.Float f ->
-      ignore (P.advance st);
-      Ast.AFloat f
-  | Token.Ident n -> (
-      ignore (P.advance st);
-      match (P.peek st).kind with
-      | Token.Colon ->
-          ignore (P.advance st);
-          Ast.AKv (n, parse_trait_value st)
-      | _ -> Ast.AName n)
-  | _ ->
-      P.error st t.span "expected a trait argument";
-      ignore (P.advance st);
-      Ast.AName ""
-
-let parse_trait_args st : Ast.trait_arg list =
-  ignore (P.advance st);
-  (* '(' *)
-  match (P.peek st).kind with
-  | Token.RParen ->
-      ignore (P.advance st);
-      []
-  | _ ->
-      let first = parse_trait_arg st in
-      let rec more acc =
-        match (P.peek st).kind with
-        | Token.Comma ->
-            ignore (P.advance st);
-            more (parse_trait_arg st :: acc)
-        | _ -> List.rev acc
-      in
-      let args = more [ first ] in
-      ignore (P.expect st Token.RParen "')' to close trait arguments");
-      args
-
-(* trait ::= "@" name ( "(" arg ("," arg)* ")" )? *)
-let parse_trait st : Ast.trait =
-  let at = P.advance st in
-  (* '@' *)
-  let name, nspan =
-    match (P.peek st).kind with
-    | Token.Ident n | Token.Prim n ->
-        let t = P.advance st in
-        (n, t.span)
-    | _ ->
-        P.error st (P.peek st).span "expected a trait name after '@'";
-        ("", (P.peek st).span)
-  in
-  let args =
-    if (P.peek st).kind = Token.LParen then parse_trait_args st else []
-  in
-  { Ast.tname = name; targs = args; tspan = Span.merge at.span nspan }
-
-let parse_trailing_traits st : Ast.trait list =
-  let rec go acc =
-    if (P.peek st).kind = Token.At then go (parse_trait st :: acc)
-    else List.rev acc
-  in
-  go []
+(* Trait and reference parsing lives in [Parser_traits]; aliased locally. *)
+let parse_ref_path = Parser_traits.parse_ref_path
+let parse_trait = Parser_traits.parse_trait
+let parse_trailing_traits = Parser_traits.parse_trailing_traits
 
 (* ── Members ───────────────────────────────────────────────────────────── *)
 
-(* member ::= name ":" type trait* *)
+(* match ::= "match" ref "{" (pattern "=>" value)* "}"  — the selection table of
+   an entry/config field. Patterns are literals (or "_"); a value is a field
+   reference, a literal, or a stack of source traits resolved in place. *)
+let parse_field_match st : Ast.field_match =
+  let kw = P.advance st in
+  (* 'match' *)
+  let subject =
+    match (P.peek st).kind with
+    | Token.Dot -> parse_ref_path st
+    | _ ->
+        P.error st (P.peek st).span
+          "expected a field reference (.name) as the match subject";
+        { Ast.segs = []; ref_span = (P.peek st).span }
+  in
+  ignore (P.expect st Token.LBrace "'{' to open the match body");
+  let parse_pattern () =
+    let t = P.peek st in
+    match t.kind with
+    | Token.Str s ->
+        ignore (P.advance st);
+        (Ast.PString s, t.span)
+    | Token.Int n ->
+        ignore (P.advance st);
+        (Ast.PInt n, t.span)
+    | Token.Ident "_" ->
+        ignore (P.advance st);
+        (Ast.PWildcard, t.span)
+    | Token.Ident n ->
+        ignore (P.advance st);
+        (Ast.PName n, t.span)
+    | _ ->
+        P.error st t.span "expected a literal pattern or '_' in the match body";
+        ignore (P.advance st);
+        (Ast.PWildcard, t.span)
+  in
+  let parse_value () =
+    let t = P.peek st in
+    match t.kind with
+    | Token.Dot ->
+        let r = parse_ref_path st in
+        (Ast.AVRef r, r.ref_span)
+    | Token.Str s ->
+        ignore (P.advance st);
+        (Ast.AVString s, t.span)
+    | Token.Int n ->
+        ignore (P.advance st);
+        (Ast.AVInt n, t.span)
+    | Token.Ident n ->
+        ignore (P.advance st);
+        (Ast.AVName n, t.span)
+    | Token.At ->
+        let traits = parse_trailing_traits st in
+        let last =
+          match List.rev traits with
+          | (tr : Ast.trait) :: _ -> tr.tspan
+          | [] -> t.span
+        in
+        (Ast.AVSources traits, Span.merge t.span last)
+    | _ ->
+        P.error st t.span
+          "expected a field reference, a literal, or value sources after '=>'";
+        ignore (P.advance st);
+        (Ast.AVName "", t.span)
+  in
+  let rec arms acc =
+    match (P.peek st).kind with
+    | Token.RBrace | Token.Eof -> List.rev acc
+    | Token.Comma ->
+        ignore (P.advance st);
+        arms acc
+    | _ ->
+        let pat, pat_span = parse_pattern () in
+        ignore
+          (P.expect st Token.FatArrow "'=>' between the pattern and its value");
+        let value, value_span = parse_value () in
+        arms ({ Ast.pat; pat_span; value; value_span } :: acc)
+  in
+  let arms = arms [] in
+  let close = P.expect st Token.RBrace "'}' to close the match body" in
+  let finish = match close with Some c -> c.span | None -> kw.span in
+  { Ast.subject; arms; match_span = Span.merge kw.span finish }
+
+(* member ::= name ":" type ("=" match)? trait* *)
 let parse_member st : Ast.member =
   let nt = P.peek st in
   let name =
@@ -206,26 +204,27 @@ let parse_member st : Ast.member =
   in
   ignore (P.expect st Token.Colon "':' after member name");
   let ty = parse_type st in
-  let traits = parse_trailing_traits st in
-  { Ast.mname = name; mname_span = nt.span; mtype = ty; mtraits = traits }
-
-let parse_members st ~what : Ast.member list =
-  let rec go acc =
+  let mmatch =
     match (P.peek st).kind with
-    | Token.RBrace | Token.Eof -> List.rev acc
-    | Token.Ident _ -> go (parse_member st :: acc)
-    | Token.Comma ->
+    | Token.Eq -> (
         ignore (P.advance st);
-        go acc
-    | _ ->
-        P.error st (P.peek st).span
-          (Printf.sprintf "unexpected %s in %s body"
-             (Token.describe (P.peek st).kind)
-             what);
-        ignore (P.advance st);
-        go acc
+        match (P.peek st).kind with
+        | Token.Ident "match" -> Some (parse_field_match st)
+        | _ ->
+            P.error st (P.peek st).span
+              "expected 'match' after '='; selection is the only field \
+               expression";
+            None)
+    | _ -> None
   in
-  go []
+  let traits = parse_trailing_traits st in
+  {
+    Ast.mname = name;
+    mname_span = nt.span;
+    mtype = ty;
+    mmatch;
+    mtraits = traits;
+  }
 
 (* generics ::= "[" name ("," name)* "]" *)
 let parse_generics st : string list =
@@ -252,41 +251,6 @@ let parse_generics st : string list =
     let ps = more [ first ] in
     ignore (P.expect st Token.RBracket "']' to close type parameters");
     ps)
-
-(* Shared header+body for the brace-with-members shapes (struct, union): a name,
-   optional generics, and a braced member list. [what] names the keyword for the
-   diagnostics. *)
-let parse_shape_body st ~what =
-  let nt = P.peek st in
-  let name =
-    match nt.kind with
-    | Token.Ident n ->
-        ignore (P.advance st);
-        n
-    | _ ->
-        P.error st nt.span (Printf.sprintf "expected a %s name" what);
-        ""
-  in
-  let params = parse_generics st in
-  ignore
-    (P.expect st Token.LBrace (Printf.sprintf "'{' to open the %s body" what));
-  let members = parse_members st ~what in
-  ignore
-    (P.expect st Token.RBrace (Printf.sprintf "'}' to close the %s body" what));
-  (name, nt.span, params, members)
-
-(* struct ::= "struct" name generics? "{" member* "}" *)
-let parse_struct st ~pub ~dtraits : Ast.decl =
-  ignore (P.advance st);
-  (* 'struct' *)
-  let name, span, params, members = parse_shape_body st ~what:"struct" in
-  {
-    Ast.dname = name;
-    dname_span = span;
-    pub;
-    dtraits;
-    dkind = Ast.DStruct { params; members };
-  }
 
 (* variant ::= name ( "(" type ")" )? trait*  — the name token is already
    consumed and passed in, so the only caller that reaches here had an
@@ -468,6 +432,55 @@ let parse_op st ~pub ~dtraits : Ast.decl =
     pub;
     dtraits;
     dkind = Ast.DOp { input; output };
+  }
+
+(* ── Structs ───────────────────────────────────────────────────────────── *)
+
+(* The struct body: members interleaved with op declarations (a struct with ops
+   is an entry). Op traits trail the op line, so a trait written between an op
+   and the next item binds to the op, exactly as at the top level. *)
+let parse_struct_items st : Ast.member list * Ast.decl list =
+  let rec go members ops =
+    match (P.peek st).kind with
+    | Token.RBrace | Token.Eof -> (List.rev members, List.rev ops)
+    | Token.Ident _ -> go (parse_member st :: members) ops
+    | Token.KwOp -> go members (parse_op st ~pub:false ~dtraits:[] :: ops)
+    | Token.Comma ->
+        ignore (P.advance st);
+        go members ops
+    | _ ->
+        P.error st (P.peek st).span
+          (Printf.sprintf "unexpected %s in struct body"
+             (Token.describe (P.peek st).kind));
+        ignore (P.advance st);
+        go members ops
+  in
+  go [] []
+
+(* struct ::= "struct" name generics? "{" (member | op)* "}" *)
+let parse_struct st ~pub ~dtraits : Ast.decl =
+  ignore (P.advance st);
+  (* 'struct' *)
+  let nt = P.peek st in
+  let name =
+    match nt.kind with
+    | Token.Ident n ->
+        ignore (P.advance st);
+        n
+    | _ ->
+        P.error st nt.span "expected a struct name";
+        ""
+  in
+  let params = parse_generics st in
+  ignore (P.expect st Token.LBrace "'{' to open the struct body");
+  let members, ops = parse_struct_items st in
+  ignore (P.expect st Token.RBrace "'}' to close the struct body");
+  {
+    Ast.dname = name;
+    dname_span = nt.span;
+    pub;
+    dtraits;
+    dkind = Ast.DStruct { params; members; ops };
   }
 
 (* ── Extensions ────────────────────────────────────────────────────────── *)

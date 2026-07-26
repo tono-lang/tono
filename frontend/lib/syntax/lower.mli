@@ -38,10 +38,18 @@ val lower_member :
   Ast.member ->
   Ir.member
 
+(* The transform named by a catalog trait ("str::trim" -> "trim"), or [None]
+   for a non-catalog trait name. Catalog membership is a typecheck concern. *)
+val transform_of : string -> string option
+
 (* Lower a surface declaration to an IR shape; its own id is qualified with
-   [module_name] and its references through [resolve]. Raises on a [DExt]
-   declaration, which has no shape; [lower_file] routes those to [lower_ext]. *)
+   [module_name] and its references through [resolve]. [role] (default [Wire])
+   selects the struct lowering: an [Entry] struct lowers its fields with their
+   sources and nests its ops as [module#entry.op]; a [Config] lowers fields
+   only. Raises on a [DExt] declaration, which has no shape; [lower_file]
+   routes those to [lower_ext]. *)
 val lower_decl :
+  ?role:Roles.role ->
   module_name:string ->
   resolve:ref_resolver ->
   diags:Diagnostic.t list ref ->
