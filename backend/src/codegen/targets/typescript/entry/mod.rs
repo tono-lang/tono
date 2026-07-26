@@ -441,6 +441,11 @@ fn class_decl(
     body.push_str(
         "    this.settings = s;\n    this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers, values };\n",
     );
+    // The mutually-exclusive transport slots are rejected at construction (as Go
+    // does in New), so a misconfigured client fails to build instead of failing
+    // obscurely on its first call.
+    refs.push(runtime_import("assertExclusiveTransport"));
+    body.push_str("    assertExclusiveTransport(this.options);\n");
 
     let hooks_field = {
         let mut slots = Vec::new();

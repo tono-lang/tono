@@ -90,7 +90,7 @@ export class OverloadedError extends APIError {
 }
 
 // ==== models_serde.ts ====
-import { CanonicalTransport, ClientOptions, WireDescriptor, execute } from "@tono/http-runtime-ts";
+import { CanonicalTransport, ClientOptions, WireDescriptor, assertExclusiveTransport, execute } from "@tono/http-runtime-ts";
 import { APIError, Credentials, DecodeError, Duration, Note, Overloaded, OverloadedError, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./notes";
 
 export function encodeI64(v: bigint): string {
@@ -424,6 +424,7 @@ export class Client {
     }
     this.settings = s;
     this.options = { baseUrl: "", fetch: s.fetch, transport: s.transport, headers: s.headers, values };
+    assertExclusiveTransport(this.options);
   }
 
   async saveNote(input: Note): Promise<Note> {

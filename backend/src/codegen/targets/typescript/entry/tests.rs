@@ -270,6 +270,21 @@ fn a_structured_output_decodes_strictly_on_required_members() {
 }
 
 #[test]
+fn the_constructor_rejects_conflicting_transports_at_construction() {
+    let module = with_descriptors(fixture_module());
+    let out = text(&module);
+    // The exclusive-transport check runs once at construction (as Go does in
+    // New), not lazily on each call, so a misconfigured client fails to build.
+    assert!(out.contains("assertExclusiveTransport(this.options);"));
+    // The check sits in the constructor, before any operation method.
+    let assert_at = out
+        .find("assertExclusiveTransport(this.options)")
+        .expect("assert call");
+    let first_op = out.find("async saveNote(").expect("op method");
+    assert!(assert_at < first_op);
+}
+
+#[test]
 fn a_bespoke_stub_keeps_the_declared_signature() {
     // No descriptor on the op (the fixture is pre-protocol): the stub
     // still takes the declared input.

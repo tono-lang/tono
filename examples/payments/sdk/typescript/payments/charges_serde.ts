@@ -4,6 +4,7 @@ import {
   CanonicalTransport,
   ClientOptions,
   WireDescriptor,
+  assertExclusiveTransport,
   execute,
 } from "@tono/http-runtime-ts";
 import {
@@ -226,6 +227,7 @@ export class Client {
       headers: s.headers,
       values,
     };
+    assertExclusiveTransport(this.options);
   }
 
   async createCharge(input: Charge): Promise<Charge> {
