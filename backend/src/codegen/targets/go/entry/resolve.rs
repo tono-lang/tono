@@ -431,7 +431,14 @@ impl Emitter for Resolver<'_, '_> {
              }} else {{\n\t{why} = {miss}\n}}"
         );
         // An explicit @with value wins: the decode runs only while unset.
-        out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
+        if field.sources.iter().any(|s| matches!(s, Source::With)) {
+            // The decode runs only if an explicit @with value did not already win.
+            out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
+        } else {
+            // No @with layer: the reason is always open here, so the guard would
+            // be statically true; emit the decode directly.
+            out.push_str(&block);
+        }
         out
     }
 
@@ -448,7 +455,14 @@ impl Emitter for Resolver<'_, '_> {
              \t{why} = \"\"\n\
              }} else {{\n\t{why} = {miss}\n}}"
         );
-        out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
+        if field.sources.iter().any(|s| matches!(s, Source::With)) {
+            // The decode runs only if an explicit @with value did not already win.
+            out.push_str(&format!("if {why} != \"\" {{\n{}\n}}", nest(&block, 1)));
+        } else {
+            // No @with layer: the reason is always open here, so the guard would
+            // be statically true; emit the decode directly.
+            out.push_str(&block);
+        }
         out
     }
 

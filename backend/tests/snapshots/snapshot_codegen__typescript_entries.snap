@@ -1,5 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
+assertion_line: 206
 expression: "render_files(files, &typescript::TsRules, \"ts\", None)"
 ---
 // ==== models.ts ====
@@ -305,70 +306,66 @@ export class Client {
     s.settings = composed;
   }
   let credsWhy = "no source";
-  if (credsWhy !== "") {
-    const raw = readEnv("SERVICE_CREDENTIALS");
-    if (raw !== undefined) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch (e) {
-        throw new Error(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
-      }
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error(`${"SERVICE_CREDENTIALS"}: expected an object`);
-      }
-      const record = parsed as Record<string, unknown>;
-      if (!("token" in parsed) || record["token"] === null) {
-        throw new Error(`${"SERVICE_CREDENTIALS"}: missing field token`);
-      }
-      if (!("account_id" in parsed) || record["account_id"] === null) {
-        throw new Error(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
-      }
-      for (const key of Object.keys(parsed)) {
-        if (!["token", "account_id"].includes(key)) {
-          throw new Error(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
-        }
-      }
-      if ("token" in parsed && typeof record["token"] !== "string") {
-        throw new Error(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
-      }
-      if ("account_id" in parsed && typeof record["account_id"] !== "string") {
-        throw new Error(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
-      }
-      const decoded = decodeCredentials(parsed);
-      const vs = validateCredentials(decoded);
-      if (vs.length > 0) {
-        throw new ValidationError(vs);
-      }
-      s.creds = decoded;
-      credsWhy = "";
-    } else {
-      credsWhy = "env SERVICE_CREDENTIALS: empty";
+  const raw = readEnv("SERVICE_CREDENTIALS");
+  if (raw !== undefined) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
     }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`${"SERVICE_CREDENTIALS"}: expected an object`);
+    }
+    const record = parsed as Record<string, unknown>;
+    if (!("token" in parsed) || record["token"] === null) {
+      throw new Error(`${"SERVICE_CREDENTIALS"}: missing field token`);
+    }
+    if (!("account_id" in parsed) || record["account_id"] === null) {
+      throw new Error(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
+    }
+    for (const key of Object.keys(parsed)) {
+      if (!["token", "account_id"].includes(key)) {
+        throw new Error(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
+      }
+    }
+    if ("token" in parsed && typeof record["token"] !== "string") {
+      throw new Error(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
+    }
+    if ("account_id" in parsed && typeof record["account_id"] !== "string") {
+      throw new Error(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
+    }
+    const decoded = decodeCredentials(parsed);
+    const vs = validateCredentials(decoded);
+    if (vs.length > 0) {
+      throw new ValidationError(vs);
+    }
+    s.creds = decoded;
+    credsWhy = "";
+  } else {
+    credsWhy = "env SERVICE_CREDENTIALS: empty";
   }
   let labelsWhy = "no source";
-  if (labelsWhy !== "") {
-    const raw = readEnv("SERVICE_LABELS");
-    if (raw !== undefined) {
-      let parsed: any;
-      try {
-        parsed = JSON.parse(raw);
-      } catch (e) {
-        throw new Error(`${"SERVICE_LABELS"}: ${String(e)}`);
-      }
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error(`${"SERVICE_LABELS"}: expected an object`);
-      }
-      for (const [key, val] of Object.entries(parsed)) {
-        if (typeof val !== "string") {
-          throw new Error(`${"SERVICE_LABELS"}: field ${key} must be a string`);
-        }
-      }
-      s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
-      labelsWhy = "";
-    } else {
-      labelsWhy = "env SERVICE_LABELS: empty";
+  const raw = readEnv("SERVICE_LABELS");
+  if (raw !== undefined) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`${"SERVICE_LABELS"}: ${String(e)}`);
     }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`${"SERVICE_LABELS"}: expected an object`);
+    }
+    for (const [key, val] of Object.entries(parsed)) {
+      if (typeof val !== "string") {
+        throw new Error(`${"SERVICE_LABELS"}: field ${key} must be a string`);
+      }
+    }
+    s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
+    labelsWhy = "";
+  } else {
+    labelsWhy = "env SERVICE_LABELS: empty";
   }
   if (s.endpoint === "") {
     throw new Error("endpoint <- " + (endpointWhy || "no value"));

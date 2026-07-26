@@ -462,7 +462,14 @@ impl Emitter for Resolver<'_, '_> {
             types = block1(&type_checks),
             validate = block1(&validate),
         );
-        out.push_str(&format!("if ({why} !== \"\") {{\n{}\n}}", nest(&inner, 1)));
+        if field.sources.iter().any(|s| matches!(s, Source::With)) {
+            // The decode runs only if an explicit @with value did not already win.
+            out.push_str(&format!("if ({why} !== \"\") {{\n{}\n}}", nest(&inner, 1)));
+        } else {
+            // No @with layer: the reason is always open here, so the guard would
+            // be statically true; emit the decode directly.
+            out.push_str(&inner);
+        }
         out
     }
 
@@ -482,7 +489,14 @@ impl Emitter for Resolver<'_, '_> {
         let inner = format!(
             "const raw = {lookup};\nif (raw !== undefined) {{\n  let parsed: any;\n  try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    throw new Error(`${{{label}}}: ${{String(e)}}`);\n  }}\n{checks}  {dest} = {decode} as {ty};\n  {why} = \"\";\n}} else {{\n  {why} = {miss};\n}}"
         );
-        out.push_str(&format!("if ({why} !== \"\") {{\n{}\n}}", nest(&inner, 1)));
+        if field.sources.iter().any(|s| matches!(s, Source::With)) {
+            // The decode runs only if an explicit @with value did not already win.
+            out.push_str(&format!("if ({why} !== \"\") {{\n{}\n}}", nest(&inner, 1)));
+        } else {
+            // No @with layer: the reason is always open here, so the guard would
+            // be statically true; emit the decode directly.
+            out.push_str(&inner);
+        }
         out
     }
 
