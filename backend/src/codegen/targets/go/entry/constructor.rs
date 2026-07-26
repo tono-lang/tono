@@ -58,9 +58,8 @@ pub(super) fn new_decl(
         refs: &mut refs,
         body: &mut body,
     };
-    for field in &entry.fields {
-        r.emit_field(field);
-    }
+    let fields = plan::emit_fields(entry, module, &mut r);
+    r.body.push_str(&fields);
 
     // client_init runs over the resolved Settings; bespoke wins.
     if hook_binding(bound, "client_init").is_some() && !multi {

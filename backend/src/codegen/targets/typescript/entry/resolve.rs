@@ -31,15 +31,6 @@ impl Resolver<'_, '_> {
         format!("config.{}", field_camel(&field.name, self.config))
     }
 
-    /// Build the plan for every field and render it into `body`.
-    pub(super) fn emit_field(&mut self, field: &EntryField) {
-        let entry = self.entry;
-        let module = self.module;
-        let stmt = plan::build_field(field, entry, module, self);
-        let text = plan::render(&stmt, 1, self);
-        self.body.push_str(&text);
-    }
-
     /// The prereq guard when the env variable's own name comes from a sibling
     /// field that may itself be absent; the env step chains onto its `else`.
     fn env_name_prereq(&self, name: &EnvName, why: &str) -> String {

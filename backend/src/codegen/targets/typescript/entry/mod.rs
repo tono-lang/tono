@@ -310,9 +310,8 @@ fn class_decl(
         helpers,
         body: &mut body,
     };
-    for field in &entry.fields {
-        r.emit_field(field);
-    }
+    let fields = plan::emit_fields(entry, module, &mut r);
+    r.body.push_str(&fields);
 
     if hook_binding(bound, "client_init").is_some() && !multi {
         body.push_str("    wrapClientInit(s);\n");

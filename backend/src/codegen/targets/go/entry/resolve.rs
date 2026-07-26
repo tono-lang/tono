@@ -29,15 +29,6 @@ impl Resolver<'_, '_> {
         self.entry.field_guaranteed(name)
     }
 
-    /// Build the plan for every field and render it into `body`.
-    pub(super) fn emit_field(&mut self, field: &EntryField) {
-        let entry = self.entry;
-        let module = self.module;
-        let stmt = plan::build_field(field, entry, module, self);
-        let text = plan::render(&stmt, 1, self);
-        self.body.push_str(&text);
-    }
-
     /// The prereq guard when the env variable's own name comes from a sibling
     /// field that may itself be absent. Returns the opened guard text (the env
     /// step closes it), or empty when the name is guaranteed.

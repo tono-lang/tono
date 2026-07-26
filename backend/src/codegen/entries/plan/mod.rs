@@ -11,12 +11,22 @@
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::symbol::SymbolKind;
-use crate::ir::{ArmValue, EntryField, EnvName, Prim, Shape, Source, TemplatePart, Tref};
+use crate::ir::{ArmValue, EntryField, EnvName, Module, Prim, Shape, Source, TemplatePart, Tref};
 
 use super::{source_stub, EntryModel};
 
 mod build;
 pub use build::{build_field, build_requires, presence_kind, Presence};
+
+/// Render every entry field's resolution plan, in dependency order, into one
+/// block of target source (each field indented one level).
+pub fn emit_fields(entry: &EntryModel, module: &Module, e: &mut dyn Emitter) -> String {
+    let mut out = String::new();
+    for field in &entry.fields {
+        out.push_str(&render(&build_field(field, entry, module, e), 1, e));
+    }
+    out
+}
 
 /// The camelCase spelling of a canonical name, for the constructor parameters
 /// and reason variables that read identically in every target.
