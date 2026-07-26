@@ -620,6 +620,18 @@ impl Emitter for Resolver<'_, '_> {
         "\t"
     }
 
+    fn term(&self) -> &'static str {
+        ""
+    }
+
+    fn eq(&self) -> &'static str {
+        "=="
+    }
+
+    fn neq(&self) -> &'static str {
+        "!="
+    }
+
     fn if_header(&self, cond: &Cond) -> String {
         format!("if {}", cond.0)
     }
@@ -632,33 +644,20 @@ impl Emitter for Resolver<'_, '_> {
         format!("composed.{}", field_pascal(member_name, self.config))
     }
 
-    fn assign_arg(&mut self, field: &EntryField, dest: &str) -> Leaf {
-        Leaf(format!("{dest} = {}", camel(&field.name)))
+    fn why_ident(&self, field_name: &str) -> String {
+        why_var(field_name)
     }
 
-    fn assign_default(
-        &mut self,
-        field: &EntryField,
-        value: &serde_json::Value,
-        dest: &str,
-    ) -> Leaf {
-        Leaf(format!("{dest} = {}", literal(&field.target, value)))
+    fn arg_ident(&self, field: &EntryField) -> String {
+        camel(&field.name)
+    }
+
+    fn literal_of(&self, target: &Tref, value: &serde_json::Value) -> String {
+        literal(target, value)
     }
 
     fn why_open(&self, field_name: &str, initial: &str) -> Leaf {
         Leaf(format!("{} := {initial:?}", why_var(field_name)))
-    }
-
-    fn why_set(&self, why_field: &str, reason: &str) -> Leaf {
-        Leaf(format!("{} = {reason:?}", why_var(why_field)))
-    }
-
-    fn cond_why_absent(&self, field_name: &str) -> Cond {
-        Cond(format!("{} != \"\"", why_var(field_name)))
-    }
-
-    fn cond_why_resolved(&self, field_name: &str) -> Cond {
-        Cond(format!("{} == \"\"", why_var(field_name)))
     }
 
     fn with_step(&mut self, field: &EntryField, dest: &str, why_field: &str) -> Leaf {
@@ -706,16 +705,8 @@ impl Emitter for Resolver<'_, '_> {
         Leaf(format!("var composed {}", type_ident_from_id(&shape.id)))
     }
 
-    fn config_close(&self, dest: &str) -> Leaf {
-        Leaf(format!("{dest} = composed"))
-    }
-
     fn bind_expr(&self, source: &[String]) -> String {
         self.path_expr(source)
-    }
-
-    fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf {
-        Leaf(format!("{member_dest} = {expr}"))
     }
 
     fn member_select_leaf(&mut self, member: &EntryField, dest: &str) -> Leaf {

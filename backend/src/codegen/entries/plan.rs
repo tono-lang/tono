@@ -10,7 +10,7 @@
 //! (RFC-0006: emission through a component tree, never parallel string
 //! concatenation).
 
-use crate::ir::{ArmValue, EntryField, Module, Shape, ShapeKind, Source, TemplatePart};
+use crate::ir::{ArmValue, EntryField, Module, Shape, ShapeKind, Source, TemplatePart, Tref};
 
 use super::{source_stub, EntryModel, FieldShape};
 
@@ -60,20 +60,62 @@ pub trait Emitter {
     /// its condition needs in TypeScript, so the header is a target call).
     fn if_header(&self, cond: &Cond) -> String;
 
-    // --- reads and destinations (spelling only) ---
+    // --- spelling atoms: the smallest per-target tokens the shared statement
+    //     builders below compose. Each is a one-liner, below any clone
+    //     threshold, so the composite statements live here once. ---
+    /// The statement terminator (`";"` for TypeScript, empty for Go).
+    fn term(&self) -> &'static str;
+    /// The equality / inequality operators (`"=="`/`"!="` vs `"==="`/`"!=="`).
+    fn eq(&self) -> &'static str;
+    fn neq(&self) -> &'static str;
+    /// The read expression of a field / member destination.
     fn dest(&self, field_name: &str) -> String;
     fn member_dest(&self, member_name: &str) -> String;
+    /// The why-var identifier for a field.
+    fn why_ident(&self, field_name: &str) -> String;
+    /// The constructor parameter name of an `@arg` field.
+    fn arg_ident(&self, field: &EntryField) -> String;
+    /// A `@default`/match-arm literal in the field's type.
+    fn literal_of(&self, target: &Tref, value: &serde_json::Value) -> String;
 
-    // --- leaf statements ---
-    fn assign_arg(&mut self, field: &EntryField, dest: &str) -> Leaf;
-    fn assign_default(&mut self, field: &EntryField, value: &serde_json::Value, dest: &str)
-        -> Leaf;
+    // --- composite statements built from the atoms (shared) ---
+    fn assign_arg(&mut self, field: &EntryField, dest: &str) -> Leaf {
+        Leaf(format!("{dest} = {}{}", self.arg_ident(field), self.term()))
+    }
+    fn assign_default(
+        &mut self,
+        field: &EntryField,
+        value: &serde_json::Value,
+        dest: &str,
+    ) -> Leaf {
+        Leaf(format!(
+            "{dest} = {}{}",
+            self.literal_of(&field.target, value),
+            self.term()
+        ))
+    }
+    /// Open a why-var (`why := "x"` vs `let why = "x";`); the declaration
+    /// keyword differs, so this one stays per-target.
     fn why_open(&self, field_name: &str, initial: &str) -> Leaf;
-    fn why_set(&self, why_field: &str, reason: &str) -> Leaf;
+    fn why_set(&self, why_field: &str, reason: &str) -> Leaf {
+        Leaf(format!(
+            "{} = {reason:?}{}",
+            self.why_ident(why_field),
+            self.term()
+        ))
+    }
 
-    // --- conditions ---
-    fn cond_why_absent(&self, field_name: &str) -> Cond;
-    fn cond_why_resolved(&self, field_name: &str) -> Cond;
+    // --- conditions (shared, from the operator atoms) ---
+    fn cond_why_absent(&self, field_name: &str) -> Cond {
+        Cond(format!(
+            "{} {} \"\"",
+            self.why_ident(field_name),
+            self.neq()
+        ))
+    }
+    fn cond_why_resolved(&self, field_name: &str) -> Cond {
+        Cond(format!("{} {} \"\"", self.why_ident(field_name), self.eq()))
+    }
 
     // --- the source steps of a NON-guaranteed chain: each owns its guard
     //     idiom, so the sequential ordering is shared while the spelling stays
@@ -97,9 +139,13 @@ pub trait Emitter {
     fn structured_leaf(&mut self, field: &EntryField, shape: &Shape) -> Stmt;
     fn json_leaf(&mut self, field: &EntryField) -> Stmt;
     fn config_open(&mut self, field: &EntryField, shape: &Shape) -> Leaf;
-    fn config_close(&self, dest: &str) -> Leaf;
+    fn config_close(&self, dest: &str) -> Leaf {
+        Leaf(format!("{dest} = composed{}", self.term()))
+    }
     fn bind_expr(&self, source: &[String]) -> String;
-    fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf;
+    fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf {
+        Leaf(format!("{member_dest} = {expr}{}", self.term()))
+    }
     fn member_select_leaf(&mut self, member: &EntryField, dest: &str) -> Leaf;
     fn member_format_leaf(&mut self, member: &EntryField, dest: &str) -> Leaf;
     fn member_chain(&mut self, member: &EntryField, sources: &[Source], dest: &str) -> Stmt;
