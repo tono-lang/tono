@@ -340,6 +340,18 @@ fn a_structured_decode_probes_the_wire_key_not_the_member_name() {
 }
 
 #[test]
+fn field_docs_flow_onto_the_settings_field_and_the_with_option() {
+    // client_name carries @doc in the fixture; it must land on both its public
+    // surfaces (the Settings field and the With option).
+    let module = fixture_module();
+    let types = types_text(&module);
+    assert!(types.contains("\t// Names the caller.\n\tClientName string"));
+    assert!(types.contains(
+        "// Names the caller.\n// WithClientName sets the client_name construction value."
+    ));
+}
+
+#[test]
 fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     let mut module = fixture_module();
     let mut choice = bare_entry_field("choice", Tref::Prim(Prim::String), vec![]);

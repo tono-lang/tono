@@ -287,6 +287,16 @@ fn the_constructor_rejects_conflicting_transports_at_construction() {
 }
 
 #[test]
+fn field_docs_flow_onto_the_settings_and_config_properties() {
+    // client_name carries @doc in the fixture; it must land as JSDoc on both its
+    // public surfaces (the Settings interface and the config object).
+    let module = with_descriptors(fixture_module());
+    let out = text(&module);
+    assert!(out.contains("  /** Names the caller. */\n  clientName: string;"));
+    assert!(out.contains("  /** Names the caller. */\n  clientName?: string;"));
+}
+
+#[test]
 fn a_bespoke_stub_keeps_the_declared_signature() {
     // No descriptor on the op (the fixture is pre-protocol): the stub
     // still takes the declared input.

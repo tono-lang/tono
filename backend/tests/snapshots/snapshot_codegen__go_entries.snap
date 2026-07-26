@@ -122,6 +122,7 @@ type Conf struct {
 // here); a declared @header wins only where nothing else set the name.
 type Settings struct {
 	APIKey string
+	// Names the caller.
 	ClientName string
 	ClientKey string
 	EndpointEnv string
@@ -149,6 +150,7 @@ type clientOptions struct {
 	maxRetries *int32
 }
 
+// Names the caller.
 // WithClientName sets the client_name construction value.
 func WithClientName(v string) ClientOption {
 	return func(w *clientOptions) { w.clientName = &v }

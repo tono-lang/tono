@@ -46,9 +46,10 @@ pub(super) fn settings_interface(
     let mut refs = vec![runtime_import("CanonicalTransport")];
     for f in entry.declared() {
         fields.push_str(&format!(
-            "  {}: {};\n",
+            "{doc}  {}: {};\n",
             field_camel(&f.name, config),
-            ts_type(&f.target)
+            ts_type(&f.target),
+            doc = field_doc(&f.traits, "  "),
         ));
         refs.extend(type_refs(&f.target, entry_module));
     }
@@ -83,9 +84,10 @@ pub(super) fn config_object_interface(
         .iter()
         .map(|f| {
             format!(
-                "  {}?: {};\n",
+                "{doc}  {}?: {};\n",
                 field_camel(&f.name, config),
-                ts_type(&f.target)
+                ts_type(&f.target),
+                doc = field_doc(&f.traits, "  "),
             )
         })
         .collect();

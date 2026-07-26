@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
-use crate::codegen::conventions::{doc_of, rename_of, type_ident_from_id, wire_key};
+use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
 use crate::codegen::entries::{
     companion_name, module_entries, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
 };
@@ -77,6 +77,17 @@ fn ts_type(t: &Tref) -> String {
 
 fn field_camel(name: &str, config: &CasingConfig) -> String {
     transform(name, SymbolKind::Field, config, None)
+}
+
+/// The JSDoc `@doc`/`@deprecated` block for an entry field's public surface (a
+/// Settings or config-object property), indented and newline-terminated, or
+/// empty when the field carries neither trait.
+fn field_doc(traits: &[crate::ir::Trait], indent: &str) -> String {
+    crate::codegen::doc::jsdoc_block(
+        doc_of(traits).as_deref(),
+        deprecated_of(traits).as_deref(),
+        indent,
+    )
 }
 
 fn module_symbol(name: &str, module: &Module) -> Symbol {

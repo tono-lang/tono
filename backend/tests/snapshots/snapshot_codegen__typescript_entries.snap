@@ -183,6 +183,7 @@ export interface Conf {
 // here); a declared @header wins only where nothing else set the name.
 export interface Settings {
   apiKey: string;
+  /** Names the caller. */
   clientName: string;
   clientKey: string;
   endpointEnv: string;
@@ -202,6 +203,7 @@ export interface Settings {
 
 // ClientConfig carries the optional (@with) construction values of Client.
 export interface ClientConfig {
+  /** Names the caller. */
   clientName?: string;
   timeout?: Duration;
   maxRetries?: number;

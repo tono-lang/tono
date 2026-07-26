@@ -13,7 +13,9 @@
 use std::collections::BTreeSet;
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
-use crate::codegen::conventions::{doc_of, prim_spelling, rename_of, type_ident_from_id, wire_key};
+use crate::codegen::conventions::{
+    deprecated_of, doc_of, prim_spelling, rename_of, type_ident_from_id, wire_key,
+};
 use crate::codegen::entries::{
     companion_name, module_entries, op_local_name, ref_is_enum, EntryModel,
 };
@@ -25,7 +27,9 @@ use crate::codegen::targets::go::render::GoRules;
 use crate::codegen::targets::go::types::{type_expr_of, GoVal, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
-use crate::ir::{EntryField, EnvName, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref};
+use crate::ir::{
+    EntryField, EnvName, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Trait, Tref,
+};
 
 /// The Go module path of the hand-written HTTP runtime the generated client
 /// drives. The import spells the path; Go resolves the package name
@@ -126,6 +130,22 @@ fn push_type_symbols(t: &Tref, refs: &mut Vec<Symbol>) {
 
 fn field_pascal(name: &str, config: &CasingConfig) -> String {
     transform(name, SymbolKind::Field, config, None)
+}
+
+/// The godoc `@doc` block plus a `// Deprecated:` line for an entry field's
+/// public surface (a Settings/config struct field or a With* option), indented
+/// and newline-terminated, or empty when the field carries neither trait.
+fn field_doc(traits: &[Trait], indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(d) = doc_of(traits) {
+        out.push_str(&crate::codegen::doc::godoc(&d, indent));
+    }
+    let dep =
+        crate::codegen::targets::go::render::deprecated_comment(deprecated_of(traits).as_deref());
+    if !dep.is_empty() {
+        out.push_str(&format!("{indent}{dep}\n"));
+    }
+    out
 }
 
 /// Whether the resolved value is string-shaped in Go (assignable from a raw

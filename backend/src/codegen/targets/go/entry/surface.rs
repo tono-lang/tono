@@ -20,9 +20,10 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
                 .iter()
                 .map(|f| {
                     format!(
-                        "\t{} {}\n",
+                        "{doc}\t{} {}\n",
                         field_pascal(&f.name, config),
-                        go_type(&f.target)
+                        go_type(&f.target),
+                        doc = field_doc(&f.traits, "\t"),
                     )
                 })
                 .collect();
@@ -42,9 +43,10 @@ pub(super) fn settings_decl(entry: &EntryModel<'_>, n: &Names, config: &CasingCo
     let mut fields = String::new();
     for f in entry.declared() {
         fields.push_str(&format!(
-            "\t{} {}\n",
+            "{doc}\t{} {}\n",
             field_pascal(&f.name, config),
-            go_type(&f.target)
+            go_type(&f.target),
+            doc = field_doc(&f.traits, "\t"),
         ));
     }
     let text = format!(
@@ -88,13 +90,14 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
             companion_name(entry.name, &f.name, multi)
         ));
         decls.push(Decl::raw(format!(
-            "// {fn_name} sets the {field} construction value.\n\
+            "{doc}// {fn_name} sets the {field} construction value.\n\
              func {fn_name}(v {ty}) {option} {{\n\treturn func(w *{carrier_ty}) {{ w.{member} = &v }}\n}}",
             field = f.name,
             ty = go_type(&f.target),
             option = n.option,
             carrier_ty = n.carrier,
             member = camel(&f.name),
+            doc = field_doc(&f.traits, ""),
         )));
     }
     decls
