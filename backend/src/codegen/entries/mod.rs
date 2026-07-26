@@ -160,6 +160,68 @@ impl<'a> EntryModel<'a> {
     }
 }
 
+impl<'a> EntryModel<'a> {
+    /// The declared type a sibling-field path resolves to: the field's own
+    /// type for a bare name, the member's type when the path reaches into a
+    /// composed or structured field. Unresolvable paths (the frontend rejects
+    /// them) read as strings so the emitters stay total.
+    pub fn path_type(&self, path: &[String], module: &Module) -> Tref {
+        let head = self
+            .fields
+            .iter()
+            .find(|f| path.first().is_some_and(|h| *h == f.name));
+        let Some(head) = head else {
+            return Tref::Prim(crate::ir::Prim::String);
+        };
+        if path.len() == 1 {
+            return head.target.clone();
+        }
+        if let Tref::Ref { id, .. } = &head.target {
+            if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+                let target = match &shape.kind {
+                    ShapeKind::Config { fields } => fields
+                        .iter()
+                        .find(|f| f.name == path[1])
+                        .map(|f| f.target.clone()),
+                    ShapeKind::Structure { members, .. } => members
+                        .iter()
+                        .find(|m| m.name == path[1])
+                        .map(|m| m.target.clone()),
+                    _ => None,
+                };
+                if let Some(t) = target {
+                    return t;
+                }
+            }
+        }
+        Tref::Prim(crate::ir::Prim::String)
+    }
+
+    /// [`Self::is_guaranteed`] looked up by field name.
+    pub fn field_guaranteed(&self, name: &str) -> bool {
+        self.fields
+            .iter()
+            .find(|f| f.name == name)
+            .is_some_and(|f| self.is_guaranteed(f))
+    }
+}
+
+/// A bare copy of a field carrying only a source chain: what a match arm's
+/// inline sources and a composed member's own chain resolve as.
+pub fn source_stub(field: &EntryField, sources: Vec<Source>) -> EntryField {
+    EntryField {
+        name: field.name.clone(),
+        target: field.target.clone(),
+        sources,
+        format: None,
+        transforms: vec![],
+        select: None,
+        binds: vec![],
+        constraints: vec![],
+        traits: vec![],
+    }
+}
+
 /// One resolved-value entry: its canonical dotted path, the entry field it
 /// hangs off, and the member name when the path reaches into a composed or
 /// structured field.

@@ -465,7 +465,9 @@ function durationToMs(v: string): number {
   }
   // The number grammar matches Go's: digits, digits.digits,
   // trailing-dot ("1.s") and leading-dot (".5s") forms.
-  const re = /(\d+(?:\.\d*)?|\.\d+)(ns|us|\u00b5s|ms|s|m|h)/gy;
+  // Sticky alone: exec advances lastIndex, and y already anchors
+  // each match to it (g would be redundant).
+  const re = /(\d+(?:\.\d*)?|\.\d+)(ns|us|\u00b5s|ms|s|m|h)/y;
   const unit: Record<string, number> = { ns: 1e-6, us: 1e-3, "\u00b5s": 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };
   let total = 0;
   let consumed = 0;

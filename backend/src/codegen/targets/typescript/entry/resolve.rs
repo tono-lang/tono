@@ -32,44 +32,11 @@ impl Resolver<'_, '_> {
     }
 
     fn path_type(&self, path: &[String]) -> Tref {
-        let head = self
-            .entry
-            .fields
-            .iter()
-            .find(|f| path.first().is_some_and(|h| *h == f.name));
-        let Some(head) = head else {
-            return Tref::Prim(Prim::String);
-        };
-        if path.len() == 1 {
-            return head.target.clone();
-        }
-        if let Tref::Ref { id, .. } = &head.target {
-            if let Some(shape) = self.module.shapes.iter().find(|s| s.id == *id) {
-                let target = match &shape.kind {
-                    ShapeKind::Config { fields } => fields
-                        .iter()
-                        .find(|f| f.name == path[1])
-                        .map(|f| f.target.clone()),
-                    ShapeKind::Structure { members, .. } => members
-                        .iter()
-                        .find(|m| m.name == path[1])
-                        .map(|m| m.target.clone()),
-                    _ => None,
-                };
-                if let Some(t) = target {
-                    return t;
-                }
-            }
-        }
-        Tref::Prim(Prim::String)
+        self.entry.path_type(path, self.module)
     }
 
     fn guaranteed(&self, name: &str) -> bool {
-        self.entry
-            .fields
-            .iter()
-            .find(|f| f.name == name)
-            .is_some_and(|f| self.entry.is_guaranteed(f))
+        self.entry.field_guaranteed(name)
     }
 
     pub(super) fn emit_field(&mut self, field: &EntryField) {
@@ -375,17 +342,7 @@ impl Resolver<'_, '_> {
                 }
             }
             ArmValue::Sources(sources) => {
-                let stub = EntryField {
-                    name: field.name.clone(),
-                    target: field.target.clone(),
-                    sources: sources.clone(),
-                    format: None,
-                    transforms: vec![],
-                    select: None,
-                    binds: vec![],
-                    constraints: vec![],
-                    traits: vec![],
-                };
+                let stub = source_stub(field, sources.clone());
                 let inner = if guaranteed {
                     self.chain_cascade(&stub, dest)
                 } else {
@@ -635,17 +592,7 @@ impl Resolver<'_, '_> {
     }
 
     fn member_sources_stmts(&mut self, member: &EntryField, dest: &str) -> String {
-        let stub = EntryField {
-            name: member.name.clone(),
-            target: member.target.clone(),
-            sources: member.sources.clone(),
-            format: None,
-            transforms: vec![],
-            select: None,
-            binds: vec![],
-            constraints: vec![],
-            traits: vec![],
-        };
+        let stub = source_stub(member, member.sources.clone());
         let guaranteed = stub.sources.iter().any(|s| matches!(s, Source::Default(_)));
         if guaranteed {
             self.chain_cascade(&stub, dest)

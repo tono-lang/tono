@@ -307,7 +307,9 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
              \x20 }\n\
              \x20 // The number grammar matches Go's: digits, digits.digits,\n\
              \x20 // trailing-dot (\"1.s\") and leading-dot (\".5s\") forms.\n\
-             \x20 const re = /(\\d+(?:\\.\\d*)?|\\.\\d+)(ns|us|\\u00b5s|ms|s|m|h)/gy;\n\
+             \x20 // Sticky alone: exec advances lastIndex, and y already anchors\n\
+             \x20 // each match to it (g would be redundant).\n\
+             \x20 const re = /(\\d+(?:\\.\\d*)?|\\.\\d+)(ns|us|\\u00b5s|ms|s|m|h)/y;\n\
              \x20 const unit: Record<string, number> = { ns: 1e-6, us: 1e-3, \"\\u00b5s\": 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };\n\
              \x20 let total = 0;\n\
              \x20 let consumed = 0;\n\
