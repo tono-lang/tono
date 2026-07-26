@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { CanonicalResponse, CanonicalTransport, WireDescriptor } from "../src/descriptor";
+import type {
+  CanonicalRequest,
+  CanonicalResponse,
+  CanonicalTransport,
+  WireDescriptor,
+} from "../src/descriptor";
 import { execute } from "../src/execute";
 import vectorsJson from "../../parity/vectors.json";
 
@@ -27,6 +32,10 @@ interface ParityVector {
     body?: string;
     attempts: number;
     delays_ms: number[];
+    // Assertions on the first request the runtime built: its full URL and a
+    // subset of its headers. Optional; vectors that exercise the entry-scoped
+    // descriptor positions (endpoint, request_headers, {.field} paths) use it.
+    request?: { url?: string; headers?: Record<string, string> };
   };
 }
 
@@ -34,7 +43,9 @@ const file = vectorsJson as unknown as { vectors: ParityVector[] };
 
 function scripted(script: ParityStep[]) {
   let attempts = 0;
-  const transport: CanonicalTransport = (_req, signal) => {
+  const requests: CanonicalRequest[] = [];
+  const transport: CanonicalTransport = (req, signal) => {
+    requests.push(req);
     if (attempts >= script.length) {
       return Promise.reject(
         new Error(`transport called ${attempts + 1} times for a ${script.length}-step script`),
@@ -61,14 +72,14 @@ function scripted(script: ParityStep[]) {
       });
     });
   };
-  return { transport, attempts: () => attempts };
+  return { transport, attempts: () => attempts, requests };
 }
 
 describe("parity vectors", () => {
   expect(file.vectors.length).toBeGreaterThan(0);
   for (const vector of file.vectors) {
     it(vector.name, async () => {
-      const { transport, attempts } = scripted(vector.script);
+      const { transport, attempts, requests } = scripted(vector.script);
       const delays: number[] = [];
       const outcome = await execute(
         vector.descriptor,
@@ -92,6 +103,15 @@ describe("parity vectors", () => {
       }
       expect(attempts()).toBe(vector.expect.attempts);
       expect(delays).toEqual(vector.expect.delays_ms);
+      if (vector.expect.request) {
+        const first = requests[0];
+        if (vector.expect.request.url !== undefined) {
+          expect(first.url).toBe(vector.expect.request.url);
+        }
+        for (const [name, value] of Object.entries(vector.expect.request.headers ?? {})) {
+          expect(first.headers[name]).toBe(value);
+        }
+      }
     });
   }
 });

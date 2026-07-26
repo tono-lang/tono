@@ -43,11 +43,15 @@ func (r *Runtime) attempt(ctx context.Context, d *WireDescriptor, input map[stri
 	if err != nil {
 		return Outcome{}, err
 	}
-	headers := buildHeaders(d, input, r.opts.Headers)
+	headers := buildHeaders(d, input, r.opts.Headers, r.opts.Values)
 	if body != nil && !hasHeader(headers, "content-type") {
 		headers["content-type"] = "application/json"
 	}
-	requestURL := r.opts.BaseURL + buildPath(d, input)
+	base := r.opts.BaseURL
+	if endpoint, ok := resolveEndpoint(d.Endpoint, r.opts.Values); ok {
+		base = endpoint
+	}
+	requestURL := base + buildPath(d, input, r.opts.Values)
 	if qs := buildQuery(d, input); qs != "" {
 		requestURL += "?" + qs
 	}

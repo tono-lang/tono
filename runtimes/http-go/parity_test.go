@@ -36,6 +36,15 @@ type parityExpect struct {
 	Body     string    `json:"body"`
 	Attempts int       `json:"attempts"`
 	DelaysMs []float64 `json:"delays_ms"`
+	// Assertions on the first request the runtime built: its full URL and a
+	// subset of its headers. Optional; vectors that exercise the entry-scoped
+	// descriptor positions (endpoint, request_headers, {.field} paths) use it.
+	Request *parityRequest `json:"request"`
+}
+
+type parityRequest struct {
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers"`
 }
 
 // loadParityVectors reads the shared vectors file. TONO_PARITY_VECTORS
@@ -68,11 +77,12 @@ func loadParityVectors(t *testing.T) []parityVector {
 	return file.Vectors
 }
 
-func scriptedTransport(t *testing.T, script []parityStep, attempts *int) Transport {
+func scriptedTransport(t *testing.T, script []parityStep, attempts *int, requests *[]CanonicalRequest) Transport {
 	return func(ctx context.Context, req CanonicalRequest) (CanonicalResponse, error) {
 		if *attempts >= len(script) {
 			t.Fatalf("transport called %d times for a %d-step script", *attempts+1, len(script))
 		}
+		*requests = append(*requests, req)
 		step := script[*attempts]
 		*attempts++
 		switch step.Kind {
@@ -105,9 +115,10 @@ func TestParityVectors(t *testing.T) {
 				t.Fatalf("descriptor: %v", err)
 			}
 			attempts := 0
+			var requests []CanonicalRequest
 			r, delays := deterministic(t, Options{
 				BaseURL:   "https://api.test",
-				Transport: scriptedTransport(t, vector.Script, &attempts),
+				Transport: scriptedTransport(t, vector.Script, &attempts, &requests),
 				Values:    vector.Values,
 			})
 			outcome, err := r.Execute(context.Background(), d, vector.Input, nil)
@@ -133,6 +144,20 @@ func TestParityVectors(t *testing.T) {
 			for i, ms := range vector.Expect.DelaysMs {
 				if want := time.Duration(ms * float64(time.Millisecond)); (*delays)[i] != want {
 					t.Fatalf("delay %d: %v, want %v", i, (*delays)[i], want)
+				}
+			}
+			if want := vector.Expect.Request; want != nil {
+				if len(requests) == 0 {
+					t.Fatal("request expectation with no recorded request")
+				}
+				first := requests[0]
+				if want.URL != "" && first.URL != want.URL {
+					t.Fatalf("request url: %q, want %q", first.URL, want.URL)
+				}
+				for name, value := range want.Headers {
+					if first.Headers[name] != value {
+						t.Fatalf("request header %s: %q, want %q", name, first.Headers[name], value)
+					}
 				}
 			}
 		})
