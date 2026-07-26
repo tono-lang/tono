@@ -43,6 +43,10 @@ fn the_entry_class_replaces_the_generic_client_surface() {
     // The class takes @arg positionally and @with as an optional config
     // object; the Settings expose the resolved fields and transport slots.
     assert!(out.contains("export class Client {"));
+    // The resolved settings are private (as Go's client field is unexported):
+    // immutable to the consumer once construction and the hook have run.
+    assert!(out.contains("private readonly settings: Settings;"));
+    assert!(!out.contains("  readonly settings: Settings;"));
     assert!(out.contains("constructor(apiKey: string, config: ClientConfig = {}) {"));
     assert!(out.contains("export interface Settings {"));
     assert!(out.contains("  fetch?: typeof fetch;"));

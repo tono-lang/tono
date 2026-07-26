@@ -159,7 +159,7 @@ const createChargeDescriptor: WireDescriptor = JSON.parse(
 // config object; construction resolves the declared sources, runs the
 // client_init bridge, validates, and freezes the runtime options.
 export class Client {
-  readonly settings: Settings;
+  private readonly settings: Settings;
   private readonly options: ClientOptions;
   constructor(apiKey: string, config: ClientConfig = {}) {
     const s: Settings = {

@@ -530,7 +530,7 @@ fn class_decl(
          // config object; construction resolves the declared sources, runs the\n\
          // client_init bridge, validates, and freezes the runtime options.\n\
          export class {client} {{\n\
-         \x20 readonly settings: {settings};\n\
+         \x20 private readonly settings: {settings};\n\
          \x20 private readonly options: ClientOptions;\n\
          {hooks_field}\
          \x20 constructor({params}) {{\n{body}  }}\n\n{methods}}}",
