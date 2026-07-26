@@ -250,11 +250,19 @@ let descriptor_carries_refs () =
         "endpoint ref" true
         (get "endpoint" = Some (`List [ `String "endpoint" ]));
       Alcotest.(check bool)
-        "timeout ref" true
-        (get "timeout" = Some (`List [ `String "timeout" ]));
+        "timeout is a value-source ref" true
+        (get "timeout" = Some (`Assoc [ ("ref", `String "timeout") ]));
       Alcotest.(check bool)
-        "retry ref" true
-        (get "retry" = Some (`List [ `String "max_retries" ]));
+        "retry wraps its max value-source" true
+        (get "retry"
+        = Some (`Assoc [ ("max", `Assoc [ ("ref", `String "max_retries") ]) ]));
+      Alcotest.(check bool)
+        "retryable error carries the flag" true
+        (match get "errors" with
+        | Some (`List [ `List [ `Int 529; `String _; `String _; `Bool true ] ])
+          ->
+            true
+        | _ -> false);
       Alcotest.(check bool)
         "one declared header" true
         (match get "request_headers" with

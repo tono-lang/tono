@@ -436,7 +436,8 @@ let entries_client : Ir.model =
                   ~constraints:[ Ir.length ~min:1 () ];
                 field "client_name" string_t
                   ~sources:[ Ir.With; Ir.Default (`String "demo") ]
-                  ~traits:[ trait "doc" (`String "Names the caller.") ];
+                  ~traits:
+                    [ trait "doc" (`List [ `String "Names the caller." ]) ];
                 field "client_key" string_t
                   ~format:[ Ir.Tpl_field [ "client_name" ] ]
                   ~transforms:[ "trim"; "upper_snake" ];
@@ -522,8 +523,8 @@ let entries_client : Ir.model =
         Ir.Structure { params = []; members = [ member "message" string_t ] };
       traits =
         [
-          trait "status" (`Int 529);
-          trait "errorCode" (`String "overloaded");
+          trait "status" (`List [ `Int 529 ]);
+          trait "errorCode" (`List [ `String "overloaded" ]);
           trait "retryable" `Null;
         ];
     }

@@ -215,9 +215,124 @@ let null_pattern_decodes_as_wildcard () =
   | Ok _ -> Alcotest.fail "null pattern did not collapse to the wildcard"
   | Error e -> Alcotest.failf "decode failed: %s" e
 
+(* ── Nested boundaries, typed arms, loose header shapes ────────────────── *)
+
+let nested_config_in_wire_list_rejected () =
+  expect "list of config in a wire struct" [ "TC0034" ]
+    "struct conf { k: string @env(\"K\") }\nstruct w { c: []conf }"
+
+let nested_config_in_generic_entry_field_rejected () =
+  (* The field also declares no source (a generic application is not the
+     composition point), so both errors are honest. *)
+  expect "config inside a generic application" [ "TC0037"; "TC0034" ]
+    ("struct conf { k: string @env(\"K\") }\nstruct page[t] { items: []t }\n"
+   ^ entry "  p: page[conf]")
+
+let nested_config_in_wire_map_rejected () =
+  expect "map of config in a wire struct" [ "TC0034" ]
+    "struct conf { k: string @env(\"K\") }\nstruct w { m: map[string]conf }"
+
+let arm_literal_wrong_field_type_rejected () =
+  expect "string arm into an i32 field" [ "TC0040" ]
+    (entry "  v: string @env(\"V\")\n  x: i32 = match .v { _ => \"s\" }")
+
+let arm_ref_wrong_field_type_rejected () =
+  expect "i32 ref arm into a string field" [ "TC0040" ]
+    (entry
+       "  v: string @env(\"V\")\n\
+       \  n: i32 @with @default(1)\n\
+       \  x: string = match .v { _ => .n }")
+
+let loose_header_literal_int_rejected () =
+  expect "int header value on a loose op" [ "TC0044" ]
+    "struct w { x: string }\n\
+     op o(w): w @http(method: \"GET\", path: \"/\") @header(\"K\", 5)"
+
+let loose_header_input_placeholder_key_rejected () =
+  expect "input placeholder key on a loose op" [ "TC0044" ]
+    "struct w { x: string }\n\
+     op o(w): w @http(method: \"GET\", path: \"/\") @header(\"X-{id}\", \"v\")"
+
+let nullable_composed_config_classifies () =
+  (* The bind flip reads through the nullable spelling, so the only error is
+     the nullable field itself, not a misleading misplaced-@bind one. *)
+  expect "nullable composition point" [ "TC0046" ]
+    ("struct conf { api_key: string }\n"
+    ^ entry "  settings: conf? @bind(api_key, .ep)")
+
+let degenerate_placeholders_diagnosed () =
+  let lower_msgs src =
+    let file, _ = Parser.parse src in
+    let diags = ref [] in
+    ignore (Lower.lower_file ~module_name:"m" ~diags file);
+    List.map (fun (d : Diagnostic.t) -> d.message) !diags
+  in
+  let has src frag =
+    Alcotest.(check bool)
+      frag true
+      (List.exists (fun m -> contains m frag) (lower_msgs src))
+  in
+  has "struct s { a: string @format(\"x{}\"), op ping() }"
+    "empty '{}' placeholder";
+  has "struct s { a: string @format(\"x{.}\"), op ping() }"
+    "empty field reference"
+
+let arm_int_into_string_rejected () =
+  expect "int arm into a string field" [ "TC0040" ]
+    (entry "  v: string @env(\"V\")\n  x: string = match .v { _ => 5 }")
+
+let arm_bool_into_string_rejected () =
+  expect "bool arm into a string field" [ "TC0040" ]
+    (entry "  v: string @env(\"V\")\n  x: string = match .v { _ => true }")
+
+let arm_bare_name_into_string_rejected () =
+  expect "bare name arm into a string field" [ "TC0040" ]
+    (entry "  v: string @env(\"V\")\n  x: string = match .v { _ => banana }")
+
+let arm_wrong_enum_case_rejected () =
+  expect "wrong case arm into an enum field" [ "TC0040" ]
+    ("enum lvl { low, high }\n"
+    ^ entry "  v: string @env(\"V\")\n  x: lvl = match .v { _ => nope }")
+
+let arm_matching_enum_case_accepted () =
+  expect "matching case arm into an enum field" []
+    ("enum lvl { low, high }\n"
+    ^ entry "  v: string @env(\"V\")\n  x: lvl = match .v { _ => low }")
+
 let () =
   Alcotest.run "entries_position"
     [
+      ( "round3",
+        [
+          Alcotest.test_case "arm int into string" `Quick
+            arm_int_into_string_rejected;
+          Alcotest.test_case "arm bool into string" `Quick
+            arm_bool_into_string_rejected;
+          Alcotest.test_case "arm bare name into string" `Quick
+            arm_bare_name_into_string_rejected;
+          Alcotest.test_case "arm wrong enum case" `Quick
+            arm_wrong_enum_case_rejected;
+          Alcotest.test_case "arm matching enum case" `Quick
+            arm_matching_enum_case_accepted;
+          Alcotest.test_case "config in wire list" `Quick
+            nested_config_in_wire_list_rejected;
+          Alcotest.test_case "config in generic arg" `Quick
+            nested_config_in_generic_entry_field_rejected;
+          Alcotest.test_case "config in wire map" `Quick
+            nested_config_in_wire_map_rejected;
+          Alcotest.test_case "arm literal type" `Quick
+            arm_literal_wrong_field_type_rejected;
+          Alcotest.test_case "arm ref type" `Quick
+            arm_ref_wrong_field_type_rejected;
+          Alcotest.test_case "loose header int value" `Quick
+            loose_header_literal_int_rejected;
+          Alcotest.test_case "loose header input key" `Quick
+            loose_header_input_placeholder_key_rejected;
+          Alcotest.test_case "nullable composed config" `Quick
+            nullable_composed_config_classifies;
+          Alcotest.test_case "degenerate placeholders" `Quick
+            degenerate_placeholders_diagnosed;
+        ] );
       ( "typed-refs",
         [
           Alcotest.test_case "bind type mismatch" `Quick

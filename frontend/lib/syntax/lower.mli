@@ -38,15 +38,6 @@ val lower_member :
   Ast.member ->
   Ir.member
 
-(* Parse a template string into IR parts: "{.a.b}" is an entry-field
-   placeholder, "{name}" an operation-input member placeholder, everything else
-   literal. An unterminated "{" is diagnosed and kept literal. *)
-val parse_template :
-  diags:Diagnostic.t list ref ->
-  span:Span.span ->
-  string ->
-  Ir.template_part list
-
 (* The transform named by a catalog trait ("str::trim" -> "trim"), or [None]
    for a non-catalog trait name. Catalog membership is a typecheck concern. *)
 val transform_of : string -> string option

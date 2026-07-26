@@ -131,8 +131,10 @@ pub(crate) fn same_set(a: &[Tref], b: &[Tref]) -> bool {
             .all(|t| a.iter().filter(|x| *x == t).count() == b.iter().filter(|x| *x == t).count())
 }
 
-/// Whether a shape's members / operation signature reference a target id.
-pub(crate) fn references(shape: &Shape, target: &str) -> bool {
+/// Whether a shape references a target id from a wire position: struct and
+/// union members, operation signatures, and the ops nested in an entry body.
+/// Entry/config field targets are construction references, not wire ones.
+pub(crate) fn references_on_wire(shape: &Shape, target: &str) -> bool {
     let refs_tref = |t: &Tref| tref_references(t, target);
     match &shape.kind {
         ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => {
@@ -147,12 +149,10 @@ pub(crate) fn references(shape: &Shape, target: &str) -> bool {
                 || output.as_ref().is_some_and(&refs_tref)
                 || errors.iter().any(refs_tref)
         }
-        ShapeKind::Enum { .. } | ShapeKind::Service { .. } => false,
-        ShapeKind::Entry { fields, operations } => {
-            fields.iter().any(|f| refs_tref(&f.target))
-                || operations.iter().any(|op| references(op, target))
+        ShapeKind::Entry { operations, .. } => {
+            operations.iter().any(|op| references_on_wire(op, target))
         }
-        ShapeKind::Config { fields } => fields.iter().any(|f| refs_tref(&f.target)),
+        ShapeKind::Config { .. } | ShapeKind::Enum { .. } | ShapeKind::Service { .. } => false,
     }
 }
 

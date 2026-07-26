@@ -37,13 +37,18 @@ type wire_descriptor = {
   bindings : (string * part) list; (* input member -> request part *)
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list; (* status -> output type, if any *)
-  errors : (int * Ir.shape_id * string option) list;
-      (* status -> error shape id; 3rd is the @errorCode body field, if any *)
+  errors : (int * Ir.shape_id * string option * bool) list;
+      (* status, error shape id, the @errorCode body value if any, and whether
+         the error is @retryable (the runtime's retry loop consumes it; on the
+         wire the flag is a fourth element present only when set) *)
   endpoint : string list option; (* @http endpoint: entry-field path *)
   request_headers : (Ir.template_part list * value_expr) list;
       (* @header(key, value): key template -> value *)
-  timeout : string list option; (* @timeout(.field) entry-field path *)
-  retry : string list option; (* @retry(.field) entry-field path *)
+  timeout : string list option;
+      (* @timeout(.field): encodes as the runtime's value-source form
+         {"ref": "<dotted field path>"} *)
+  retry : string list option;
+      (* @retry(.field): encodes as {"max": {"ref": "<dotted field path>"}} *)
 }
 
 (* Resolve one operation shape against a shape lookup. Returns [None] for an

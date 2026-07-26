@@ -14,7 +14,7 @@ type wire_descriptor = {
   bindings : (string * part) list;
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list;
-  errors : (int * Ir.shape_id * string option) list;
+  errors : (int * Ir.shape_id * string option * bool) list;
   endpoint : string list option;
   request_headers : (Ir.template_part list * value_expr) list;
   timeout : string list option;
@@ -66,12 +66,12 @@ let field_path (v : Ir.json) : string list option =
   | _ -> None
 
 (* Parse a template string into IR parts; the diagnostics sink is discarded
-   because the frontend already validated the string at the AST level. *)
+   because the typechecker already validated the string with its real span. *)
 let template_of (s : string) : Ir.template_part list =
   let d = ref [] in
   let dpos : Span.pos = { line = 0; col = 0; offset = 0 } in
   let dspan : Span.span = { start = dpos; finish = dpos } in
-  Lower.parse_template ~diags:d ~span:dspan s
+  Template.parse ~diags:d ~span:dspan s
 
 let has_placeholder (s : string) : bool =
   match template_of s with [] | [ Ir.Tpl_lit _ ] -> false | _ -> true
@@ -125,7 +125,7 @@ let members_of (lookup : Ir.shape_id -> Ir.shape option) (t : Ir.tref option) :
 (* ── Error discrimination ──────────────────────────────────────────────── *)
 
 let error_entry (lookup : Ir.shape_id -> Ir.shape option) (t : Ir.tref) :
-    (int * Ir.shape_id * string option) option =
+    (int * Ir.shape_id * string option * bool) option =
   match t with
   | Ir.Ref (id, _) -> (
       match lookup id with
@@ -137,7 +137,8 @@ let error_entry (lookup : Ir.shape_id -> Ir.shape option) (t : Ir.tref) :
             Option.bind (trait_by "errorCode" s.traits) (fun t ->
                 string_arg t.value)
           in
-          Option.map (fun st -> (st, id, code)) status
+          let retryable = has_trait "retryable" s.traits in
+          Option.map (fun st -> (st, id, code, retryable)) status
       | None -> None)
   | _ -> None
 
@@ -229,13 +230,17 @@ let encode (d : wire_descriptor) : Ir.json =
         (match out with Some t -> Ir_json.encode_tref t | None -> `Null);
       ]
   in
-  let err (status, id, code) =
+  (* The retryable flag rides as a fourth element only when set: both
+     runtimes read its absence as not retryable, so the pre-retry three
+     element form stays the common case. *)
+  let err (status, id, code, retryable) =
     `List
-      [
-        `Int status;
-        `String id;
-        (match code with Some c -> `String c | None -> `Null);
-      ]
+      ([
+         `Int status;
+         `String id;
+         (match code with Some c -> `String c | None -> `Null);
+       ]
+      @ if retryable then [ `Bool true ] else [])
   in
   let path segs = `List (List.map (fun s -> `String s) segs) in
   let value_expr = function
@@ -250,6 +255,7 @@ let encode (d : wire_descriptor) : Ir.json =
       [ `List (List.map Ir_json.encode_template_part key); value_expr value ]
   in
   let opt_path k = function None -> [] | Some p -> [ (k, path p) ] in
+  let value_ref p = `Assoc [ ("ref", `String (String.concat "." p)) ] in
   `Assoc
     ([
        ("http_method", `String d.http_method);
@@ -263,8 +269,13 @@ let encode (d : wire_descriptor) : Ir.json =
     @ (match d.request_headers with
       | [] -> []
       | hs -> [ ("request_headers", `List (List.map header hs)) ])
-    @ opt_path "timeout" d.timeout
-    @ opt_path "retry" d.retry)
+    @ (match d.timeout with
+      | None -> []
+      | Some p -> [ ("timeout", value_ref p) ])
+    @
+    match d.retry with
+    | None -> []
+    | Some p -> [ ("retry", `Assoc [ ("max", value_ref p) ]) ])
 
 (* ── Module pass ───────────────────────────────────────────────────────── *)
 

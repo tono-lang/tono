@@ -56,8 +56,10 @@ let show_desc (d : Protocol_http.wire_descriptor) : string =
   in
   let errors =
     List.map
-      (fun (s, id, c) ->
-        Printf.sprintf "%d:%s:%s" s id (Option.value ~default:"-" c))
+      (fun (s, id, c, retryable) ->
+        Printf.sprintf "%d:%s:%s%s" s id
+          (Option.value ~default:"-" c)
+          (if retryable then ":retry" else ""))
       d.errors
   in
   String.concat "|"

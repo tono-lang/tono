@@ -201,12 +201,13 @@ fn index(model: &Model) -> BTreeMap<&str, &Shape> {
     m
 }
 
-/// A removed shape. Still referenced by a surviving shape means encoded data
-/// points at a type that is gone (wire break); otherwise it is a vanished public
-/// declaration (source break).
+/// A removed shape. Still referenced from a wire position means encoded data
+/// points at a type that is gone (wire break); referenced only by entry or
+/// config fields (which never cross the wire), or by nothing, it is a vanished
+/// declaration that breaks compiling callers (source break).
 fn removed_shape(shape: &Shape, current: &BTreeMap<&str, &Shape>) -> Change {
-    let referenced = current.values().any(|s| references(s, &shape.id));
-    let category = if referenced {
+    let on_wire = current.values().any(|s| references_on_wire(s, &shape.id));
+    let category = if on_wire {
         Category::WireBreaking
     } else {
         Category::SourceBreaking

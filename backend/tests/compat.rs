@@ -125,8 +125,10 @@ fn removing_an_orphan_entry_or_config_is_source_breaking() {
 }
 
 #[test]
-fn removing_a_shape_an_entry_or_config_references_is_wire_breaking() {
-    // Referenced through an entry field target.
+fn removed_shape_severity_follows_the_reference_position() {
+    // Referenced through an entry field target: a construction reference,
+    // never on the wire, so removing the target breaks compiling callers
+    // (source), not encoded data (wire).
     let before = model(vec![
         structure("billing#Card", vec![]),
         entry(
@@ -142,10 +144,10 @@ fn removing_a_shape_an_entry_or_config_references_is_wire_breaking() {
     )]);
     assert_eq!(
         find(&diff(&before, &after), "remove-shape billing#Card").category,
-        Category::WireBreaking
+        Category::SourceBreaking
     );
 
-    // Referenced through an op nested in the entry body.
+    // Referenced through an op nested in the entry body: that is wire.
     let nested_op = Shape {
         id: "billing#client.save".into(),
         kind: ShapeKind::Operation {
@@ -168,7 +170,7 @@ fn removing_a_shape_an_entry_or_config_references_is_wire_breaking() {
         Category::WireBreaking
     );
 
-    // Referenced through a config field target.
+    // Referenced through a config field target: construction again.
     let before = model(vec![
         structure("billing#Creds", vec![]),
         config(
@@ -182,7 +184,7 @@ fn removing_a_shape_an_entry_or_config_references_is_wire_breaking() {
     )]);
     assert_eq!(
         find(&diff(&before, &after), "remove-shape billing#Creds").category,
-        Category::WireBreaking
+        Category::SourceBreaking
     );
 }
 

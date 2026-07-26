@@ -75,10 +75,30 @@ let check_match ctx (fields : Ast.member list) (m : Ast.member)
                 ]
             | SOther, _ -> []
           in
+          (* Arm values are typed against the FIELD the match feeds (the
+             subject only selects): a ref must carry the field's type, and a
+             literal must spell a value of it. String literals stay legal for
+             the boundary-parsed primitives (duration and friends), exactly
+             like @default. *)
+          let field_scalar = Entry_scope.scalar_of_ty ctx m.mtype in
+          let field_ty_str = Printer.print_ty (Entry_scope.base_ty m.mtype) in
           let value_diags (a : Ast.match_arm) =
             match a.value with
             | Ast.AVRef r -> (
                 match resolve_path ctx fields r.segs with
+                | Some target
+                  when not
+                         (String.equal
+                            (Printer.print_ty
+                               (Entry_scope.base_ty target.mtype))
+                            field_ty_str) ->
+                    [
+                      err Error_codes.match_invalid r.ref_span
+                        "arm value '%s' has type %s but the field is %s"
+                        (path_str r.segs)
+                        (Printer.print_ty (Entry_scope.base_ty target.mtype))
+                        field_ty_str;
+                    ]
                 | Some _ -> []
                 | None ->
                     [
@@ -108,7 +128,47 @@ let check_match ctx (fields : Ast.member list) (m : Ast.member)
                           "a match arm only stacks @env/@default sources";
                       ])
                   traits
-            | Ast.AVString _ | Ast.AVInt _ | Ast.AVName _ -> []
+            | Ast.AVString _ -> (
+                match field_scalar with
+                | SString | SOther -> []
+                | SInt | SBool | SEnum _ ->
+                    [
+                      err Error_codes.match_invalid a.value_span
+                        "a string arm value does not fit the %s field"
+                        field_ty_str;
+                    ])
+            | Ast.AVInt _ -> (
+                match field_scalar with
+                | SInt | SOther -> []
+                | SString | SBool | SEnum _ ->
+                    [
+                      err Error_codes.match_invalid a.value_span
+                        "an integer arm value does not fit the %s field"
+                        field_ty_str;
+                    ])
+            | Ast.AVName ("true" | "false") -> (
+                match field_scalar with
+                | SBool -> []
+                | _ ->
+                    [
+                      err Error_codes.match_invalid a.value_span
+                        "a bool arm value does not fit the %s field"
+                        field_ty_str;
+                    ])
+            | Ast.AVName n -> (
+                match field_scalar with
+                | SEnum cases when List.mem n cases -> []
+                | SEnum _ ->
+                    [
+                      err Error_codes.match_invalid a.value_span
+                        "'%s' is not a case of the field's enum" n;
+                    ]
+                | _ ->
+                    [
+                      err Error_codes.match_invalid a.value_span
+                        "a bare name arm value is an enum case; the field is %s"
+                        field_ty_str;
+                    ])
           in
           let dup_and_reach_diags =
             let rec go seen wild = function

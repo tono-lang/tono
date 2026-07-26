@@ -174,7 +174,7 @@ value sources (presence is governed by the sources):
 ```json
 { "name": "endpoint_v2",
   "target": { "prim": "string" },
-  "sources": [ "arg", "with", { "env": "ENDPOINT" },
+  "sources": [ "with", { "env": "ENDPOINT" },
                { "env": { "field": ["endpoint_env"] } }, { "default": "v2" } ],
   "format": [ { "lit": "ENDPOINT_" }, { "field": ["client_key"] }, { "lit": "_V2" } ],
   "transforms": [ "trim", "upper_snake" ],
@@ -185,8 +185,10 @@ value sources (presence is governed by the sources):
   "constraints": [], "traits": [] }
 ```
 
-- `sources` is the declared fallback chain, in order: `"arg"`, `"with"`,
-  `{ "env": <string | {"field": [...]}> }`, `{ "default": <json> }`.
+- `sources` is the declared fallback chain, in order. The forms are `"arg"`,
+  `"with"`, `{ "env": <string | {"field": [...]}> }`, and
+  `{ "default": <json> }`; `"arg"` is exclusive and never stacks with the
+  others (the typechecker rejects the combination as dead sources).
 - `format` (omitted when absent) is the parsed `@format` template: `lit`
   literal runs, `field` entry-field placeholders (`{.x}`), and `input`
   operation-input placeholders (`{id}`, protocol trait positions only).

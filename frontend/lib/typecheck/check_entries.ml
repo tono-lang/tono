@@ -275,8 +275,11 @@ let config_origin ctx (name : string) : string =
         entry field
   | None -> ""
 
-(* Any type reference to an entry/config from a wire position: op inputs and
-   outputs, declared errors, wire struct members, union payloads. *)
+(* Any type reference to an entry/config outside its closed boundary: op
+   inputs and outputs, declared errors, wire struct members, union payloads,
+   and anything nested in lists, maps, or generic arguments. The only legal
+   appearance (a bare config as a direct entry field, the composition point)
+   is carved out by the caller before recursing here. *)
 let rec boundary_ty ctx (t : Ast.ty) : Diagnostic.t list =
   match t with
   | Ast.TName (n, args, span) ->
@@ -284,13 +287,14 @@ let rec boundary_ty ctx (t : Ast.ty) : Diagnostic.t list =
         | Roles.Entry ->
             [
               err Error_codes.entry_wire_boundary span
-                "'%s' is an entry and never crosses the wire" n;
+                "'%s' is an entry and cannot be referenced as a type" n;
             ]
         | Roles.Config ->
             [
               err Error_codes.entry_wire_boundary span
-                "'%s' is a config and never crosses the wire%s" n
-                (config_origin ctx n);
+                "'%s' is a config and can only be composed directly by an \
+                 entry field%s"
+                n (config_origin ctx n);
             ]
         | Roles.Wire -> [])
       @ List.concat_map (boundary_ty ctx) args
@@ -363,28 +367,17 @@ let check_generics (d : Ast.decl) params what : Diagnostic.t list =
         d.dname;
     ]
 
-(* Wire members must not compose entries/configs; entry fields must not name
-   an entry. A config-typed entry field is the composition point (fine); a
-   config/entry-typed anything else crosses a closed boundary. *)
+(* Member types never reference an entry, and reference a config only as the
+   bare type of a direct entry field (the composition point); a config nested
+   in a list, map, or generic argument is closed like any wire position. *)
 let check_member_boundary ctx ~(container : Roles.role) (m : Ast.member) :
     Diagnostic.t list =
-  match base_ty m.mtype with
-  | Ast.TName (n, _, span) -> (
-      match (role_of_name ctx n, container) with
-      | Roles.Entry, _ ->
-          [
-            err Error_codes.entry_wire_boundary span
-              "'%s' is an entry and cannot be a field type" n;
-          ]
-      | Roles.Config, Roles.Entry -> []
-      | Roles.Config, _ ->
-          [
-            err Error_codes.entry_wire_boundary span
-              "'%s' is a config and can only be composed by an entry field%s" n
-              (config_origin ctx n);
-          ]
-      | Roles.Wire, _ -> [])
-  | _ -> []
+  match container with
+  | Roles.Entry -> (
+      match base_ty m.mtype with
+      | Ast.TName (n, [], _) when role_of_name ctx n = Roles.Config -> []
+      | t -> boundary_ty ctx t)
+  | Roles.Config | Roles.Wire -> boundary_ty ctx m.mtype
 
 (* Construction metadata on a wire member would be dropped in silence: the IR
    loses a match, and @format/@str::* would ride the bag with no consumer,
@@ -480,13 +473,16 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
         members
   in
   let lazy_diags =
-    List.filter_map
-      (fun ((segs : string list), span) ->
-        match segs with
-        | head :: _ when Option.is_some (resolve_path ctx members segs) ->
-            Option.map (chain_error span segs) (broken_of head)
-        | _ -> None)
-      consumptions
+    (* One op can consume the same broken field through several traits; the
+       identical chain reports once. *)
+    List.sort_uniq compare
+      (List.filter_map
+         (fun ((segs : string list), span) ->
+           match segs with
+           | head :: _ when Option.is_some (resolve_path ctx members segs) ->
+               Option.map (chain_error span segs) (broken_of head)
+           | _ -> None)
+         consumptions)
   in
   (* Fields transitively consumed by the ops/binds above are covered by the
      chain errors; the rest still must declare a source. *)

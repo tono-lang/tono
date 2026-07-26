@@ -35,8 +35,14 @@ let classify (decls : Ast.decl list) : (string, role) Hashtbl.t =
           List.iter
             (fun (m : Ast.member) ->
               if member_has_bind m then
+                (* Read through a nullable spelling: the field itself is
+                   rejected elsewhere, but the classification must still flip
+                   so the diagnostics describe the composition, not a
+                   misplaced @bind. *)
                 match m.Ast.mtype with
-                | Ast.TName (n, [], _) when not (Hashtbl.mem roles n) ->
+                | Ast.TName (n, [], _)
+                | Ast.TNullable (Ast.TName (n, [], _), _)
+                  when not (Hashtbl.mem roles n) ->
                     Hashtbl.replace roles n Config
                 | _ -> ())
             members

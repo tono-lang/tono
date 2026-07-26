@@ -83,7 +83,7 @@ let template_refs (s : string) : string list list =
   let d = ref [] in
   let dpos : Span.pos = { line = 0; col = 0; offset = 0 } in
   let dspan : Span.span = { start = dpos; finish = dpos } in
-  let parts = Lower.parse_template ~diags:d ~span:dspan s in
+  let parts = Template.parse ~diags:d ~span:dspan s in
   List.filter_map (function Ir.Tpl_field p -> Some p | _ -> None) parts
 
 (* The field references a member's trait metadata consumes (env refs, format

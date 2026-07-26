@@ -26,6 +26,75 @@ let scalar_of_ty = Entry_scope.scalar_of_ty
 let protocol_trait_names = Entry_scope.protocol_trait_names
 let op_refs = Entry_scope.op_refs
 
+(* Template strings in protocol positions parse here with their real span,
+   so an unterminated "{" is diagnosed instead of silently going literal. *)
+let template_of ~span str =
+  let d = ref [] in
+  let parts = Template.parse ~diags:d ~span str in
+  (parts, List.rev !d)
+
+(* Shape rules of @header, independent of any field scope, so loose ops obey
+   them too: a string key without input placeholders, and a value that is a
+   literal string (no template; derive a @format field instead) or a field
+   reference. A non-string literal has no defined stringification. *)
+let check_header_shapes (op : Ast.decl) : Diagnostic.t list =
+  List.concat_map
+    (fun (tr : Ast.trait) ->
+      match tr.Ast.targs with
+      | [ key; value ] -> (
+          (match key with
+            | Ast.AString k ->
+                let parts, diags = template_of ~span:tr.tspan k in
+                diags
+                @
+                (* Input members vary per call; only the @http path carries
+                   that scope. A header key resolves at construction. *)
+                if
+                  List.exists
+                    (function Ir.Tpl_input _ -> true | _ -> false)
+                    parts
+                then
+                  [
+                    err Error_codes.protocol_trait_invalid tr.tspan
+                      "input placeholders ({name}) are only available in the \
+                       @http path; a @header key takes {.field} references";
+                  ]
+                else []
+            | _ ->
+                [
+                  err Error_codes.protocol_trait_invalid tr.tspan
+                    "@header expects a string key (a literal, possibly with \
+                     {.field} placeholders)";
+                ])
+          @
+          match value with
+          | Ast.AString v -> (
+              let parts, diags = template_of ~span:tr.tspan v in
+              diags
+              @
+              match parts with
+              | [] | [ Ir.Tpl_lit _ ] -> []
+              | _ ->
+                  [
+                    err Error_codes.protocol_trait_invalid tr.tspan
+                      "a template in a @header value is not supported; derive \
+                       it with @format on a field and reference the field";
+                  ])
+          | Ast.ARef _ -> []
+          | _ ->
+              [
+                err Error_codes.protocol_trait_invalid tr.tspan
+                  "@header expects a string literal or a field reference as \
+                   its value";
+              ])
+      | _ ->
+          [
+            err Error_codes.protocol_trait_invalid tr.tspan
+              "@header expects a key and a value, e.g. @header(\"X-Name\", \
+               .field)";
+          ])
+    (traits_named "header" op.Ast.dtraits)
+
 (* Protocol checks shared by every op: @header/@timeout/@retry require @http
    (a purely local operation has no protocol surface). *)
 let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
@@ -86,7 +155,8 @@ let check_loose_op (op : Ast.decl) : Diagnostic.t list =
             "@header is a protocol trait and requires @http on the operation")
         (traits_named "header" op.dtraits)
   in
-  header_http_diags @ ref_diags @ endpoint_diags @ timeout_retry_diags
+  header_http_diags @ check_header_shapes op @ ref_diags @ endpoint_diags
+  @ timeout_retry_diags
 
 let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     Diagnostic.t list =
@@ -161,13 +231,6 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
       (fun ctx t -> scalar_of_ty ctx t = Entry_scope.SInt)
       "integer"
   in
-  (* Template strings in protocol positions parse here with their real span,
-     so an unterminated "{" is diagnosed instead of silently going literal. *)
-  let template_of ~span str =
-    let d = ref [] in
-    let parts = Lower.parse_template ~diags:d ~span str in
-    (parts, List.rev !d)
-  in
   let path_template_diags =
     match find_trait "http" op.dtraits with
     | Some { targs; tspan; _ } -> (
@@ -176,69 +239,6 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
         | _ -> [])
     | None -> []
   in
-  let header_diags =
-    List.concat_map
-      (fun (tr : Ast.trait) ->
-        match tr.Ast.targs with
-        | [ key; value ] -> (
-            (match key with
-              | Ast.AString k ->
-                  let parts, diags = template_of ~span:tr.tspan k in
-                  diags
-                  @
-                  (* Input members vary per call; only the @http path carries
-                   that scope. A header key resolves at construction. *)
-                  if
-                    List.exists
-                      (function Ir.Tpl_input _ -> true | _ -> false)
-                      parts
-                  then
-                    [
-                      err Error_codes.protocol_trait_invalid tr.tspan
-                        "input placeholders ({name}) are only available in the \
-                         @http path; a @header key takes {.field} references";
-                    ]
-                  else []
-              | _ ->
-                  [
-                    err Error_codes.protocol_trait_invalid tr.tspan
-                      "@header expects a string key (a literal, possibly with \
-                       {.field} placeholders)";
-                  ])
-            @
-            (* The value forms are a literal string or a field reference; a
-               template here is out of surface (derive a @format field and
-               reference it), and a non-string literal has no defined
-               stringification on the wire. *)
-            match value with
-            | Ast.AString v -> (
-                let parts, diags = template_of ~span:tr.tspan v in
-                diags
-                @
-                match parts with
-                | [] | [ Ir.Tpl_lit _ ] -> []
-                | _ ->
-                    [
-                      err Error_codes.protocol_trait_invalid tr.tspan
-                        "a template in a @header value is not supported; \
-                         derive it with @format on a field and reference the \
-                         field";
-                    ])
-            | Ast.ARef _ -> []
-            | _ ->
-                [
-                  err Error_codes.protocol_trait_invalid tr.tspan
-                    "@header expects a string literal or a field reference as \
-                     its value";
-                ])
-        | _ ->
-            [
-              err Error_codes.protocol_trait_invalid tr.tspan
-                "@header expects a key and a value, e.g. @header(\"X-Name\", \
-                 .field)";
-            ])
-      (traits_named "header" op.dtraits)
-  in
   check_protocol_positions op
   @ ref_diags @ http_diags @ path_template_diags @ timeout_diags @ retry_diags
-  @ header_diags
+  @ check_header_shapes op
