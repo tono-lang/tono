@@ -79,6 +79,12 @@ fn field_camel(name: &str, config: &CasingConfig) -> String {
     transform(name, SymbolKind::Field, config, None)
 }
 
+/// An entry field's public identifier, honoring its `@rename(typescript)`
+/// override. Config members and path tails keep the plain [`field_camel`].
+fn field_camel_ren(name: &str, rename: Option<&str>, config: &CasingConfig) -> String {
+    transform(name, SymbolKind::Field, config, rename)
+}
+
 /// The JSDoc `@doc`/`@deprecated` block for an entry field's public surface (a
 /// Settings or config-object property), indented and newline-terminated, or
 /// empty when the field carries neither trait.
@@ -293,7 +299,13 @@ fn class_decl(
     let args = entry.args();
     let mut params: Vec<String> = args
         .iter()
-        .map(|f| format!("{}: {}", camel(&f.name), ts_type(&f.target)))
+        .map(|f| {
+            format!(
+                "{}: {}",
+                plan::arg_camel(&f.name, &f.traits, LANG),
+                ts_type(&f.target)
+            )
+        })
         .collect();
     if !entry.with_fields().is_empty() {
         params.push(format!("config: {} = {{}}", n.config));
@@ -308,7 +320,7 @@ fn class_decl(
             .iter()
             .map(|f| format!(
                 "{}: {}, ",
-                field_camel(&f.name, config),
+                field_camel_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
                 zero_value(&f.target)
             ))
             .collect::<String>(),
@@ -366,13 +378,21 @@ fn class_decl(
                 plan::Presence::Always => line.condition.clone(),
                 plan::Presence::String => format!(
                     "s.{} !== {} && {}",
-                    field_camel(&field.name, config),
+                    field_camel_ren(
+                        &field.name,
+                        rename_of(&field.traits, LANG).as_deref(),
+                        config
+                    ),
                     cast_string(&field.target, "\"\""),
                     line.condition
                 ),
                 plan::Presence::Bytes => format!(
                     "s.{}.length !== 0 && {}",
-                    field_camel(&field.name, config),
+                    field_camel_ren(
+                        &field.name,
+                        rename_of(&field.traits, LANG).as_deref(),
+                        config
+                    ),
                     line.condition
                 ),
                 plan::Presence::Numeric => {
@@ -385,7 +405,11 @@ fn class_decl(
                         "({why} === \"\" || s.{ident} !== {zero}) && {}",
                         line.condition,
                         why = why_var(&field.name),
-                        ident = field_camel(&field.name, config),
+                        ident = field_camel_ren(
+                            &field.name,
+                            rename_of(&field.traits, LANG).as_deref(),
+                            config
+                        ),
                     )
                 }
             };

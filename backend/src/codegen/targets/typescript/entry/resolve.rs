@@ -28,7 +28,14 @@ impl Resolver<'_, '_> {
     }
 
     fn with_access(&self, field: &EntryField) -> String {
-        format!("config.{}", field_camel(&field.name, self.config))
+        format!(
+            "config.{}",
+            field_camel_ren(
+                &field.name,
+                rename_of(&field.traits, LANG).as_deref(),
+                self.config
+            )
+        )
     }
 
     /// The prereq guard when the env variable's own name comes from a sibling
@@ -133,7 +140,7 @@ impl Resolver<'_, '_> {
     fn decode_opening(&mut self, field: &EntryField, out: &mut String) -> Option<(String, String)> {
         let dest = self.ident(&field.name);
         if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            out.push_str(&format!("{dest} = {};", camel(&field.name)));
+            out.push_str(&format!("{dest} = {};", self.arg_ident(field)));
             return None;
         }
         let why = why_var(&field.name);
@@ -191,6 +198,10 @@ impl Emitter for Resolver<'_, '_> {
         "  "
     }
 
+    fn lang(&self) -> &'static str {
+        LANG
+    }
+
     fn term(&self) -> &'static str {
         ";"
     }
@@ -208,14 +219,31 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     fn ident(&self, name: &str) -> String {
-        format!("s.{}", field_camel(name, self.config))
+        format!(
+            "s.{}",
+            field_camel_ren(
+                name,
+                self.entry.field_rename(name, LANG).as_deref(),
+                self.config
+            )
+        )
     }
 
     fn path_expr(&self, path: &[String]) -> String {
         let mut out = "s".to_string();
-        for seg in path {
+        for (i, seg) in path.iter().enumerate() {
             out.push('.');
-            out.push_str(&field_camel(seg, self.config));
+            // Only the head is an entry field (it honors @rename); the tail
+            // reaches into config/struct members, spelled plainly.
+            if i == 0 {
+                out.push_str(&field_camel_ren(
+                    seg,
+                    self.entry.field_rename(seg, LANG).as_deref(),
+                    self.config,
+                ));
+            } else {
+                out.push_str(&field_camel(seg, self.config));
+            }
         }
         out
     }
@@ -526,7 +554,7 @@ impl Emitter for Resolver<'_, '_> {
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
         format!(
             "if ((s.{head}.{member} ?? {zero}) === {zero}) {{\n  throw new {config}(\"{name}: no value\");\n}}",
-            head = field_camel(head, self.config),
+            head = field_camel_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             member = field_camel(member, self.config),
             zero = cast_string(leaf, "\"\""),
             config = error_names().config,
@@ -544,7 +572,7 @@ impl Emitter for Resolver<'_, '_> {
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         format!(
             "if (s.{ident} === {zero}) {{\n  throw new {config}(\"{name} <- \" + ({why} || \"no value\"));\n}}",
-            ident = field_camel(head, self.config),
+            ident = field_camel_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             zero = cast_string(target, "\"\""),
             why = why_var(head),
             name = head,
@@ -555,7 +583,7 @@ impl Emitter for Resolver<'_, '_> {
     fn require_bytes(&mut self, head: &str) -> String {
         format!(
             "if (s.{ident}.length === 0) {{\n  throw new {config}(\"{name} <- \" + ({why} || \"no value\"));\n}}",
-            ident = field_camel(head, self.config),
+            ident = field_camel_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             why = why_var(head),
             name = head,
             config = error_names().config,
@@ -570,7 +598,7 @@ impl Emitter for Resolver<'_, '_> {
         };
         format!(
             "if ({why} !== \"\" && s.{ident} === {zero}) {{\n  throw new {config}(\"{name} <- \" + {why});\n}}",
-            ident = field_camel(head, self.config),
+            ident = field_camel_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             why = why_var(head),
             name = head,
             config = error_names().config,

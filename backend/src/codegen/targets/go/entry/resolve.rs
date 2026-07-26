@@ -147,7 +147,7 @@ impl Resolver<'_, '_> {
     fn decode_opening(&mut self, field: &EntryField, out: &mut String) -> Option<(String, String)> {
         let dest = self.ident(&field.name);
         if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            out.push_str(&format!("{dest} = {}", camel(&field.name)));
+            out.push_str(&format!("{dest} = {}", self.arg_ident(field)));
             return None;
         }
         let why = why_var(&field.name);
@@ -208,6 +208,10 @@ impl Emitter for Resolver<'_, '_> {
         "\t"
     }
 
+    fn lang(&self) -> &'static str {
+        LANG
+    }
+
     fn term(&self) -> &'static str {
         ""
     }
@@ -225,14 +229,31 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     fn ident(&self, name: &str) -> String {
-        format!("s.{}", field_pascal(name, self.config))
+        format!(
+            "s.{}",
+            field_pascal_ren(
+                name,
+                self.entry.field_rename(name, LANG).as_deref(),
+                self.config
+            )
+        )
     }
 
     fn path_expr(&self, path: &[String]) -> String {
         let mut out = "s".to_string();
-        for seg in path {
+        for (i, seg) in path.iter().enumerate() {
             out.push('.');
-            out.push_str(&field_pascal(seg, self.config));
+            // Only the head is an entry field (it honors @rename); the tail
+            // reaches into config/struct members, spelled plainly.
+            if i == 0 {
+                out.push_str(&field_pascal_ren(
+                    seg,
+                    self.entry.field_rename(seg, LANG).as_deref(),
+                    self.config,
+                ));
+            } else {
+                out.push_str(&field_pascal(seg, self.config));
+            }
         }
         out
     }
@@ -491,7 +512,7 @@ impl Emitter for Resolver<'_, '_> {
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
         format!(
             "if s.{head_ident}.{member_ident} == {zero} {{\n\treturn nil, &{config}{{Message: \"{name}: no value\"}}\n}}",
-            head_ident = field_pascal(head, self.config),
+            head_ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             member_ident = field_pascal(member, self.config),
             zero = cast_string(leaf, "\"\""),
             config = error_names().config,
@@ -509,7 +530,7 @@ impl Emitter for Resolver<'_, '_> {
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         format!(
             "if s.{ident} == {zero} {{\n\twhy := {why}\n\tif why == \"\" {{\n\t\twhy = \"no value\"\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + why}}\n}}",
-            ident = field_pascal(head, self.config),
+            ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             zero = cast_string(target, "\"\""),
             why = why_var(head),
             name = head,
@@ -520,7 +541,7 @@ impl Emitter for Resolver<'_, '_> {
     fn require_bytes(&mut self, head: &str) -> String {
         format!(
             "if len(s.{ident}) == 0 {{\n\twhy := {why}\n\tif why == \"\" {{\n\t\twhy = \"no value\"\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + why}}\n}}",
-            ident = field_pascal(head, self.config),
+            ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             why = why_var(head),
             name = head,
             config = error_names().config,
@@ -530,7 +551,7 @@ impl Emitter for Resolver<'_, '_> {
     fn require_numeric(&mut self, head: &str, _target: &Tref) -> String {
         format!(
             "if {why} != \"\" && s.{ident} == 0 {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {why}}}\n}}",
-            ident = field_pascal(head, self.config),
+            ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             why = why_var(head),
             name = head,
             config = error_names().config,

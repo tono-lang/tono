@@ -160,6 +160,13 @@ fn field_pascal(name: &str, config: &CasingConfig) -> String {
     transform(name, SymbolKind::Field, config, None)
 }
 
+/// An entry field's exported identifier, honoring its `@rename(go)` override.
+/// Config members and path tails keep the plain [`field_pascal`] (they are not
+/// entry fields, so `@rename` on them is a later concern).
+fn field_pascal_ren(name: &str, rename: Option<&str>, config: &CasingConfig) -> String {
+    transform(name, SymbolKind::Field, config, rename)
+}
+
 /// The godoc `@doc` block plus a `// Deprecated:` line for an entry field's
 /// public surface (a Settings/config struct field or a With* option), indented
 /// and newline-terminated, or empty when the field carries neither trait.

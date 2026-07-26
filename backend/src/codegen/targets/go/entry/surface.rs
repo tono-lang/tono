@@ -49,7 +49,7 @@ pub(super) fn settings_decl(
     for f in entry.declared() {
         fields.push_str(&format!(
             "{doc}\t{} {}\n",
-            field_pascal(&f.name, config),
+            field_pascal_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
             field_go_type(&f.target, module),
             doc = field_doc(&f.traits, "\t"),
         ));
@@ -90,9 +90,12 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
         carrier = n.carrier,
     )));
     for f in configurable {
+        // The public option name honors @rename(go); the carrier member stays
+        // the plain camel name (it is internal and read the same way in resolve).
+        let display = rename_of(&f.traits, LANG).unwrap_or_else(|| f.name.clone());
         let fn_name = pascal(&format!(
             "with_{}",
-            companion_name(entry.name, &f.name, multi)
+            companion_name(entry.name, &display, multi)
         ));
         decls.push(Decl::raw(format!(
             "{doc}// {fn_name} sets the {field} construction value.\n\

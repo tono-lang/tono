@@ -6,13 +6,14 @@
 use super::*;
 
 pub(super) fn access(vp: &crate::codegen::entries::ValuePath<'_>, config: &CasingConfig) -> String {
+    let head = field_camel_ren(
+        &vp.field.name,
+        rename_of(&vp.field.traits, LANG).as_deref(),
+        config,
+    );
     match &vp.member {
-        None => field_camel(&vp.field.name, config),
-        Some(member) => format!(
-            "{}.{}",
-            field_camel(&vp.field.name, config),
-            field_camel(member, config)
-        ),
+        None => head,
+        Some(member) => format!("{}.{}", head, field_camel(member, config)),
     }
 }
 

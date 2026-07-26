@@ -47,7 +47,7 @@ pub(super) fn settings_interface(
     for f in entry.declared() {
         fields.push_str(&format!(
             "{doc}  {}: {};\n",
-            field_camel(&f.name, config),
+            field_camel_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
             ts_type(&f.target),
             doc = field_doc(&f.traits, "  "),
         ));
@@ -85,7 +85,7 @@ pub(super) fn config_object_interface(
         .map(|f| {
             format!(
                 "{doc}  {}?: {};\n",
-                field_camel(&f.name, config),
+                field_camel_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
                 ts_type(&f.target),
                 doc = field_doc(&f.traits, "  "),
             )

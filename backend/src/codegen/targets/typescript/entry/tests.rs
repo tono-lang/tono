@@ -299,6 +299,27 @@ fn field_docs_flow_onto_the_settings_and_config_properties() {
 }
 
 #[test]
+fn an_entry_field_rename_retargets_every_ts_identifier() {
+    let mut module = with_descriptors(fixture_module());
+    let mut token = bare_entry_field("primary_key", Tref::Prim(Prim::String), vec![Source::Arg]);
+    // @rename(lang) is a verbatim identifier, used at every position.
+    token.traits = vec![crate::ir::Trait {
+        id: "core#rename".into(),
+        value: serde_json::json!({"typescript": "authToken"}),
+    }];
+    push_entry_field(&mut module, token);
+    let out = text(&module);
+    // The Settings property, the constructor param, and the internal write all
+    // use the renamed identifier; none use the casing of the canonical name.
+    assert!(out.contains("  authToken: string;"));
+    assert!(out.contains("authToken: string"));
+    assert!(out.contains("s.authToken = authToken;"));
+    assert!(!out.contains("primaryKey"));
+    // The canonical dotted key the runtime reads is unchanged.
+    assert!(out.contains("values[\"primary_key\"]"));
+}
+
+#[test]
 fn a_bespoke_stub_keeps_the_declared_signature() {
     // No descriptor on the op (the fixture is pre-protocol): the stub
     // still takes the declared input.

@@ -27,7 +27,13 @@ pub(super) fn new_decl(
     let args = entry.args();
     let params: Vec<String> = args
         .iter()
-        .map(|f| format!("{} {}", camel(&f.name), go_type(&f.target)))
+        .map(|f| {
+            format!(
+                "{} {}",
+                plan::arg_camel(&f.name, &f.traits, LANG),
+                go_type(&f.target)
+            )
+        })
         .collect();
     let opts_param = if entry.with_fields().is_empty() {
         String::new()
@@ -106,20 +112,32 @@ pub(super) fn new_decl(
                 plan::Presence::Always => line.condition.clone(),
                 plan::Presence::String => format!(
                     "s.{} != {} && {}",
-                    field_pascal(&field.name, config),
+                    field_pascal_ren(
+                        &field.name,
+                        rename_of(&field.traits, LANG).as_deref(),
+                        config
+                    ),
                     cast_string(&field.target, "\"\""),
                     line.condition
                 ),
                 plan::Presence::Bytes => format!(
                     "len(s.{}) != 0 && {}",
-                    field_pascal(&field.name, config),
+                    field_pascal_ren(
+                        &field.name,
+                        rename_of(&field.traits, LANG).as_deref(),
+                        config
+                    ),
                     line.condition
                 ),
                 plan::Presence::Numeric => format!(
                     "({why} == \"\" || s.{ident} != 0) && {}",
                     line.condition,
                     why = why_var(&field.name),
-                    ident = field_pascal(&field.name, config),
+                    ident = field_pascal_ren(
+                        &field.name,
+                        rename_of(&field.traits, LANG).as_deref(),
+                        config
+                    ),
                 ),
             };
             guards.push_str(&format!(
@@ -239,7 +257,14 @@ pub(super) fn value_expr(
     match (&vp.member, vp.target) {
         (None, Tref::Ref { .. }) if !scalar_ref => None,
         (None, Tref::Map(_, _)) | (None, Tref::List(_)) => None,
-        (None, _) => Some(format!("s.{}", field_pascal(&vp.field.name, config))),
+        (None, _) => Some(format!(
+            "s.{}",
+            field_pascal_ren(
+                &vp.field.name,
+                rename_of(&vp.field.traits, LANG).as_deref(),
+                config
+            )
+        )),
         (Some(member), t) => {
             if matches!(t, Tref::Ref { .. }) && !scalar_ref {
                 return None;
@@ -249,7 +274,11 @@ pub(super) fn value_expr(
             }
             Some(format!(
                 "s.{}.{}",
-                field_pascal(&vp.field.name, config),
+                field_pascal_ren(
+                    &vp.field.name,
+                    rename_of(&vp.field.traits, LANG).as_deref(),
+                    config
+                ),
                 field_pascal(member, config)
             ))
         }

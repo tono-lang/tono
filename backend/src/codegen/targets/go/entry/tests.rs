@@ -354,6 +354,32 @@ fn field_docs_flow_onto_the_settings_field_and_the_with_option() {
 }
 
 #[test]
+fn an_entry_field_rename_retargets_every_go_identifier() {
+    let mut module = fixture_module();
+    // A renamed @arg: @rename(go) retargets the public identifier and every
+    // internal reference consistently, while the canonical value key is untouched.
+    let mut token = bare_entry_field("primary_key", Tref::Prim(Prim::String), vec![Source::Arg]);
+    // @rename(lang) is a verbatim identifier (it bypasses casing), used at every
+    // position the field appears in.
+    token.traits = vec![crate::ir::Trait {
+        id: "core#rename".into(),
+        value: serde_json::json!({"go": "AuthToken"}),
+    }];
+    push_entry_field(&mut module, token);
+    let types = types_text(&module);
+    let serde = serde_text(&module);
+    // The Settings field, the @arg param, and the internal write all use the
+    // renamed identifier; none use the casing of the canonical name.
+    assert!(types.contains("\tAuthToken string\n"));
+    assert!(!types.contains("PrimaryKey"));
+    assert!(serde.contains("AuthToken string"));
+    assert!(serde.contains("s.AuthToken = AuthToken"));
+    assert!(!serde.contains("PrimaryKey"));
+    // The canonical dotted key the runtime reads is unchanged (not renamed).
+    assert!(serde.contains("values[\"primary_key\"]"));
+}
+
+#[test]
 fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     let mut module = fixture_module();
     let mut choice = bare_entry_field("choice", Tref::Prim(Prim::String), vec![]);

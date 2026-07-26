@@ -39,6 +39,18 @@ pub(crate) fn camel(name: &str) -> String {
     )
 }
 
+/// The camelCase constructor-parameter name of a field, honoring its
+/// `@rename(lang)` override (a `@rename` retargets the whole public identifier,
+/// param included, without touching the canonical value key).
+pub(crate) fn arg_camel(name: &str, traits: &[crate::ir::Trait], lang: &str) -> String {
+    transform(
+        name,
+        SymbolKind::Field,
+        &CasingConfig::new(CaseStyle::Camel),
+        crate::codegen::conventions::rename_of(traits, lang).as_deref(),
+    )
+}
+
 /// The reason ("why") variable tracking a field's deferred resolution.
 pub(crate) fn why_var(field: &str) -> String {
     camel(&format!("{field}_why"))
@@ -103,6 +115,10 @@ pub trait Emitter {
     /// One indentation unit (`"\t"` for Go, four spaces for TypeScript).
     fn indent_unit(&self) -> &'static str;
 
+    /// The target's `@rename` language key (`"go"` / `"typescript"`), so a
+    /// field's generated identifier honors its `@rename(lang)` override.
+    fn lang(&self) -> &'static str;
+
     /// The `if <cond> {` / `} else if <cond> {` headers (Go omits the parens
     /// its condition needs in TypeScript, so the header is a target call).
     fn if_header(&self, cond: &Cond) -> String;
@@ -139,9 +155,10 @@ pub trait Emitter {
     fn why_ident(&self, field_name: &str) -> String {
         why_var(field_name)
     }
-    /// The constructor parameter name of an `@arg` field.
+    /// The constructor parameter name of an `@arg` field, honoring its
+    /// `@rename(lang)` override.
     fn arg_ident(&self, field: &EntryField) -> String {
-        camel(&field.name)
+        arg_camel(&field.name, &field.traits, self.lang())
     }
     /// The read expression of a sibling-field path (`creds.token`).
     fn path_read(&self, path: &[String]) -> String {

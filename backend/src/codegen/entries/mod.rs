@@ -222,6 +222,17 @@ impl<'a> EntryModel<'a> {
             .find(|f| f.name == name)
             .is_some_and(|f| self.is_guaranteed(f))
     }
+
+    /// The `@rename(lang)` override of the entry field with this canonical name,
+    /// so its generated identifier (a constructor param, a `With*`/`with` option,
+    /// a Settings member, and every internal reference) reads idiomatically in
+    /// the target without changing the canonical name the runtime looks up by.
+    pub fn field_rename(&self, name: &str, lang: &str) -> Option<String> {
+        self.fields
+            .iter()
+            .find(|f| f.name == name)
+            .and_then(|f| crate::codegen::conventions::rename_of(&f.traits, lang))
+    }
 }
 
 /// Whether a leaf type is an enum reference (a branded string on the wire),
