@@ -8,30 +8,10 @@
 
 use super::super::{EntryModel, FieldShape};
 use super::{arm_sources, format_absent_deps, string_like, Emitter, Leaf, Stmt};
-use crate::ir::{
-    ArmValue, EntryField, EnvName, Module, Prim, Select, Shape, ShapeKind, Source, Tref,
-};
+use crate::ir::{ArmValue, EntryField, Module, Prim, Select, Shape, ShapeKind, Source, Tref};
 
 fn has_arg(field: &EntryField) -> bool {
     field.sources.iter().any(|s| matches!(s, Source::Arg))
-}
-
-/// The prereq guard an env step opens when the variable's own name is read from
-/// a still-deferred sibling: the env lookup runs only once that head resolves,
-/// so the step chains onto this guard's `else`. Empty when the name is a literal
-/// or a guaranteed sibling. The decision is shared; the guard line is spelled
-/// per target.
-pub fn env_name_prereq(name: &EnvName, why: &str, entry: &EntryModel, e: &dyn Emitter) -> String {
-    let EnvName::Field(fr) = name else {
-        return String::new();
-    };
-    let Some(head) = fr.field.first() else {
-        return String::new();
-    };
-    if entry.field_guaranteed(head) {
-        return String::new();
-    }
-    e.name_prereq_line(head, why)
 }
 
 /// Build the resolution plan for one entry field, dispatching on its shape.
