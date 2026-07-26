@@ -353,16 +353,13 @@ fn apply_transforms(expr: String, transforms: &[String], helpers: &mut Helpers) 
             "trim" => format!("strings.TrimSpace({out})"),
             "lower" => format!("strings.ToLower({out})"),
             "upper" => format!("strings.ToUpper({out})"),
-            "upper_snake" | "snake" | "kebab" | "pascal" => {
-                helpers.transforms.insert(match t.as_str() {
-                    "upper_snake" => "upper_snake",
-                    "snake" => "snake",
-                    "kebab" => "kebab",
-                    _ => "pascal",
-                });
-                format!("str{}({out})", pascal(t))
-            }
-            _ => out,
+            other => match crate::codegen::entries::plan::casing_transform(other, &out) {
+                Some((key, expr)) => {
+                    helpers.transforms.insert(key);
+                    expr
+                }
+                None => out,
+            },
         };
     }
     out

@@ -375,16 +375,13 @@ pub(super) fn apply_transforms(
             "trim" => format!("({out}).trim()"),
             "lower" => format!("({out}).toLowerCase()"),
             "upper" => format!("({out}).toUpperCase()"),
-            "upper_snake" | "snake" | "kebab" | "pascal" => {
-                helpers.transforms.insert(match t.as_str() {
-                    "upper_snake" => "upper_snake",
-                    "snake" => "snake",
-                    "kebab" => "kebab",
-                    _ => "pascal",
-                });
-                format!("str{}({out})", pascal(t))
-            }
-            _ => out,
+            other => match crate::codegen::entries::plan::casing_transform(other, &out) {
+                Some((key, expr)) => {
+                    helpers.transforms.insert(key);
+                    expr
+                }
+                None => out,
+            },
         };
     }
     out

@@ -56,6 +56,22 @@ pub(crate) fn why_var(field: &str) -> String {
     camel(&format!("{field}_why"))
 }
 
+/// A casing `@str::*` transform applied over `out`: the shared helper key to
+/// pull in and the call spelling, identical in every target (the case-fold
+/// transforms lower to the same generated `str*` helper). Returns `None` for the
+/// language-specific transforms (`trim`/`lower`/`upper`) each target spells
+/// itself. The key is the transform's own name.
+pub(crate) fn casing_transform(t: &str, out: &str) -> Option<(&'static str, String)> {
+    let (key, name) = match t {
+        "upper_snake" => ("upper_snake", "strUpperSnake"),
+        "snake" => ("snake", "strSnake"),
+        "kebab" => ("kebab", "strKebab"),
+        "pascal" => ("pascal", "strPascal"),
+        _ => return None,
+    };
+    Some((key, format!("{name}({out})")))
+}
+
 /// A type carried as a (branded) string at rest, so its zero value is the empty
 /// string and a consumed-chain require compares against `""`.
 pub(crate) fn string_like(t: &Tref) -> bool {
