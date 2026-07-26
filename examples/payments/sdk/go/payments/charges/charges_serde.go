@@ -126,8 +126,45 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	case tonohttp.OutcomeError:
 		return zero, DecodeCreateChargeError(outcome.Status, []byte(outcome.Body))
 	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(outcome.Body), &probe); err != nil {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["id"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["amount"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["fee"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["receipt"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["currency"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["tags"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["metadata"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["created"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["status"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if rv, ok := probe["method"]; !ok || string(rv) == "null" {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
 	var out Charge
 	if err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	if vs := ValidateCharge(out); len(vs) > 0 {
 		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
 	}
 	return out, nil

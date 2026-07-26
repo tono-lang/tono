@@ -257,6 +257,19 @@ fn a_constrained_op_input_is_validated_before_transport() {
 }
 
 #[test]
+fn a_structured_output_decodes_strictly_on_required_members() {
+    let module = with_descriptors(fixture_module());
+    let out = text(&module);
+    // The 2xx output checks its required members before decoding; a missing one
+    // surfaces a DecodeError instead of an undefined field. Unknown fields are
+    // tolerated (decodeNote maps only what it knows).
+    assert!(out.contains("if (!(\"id\" in raw) || raw[\"id\"] === null) {"));
+    assert!(out.contains("if (!(\"body\" in raw) || raw[\"body\"] === null) {"));
+    assert!(out.contains("throw new DecodeError(\"$\", \"Note\", outcome.body);"));
+    assert!(out.contains("out = decodeNote(raw);"));
+}
+
+#[test]
 fn a_bespoke_stub_keeps_the_declared_signature() {
     // No descriptor on the op (the fixture is pre-protocol): the stub
     // still takes the declared input.

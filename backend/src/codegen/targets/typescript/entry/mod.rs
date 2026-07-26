@@ -602,13 +602,47 @@ fn op_method(
         Some(Tref::Ref { id, .. }) => {
             refs.push(module_symbol(&en.decode, module));
             let out_name = type_ident_from_id(id);
-            format!(
-                "    try {{\n      return decode{out_name}(JSON.parse(outcome.body));\n    }} catch {{\n      {t}\n    }}",
-                t = throw(format!(
-                    "new {}(\"$\", \"{out_name}\", outcome.body)",
-                    en.decode
-                )),
-            )
+            let t = throw(format!(
+                "new {}(\"$\", \"{out_name}\", outcome.body)",
+                en.decode
+            ));
+            // A structured output decodes strictly on what the contract promises:
+            // required members must be present (undefined/null is absence) and
+            // declared validation must pass. Unknown fields are tolerated so a
+            // server adding a field does not break the client.
+            let out_shape = module.shapes.iter().find(|s| s.id == *id);
+            let mut required = String::new();
+            let mut validate = String::new();
+            if let Some(shape) = out_shape {
+                if let ShapeKind::Structure { members, .. } = &shape.kind {
+                    for m in members.iter().filter(|m| m.required) {
+                        let name = wire_key(m);
+                        required.push_str(&format!(
+                            "      if (!({name:?} in raw) || raw[{name:?}] === null) {{\n        {t}\n      }}\n",
+                        ));
+                    }
+                }
+                if validation::shape_has_checks(shape) {
+                    refs.push(module_symbol(&format!("validate{out_name}"), module));
+                    validate = format!(
+                        "      const vs = validate{out_name}(out);\n      if (vs.length > 0) {{\n        {t}\n      }}\n",
+                    );
+                }
+            }
+            if required.is_empty() && validate.is_empty() {
+                format!(
+                    "    try {{\n      return decode{out_name}(JSON.parse(outcome.body));\n    }} catch {{\n      {t}\n    }}",
+                )
+            } else {
+                format!(
+                    "    let raw: any;\n    try {{\n      raw = JSON.parse(outcome.body);\n    }} catch {{\n      {t}\n    }}\n\
+                     \x20   if (typeof raw !== \"object\" || raw === null || Array.isArray(raw)) {{\n      {t}\n    }}\n\
+                     {required}\
+                     \x20   let out: {out_name};\n    try {{\n      out = decode{out_name}(raw);\n    }} catch {{\n      {t}\n    }}\n\
+                     {validate}\
+                     \x20   return out;",
+                )
+            }
         }
         Some(t) => {
             // A 64-bit integer (or a container holding one) rides the wire

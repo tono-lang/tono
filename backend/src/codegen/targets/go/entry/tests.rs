@@ -497,6 +497,21 @@ fn a_constrained_op_input_is_validated_before_transport() {
 }
 
 #[test]
+fn a_structured_output_decodes_strictly_on_required_members() {
+    let module = with_descriptors(fixture_module());
+    let serde = serde_text(&module);
+    // The 2xx output is probed for its required members (a zero value is not a
+    // present value) and a missing one surfaces a DecodeError, not a zeroed
+    // struct. The probe reads the wire key.
+    assert!(serde.contains("var probe map[string]json.RawMessage"));
+    assert!(serde.contains("if rv, ok := probe[\"id\"]; !ok || string(rv) == \"null\" {"));
+    assert!(serde.contains("if rv, ok := probe[\"body\"]; !ok || string(rv) == \"null\" {"));
+    assert!(serde.contains("&DecodeError{Path: \"$\", Expected: \"Note\", Raw: outcome.Body}"));
+    // Unknown fields are still tolerated (a plain Unmarshal into the struct).
+    assert!(serde.contains("var out Note"));
+}
+
+#[test]
 fn the_bespoke_stub_error_passes_through_the_bound_on_error_hook() {
     let mut module = fixture_module();
     module.extensions = vec![crate::ir::Extension {

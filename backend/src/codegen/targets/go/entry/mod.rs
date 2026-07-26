@@ -592,18 +592,56 @@ fn op_method_decl(
         }
         Some(t) => {
             refs.push(import("json", "encoding/json"));
-            format!(
-                "\tvar out {ty}\n\
-                 \tif err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {{\n\
-                 \t\treturn zero, {fail_decode}\n\t}}\n\
-                 \treturn out, nil",
-                ty = go_type(t),
-                fail_decode = fail(format!(
-                    "&{decode}{{Path: \"$\", Expected: {expected:?}, Raw: outcome.Body}}",
-                    decode = en.decode,
-                    expected = go_type(t),
-                )),
-            )
+            let ty = go_type(t);
+            let fail_decode = fail(format!(
+                "&{decode}{{Path: \"$\", Expected: {ty:?}, Raw: outcome.Body}}",
+                decode = en.decode,
+            ));
+            // A structured output decodes strictly on what the contract promises:
+            // required members must be present (a zero value is not absence) and
+            // declared validation must pass. Unknown fields are tolerated so a
+            // server adding a field does not break the client.
+            let out_shape = match t {
+                Tref::Ref { id, .. } => module.shapes.iter().find(|s| s.id == *id),
+                _ => None,
+            };
+            let mut probe = String::new();
+            let mut validate = String::new();
+            if let Some(shape) = out_shape {
+                if let ShapeKind::Structure { members, .. } = &shape.kind {
+                    for m in members.iter().filter(|m| m.required) {
+                        let name = wire_key(m);
+                        probe.push_str(&format!(
+                            "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn zero, {fail_decode}\n\t}}\n",
+                        ));
+                    }
+                }
+                if validation::shape_has_checks(shape) {
+                    validate = format!(
+                        "\tif vs := Validate{ty}(out); len(vs) > 0 {{\n\t\treturn zero, {fail_decode}\n\t}}\n",
+                    );
+                }
+            }
+            if probe.is_empty() && validate.is_empty() {
+                format!(
+                    "\tvar out {ty}\n\
+                     \tif err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {{\n\
+                     \t\treturn zero, {fail_decode}\n\t}}\n\
+                     \treturn out, nil",
+                )
+            } else {
+                format!(
+                    "\tvar probe map[string]json.RawMessage\n\
+                     \tif err := json.Unmarshal([]byte(outcome.Body), &probe); err != nil {{\n\
+                     \t\treturn zero, {fail_decode}\n\t}}\n\
+                     {probe}\
+                     \tvar out {ty}\n\
+                     \tif err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {{\n\
+                     \t\treturn zero, {fail_decode}\n\t}}\n\
+                     {validate}\
+                     \treturn out, nil",
+                )
+            }
         }
         None => "\treturn nil".to_string(),
     };

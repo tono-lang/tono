@@ -244,11 +244,56 @@ export class Client {
     if (outcome.outcome === "error") {
       throw decodeCreateChargeError(outcome.status, outcome.body);
     }
+    let raw: any;
     try {
-      return decodeCharge(JSON.parse(outcome.body));
+      raw = JSON.parse(outcome.body);
     } catch {
       throw new DecodeError("$", "Charge", outcome.body);
     }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("id" in raw) || raw["id"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("amount" in raw) || raw["amount"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("fee" in raw) || raw["fee"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("receipt" in raw) || raw["receipt"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("currency" in raw) || raw["currency"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("tags" in raw) || raw["tags"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("metadata" in raw) || raw["metadata"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("created" in raw) || raw["created"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("status" in raw) || raw["status"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    if (!("method" in raw) || raw["method"] === null) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    let out: Charge;
+    try {
+      out = decodeCharge(raw);
+    } catch {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    const vs = validateCharge(out);
+    if (vs.length > 0) {
+      throw new DecodeError("$", "Charge", outcome.body);
+    }
+    return out;
   }
 }
 

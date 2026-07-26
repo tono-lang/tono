@@ -434,11 +434,28 @@ export class Client {
     if (outcome.outcome === "error") {
       throw decodeSaveNoteError(outcome.status, outcome.body);
     }
+    let raw: any;
     try {
-      return decodeNote(JSON.parse(outcome.body));
+      raw = JSON.parse(outcome.body);
     } catch {
       throw new DecodeError("$", "Note", outcome.body);
     }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new DecodeError("$", "Note", outcome.body);
+    }
+      if (!("id" in raw) || raw["id"] === null) {
+        throw new DecodeError("$", "Note", outcome.body);
+      }
+      if (!("body" in raw) || raw["body"] === null) {
+        throw new DecodeError("$", "Note", outcome.body);
+      }
+    let out: Note;
+    try {
+      out = decodeNote(raw);
+    } catch {
+      throw new DecodeError("$", "Note", outcome.body);
+    }
+    return out;
   }
 }
 
