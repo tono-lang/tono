@@ -183,16 +183,6 @@ fn field_doc(traits: &[Trait], indent: &str) -> String {
     out
 }
 
-/// Whether the resolved value is string-shaped in Go (assignable from a raw
-/// env string with at most a named-type cast).
-fn string_like(t: &Tref) -> bool {
-    matches!(
-        t,
-        Tref::Prim(Prim::String | Prim::Uuid | Prim::Timestamp | Prim::Date | Prim::Duration)
-            | Tref::Ref { .. }
-    )
-}
-
 /// An expression casting a raw string `v` into the field's Go type. Only valid
 /// for string-like types.
 fn cast_string(t: &Tref, v: &str) -> String {

@@ -276,6 +276,18 @@ pub struct ValuePath<'a> {
     pub target: &'a Tref,
 }
 
+/// Whether a frozen value entry needs a presence guard before it is written to
+/// the runtime values. A guaranteed non-member field is always present, and a
+/// non-string value freezes unconditionally (its zero reads the same as its
+/// absence to the runtime's value positions). Shared so each target spells only
+/// the comparison operator, not the decision.
+pub fn needs_presence_guard(entry: &EntryModel, vp: &ValuePath) -> bool {
+    if entry.is_guaranteed(vp.field) && vp.member.is_none() {
+        return false;
+    }
+    plan::string_like(vp.target)
+}
+
 /// The bare operation name of an entry-nested op: the id is
 /// `module#entry.op`, so the local part still carries the entry prefix the
 /// generated method name must not.

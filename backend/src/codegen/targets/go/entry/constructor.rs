@@ -309,21 +309,14 @@ pub(super) fn value_cast(t: &Tref, expr: &str) -> String {
 }
 
 /// The presence condition guarding a value entry, or `None` when the value is
-/// always frozen. The guard reads the resolved value itself, not the declared
-/// chain's why-reason: client_init runs over the Settings before this point
-/// (bespoke wins), so a hook-filled field must freeze like a declared one. A
-/// non-string value freezes unconditionally (its zero means the same thing to
-/// the runtime's value positions as its absence).
+/// always frozen. The decision (a guaranteed non-member field is always present;
+/// a non-string value freezes unconditionally) is shared; this target spells
+/// only the comparison.
 pub(super) fn presence_guard(
     entry: &EntryModel<'_>,
     vp: &crate::codegen::entries::ValuePath<'_>,
     expr: &str,
 ) -> Option<String> {
-    if entry.is_guaranteed(vp.field) && vp.member.is_none() {
-        return None;
-    }
-    if !string_like(vp.target) {
-        return None;
-    }
-    Some(format!("{expr} != {}", cast_string(vp.target, "\"\"")))
+    crate::codegen::entries::needs_presence_guard(entry, vp)
+        .then(|| format!("{expr} != {}", cast_string(vp.target, "\"\"")))
 }
