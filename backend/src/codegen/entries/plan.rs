@@ -10,7 +10,9 @@
 //! (RFC-0006: emission through a component tree, never parallel string
 //! concatenation).
 
-use crate::ir::{ArmValue, EntryField, Module, Shape, ShapeKind, Source, TemplatePart, Tref};
+use crate::ir::{
+    ArmValue, EntryField, EnvName, Module, Shape, ShapeKind, Source, TemplatePart, Tref,
+};
 
 use super::{source_stub, EntryModel, FieldShape};
 
@@ -77,6 +79,51 @@ pub trait Emitter {
     fn arg_ident(&self, field: &EntryField) -> String;
     /// A `@default`/match-arm literal in the field's type.
     fn literal_of(&self, target: &Tref, value: &serde_json::Value) -> String;
+    /// The read expression of a sibling-field path (`creds.token`).
+    fn path_read(&self, path: &[String]) -> String;
+    /// The declared type at a sibling-field path.
+    fn path_type_of(&self, path: &[String]) -> Tref;
+    /// Render an expression of type `t` as a target string (for env-name and
+    /// error-label interpolation); pulls any import the spelling needs.
+    fn to_string_expr(&mut self, expr: &str, t: &Tref) -> String;
+    /// The environment read call around a name expression (`os.LookupEnv(x)` /
+    /// `readEnv(x)`); records the import/helper it needs.
+    fn env_read_call(&mut self, name_expr: &str) -> String;
+
+    // --- the env lookup / label / miss reason (shared: only the read call and
+    //     the to-string spelling differ) ---
+    fn env_lookup(&mut self, name: &EnvName) -> String {
+        match name {
+            EnvName::Name(n) => self.env_read_call(&format!("{n:?}")),
+            EnvName::Field(fr) => {
+                let t = self.path_type_of(&fr.field);
+                let read = self.path_read(&fr.field);
+                let s = self.to_string_expr(&read, &t);
+                self.env_read_call(&s)
+            }
+        }
+    }
+    fn env_label(&mut self, name: &EnvName) -> String {
+        match name {
+            EnvName::Name(n) => format!("{n:?}"),
+            EnvName::Field(fr) => {
+                let t = self.path_type_of(&fr.field);
+                let read = self.path_read(&fr.field);
+                self.to_string_expr(&read, &t)
+            }
+        }
+    }
+    fn env_miss_reason(&mut self, name: &EnvName) -> String {
+        match name {
+            EnvName::Name(n) => format!("{:?}", format!("env {n}: empty")),
+            EnvName::Field(fr) => {
+                let t = self.path_type_of(&fr.field);
+                let read = self.path_read(&fr.field);
+                let s = self.to_string_expr(&read, &t);
+                format!("\"env \" + {s} + \": empty\"")
+            }
+        }
+    }
 
     // --- composite statements built from the atoms (shared) ---
     fn assign_arg(&mut self, field: &EntryField, dest: &str) -> Leaf {

@@ -75,41 +75,6 @@ impl Resolver<'_, '_> {
         )
     }
 
-    fn env_lookup(&mut self, name: &EnvName) -> String {
-        self.helpers.read_env = true;
-        match name {
-            EnvName::Name(n) => format!("readEnv({n:?})"),
-            EnvName::Field(fr) => {
-                let expr = self.path_expr(&fr.field);
-                let t = self.path_type(&fr.field);
-                format!("readEnv({})", as_template_string(&expr, &t))
-            }
-        }
-    }
-
-    fn env_label(&self, name: &EnvName) -> String {
-        match name {
-            EnvName::Name(n) => format!("{n:?}"),
-            EnvName::Field(fr) => {
-                let t = self.path_type(&fr.field);
-                as_template_string(&self.path_expr(&fr.field), &t)
-            }
-        }
-    }
-
-    fn env_miss_reason(&mut self, name: &EnvName) -> String {
-        match name {
-            EnvName::Name(n) => format!("{:?}", format!("env {n}: empty")),
-            EnvName::Field(fr) => {
-                let t = self.path_type(&fr.field);
-                format!(
-                    "\"env \" + {} + \": empty\"",
-                    as_template_string(&self.path_expr(&fr.field), &t)
-                )
-            }
-        }
-    }
-
     /// Parse a raw env string `v` into the destination, by the declared type; a
     /// parse failure fails construction naming the variable and the type. The
     /// body sits inside `if (v !== undefined) { .. }`, relative to column zero.
@@ -215,7 +180,8 @@ impl Resolver<'_, '_> {
                 }
                 Source::Env(name) => {
                     let lookup = self.env_lookup(name);
-                    let parse = self.env_parse(field, dest, &self.env_label(name));
+                    let label = self.env_label(name);
+                    let parse = self.env_parse(field, dest, &label);
                     out.push_str(&format!(
                         "\nif (!{flag}) {{\n  const v = {lookup};\n  if (v !== undefined) {{\n{parse}\n    {flag} = true;\n  }}\n}}",
                         parse = nest(&parse, 2),
@@ -677,6 +643,23 @@ impl Emitter for Resolver<'_, '_> {
 
     fn literal_of(&self, target: &Tref, value: &serde_json::Value) -> String {
         literal(target, value)
+    }
+
+    fn path_read(&self, path: &[String]) -> String {
+        self.path_expr(path)
+    }
+
+    fn path_type_of(&self, path: &[String]) -> Tref {
+        self.path_type(path)
+    }
+
+    fn to_string_expr(&mut self, expr: &str, t: &Tref) -> String {
+        as_template_string(expr, t)
+    }
+
+    fn env_read_call(&mut self, name_expr: &str) -> String {
+        self.helpers.read_env = true;
+        format!("readEnv({name_expr})")
     }
 
     fn why_open(&self, field_name: &str, initial: &str) -> Leaf {

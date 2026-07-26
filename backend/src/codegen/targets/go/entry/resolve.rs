@@ -76,48 +76,12 @@ impl Resolver<'_, '_> {
         )
     }
 
-    fn env_lookup(&mut self, name: &EnvName) -> String {
-        self.import("os", "os");
-        match name {
-            EnvName::Name(n) => format!("os.LookupEnv({n:?})"),
-            EnvName::Field(fr) => {
-                let expr = self.path_expr(&fr.field);
-                let t = self.path_type(&fr.field);
-                format!("os.LookupEnv({})", self.as_string_expr(&expr, &t))
-            }
-        }
-    }
-
     /// [`as_string`] plus the fmt import its non-string spelling needs.
     fn as_string_expr(&mut self, expr: &str, t: &Tref) -> String {
         if as_string_needs_fmt(t) {
             self.import("fmt", "fmt");
         }
         as_string(expr, t)
-    }
-
-    fn env_label(&mut self, name: &EnvName) -> String {
-        match name {
-            EnvName::Name(n) => format!("{n:?}"),
-            EnvName::Field(fr) => {
-                let t = self.path_type(&fr.field);
-                self.as_string_expr(&self.path_expr(&fr.field), &t)
-            }
-        }
-    }
-
-    fn env_miss_reason(&mut self, name: &EnvName) -> String {
-        match name {
-            EnvName::Name(n) => format!("{:?}", format!("env {n}: empty")),
-            EnvName::Field(fr) => {
-                let t = self.path_type(&fr.field);
-                let expr = self.path_expr(&fr.field);
-                format!(
-                    "\"env \" + {} + \": empty\"",
-                    self.as_string_expr(&expr, &t)
-                )
-            }
-        }
     }
 
     /// The statements parsing a raw env string `v` into the destination, by the
@@ -654,6 +618,23 @@ impl Emitter for Resolver<'_, '_> {
 
     fn literal_of(&self, target: &Tref, value: &serde_json::Value) -> String {
         literal(target, value)
+    }
+
+    fn path_read(&self, path: &[String]) -> String {
+        self.path_expr(path)
+    }
+
+    fn path_type_of(&self, path: &[String]) -> Tref {
+        self.path_type(path)
+    }
+
+    fn to_string_expr(&mut self, expr: &str, t: &Tref) -> String {
+        self.as_string_expr(expr, t)
+    }
+
+    fn env_read_call(&mut self, name_expr: &str) -> String {
+        self.import("os", "os");
+        format!("os.LookupEnv({name_expr})")
     }
 
     fn why_open(&self, field_name: &str, initial: &str) -> Leaf {
