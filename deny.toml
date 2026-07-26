@@ -3,6 +3,11 @@
 [advisories]
 yanked = "deny"
 # Security advisories from the RustSec database fail the build by default.
+ignore = [
+  # `paste` is archived upstream; it reaches us only through ratatui's macros
+  # (build-time proc-macro, no runtime exposure). Drop when ratatui sheds it.
+  "RUSTSEC-2024-0436",
+]
 
 [bans]
 multiple-versions = "warn"
@@ -28,3 +33,6 @@ private = { ignore = true }
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# The tono tree-sitter grammar is not on crates.io; it is our own org's repo,
+# pinned to a rev in Cargo.toml.
+allow-git = ["https://github.com/tono-lang/tree-sitter-tono"]
