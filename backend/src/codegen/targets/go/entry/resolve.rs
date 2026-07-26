@@ -426,10 +426,12 @@ impl Emitter for Resolver<'_, '_> {
             for m in members.iter().filter(|m| m.required) {
                 // An explicit null is as absent as a missing key: the typed
                 // decode below would zero it silently, and the TypeScript decode
-                // rejects it, so both targets treat it as missing.
+                // rejects it, so both targets treat it as missing. The probe reads
+                // the wire key (the @wire override the codec serializes under), not
+                // the in-code member name.
+                let name = wire_key(m);
                 required_checks.push_str(&format!(
                     "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn nil, fmt.Errorf(\"%s: missing field {name}\", {{LABEL}})\n\t}}\n",
-                    name = m.name,
                 ));
             }
         }

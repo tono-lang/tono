@@ -192,6 +192,46 @@ fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
 }
 
 #[test]
+fn a_structured_decode_probes_the_wire_key_not_the_member_name() {
+    let mut module = with_descriptors(fixture_module());
+    module.shapes.push(crate::ir::Shape {
+        id: "notes#creds".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![crate::ir::Member {
+                name: "token".into(),
+                target: Tref::Prim(Prim::String),
+                required: true,
+                default: None,
+                constraints: vec![],
+                // @wire renames the serialized key; the decode must check "tok".
+                traits: vec![crate::ir::Trait {
+                    id: "core#wire".into(),
+                    value: serde_json::json!("tok"),
+                }],
+            }],
+        },
+        traits: vec![],
+    });
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "creds",
+            Tref::Ref {
+                id: "notes#creds".into(),
+                args: vec![],
+            },
+            vec![Source::Env(EnvName::Name("CREDS".into()))],
+        ),
+    );
+    let out = text(&module);
+    // The required and unknown checks read the wire key, not the member name.
+    assert!(out.contains("if (!(\"tok\" in parsed) || record[\"tok\"] === null) {"));
+    assert!(out.contains("missing field tok"));
+    assert!(!out.contains("\"token\" in parsed"));
+}
+
+#[test]
 fn a_bespoke_stub_keeps_the_declared_signature() {
     // No descriptor on the op (the fixture is pre-protocol): the stub
     // still takes the declared input.

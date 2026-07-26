@@ -298,6 +298,46 @@ fn a_structured_source_falls_back_across_multiple_envs() {
 }
 
 #[test]
+fn a_structured_decode_probes_the_wire_key_not_the_member_name() {
+    let mut module = fixture_module();
+    module.shapes.push(crate::ir::Shape {
+        id: "notes#creds".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![crate::ir::Member {
+                name: "token".into(),
+                target: Tref::Prim(Prim::String),
+                required: true,
+                default: None,
+                constraints: vec![],
+                // @wire renames the serialized key; the decode must probe "tok".
+                traits: vec![crate::ir::Trait {
+                    id: "core#wire".into(),
+                    value: serde_json::json!("tok"),
+                }],
+            }],
+        },
+        traits: vec![],
+    });
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "creds",
+            Tref::Ref {
+                id: "notes#creds".into(),
+                args: vec![],
+            },
+            vec![Source::Env(EnvName::Name("CREDS".into()))],
+        ),
+    );
+    let serde = serde_text(&module);
+    // The required-field probe reads the wire key, matching what the codec emits.
+    assert!(serde.contains("if rv, ok := probe[\"tok\"]; !ok || string(rv) == \"null\" {"));
+    assert!(serde.contains("missing field tok"));
+    assert!(!serde.contains("probe[\"token\"]"));
+}
+
+#[test]
 fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     let mut module = fixture_module();
     let mut choice = bare_entry_field("choice", Tref::Prim(Prim::String), vec![]);

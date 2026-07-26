@@ -405,13 +405,16 @@ impl Emitter for Resolver<'_, '_> {
         let mut type_checks = String::new();
         if let ShapeKind::Structure { members, .. } = &shape.kind {
             for m in members {
-                known.push(format!("{:?}", m.name));
+                // Every check reads the wire key (the @wire override the codec
+                // serializes under), not the in-code member name; `parsed` is the
+                // raw wire object.
+                let name = wire_key(m);
+                known.push(format!("{name:?}"));
                 if m.required {
                     // An explicit null is as absent as a missing key, the same
                     // rule the Go probe applies.
                     required_checks.push_str(&format!(
                         "if (!({name:?} in parsed) || record[{name:?}] === null) {{\n  throw new Error(`${{__LABEL__}}: missing field {name}`);\n}}\n",
-                        name = m.name,
                     ));
                 }
                 // Scalar wire-type checks keep the strictness on par with the Go
@@ -444,19 +447,15 @@ impl Emitter for Resolver<'_, '_> {
                     let guard = if m.required {
                         String::new()
                     } else {
-                        format!(
-                            "record[{name:?}] !== undefined && record[{name:?}] !== null && ",
-                            name = m.name
-                        )
+                        format!("record[{name:?}] !== undefined && record[{name:?}] !== null && ")
                     };
                     type_checks.push_str(&format!(
                         "if ({guard}{present}typeof record[{name:?}] !== {ts_typeof:?}) {{\n  throw new Error(`${{__LABEL__}}: field {name} must be {describe}`);\n}}\n",
                         present = if m.required {
-                            format!("{name:?} in parsed && ", name = m.name)
+                            format!("{name:?} in parsed && ")
                         } else {
                             String::new()
                         },
-                        name = m.name,
                     ));
                 }
             }
