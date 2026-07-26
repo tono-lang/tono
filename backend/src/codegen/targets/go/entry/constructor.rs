@@ -356,18 +356,6 @@ pub(super) fn value_expr(
     }
 }
 
-/// Whether a leaf type is an enum reference (a branded string on the wire),
-/// which is what lets it freeze into the runtime values.
-pub(super) fn ref_is_enum(t: &Tref, module: &Module) -> bool {
-    let Tref::Ref { id, .. } = t else {
-        return false;
-    };
-    module
-        .shapes
-        .iter()
-        .any(|s| s.id == *id && matches!(s.kind, ShapeKind::Enum { .. }))
-}
-
 /// The cast that makes a resolved value directly usable by the runtime's
 /// value positions: integers widen to int64, branded strings flatten.
 pub(super) fn value_cast(t: &Tref, expr: &str) -> String {

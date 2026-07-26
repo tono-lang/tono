@@ -482,19 +482,22 @@ impl Resolver<'_, '_> {
         (concat, absent_deps)
     }
 
-    /// A structured source: an explicit `@arg`/`@with` value passes typed, a
-    /// JSON env value decodes strictly into the wire struct (required members
-    /// checked by name, unknown fields rejected), and declared validation runs
-    /// at construction. The error carries the variable's name as context.
-    fn emit_structured(&mut self, field: &EntryField, shape: &Shape) {
+    /// The shared opening of a decoded field (structured or whole-JSON): an
+    /// explicit `@arg` value passes typed, the why-var opens the chain
+    /// (without `@arg` such a field is never guaranteed, `@default` does not
+    /// apply to it), an optional `@with` layer wins over the env decode, and
+    /// the env source (when there is one) yields its destination, why-var,
+    /// lookup, label, and miss reason.
+    fn decode_opening(
+        &mut self,
+        field: &EntryField,
+    ) -> Option<(String, String, String, String, String)> {
         let dest = self.ident(&field.name);
         if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
             let assign = format!("\t{dest} = {}\n", camel(&field.name));
             self.push(&assign);
-            return;
+            return None;
         }
-        // Without @arg a structured field can never be guaranteed (@default
-        // does not apply to it), so the chain is always why-tracked.
         let why = why_var(&field.name);
         self.push(&format!("\t{why} := \"no source\"\n"));
         if field.sources.iter().any(|s| matches!(s, Source::With)) {
@@ -506,15 +509,26 @@ impl Resolver<'_, '_> {
         }
         let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
         else {
-            return;
+            return None;
         };
         self.import("os", "os");
         self.import("json", "encoding/json");
         self.import("fmt", "fmt");
-        self.import("bytes", "bytes");
         let lookup = self.env_lookup(name);
         let label = self.env_label(name);
         let miss = self.env_miss_reason(name);
+        Some((dest, why, lookup, label, miss))
+    }
+
+    /// A structured source: an explicit `@arg`/`@with` value passes typed, a
+    /// JSON env value decodes strictly into the wire struct (required members
+    /// checked by name, unknown fields rejected), and declared validation runs
+    /// at construction. The error carries the variable's name as context.
+    fn emit_structured(&mut self, field: &EntryField, shape: &Shape) {
+        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field) else {
+            return;
+        };
+        self.import("bytes", "bytes");
         let ty = type_ident_from_id(&shape.id);
         let mut required_checks = String::new();
         if let ShapeKind::Structure { members, .. } = &shape.kind {
@@ -561,31 +575,9 @@ impl Resolver<'_, '_> {
     /// A map/list field: an explicit `@arg`/`@with` value passes typed, an env
     /// value decodes as JSON whole.
     fn emit_json(&mut self, field: &EntryField) {
-        let dest = self.ident(&field.name);
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            let assign = format!("\t{dest} = {}\n", camel(&field.name));
-            self.push(&assign);
-            return;
-        }
-        let why = why_var(&field.name);
-        self.push(&format!("\t{why} := \"no source\"\n"));
-        if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            let step = format!(
-                "\tif w.{carrier} != nil {{\n\t\t{dest} = *w.{carrier}\n\t\t{why} = \"\"\n\t}} else {{\n\t\t{why} = \"not configured\"\n\t}}\n",
-                carrier = camel(&field.name),
-            );
-            self.push(&step);
-        }
-        let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
-        else {
+        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field) else {
             return;
         };
-        self.import("os", "os");
-        self.import("json", "encoding/json");
-        self.import("fmt", "fmt");
-        let lookup = self.env_lookup(name);
-        let label = self.env_label(name);
-        let miss = self.env_miss_reason(name);
         let block = format!(
             "\tif raw, ok := {lookup}; ok && raw != \"\" {{\n\
              \t\tif err := json.Unmarshal([]byte(raw), &{dest}); err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t\t}}\n\

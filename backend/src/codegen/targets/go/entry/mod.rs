@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{doc_of, prim_spelling, rename_of, type_ident_from_id};
 use crate::codegen::entries::{
-    companion_name, module_entries, op_local_name, source_stub, EntryModel, FieldShape,
+    companion_name, module_entries, op_local_name, ref_is_enum, source_stub, EntryModel, FieldShape,
 };
 use crate::codegen::extensions::{bound_extensions, hook_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
@@ -435,35 +435,27 @@ fn hook_wrapper_decls(
             }
         }
     }
-    if let Some(b) = hook_binding(bound, "before_request") {
-        decls.push(Decl::raw_with(
-            wrap(
-                "before_request",
-                &format!("{}(ctx, req)", b.symbol),
-                "(ctx context.Context, req tonohttp.CanonicalRequest) (tonohttp.CanonicalRequest, error)",
-                "out",
-            ),
-            vec![
-                import("errors", "errors"),
-                import("context", "context"),
-                runtime_symbol(),
-            ],
-        ));
-    }
-    if let Some(b) = hook_binding(bound, "after_response") {
-        decls.push(Decl::raw_with(
-            wrap(
-                "after_response",
-                &format!("{}(ctx, res)", b.symbol),
-                "(ctx context.Context, res tonohttp.CanonicalResponse) (tonohttp.CanonicalResponse, error)",
-                "out",
-            ),
-            vec![
-                import("errors", "errors"),
-                import("context", "context"),
-                runtime_symbol(),
-            ],
-        ));
+    for (slot, var, shape) in [
+        ("before_request", "req", "CanonicalRequest"),
+        ("after_response", "res", "CanonicalResponse"),
+    ] {
+        if let Some(b) = hook_binding(bound, slot) {
+            decls.push(Decl::raw_with(
+                wrap(
+                    slot,
+                    &format!("{}(ctx, {var})", b.symbol),
+                    &format!(
+                        "(ctx context.Context, {var} tonohttp.{shape}) (tonohttp.{shape}, error)"
+                    ),
+                    "out",
+                ),
+                vec![
+                    import("errors", "errors"),
+                    import("context", "context"),
+                    runtime_symbol(),
+                ],
+            ));
+        }
     }
     if let Some(b) = hook_binding(bound, "on_error") {
         decls.push(Decl::raw(format!(

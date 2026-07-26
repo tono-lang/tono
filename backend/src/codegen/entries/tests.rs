@@ -243,8 +243,8 @@ fn guaranteed_follows_arg_default_and_derivation_inputs() {
     assert!(!entry.is_guaranteed(by("floating")));
 }
 
-#[test]
-fn consumed_heads_read_the_raw_protocol_traits() {
+/// A bare entry whose one operation carries the given raw protocol traits.
+fn entry_with_op_traits(traits: Vec<(&str, serde_json::Value)>) -> Module {
     let op = Shape {
         id: "m#client.save".into(),
         kind: ShapeKind::Operation {
@@ -252,42 +252,40 @@ fn consumed_heads_read_the_raw_protocol_traits() {
             output: None,
             errors: vec![],
         },
-        traits: vec![
-            crate::ir::Trait {
-                id: "http".into(),
-                value: json!({
-                    "method": "POST",
-                    "path": "/v/{.tenant}/notes/{id}",
-                    "endpoint": {"field": ["endpoint"]}
-                }),
-            },
-            crate::ir::Trait {
-                id: "header".into(),
-                value: json!(["X-Client", {"field": ["client_name"]}]),
-            },
-            crate::ir::Trait {
-                id: "timeout".into(),
-                value: json!([{"field": ["timeout"]}]),
-            },
-            crate::ir::Trait {
-                id: "retry".into(),
-                value: json!([{"field": ["max_retries"]}]),
-            },
-            crate::ir::Trait {
-                id: "wire_descriptor".into(),
-                value: json!({"opaque": true}),
-            },
-        ],
+        traits: traits
+            .into_iter()
+            .map(|(id, value)| crate::ir::Trait {
+                id: id.into(),
+                value,
+            })
+            .collect(),
     };
-    let shape = Shape {
+    module_of(vec![Shape {
         id: "m#client".into(),
         kind: ShapeKind::Entry {
             fields: vec![],
             operations: vec![op],
         },
         traits: vec![],
-    };
-    let module = module_of(vec![shape]);
+    }])
+}
+
+#[test]
+fn consumed_heads_read_the_raw_protocol_traits() {
+    let module = entry_with_op_traits(vec![
+        (
+            "http",
+            json!({
+                "method": "POST",
+                "path": "/v/{.tenant}/notes/{id}",
+                "endpoint": {"field": ["endpoint"]}
+            }),
+        ),
+        ("header", json!(["X-Client", {"field": ["client_name"]}])),
+        ("timeout", json!([{"field": ["timeout"]}])),
+        ("retry", json!([{"field": ["max_retries"]}])),
+        ("wire_descriptor", json!({"opaque": true})),
+    ]);
     let entries = module_entries(&module);
     assert_eq!(
         entries[0].consumed_field_heads(),
@@ -303,37 +301,17 @@ fn consumed_heads_read_the_raw_protocol_traits() {
 
 #[test]
 fn consumed_paths_keep_the_member_segments() {
-    let op = Shape {
-        id: "m#client.save".into(),
-        kind: ShapeKind::Operation {
-            input: None,
-            output: None,
-            errors: vec![],
-        },
-        traits: vec![
-            crate::ir::Trait {
-                id: "http".into(),
-                value: json!({
-                    "method": "POST",
-                    "path": "/v/{.conf.tenant}/notes",
-                    "endpoint": {"field": ["endpoint"]}
-                }),
-            },
-            crate::ir::Trait {
-                id: "header".into(),
-                value: json!(["X-Key", {"field": ["conf", "api_key"]}]),
-            },
-        ],
-    };
-    let shape = Shape {
-        id: "m#client".into(),
-        kind: ShapeKind::Entry {
-            fields: vec![],
-            operations: vec![op],
-        },
-        traits: vec![],
-    };
-    let module = module_of(vec![shape]);
+    let module = entry_with_op_traits(vec![
+        (
+            "http",
+            json!({
+                "method": "POST",
+                "path": "/v/{.conf.tenant}/notes",
+                "endpoint": {"field": ["endpoint"]}
+            }),
+        ),
+        ("header", json!(["X-Key", {"field": ["conf", "api_key"]}])),
+    ]);
     let entries = module_entries(&module);
     assert_eq!(
         entries[0].consumed_field_paths(),

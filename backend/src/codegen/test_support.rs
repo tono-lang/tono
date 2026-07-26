@@ -569,3 +569,218 @@ pub fn entries_matrix_module() -> Module {
         extensions: vec![],
     }
 }
+
+/// A single-name env source chain.
+fn env(name: &str) -> Vec<crate::ir::Source> {
+    vec![crate::ir::Source::Env(crate::ir::EnvName::Name(
+        name.into(),
+    ))]
+}
+
+/// A bare entry field: only a name, a target, and a source chain. The entry
+/// tests build every fixture through this so the wordy IR literal lives once.
+pub fn bare_entry_field(
+    name: &str,
+    target: Tref,
+    sources: Vec<crate::ir::Source>,
+) -> crate::ir::EntryField {
+    crate::ir::EntryField {
+        name: name.into(),
+        target,
+        sources,
+        format: None,
+        transforms: vec![],
+        select: None,
+        binds: vec![],
+        constraints: vec![],
+        traits: vec![],
+    }
+}
+
+/// Push a field onto every entry of the module.
+pub fn push_entry_field(module: &mut Module, field: crate::ir::EntryField) {
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
+            fields.push(field.clone());
+        }
+    }
+}
+
+/// Push a member onto every config shape of the module.
+pub fn push_config_member(module: &mut Module, field: crate::ir::EntryField) {
+    for shape in &mut module.shapes {
+        if let ShapeKind::Config { fields } = &mut shape.kind {
+            fields.push(field.clone());
+        }
+    }
+}
+
+/// Attach a protocol trait to every entry operation.
+pub fn push_entry_op_trait(module: &mut Module, id: &str, value: serde_json::Value) {
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations {
+                op.traits.push(Trait {
+                    id: id.into(),
+                    value: value.clone(),
+                });
+            }
+        }
+    }
+}
+
+/// Set every entry operation's output type.
+pub fn set_entry_op_outputs(module: &mut Module, target: Tref) {
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations {
+                if let ShapeKind::Operation { output, .. } = &mut op.kind {
+                    *output = Some(target.clone());
+                }
+            }
+        }
+    }
+}
+
+/// The wire struct with a required checked member the strict structured
+/// decode tests share.
+pub fn credentials_shape(id: &str) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![
+                member_constrained(
+                    "token",
+                    Tref::Prim(Prim::String),
+                    vec![Constraint::Length {
+                        min: Some(1),
+                        max: None,
+                    }],
+                ),
+                member("account_id", Tref::Prim(Prim::String), true),
+            ],
+        },
+        traits: vec![],
+    }
+}
+
+/// A `@str::*` pipeline on a plain chain field: transforms must apply to the
+/// resolved value even without a `@format`.
+pub fn with_transformed_chain_field(module: &mut Module) {
+    let mut team = bare_entry_field("team", Tref::Prim(Prim::String), env("TEAM"));
+    team.transforms = vec!["snake".into()];
+    push_entry_field(module, team);
+}
+
+/// Config members carrying their own derivations: a `@format` with a
+/// transform, and a match on a guaranteed sibling.
+pub fn with_derived_config_members(module: &mut Module) {
+    let mut label = bare_entry_field("label", Tref::Prim(Prim::String), vec![]);
+    label.format = Some(vec![
+        crate::ir::TemplatePart::Lit("conf-".into()),
+        crate::ir::TemplatePart::Field(vec!["client_name".into()]),
+    ]);
+    label.transforms = vec!["upper".into()];
+    push_config_member(module, label);
+    let mut size = bare_entry_field("size", Tref::Prim(Prim::String), vec![]);
+    size.select = Some(crate::ir::Select {
+        subject: vec!["client_name".into()],
+        arms: vec![crate::ir::SelectArm {
+            pattern: Some(serde_json::json!("demo")),
+            value: crate::ir::ArmValue::Lit(serde_json::json!("small")),
+        }],
+    });
+    push_config_member(module, size);
+}
+
+/// A config member matching on a why-tracked sibling, with one arm reading
+/// another absent chain and one inline-source arm.
+pub fn with_member_select_on_absent_subject(module: &mut Module) {
+    let mut zone = bare_entry_field("zone", Tref::Prim(Prim::String), vec![]);
+    zone.select = Some(crate::ir::Select {
+        subject: vec!["endpoint".into()],
+        arms: vec![
+            crate::ir::SelectArm {
+                pattern: Some(serde_json::json!("https://api.example.com")),
+                value: crate::ir::ArmValue::Field(vec!["endpoint_v1".into()]),
+            },
+            crate::ir::SelectArm {
+                pattern: None,
+                value: crate::ir::ArmValue::Sources(env("ZONE")),
+            },
+        ],
+    });
+    push_config_member(module, zone);
+}
+
+/// A consumed bytes head plus a range-constrained numeric chain: the requires
+/// and the constraint presence gate for the non-string scalars.
+pub fn with_bytes_and_constrained_port(module: &mut Module) {
+    push_entry_field(
+        module,
+        bare_entry_field("secret", Tref::Prim(Prim::Bytes), env("SECRET")),
+    );
+    let mut port = bare_entry_field("port", Tref::Prim(Prim::I32), env("PORT"));
+    port.constraints = vec![Constraint::Range {
+        min: Some(1.0),
+        max: None,
+        excl_min: false,
+        excl_max: false,
+    }];
+    push_entry_field(module, port);
+    push_entry_op_trait(
+        module,
+        "header",
+        serde_json::json!(["X-Secret", {"field": ["secret"]}]),
+    );
+}
+
+/// An enum-typed config member: it must freeze into the runtime values as a
+/// branded string like a top-level enum field.
+pub fn with_enum_config_member(module: &mut Module) {
+    module.shapes.push(enum_shape(
+        "notes#Mode",
+        vec![("live".into(), None), ("test".into(), None)],
+    ));
+    push_config_member(
+        module,
+        bare_entry_field(
+            "mode",
+            Tref::Ref {
+                id: "notes#Mode".into(),
+                args: vec![],
+            },
+            env("MODE"),
+        ),
+    );
+}
+
+/// The structured and whole-JSON sources the strict decode tests share: a
+/// credentials struct decoded from an env variable, and a labels map decoded
+/// whole.
+pub fn with_structured_sources(module: &mut Module, creds_sources: Vec<crate::ir::Source>) {
+    module.shapes.push(credentials_shape("notes#credentials"));
+    push_entry_field(
+        module,
+        bare_entry_field(
+            "creds",
+            Tref::Ref {
+                id: "notes#credentials".into(),
+                args: vec![],
+            },
+            creds_sources,
+        ),
+    );
+    push_entry_field(
+        module,
+        bare_entry_field(
+            "labels",
+            Tref::Map(
+                Box::new(Tref::Prim(Prim::String)),
+                Box::new(Tref::Prim(Prim::String)),
+            ),
+            env("SERVICE_LABELS"),
+        ),
+    );
+}

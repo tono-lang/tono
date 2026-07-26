@@ -206,6 +206,19 @@ impl<'a> EntryModel<'a> {
     }
 }
 
+/// Whether a leaf type is an enum reference (a branded string on the wire),
+/// which is what lets it freeze into the runtime values wherever it sits (a
+/// field or a composed/structured member).
+pub fn ref_is_enum(t: &Tref, module: &Module) -> bool {
+    let Tref::Ref { id, .. } = t else {
+        return false;
+    };
+    module
+        .shapes
+        .iter()
+        .any(|s| s.id == *id && matches!(s.kind, ShapeKind::Enum { .. }))
+}
+
 /// A bare copy of a field carrying only a source chain: what a match arm's
 /// inline sources and a composed member's own chain resolve as.
 pub fn source_stub(field: &EntryField, sources: Vec<Source>) -> EntryField {

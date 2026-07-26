@@ -1,7 +1,11 @@
 use super::*;
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
-use crate::codegen::test_support::rendered;
+use crate::codegen::test_support::{
+    bare_entry_field, push_entry_field, push_entry_op_trait, rendered, set_entry_op_outputs,
+    with_bytes_and_constrained_port, with_derived_config_members, with_enum_config_member,
+    with_member_select_on_absent_subject, with_structured_sources, with_transformed_chain_field,
+};
 use crate::ir::decode_model;
 
 /// The canonical entry fixture (config, every source kind, derivation,
@@ -83,21 +87,14 @@ fn the_resolution_follows_the_declared_chains() {
 fn the_env_boundary_parses_by_type_naming_variable_and_type() {
     let mut module = fixture_module();
     // Give a field an env-sourced integer to exercise the parse path.
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
-            fields.push(EntryField {
-                name: "port".into(),
-                target: Tref::Prim(Prim::I32),
-                sources: vec![Source::Env(EnvName::Name("PORT".into()))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-        }
-    }
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "port",
+            Tref::Prim(Prim::I32),
+            vec![Source::Env(EnvName::Name("PORT".into()))],
+        ),
+    );
     let serde = serde_text(&module);
     assert!(serde.contains("strconv.ParseInt(v, 10, 32)"));
     assert!(serde.contains("fmt.Errorf(\"%s: invalid i32 %q\", \"PORT\", v)"));
@@ -207,35 +204,25 @@ fn a_dynamic_env_name_off_an_absent_chain_emits_balanced_braces() {
     // itself be absent: the emitted run must be one balanced
     // if/else-if/else (the else chains straight into the lookup).
     let mut module = fixture_module();
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
-            // naming is env-only (not guaranteed); reader looks its value up.
-            fields.push(EntryField {
-                name: "naming".into(),
-                target: Tref::Prim(Prim::String),
-                sources: vec![Source::Env(EnvName::Name("NAMING".into()))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-            fields.push(EntryField {
-                name: "reader".into(),
-                target: Tref::Prim(Prim::String),
-                sources: vec![Source::Env(EnvName::Field(crate::ir::FieldRef {
-                    field: vec!["naming".into()],
-                }))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-        }
-    }
+    // naming is env-only (not guaranteed); reader looks its value up.
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "naming",
+            Tref::Prim(Prim::String),
+            vec![Source::Env(EnvName::Name("NAMING".into()))],
+        ),
+    );
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "reader",
+            Tref::Prim(Prim::String),
+            vec![Source::Env(EnvName::Field(crate::ir::FieldRef {
+                field: vec!["naming".into()],
+            }))],
+        ),
+    );
     let serde = serde_text(&module);
     assert!(serde.contains("readerWhy = \"naming <- \" + namingWhy"));
     let new_fn = serde
@@ -253,71 +240,14 @@ fn a_dynamic_env_name_off_an_absent_chain_emits_balanced_braces() {
 #[test]
 fn structured_sources_decode_strictly_and_honor_explicit_values() {
     let mut module = fixture_module();
-    let creds = Shape {
-        id: "notes#credentials".into(),
-        kind: ShapeKind::Structure {
-            params: vec![],
-            members: vec![
-                Member {
-                    name: "token".into(),
-                    target: Tref::Prim(Prim::String),
-                    required: true,
-                    default: None,
-                    constraints: vec![crate::ir::Constraint::Length {
-                        min: Some(1),
-                        max: None,
-                    }],
-                    traits: vec![],
-                },
-                Member {
-                    name: "account_id".into(),
-                    target: Tref::Prim(Prim::String),
-                    required: true,
-                    default: None,
-                    constraints: vec![],
-                    traits: vec![],
-                },
-            ],
-        },
-        traits: vec![],
-    };
-    module.shapes.push(creds);
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
-            // @with layers over the env decode; a labels map decodes whole.
-            fields.push(EntryField {
-                name: "creds".into(),
-                target: Tref::Ref {
-                    id: "notes#credentials".into(),
-                    args: vec![],
-                },
-                sources: vec![
-                    Source::With,
-                    Source::Env(EnvName::Name("SERVICE_CREDENTIALS".into())),
-                ],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-            fields.push(EntryField {
-                name: "labels".into(),
-                target: Tref::Map(
-                    Box::new(Tref::Prim(Prim::String)),
-                    Box::new(Tref::Prim(Prim::String)),
-                ),
-                sources: vec![Source::Env(EnvName::Name("SERVICE_LABELS".into()))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-        }
-    }
+    // @with layers over the env decode; a labels map decodes whole.
+    with_structured_sources(
+        &mut module,
+        vec![
+            Source::With,
+            Source::Env(EnvName::Name("SERVICE_CREDENTIALS".into())),
+        ],
+    );
     let serde = serde_text(&module);
     // Strict decode: probe for required members, unknown fields rejected,
     // declared validation at construction, the env name as context.
@@ -339,29 +269,15 @@ fn structured_sources_decode_strictly_and_honor_explicit_values() {
 #[test]
 fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     let mut module = fixture_module();
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
-            let mut choice = EntryField {
-                name: "choice".into(),
-                target: Tref::Prim(Prim::String),
-                sources: vec![],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            };
-            choice.select = Some(crate::ir::Select {
-                subject: vec!["client_name".into()],
-                arms: vec![crate::ir::SelectArm {
-                    pattern: Some(serde_json::json!("demo")),
-                    value: crate::ir::ArmValue::Lit(serde_json::json!("d")),
-                }],
-            });
-            fields.push(choice);
-        }
-    }
+    let mut choice = bare_entry_field("choice", Tref::Prim(Prim::String), vec![]);
+    choice.select = Some(crate::ir::Select {
+        subject: vec!["client_name".into()],
+        arms: vec![crate::ir::SelectArm {
+            pattern: Some(serde_json::json!("demo")),
+            value: crate::ir::ArmValue::Lit(serde_json::json!("d")),
+        }],
+    });
+    push_entry_field(&mut module, choice);
     let serde = serde_text(&module);
     assert!(serde.contains(
             "return nil, fmt.Errorf(\"choice: match on client_name: unmatched value %v\", s.ClientName)"
@@ -381,46 +297,23 @@ fn an_operation_without_a_descriptor_stubs_with_a_contract_error() {
 #[test]
 fn transforms_apply_to_chain_and_match_resolved_values() {
     let mut module = fixture_module();
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
-            fields.push(EntryField {
-                name: "team".into(),
-                target: Tref::Prim(Prim::String),
-                sources: vec![Source::Env(EnvName::Name("TEAM".into()))],
-                format: None,
-                transforms: vec!["snake".into()],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-            let mut picked = EntryField {
-                name: "picked".into(),
-                target: Tref::Prim(Prim::String),
-                sources: vec![],
-                format: None,
-                transforms: vec!["upper".into()],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            };
-            picked.select = Some(crate::ir::Select {
-                subject: vec!["client_name".into()],
-                arms: vec![
-                    crate::ir::SelectArm {
-                        pattern: Some(serde_json::json!("demo")),
-                        value: crate::ir::ArmValue::Lit(serde_json::json!("d")),
-                    },
-                    crate::ir::SelectArm {
-                        pattern: None,
-                        value: crate::ir::ArmValue::Lit(serde_json::json!("x")),
-                    },
-                ],
-            });
-            fields.push(picked);
-        }
-    }
+    with_transformed_chain_field(&mut module);
+    let mut picked = bare_entry_field("picked", Tref::Prim(Prim::String), vec![]);
+    picked.transforms = vec!["upper".into()];
+    picked.select = Some(crate::ir::Select {
+        subject: vec!["client_name".into()],
+        arms: vec![
+            crate::ir::SelectArm {
+                pattern: Some(serde_json::json!("demo")),
+                value: crate::ir::ArmValue::Lit(serde_json::json!("d")),
+            },
+            crate::ir::SelectArm {
+                pattern: None,
+                value: crate::ir::ArmValue::Lit(serde_json::json!("x")),
+            },
+        ],
+    });
+    push_entry_field(&mut module, picked);
     let serde = serde_text(&module);
     // The pipeline runs over the resolved value whatever idiom produced it.
     assert!(serde.contains("s.Team = strSnake(s.Team)"));
@@ -430,41 +323,7 @@ fn transforms_apply_to_chain_and_match_resolved_values() {
 #[test]
 fn a_config_member_keeps_its_declared_derivation() {
     let mut module = fixture_module();
-    for shape in &mut module.shapes {
-        if let ShapeKind::Config { fields } = &mut shape.kind {
-            fields.push(EntryField {
-                name: "label".into(),
-                target: Tref::Prim(Prim::String),
-                sources: vec![],
-                format: Some(vec![
-                    crate::ir::TemplatePart::Lit("conf-".into()),
-                    crate::ir::TemplatePart::Field(vec!["client_name".into()]),
-                ]),
-                transforms: vec!["upper".into()],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-            fields.push(EntryField {
-                name: "size".into(),
-                target: Tref::Prim(Prim::String),
-                sources: vec![],
-                format: None,
-                transforms: vec![],
-                select: Some(crate::ir::Select {
-                    subject: vec!["client_name".into()],
-                    arms: vec![crate::ir::SelectArm {
-                        pattern: Some(serde_json::json!("demo")),
-                        value: crate::ir::ArmValue::Lit(serde_json::json!("small")),
-                    }],
-                }),
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-        }
-    }
+    with_derived_config_members(&mut module);
     let serde = serde_text(&module);
     // The member's @format (with its transforms) lands inside the composition.
     assert!(serde.contains("composed.Label = strings.ToUpper(\"conf-\" + s.ClientName)"));
@@ -477,32 +336,15 @@ fn a_config_member_keeps_its_declared_derivation() {
 #[test]
 fn the_env_boundary_decodes_bytes_and_rejects_non_decimal_floats() {
     let mut module = fixture_module();
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
-            fields.push(EntryField {
-                name: "secret".into(),
-                target: Tref::Prim(Prim::Bytes),
-                sources: vec![Source::Env(EnvName::Name("SECRET".into()))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-            fields.push(EntryField {
-                name: "rate".into(),
-                target: Tref::Prim(Prim::Float),
-                sources: vec![Source::Env(EnvName::Name("RATE".into()))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-        }
-    }
+    with_bytes_and_constrained_port(&mut module);
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "rate",
+            Tref::Prim(Prim::Float),
+            vec![Source::Env(EnvName::Name("RATE".into()))],
+        ),
+    );
     let serde = serde_text(&module);
     // Bytes ride the env boundary as base64, the same encoding the wire uses.
     assert!(serde.contains("base64.StdEncoding.DecodeString(v)"));
@@ -514,16 +356,11 @@ fn the_env_boundary_decodes_bytes_and_rejects_non_decimal_floats() {
 #[test]
 fn a_consumed_config_member_requires_a_value_at_construction() {
     let mut module = fixture_module();
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
-            for op in operations {
-                op.traits.push(crate::ir::Trait {
-                    id: "header".into(),
-                    value: serde_json::json!(["X-Key", {"field": ["settings", "api_key"]}]),
-                });
-            }
-        }
-    }
+    push_entry_op_trait(
+        &mut module,
+        "header",
+        serde_json::json!(["X-Key", {"field": ["settings", "api_key"]}]),
+    );
     let serde = serde_text(&module);
     // The leaf value itself is checked (there is no member-level why).
     assert!(serde.contains("if s.Settings.APIKey == \"\" {"));
@@ -613,35 +450,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
 #[test]
 fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
     let mut module = fixture_module();
-    for shape in &mut module.shapes {
-        if let ShapeKind::Config { fields } = &mut shape.kind {
-            fields.push(EntryField {
-                name: "zone".into(),
-                target: Tref::Prim(Prim::String),
-                sources: vec![],
-                format: None,
-                transforms: vec![],
-                select: Some(crate::ir::Select {
-                    subject: vec!["endpoint".into()],
-                    arms: vec![
-                        crate::ir::SelectArm {
-                            pattern: Some(serde_json::json!("https://api.example.com")),
-                            value: crate::ir::ArmValue::Field(vec!["endpoint_v1".into()]),
-                        },
-                        crate::ir::SelectArm {
-                            pattern: None,
-                            value: crate::ir::ArmValue::Sources(vec![Source::Env(EnvName::Name(
-                                "ZONE".into(),
-                            ))]),
-                        },
-                    ],
-                }),
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-        }
-    }
+    with_member_select_on_absent_subject(&mut module);
     let serde = serde_text(&module);
     // The member's switch only runs once the why-tracked subject resolved, an
     // arm reading an absent chain assigns only when that chain resolved, and
@@ -654,43 +463,7 @@ fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
 #[test]
 fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presence() {
     let mut module = fixture_module();
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { fields, operations } = &mut shape.kind {
-            fields.push(EntryField {
-                name: "secret".into(),
-                target: Tref::Prim(Prim::Bytes),
-                sources: vec![Source::Env(EnvName::Name("SECRET".into()))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-            fields.push(EntryField {
-                name: "port".into(),
-                target: Tref::Prim(Prim::I32),
-                sources: vec![Source::Env(EnvName::Name("PORT".into()))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![crate::ir::Constraint::Range {
-                    min: Some(1.0),
-                    max: None,
-                    excl_min: false,
-                    excl_max: false,
-                }],
-                traits: vec![],
-            });
-            for op in operations {
-                op.traits.push(crate::ir::Trait {
-                    id: "header".into(),
-                    value: serde_json::json!(["X-Secret", {"field": ["secret"]}]),
-                });
-            }
-        }
-    }
+    with_bytes_and_constrained_port(&mut module);
     let serde = serde_text(&module);
     assert!(serde.contains("if len(s.Secret) == 0 {"));
     // The numeric constraint skips when the chain reported absent and the
@@ -701,15 +474,7 @@ fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presen
 #[test]
 fn a_64_bit_operation_output_decodes_from_its_wire_string() {
     let mut module = with_descriptors(fixture_module());
-    for shape in &mut module.shapes {
-        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
-            for op in operations {
-                if let ShapeKind::Operation { output, .. } = &mut op.kind {
-                    *output = Some(Tref::Prim(Prim::I64));
-                }
-            }
-        }
-    }
+    set_entry_op_outputs(&mut module, Tref::Prim(Prim::I64));
     let serde = serde_text(&module);
     assert!(serde.contains("var wire string"));
     assert!(serde.contains("strconv.ParseInt(wire, 10, 64)"));
@@ -718,28 +483,7 @@ fn a_64_bit_operation_output_decodes_from_its_wire_string() {
 #[test]
 fn an_enum_member_of_a_config_freezes_as_a_branded_string() {
     let mut module = fixture_module();
-    module.shapes.push(crate::codegen::test_support::enum_shape(
-        "notes#Mode",
-        vec![("live".into(), None), ("test".into(), None)],
-    ));
-    for shape in &mut module.shapes {
-        if let ShapeKind::Config { fields } = &mut shape.kind {
-            fields.push(EntryField {
-                name: "mode".into(),
-                target: Tref::Ref {
-                    id: "notes#Mode".into(),
-                    args: vec![],
-                },
-                sources: vec![Source::Env(EnvName::Name("MODE".into()))],
-                format: None,
-                transforms: vec![],
-                select: None,
-                binds: vec![],
-                constraints: vec![],
-                traits: vec![],
-            });
-        }
-    }
+    with_enum_config_member(&mut module);
     let serde = serde_text(&module);
     assert!(serde.contains("values[\"settings.mode\"] = string(s.Settings.Mode)"));
 }

@@ -465,15 +465,22 @@ impl Resolver<'_, '_> {
     /// JSON env value decodes strictly (required members first, then unknown
     /// fields, then per-member scalar type checks, mirroring the Go order and
     /// strictness), and declared validation runs at construction.
-    fn emit_structured(&mut self, field: &EntryField, shape: &Shape) {
+    /// The shared opening of a decoded field (structured or whole-JSON): an
+    /// explicit `@arg` value passes typed, the why-var opens the chain
+    /// (without `@arg` such a field is never guaranteed, `@default` does not
+    /// apply to it), an optional `@with` layer wins over the env decode, and
+    /// the env source (when there is one) yields its destination, why-var,
+    /// lookup, label, and miss reason.
+    fn decode_opening(
+        &mut self,
+        field: &EntryField,
+    ) -> Option<(String, String, String, String, String)> {
         let dest = self.ident(&field.name);
         if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
             let assign = format!("    {dest} = {};\n", camel(&field.name));
             self.push(&assign);
-            return;
+            return None;
         }
-        // Without @arg a structured field can never be guaranteed (@default
-        // does not apply to it), so the chain is always why-tracked.
         let why = why_var(&field.name);
         self.push(&format!("    let {why} = \"no source\";\n"));
         if field.sources.iter().any(|s| matches!(s, Source::With)) {
@@ -484,11 +491,18 @@ impl Resolver<'_, '_> {
         }
         let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
         else {
-            return;
+            return None;
         };
         let lookup = self.env_lookup(name);
         let label = self.env_label(name);
         let miss = self.env_miss_reason(name);
+        Some((dest, why, lookup, label, miss))
+    }
+
+    fn emit_structured(&mut self, field: &EntryField, shape: &Shape) {
+        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field) else {
+            return;
+        };
         let ty = type_ident_from_id(&shape.id);
         let mut known = Vec::new();
         let mut required_checks = String::new();
@@ -585,27 +599,9 @@ impl Resolver<'_, '_> {
     /// A map/list field: an explicit `@arg`/`@with` value passes typed, an env
     /// value decodes as JSON whole.
     fn emit_json(&mut self, field: &EntryField) {
-        let dest = self.ident(&field.name);
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            let assign = format!("    {dest} = {};\n", camel(&field.name));
-            self.push(&assign);
-            return;
-        }
-        let why = why_var(&field.name);
-        self.push(&format!("    let {why} = \"no source\";\n"));
-        if field.sources.iter().any(|s| matches!(s, Source::With)) {
-            let acc = self.with_access(field);
-            self.push(&format!(
-                "    if ({acc} !== undefined) {{\n      {dest} = {acc};\n      {why} = \"\";\n    }} else {{\n      {why} = \"not configured\";\n    }}\n"
-            ));
-        }
-        let Some(Source::Env(name)) = field.sources.iter().find(|s| matches!(s, Source::Env(_)))
-        else {
+        let Some((dest, why, lookup, label, miss)) = self.decode_opening(field) else {
             return;
         };
-        let lookup = self.env_lookup(name);
-        let label = self.env_label(name);
-        let miss = self.env_miss_reason(name);
         let ty = ts_type(&field.target);
         // The parsed JSON runs through the same wire decode the codecs use,
         // so an i64 map or a union field lands typed, not as raw JSON shapes.
