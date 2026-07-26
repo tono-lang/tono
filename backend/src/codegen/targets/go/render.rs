@@ -231,11 +231,13 @@ impl RenderRules for GoRules {
         // Go imports the whole package, so the per-symbol names play no part. An
         // SDK module is a package sub-path (payments.common -> payments/common)
         // prefixed with the SDK's Go module path so it resolves; a standard-library
-        // import (encoding/json, fmt) is left verbatim.
+        // import (encoding/json, fmt) and an external module path (which already
+        // carries slashes, and whose dots are host-name dots) are left verbatim.
         let full = match &self.go_module {
             Some(root) if self.internal_modules.contains(module) => {
                 format!("{root}/{}", module.replace('.', "/"))
             }
+            _ if module.contains('/') => module.to_string(),
             _ => module.replace('.', "/"),
         };
         format!("import \"{full}\"")

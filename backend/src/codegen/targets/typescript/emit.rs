@@ -47,6 +47,7 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         type_decls.extend(emit_validators(shape, config));
         serde_decls.extend(emit_codecs(shape, config, &module.name));
     }
+    let module_has_entries = crate::codegen::entries::has_entries(module);
     // Operations bring the error classes and the client interface into the
     // types file and the discriminators in with the codecs they call.
     if !module.operations.is_empty() {
@@ -56,10 +57,21 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         // decode output, the error discriminator) and embeds each operation's
         // opaque wire descriptor.
         serde_decls.extend(client::client_decls(module, config));
+    } else if module_has_entries {
+        // An entry's client maps outcomes onto the same taxonomy; its client
+        // surface is its own exported class, so the loose-op interface (and
+        // the generic HttpClient) stays out.
+        type_decls.extend(errors::taxonomy_and_declared_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the `Violation` record a
         // validator references, which the taxonomy would otherwise have carried.
         type_decls.push(errors::violation_decl());
+    }
+    if module_has_entries {
+        // The entry client rides the serde file with the codecs it calls.
+        serde_decls.extend(crate::codegen::targets::typescript::entry::entry_decls(
+            module, config,
+        ));
     }
 
     let mut files = vec![ModuleFile {

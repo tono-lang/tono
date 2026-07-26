@@ -78,7 +78,7 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 /// The TypeScript spelling of a length measure: a string counts code points via
 /// spread (so astral characters count once, unlike `.length`'s UTF-16 units), and
 /// an array counts its `.length`.
-struct TsVal;
+pub(crate) struct TsVal;
 impl ValSyntax for TsVal {
     fn length(&self, access: &str, measure: Measure) -> String {
         match measure {

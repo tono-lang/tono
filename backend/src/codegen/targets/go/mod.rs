@@ -10,6 +10,7 @@
 pub mod client;
 pub mod codecs;
 pub mod emit;
+pub mod entry;
 pub mod errors;
 pub mod render;
 pub mod symbols;

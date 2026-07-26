@@ -12,7 +12,6 @@
 //! response matches no declared error.
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::conventions::type_ident_from_id;
 use crate::codegen::ops::{
     self, error_names, error_type_name, module_declared_errors, DeclaredError, ErrorNames,
 };
@@ -24,11 +23,19 @@ use crate::ir::{Module, Shape};
 /// The declarations for the types file: the taxonomy, the declared-error
 /// classes, and the client interface.
 pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
-    let mut decls = taxonomy_decls();
-    decls.extend(declared_error_decls(module));
+    let mut decls = taxonomy_and_declared_decls(module);
     // Errors are thrown in TypeScript, so the client's error channel stays out
     // of the signatures (`None`).
     decls.push(ops::client_decl(module, config, LANG, &type_expr_of, None));
+    decls
+}
+
+/// The taxonomy and the declared-error classes without the loose-op client
+/// interface: what an entry-only module needs (its client surface is the
+/// entry's own exported class).
+pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
+    let mut decls = taxonomy_decls();
+    decls.extend(declared_error_decls(module));
     decls
 }
 
@@ -141,6 +148,26 @@ fn discriminator_fn(
     module: &Module,
     n: &ErrorNames,
 ) -> Decl {
+    let fn_name = format!(
+        "decode{}Error",
+        crate::codegen::conventions::type_ident_from_id(&op.id)
+    );
+    discriminator_fn_body(&fn_name, ordered, module, n)
+}
+
+/// The same discrimination function under a caller-chosen name (an
+/// entry-nested operation derives its name through the entry rule, not from
+/// the raw shape id).
+pub fn discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError], module: &Module) -> Decl {
+    discriminator_fn_body(fn_name, ordered, module, &error_names())
+}
+
+fn discriminator_fn_body(
+    fn_name: &str,
+    ordered: &[DeclaredError],
+    module: &Module,
+    n: &ErrorNames,
+) -> Decl {
     let fallback = format!("new {}(status, body)", n.api);
     let mut body = String::new();
     body.push_str("  let parsed: any;\n");
@@ -176,9 +203,8 @@ fn discriminator_fn(
     body.push_str("  } catch {}\n");
     body.push_str(&format!("  return {fallback};"));
 
-    let fn_name = format!("decode{}Error", type_ident_from_id(&op.id));
     Decl::Function(Function {
-        name: Symbol::builtin(fn_name),
+        name: Symbol::builtin(fn_name.to_string()),
         params: vec![
             Field {
                 name: Symbol::builtin("status"),

@@ -73,7 +73,7 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
 /// The Go spelling of a length measure: a string counts code points through
 /// `[]rune` (no import, unlike `utf8.RuneCountInString`), and a slice or byte
 /// buffer counts its `len`.
-struct GoVal;
+pub(crate) struct GoVal;
 impl ValSyntax for GoVal {
     fn length(&self, access: &str, measure: Measure) -> String {
         match measure {

@@ -132,13 +132,18 @@ pub fn declared_errors(op: &Shape, module: &Module) -> Vec<DeclaredError> {
     out
 }
 
-/// Every error shape declared by any of the module's operations, in order of
-/// first appearance. This is the set that becomes error types (under the Api
-/// category) in the generated SDK.
+/// Every error shape declared by any of the module's operations (loose ones
+/// and the ones nested in an entry body), in order of first appearance. This
+/// is the set that becomes error types (under the Api category) in the
+/// generated SDK.
 pub fn module_declared_errors(module: &Module) -> Vec<DeclaredError> {
     let mut seen: Vec<String> = Vec::new();
     let mut out = Vec::new();
-    for op in &module.operations {
+    let nested = module.shapes.iter().flat_map(|s| match &s.kind {
+        ShapeKind::Entry { operations, .. } => operations.as_slice(),
+        _ => &[],
+    });
+    for op in module.operations.iter().chain(nested) {
         for err in declared_errors(op, module) {
             if !seen.contains(&err.shape_id) {
                 seen.push(err.shape_id.clone());

@@ -1,0 +1,368 @@
+---
+source: backend/tests/snapshot_codegen.rs
+assertion_line: 129
+expression: "render_files(files, &go::GoRules::default(), \"go\", Some(&header))"
+---
+// ==== models.go ====
+package notes
+
+import "context"
+import "github.com/tono-lang/tono/runtimes/http-go"
+import "net/http"
+import "strconv"
+
+type Timestamp string
+
+type LocalDate string
+
+type Duration string
+
+type Note struct {
+	ID string `json:"id"`
+	Body string `json:"body"`
+}
+
+type Overloaded struct {
+	Message string `json:"message"`
+}
+
+type Violation struct {
+	Field      string `json:"field"`
+	Constraint string `json:"constraint"`
+	Message    string `json:"message"`
+}
+
+type ValidationError struct {
+	Violations []Violation `json:"violations"`
+}
+
+func (e *ValidationError) Error() string { return "validation failed" }
+
+type TransportError struct {
+	Cause error
+}
+
+func (e *TransportError) Error() string { return "transport failure" }
+
+func (e *TransportError) Unwrap() error { return e.Cause }
+
+type DecodeError struct {
+	Path     string
+	Expected string
+	Raw      string
+}
+
+func (e *DecodeError) Error() string { return "response body did not match the declared schema" }
+
+type ContractError struct {
+	ContractName string
+	Cause        error
+}
+
+func (e *ContractError) Error() string { return "contract hook '" + e.ContractName + "' failed" }
+
+func (e *ContractError) Unwrap() error { return e.Cause }
+
+type APIError struct {
+	Status int
+	Body   string
+}
+
+func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status) }
+
+func (e *Overloaded) Error() string { return "overloaded" }
+
+func (e *Overloaded) Retryable() bool { return true }
+
+// Conf is a construction-only composition of the entry surface; it
+// never crosses the wire.
+type Conf struct {
+	APIKey string
+	Region string
+}
+
+// Settings are the resolved construction values of the client entry,
+// handed to the client_init hook before validation: bespoke code may
+// overwrite any field (bespoke wins) and set transport through the slots.
+// Exactly one transport slot may be set: HTTPClient (native) or Transport
+// (canonical). Headers are the base request headers (bespoke auth writes
+// here); a declared @header wins only where nothing else set the name.
+type Settings struct {
+	APIKey string
+	ClientName string
+	ClientKey string
+	EndpointEnv string
+	EndpointVersion string
+	EndpointV1 string
+	EndpointV2 string
+	Endpoint string
+	Timeout Duration
+	MaxRetries int32
+	Settings Conf
+
+	HTTPClient *http.Client
+	Transport  tonohttp.Transport
+	Headers    map[string]string
+}
+
+// ClientOption configures an optional (@with) construction value of Client.
+type ClientOption func(*clientWiths)
+
+type clientWiths struct {
+	clientName *string
+	timeout *Duration
+	maxRetries *int32
+}
+
+// WithClientName sets the client_name construction value.
+func WithClientName(v string) ClientOption {
+	return func(w *clientWiths) { w.clientName = &v }
+}
+
+// WithTimeout sets the timeout construction value.
+func WithTimeout(v Duration) ClientOption {
+	return func(w *clientWiths) { w.timeout = &v }
+}
+
+// WithMaxRetries sets the max_retries construction value.
+func WithMaxRetries(v int32) ClientOption {
+	return func(w *clientWiths) { w.maxRetries = &v }
+}
+
+// Client is the generated SDK client the client entry declares.
+type Client struct {
+	settings Settings
+	runtime  *tonohttp.Runtime
+	hooks    *tonohttp.Hooks
+}
+
+// ClientAPI is the operation surface of Client, for mocking.
+type ClientAPI interface {
+	SaveNote(ctx context.Context, input Note) (Note, error)
+}
+
+var _ ClientAPI = (*Client)(nil)
+
+// ==== models_serde.go ====
+package notes
+
+import "context"
+import "encoding/json"
+import "errors"
+import "fmt"
+import "github.com/tono-lang/tono/runtimes/http-go"
+import "os"
+import "strings"
+import "time"
+
+// mustDescriptor parses a compiler-emitted descriptor literal at package
+// load; a parse failure is a build defect, never a runtime input.
+func mustDescriptor(literal string) *tonohttp.WireDescriptor {
+	d, err := tonohttp.ParseDescriptor([]byte(literal))
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+// encodeRecord turns a typed input into the wire record the runtime binds
+// from, through the type's own JSON tags.
+func encodeRecord(v any) (map[string]any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+var saveNoteDescriptor = mustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"label\"}],[\"body\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[529,\"notes#overloaded\",\"overloaded\",true]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-Client-Name\"}],{\"field\":[\"client_name\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,null]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/notes/{id}\"}")
+
+// New constructs Client: positional @arg values, options for @with,
+// declared sources resolved top-down, client_init on top (bespoke wins),
+// then the declared validation.
+func New(apiKey string, opts ...ClientOption) (*Client, error) {
+	w := clientWiths{}
+	for _, opt := range opts {
+		opt(&w)
+	}
+	s := Settings{Headers: map[string]string{}}
+	s.APIKey = apiKey
+	if w.clientName != nil {
+		s.ClientName = *w.clientName
+	} else {
+		s.ClientName = "demo"
+	}
+	s.ClientKey = strUpperSnake(strings.TrimSpace(s.ClientName))
+	s.EndpointEnv = "ENDPOINT_" + s.ClientKey + "_V2"
+	if v, ok := os.LookupEnv("ENDPOINT_VERSION"); ok && v != "" {
+		s.EndpointVersion = v
+	} else {
+		s.EndpointVersion = "v2"
+	}
+	endpointV1Why := "no source"
+	if v, ok := os.LookupEnv("ENDPOINT"); ok && v != "" {
+			s.EndpointV1 = v
+		endpointV1Why = ""
+	} else {
+		endpointV1Why = "env ENDPOINT: empty"
+	}
+	endpointV2Why := "no source"
+	if v, ok := os.LookupEnv(s.EndpointEnv); ok && v != "" {
+			s.EndpointV2 = v
+		endpointV2Why = ""
+	} else {
+		endpointV2Why = "env " + s.EndpointEnv + ": empty"
+	}
+	endpointWhy := ""
+	switch s.EndpointVersion {
+	case "v1":
+		if endpointV1Why != "" {
+			endpointWhy = "endpoint_v1 <- " + endpointV1Why
+		} else {
+			s.Endpoint = s.EndpointV1
+		}
+	case "legacy":
+		s.Endpoint = "https://old.example.com"
+	default:
+		endpointWhy = "no source"
+		if v, ok := os.LookupEnv("ENDPOINT_V2"); ok && v != "" {
+				s.Endpoint = v
+			endpointWhy = ""
+		} else {
+			endpointWhy = "env ENDPOINT_V2: empty"
+		}
+		if endpointWhy != "" {
+		s.Endpoint = "https://example.com"
+			endpointWhy = ""
+		}
+	}
+	if w.timeout != nil {
+		s.Timeout = *w.timeout
+	} else {
+		s.Timeout = Duration("10s")
+	}
+	if w.maxRetries != nil {
+		s.MaxRetries = *w.maxRetries
+	} else {
+		s.MaxRetries = int32(3)
+	}
+	{
+		var composed Conf
+		composed.APIKey = s.APIKey
+		if v, ok := os.LookupEnv("REGION"); ok && v != "" {
+			composed.Region = v
+		} else {
+			composed.Region = "us"
+		}
+		s.Settings = composed
+	}
+	if s.Endpoint == "" {
+		why := endpointWhy
+		if why == "" {
+			why = "no value"
+		}
+		return nil, errors.New("endpoint <- " + why)
+	}
+	violations := []Violation{}
+	if len([]rune(s.APIKey)) < 1 {
+		violations = append(violations, Violation{Field: "api_key", Constraint: "length", Message: "api_key length must be >= 1"})
+	}
+	if len(violations) > 0 {
+		return nil, &ValidationError{Violations: violations}
+	}
+	values := map[string]any{}
+	values["api_key"] = s.APIKey
+	values["client_name"] = s.ClientName
+	values["client_key"] = s.ClientKey
+	values["endpoint_env"] = s.EndpointEnv
+	values["endpoint_version"] = s.EndpointVersion
+	if endpointV1Why == "" {
+		values["endpoint_v1"] = s.EndpointV1
+	}
+	if endpointV2Why == "" {
+		values["endpoint_v2"] = s.EndpointV2
+	}
+	if endpointWhy == "" {
+		values["endpoint"] = s.Endpoint
+	}
+	{
+		ms, err := durationMs(string(s.Timeout))
+		if err != nil {
+			return nil, fmt.Errorf("timeout: invalid duration %q", string(s.Timeout))
+		}
+		values["timeout"] = ms
+	}
+	values["max_retries"] = int64(s.MaxRetries)
+	values["settings.api_key"] = s.Settings.APIKey
+	values["settings.region"] = s.Settings.Region
+	runtime, err := tonohttp.New(tonohttp.Options{Client: s.HTTPClient, Transport: s.Transport, Headers: s.Headers, Values: values})
+	if err != nil {
+		return nil, err
+	}
+	return &Client{settings: s, runtime: runtime, hooks: nil}, nil
+}
+
+func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
+	var zero Note
+	record, err := encodeRecord(input)
+	if err != nil {
+		return zero, err
+	}
+	outcome, err := c.runtime.Execute(ctx, saveNoteDescriptor, record, c.hooks)
+	if err != nil {
+		return zero, err
+	}
+	switch outcome.Kind {
+	case tonohttp.OutcomeTransport:
+		return zero, &TransportError{Cause: outcome.Cause}
+	case tonohttp.OutcomeError:
+		return zero, DecodeSaveNoteError(outcome.Status, []byte(outcome.Body))
+	}
+	var out Note
+	if err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {
+		return zero, &DecodeError{Path: "$", Expected: "Note", Raw: outcome.Body}
+	}
+	return out, nil
+}
+
+func DecodeSaveNoteError(status int, body []byte) error {
+	var probe struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	if status == 529 && probe.Code == "overloaded" {
+		var data Overloaded
+		if json.Unmarshal(body, &data) == nil {
+			return &data
+		}
+	}
+	return &APIError{Status: status, Body: string(body)}
+}
+
+// durationMs parses a duration field for the runtime's millisecond value
+// positions.
+func durationMs(v string) (float64, error) {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, err
+	}
+	return float64(d) / float64(time.Millisecond), nil
+}
+
+// strTransformWords splits a resolved value for the casing transforms:
+// runs of spaces, hyphens, and underscores separate words.
+func strTransformWords(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == '-' || r == '_' })
+}
+
+func strUpperSnake(s string) string {
+	ws := strTransformWords(s)
+	for i := range ws {
+		ws[i] = strings.ToUpper(ws[i])
+	}
+	return strings.Join(ws, "_")
+}

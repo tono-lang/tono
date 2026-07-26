@@ -21,8 +21,7 @@ use crate::ir::{Module, Shape};
 /// The declarations for the types file: the taxonomy error values, the
 /// declared errors' methods, and the blocking client interface.
 pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
-    let mut decls = taxonomy_decls();
-    decls.extend(declared_error_decls(module));
+    let mut decls = taxonomy_and_declared_decls(module);
     // The error channel is the native (T, error) pair on every method.
     decls.push(ops::client_decl(
         module,
@@ -31,6 +30,15 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
         &type_expr_of,
         Some("error"),
     ));
+    decls
+}
+
+/// The taxonomy and the declared errors' methods without the loose-op client
+/// interface: what an entry-only module needs (its client surface is the
+/// entry's own struct and mock interface).
+pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
+    let mut decls = taxonomy_decls();
+    decls.extend(declared_error_decls(module));
     decls
 }
 
@@ -150,6 +158,17 @@ fn discriminator_fn(op: &Shape, ordered: &[DeclaredError], n: &ErrorNames) -> De
         "Decode{}Error",
         crate::codegen::conventions::type_ident_from_id(&op.id)
     );
+    discriminator_fn_body(&fn_name, ordered, n)
+}
+
+/// The same discrimination function under a caller-chosen name (an
+/// entry-nested operation derives its name through the entry rule, not from
+/// the raw shape id).
+pub fn discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) -> Decl {
+    discriminator_fn_body(fn_name, ordered, &error_names())
+}
+
+fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorNames) -> Decl {
     let mut body = String::new();
     body.push_str(&format!(
         "func {fn_name}(status int, body []byte) error {{\n"

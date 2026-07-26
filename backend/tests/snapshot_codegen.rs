@@ -83,3 +83,61 @@ fn typescript_codegen_snapshot() {
         render_files(files, &typescript::TsRules, "ts", None)
     );
 }
+
+/// The entry fixture (config, every source kind, derivation, selection,
+/// composition, structured protocol refs) with an opaque descriptor attached
+/// to its nested op, standing in for the frontend's protocol pass. The
+/// snapshot covers the whole construction surface: New, With*, Settings, the
+/// match switch, @bind composition, and the outcome mapping.
+fn entries_module() -> tono_backend::ir::Module {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../ir-schema/fixtures/entries_client.json"
+    ))
+    .expect("fixture");
+    let model = tono_backend::ir::decode_model(&text).expect("fixture decodes");
+    let mut module = model.modules.into_iter().next().expect("one module");
+    for shape in &mut module.shapes {
+        if let tono_backend::ir::ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations {
+                op.traits.push(tono_backend::ir::Trait {
+                    id: "wire_descriptor".into(),
+                    value: serde_json::json!({
+                        "http_method": "POST",
+                        "uri": "/notes/{id}",
+                        "bindings": [["id", {"kind": "label"}], ["body", {"kind": "body"}]],
+                        "response_bindings": [],
+                        "success": [[200, null]],
+                        "errors": [[529, "notes#overloaded", "overloaded", true]],
+                        "endpoint": ["endpoint"],
+                        "request_headers": [[[{"lit": "X-Client-Name"}], {"field": ["client_name"]}]],
+                        "timeout": {"ref": "timeout"},
+                        "retry": {"max": {"ref": "max_retries"}}
+                    }),
+                });
+            }
+        }
+    }
+    module
+}
+
+#[test]
+fn go_entries_codegen_snapshot() {
+    let module = entries_module();
+    let files = go::emit::emit_module(&module, &go::types::go_casing(), &Default::default());
+    let header = go::emit::package_clause("notes");
+    assert_snapshot!(
+        "go_entries",
+        render_files(files, &go::GoRules::default(), "go", Some(&header))
+    );
+}
+
+#[test]
+fn typescript_entries_codegen_snapshot() {
+    let module = entries_module();
+    let files = typescript::emit::emit_module(&module, &typescript::types::ts_casing());
+    assert_snapshot!(
+        "typescript_entries",
+        render_files(files, &typescript::TsRules, "ts", None)
+    );
+}
