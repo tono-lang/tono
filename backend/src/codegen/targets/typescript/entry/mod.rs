@@ -426,6 +426,40 @@ fn class_decl(
                     cast_string(&field.target, "\"\""),
                     line.condition
                 )
+            } else if matches!(field.target, Tref::Prim(Prim::Bytes)) {
+                format!(
+                    "s.{}.length !== 0 && {}",
+                    field_camel(&field.name, config),
+                    line.condition
+                )
+            } else if matches!(
+                field.target,
+                Tref::Prim(
+                    Prim::I8
+                        | Prim::I16
+                        | Prim::I32
+                        | Prim::I64
+                        | Prim::U8
+                        | Prim::U16
+                        | Prim::U32
+                        | Prim::U64
+                        | Prim::Float
+                )
+            ) {
+                // A numeric zero can be a legitimate resolved value, so the
+                // check only skips when the chain reported absent AND the
+                // bridge left the zero in place (same rule as the requires).
+                let zero = if matches!(field.target, Tref::Prim(Prim::I64 | Prim::U64)) {
+                    "0n"
+                } else {
+                    "0"
+                };
+                format!(
+                    "({why} === \"\" || s.{ident} !== {zero}) && {}",
+                    line.condition,
+                    why = why_var(&field.name),
+                    ident = field_camel(&field.name, config),
+                )
             } else {
                 line.condition.clone()
             };
@@ -450,18 +484,25 @@ fn class_decl(
     // Freeze the resolved values for the runtime's ref positions.
     body.push_str("    const values: Record<string, unknown> = {};\n");
     for vp in entry.value_paths(module) {
-        // An enum-typed field is a branded string (FieldShape::Scalar): it
-        // freezes like any other scalar the descriptor's refs can name.
-        let scalar_ref = vp.member.is_none()
-            && matches!(entry.field_shape(vp.field, module), FieldShape::Scalar);
+        // An enum-typed leaf is a branded string wherever it sits (a field or
+        // a composed/structured member): it freezes like any other scalar the
+        // descriptor's refs can name.
+        let scalar_ref = ref_is_enum(vp.target, module);
         if value_expr(&vp, config, scalar_ref).is_none() {
             continue;
         }
         // A member of a structured draft may be undefined (the draft starts
         // from an empty object); reading it through its zero keeps the frozen
-        // values and the presence guard aligned with Go's zero struct.
+        // values and the presence guard aligned with Go's zero struct. A
+        // string-like member falls back to the empty string (its Go zero),
+        // never to the draft's empty-object spelling.
         let expr = if vp.member.is_some() {
-            format!("(s.{} ?? {})", access(&vp, config), zero_value(vp.target))
+            let zero = if string_like(vp.target) {
+                cast_string(vp.target, "\"\"")
+            } else {
+                zero_value(vp.target)
+            };
+            format!("(s.{} ?? {})", access(&vp, config), zero)
         } else {
             format!("s.{}", access(&vp, config))
         };
@@ -639,7 +680,27 @@ fn op_method(
                 )),
             )
         }
-        Some(_) => format!("    return JSON.parse(outcome.body) as {ret};"),
+        Some(t) => {
+            // A 64-bit integer (or a container holding one) rides the wire
+            // as strings: the parsed body runs through the same decode the
+            // codecs use so the method returns bigints, not raw JSON shapes.
+            let decode = crate::codegen::targets::typescript::codecs::decode_expr(
+                "JSON.parse(outcome.body)",
+                t,
+            );
+            if decode == "JSON.parse(outcome.body)" {
+                format!("    return {decode} as {ret};")
+            } else {
+                refs.push(module_symbol(&en.decode, module));
+                format!(
+                    "    try {{\n      return {decode} as {ret};\n    }} catch {{\n      {t}\n    }}",
+                    t = throw(format!(
+                        "new {}(\"$\", {ret:?}, outcome.body)",
+                        en.decode
+                    )),
+                )
+            }
+        }
         None => "    return;".to_string(),
     };
     let hooks_arg = if passes_hooks { ", this.hooks" } else { "" };
@@ -666,67 +727,12 @@ fn why_var(field: &str) -> String {
     camel(&format!("{field}_why"))
 }
 
-fn access(vp: &crate::codegen::entries::ValuePath<'_>, config: &CasingConfig) -> String {
-    match &vp.member {
-        None => field_camel(&vp.field.name, config),
-        Some(member) => format!(
-            "{}.{}",
-            field_camel(&vp.field.name, config),
-            field_camel(member, config)
-        ),
-    }
-}
-
-/// Whether a value path freezes into the runtime values. A named reference
-/// freezes when it resolves to a scalar (an enum is a branded string), which
-/// is what `scalar_ref` says.
-fn value_expr(
-    vp: &crate::codegen::entries::ValuePath<'_>,
-    config: &CasingConfig,
-    scalar_ref: bool,
-) -> Option<String> {
-    if matches!(vp.target, Tref::Ref { .. }) && !scalar_ref {
-        return None;
-    }
-    if matches!(vp.target, Tref::Map(_, _) | Tref::List(_)) {
-        return None;
-    }
-    Some(format!("s.{}", access(vp, config)))
-}
-
-/// The conversion into the runtime's value positions: bigints narrow to
-/// numbers (the descriptor's numeric refs), everything else passes as is.
-fn value_cast(t: &Tref, expr: &str) -> String {
-    match t {
-        Tref::Prim(Prim::I64 | Prim::U64) => format!("Number({expr})"),
-        _ => expr.to_string(),
-    }
-}
-
-/// The presence condition guarding a value entry, or `None` when the value is
-/// always frozen. The guard reads the resolved value itself, not the declared
-/// chain's why-reason: client_init runs over the Settings before this point
-/// (bespoke wins), so a hook-filled field must freeze like a declared one. A
-/// non-string value freezes unconditionally (its zero means the same thing to
-/// the runtime's value positions as its absence).
-fn presence_guard(
-    entry: &EntryModel<'_>,
-    vp: &crate::codegen::entries::ValuePath<'_>,
-    expr: &str,
-) -> Option<String> {
-    if entry.is_guaranteed(vp.field) && vp.member.is_none() {
-        return None;
-    }
-    if !string_like(vp.target) {
-        return None;
-    }
-    Some(format!("{expr} !== {}", cast_string(vp.target, "\"\"")))
-}
-
+mod checks;
 mod resolve;
 mod surface;
 #[cfg(test)]
 mod tests;
 
+use checks::{access, presence_guard, ref_is_enum, value_cast, value_expr};
 use resolve::Resolver;
 use surface::*;

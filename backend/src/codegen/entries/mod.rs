@@ -272,6 +272,66 @@ const RESERVED_ARG_NAMES: [&str; 18] = [
     "composed",
 ];
 
+/// Language keywords an `@arg` field cannot take either: a single-word
+/// canonical name passes through the camel casing unchanged, so a Go or
+/// TypeScript keyword would land verbatim as a parameter name.
+const RESERVED_ARG_KEYWORDS: [&str; 43] = [
+    "break",
+    "case",
+    "catch",
+    "chan",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "defer",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "fallthrough",
+    "finally",
+    "for",
+    "func",
+    "function",
+    "go",
+    "goto",
+    "if",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "map",
+    "new",
+    "package",
+    "range",
+    "return",
+    "select",
+    "static",
+    "struct",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "try",
+    "type",
+    "typeof",
+    "var",
+    "void",
+];
+
+/// The Pascal spelling of a canonical name, for collision checks against the
+/// generated type surface.
+fn pascal_ident(name: &str) -> String {
+    crate::codegen::casing::transform(
+        name,
+        crate::codegen::symbol::SymbolKind::Type,
+        &crate::codegen::casing::CasingConfig::new(crate::codegen::casing::CaseStyle::Pascal),
+        None,
+    )
+}
+
 /// Generation-time validation of the entry surface: the cases the frontend
 /// cannot see (they are target rules) and that would otherwise produce
 /// uncompilable or silently wrong output. Returns the first offense.
@@ -295,6 +355,14 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                 {
                     return Err(format!(
                         "module {}: entry {} field {} is an @arg but its name is a local the generated constructor already declares; rename the field",
+                        module.name, entry.name, field.name
+                    ));
+                }
+                if RESERVED_ARG_KEYWORDS.contains(&field.name.as_str())
+                    && has_source(field, |s| matches!(s, Source::Arg))
+                {
+                    return Err(format!(
+                        "module {}: entry {} field {} is an @arg but its name is a keyword in a target language; rename the field",
                         module.name, entry.name, field.name
                     ));
                 }
@@ -383,6 +451,33 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                 ));
             }
         }
+        // A declared shape spelling a generated type (an entry's client type
+        // or one of its companions) would emit two same-named types.
+        let mut generated: Vec<(String, String)> = Vec::new();
+        for entry in &entries {
+            generated.push((
+                pascal_ident(entry.name),
+                format!("client type of entry {}", entry.name),
+            ));
+        }
+        for (companion, owner) in &companions {
+            generated.push((
+                pascal_ident(companion),
+                format!("{companion} companion of entry {owner}"),
+            ));
+        }
+        for shape in &module.shapes {
+            if matches!(shape.kind, ShapeKind::Entry { .. }) {
+                continue;
+            }
+            let ident = local_name(&shape.id);
+            if let Some((_, what)) = generated.iter().find(|(g, _)| g == ident) {
+                return Err(format!(
+                    "module {}: shape {} collides with the {}; rename the shape",
+                    module.name, ident, what
+                ));
+            }
+        }
         // The Go constructor is `New` (single entry) or `New<Entry>` (multi):
         // an entry type spelling the same identifier cannot share the package.
         if !multi && entries.iter().any(|e| e.name == "new") {
@@ -401,14 +496,7 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                         "module {}: entry {} collides with the New{} constructor generated for entry {}; rename one",
                         module.name,
                         entry.name,
-                        crate::codegen::casing::transform(
-                            other.name,
-                            crate::codegen::symbol::SymbolKind::Type,
-                            &crate::codegen::casing::CasingConfig::new(
-                                crate::codegen::casing::CaseStyle::Pascal
-                            ),
-                            None
-                        ),
+                        pascal_ident(other.name),
                         other.name
                     ));
                 }

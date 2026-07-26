@@ -2,6 +2,7 @@
 //! surface lowered to TypeScript statements, mirroring the Go emitter
 //! statement for statement so both SDKs construct identically.
 
+use super::checks::*;
 use super::*;
 
 pub(super) struct Resolver<'a, 'b> {
@@ -167,15 +168,36 @@ impl Resolver<'_, '_> {
                             .collect::<String>(),
                     )
                 }
+                // Both lines sit at the step's own depth (no internal
+                // padding): the wrapper below owns the indentation, first or
+                // nested.
                 Source::Default(v) => format!(
-                    "{dest} = {lit};\n    {why} = \"\";\n",
+                    "{dest} = {lit};\n{why} = \"\";\n",
                     lit = literal(&field.target, v),
                 ),
                 Source::Arg => continue,
             };
+            let flat = matches!(source, Source::Default(_));
             if first {
-                out.push_str(&format!("    {step}"));
+                if flat {
+                    out.push_str(
+                        &step
+                            .lines()
+                            .map(|l| format!("    {l}\n"))
+                            .collect::<String>(),
+                    );
+                } else {
+                    out.push_str(&format!("    {step}"));
+                }
                 first = false;
+            } else if flat {
+                out.push_str(&format!(
+                    "    if ({why} !== \"\") {{\n{body}    }}\n",
+                    body = step
+                        .lines()
+                        .map(|l| format!("      {l}\n"))
+                        .collect::<String>(),
+                ));
             } else {
                 out.push_str(&format!("    if ({why} !== \"\") {{\n    {step}    }}\n",));
             }
@@ -542,7 +564,7 @@ impl Resolver<'_, '_> {
             "    if ({why} !== \"\") {{\n      const raw = {lookup};\n      if (raw !== undefined) {{\n\
              \x20       let parsed: unknown;\n\
              \x20       try {{\n          parsed = JSON.parse(raw);\n        }} catch (e) {{\n          throw new Error(`${{{label}}}: ${{String(e)}}`);\n        }}\n\
-             \x20       if (typeof parsed !== \"object\" || parsed === null) {{\n          throw new Error(`${{{label}}}: expected an object`);\n        }}\n\
+             \x20       if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n          throw new Error(`${{{label}}}: expected an object`);\n        }}\n\
              \x20       const record = parsed as Record<string, unknown>;\n\
              {required}\
              \x20       for (const key of Object.keys(parsed)) {{\n          if (![{known}].includes(key)) {{\n            throw new Error(`${{{label}}}: unknown field ${{key}}`);\n          }}\n        }}\n\
@@ -589,8 +611,11 @@ impl Resolver<'_, '_> {
         // so an i64 map or a union field lands typed, not as raw JSON shapes.
         let decode =
             crate::codegen::targets::typescript::codecs::decode_expr("parsed", &field.target);
+        // Container and element checks keep the boundary as strict as Go's
+        // typed unmarshal: the same env value must construct in both targets.
+        let checks = json_shape_checks(&field.target, &label);
         let block = format!(
-            "    if ({why} !== \"\") {{\n      const raw = {lookup};\n      if (raw !== undefined) {{\n        try {{\n          const parsed = JSON.parse(raw);\n          {dest} = {decode} as {ty};\n        }} catch (e) {{\n          throw new Error(`${{{label}}}: ${{String(e)}}`);\n        }}\n        {why} = \"\";\n      }} else {{\n        {why} = {miss};\n      }}\n    }}\n"
+            "    if ({why} !== \"\") {{\n      const raw = {lookup};\n      if (raw !== undefined) {{\n        let parsed: any;\n        try {{\n          parsed = JSON.parse(raw);\n        }} catch (e) {{\n          throw new Error(`${{{label}}}: ${{String(e)}}`);\n        }}\n{checks}        {dest} = {decode} as {ty};\n        {why} = \"\";\n      }} else {{\n        {why} = {miss};\n      }}\n    }}\n"
         );
         self.push(&block);
     }
@@ -761,39 +786,5 @@ impl Resolver<'_, '_> {
                 .map(|l| format!("  {l}\n"))
                 .collect::<String>()
         )
-    }
-}
-
-fn indent2(block: &str) -> String {
-    block
-        .lines()
-        .map(|l| format!("  {l}\n"))
-        .collect::<String>()
-}
-
-/// The inclusive range of a narrow integer, for the boundary check that
-/// mirrors Go's strconv bit-size enforcement.
-fn int_bounds(p: &Prim) -> (&'static str, &'static str) {
-    match p {
-        Prim::I8 => ("-128", "127"),
-        Prim::I16 => ("-32768", "32767"),
-        Prim::I32 => ("-2147483648", "2147483647"),
-        Prim::U8 => ("0", "255"),
-        Prim::U16 => ("0", "65535"),
-        _ => ("0", "4294967295"),
-    }
-}
-
-fn prim_name(p: &Prim) -> &'static str {
-    match p {
-        Prim::I8 => "i8",
-        Prim::I16 => "i16",
-        Prim::I32 => "i32",
-        Prim::I64 => "i64",
-        Prim::U8 => "u8",
-        Prim::U16 => "u16",
-        Prim::U32 => "u32",
-        Prim::U64 => "u64",
-        _ => "value",
     }
 }

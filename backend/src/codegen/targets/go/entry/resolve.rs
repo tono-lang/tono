@@ -173,20 +173,29 @@ impl Resolver<'_, '_> {
                         parse = self.env_parse(field, dest, &label),
                     )
                 }
+                // Both lines sit at the step's own depth (no internal tab):
+                // the wrapper below owns the indentation, first or nested.
                 Source::Default(v) => format!(
-                    "{dest} = {lit}\n\t{why} = \"\"\n",
+                    "{dest} = {lit}\n{why} = \"\"\n",
                     lit = literal(&field.target, v),
                 ),
                 Source::Arg => continue,
             };
+            let flat = matches!(source, Source::Default(_));
             if first {
-                out.push_str(&format!("\t{step}"));
+                if flat {
+                    out.push_str(&indent(step.trim_end_matches('\n')));
+                } else {
+                    out.push_str(&format!("\t{step}"));
+                }
                 first = false;
             } else {
-                out.push_str(&format!(
-                    "\tif {why} != \"\" {{\n{indented}\t}}\n",
-                    indented = indent(step.trim_end_matches('\n')),
-                ));
+                let body = if flat {
+                    indent(indent(step.trim_end_matches('\n')).trim_end_matches('\n'))
+                } else {
+                    indent(step.trim_end_matches('\n'))
+                };
+                out.push_str(&format!("\tif {why} != \"\" {{\n{body}\t}}\n"));
             }
         }
         out

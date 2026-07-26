@@ -558,6 +558,31 @@ fn op_method_decl(
         )
     };
     let success = match output {
+        // A 64-bit integer rides the wire as a string, so the success body is
+        // a JSON string decoded and parsed, not a bare number.
+        Some(t @ Tref::Prim(p @ (Prim::I64 | Prim::U64))) => {
+            refs.push(import("json", "encoding/json"));
+            refs.push(import("strconv", "strconv"));
+            let fail_decode = fail(format!(
+                "&{decode}{{Path: \"$\", Expected: {expected:?}, Raw: outcome.Body}}",
+                decode = en.decode,
+                expected = go_type(t),
+            ));
+            let parse = if matches!(p, Prim::U64) {
+                "strconv.ParseUint"
+            } else {
+                "strconv.ParseInt"
+            };
+            format!(
+                "\tvar wire string\n\
+                 \tif err := json.Unmarshal([]byte(outcome.Body), &wire); err != nil {{\n\
+                 \t\treturn zero, {fail_decode}\n\t}}\n\
+                 \tout, err := {parse}(wire, 10, 64)\n\
+                 \tif err != nil {{\n\
+                 \t\treturn zero, {fail_decode}\n\t}}\n\
+                 \treturn out, nil"
+            )
+        }
         Some(t) => {
             refs.push(import("json", "encoding/json"));
             format!(

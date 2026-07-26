@@ -190,6 +190,35 @@ pub(super) fn new_decl(
                     cast_string(&field.target, "\"\""),
                     line.condition
                 )
+            } else if matches!(field.target, Tref::Prim(Prim::Bytes)) {
+                format!(
+                    "len(s.{}) != 0 && {}",
+                    field_pascal(&field.name, config),
+                    line.condition
+                )
+            } else if matches!(
+                field.target,
+                Tref::Prim(
+                    Prim::I8
+                        | Prim::I16
+                        | Prim::I32
+                        | Prim::I64
+                        | Prim::U8
+                        | Prim::U16
+                        | Prim::U32
+                        | Prim::U64
+                        | Prim::Float
+                )
+            ) {
+                // A numeric zero can be a legitimate resolved value, so the
+                // check only skips when the chain reported absent AND the
+                // bridge left the zero in place (same rule as the requires).
+                format!(
+                    "({why} == \"\" || s.{ident} != 0) && {}",
+                    line.condition,
+                    why = why_var(&field.name),
+                    ident = field_pascal(&field.name, config),
+                )
             } else {
                 line.condition.clone()
             };
@@ -213,10 +242,10 @@ pub(super) fn new_decl(
     // Freeze the resolved values for the runtime's ref positions.
     body.push_str("\tvalues := map[string]any{}\n");
     for vp in entry.value_paths(module) {
-        // An enum-typed field is a branded string (FieldShape::Scalar): it
-        // freezes like any other scalar the descriptor's refs can name.
-        let scalar_ref = vp.member.is_none()
-            && matches!(entry.field_shape(vp.field, module), FieldShape::Scalar);
+        // An enum-typed leaf is a branded string wherever it sits (a field or
+        // a composed/structured member): it freezes like any other scalar the
+        // descriptor's refs can name.
+        let scalar_ref = ref_is_enum(vp.target, module);
         let Some(expr) = value_expr(&vp, config, scalar_ref) else {
             continue;
         };
@@ -312,7 +341,10 @@ pub(super) fn value_expr(
         (None, Tref::Map(_, _)) | (None, Tref::List(_)) => None,
         (None, _) => Some(format!("s.{}", field_pascal(&vp.field.name, config))),
         (Some(member), t) => {
-            if matches!(t, Tref::Ref { .. } | Tref::Map(_, _) | Tref::List(_)) {
+            if matches!(t, Tref::Ref { .. }) && !scalar_ref {
+                return None;
+            }
+            if matches!(t, Tref::Map(_, _) | Tref::List(_)) {
                 return None;
             }
             Some(format!(
@@ -322,6 +354,18 @@ pub(super) fn value_expr(
             ))
         }
     }
+}
+
+/// Whether a leaf type is an enum reference (a branded string on the wire),
+/// which is what lets it freeze into the runtime values.
+pub(super) fn ref_is_enum(t: &Tref, module: &Module) -> bool {
+    let Tref::Ref { id, .. } = t else {
+        return false;
+    };
+    module
+        .shapes
+        .iter()
+        .any(|s| s.id == *id && matches!(s.kind, ShapeKind::Enum { .. }))
 }
 
 /// The cast that makes a resolved value directly usable by the runtime's

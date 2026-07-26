@@ -267,8 +267,8 @@ export class Client {
           }
         }
         if (endpointWhy !== "") {
-        s.endpoint = "https://example.com";
-        endpointWhy = "";
+          s.endpoint = "https://example.com";
+          endpointWhy = "";
         }
         break;
       }
@@ -315,7 +315,7 @@ export class Client {
         } catch (e) {
           throw new Error(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
         }
-        if (typeof parsed !== "object" || parsed === null) {
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
           throw new Error(`${"SERVICE_CREDENTIALS"}: expected an object`);
         }
         const record = parsed as Record<string, unknown>;
@@ -351,12 +351,21 @@ export class Client {
     if (labelsWhy !== "") {
       const raw = readEnv("SERVICE_LABELS");
       if (raw !== undefined) {
+        let parsed: any;
         try {
-          const parsed = JSON.parse(raw);
-          s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
+          parsed = JSON.parse(raw);
         } catch (e) {
           throw new Error(`${"SERVICE_LABELS"}: ${String(e)}`);
         }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error(`${"SERVICE_LABELS"}: expected an object`);
+        }
+        for (const [key, val] of Object.entries(parsed)) {
+          if (typeof val !== "string") {
+            throw new Error(`${"SERVICE_LABELS"}: field ${key} must be a string`);
+          }
+        }
+        s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
         labelsWhy = "";
       } else {
         labelsWhy = "env SERVICE_LABELS: empty";

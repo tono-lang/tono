@@ -406,8 +406,15 @@ fn a_whole_json_field_decodes_through_the_wire_codecs() {
     let out = text(&module);
     // The parsed JSON runs through the same decode the wire codec uses, so
     // an i64 map lands as bigints instead of raw strings.
-    assert!(out.contains("const parsed = JSON.parse(raw);"));
+    assert!(out.contains("parsed = JSON.parse(raw);"));
     assert!(out.contains("[k, decodeI64(v)]"));
+    // The boundary is as strict as Go's typed unmarshal: the container shape
+    // and every scalar element are checked before the decode (i64 rides the
+    // wire as a string).
+    assert!(out
+        .contains("if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed))"));
+    assert!(out.contains("for (const [key, val] of Object.entries(parsed)) {"));
+    assert!(out.contains("field ${key} must be a string"));
 }
 
 #[test]
@@ -437,4 +444,139 @@ fn duration_parsing_accepts_both_micro_signs() {
     // Go's ParseDuration takes U+00B5 and U+03BC; the shared grammar must too.
     assert!(out.contains("\\u00b5s"));
     assert!(out.contains("\\u03bcs"));
+}
+
+#[test]
+fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
+    let mut module = fixture_module();
+    for shape in &mut module.shapes {
+        if let ShapeKind::Config { fields } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "zone".into(),
+                target: Tref::Prim(Prim::String),
+                sources: vec![],
+                format: None,
+                transforms: vec![],
+                select: Some(crate::ir::Select {
+                    subject: vec!["endpoint".into()],
+                    arms: vec![
+                        crate::ir::SelectArm {
+                            pattern: Some(serde_json::json!("https://api.example.com")),
+                            value: crate::ir::ArmValue::Field(vec!["endpoint_v1".into()]),
+                        },
+                        crate::ir::SelectArm {
+                            pattern: None,
+                            value: crate::ir::ArmValue::Sources(vec![Source::Env(EnvName::Name(
+                                "ZONE".into(),
+                            ))]),
+                        },
+                    ],
+                }),
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+        }
+    }
+    let out = text(&module);
+    // The member's switch only runs once the why-tracked subject resolved, an
+    // arm reading an absent chain assigns only when that chain resolved, and
+    // an inline source arm keeps the presence-only member spelling.
+    assert!(out.contains("if (endpointWhy === \"\") {"));
+    assert!(out.contains("if (endpointV1Why === \"\") {"));
+    assert!(out.contains("readEnv(\"ZONE\")"));
+}
+
+#[test]
+fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presence() {
+    let mut module = fixture_module();
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { fields, operations } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "secret".into(),
+                target: Tref::Prim(Prim::Bytes),
+                sources: vec![Source::Env(EnvName::Name("SECRET".into()))],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+            fields.push(EntryField {
+                name: "port".into(),
+                target: Tref::Prim(Prim::I32),
+                sources: vec![Source::Env(EnvName::Name("PORT".into()))],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![crate::ir::Constraint::Range {
+                    min: Some(1.0),
+                    max: None,
+                    excl_min: false,
+                    excl_max: false,
+                }],
+                traits: vec![],
+            });
+            for op in operations {
+                op.traits.push(crate::ir::Trait {
+                    id: "header".into(),
+                    value: serde_json::json!(["X-Secret", {"field": ["secret"]}]),
+                });
+            }
+        }
+    }
+    let out = text(&module);
+    assert!(out.contains("if (s.secret.length === 0) {"));
+    // The numeric constraint skips when the chain reported absent and the
+    // bridge left the zero in place (same presence rule as the requires).
+    assert!(out.contains("(portWhy === \"\" || s.port !== 0) &&"));
+}
+
+#[test]
+fn a_64_bit_operation_output_decodes_from_its_wire_string() {
+    let mut module = with_descriptors(fixture_module());
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations {
+                if let ShapeKind::Operation { output, .. } = &mut op.kind {
+                    *output = Some(Tref::Prim(Prim::I64));
+                }
+            }
+        }
+    }
+    let out = text(&module);
+    assert!(out.contains("return decodeI64(JSON.parse(outcome.body)) as bigint;"));
+}
+
+#[test]
+fn an_enum_member_of_a_config_freezes_as_a_branded_string() {
+    let mut module = fixture_module();
+    module.shapes.push(crate::codegen::test_support::enum_shape(
+        "notes#Mode",
+        vec![("live".into(), None), ("test".into(), None)],
+    ));
+    for shape in &mut module.shapes {
+        if let ShapeKind::Config { fields } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "mode".into(),
+                target: Tref::Ref {
+                    id: "notes#Mode".into(),
+                    args: vec![],
+                },
+                sources: vec![Source::Env(EnvName::Name("MODE".into()))],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+        }
+    }
+    let out = text(&module);
+    // The member reads through the branded empty string, never the draft's
+    // empty-object spelling.
+    assert!(out.contains("values[\"settings.mode\"] = (s.settings.mode ?? \"\" as Mode);"));
 }

@@ -609,3 +609,158 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
         "unbalanced braces in the generated constructor:\n{new_fn}"
     );
 }
+
+#[test]
+fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
+    let mut module = fixture_module();
+    for shape in &mut module.shapes {
+        if let ShapeKind::Config { fields } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "zone".into(),
+                target: Tref::Prim(Prim::String),
+                sources: vec![],
+                format: None,
+                transforms: vec![],
+                select: Some(crate::ir::Select {
+                    subject: vec!["endpoint".into()],
+                    arms: vec![
+                        crate::ir::SelectArm {
+                            pattern: Some(serde_json::json!("https://api.example.com")),
+                            value: crate::ir::ArmValue::Field(vec!["endpoint_v1".into()]),
+                        },
+                        crate::ir::SelectArm {
+                            pattern: None,
+                            value: crate::ir::ArmValue::Sources(vec![Source::Env(EnvName::Name(
+                                "ZONE".into(),
+                            ))]),
+                        },
+                    ],
+                }),
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+        }
+    }
+    let serde = serde_text(&module);
+    // The member's switch only runs once the why-tracked subject resolved, an
+    // arm reading an absent chain assigns only when that chain resolved, and
+    // an inline source arm keeps the presence-only member spelling.
+    assert!(serde.contains("if endpointWhy == \"\" {"));
+    assert!(serde.contains("if endpointV1Why == \"\" {"));
+    assert!(serde.contains("os.LookupEnv(\"ZONE\")"));
+}
+
+#[test]
+fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presence() {
+    let mut module = fixture_module();
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { fields, operations } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "secret".into(),
+                target: Tref::Prim(Prim::Bytes),
+                sources: vec![Source::Env(EnvName::Name("SECRET".into()))],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+            fields.push(EntryField {
+                name: "port".into(),
+                target: Tref::Prim(Prim::I32),
+                sources: vec![Source::Env(EnvName::Name("PORT".into()))],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![crate::ir::Constraint::Range {
+                    min: Some(1.0),
+                    max: None,
+                    excl_min: false,
+                    excl_max: false,
+                }],
+                traits: vec![],
+            });
+            for op in operations {
+                op.traits.push(crate::ir::Trait {
+                    id: "header".into(),
+                    value: serde_json::json!(["X-Secret", {"field": ["secret"]}]),
+                });
+            }
+        }
+    }
+    let serde = serde_text(&module);
+    assert!(serde.contains("if len(s.Secret) == 0 {"));
+    // The numeric constraint skips when the chain reported absent and the
+    // bridge left the zero in place (same presence rule as the requires).
+    assert!(serde.contains("(portWhy == \"\" || s.Port != 0) &&"));
+}
+
+#[test]
+fn a_64_bit_operation_output_decodes_from_its_wire_string() {
+    let mut module = with_descriptors(fixture_module());
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations {
+                if let ShapeKind::Operation { output, .. } = &mut op.kind {
+                    *output = Some(Tref::Prim(Prim::I64));
+                }
+            }
+        }
+    }
+    let serde = serde_text(&module);
+    assert!(serde.contains("var wire string"));
+    assert!(serde.contains("strconv.ParseInt(wire, 10, 64)"));
+}
+
+#[test]
+fn an_enum_member_of_a_config_freezes_as_a_branded_string() {
+    let mut module = fixture_module();
+    module.shapes.push(crate::codegen::test_support::enum_shape(
+        "notes#Mode",
+        vec![("live".into(), None), ("test".into(), None)],
+    ));
+    for shape in &mut module.shapes {
+        if let ShapeKind::Config { fields } = &mut shape.kind {
+            fields.push(EntryField {
+                name: "mode".into(),
+                target: Tref::Ref {
+                    id: "notes#Mode".into(),
+                    args: vec![],
+                },
+                sources: vec![Source::Env(EnvName::Name("MODE".into()))],
+                format: None,
+                transforms: vec![],
+                select: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+        }
+    }
+    let serde = serde_text(&module);
+    assert!(serde.contains("values[\"settings.mode\"] = string(s.Settings.Mode)"));
+}
+
+#[test]
+fn after_response_and_on_error_hooks_get_boundary_wrappers() {
+    let mut module = fixture_module();
+    let hook = |name: &str, binding: &str| crate::ir::Extension {
+        name: name.into(),
+        kind: crate::ir::ExtKind::Hook,
+        signature: None,
+        bindings: [("go".to_string(), binding.to_string())]
+            .into_iter()
+            .collect(),
+        conformance: None,
+    };
+    module.extensions = vec![
+        hook("after_response", "ext/go/log.go#LogResponse"),
+        hook("on_error", "ext/go/err.go#MapError"),
+    ];
+    let serde = serde_text(&module);
+    assert!(serde.contains("func afterResponseHook(ctx context.Context, res tonohttp.CanonicalResponse) (tonohttp.CanonicalResponse, error) {"));
+    assert!(serde.contains("func onErrorHook(err error) error {"));
+}

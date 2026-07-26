@@ -252,7 +252,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 			endpointWhy = "env ENDPOINT_V2: empty"
 		}
 		if endpointWhy != "" {
-		s.Endpoint = "https://example.com"
+			s.Endpoint = "https://example.com"
 			endpointWhy = ""
 		}
 	}

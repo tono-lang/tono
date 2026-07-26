@@ -544,3 +544,117 @@ fn has_entries_sees_only_entry_shapes() {
     assert!(!has_entries(&module_of(vec![])));
     assert!(has_entries(&module_of(vec![entry_shape("m#c", vec![])])));
 }
+
+#[test]
+fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
+    let model = |shapes: Vec<Shape>| crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![Module {
+            name: "m".into(),
+            shapes,
+            operations: vec![],
+            extensions: vec![],
+        }],
+    };
+    // A wire struct spelling a generated companion type collides with it.
+    let settings = Shape {
+        id: "m#Settings".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![],
+        },
+        traits: vec![],
+    };
+    let err =
+        validate_entries(&model(vec![entry_shape("m#client", vec![]), settings])).unwrap_err();
+    assert!(err.contains("settings companion"), "{err}");
+    // A shape spelling the entry's own client type collides too.
+    let client_type = Shape {
+        id: "m#Client".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![],
+        },
+        traits: vec![],
+    };
+    let err =
+        validate_entries(&model(vec![entry_shape("m#client", vec![]), client_type])).unwrap_err();
+    assert!(err.contains("client type"), "{err}");
+    // An @arg named after a target-language keyword is an invalid parameter.
+    let err = validate_entries(&model(vec![entry_shape(
+        "m#client",
+        vec![field("type", vec![Source::Arg])],
+    )]))
+    .unwrap_err();
+    assert!(err.contains("keyword"), "{err}");
+}
+
+#[test]
+fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
+    let hook = crate::ir::Extension {
+        name: "client_init".into(),
+        kind: crate::ir::ExtKind::Hook,
+        signature: None,
+        bindings: [("ts".to_string(), "ext/ts/i.ts#init".to_string())]
+            .into_iter()
+            .collect(),
+        conformance: None,
+    };
+    let loose_op = Shape {
+        id: "m#other".into(),
+        kind: ShapeKind::Operation {
+            input: None,
+            output: None,
+            errors: vec![],
+        },
+        traits: vec![],
+    };
+    let mut m = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![Module {
+            name: "m".into(),
+            shapes: vec![entry_shape("m#sdk", vec![])],
+            operations: vec![loose_op],
+            extensions: vec![hook],
+        }],
+    };
+    let err = validate_entries(&m).unwrap_err();
+    assert!(err.contains("mixes loose operations"), "{err}");
+    m.modules[0].extensions.clear();
+    m.modules[0].operations.clear();
+    assert!(validate_entries(&m).is_ok());
+}
+
+#[test]
+fn path_types_reach_structure_members_and_fall_back_to_string() {
+    let creds = Shape {
+        id: "m#Creds".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![crate::ir::Member {
+                name: "token".into(),
+                target: Tref::Prim(crate::ir::Prim::I32),
+                required: true,
+                default: None,
+                constraints: vec![],
+                traits: vec![],
+            }],
+        },
+        traits: vec![],
+    };
+    let mut structured = field("creds", vec![]);
+    structured.target = Tref::Ref {
+        id: "m#Creds".into(),
+        args: vec![],
+    };
+    let module = module_of(vec![creds, entry_shape("m#client", vec![structured])]);
+    let entries = module_entries(&module);
+    let entry = &entries[0];
+    let t = entry.path_type(&["creds".into(), "token".into()], &module);
+    assert!(matches!(t, Tref::Prim(crate::ir::Prim::I32)));
+    // Unresolvable paths read as strings so the emitters stay total.
+    let t = entry.path_type(&["creds".into(), "nope".into()], &module);
+    assert!(matches!(t, Tref::Prim(crate::ir::Prim::String)));
+    let t = entry.path_type(&["ghost".into()], &module);
+    assert!(matches!(t, Tref::Prim(crate::ir::Prim::String)));
+}
