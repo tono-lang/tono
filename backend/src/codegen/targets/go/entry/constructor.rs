@@ -96,14 +96,7 @@ pub(super) fn new_decl(
         if field.constraints.is_empty() {
             continue;
         }
-        let member = Member {
-            name: field.name.clone(),
-            target: field.target.clone(),
-            required: true,
-            default: None,
-            constraints: field.constraints.clone(),
-            traits: field.traits.clone(),
-        };
+        let member = crate::codegen::entries::field_as_member(field);
         for line in validation::guard_lines(&[member], &GoVal, "s.", config, LANG) {
             // The check reads the value bespoke left in place (client_init ran
             // already, bespoke wins), so presence is judged off the value

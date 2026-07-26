@@ -12,10 +12,24 @@
 use std::collections::HashSet;
 
 use crate::ir::{
-    ArmValue, Bind, EntryField, EnvName, Module, Shape, ShapeKind, Source, TemplatePart, Tref,
+    ArmValue, Bind, EntryField, EnvName, Member, Module, Shape, ShapeKind, Source, TemplatePart,
+    Tref,
 };
 
 pub mod plan;
+
+/// An entry field seen as a required struct member, so the declared-validation
+/// guard machinery (shared with structure members) can run over it.
+pub(crate) fn field_as_member(field: &EntryField) -> Member {
+    Member {
+        name: field.name.clone(),
+        target: field.target.clone(),
+        required: true,
+        default: None,
+        constraints: field.constraints.clone(),
+        traits: field.traits.clone(),
+    }
+}
 
 /// One entry of a module with its fields in resolution order: every field a
 /// step depends on (a `@env(.ref)` variable name, a `@format` placeholder, a

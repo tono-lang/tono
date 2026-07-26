@@ -25,9 +25,7 @@ use crate::codegen::targets::go::render::GoRules;
 use crate::codegen::targets::go::types::{type_expr_of, GoVal, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
-use crate::ir::{
-    EntryField, EnvName, Member, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref,
-};
+use crate::ir::{EntryField, EnvName, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref};
 
 /// The Go module path of the hand-written HTTP runtime the generated client
 /// drives. The import spells the path; Go resolves the package name

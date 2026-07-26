@@ -26,9 +26,7 @@ use crate::codegen::targets::typescript::render::TsRules;
 use crate::codegen::targets::typescript::types::{type_expr_of, TsVal, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
-use crate::ir::{
-    EntryField, EnvName, Member, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref,
-};
+use crate::ir::{EntryField, EnvName, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref};
 
 /// The runtime package (same one the loose-op client uses).
 use crate::codegen::targets::typescript::client::RUNTIME_PKG;
@@ -342,14 +340,7 @@ fn class_decl(
         if field.constraints.is_empty() {
             continue;
         }
-        let member = Member {
-            name: field.name.clone(),
-            target: field.target.clone(),
-            required: true,
-            default: None,
-            constraints: field.constraints.clone(),
-            traits: field.traits.clone(),
-        };
+        let member = crate::codegen::entries::field_as_member(field);
         for line in validation::guard_lines(&[member], &TsVal, "s.", config, LANG) {
             // The check reads the value bespoke left in place (client_init ran
             // already, bespoke wins), so presence is judged off the value
