@@ -213,3 +213,44 @@ fn a_module_without_entries_emits_nothing() {
     };
     assert!(entry_decls(&module, &ts_casing()).is_empty());
 }
+
+#[test]
+fn the_matrix_module_exercises_every_resolution_idiom() {
+    let module = crate::codegen::test_support::entries_matrix_module();
+    let out = text(&module);
+    // Typed boundaries: digit grammar, sign, and per-type ranges.
+    assert!(out.contains("n < -128 || n > 127"));
+    assert!(out.contains("n < -32768 || n > 32767"));
+    assert!(out.contains("n > 255"));
+    assert!(out.contains("-9223372036854775808n"));
+    assert!(out.contains("18446744073709551615n"));
+    assert!(out.contains("Number.isFinite(n)"));
+    assert!(out.contains("durationToMs(v)"));
+    assert!(out.contains("v === \"true\" || v === \"1\""));
+    // An enum field is a branded string: cast at the boundary, frozen.
+    assert!(out.contains("s.mode = v as Mode;"));
+    assert!(out.contains("values[\"mode\"] = s.mode;"));
+    // Guaranteed and why-tracked dynamic env names.
+    assert!(out.contains("readEnv(s.sureName)"));
+    assert!(out.contains("dynamicWhy = \"naming <- \" + namingWhy;"));
+    // Transforms compose innermost-first; the input placeholder renders empty.
+    assert!(out.contains("strUpperSnake(strPascal(strKebab(strSnake(("));
+    // Both select flavors, the guaranteed one failing on an undeclared value.
+    assert!(out.contains("case 1: {"));
+    assert!(out.contains(
+        "throw new Error(`sure_pick: match on sure_name: unmatched value ${String(s.sureName)}`);"
+    ));
+    // Composition with member chains, including an int member parse.
+    assert!(out.contains("composed.key = s.naming;"));
+    assert!(out.contains("composed.sure = s.sureName;"));
+    // Structured and whole-JSON sources honor explicit values.
+    assert!(out.contains("if (config.creds !== undefined) {"));
+    assert!(out.contains("s.credsArg = credsArg;"));
+    assert!(out.contains("s.tags = tags;"));
+    // The four method shapes: full descriptor, bare, primitive output, stub.
+    assert!(out.contains("async fetchNote(input: Note): Promise<Note> {"));
+    assert!(out.contains("async ping(): Promise<void> {"));
+    assert!(out.contains("async count(): Promise<number> {"));
+    assert!(out.contains("async local(input: Note): Promise<string> {"));
+    assert!(out.contains("operation has no transport binding"));
+}

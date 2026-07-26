@@ -374,3 +374,65 @@ fn an_operation_without_a_descriptor_stubs_with_a_contract_error() {
     assert!(!serde.contains("var saveNoteDescriptor"));
     assert!(serde.contains("errors.New(\"operation has no transport binding\")"));
 }
+
+#[test]
+fn the_matrix_module_exercises_every_resolution_idiom() {
+    let module = crate::codegen::test_support::entries_matrix_module();
+    let types = types_text(&module);
+    let serde = serde_text(&module);
+    // Typed boundaries: every env-parsed primitive spells its own parse.
+    assert!(serde.contains("strconv.ParseInt(v, 10, 8)"));
+    assert!(serde.contains("strconv.ParseInt(v, 10, 16)"));
+    assert!(serde.contains("strconv.ParseInt(v, 10, 64)"));
+    assert!(serde.contains("strconv.ParseUint(v, 10, 8)"));
+    assert!(serde.contains("strconv.ParseUint(v, 10, 64)"));
+    assert!(serde.contains("strconv.ParseFloat(v, 64)"));
+    assert!(serde.contains("time.ParseDuration(v)"));
+    assert!(serde.contains("case \"true\", \"1\":"));
+    // An enum field is a branded string: cast at the boundary, frozen into
+    // the values.
+    assert!(serde.contains("s.Mode = Mode(v)"));
+    assert!(serde.contains("values[\"mode\"] = string(s.Mode)"));
+    // Guaranteed and why-tracked dynamic env names both spell one balanced run.
+    assert!(serde.contains("os.LookupEnv(s.SureName)"));
+    assert!(serde.contains("dynamicWhy = \"naming <- \" + namingWhy"));
+    // Transforms compose innermost-first; the input placeholder renders empty.
+    assert!(serde.contains("strUpperSnake(strPascal(strKebab(strSnake(strings.ToUpper(strings.ToLower(strings.TrimSpace("));
+    // Both select flavors: why-tracked with an inline source arm, and a
+    // guaranteed one that fails construction on an undeclared value.
+    assert!(serde.contains("case 1:"));
+    assert!(serde.contains("pickedWhy = \"no source\""));
+    assert!(serde.contains(
+        "return nil, fmt.Errorf(\"sure_pick: match on sure_name: unmatched value %v\", s.SureName)"
+    ));
+    // Composition: binds layered over member chains, an int member parsing.
+    assert!(serde.contains("composed.Key = s.Naming"));
+    assert!(serde.contains("composed.Sure = s.SureName"));
+    assert!(serde.contains("strconv.ParseInt(v, 10, 32)"));
+    // Structured and whole-JSON sources honor explicit values.
+    assert!(serde.contains("if w.creds != nil {"));
+    assert!(serde.contains("s.CredsArg = credsArg"));
+    assert!(serde.contains("if w.labels != nil {"));
+    assert!(serde.contains("s.Tags = tags"));
+    // The four method shapes: full descriptor, bare, primitive output, stub.
+    assert!(
+        serde.contains("func (c *API) FetchNote(ctx context.Context, input Note) (Note, error) {")
+    );
+    assert!(serde.contains("func (c *API) Ping(ctx context.Context) error {"));
+    assert!(serde.contains("func (c *API) Count(ctx context.Context) (int32, error) {"));
+    assert!(
+        serde.contains("var zero string\n\treturn zero, &ContractError{ContractName: \"local\"")
+    );
+    // The entry doc rides the client type.
+    assert!(types.contains("// The matrix entry."));
+    let new_fn = serde
+        .split("func New(")
+        .nth(1)
+        .and_then(|rest| rest.split("\nfunc ").next())
+        .expect("New body");
+    assert_eq!(
+        new_fn.matches('{').count(),
+        new_fn.matches('}').count(),
+        "unbalanced braces in the generated constructor:\n{new_fn}"
+    );
+}
