@@ -105,6 +105,34 @@ fn go_type(t: &Tref) -> String {
     render_type(&type_expr_of(t), &GoRules::default())
 }
 
+/// The unexported Go name of a composed config type. A config is construction
+/// only (never on the wire, never named by a caller), so it is hidden from the
+/// package's public surface: an unexported type the SDK builds internally and
+/// exposes only through the (already public) resolved values.
+fn config_type_ident(id: &str) -> String {
+    let name = type_ident_from_id(id);
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => name,
+    }
+}
+
+/// The Go type spelling of an entry field, hiding a composed config behind its
+/// unexported name while every other type keeps its normal (wire) spelling.
+fn field_go_type(t: &Tref, module: &Module) -> String {
+    if let Tref::Ref { id, .. } = t {
+        if module
+            .shapes
+            .iter()
+            .any(|s| s.id == *id && matches!(s.kind, ShapeKind::Config { .. }))
+        {
+            return config_type_ident(id);
+        }
+    }
+    go_type(t)
+}
+
 /// The symbols a declared type references (for transitive import collection
 /// off a raw declaration): the cross-module refs a nominal type carries.
 fn push_type_symbols(t: &Tref, refs: &mut Vec<Symbol>) {

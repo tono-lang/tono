@@ -51,7 +51,9 @@ fn the_entry_class_replaces_the_generic_client_surface() {
     assert!(out.contains("export interface ClientConfig {"));
     assert!(out.contains("  clientName?: string;"));
     // Construction-only config interface.
-    assert!(out.contains("export interface Conf {"));
+    // The config interface is construction-only, hidden (not exported).
+    assert!(out.contains("interface Conf {"));
+    assert!(!out.contains("export interface Conf {"));
     // The descriptor is embedded verbatim and the method maps the outcome.
     assert!(out.contains("const saveNoteDescriptor: WireDescriptor = JSON.parse("));
     assert!(out.contains("async saveNote(input: Note): Promise<Note> {"));

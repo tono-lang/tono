@@ -169,8 +169,8 @@ export function decodeCredentials(raw: any): Credentials {
 }
 
 // Conf is a construction-only composition of the entry surface; it
-// never crosses the wire.
-export interface Conf {
+// never crosses the wire and is module-local (the SDK builds it).
+interface Conf {
   apiKey: string;
   region: string;
 }

@@ -38,8 +38,10 @@ fn the_construction_surface_is_new_options_settings_and_the_mock_interface() {
     assert!(types.contains("\tHTTPClient *http.Client\n"));
     assert!(types.contains("\tTransport  tonohttp.Transport\n"));
     assert!(types.contains("\tHeaders    map[string]string\n"));
-    // The config is a construction-only struct.
-    assert!(types.contains("type Conf struct {"));
+    // The config is a construction-only struct, hidden (unexported) from the
+    // package's public surface.
+    assert!(types.contains("type conf struct {"));
+    assert!(!types.contains("type Conf struct {"));
     // One functional option per @with field, unprefixed (single entry).
     assert!(types.contains("func WithClientName(v string) ClientOption {"));
     assert!(types.contains("func WithTimeout(v Duration) ClientOption {"));

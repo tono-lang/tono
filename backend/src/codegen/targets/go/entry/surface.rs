@@ -15,7 +15,7 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
             let ShapeKind::Config { fields } = &shape.kind else {
                 return None;
             };
-            let name = type_ident_from_id(&shape.id);
+            let name = config_type_ident(&shape.id);
             let members: String = fields
                 .iter()
                 .map(|f| {
@@ -29,7 +29,7 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
                 .collect();
             Some(Decl::raw(format!(
                 "// {name} is a construction-only composition of the entry surface; it\n\
-                 // never crosses the wire.\n\
+                 // never crosses the wire and is unexported (the SDK builds it).\n\
                  type {name} struct {{\n{members}}}"
             )))
         })
@@ -39,13 +39,18 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
 /// The `Settings` struct: every resolved entry field plus the transport slots
 /// the bespoke `client_init` hook may fill (native client or canonical
 /// transport, and the base headers a bespoke auth writes into).
-pub(super) fn settings_decl(entry: &EntryModel<'_>, n: &Names, config: &CasingConfig) -> Decl {
+pub(super) fn settings_decl(
+    entry: &EntryModel<'_>,
+    n: &Names,
+    config: &CasingConfig,
+    module: &Module,
+) -> Decl {
     let mut fields = String::new();
     for f in entry.declared() {
         fields.push_str(&format!(
             "{doc}\t{} {}\n",
             field_pascal(&f.name, config),
-            go_type(&f.target),
+            field_go_type(&f.target, module),
             doc = field_doc(&f.traits, "\t"),
         ));
     }
@@ -183,7 +188,7 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
     let mut decls = config_structs(module, config);
     for entry in &entries {
         let n = names(entry, multi);
-        decls.push(settings_decl(entry, &n, config));
+        decls.push(settings_decl(entry, &n, config, module));
         decls.extend(option_decls(entry, &n, multi));
         decls.extend(client_decls(entry, &n, config));
     }

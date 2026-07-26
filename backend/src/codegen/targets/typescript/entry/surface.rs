@@ -27,8 +27,8 @@ pub(super) fn config_interfaces(module: &Module, config: &CasingConfig) -> Vec<D
                 .collect();
             Some(Decl::raw(format!(
                 "// {name} is a construction-only composition of the entry surface; it\n\
-                 // never crosses the wire.\n\
-                 export interface {name} {{\n{members}}}"
+                 // never crosses the wire and is module-local (the SDK builds it).\n\
+                 interface {name} {{\n{members}}}"
             )))
         })
         .collect()

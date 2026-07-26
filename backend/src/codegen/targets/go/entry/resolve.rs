@@ -263,7 +263,7 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     fn config_open(&mut self, _field: &EntryField, shape: &Shape) -> Leaf {
-        Leaf(format!("var composed {}", type_ident_from_id(&shape.id)))
+        Leaf(format!("var composed {}", config_type_ident(&shape.id)))
     }
 
     /// The `@with` presence step of a non-guaranteed chain, relative to column

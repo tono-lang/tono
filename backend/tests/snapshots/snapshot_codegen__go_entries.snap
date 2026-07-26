@@ -107,9 +107,9 @@ func (e *Overloaded) Retryable() bool { return true }
 
 func (e *Overloaded) sdkError() {}
 
-// Conf is a construction-only composition of the entry surface; it
-// never crosses the wire.
-type Conf struct {
+// conf is a construction-only composition of the entry surface; it
+// never crosses the wire and is unexported (the SDK builds it).
+type conf struct {
 	APIKey string
 	Region string
 }
@@ -132,7 +132,7 @@ type Settings struct {
 	Endpoint string
 	Timeout Duration
 	MaxRetries int32
-	Settings Conf
+	Settings conf
 	Creds Credentials
 	Labels map[string]string
 
@@ -288,7 +288,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		s.MaxRetries = int32(3)
 	}
 	{
-		var composed Conf
+		var composed conf
 		composed.APIKey = s.APIKey
 		if v, ok := os.LookupEnv("REGION"); ok && v != "" {
 			composed.Region = v
