@@ -87,7 +87,13 @@ func main() {
 	}
 }
 EOF
-(cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 && go build ./... && go run ./verify)
+# The generated entry client drives the hand-written Go HTTP runtime; the
+# throwaway module resolves it from this repo, the way a consumer pins it.
+(cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 \
+    && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
+    && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
+    && go mod tidy >/dev/null 2>&1 \
+    && go build ./... && go run ./verify)
 
 echo "typescript..."
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"

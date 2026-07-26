@@ -18,11 +18,17 @@ src/**.tono ──frontend──▶ ir.json ──tono gen──▶ sdk/{rust,go
     exercise the hard wire cases: 64-bit integers (string on the wire), `bytes`
     (base64), an open enum and an int-backed enum, an internally-tagged union, a
     nullable field, a list, a map, and the well-known `uuid`/`timestamp` types.
-    It also declares an async HTTP operation with two declared errors, so the
-    SDKs carry the error taxonomy, the client surface, and per-operation error
-    discrimination. The `@http` binding is resolved into an opaque wire descriptor
-    the TypeScript SDK embeds and hands to the hand-written runtime
-    ([`runtimes/http-ts`](../../runtimes/http-ts)) at `runtime.execute`.
+    It also declares a `client` entry: a struct with the operation in its body,
+    whose fields carry construction sources (`@arg` for the API key, `@env` with
+    a `@default` for the endpoint, `@with` for timeout and retries). The entry
+    becomes the SDK construction surface: `New(apiKey, ...)` with functional
+    options in Go, `new Client(apiKey, config?)` in TypeScript, each resolving
+    the declared sources, validating, and freezing the resolved values for the
+    runtime. The `@http` binding is resolved into an opaque wire descriptor the
+    generated SDKs embed and hand to the hand-written runtimes
+    ([`runtimes/http-ts`](../../runtimes/http-ts),
+    [`runtimes/http-go`](../../runtimes/http-go)); the descriptor's endpoint,
+    header, timeout, and retry references resolve against those frozen values.
 - [`ir.json`](ir.json) — the canonical IR the frontend emits (the contract the
   backend consumes). Shape ids are module-qualified (`payments.charges#charge`).
 - [`sdk/`](sdk) — the generated source. Each module maps to an idiomatic

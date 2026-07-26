@@ -2,8 +2,13 @@
 
 package charges
 
+import "context"
 import "encoding/json"
+import "fmt"
+import "github.com/tono-lang/tono/runtimes/http-go"
+import "os"
 import "example.com/sdk/payments/common"
+import "time"
 
 func (c *Charge) UnmarshalJSON(b []byte) error {
 	type alias Charge
@@ -26,6 +31,105 @@ func (c *Charge) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// mustDescriptor parses a compiler-emitted descriptor literal at package
+// load; a parse failure is a build defect, never a runtime input.
+func mustDescriptor(literal string) *tonohttp.WireDescriptor {
+	d, err := tonohttp.ParseDescriptor([]byte(literal))
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+// encodeRecord turns a typed input into the wire record the runtime binds
+// from, through the type's own JSON tags.
+func encodeRecord(v any) (map[string]any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+var createChargeDescriptor = mustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[402,\"payments.charges#card_declined\",\"card_declined\",true],[404,\"payments.charges#not_found\",null]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}")
+
+// New constructs Client: positional @arg values, options for @with,
+// declared sources resolved top-down, client_init on top (bespoke wins),
+// then the declared validation.
+func New(apiKey string, opts ...ClientOption) (*Client, error) {
+	w := clientWiths{}
+	for _, opt := range opts {
+		opt(&w)
+	}
+	s := Settings{Headers: map[string]string{}}
+	s.APIKey = apiKey
+	if v, ok := os.LookupEnv("PAYMENTS_ENDPOINT"); ok && v != "" {
+		s.Endpoint = v
+	} else {
+		s.Endpoint = "https://api.payments.example.com"
+	}
+	if w.timeout != nil {
+		s.Timeout = *w.timeout
+	} else {
+		s.Timeout = Duration("10s")
+	}
+	if w.maxRetries != nil {
+		s.MaxRetries = *w.maxRetries
+	} else {
+		s.MaxRetries = int32(2)
+	}
+	violations := []Violation{}
+	if len([]rune(s.APIKey)) < 1 {
+		violations = append(violations, Violation{Field: "api_key", Constraint: "length", Message: "api_key length must be >= 1"})
+	}
+	if len(violations) > 0 {
+		return nil, &ValidationError{Violations: violations}
+	}
+	values := map[string]any{}
+	values["api_key"] = s.APIKey
+	values["endpoint"] = s.Endpoint
+	{
+		ms, err := durationMs(string(s.Timeout))
+		if err != nil {
+			return nil, fmt.Errorf("timeout: invalid duration %q", string(s.Timeout))
+		}
+		values["timeout"] = ms
+	}
+	values["max_retries"] = int64(s.MaxRetries)
+	runtime, err := tonohttp.New(tonohttp.Options{Client: s.HTTPClient, Transport: s.Transport, Headers: s.Headers, Values: values})
+	if err != nil {
+		return nil, err
+	}
+	return &Client{settings: s, runtime: runtime, hooks: nil}, nil
+}
+
+func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error) {
+	var zero Charge
+	record, err := encodeRecord(input)
+	if err != nil {
+		return zero, err
+	}
+	outcome, err := c.runtime.Execute(ctx, createChargeDescriptor, record, c.hooks)
+	if err != nil {
+		return zero, err
+	}
+	switch outcome.Kind {
+	case tonohttp.OutcomeTransport:
+		return zero, &TransportError{Cause: outcome.Cause}
+	case tonohttp.OutcomeError:
+		return zero, DecodeCreateChargeError(outcome.Status, []byte(outcome.Body))
+	}
+	var out Charge
+	if err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {
+		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	}
+	return out, nil
+}
+
 func DecodeCreateChargeError(status int, body []byte) error {
 	var probe struct {
 		Code string `json:"code"`
@@ -44,4 +148,14 @@ func DecodeCreateChargeError(status int, body []byte) error {
 		}
 	}
 	return &APIError{Status: status, Body: string(body)}
+}
+
+// durationMs parses a duration field for the runtime's millisecond value
+// positions.
+func durationMs(v string) (float64, error) {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, err
+	}
+	return float64(d) / float64(time.Millisecond), nil
 }

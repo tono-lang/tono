@@ -147,8 +147,3 @@ export class NotFoundError extends APIError {
     this.name = "NotFoundError";
   }
 }
-
-export interface Client {
-  /** Creates a charge. */
-  createCharge(input: Charge): Promise<Charge>;
-}
