@@ -702,6 +702,8 @@ fn op_method_decl(
     Decl::raw_with(text, refs)
 }
 
+#[cfg(test)]
+mod bespoke_tests;
 mod constructor;
 mod decode;
 mod impl_op;

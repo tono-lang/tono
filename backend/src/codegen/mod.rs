@@ -20,6 +20,7 @@ pub mod imports;
 pub mod layout;
 pub mod modules;
 pub mod ops;
+pub mod output;
 pub mod pipeline;
 pub mod reexport;
 pub mod render;
@@ -41,9 +42,8 @@ pub use format::{Formatted, Formatter};
 pub use group::{Audience, Group, Origin};
 pub use layout::check_go_layout;
 pub use modules::CodegenConfig;
-pub use pipeline::{
-    casing_for, generate, generate_target, parse_targets, GeneratedFile, TargetKind,
-};
+pub use output::{GeneratedFile, TargetKind};
+pub use pipeline::{casing_for, generate, generate_target, parse_targets};
 pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};
 pub use target::{Fragment, RenderRules, Target};
