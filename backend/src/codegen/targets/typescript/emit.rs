@@ -91,10 +91,26 @@ fn exported_in_text(decls: &[Decl]) -> Vec<String> {
     names
 }
 
+/// Whether `text` calls `name` as an identifier of its own, rather than merely
+/// containing those characters inside a longer one.
+fn calls(text: &str, name: &str) -> bool {
+    let boundary = |c: char| !(c.is_alphanumeric() || c == '_' || c == '$');
+    text.match_indices(name).any(|(at, _)| {
+        let before = text[..at].chars().next_back().is_none_or(boundary);
+        let after = text[at + name.len()..].chars().next().is_none_or(boundary);
+        before && after
+    })
+}
+
 /// Declare the symbols a group's declarations call from another group, so the
-/// engine collects the import. A raw body names a helper or a codec in text
-/// rather than through a symbol, so the reference is recovered from the text: a
-/// name is referenced exactly when it occurs in one of them.
+/// engine collects the import.
+///
+/// A raw body names a helper or a codec in text rather than through a symbol,
+/// so the reference is recovered from the text: a name is referenced exactly
+/// when the text calls it as an identifier. Recovering it is weaker than
+/// declaring it where the call is emitted (which is what the Go entry does);
+/// what it cannot do is invent a name, so the failure mode is an import nothing
+/// uses, not a name nothing imports.
 fn attach_text_refs(decls: &mut [Decl], names: &[(String, String)]) {
     let used: Vec<Symbol> = names
         .iter()
@@ -102,7 +118,7 @@ fn attach_text_refs(decls: &mut [Decl], names: &[(String, String)]) {
             decls
                 .iter()
                 .filter_map(raw_text)
-                .any(|text| text.contains(name.as_str()))
+                .any(|text| calls(text, name))
         })
         .map(|(name, module)| Symbol::imported(name.clone(), module.clone(), name.clone()))
         .collect();
@@ -216,6 +232,18 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
 
 #[cfg(test)]
 mod tests {
+    use super::calls;
+
+    #[test]
+    fn a_name_is_called_only_when_it_stands_on_its_own() {
+        assert!(calls("return encodeI64(v);", "encodeI64"));
+        assert!(calls("encodeI64", "encodeI64"));
+        // A longer identifier that merely contains the name is not a call to it,
+        // which is what would otherwise pull an import nothing uses.
+        assert!(!calls("decodeNotFoundError(x)", "decodeNotFound"));
+        assert!(!calls("myEncodeI64(v)", "encodeI64"));
+    }
+
     use super::*;
     use crate::codegen::group::{CODEC, TYPES};
     use crate::codegen::target::RenderRules;
