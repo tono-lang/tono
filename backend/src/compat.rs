@@ -191,11 +191,20 @@ pub fn diff(baseline: &Model, current: &Model) -> Report {
 /// Fold a model's shapes and operations into one id-keyed index. Operations live
 /// in a separate vec but are themselves shapes; ids are globally unique namespaced
 /// strings, so a flat cross-module index is correct.
+///
+/// Only what the SDK exposes is indexed. A declaration the layout routes to an
+/// internal group is emitted where no consumer can name it, so it never entered
+/// the compared surface and changing it cannot break anyone. Crossing the
+/// boundary is still a change: a shape that leaves the surface reads as removed,
+/// and one that joins it reads as added, which is exactly what they are.
 fn index(model: &Model) -> BTreeMap<&str, &Shape> {
+    let exposed = crate::codegen::visibility::derive(model);
     let mut m = BTreeMap::new();
     for module in &model.modules {
         for shape in module.shapes.iter().chain(module.operations.iter()) {
-            m.insert(shape.id.as_str(), shape);
+            if exposed.shape(shape) {
+                m.insert(shape.id.as_str(), shape);
+            }
         }
     }
     m
