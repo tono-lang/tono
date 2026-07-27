@@ -57,6 +57,15 @@ pub trait RenderRules {
 
     /// Render one declaration into rough but syntactically valid surface text.
     fn render_decl(&self, decl: &Decl) -> String;
+
+    /// How this target spells a reference to `symbol` where the tree does not
+    /// model the position (inside a raw item's text, through a
+    /// [`symbol_slot`](crate::codegen::tree::symbol_slot)). The bare name is
+    /// right for a language that imports names; a language that qualifies a
+    /// cross-unit reference with a package selector overrides this.
+    fn render_symbol(&self, symbol: &Symbol) -> String {
+        symbol.name.clone()
+    }
 }
 
 /// Declare a target's zero-sized struct and its [`Target`] impl from the

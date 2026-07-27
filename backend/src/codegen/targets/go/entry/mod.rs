@@ -23,7 +23,6 @@ use crate::codegen::extensions::{bound_extensions, hook_binding, impl_binding, B
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
-use crate::codegen::targets::go::render::GoRules;
 use crate::codegen::targets::go::types::{type_expr_of, GoVal, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
@@ -101,8 +100,23 @@ fn names(entry: &EntryModel<'_>, multi: bool) -> Names {
     }
 }
 
+/// The Go spelling of a type inside opaque text. An imported leaf renders as a
+/// slot, so the package selector (or its absence) is decided when the file is
+/// rendered; the caller declares the matching symbols with
+/// [`push_type_symbols`].
 pub(super) fn go_type(t: &Tref) -> String {
-    render_type(&type_expr_of(t), &GoRules::default())
+    render_type(&type_expr_of(t), &crate::codegen::targets::go::SlotRules)
+}
+
+/// The Go spelling of a type as *data*: the name that goes into a message a
+/// consumer reads, not into a code position. A slot would be wrong here twice
+/// over: it never reaches the renderer intact through a quoted literal, and a
+/// package selector is noise in an error string.
+pub(super) fn go_type_label(t: &Tref) -> String {
+    render_type(
+        &type_expr_of(t),
+        &crate::codegen::targets::go::GoRules::default(),
+    )
 }
 
 /// The unexported Go name of a composed config type. A config is construction
@@ -298,15 +312,16 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     EntryEmission { shared, per_entry }
 }
 
-/// The Go package selector the SDK's shared internal package is reached through.
-/// Raw text cannot go through the type renderer, so the qualification is spelled
-/// here; the import itself is still collected from [`shared_symbol`].
-const SHARED: &str = crate::codegen::layout::GO_ROOT_PACKAGE;
-
 /// A reference to a name in the SDK's shared internal package, so the import is
 /// collected wherever the raw text calls it.
 fn shared_symbol(name: &str) -> Symbol {
     Symbol::imported(name, crate::codegen::group::ROOT, name)
+}
+
+/// A shared helper named inside opaque text: a slot, so the package selector is
+/// applied (or dropped) when the file is rendered.
+fn shared_slot(name: &str) -> String {
+    crate::codegen::tree::symbol_slot(name)
 }
 
 /// The entry construction helpers, which serve every entry of every module and
@@ -383,8 +398,17 @@ fn casing_helper(name: &str, body: &str) -> Decl {
 /// The transform-application expression, innermost first in declared order.
 /// Only the language-specific `trim`/`lower`/`upper` spellings are Go's; the
 /// shared pipeline folds them and the case-fold helpers.
-fn apply_transforms(expr: String, transforms: &[String], helpers: &mut Helpers) -> String {
-    crate::codegen::entries::plan::apply_transforms(
+/// Fold the `@str::*` pipeline, declaring a reference for every shared helper it
+/// reaches: the helper lives in the SDK's shared package, so without the
+/// reference the call would render with no import behind it.
+fn apply_transforms(
+    expr: String,
+    transforms: &[String],
+    helpers: &mut Helpers,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    let before = helpers.transforms.len();
+    let out = crate::codegen::entries::plan::apply_transforms(
         expr,
         transforms,
         &mut helpers.transforms,
@@ -394,8 +418,15 @@ fn apply_transforms(expr: String, transforms: &[String], helpers: &mut Helpers) 
             "upper" => Some(format!("strings.ToUpper({out})")),
             _ => None,
         },
-        |name| format!("{SHARED}.{name}"),
-    )
+        shared_slot,
+    );
+    if helpers.transforms.len() != before || out.contains('\u{1}') {
+        refs.push(shared_symbol("StrTransformWords"));
+        for name in ["StrUpperSnake", "StrSnake", "StrKebab", "StrPascal"] {
+            refs.push(shared_symbol(name));
+        }
+    }
+    out
 }
 
 /// One `var <op>Descriptor = mustDescriptor(...)` per operation. The literal
@@ -409,8 +440,9 @@ fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
             let json = serde_json::to_string(descriptor).unwrap_or_else(|_| "null".into());
             Some(Decl::raw_with(
                 format!(
-                    "var {var} = {SHARED}.MustDescriptor({literal})",
+                    "var {var} = {helper}({literal})",
                     var = descriptor_var(n, op),
+                    helper = shared_slot("MustDescriptor"),
                     literal = go_string_literal(&json),
                 ),
                 vec![shared_symbol("MustDescriptor")],
@@ -624,6 +656,10 @@ fn op_method_decl(
         }
     };
     let (zero_decl, ret_zero) = zero_of(output);
+    // The zero value and the decode both name the output type in opaque text.
+    if let Some(t) = output {
+        push_type_symbols(t, &mut refs);
+    }
     let validate_block = validate_block(input, module, ret_zero, &fail);
     if wire_descriptor(op).is_none() {
         // No protocol binding: the operation is implemented by bespoke sources
@@ -649,8 +685,9 @@ fn op_method_decl(
     }
     let record = match input {
         Some(_) => format!(
-            "\trecord, err := {SHARED}.EncodeRecord(input)\n\
+            "\trecord, err := {encode}(input)\n\
              \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
+            encode = shared_slot("EncodeRecord"),
             fail_enc = fail("err".to_string()),
         ),
         None => "\tvar record map[string]any\n".to_string(),

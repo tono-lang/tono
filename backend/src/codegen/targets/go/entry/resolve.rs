@@ -429,7 +429,12 @@ impl Emitter for Resolver<'_, '_> {
         if !field.transforms.is_empty() {
             self.import("strings", "strings");
         }
-        let expr = apply_transforms(concat.join(" + "), &field.transforms, self.helpers);
+        let expr = apply_transforms(
+            concat.join(" + "),
+            &field.transforms,
+            self.helpers,
+            self.refs,
+        );
         format!("{dest} = {}", cast_string(&field.target, &expr))
     }
 
@@ -441,7 +446,7 @@ impl Emitter for Resolver<'_, '_> {
         }
         self.import("strings", "strings");
         let expr = self.as_string_expr(dest, &field.target);
-        let expr = apply_transforms(expr, &field.transforms, self.helpers);
+        let expr = apply_transforms(expr, &field.transforms, self.helpers, self.refs);
         Some(format!("{dest} = {}", cast_string(&field.target, &expr)))
     }
 

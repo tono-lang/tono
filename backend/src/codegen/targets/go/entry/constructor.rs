@@ -22,6 +22,12 @@ pub(super) fn new_decl(
 ) -> Decl {
     let en = error_names();
     let mut refs = vec![runtime_symbol()];
+    // Every declared field's type can surface in the body as a zero value, a
+    // default cast or a parse, all of them opaque text, so the references are
+    // declared once here rather than at each spelling.
+    for field in entry.declared() {
+        push_type_symbols(&field.target, &mut refs);
+    }
     let mut body = String::new();
 
     // Constructor signature: positional @arg fields, then the options.
@@ -176,12 +182,14 @@ pub(super) fn new_decl(
         let assign = if let Tref::Prim(Prim::Duration) = vp.target {
             helpers.duration_ms = true;
             refs.push(import("fmt", "fmt"));
+            refs.push(super::shared_symbol("DurationMs"));
             let fail = config_errorf(&format!(
                 "\"{path}: invalid duration %q\", string({expr})",
                 path = vp.path,
             ));
             format!(
-                "\t{{\n\t\tms, err := tono.DurationMs(string({expr}))\n\t\tif err != nil {{\n\t\t\t{fail}\n\t\t}}\n\t\tvalues[{path:?}] = ms\n\t}}\n",
+                "\t{{\n\t\tms, err := {duration}(string({expr}))\n\t\tif err != nil {{\n\t\t\t{fail}\n\t\t}}\n\t\tvalues[{path:?}] = ms\n\t}}\n",
+                duration = super::shared_slot("DurationMs"),
                 path = vp.path,
             )
         } else {

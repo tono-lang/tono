@@ -60,13 +60,19 @@ pub fn go_has_shared_package(model: &Model) -> bool {
         .any(crate::codegen::entries::has_entries)
 }
 
-/// Whether a Go SDK needs the SDK's module path to spell its imports.
-///
-/// Always: the shared support package is emitted for every SDK, so there is
-/// always a cross-package import, and Go has no relative ones. Kept as a
-/// function so the reason lives here rather than at the call site.
-pub fn go_needs_module_path(_model: &Model) -> bool {
-    true
+/// Whether a Go SDK emits more than the modules' own packages, which is what
+/// makes a cross-package import (and so a module path) unavoidable: a second
+/// module, the shared packages, or any declaration Go moves under `internal/`.
+pub fn go_needs_module_path(model: &Model) -> bool {
+    if model.modules.len() > 1 || go_has_shared_package(model) {
+        return true;
+    }
+    let exposed = crate::codegen::visibility::derive(model);
+    model
+        .modules
+        .iter()
+        .flat_map(|m| m.shapes.iter())
+        .any(|shape| !exposed.shape(shape))
 }
 
 /// Where a group's source file lands, relative to the output root.
@@ -261,9 +267,9 @@ pub fn check_go_layout(
     let shared = go_has_shared_package(&model);
     if go_needs_module_path(&model) && config.go_module.is_none() {
         return Err(
-            "Go output needs --go-module <path>: the SDK is more than one package \
-             (the shared types at least), and Go has no relative imports, so a \
-             cross-package import needs the SDK's module path"
+            "Go output with more than one package needs --go-module <path>: Go \
+             has no relative imports, so a cross-package import needs the SDK's \
+             module path"
                 .into(),
         );
     }

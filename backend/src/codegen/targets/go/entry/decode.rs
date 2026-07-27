@@ -11,7 +11,7 @@ use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::ir::{Module, Prim, ShapeKind, Tref};
 
-use super::{go_type, import};
+use super::{go_type_label, import};
 
 /// How the caller names the success payload, in the two spellings Go needs: as
 /// text (for the `Raw:`/`Body:` fields the taxonomy carries) and as bytes (for
@@ -50,7 +50,7 @@ pub(super) fn success_block(
             let fail_decode = fail(format!(
                 "&{decode}{{Path: \"$\", Expected: {expected:?}, Raw: {text}}}",
                 decode = en.decode,
-                expected = go_type(t),
+                expected = go_type_label(t),
             ));
             let parse = if matches!(p, Prim::U64) {
                 "strconv.ParseUint"
@@ -69,7 +69,7 @@ pub(super) fn success_block(
         }
         Some(t) => {
             refs.push(import("json", "encoding/json"));
-            let ty = go_type(t);
+            let ty = go_type_label(t);
             let fail_decode = fail(format!(
                 "&{decode}{{Path: \"$\", Expected: {ty:?}, Raw: {text}}}",
                 decode = en.decode,

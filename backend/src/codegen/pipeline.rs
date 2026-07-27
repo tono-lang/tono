@@ -6,8 +6,6 @@
 //! deterministic (no language formatter need be installed to test it). Running
 //! each language's real formatter and writing to disk is the CLI's job.
 
-use std::path::PathBuf;
-
 use crate::codegen::assemble::{emit_module_files, shared_file};
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::layout::{go_selector, output_path, repoint_to_groups, SameUnit};
@@ -114,6 +112,18 @@ fn emit_target(
             module, target, casing, union_ids, exposed,
         ));
     }
+    // With one module there is nothing to share, so the support declarations
+    // ride its public group instead of a group of their own.
+    if model.modules.len() == 1 {
+        if let Some(types) = module_files
+            .iter_mut()
+            .find(|f| f.group.name == crate::codegen::group::TYPES)
+        {
+            let mut decls = assemble::support_decls(target);
+            decls.append(&mut types.file.decls);
+            types.file.decls = decls;
+        }
+    }
     // One pass over the emitted groups records where each symbol ended up; the
     // references are then re-pointed at it, which is what keeps import
     // collection automatic now that a module spans several files.
@@ -138,6 +148,22 @@ fn emit_target(
         TargetKind::Go => Vec::new(),
     });
     files
+}
+
+/// Reject a file that still carries a symbol slot.
+///
+/// A slot is filled when the file is rendered, from the item's own references.
+/// One that survives means the emitter wrote the slot but not the reference, so
+/// the name would come out with no import behind it: a compile error in the
+/// generated SDK, and a confusing one. Catching it here names the file instead.
+fn reject_unfilled_slots(files: &[GeneratedFile]) -> Result<(), String> {
+    match files.iter().find(|f| f.text.contains('\u{1}')) {
+        Some(file) => Err(format!(
+            "codegen defect: {} names a symbol with no reference behind it",
+            file.path.display()
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Reject two files claiming the same path.
@@ -188,6 +214,7 @@ pub fn generate(
         ));
     }
     reject_duplicate_paths(&files)?;
+    reject_unfilled_slots(&files)?;
     Ok(files)
 }
 
@@ -208,6 +235,7 @@ pub fn generate_target(
     let (model, union_ids, exposed) = prepare(model, config);
     let files = emit_target(&model, target, casing, config, &union_ids, &exposed);
     reject_duplicate_paths(&files)?;
+    reject_unfilled_slots(&files)?;
     Ok(files)
 }
 
@@ -217,6 +245,7 @@ mod tests {
     use crate::codegen::layout::check_go_layout;
     use crate::codegen::test_support::{member, structure, union_shape};
     use crate::ir::{Module, Prim, Shape, ShapeKind, Tref};
+    use std::path::PathBuf;
 
     /// A model whose Go module carries a union, so Go splits into two files while
     /// Rust and TypeScript stay single-file.
@@ -297,14 +326,11 @@ mod tests {
             paths,
             vec![
                 format!("rust{sep}internal.rs"),
-                format!("rust{sep}support.rs"),
                 format!("rust{sep}payments{sep}types.rs"),
                 format!("rust{sep}lib.rs"),
                 format!("rust{sep}payments{sep}mod.rs"),
-                format!("go{sep}support{sep}support.go"),
                 format!("go{sep}payments{sep}types.go"),
                 format!("typescript{sep}internal.ts"),
-                format!("typescript{sep}support.ts"),
                 format!("typescript{sep}payments{sep}types.ts"),
                 format!("typescript{sep}payments{sep}codec.ts"),
                 format!("typescript{sep}payments{sep}index.ts"),
@@ -319,8 +345,9 @@ mod tests {
             .filter(|f| f.path.extension().is_some_and(|e| e != "json"))
             .all(|f| f.text.starts_with(BANNER)));
         assert!(text_at(&files, "rust/internal.rs").contains("pub mod i64_string"));
-        // The branded well-known types are the SDK's, not the module's.
-        assert!(text_at(&files, "rust/support.rs").contains("pub struct Timestamp"));
+        // One module shares nothing, so the branded well-known types ride its
+        // public group rather than a group of their own.
+        assert!(text_at(&files, "rust/payments/types.rs").contains("pub struct Timestamp"));
         assert!(text_at(&files, "rust/payments/types.rs").contains("pub struct Charge"));
         assert!(text_at(&files, "go/payments/types.go").contains("package payments"));
         assert!(text_at(&files, "go/payments/types.go").contains("type Charge struct"));
@@ -463,6 +490,19 @@ mod tests {
         };
         assert!(reject_duplicate_paths(&[file("a.go"), file("b.go")]).is_ok());
         let err = reject_duplicate_paths(&[file("a.go"), file("a.go")]).unwrap_err();
+        assert!(err.contains("a.go"));
+    }
+
+    #[test]
+    fn a_slot_with_no_reference_behind_it_is_a_defect() {
+        let file = |text: &str| GeneratedFile {
+            target: TargetKind::Go,
+            path: PathBuf::from("a.go"),
+            text: text.into(),
+        };
+        assert!(reject_unfilled_slots(&[file("func F() {}")]).is_ok());
+        let err =
+            reject_unfilled_slots(&[file(&crate::codegen::tree::symbol_slot("F"))]).unwrap_err();
         assert!(err.contains("a.go"));
     }
 
@@ -630,18 +670,8 @@ mod tests {
     fn a_single_segment_module_still_gets_its_own_package_directory() {
         // A module is a directory of groups in every target, so even the flat
         // single-module case nests: the groups need somewhere to sit together.
-        let config = CodegenConfig {
-            go_module: Some("example.com/sdk".into()),
-            ..CodegenConfig::default()
-        };
-        let files = generate(&demo_model(), &[TargetKind::Go], &config).unwrap();
-        assert_eq!(
-            paths_of(&files),
-            vec![
-                "go/support/support.go".to_string(),
-                "go/payments/types.go".to_string(),
-            ]
-        );
+        let files = generate(&demo_model(), &[TargetKind::Go], &CodegenConfig::default()).unwrap();
+        assert_eq!(paths_of(&files), vec!["go/payments/types.go".to_string()]);
     }
 
     #[test]

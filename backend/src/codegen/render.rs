@@ -52,7 +52,14 @@ pub fn render_file_with(
         if index > 0 {
             rough.push('\n');
         }
-        rough.push_str(&rules.render_decl(decl));
+        // Opaque text carries a slot where a reference could not be spelled at
+        // emission; the target spells it now, when the file it lands in is known.
+        let rendered = rules.render_decl(decl);
+        rough.push_str(&crate::codegen::tree::fill_symbol_slots(
+            &rendered,
+            crate::codegen::tree::item_refs(decl),
+            &|symbol| rules.render_symbol(symbol),
+        ));
         rough.push('\n');
     }
     formatter.run(&rough)

@@ -7,7 +7,7 @@
 //! can only say which IR module a type belongs to.
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::group::{Group, SymbolIndex};
+use crate::codegen::group::{self, Group, SymbolIndex};
 use crate::codegen::layout::repoint_to_groups;
 use crate::codegen::pipeline::TargetKind;
 use crate::codegen::targets::{go, rust, typescript};
@@ -58,17 +58,15 @@ pub(crate) fn support_decls(target: TargetKind) -> Vec<Decl> {
     }
 }
 
-/// The SDK-root support group's file.
+/// Where the support declarations land.
 ///
-/// Always emitted, even for one module: a target that qualifies a reference in
-/// text (Go names the package selector) bakes the qualification in at emission,
-/// so where these declarations live cannot be decided later without the two
-/// spellings disagreeing.
-pub(crate) fn support_file(_model: &Model, target: TargetKind) -> Option<ModuleFile> {
-    Some(ModuleFile::new(
-        Group::root_support(),
-        support_decls(target),
-    ))
+/// They exist to be one set of types for the whole SDK, so a single-module SDK
+/// has nothing to share and they ride that module's public group instead. The
+/// symbol tables name the support group either way; a reference in opaque text
+/// is a slot, so the spelling follows wherever the group landed rather than
+/// being fixed where the text is built.
+pub(crate) fn support_file(model: &Model, target: TargetKind) -> Option<ModuleFile> {
+    (model.modules.len() > 1).then(|| ModuleFile::new(Group::root_support(), support_decls(target)))
 }
 
 /// Record which group declares each symbol, so a reference from another group
@@ -80,6 +78,13 @@ pub(crate) fn build_index(files: &[ModuleFile]) -> SymbolIndex {
     for file in files {
         if let Some(module) = &file.group.module {
             index.set_default(module, &Group::types(module).path());
+        }
+    }
+    // With no root support group its declarations were folded into the single
+    // module's public group, so the name the symbol tables use resolves there.
+    if !files.iter().any(|f| f.group == Group::root_support()) {
+        if let Some(module) = files.iter().find_map(|f| f.group.module.as_deref()) {
+            index.set_default(group::ROOT_SUPPORT, &Group::types(module).path());
         }
     }
     for file in files {

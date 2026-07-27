@@ -92,6 +92,35 @@ fn type_params(params: &[String]) -> String {
 /// The Go spelling of each composite type construct; the recursion lives in the
 /// shared `syntax` driver. An `@entries` map is the generated generic `Entries[K,
 /// V]`, whose `MarshalJSON`/`UnmarshalJSON` carry each pair as a two-element array.
+/// Renders a type into opaque text: an imported leaf becomes a slot, so which
+/// package it resolves through is decided when the file is rendered rather than
+/// baked in where the text is built.
+pub struct SlotRules;
+
+impl TypeSyntax for SlotRules {
+    fn leaf(&self, symbol: &crate::codegen::symbol::Symbol) -> String {
+        match symbol.import {
+            Some(_) => crate::codegen::tree::symbol_slot(&symbol.name),
+            None => symbol.name.clone(),
+        }
+    }
+    fn list(&self, inner: &str) -> String {
+        format!("[]{inner}")
+    }
+    fn map(&self, key: &str, value: &str) -> String {
+        format!("map[{key}]{value}")
+    }
+    fn nullable(&self, inner: &str) -> String {
+        format!("*{inner}")
+    }
+    fn generic(&self, name: &str, args: &[String]) -> String {
+        format!("{name}[{}]", args.join(", "))
+    }
+    fn entries(&self, key: &str, value: &str) -> String {
+        format!("Entries[{key}, {value}]")
+    }
+}
+
 impl TypeSyntax for GoRules {
     fn leaf(&self, symbol: &crate::codegen::symbol::Symbol) -> String {
         // A reference to another SDK package is qualified with that package's
@@ -270,6 +299,13 @@ impl RenderRules for GoRules {
             }
             _ => format!("import \"{full}\""),
         }
+    }
+
+    /// A reference inside opaque text: the same rule the type renderer uses, so
+    /// a name from another package is qualified with its selector and a
+    /// same-package one stays bare.
+    fn render_symbol(&self, symbol: &crate::codegen::symbol::Symbol) -> String {
+        <Self as TypeSyntax>::leaf(self, symbol)
     }
 
     fn render_decl(&self, decl: &Decl) -> String {

@@ -78,6 +78,63 @@ pub struct Alias {
     pub value: String,
 }
 
+/// A placeholder for a reference inside opaque text, replaced when the file is
+/// rendered by the target's spelling of that symbol.
+///
+/// Opaque text is the one thing the engine cannot re-point the way it re-points
+/// the tree, so a name that may turn out to live in another compilation unit
+/// (Go writes a package selector for one) has to be written as a slot rather
+/// than spelled where it is emitted. The slot names the symbol; the emitter
+/// carries the matching `Symbol` in the item's `refs`, which is also what makes
+/// the import collected.
+///
+/// The delimiter is a control character, so it cannot occur in source a spec
+/// could produce.
+pub fn symbol_slot(name: &str) -> String {
+    format!("\u{1}{name}\u{1}")
+}
+
+/// Replace every [`symbol_slot`] in `text` with `spell(symbol)` for the matching
+/// reference. A slot with no matching reference keeps the bare name: the import
+/// would be missing either way, and a control character in the output would turn
+/// a missing declaration into an unreadable one.
+pub fn fill_symbol_slots(text: &str, refs: &[Symbol], spell: &dyn Fn(&Symbol) -> String) -> String {
+    if !text.contains('\u{1}') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut parts = text.split('\u{1}');
+    if let Some(first) = parts.next() {
+        out.push_str(first);
+    }
+    let mut in_slot = true;
+    for part in parts {
+        if in_slot {
+            match refs.iter().find(|s| s.name == part) {
+                Some(symbol) => out.push_str(&spell(symbol)),
+                None => out.push_str(part),
+            }
+        } else {
+            out.push_str(part);
+        }
+        in_slot = !in_slot;
+    }
+    out
+}
+
+/// The references an item declares, which is what a slot in its text resolves
+/// against. Only the items carrying opaque text have any.
+pub fn item_refs(decl: &Decl) -> &[Symbol] {
+    match decl {
+        Decl::Raw(raw) => &raw.refs,
+        Decl::Function(function) => {
+            let FnBody::Raw { refs, .. } = &function.body;
+            refs
+        }
+        _ => &[],
+    }
+}
+
 /// A fully-formed top-level item rendered verbatim, for constructs the shared
 /// node set does not model (an `impl` block, a helper module, a method with a
 /// receiver). Its `refs` declare the symbols the text references so import

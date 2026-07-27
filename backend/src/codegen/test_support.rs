@@ -236,7 +236,15 @@ pub fn error_demo_module() -> Module {
 pub fn rendered(decls: &[Decl], rules: &impl RenderRules) -> String {
     decls
         .iter()
-        .map(|d| rules.render_decl(d))
+        .map(|d| {
+            // Same last step the engine takes: a slot in opaque text is spelled
+            // by the target, so a test reads what the file would carry.
+            crate::codegen::tree::fill_symbol_slots(
+                &rules.render_decl(d),
+                crate::codegen::tree::item_refs(d),
+                &|symbol| rules.render_symbol(symbol),
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
