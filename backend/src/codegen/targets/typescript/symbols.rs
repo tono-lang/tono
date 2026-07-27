@@ -14,7 +14,7 @@ pub fn symbol_of(t: &Tref) -> Symbol {
 /// The TypeScript spelling of a primitive (the `typescript` column of the shared
 /// table).
 fn prim_symbol(p: &Prim) -> Symbol {
-    Symbol::builtin(prim_spelling(p).typescript)
+    crate::codegen::conventions::prim_symbol(p, prim_spelling(p).typescript)
 }
 
 #[cfg(test)]

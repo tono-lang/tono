@@ -3,3 +3,4 @@
 #[allow(dead_code)]
 mod internal;
 pub mod payments;
+pub mod support;

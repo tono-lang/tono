@@ -20,10 +20,19 @@ fn tmpdir(name: &str) -> PathBuf {
     dir
 }
 
-/// Run `tono gen` feeding `IR` on stdin; returns whether it succeeded.
+/// Run `tono gen` feeding `IR` on stdin; returns whether it succeeded. Go always
+/// emits more than one package, so the module path is always supplied.
 fn gen_via_stdin(out: &Path, target: &str) -> bool {
     let mut child = tono()
-        .args(["gen", "--target", target, "--out", out.to_str().unwrap()])
+        .args([
+            "gen",
+            "--target",
+            target,
+            "--out",
+            out.to_str().unwrap(),
+            "--go-module",
+            "example.com/sdk",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -317,7 +326,10 @@ fn manifest_drives_enabled_targets_and_out_dirs() {
 #[test]
 fn manifest_is_auto_discovered_from_a_subdirectory() {
     let base = tmpdir("m-discover");
-    write_manifest(&base, "[target.go]\nout = \"out/go\"\n");
+    write_manifest(
+        &base,
+        "[target.go]\nout = \"out/go\"\npackage = \"example.com/sdk\"\n",
+    );
     let nested = base.join("sub");
     std::fs::create_dir_all(&nested).unwrap();
     let out = gen_stdin_in(&nested, &[], IR);

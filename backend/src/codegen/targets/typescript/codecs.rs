@@ -148,16 +148,23 @@ fn ref_ids(t: &Tref) -> Vec<String> {
 /// file imports them from the types file: the shape's own type and, for a structure
 /// or union, any branded well-known type a member decode mentions.
 fn attach_type_refs(decls: Vec<Decl>, shape: &Shape, module: &str) -> Vec<Decl> {
-    let mut names: Vec<String> = vec![type_ident(shape, LANG)];
+    let mut refs: Vec<Symbol> = vec![{
+        let name = type_ident(shape, LANG);
+        Symbol::imported(name.clone(), module.to_string(), name)
+    }];
     if let ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } = &shape.kind {
         for member in members {
-            names.extend(branded_types(&member.target));
+            // A branded well-known type belongs to the SDK's shared support
+            // group, not to the module whose codec casts to it.
+            refs.extend(branded_types(&member.target).into_iter().map(|name| {
+                Symbol::imported(
+                    name.clone(),
+                    crate::codegen::group::ROOT_SUPPORT.to_string(),
+                    name,
+                )
+            }));
         }
     }
-    let refs: Vec<Symbol> = names
-        .into_iter()
-        .map(|name| Symbol::imported(name.clone(), module.to_string(), name))
-        .collect();
     decls
         .into_iter()
         .map(|decl| with_refs(decl, &refs))

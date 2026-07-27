@@ -7,11 +7,11 @@
 //! can only say which IR module a type belongs to.
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::group::{self, Group, SymbolIndex};
+use crate::codegen::group::{Group, SymbolIndex};
 use crate::codegen::layout::repoint_to_groups;
 use crate::codegen::pipeline::TargetKind;
 use crate::codegen::targets::{go, rust, typescript};
-use crate::codegen::tree::ModuleFile;
+use crate::codegen::tree::{Decl, ModuleFile};
 use crate::codegen::visibility::Exposed;
 use crate::ir::{Model, Module};
 
@@ -48,6 +48,29 @@ pub(crate) fn shared_file(
     (!decls.is_empty()).then(|| ModuleFile::new(Group::root_internal(), decls))
 }
 
+/// The SDK-root support group's declarations: the branded well-known types,
+/// which belong to the SDK rather than to any one module.
+pub(crate) fn support_decls(target: TargetKind) -> Vec<Decl> {
+    match target {
+        TargetKind::Rust => rust::codecs::well_known_decls(),
+        TargetKind::Go => go::emit::well_known_decls(),
+        TargetKind::TypeScript => typescript::emit::well_known_decls(),
+    }
+}
+
+/// The SDK-root support group's file.
+///
+/// Always emitted, even for one module: a target that qualifies a reference in
+/// text (Go names the package selector) bakes the qualification in at emission,
+/// so where these declarations live cannot be decided later without the two
+/// spellings disagreeing.
+pub(crate) fn support_file(_model: &Model, target: TargetKind) -> Option<ModuleFile> {
+    Some(ModuleFile::new(
+        Group::root_support(),
+        support_decls(target),
+    ))
+}
+
 /// Record which group declares each symbol, so a reference from another group
 /// resolves to the file that actually holds it rather than to the module as a
 /// whole. A symbol declared through opaque text is listed by the emitter
@@ -60,14 +83,14 @@ pub(crate) fn build_index(files: &[ModuleFile]) -> SymbolIndex {
         }
     }
     for file in files {
-        // Emitters build symbols against the IR module a type belongs to; the
-        // root group's own declarations are keyed on its path, which is what the
-        // emitters name when they reference a shared helper.
+        // Emitters build symbols against the IR module a type belongs to; a root
+        // group's own declarations are keyed on its path, which is what the
+        // emitters and the symbol tables name when they reference it.
         let owner = file
             .group
             .module
             .clone()
-            .unwrap_or_else(|| group::ROOT.to_string());
+            .unwrap_or_else(|| file.group.path());
         let path = file.group.path();
         for name in crate::codegen::imports::declared_symbols(&file.file.decls) {
             index.insert(&owner, &name, &path);

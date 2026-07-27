@@ -7,7 +7,8 @@ import {
   encodeBytes,
   encodeI64,
 } from "../../internal";
-import { CardDeclined, Charge, NotFound, Timestamp } from "./types";
+import { Timestamp } from "../../support";
+import { CardDeclined, Charge, NotFound } from "./types";
 import {
   decodePaymentMethod,
   decodeStatus,

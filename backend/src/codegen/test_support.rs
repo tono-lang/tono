@@ -242,14 +242,17 @@ pub fn rendered(decls: &[Decl], rules: &impl RenderRules) -> String {
 }
 
 /// Assert a symbol table maps each primitive to the expected in-code name and
-/// imports none of them.
+/// imports none of them, except a branded well-known type, which is a
+/// declaration of the SDK's shared support group.
 pub fn assert_prim_symbols(symbol_of: impl Fn(&Tref) -> Symbol, cases: &[(Prim, &str)]) {
     for (prim, expected) in cases {
         let symbol = symbol_of(&Tref::Prim(prim.clone()));
         assert_eq!(&symbol.name, expected, "{prim:?}");
+        let shared = matches!(prim, Prim::Timestamp | Prim::Date | Prim::Duration);
         assert_eq!(
-            symbol.import, None,
-            "primitives are not imported ({prim:?})"
+            symbol.import.is_some(),
+            shared,
+            "only a well-known primitive is imported ({prim:?})"
         );
     }
 }

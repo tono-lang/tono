@@ -101,14 +101,10 @@ pub fn emit_module(
         entries: uses_entries(module),
         variant: uses_union(module),
     };
-    // The branded well-known strings and the `Entries` container are part of the
-    // module's public surface (a struct field has one), and a method needs its
-    // receiver's package, so both stay here rather than in the shared package,
-    // which `internal/` would put out of a consumer's reach. The cost is that
-    // two modules' `Timestamp` are distinct named types: sharing them needs a
-    // *public* root group, which is a surface change of its own.
-    let mut type_decls = well_known_decls();
-    type_decls.extend(runtime_type_helpers(helpers));
+    // The `Entries` container stays with the module: its methods need its
+    // package, so it cannot move to the shared support group the way the
+    // branded well-known types do.
+    let mut type_decls = runtime_type_helpers(helpers);
     let mut codec_decls = runtime_serde_helpers(helpers);
     // A shape a public type reaches is public; the rest are the module's own
     // business and move to its internal group, taking their serialization with
@@ -265,9 +261,10 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].group.name, TYPES);
         let out = rendered(&files, TYPES);
-        // Well-known named strings and the tagged type are present; with no union and
-        // no @entries, no runtime helper and no import is emitted.
-        assert!(out.contains("type Timestamp string"));
+        // The branded well-known strings belong to the SDK's shared support
+        // group, not to the module, so only the tagged type is here; with no
+        // union and no @entries, no runtime helper is emitted either.
+        assert!(!out.contains("type Timestamp string"));
         assert!(out.contains("type Charge struct {"));
         // The type holds the 64-bit integer natively, tagged `,string`.
         assert!(out.contains("\tAmountCents int64 `json:\"amount_cents,string\"`\n"));

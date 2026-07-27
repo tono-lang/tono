@@ -166,6 +166,7 @@ fn emit_target(
 ) -> Vec<GeneratedFile> {
     let mut module_files: Vec<ModuleFile> =
         shared_file(model, target, casing).into_iter().collect();
+    module_files.extend(assemble::support_file(model, target));
     for module in &model.modules {
         module_files.extend(emit_module_files(
             module, target, casing, union_ids, exposed,
@@ -378,11 +379,14 @@ mod tests {
             paths,
             vec![
                 format!("rust{sep}internal.rs"),
+                format!("rust{sep}support.rs"),
                 format!("rust{sep}payments{sep}types.rs"),
                 format!("rust{sep}lib.rs"),
                 format!("rust{sep}payments{sep}mod.rs"),
+                format!("go{sep}support{sep}support.go"),
                 format!("go{sep}payments{sep}types.go"),
                 format!("typescript{sep}internal.ts"),
+                format!("typescript{sep}support.ts"),
                 format!("typescript{sep}payments{sep}types.ts"),
                 format!("typescript{sep}payments{sep}codec.ts"),
                 format!("typescript{sep}payments{sep}index.ts"),
@@ -397,6 +401,8 @@ mod tests {
             .filter(|f| f.path.extension().is_some_and(|e| e != "json"))
             .all(|f| f.text.starts_with(BANNER)));
         assert!(text_at(&files, "rust/internal.rs").contains("pub mod i64_string"));
+        // The branded well-known types are the SDK's, not the module's.
+        assert!(text_at(&files, "rust/support.rs").contains("pub struct Timestamp"));
         assert!(text_at(&files, "rust/payments/types.rs").contains("pub struct Charge"));
         assert!(text_at(&files, "go/payments/types.go").contains("package payments"));
         assert!(text_at(&files, "go/payments/types.go").contains("type Charge struct"));
@@ -706,8 +712,18 @@ mod tests {
     fn a_single_segment_module_still_gets_its_own_package_directory() {
         // A module is a directory of groups in every target, so even the flat
         // single-module case nests: the groups need somewhere to sit together.
-        let files = generate(&demo_model(), &[TargetKind::Go], &CodegenConfig::default()).unwrap();
-        assert_eq!(paths_of(&files), vec!["go/payments/types.go".to_string()]);
+        let config = CodegenConfig {
+            go_module: Some("example.com/sdk".into()),
+            ..CodegenConfig::default()
+        };
+        let files = generate(&demo_model(), &[TargetKind::Go], &config).unwrap();
+        assert_eq!(
+            paths_of(&files),
+            vec![
+                "go/support/support.go".to_string(),
+                "go/payments/types.go".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -130,9 +130,7 @@ fn runtime_helper_refs() -> Vec<(String, String)> {
 /// plain JSON-native types still always has codecs, so both files are emitted in
 /// practice, but the serde file is omitted when no codec is produced.
 pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) -> Vec<ModuleFile> {
-    // The branded well-known aliases are part of the module's public surface (an
-    // interface field has one), so they stay with the module's types.
-    let mut type_decls = well_known_decls();
+    let mut type_decls = Vec::new();
     let mut codec_decls = Vec::new();
     // A shape a public type reaches is public; the rest are the module's own
     // business and move to its internal group, taking their codecs with them.
@@ -295,10 +293,10 @@ mod tests {
         let files = groups(&module);
         assert_eq!(files.len(), 2, "TypeScript splits types from serde");
 
-        // The types file holds the branded aliases and the interface, with no codec
-        // and no runtime helper.
+        // The types file holds the interface, with no codec and no runtime
+        // helper; the branded aliases belong to the SDK's support group.
         let types = rendered(&files, TYPES);
-        assert!(types.contains("export type Timestamp = string"));
+        assert!(!types.contains("export type Timestamp = string"));
         assert!(types.contains("export interface Charge {"));
         assert!(types.contains("  amountCents: bigint;"));
         assert!(!types.contains("export function encodeI64"));

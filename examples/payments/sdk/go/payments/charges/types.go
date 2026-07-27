@@ -2,14 +2,9 @@
 
 package charges
 
+import "example.com/sdk/support"
 import "example.com/sdk/payments/common"
 import "strconv"
-
-type Timestamp string
-
-type LocalDate string
-
-type Duration string
 
 // A small payments API that exercises the hard wire cases end to end.
 type Charge struct {
@@ -22,7 +17,7 @@ type Charge struct {
 	Note     *string              `json:"note,omitempty"`
 	Tags     []string             `json:"tags"`
 	Metadata map[string]string    `json:"metadata"`
-	Created  Timestamp            `json:"created"`
+	Created  support.Timestamp    `json:"created"`
 	Status   common.Status        `json:"status"`
 	Method   common.PaymentMethod `json:"method"`
 }

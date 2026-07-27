@@ -3,6 +3,7 @@
 package charges
 
 import "example.com/sdk/internal/tono"
+import "example.com/sdk/support"
 import "context"
 import "encoding/json"
 import "fmt"
@@ -19,7 +20,7 @@ import "os"
 type Settings struct {
 	APIKey     string
 	Endpoint   string
-	Timeout    Duration
+	Timeout    support.Duration
 	MaxRetries int32
 
 	HTTPClient *http.Client
@@ -31,12 +32,12 @@ type Settings struct {
 type ClientOption func(*clientOptions)
 
 type clientOptions struct {
-	timeout    *Duration
+	timeout    *support.Duration
 	maxRetries *int32
 }
 
 // WithTimeout sets the timeout construction value.
-func WithTimeout(v Duration) ClientOption {
+func WithTimeout(v support.Duration) ClientOption {
 	return func(w *clientOptions) { w.timeout = &v }
 }
 
@@ -80,7 +81,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	if w.timeout != nil {
 		s.Timeout = *w.timeout
 	} else {
-		s.Timeout = Duration("10s")
+		s.Timeout = support.Duration("10s")
 	}
 	if w.maxRetries != nil {
 		s.MaxRetries = *w.maxRetries

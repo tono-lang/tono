@@ -48,9 +48,19 @@ pub const CODEC: &str = "codec";
 /// The generator-owned internal group, both at the SDK root and per module.
 pub const INTERNAL: &str = "internal";
 
+/// The generator-owned group holding what every module of the SDK shares and a
+/// consumer names: the branded well-known types.
+pub const SUPPORT: &str = "support";
+
 /// The SDK-root internal group's path, spelled out for the emitters that
 /// reference a shared helper from raw text and need to name where it lives.
 pub const ROOT: &str = "::internal";
+
+/// The SDK-root support group's path. A symbol table names it when it maps a
+/// well-known primitive, since those are one set of types for the whole SDK
+/// rather than one per module: two modules' `Timestamp` have to be the same
+/// type, or a value of one cannot be handed to the other.
+pub const ROOT_SUPPORT: &str = "::support";
 
 /// The separator between a group's module and its name in a group path. Two
 /// colons cannot occur in a dotted module name, so a path parses unambiguously
@@ -76,6 +86,17 @@ impl Group {
             name: INTERNAL.into(),
             origin: Origin::Generator,
             audience: Audience::Internal,
+        }
+    }
+
+    /// The SDK-root support group: the declarations every module shares and a
+    /// consumer names, so they are one set of types rather than one per module.
+    pub fn root_support() -> Self {
+        Self {
+            module: None,
+            name: SUPPORT.into(),
+            origin: Origin::Generator,
+            audience: Audience::Public,
         }
     }
 
@@ -217,6 +238,14 @@ mod tests {
             Some((Some("payments.common"), "types"))
         );
         assert_eq!(module_of(&group.path()), Some("payments.common"));
+    }
+
+    #[test]
+    fn the_root_support_group_is_public_and_generator_owned() {
+        let group = Group::root_support();
+        assert_eq!(group.path(), ROOT_SUPPORT);
+        assert!(!group.is_internal());
+        assert_eq!(group.origin, Origin::Generator);
     }
 
     #[test]

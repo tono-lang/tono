@@ -11,9 +11,7 @@
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::group::Group;
-use crate::codegen::targets::rust::codecs::{
-    open_enum_macro, runtime_helpers, well_known_decls, HelperSet,
-};
+use crate::codegen::targets::rust::codecs::{open_enum_macro, runtime_helpers, HelperSet};
 use crate::codegen::targets::rust::errors;
 use crate::codegen::targets::rust::types::{emit_serde, emit_type, emit_validators};
 use crate::codegen::tree::{Decl, ModuleFile, Raw};
@@ -30,12 +28,7 @@ use crate::ir::Module;
 /// plain structs with no wide integer, no bytes, and no open enum needs no serde
 /// file at all.
 pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) -> Vec<ModuleFile> {
-    // The branded well-known newtypes are part of the module's public surface (a
-    // struct field has one), so they stay with the module's types rather than in
-    // the shared module, which is crate-visible only. The cost is that two
-    // modules' `Timestamp` are distinct newtypes: sharing them needs a *public*
-    // root group, which is a surface change of its own.
-    let mut type_decls = well_known_decls();
+    let mut type_decls = Vec::new();
     let mut internal_type_decls = Vec::new();
     let mut codec_shape_decls = Vec::new();
     let mut hidden_serde_decls = Vec::new();
@@ -282,11 +275,11 @@ mod tests {
         };
         assert_eq!(groups(&module).len(), 1);
 
-        // The types group holds the branded newtype and the struct, and pulls only
-        // the i64 helper it uses from the shared module (no u64, no base64).
+        // The types group holds the struct and pulls only the i64 helper it uses
+        // from the shared module (no u64, no base64); the branded newtypes
+        // belong to the SDK's support group, not to the module.
         let types = rendered(&module, TYPES);
-        assert!(types.contains("#[serde(transparent)]"));
-        assert!(types.contains("pub struct Timestamp(pub String);"));
+        assert!(!types.contains("pub struct Timestamp(pub String);"));
         assert!(types.contains("use crate::internal::{i64_string};"));
         assert!(!types.contains("u64_string"));
         assert!(!types.contains("base64_bytes"));

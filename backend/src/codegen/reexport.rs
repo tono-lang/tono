@@ -76,12 +76,18 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
                     body.push_str(&format!("#[allow(dead_code)]\nmod {name};\n"));
                 }
             }
-            let uses: String = node
-                .files
-                .iter()
-                .filter(|(_, public)| **public)
-                .map(|(name, _)| format!("pub use {name}::*;\n"))
-                .collect();
+            // The crate root declares its children and stops there: flattening
+            // them into one namespace is the root barrel this layout refuses,
+            // and a consumer reaches a group by naming it.
+            let uses: String = if dir == root {
+                String::new()
+            } else {
+                node.files
+                    .iter()
+                    .filter(|(_, public)| **public)
+                    .map(|(name, _)| format!("pub use {name}::*;\n"))
+                    .collect()
+            };
             if !uses.is_empty() {
                 body.push('\n');
                 body.push_str(&uses);
@@ -102,13 +108,19 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
 /// resolve.
 pub fn typescript_barrels(groups: &[Group]) -> Vec<GeneratedFile> {
     let mut by_module: BTreeMap<&str, Vec<&Group>> = BTreeMap::new();
-    for group in groups {
-        if let Some(module) = group.module.as_deref() {
-            by_module.entry(module).or_default().push(group);
-        }
-    }
     let mut files = Vec::new();
     let mut exports: Vec<(String, String)> = Vec::new();
+    for group in groups {
+        match group.module.as_deref() {
+            Some(module) => by_module.entry(module).or_default().push(group),
+            // A public root group is its own entry point: it holds no module's
+            // declarations, so it needs no barrel, only a specifier.
+            None if !group.is_internal() => {
+                exports.push((format!("./{}", group.name), format!("./{}.ts", group.name)))
+            }
+            None => {}
+        }
+    }
     for (module, groups) in by_module {
         let dir = PathBuf::from(TargetKind::TypeScript.dir()).join(layout::module_dir(module));
         let body: String = groups
@@ -171,9 +183,9 @@ mod tests {
         // The shared group is a private module: unreachable from outside the crate.
         assert!(lib.contains("mod internal;"));
         assert!(!lib.contains("pub mod internal;"));
-        // No root barrel: the crate root declares modules, it does not flatten
-        // them into one namespace.
-        assert!(!lib.contains("pub use payments"));
+        // No root barrel: the crate root declares its children and does not
+        // flatten them into one namespace.
+        assert!(!lib.contains("pub use"));
     }
 
     #[test]
@@ -204,8 +216,12 @@ mod tests {
 
     #[test]
     fn the_package_exports_map_lists_the_barrels_and_nothing_else() {
-        let files = typescript_barrels(&payments());
+        let mut groups = payments();
+        groups.push(Group::root_support());
+        let files = typescript_barrels(&groups);
         let manifest = text_at(&files, "typescript/package.json");
+        // A public root group is an entry point of its own.
+        assert!(manifest.contains("\"./support\": \"./support.ts\""));
         assert!(manifest.contains("\"./payments/charges\": \"./payments/charges/index.ts\""));
         assert!(manifest.contains("\"./payments/common\": \"./payments/common/index.ts\""));
         // Nothing internal is reachable, and there is no root entry point that

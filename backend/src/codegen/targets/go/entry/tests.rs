@@ -45,7 +45,7 @@ fn the_construction_surface_is_new_options_settings_and_the_mock_interface() {
     assert!(!types.contains("type Conf struct {"));
     // One functional option per @with field, unprefixed (single entry).
     assert!(types.contains("func WithClientName(v string) ClientOption {"));
-    assert!(types.contains("func WithTimeout(v Duration) ClientOption {"));
+    assert!(types.contains("func WithTimeout(v support.Duration) ClientOption {"));
     assert!(types.contains("func WithMaxRetries(v int32) ClientOption {"));
     // The mock interface has ctx first and the conformance assertion.
     assert!(types.contains("type ClientAPI interface {"));

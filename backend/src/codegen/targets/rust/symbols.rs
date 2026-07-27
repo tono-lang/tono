@@ -13,7 +13,7 @@ pub fn symbol_of(t: &Tref) -> Symbol {
 
 /// The Rust spelling of a primitive (the `rust` column of the shared table).
 fn prim_symbol(p: &Prim) -> Symbol {
-    Symbol::builtin(prim_spelling(p).rust)
+    crate::codegen::conventions::prim_symbol(p, prim_spelling(p).rust)
 }
 
 #[cfg(test)]

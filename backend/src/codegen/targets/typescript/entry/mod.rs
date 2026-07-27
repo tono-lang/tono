@@ -96,6 +96,11 @@ fn field_doc(traits: &[crate::ir::Trait], indent: &str) -> String {
     )
 }
 
+/// A reference to a declaration of the SDK's shared support group.
+fn support_symbol(name: &str) -> Symbol {
+    Symbol::imported(name, crate::codegen::group::ROOT_SUPPORT, name)
+}
+
 pub(super) fn module_symbol(name: &str, module: &Module) -> Symbol {
     Symbol::imported(name.to_string(), module.name.clone(), name.to_string())
 }
@@ -104,9 +109,10 @@ pub(super) fn module_symbol(name: &str, module: &Module) -> Symbol {
 /// branded well-known aliases and any named shape.
 fn type_refs(t: &Tref, module: &Module) -> Vec<Symbol> {
     match t {
-        Tref::Prim(Prim::Timestamp) => vec![module_symbol("Timestamp", module)],
-        Tref::Prim(Prim::Date) => vec![module_symbol("LocalDate", module)],
-        Tref::Prim(Prim::Duration) => vec![module_symbol("Duration", module)],
+        // A branded well-known type is the SDK's, not the module's.
+        Tref::Prim(Prim::Timestamp) => vec![support_symbol("Timestamp")],
+        Tref::Prim(Prim::Date) => vec![support_symbol("LocalDate")],
+        Tref::Prim(Prim::Duration) => vec![support_symbol("Duration")],
         Tref::Ref { id, .. } => {
             // A config interface lives in this same serde file (it is part of
             // the entry surface), so it needs no companion import.

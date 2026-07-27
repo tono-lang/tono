@@ -2,12 +2,6 @@
 
 package common
 
-type Timestamp string
-
-type LocalDate string
-
-type Duration string
-
 type Status string
 
 const (

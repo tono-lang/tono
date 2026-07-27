@@ -39,8 +39,10 @@ src/**.tono ──frontend──▶ ir.json ──tono gen──▶ sdk/{rust,go
   mechanism: in Go a package under `internal/`, which the toolchain refuses to
   resolve from outside the SDK, so the module's own package holds only files
   named for what they contain; in Rust a crate-visible `mod`; in TypeScript a
-  file left out of the package's `exports`. What crosses module boundaries (the
-  runtime helpers) sits in the SDK-root internal group. Each module re-exports
+  file left out of the package's `exports`. What crosses module boundaries sits
+  in an SDK-root group: `support` for what a consumer names (the branded
+  well-known types, so two modules' `Timestamp` are one type), `internal` for
+  the runtime helpers. Each module re-exports
   its public groups (a `pub use` in Rust, a barrel in TypeScript); there is no
   root barrel aggregating the modules.
 

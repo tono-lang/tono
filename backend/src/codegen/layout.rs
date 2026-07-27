@@ -34,6 +34,10 @@ use crate::ir::Model;
 /// to be one no module can take (see [`check_go_layout`]).
 pub(crate) const GO_ROOT_PACKAGE: &str = "tono";
 
+/// The Go package name of the SDK-root support group. Public, so it sits beside
+/// the modules rather than under `internal/`: a consumer names these types.
+pub(crate) const GO_SUPPORT_PACKAGE: &str = group::SUPPORT;
+
 /// The Go package name / Rust module leaf for a dotted module: its last segment.
 pub(crate) fn package_name(module: &str) -> &str {
     module.rsplit('.').next().unwrap_or(module)
@@ -56,19 +60,13 @@ pub fn go_has_shared_package(model: &Model) -> bool {
         .any(crate::codegen::entries::has_entries)
 }
 
-/// Whether a Go SDK emits more than the modules' own packages, which is what
-/// makes a cross-package import (and so a module path) unavoidable: the shared
-/// helpers, or any declaration Go moves under `internal/`.
-pub fn go_needs_module_path(model: &Model) -> bool {
-    if go_has_shared_package(model) || model.modules.len() > 1 {
-        return true;
-    }
-    let exposed = crate::codegen::visibility::derive(model);
-    model
-        .modules
-        .iter()
-        .flat_map(|m| m.shapes.iter())
-        .any(|shape| !exposed.shape(shape))
+/// Whether a Go SDK needs the SDK's module path to spell its imports.
+///
+/// Always: the shared support package is emitted for every SDK, so there is
+/// always a cross-package import, and Go has no relative ones. Kept as a
+/// function so the reason lives here rather than at the call site.
+pub fn go_needs_module_path(_model: &Model) -> bool {
+    true
 }
 
 /// Where a group's source file lands, relative to the output root.
@@ -82,10 +80,13 @@ pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
         // module's public package holds only files named for what they contain.
         // Rust and TypeScript need no relocation: a private module and an
         // unlisted subpath fence a file in place.
-        (None, TargetKind::Go) => root
+        (None, TargetKind::Go) if grp.is_internal() => root
             .join("internal")
             .join(GO_ROOT_PACKAGE)
             .join(format!("{GO_ROOT_PACKAGE}.{ext}")),
+        (None, TargetKind::Go) => root
+            .join(GO_SUPPORT_PACKAGE)
+            .join(format!("{GO_SUPPORT_PACKAGE}.{ext}")),
         (None, _) => root.join(format!("{}.{ext}", grp.name)),
         (Some(module), TargetKind::Go) if grp.is_internal() && !grp.is_colocated() => root
             .join("internal")
@@ -126,7 +127,11 @@ pub fn same_go_package(a: &str, b: &str) -> bool {
 /// `None` when the path is not a group path.
 fn go_package_of(path: &str) -> Option<(&str, bool)> {
     let (module, name) = group::parse_path(path)?;
-    Some((module?, name == group::INTERNAL))
+    match module {
+        // Each SDK-root group is a package of its own.
+        None => Some((name, false)),
+        Some(module) => Some((module, name == group::INTERNAL)),
+    }
 }
 
 /// The Rust crate path of a group, or `None` when the path is not a group path
@@ -144,7 +149,8 @@ pub fn rust_path(path: &str) -> Option<String> {
 pub fn go_import(go_module: &str, path: &str) -> Option<String> {
     let (module, name) = group::parse_path(path)?;
     Some(match module {
-        None => format!("{go_module}/internal/{GO_ROOT_PACKAGE}"),
+        None if name == group::INTERNAL => format!("{go_module}/internal/{GO_ROOT_PACKAGE}"),
+        None => format!("{go_module}/{GO_SUPPORT_PACKAGE}"),
         Some(module) if name == group::INTERNAL => {
             format!("{go_module}/internal/{}", module.replace('.', "/"))
         }
@@ -155,9 +161,10 @@ pub fn go_import(go_module: &str, path: &str) -> Option<String> {
 /// The Go package selector a group is referenced through (its directory's last
 /// segment), or `None` when the path is not a group path.
 pub fn go_selector(path: &str) -> Option<String> {
-    let (module, _) = group::parse_path(path)?;
+    let (module, name) = group::parse_path(path)?;
     Some(match module {
-        None => GO_ROOT_PACKAGE.to_string(),
+        None if name == group::INTERNAL => GO_ROOT_PACKAGE.to_string(),
+        None => GO_SUPPORT_PACKAGE.to_string(),
         // The relocated group keeps the module's name as its package name; it is
         // only ever referenced from inside itself, so the two never collide.
         Some(module) => package_name(module).to_string(),
@@ -254,9 +261,9 @@ pub fn check_go_layout(
     let shared = go_has_shared_package(&model);
     if go_needs_module_path(&model) && config.go_module.is_none() {
         return Err(
-            "Go output with more than one package needs --go-module <path>: Go has \
-             no relative imports, so a cross-package import needs the SDK's module \
-             path"
+            "Go output needs --go-module <path>: the SDK is more than one package \
+             (the shared types at least), and Go has no relative imports, so a \
+             cross-package import needs the SDK's module path"
                 .into(),
         );
     }
