@@ -5,7 +5,7 @@ package charges
 import "context"
 import "encoding/json"
 import "fmt"
-import "github.com/tono-lang/tono/runtimes/http-go"
+import tonohttp "github.com/tono-lang/tono/runtimes/http-go"
 import "os"
 import "example.com/sdk/payments/common"
 import "time"

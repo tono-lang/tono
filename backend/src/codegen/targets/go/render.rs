@@ -17,6 +17,19 @@ use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, FnBody, Function, Method, TypeExpr};
 
+/// Whether `s` is a legal Go identifier (so Go can infer a package selector from
+/// an import path segment). A hyphenated segment like `http-go` is not, and needs
+/// an explicit import alias.
+fn is_go_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {
+            chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+        }
+        _ => false,
+    }
+}
+
 /// A godoc comment prefix for a documented element, indented and newline-terminated,
 /// or empty when there is no doc. The Markdown is flattened to plain text (godoc is
 /// not Markdown) and sits directly above the declaration.
@@ -227,20 +240,35 @@ impl GoRules {
 }
 
 impl RenderRules for GoRules {
-    fn render_import(&self, _from_module: &str, module: &str, _names: &[&str]) -> String {
+    fn render_import(&self, _from_module: &str, module: &str, names: &[&str]) -> String {
         // Go imports the whole package, so the per-symbol names play no part. An
         // SDK module is a package sub-path (payments.common -> payments/common)
         // prefixed with the SDK's Go module path so it resolves; a standard-library
         // import (encoding/json, fmt) and an external module path (which already
         // carries slashes, and whose dots are host-name dots) are left verbatim.
+        let is_internal = self.go_module.is_some() && self.internal_modules.contains(module);
         let full = match &self.go_module {
-            Some(root) if self.internal_modules.contains(module) => {
+            Some(root) if is_internal => {
                 format!("{root}/{}", module.replace('.', "/"))
             }
             _ if module.contains('/') => module.to_string(),
             _ => module.replace('.', "/"),
         };
-        format!("import \"{full}\"")
+        // Go infers the package selector from the path's last segment, but only
+        // when that segment is a legal identifier. The runtimes/http-go package
+        // clause is `tonohttp` and `http-go` is not an identifier (the hyphen),
+        // so the reference cannot resolve without an explicit alias. Emit it in
+        // that case, taking the alias from the import name. A legal-identifier
+        // segment (every stdlib package, every internal SDK module, the flat
+        // single-package layout) stays bare, so the `imported` slot (reused for
+        // the referenced symbol name in those layouts) is correctly ignored.
+        let inferred = full.rsplit('/').next().unwrap_or(&full);
+        match names.first() {
+            Some(alias) if !is_internal && !is_go_ident(inferred) => {
+                format!("import {alias} \"{full}\"")
+            }
+            _ => format!("import \"{full}\""),
+        }
     }
 
     fn render_decl(&self, decl: &Decl) -> String {
@@ -319,6 +347,17 @@ mod tests {
         assert_eq!(
             rules.render_import("payments.charges", "encoding/json", &[]),
             "import \"encoding/json\""
+        );
+        // An external package whose path segment is not a legal identifier (the
+        // runtime's http-go) carries its alias explicitly, so the tonohttp.X
+        // references resolve without leaning on the package clause.
+        assert_eq!(
+            rules.render_import(
+                "payments.charges",
+                "github.com/tono-lang/tono/runtimes/http-go",
+                &["tonohttp"]
+            ),
+            "import tonohttp \"github.com/tono-lang/tono/runtimes/http-go\""
         );
     }
 

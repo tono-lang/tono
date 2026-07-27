@@ -6,7 +6,7 @@ expression: "render_files(files, &go::GoRules::default(), \"go\", Some(&header))
 package notes
 
 import "context"
-import "github.com/tono-lang/tono/runtimes/http-go"
+import tonohttp "github.com/tono-lang/tono/runtimes/http-go"
 import "net/http"
 import "strconv"
 
@@ -149,8 +149,8 @@ type clientOptions struct {
 	maxRetries *int32
 }
 
-// Names the caller.
 // WithClientName sets the client_name construction value.
+// Names the caller.
 func WithClientName(v string) ClientOption {
 	return func(w *clientOptions) { w.clientName = &v }
 }
@@ -186,7 +186,7 @@ import "bytes"
 import "context"
 import "encoding/json"
 import "fmt"
-import "github.com/tono-lang/tono/runtimes/http-go"
+import tonohttp "github.com/tono-lang/tono/runtimes/http-go"
 import "os"
 import "strings"
 import "time"

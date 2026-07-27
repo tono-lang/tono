@@ -352,8 +352,10 @@ fn field_docs_flow_onto_the_settings_field_and_the_with_option() {
     let module = fixture_module();
     let types = types_text(&module);
     assert!(types.contains("\t// Names the caller.\n\tClientName string"));
+    // godoc needs the identifier first, so the canonical sentence leads and the
+    // @doc line follows as continuation.
     assert!(types.contains(
-        "// Names the caller.\n// WithClientName sets the client_name construction value."
+        "// WithClientName sets the client_name construction value.\n// Names the caller."
     ));
 }
 

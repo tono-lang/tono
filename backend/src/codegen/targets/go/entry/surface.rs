@@ -97,9 +97,12 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
             "with_{}",
             companion_name(entry.name, &display, multi)
         ));
+        // godoc reads a doc comment as documentation only when it opens with the
+        // declared identifier, so the canonical sentence leads and any @doc /
+        // @deprecated lines follow as continuation.
         decls.push(Decl::raw(format!(
-            "{doc}// {fn_name} sets the {field} construction value.\n\
-             func {fn_name}(v {ty}) {option} {{\n\treturn func(w *{carrier_ty}) {{ w.{member} = &v }}\n}}",
+            "// {fn_name} sets the {field} construction value.\n\
+             {doc}func {fn_name}(v {ty}) {option} {{\n\treturn func(w *{carrier_ty}) {{ w.{member} = &v }}\n}}",
             field = f.name,
             ty = go_type(&f.target),
             option = n.option,

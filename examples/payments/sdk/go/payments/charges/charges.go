@@ -3,7 +3,7 @@
 package charges
 
 import "context"
-import "github.com/tono-lang/tono/runtimes/http-go"
+import tonohttp "github.com/tono-lang/tono/runtimes/http-go"
 import "net/http"
 import "example.com/sdk/payments/common"
 import "strconv"
