@@ -8,8 +8,8 @@
     "skipLibCheck": true,
     "noEmitOnError": true,
     "forceConsistentCasingInFileNames": true,
-    "rootDir": "work",
-    "outDir": "dist"
+    "rootDir": "work-conformance",
+    "outDir": "work-conformance/dist"
   },
-  "include": ["work/**/*.ts"]
+  "include": ["work-conformance/**/*.ts"]
 }

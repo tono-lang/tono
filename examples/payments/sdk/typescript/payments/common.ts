@@ -17,5 +17,4 @@ export interface BankAccount {
 }
 
 export type PaymentMethod =
-  | ({ kind: "card" } & Card)
-  | ({ kind: "bank" } & BankAccount);
+  ({ kind: "card" } & Card) | ({ kind: "bank" } & BankAccount);

@@ -35,7 +35,7 @@ jobs:
       # The CLI tooling tests shell out to the OCaml frontend and the Go
       # toolchain; without them those tests skip and the cli crate's coverage
       # collapses.
-      - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3
+      - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
         if: env.SONAR_TOKEN != ''
         with:
           ocaml-compiler: "5.2"
@@ -51,7 +51,7 @@ jobs:
       - name: Generate Rust coverage for Sonar
         if: env.SONAR_TOKEN != ''
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         if: env.SONAR_TOKEN != ''
         with:
           node-version: 20

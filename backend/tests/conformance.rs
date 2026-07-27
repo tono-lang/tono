@@ -165,20 +165,11 @@ fn ts_output() -> Option<Value> {
             .expect("write ts models source");
     }
     std::fs::write(work.join("conformance.ts"), ts_driver()).expect("write conformance.ts");
+    // Naming the sources on the command line makes tsc ignore any tsconfig in
+    // scope, which it now rejects outright, so the settings live in a project
+    // file of their own next to the round-trip one.
     let compile = Command::new(&tsc)
-        .args([
-            "work-conformance/models.ts",
-            "work-conformance/models_serde.ts",
-            "work-conformance/conformance.ts",
-            "--outDir",
-            "work-conformance/dist",
-            "--target",
-            "ES2020",
-            "--module",
-            "commonjs",
-            "--lib",
-            "ES2020,DOM",
-        ])
+        .args(["-p", "tsconfig.conformance.json"])
         .current_dir(&ws)
         .output()
         .expect("run tsc");
