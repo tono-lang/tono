@@ -8,13 +8,17 @@
 //! built-ins, so a module of plain JSON-native types still gets only a types file.
 
 use crate::codegen::casing::CasingConfig;
+use crate::codegen::group::Group;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::client;
-use crate::codegen::targets::typescript::codecs::{emit_codecs, runtime_helpers};
+use crate::codegen::targets::typescript::codecs::{
+    emit_codecs, runtime_helpers, RUNTIME_HELPER_NAMES,
+};
 use crate::codegen::targets::typescript::errors;
 use crate::codegen::targets::typescript::types::{emit_type, emit_validators};
-use crate::codegen::tree::{Alias, Decl, File, ModuleFile};
+use crate::codegen::tree::{Alias, Decl, FnBody, ModuleFile};
 use crate::codegen::validation;
+use crate::codegen::visibility::Exposed;
 use crate::ir::Module;
 
 /// The branded well-known type aliases: zero-dependency nominal types that are a
@@ -31,6 +35,93 @@ pub fn well_known_decls() -> Vec<Decl> {
         .collect()
 }
 
+/// The SDK-root group's declarations: the codec runtime helpers every module's
+/// codecs call. They serve no module in particular, so the whole SDK carries one
+/// copy instead of one per module.
+pub fn shared_decls() -> Vec<Decl> {
+    runtime_helpers()
+}
+
+/// The text of a declaration that carries opaque source, or `None` for one the
+/// tree models structurally.
+fn raw_text(decl: &Decl) -> Option<&str> {
+    match decl {
+        Decl::Function(f) => {
+            let FnBody::Raw { text, .. } = &f.body;
+            Some(text)
+        }
+        Decl::Raw(raw) => Some(&raw.text),
+        _ => None,
+    }
+}
+
+/// The top-level names a group declares through opaque text. The tree cannot be
+/// read for them (that is what makes the text opaque), so they are recovered
+/// from it: an exported declaration is a line starting with `export` and naming
+/// what it declares.
+fn exported_in_text(decls: &[Decl]) -> Vec<String> {
+    let mut names = Vec::new();
+    for text in decls.iter().filter_map(raw_text) {
+        for line in text.lines() {
+            let Some(rest) = line.strip_prefix("export ") else {
+                continue;
+            };
+            let mut words = rest.split_whitespace();
+            let (Some(keyword), Some(name)) = (words.next(), words.next()) else {
+                continue;
+            };
+            if !matches!(
+                keyword,
+                "function" | "const" | "class" | "interface" | "type" | "abstract"
+            ) {
+                continue;
+            }
+            let name: String = name
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Declare the symbols a group's declarations call from another group, so the
+/// engine collects the import. A raw body names a helper or a codec in text
+/// rather than through a symbol, so the reference is recovered from the text: a
+/// name is referenced exactly when it occurs in one of them.
+fn attach_text_refs(decls: &mut [Decl], names: &[(String, String)]) {
+    let used: Vec<Symbol> = names
+        .iter()
+        .filter(|(name, _)| {
+            decls
+                .iter()
+                .filter_map(raw_text)
+                .any(|text| text.contains(name.as_str()))
+        })
+        .map(|(name, module)| Symbol::imported(name.clone(), module.clone(), name.clone()))
+        .collect();
+    if used.is_empty() {
+        return;
+    }
+    if let Some(Decl::Function(first)) = decls.iter_mut().find(|d| matches!(d, Decl::Function(_))) {
+        let FnBody::Raw { refs, .. } = &mut first.body;
+        refs.extend(used);
+    } else if let Some(Decl::Raw(first)) = decls.iter_mut().find(|d| matches!(d, Decl::Raw(_))) {
+        first.refs.extend(used);
+    }
+}
+
+/// The shared runtime helpers, paired with the group that declares them.
+fn runtime_helper_refs() -> Vec<(String, String)> {
+    RUNTIME_HELPER_NAMES
+        .iter()
+        .map(|name| ((*name).to_string(), crate::codegen::group::ROOT.to_string()))
+        .collect()
+}
+
 /// Assemble a TypeScript module into separate output files: a types file (the
 /// branded well-known aliases and each shape's type declaration) and, when there is
 /// anything to serialize, a serde file (the runtime helpers and each shape's
@@ -38,13 +129,23 @@ pub fn well_known_decls() -> Vec<Decl> {
 /// from the types file; the runtime helpers depend only on built-ins. A module of
 /// plain JSON-native types still always has codecs, so both files are emitted in
 /// practice, but the serde file is omitted when no codec is produced.
-pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
+pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) -> Vec<ModuleFile> {
+    // The branded well-known aliases are part of the module's public surface (an
+    // interface field has one), so they stay with the module's types.
     let mut type_decls = well_known_decls();
-    let mut serde_decls = runtime_helpers();
+    let mut serde_decls = Vec::new();
+    // A shape a public type reaches is public; the rest are the module's own
+    // business and stay in its internal group.
+    let mut internal_decls = Vec::new();
     for shape in &module.shapes {
-        type_decls.extend(emit_type(shape, config));
-        // Validators live with the types (next to the `Violation` record they push).
-        type_decls.extend(emit_validators(shape, config));
+        let into = if exposed.shape(shape) {
+            &mut type_decls
+        } else {
+            &mut internal_decls
+        };
+        into.extend(emit_type(shape, config));
+        // Validators live with the type they check.
+        into.extend(emit_validators(shape, config));
         serde_decls.extend(emit_codecs(shape, config, &module.name));
     }
     let module_has_entries = crate::codegen::entries::has_entries(module);
@@ -68,35 +169,36 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         // taxonomy would otherwise have carried.
         type_decls.extend(errors::standalone_validation_decls());
     }
-    if module_has_entries {
-        // The entry client rides the serde file with the codecs it calls.
-        serde_decls.extend(crate::codegen::targets::typescript::entry::entry_decls(
-            module, config,
-        ));
-    }
+    let entries = crate::codegen::targets::typescript::entry::emit(module, config);
+    internal_decls.extend(entries.shared);
+    internal_decls.extend(serde_decls);
+    attach_text_refs(&mut internal_decls, &runtime_helper_refs());
 
-    let mut files = vec![ModuleFile {
-        suffix: "",
-        file: File {
-            module: module.name.clone(),
-            decls: type_decls,
-        },
-        imports_companion: None,
-    }];
-    // The runtime helpers are always present, so the serde file is non-empty
-    // whenever the module has any shape; an empty module emits only its types.
-    if serde_decls.len() > runtime_helpers().len() {
-        files.push(ModuleFile {
-            suffix: "_serde",
-            // The serde file is the same logical module as the types file; the
-            // companion redirect (below) turns the self-module type references its
-            // codecs declare into an import of the types file.
-            file: File {
-                module: module.name.clone(),
-                decls: serde_decls,
-            },
-            imports_companion: Some(module.name.clone()),
-        });
+    // What the internal group declares as opaque text (the codecs, the
+    // resolution helpers, the bound-hook wrappers) is what an entry group calls,
+    // so those names are what its imports are recovered from.
+    let internal_names: Vec<(String, String)> = exported_in_text(&internal_decls)
+        .into_iter()
+        .chain(crate::codegen::imports::declared_symbols(&internal_decls))
+        .map(|name| (name, module.name.clone()))
+        .chain(runtime_helper_refs())
+        .collect();
+
+    let mut files = vec![ModuleFile::new(Group::types(&module.name), type_decls)];
+    // One group per entry declaration, named after it: the entry's class, its
+    // Settings, and its operation methods, so the construction surface reads
+    // together instead of riding the file named for serialization.
+    for (name, mut decls) in entries.per_entry {
+        attach_text_refs(&mut decls, &internal_names);
+        let provides = exported_in_text(&decls);
+        files.push(ModuleFile::new(Group::entry(&module.name, &name), decls).providing(provides));
+    }
+    if !internal_decls.is_empty() {
+        let provides = exported_in_text(&internal_decls);
+        files.push(
+            ModuleFile::new(Group::module_internal(&module.name), internal_decls)
+                .providing(provides),
+        );
     }
     files
 }
@@ -104,30 +206,30 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::group::{INTERNAL, TYPES};
     use crate::codegen::target::RenderRules;
     use crate::codegen::targets::typescript::types::ts_casing;
     use crate::codegen::targets::typescript::TsRules;
-    use crate::codegen::Formatter;
     use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
 
-    fn passthrough() -> Formatter {
-        Formatter::new("cat", vec![])
+    /// Emit a module's groups with everything exposed, resolved the way the
+    /// pipeline resolves them.
+    fn groups(module: &Module) -> Vec<ModuleFile> {
+        crate::codegen::test_support::resolve_groups(emit_module(
+            module,
+            &ts_casing(),
+            &Exposed::all(),
+        ))
     }
 
-    /// Render the text of the file with the given basename suffix ("" types,
-    /// "_serde" serialization), redirecting self-module symbols to the types file.
-    fn rendered(files: &[ModuleFile], suffix: &str) -> String {
-        let mf = files
-            .iter()
-            .find(|f| f.suffix == suffix)
-            .unwrap_or_else(|| panic!("module did not emit a {suffix:?} file"));
-        crate::codegen::render::render_file_with_companion(
-            &mf.file,
-            mf.imports_companion.as_deref(),
+    /// Render the named group of a module, panicking if it did not emit one.
+    fn rendered(files: &[ModuleFile], group: &str) -> String {
+        crate::codegen::test_support::render_group(
+            files,
+            group,
+            crate::codegen::TargetKind::TypeScript,
             &TsRules,
-            &passthrough(),
         )
-        .text
     }
 
     #[test]
@@ -135,7 +237,7 @@ mod tests {
         // No operation means no taxonomy, but the validator returns the Validation
         // category, so its classes must still be emitted or the module cannot compile.
         let module = crate::codegen::test_support::constrained_module();
-        let types = rendered(&emit_module(&module, &ts_casing()), "");
+        let types = rendered(&groups(&module), TYPES);
         assert!(types.contains("export interface Violation {"));
         assert!(types.contains("export class ValidationError extends TonoError {"));
         // The category extends the root, so the root rides along with it.
@@ -182,12 +284,12 @@ mod tests {
             operations: vec![],
             extensions: vec![],
         };
-        let files = emit_module(&module, &ts_casing());
+        let files = groups(&module);
         assert_eq!(files.len(), 2, "TypeScript splits types from serde");
 
         // The types file holds the branded aliases and the interface, with no codec
         // and no runtime helper.
-        let types = rendered(&files, "");
+        let types = rendered(&files, TYPES);
         assert!(types.contains("export type Timestamp = string"));
         assert!(types.contains("export interface Charge {"));
         assert!(types.contains("  amountCents: bigint;"));
@@ -197,9 +299,11 @@ mod tests {
 
         // The serde file holds the runtime helpers and the codecs, and imports the
         // types it references from the types file.
-        let serde = rendered(&files, "_serde");
-        assert!(serde.contains("import { Charge } from \"./billing\";"));
-        assert!(serde.contains("export function encodeI64(v: bigint): string {"));
+        let serde = rendered(&files, INTERNAL);
+        assert!(serde.contains("import { Charge } from \"./types\";"));
+        // The runtime helpers are the SDK's, not the module's, so they are
+        // imported rather than repeated here.
+        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../internal\";"));
         assert!(serde.contains("export function encodeCharge(value: Charge): unknown {"));
         assert!(serde.contains("amount_cents: encodeI64(value.amountCents),"));
         assert!(!serde.contains("export interface Charge"));
@@ -213,8 +317,8 @@ mod tests {
             operations: vec![],
             extensions: vec![],
         };
-        let files = emit_module(&module, &ts_casing());
+        let files = groups(&module);
         assert_eq!(files.len(), 1);
-        assert_eq!(files[0].suffix, "");
+        assert_eq!(files[0].group.name, TYPES);
     }
 }

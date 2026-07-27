@@ -286,11 +286,6 @@ impl HelperSet {
         }
         names
     }
-
-    /// Whether the set is empty (no helper needed).
-    pub(crate) fn is_empty(self) -> bool {
-        self.names().is_empty()
-    }
 }
 
 /// The hand-written `#[serde(with)]` helper modules the set selects: a 64-bit

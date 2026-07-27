@@ -21,18 +21,19 @@ fn fixture_module() -> Module {
     model.modules.into_iter().next().expect("one module")
 }
 
-fn types_text(module: &Module) -> String {
-    rendered(&type_decls(module, &go_casing()), &GoRules::default())
-}
-
-fn serde_text(module: &Module) -> String {
-    rendered(&serde_decls(module, &go_casing()), &GoRules::default())
+/// Everything a module's entries emit: the declarations they share (which ride
+/// the module's internal group) followed by each entry's own group.
+fn entry_text(module: &Module) -> String {
+    let emission = emit(module, &go_casing());
+    let mut decls = emission.shared;
+    decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
+    rendered(&decls, &GoRules::default())
 }
 
 #[test]
 fn the_construction_surface_is_new_options_settings_and_the_mock_interface() {
     let module = fixture_module();
-    let types = types_text(&module);
+    let types = entry_text(&module);
     // Settings carry every resolved field plus the transport slots.
     assert!(types.contains("type Settings struct {"));
     assert!(types.contains("\tHTTPClient *http.Client\n"));
@@ -51,14 +52,14 @@ fn the_construction_surface_is_new_options_settings_and_the_mock_interface() {
     assert!(types.contains("SaveNote(ctx context.Context, input Note) (Note, error)"));
     assert!(types.contains("var _ ClientAPI = (*Client)(nil)"));
 
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains("func New(apiKey string, opts ...ClientOption) (*Client, error) {"));
 }
 
 #[test]
 fn the_resolution_follows_the_declared_chains() {
     let module = fixture_module();
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // @arg lands positionally; @with falls back to @default.
     assert!(serde.contains("s.APIKey = apiKey"));
     assert!(serde.contains("if w.clientName != nil {"));
@@ -98,7 +99,7 @@ fn the_env_boundary_parses_by_type_naming_variable_and_type() {
             vec![Source::Env(EnvName::Name("PORT".into()))],
         ),
     );
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains("strconv.ParseInt(v, 10, 32)"));
     assert!(
         serde.contains("&ConfigError{Message: fmt.Sprintf(\"%s: invalid i32 %q\", \"PORT\", v)}")
@@ -119,12 +120,12 @@ fn a_multi_entry_module_prefixes_the_colliding_companions() {
         clone
     };
     module.shapes.push(second);
-    let types = types_text(&module);
+    let types = entry_text(&module);
     assert!(types.contains("type ClientSettings struct {"));
     assert!(types.contains("type AdminSettings struct {"));
     assert!(types.contains("func WithClientClientName(v string) ClientOption {"));
     assert!(types.contains("func WithAdminClientName(v string) AdminOption {"));
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(
         serde.contains("func NewClient(apiKey string, opts ...ClientOption) (*Client, error) {")
     );
@@ -156,7 +157,7 @@ fn bound_hooks_wire_the_settings_bridge_and_the_transport_slots() {
             conformance: None,
         },
     ];
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // client_init runs over the resolved Settings, after sources and
     // before validation; a bespoke failure is a ContractError.
     assert!(serde.contains("func clientInitHook(s *Settings) error {"));
@@ -196,9 +197,9 @@ fn with_descriptors(mut module: Module) -> Module {
 #[test]
 fn the_method_maps_the_raw_outcome_onto_the_taxonomy() {
     let module = with_descriptors(fixture_module());
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The descriptor is embedded verbatim, an opaque blob.
-    assert!(serde.contains("var saveNoteDescriptor = mustDescriptor("));
+    assert!(serde.contains("var saveNoteDescriptor = tono.MustDescriptor("));
     assert!(serde
         .contains("outcome, err := c.runtime.Execute(ctx, saveNoteDescriptor, record, c.hooks)"));
     assert!(serde.contains("case tonohttp.OutcomeTransport:"));
@@ -232,7 +233,7 @@ fn a_dynamic_env_name_off_an_absent_chain_emits_balanced_braces() {
             }))],
         ),
     );
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains("readerWhy = \"naming <- \" + namingWhy"));
     let new_fn = serde
         .split("func New(")
@@ -257,7 +258,7 @@ fn structured_sources_decode_strictly_and_honor_explicit_values() {
             Source::Env(EnvName::Name("SERVICE_CREDENTIALS".into())),
         ],
     );
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // Strict decode: probe for required members, unknown fields rejected,
     // declared validation at construction, the env name as context.
     assert!(serde.contains(
@@ -273,7 +274,7 @@ fn structured_sources_decode_strictly_and_honor_explicit_values() {
     assert!(serde.contains("if credsWhy != \"\" {"));
     // The whole-JSON map field decodes with its env name as context.
     assert!(serde.contains("json.Unmarshal([]byte(raw), &s.Labels)"));
-    let types = types_text(&module);
+    let types = entry_text(&module);
     assert!(types.contains("func WithCreds(v Credentials) ClientOption {"));
 }
 
@@ -289,7 +290,7 @@ fn a_structured_source_falls_back_across_multiple_envs() {
             Source::Env(EnvName::Name("SERVICE_CREDENTIALS_FALLBACK".into())),
         ],
     );
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // Both variables are read (the fallback is not dropped).
     assert!(serde.contains("os.LookupEnv(\"SERVICE_CREDENTIALS\")"));
     assert!(serde.contains("os.LookupEnv(\"SERVICE_CREDENTIALS_FALLBACK\")"));
@@ -340,7 +341,7 @@ fn a_structured_decode_probes_the_wire_key_not_the_member_name() {
             vec![Source::Env(EnvName::Name("CREDS".into()))],
         ),
     );
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The required-field probe reads the wire key, matching what the codec emits.
     assert!(serde.contains("if rv, ok := probe[\"tok\"]; !ok || string(rv) == \"null\" {"));
     assert!(serde.contains("missing field tok"));
@@ -352,7 +353,7 @@ fn field_docs_flow_onto_the_settings_field_and_the_with_option() {
     // client_name carries @doc in the fixture; it must land on both its public
     // surfaces (the Settings field and the With option).
     let module = fixture_module();
-    let types = types_text(&module);
+    let types = entry_text(&module);
     assert!(types.contains("\t// Names the caller.\n\tClientName string"));
     // godoc needs the identifier first, so the canonical sentence leads and the
     // @doc line follows as continuation.
@@ -374,8 +375,8 @@ fn an_entry_field_rename_retargets_every_go_identifier() {
         value: serde_json::json!({"go": "AuthToken"}),
     }];
     push_entry_field(&mut module, token);
-    let types = types_text(&module);
-    let serde = serde_text(&module);
+    let types = entry_text(&module);
+    let serde = entry_text(&module);
     // The Settings field, the @arg param, and the internal write all use the
     // renamed identifier; none use the casing of the canonical name.
     assert!(types.contains("\tAuthToken string\n"));
@@ -399,7 +400,7 @@ fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
         }],
     });
     push_entry_field(&mut module, choice);
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains(
             "return nil, &ConfigError{Message: fmt.Sprintf(\"choice: match on client_name: unmatched value %v\", s.ClientName)}"
         ));
@@ -414,7 +415,7 @@ fn a_why_reason_nothing_reads_is_discarded_rather_than_left_unused() {
     let env = crate::ir::Source::Env(crate::ir::EnvName::Name("SPARE_TOKEN".into()));
     let field = bare_entry_field("spare_token", Tref::Prim(Prim::String), vec![env]);
     push_entry_field(&mut module, field);
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains("spareTokenWhy := \"no source\""));
     assert!(serde.contains("\t_ = spareTokenWhy\n"));
     // A consumed chain is read by its own check, so it is left alone.
@@ -442,7 +443,7 @@ fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
     // refuses; a direct library caller that skipped it gets a diagnosable
     // method rather than one that does not compile.
     let module = fixture_module();
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(!serde.contains("var saveNoteDescriptor"));
     assert!(serde.contains("errors.New(\"operation has no implementation for Go\")"));
 }
@@ -451,7 +452,7 @@ fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
 fn a_typed_impl_calls_the_bound_symbol_and_guards_the_error_boundary() {
     let mut module = fixture_module();
     module.extensions = vec![impl_ext(false)];
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // Settings and input reach the bespoke symbol, called unqualified: the
     // bound file is dropped into the generated package.
     assert!(serde.contains("out, err := SaveNote(ctx, &c.settings, input)"));
@@ -470,7 +471,7 @@ fn a_typed_impl_calls_the_bound_symbol_and_guards_the_error_boundary() {
 fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
     let mut module = fixture_module();
     module.extensions = vec![impl_ext(true)];
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The input travels as its wire bytes; the outcome comes back raw.
     assert!(serde.contains("payload, err := json.Marshal(input)"));
     assert!(serde.contains("outcome, err := SaveNote(ctx, &c.settings, payload)"));
@@ -510,7 +511,7 @@ fn transforms_apply_to_chain_and_match_resolved_values() {
         ],
     });
     push_entry_field(&mut module, picked);
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The pipeline runs over the resolved value whatever idiom produced it.
     assert!(serde.contains("s.Team = strSnake(s.Team)"));
     assert!(serde.contains("s.Picked = strings.ToUpper(s.Picked)"));
@@ -520,7 +521,7 @@ fn transforms_apply_to_chain_and_match_resolved_values() {
 fn a_config_member_keeps_its_declared_derivation() {
     let mut module = fixture_module();
     with_derived_config_members(&mut module);
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The member's @format (with its transforms) lands inside the composition.
     assert!(serde.contains("composed.Label = strings.ToUpper(\"conf-\" + s.ClientName)"));
     // The member's match lowers to a switch writing the composed member; an
@@ -541,7 +542,7 @@ fn the_env_boundary_decodes_bytes_and_rejects_non_decimal_floats() {
             vec![Source::Env(EnvName::Name("RATE".into()))],
         ),
     );
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // Bytes ride the env boundary as base64, the same encoding the wire uses.
     assert!(serde.contains("base64.StdEncoding.DecodeString(v)"));
     assert!(serde
@@ -558,7 +559,7 @@ fn a_consumed_config_member_requires_a_value_at_construction() {
         "header",
         serde_json::json!(["X-Key", {"field": ["settings", "api_key"]}]),
     );
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The leaf value itself is checked (there is no member-level why).
     assert!(serde.contains("if s.Settings.APIKey == \"\" {"));
     assert!(serde.contains("&ConfigError{Message: \"settings.api_key: no value\"}"));
@@ -583,7 +584,7 @@ fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
         "header",
         serde_json::json!(["X-Max", {"field": ["settings", "max_conns"]}]),
     );
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The reason var is hoisted above the config block (so the post-construction
     // require can read it) and the member resolves through the tracked chain.
     assert!(serde.contains("settingsMaxConnsWhy := \"no source\""));
@@ -612,7 +613,7 @@ fn a_constrained_op_input_is_validated_before_transport() {
             }
         }
     }
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The input is validated and a violation surfaces as the Validation category
     // the validator itself returns.
     assert!(serde.contains("if invalid := ValidateNote(input); invalid != nil {"));
@@ -628,7 +629,7 @@ fn a_constrained_op_input_is_validated_before_transport() {
 #[test]
 fn a_structured_output_decodes_strictly_on_required_members() {
     let module = with_descriptors(fixture_module());
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The 2xx output is probed for its required members (a zero value is not a
     // present value) and a missing one surfaces a DecodeError, not a zeroed
     // struct. The probe reads the wire key.
@@ -657,7 +658,7 @@ fn the_unimplemented_op_error_passes_through_the_bound_on_error_hook() {
             .collect(),
         conformance: None,
     }];
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains(
         "return zero, onErrorHook(&ContractError{ContractName: \"save_note\", Cause: errors.New(\"operation has no implementation for Go\")})"
     ));
@@ -666,8 +667,8 @@ fn the_unimplemented_op_error_passes_through_the_bound_on_error_hook() {
 #[test]
 fn the_matrix_module_exercises_every_resolution_idiom() {
     let module = crate::codegen::test_support::entries_matrix_module();
-    let types = types_text(&module);
-    let serde = serde_text(&module);
+    let types = entry_text(&module);
+    let serde = entry_text(&module);
     // Typed boundaries: every env-parsed primitive spells its own parse.
     assert!(serde.contains("strconv.ParseInt(v, 10, 8)"));
     assert!(serde.contains("strconv.ParseInt(v, 10, 16)"));
@@ -729,7 +730,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
 fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
     let mut module = fixture_module();
     with_member_select_on_absent_subject(&mut module);
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     // The member's switch only runs once the why-tracked subject resolved, an
     // arm reading an absent chain assigns only when that chain resolved, and
     // an inline source arm keeps the presence-only member spelling.
@@ -742,7 +743,7 @@ fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
 fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presence() {
     let mut module = fixture_module();
     with_bytes_and_constrained_port(&mut module);
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains("if len(s.Secret) == 0 {"));
     // The numeric constraint skips when the chain reported absent and the
     // bridge left the zero in place (same presence rule as the requires).
@@ -753,7 +754,7 @@ fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presen
 fn a_64_bit_operation_output_decodes_from_its_wire_string() {
     let mut module = with_descriptors(fixture_module());
     set_entry_op_outputs(&mut module, Tref::Prim(Prim::I64));
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains("var wire string"));
     assert!(serde.contains("strconv.ParseInt(wire, 10, 64)"));
 }
@@ -762,7 +763,7 @@ fn a_64_bit_operation_output_decodes_from_its_wire_string() {
 fn an_enum_member_of_a_config_freezes_as_a_branded_string() {
     let mut module = fixture_module();
     with_enum_config_member(&mut module);
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains("values[\"settings.mode\"] = string(s.Settings.Mode)"));
 }
 
@@ -783,7 +784,7 @@ fn after_response_and_on_error_hooks_get_boundary_wrappers() {
         hook("after_response", "ext/go/log.go#LogResponse"),
         hook("on_error", "ext/go/err.go#MapError"),
     ];
-    let serde = serde_text(&module);
+    let serde = entry_text(&module);
     assert!(serde.contains("func afterResponseHook(ctx context.Context, res tonohttp.CanonicalResponse) (tonohttp.CanonicalResponse, error) {"));
     assert!(serde.contains("func onErrorHook(err error) error {"));
     // The wrapper preserves any generated SDK error (marker interface), wrapping

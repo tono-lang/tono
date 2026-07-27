@@ -13,9 +13,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
-use tono_backend::codegen::render::render_file_with_companion;
+use tono_backend::codegen::layout::SameUnit;
+use tono_backend::codegen::render::render_file_with;
 use tono_backend::codegen::targets::{go, rust, typescript};
+use tono_backend::codegen::visibility::Exposed;
 use tono_backend::codegen::Formatter;
+use tono_backend::codegen::{generate_target, resolve_groups, CodegenConfig, TargetKind};
+use tono_backend::ir::Model;
 
 mod common;
 use common::{matrix_module as shared_module, CANONICAL_WIRE as CANONICAL};
@@ -61,27 +65,38 @@ fn run(dir: &Path, program: &str, args: &[&str], input: Option<&str>) -> String 
     String::from_utf8(out.stdout).expect("utf8 stdout")
 }
 
+/// Generate the whole SDK for a target and write the tree under `root`, so the
+/// driver consumes it exactly as the layout emits it.
+fn write_sdk(root: &Path, target: TargetKind, casing: &tono_backend::codegen::CasingConfig) {
+    let model = Model {
+        tono_ir_version: 6,
+        modules: vec![shared_module()],
+    };
+    for file in
+        generate_target(&model, target, &CodegenConfig::default(), casing).expect("generates")
+    {
+        let relative = file
+            .path
+            .strip_prefix(target.dir())
+            .expect("target-rooted path");
+        let out = root.join(relative);
+        std::fs::create_dir_all(out.parent().expect("a parent")).expect("create module dir");
+        std::fs::write(&out, &file.text).expect("write generated source");
+    }
+}
+
 fn rust_output() -> Option<Value> {
     if !have("cargo", "--version") {
         return None;
     }
     let dir = tests_dir().join("rust");
-    // Rust splits the module into types and serde files; write both as the
-    // `models`/`models_serde` modules the harness crate declares.
-    for module_file in rust::emit::emit_module(&shared_module(), &rust::types::rust_casing()) {
-        let text = render_file_with_companion(
-            &module_file.file,
-            module_file.imports_companion.as_deref(),
-            &rust::RustRules,
-            &Formatter::new("cat", vec![]),
-        )
-        .text;
-        std::fs::write(
-            dir.join(format!("src/models{}.rs", module_file.suffix)),
-            text,
-        )
-        .expect("write rust models source");
-    }
+    // The generated SDK is the harness crate's library; the driver is a binary
+    // that consumes it from outside.
+    write_sdk(
+        &dir.join("src"),
+        TargetKind::Rust,
+        &rust::types::rust_casing(),
+    );
     let out = run(
         &dir,
         "cargo",
@@ -105,18 +120,30 @@ fn go_output() -> Option<Value> {
         .filter(|s| matches!(s.kind, tono_backend::ir::ShapeKind::Union { .. }))
         .map(|s| s.id.clone())
         .collect();
-    for module_file in go::emit::emit_module(&module, &go::types::go_casing(), &union_ids) {
-        let rough = render_file_with_companion(
+    let mut files = go::emit::emit_module(
+        &module,
+        &go::types::go_casing(),
+        &union_ids,
+        &Exposed::all(),
+    );
+    resolve_groups(&mut files);
+    for module_file in files {
+        let rough = render_file_with(
             &module_file.file,
-            module_file.imports_companion.as_deref(),
-            &go::GoRules::default(),
+            &SameUnit {
+                target: TargetKind::Go,
+            },
+            &go::GoRules {
+                go_module: None,
+                current: module_file.group.path(),
+            },
             &Formatter::new("cat", vec![]),
         )
         .text;
         let source = format!("{}\n{}", go::emit::package_clause("main"), rough);
         let formatted = Formatter::new("gofmt", vec![]).run(&source);
         std::fs::write(
-            dir.join(format!("models{}.go", module_file.suffix)),
+            dir.join(format!("models_{}.go", module_file.group.name)),
             formatted.text,
         )
         .expect("write go source");
@@ -135,7 +162,7 @@ fn go_output() -> Option<Value> {
 /// re-encodes and prints the wire JSON.
 fn ts_driver() -> String {
     format!(
-        "import {{ decodeAccount, encodeAccount }} from \"./models_serde\";\n\
+        "import {{ decodeAccount, encodeAccount }} from \"./models/internal\";\n\
          const input: any = {CANONICAL};\n\
          console.log(JSON.stringify(encodeAccount(decodeAccount(input))));\n"
     )
@@ -148,22 +175,13 @@ fn ts_output() -> Option<Value> {
         return None;
     }
     let work = ws.join("work-conformance");
+    let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).expect("create work-conformance");
-    // TypeScript splits the module into a types file and a serde file; write both,
-    // then compile both alongside the driver.
-    for module_file in
-        typescript::emit::emit_module(&shared_module(), &typescript::types::ts_casing())
-    {
-        let text = render_file_with_companion(
-            &module_file.file,
-            module_file.imports_companion.as_deref(),
-            &typescript::TsRules,
-            &Formatter::new("cat", vec![]),
-        )
-        .text;
-        std::fs::write(work.join(format!("models{}.ts", module_file.suffix)), text)
-            .expect("write ts models source");
-    }
+    write_sdk(
+        &work,
+        TargetKind::TypeScript,
+        &typescript::types::ts_casing(),
+    );
     std::fs::write(work.join("conformance.ts"), ts_driver()).expect("write conformance.ts");
     // Naming the sources on the command line makes tsc ignore any tsconfig in
     // scope, which it now rejects outright, so the settings live in a project

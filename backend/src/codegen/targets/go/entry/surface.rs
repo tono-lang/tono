@@ -184,19 +184,17 @@ pub(super) fn method_name(op: &Shape, config: &CasingConfig) -> String {
     )
 }
 
-/// Every type-file declaration of the module's entry surface.
-pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
-    let entries = module_entries(module);
-    if entries.is_empty() {
-        return Vec::new();
-    }
-    let multi = entries.len() > 1;
-    let mut decls = config_structs(module, config);
-    for entry in &entries {
-        let n = names(entry, multi);
-        decls.push(settings_decl(entry, &n, config, module));
-        decls.extend(option_decls(entry, &n, multi));
-        decls.extend(client_decls(entry, &n, config));
-    }
+/// One entry's type surface: its resolved Settings, its functional options, and
+/// its client struct with the mock interface.
+pub(super) fn entry_type_decls(
+    entry: &EntryModel<'_>,
+    n: &Names,
+    module: &Module,
+    config: &CasingConfig,
+    multi: bool,
+) -> Vec<Decl> {
+    let mut decls = vec![settings_decl(entry, n, config, module)];
+    decls.extend(option_decls(entry, n, multi));
+    decls.extend(client_decls(entry, n, config));
     decls
 }

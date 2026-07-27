@@ -12,8 +12,18 @@ use crate::codegen::targets::typescript::types::LANG;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Tref};
 
-/// The shared runtime helpers a generated file relies on, emitted once per file
-/// with zero dependencies.
+/// The names of the shared runtime helpers, so a file calling one from a codec
+/// body can declare the reference and have the import collected.
+pub const RUNTIME_HELPER_NAMES: &[&str] = &[
+    "encodeI64",
+    "decodeI64",
+    "decodeU64",
+    "encodeBytes",
+    "decodeBytes",
+];
+
+/// The shared runtime helpers every module's codecs call, emitted once for the
+/// whole SDK with zero dependencies.
 pub fn runtime_helpers() -> Vec<Decl> {
     vec![
         function(
@@ -84,9 +94,11 @@ pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str) -> Vec<De
         .collect()
 }
 
-/// Cross-module codec references: for each member (or union payload) whose type
-/// points to another module, the `encode`/`decode` functions live in that
-/// module's serde file, so the codecs here import them from `<module>_serde`.
+/// Codec references: for each member (or union payload) whose type is a named
+/// shape, the `encode`/`decode` functions the codec dispatches to. Naming them
+/// as symbols of the module they belong to is what lets the engine find the
+/// group that declares them and emit the import, whether that is another
+/// module's internal group or this one's.
 fn codec_refs(shape: &Shape, self_module: &str) -> Vec<Symbol> {
     let members: &[Member] = match &shape.kind {
         ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => members,
@@ -102,10 +114,9 @@ fn codec_refs(shape: &Shape, self_module: &str) -> Vec<Symbol> {
                 continue; // a same-module codec is in this very file
             }
             let suffix = type_suffix(&id);
-            let serde = format!("{module}_serde");
             for op in ["encode", "decode"] {
                 let name = format!("{op}{suffix}");
-                refs.push(Symbol::imported(name.clone(), serde.clone(), name));
+                refs.push(Symbol::imported(name.clone(), module, name));
             }
         }
     }
@@ -513,10 +524,11 @@ mod tests {
         let names: Vec<&str> = refs.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"encodeStatus"));
         assert!(names.contains(&"decodeStatus"));
-        // Both are imported from the referenced module's serde file.
+        // Both are named against the module they belong to; which of its groups
+        // declares them is the engine's to resolve.
         assert!(refs
             .iter()
-            .all(|s| s.import.as_ref().unwrap().module == "payments.common_serde"));
+            .all(|s| s.import.as_ref().unwrap().module == "payments.common"));
         // A same-module reference is in this very file, so it contributes no import.
         let local = structure(
             "payments.charge#Line",

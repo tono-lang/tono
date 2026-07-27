@@ -1,49 +1,40 @@
-//! Codegen snapshot review gate. The emitted source for the shared wire-matrix
-//! module (types, serde, error surface, and client) is snapshotted per target.
-//! An unexpected diff fails the test; an intended change is accepted with
-//! `cargo insta review`, so a human signs off on every codegen change.
+//! Codegen snapshot review gate. The whole emitted SDK for the shared
+//! wire-matrix module (its groups, their paths, and their source) is snapshotted
+//! per target. An unexpected diff fails the test; an intended change is accepted
+//! with `cargo insta review`, so a human signs off on every codegen change,
+//! layout included.
 //!
-//! Rendering goes through the same path the conformance test uses, with a `cat`
-//! formatter so the snapshot is hermetic (no language formatter need be installed)
-//! and captures the emitter's own deterministic output.
+//! Generation goes through the same path the CLI uses, with the engine's own
+//! rough output (no language formatter need be installed), so the snapshot is
+//! hermetic and deterministic.
 
 use insta::assert_snapshot;
-use tono_backend::codegen::render::render_file_with_companion;
-use tono_backend::codegen::target::RenderRules;
-use tono_backend::codegen::targets::{go, rust, typescript};
-use tono_backend::codegen::tree::ModuleFile;
-use tono_backend::codegen::Formatter;
+use tono_backend::codegen::{casing_for, generate_target, CodegenConfig, TargetKind};
+use tono_backend::ir::{Model, Module};
 
 mod common;
 use common::matrix_module;
 
-/// Render every emitted file of a module to one snapshot body: each file rendered
-/// verbatim (identity formatter, so the gate needs no language formatter), tagged
-/// with a `models<suffix>.<ext>` banner, and optionally prefixed by a `header`
-/// (the Go package clause). The order of `files` is the emitter's own.
-fn render_files(
-    files: Vec<ModuleFile>,
-    rules: &dyn RenderRules,
-    ext: &str,
-    header: Option<&str>,
-) -> String {
-    let identity = Formatter::new("cat", vec![]);
+/// Generate one target's whole SDK for a single-module model and lay every file
+/// out in one snapshot body, each tagged with its output path.
+fn render_sdk(module: Module, target: TargetKind, go_module: Option<&str>) -> String {
+    let model = Model {
+        tono_ir_version: 6,
+        modules: vec![module],
+    };
+    let config = CodegenConfig {
+        go_module: go_module.map(str::to_string),
+        ..CodegenConfig::default()
+    };
+    let files = generate_target(&model, target, &config, &casing_for(target)).expect("generates");
     let mut out = String::new();
-    for module_file in files {
-        let body = render_file_with_companion(
-            &module_file.file,
-            module_file.imports_companion.as_deref(),
-            rules,
-            &identity,
-        )
-        .text;
-        let text = match header {
-            Some(header) => format!("{header}\n{body}"),
-            None => body,
-        };
+    for file in files {
         out.push_str(&format!(
-            "// ==== models{}.{ext} ====\n{text}\n",
-            module_file.suffix
+            "// ==== {} ====\n{}\n",
+            file.path
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+            file.text
         ));
     }
     out
@@ -51,36 +42,19 @@ fn render_files(
 
 #[test]
 fn rust_codegen_snapshot() {
-    let files = rust::emit::emit_module(&matrix_module(), &rust::types::rust_casing());
-    assert_snapshot!("rust", render_files(files, &rust::RustRules, "rs", None));
+    assert_snapshot!("rust", render_sdk(matrix_module(), TargetKind::Rust, None));
 }
 
 #[test]
 fn go_codegen_snapshot() {
-    let module = matrix_module();
-    // The Go emitter needs the model's union ids so a struct field whose type is a
-    // union gets a container UnmarshalJSON; for a single module it is the module's
-    // own unions.
-    let union_ids: std::collections::HashSet<String> = module
-        .shapes
-        .iter()
-        .filter(|s| matches!(s.kind, tono_backend::ir::ShapeKind::Union { .. }))
-        .map(|s| s.id.clone())
-        .collect();
-    let files = go::emit::emit_module(&module, &go::types::go_casing(), &union_ids);
-    let header = go::emit::package_clause("models");
-    assert_snapshot!(
-        "go",
-        render_files(files, &go::GoRules::default(), "go", Some(&header))
-    );
+    assert_snapshot!("go", render_sdk(matrix_module(), TargetKind::Go, None));
 }
 
 #[test]
 fn typescript_codegen_snapshot() {
-    let files = typescript::emit::emit_module(&matrix_module(), &typescript::types::ts_casing());
     assert_snapshot!(
         "typescript",
-        render_files(files, &typescript::TsRules, "ts", None)
+        render_sdk(matrix_module(), TargetKind::TypeScript, None)
     );
 }
 
@@ -190,21 +164,16 @@ fn entries_module() -> tono_backend::ir::Module {
 
 #[test]
 fn go_entries_codegen_snapshot() {
-    let module = entries_module();
-    let files = go::emit::emit_module(&module, &go::types::go_casing(), &Default::default());
-    let header = go::emit::package_clause("notes");
     assert_snapshot!(
         "go_entries",
-        render_files(files, &go::GoRules::default(), "go", Some(&header))
+        render_sdk(entries_module(), TargetKind::Go, Some("example.com/sdk"))
     );
 }
 
 #[test]
 fn typescript_entries_codegen_snapshot() {
-    let module = entries_module();
-    let files = typescript::emit::emit_module(&module, &typescript::types::ts_casing());
     assert_snapshot!(
         "typescript_entries",
-        render_files(files, &typescript::TsRules, "ts", None)
+        render_sdk(entries_module(), TargetKind::TypeScript, None)
     );
 }

@@ -2,16 +2,8 @@
 // the generated types, re-encode it, and print the result. The conformance
 // harness pipes the same fixture to every language and asserts the re-encoded
 // JSON is Value-equal across all of them.
-#![allow(dead_code)]
 
-#[path = "../models.rs"]
-mod models;
-// The generated serde file: the helper modules and the open enum's impls, which
-// reference the types through `use crate::models::*`.
-#[path = "../models_serde.rs"]
-mod models_serde;
-
-use models::Account;
+use sdk::models::Account;
 use std::io::Read;
 
 fn main() {

@@ -9,7 +9,7 @@
 
 import type { Outcome } from "@tono/ext-runtime-ts";
 
-import type { Settings } from "../../notes_serde";
+import type { Settings } from "../../notes";
 import { type Note, type NoteRef, OverloadedError } from "../../notes";
 
 // storeSave is the typed form: it speaks the operation's own types, so it owns

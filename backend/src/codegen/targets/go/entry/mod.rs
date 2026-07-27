@@ -244,20 +244,41 @@ struct Helpers {
     transforms: BTreeSet<&'static str>,
 }
 
-/// Every serde-file declaration: the shared helpers, the bound-hook wrappers,
-/// and per entry the descriptor constants, the constructor, and the methods.
-pub fn serde_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
+/// A module's entry emission, split the way the layout groups it: the
+/// declarations every entry of the module shares (the construction-only config
+/// structs, the descriptor and record helpers, the bound-hook wrappers) and, per
+/// entry, everything named after that entry.
+pub struct EntryEmission {
+    /// Shared across the module's entries, so they ride its internal group.
+    pub shared: Vec<Decl>,
+    /// Each entry's own group: its name and its declarations.
+    pub per_entry: Vec<(String, Vec<Decl>)>,
+}
+
+/// Emit a module's entries. The surface (Settings, options, the client struct)
+/// and the behavior (the constructor, the operation methods) of one entry are
+/// emitted together, so an entry's group holds the whole thing rather than
+/// leaving the constructor in a file named for serialization.
+///
+/// The on-demand helpers are gathered across every entry and emitted once, since
+/// Go would reject a second declaration of the same function in the package.
+pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let entries = module_entries(module);
     if entries.is_empty() {
-        return Vec::new();
+        return EntryEmission {
+            shared: Vec::new(),
+            per_entry: Vec::new(),
+        };
     }
     let multi = entries.len() > 1;
     let bound = bound_extensions(module, &BINDING_LANGS);
     let mut helpers = Helpers::default();
-    let mut decls = vec![shared_helpers_decl()];
-    decls.extend(hook_wrapper_decls(&bound, &entries, multi));
+    let mut shared = surface::config_structs(module, config);
+    shared.extend(hook_wrapper_decls(&bound, &entries, multi));
+    let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
+        let mut decls = surface::entry_type_decls(entry, &n, module, config, multi);
         decls.extend(descriptor_decls(entry, &n));
         decls.push(new_decl(
             entry,
@@ -272,25 +293,40 @@ pub fn serde_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
             decls.push(op_method_decl(&n, op, module, config, &bound));
         }
         decls.extend(discriminator_decls_for(entry, &n, module, &bound));
+        per_entry.push((entry.name.to_string(), decls));
     }
-    decls.extend(helper_decls(&helpers));
-    decls
+    shared.extend(helper_decls(&helpers));
+    EntryEmission { shared, per_entry }
 }
 
-/// The always-needed helpers: descriptor parsing at package load and the
-/// struct-to-record encoding the runtime input takes.
-fn shared_helpers_decl() -> Decl {
-    Decl::raw_with(
-        "// mustDescriptor parses a compiler-emitted descriptor literal at package\n\
+/// The Go package selector the SDK's shared internal package is reached through.
+/// Raw text cannot go through the type renderer, so the qualification is spelled
+/// here; the import itself is still collected from [`shared_symbol`].
+const SHARED: &str = crate::codegen::layout::GO_ROOT_PACKAGE;
+
+/// A reference to a name in the SDK's shared internal package, so the import is
+/// collected wherever the raw text calls it.
+fn shared_symbol(name: &str) -> Symbol {
+    Symbol::imported(name, crate::codegen::group::ROOT, name)
+}
+
+/// The entry construction helpers, which serve every entry of every module and
+/// so live in the SDK's shared internal package: descriptor parsing at package
+/// load and the struct-to-record encoding the runtime input takes. They are
+/// exported because a Go package boundary is what makes them shared, and
+/// `internal/` is what keeps them out of a consumer's reach.
+pub fn runtime_decls() -> Vec<Decl> {
+    vec![Decl::raw_with(
+        "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
          // load; a parse failure is a build defect, never a runtime input.\n\
-         func mustDescriptor(literal string) *tonohttp.WireDescriptor {\n\
+         func MustDescriptor(literal string) *tonohttp.WireDescriptor {\n\
          \td, err := tonohttp.ParseDescriptor([]byte(literal))\n\
          \tif err != nil {\n\t\tpanic(err)\n\t}\n\
          \treturn d\n\
          }\n\n\
-         // encodeRecord turns a typed input into the wire record the runtime binds\n\
+         // EncodeRecord turns a typed input into the wire record the runtime binds\n\
          // from, through the type's own JSON tags.\n\
-         func encodeRecord(v any) (map[string]any, error) {\n\
+         func EncodeRecord(v any) (map[string]any, error) {\n\
          \tb, err := json.Marshal(v)\n\
          \tif err != nil {\n\t\treturn nil, err\n\t}\n\
          \tvar m map[string]any\n\
@@ -299,7 +335,7 @@ fn shared_helpers_decl() -> Decl {
          }"
         .to_string(),
         vec![runtime_symbol(), import("json", "encoding/json")],
-    )
+    )]
 }
 
 /// The on-demand helpers the resolution used.
@@ -371,11 +407,14 @@ fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
         .filter_map(|op| {
             let descriptor = wire_descriptor(op)?;
             let json = serde_json::to_string(descriptor).unwrap_or_else(|_| "null".into());
-            Some(Decl::raw(format!(
-                "var {var} = mustDescriptor({literal})",
-                var = descriptor_var(n, op),
-                literal = go_string_literal(&json),
-            )))
+            Some(Decl::raw_with(
+                format!(
+                    "var {var} = {SHARED}.MustDescriptor({literal})",
+                    var = descriptor_var(n, op),
+                    literal = go_string_literal(&json),
+                ),
+                vec![shared_symbol("MustDescriptor")],
+            ))
         })
         .collect()
 }
@@ -605,9 +644,12 @@ fn op_method_decl(
         });
     }
     refs.push(runtime_symbol());
+    if input.is_some() {
+        refs.push(shared_symbol("EncodeRecord"));
+    }
     let record = match input {
         Some(_) => format!(
-            "\trecord, err := encodeRecord(input)\n\
+            "\trecord, err := {SHARED}.EncodeRecord(input)\n\
              \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
             fail_enc = fail("err".to_string()),
         ),
@@ -671,4 +713,3 @@ mod tests;
 use constructor::{new_decl, why_var};
 use resolve::Resolver;
 use surface::method_signature;
-pub use surface::type_decls;

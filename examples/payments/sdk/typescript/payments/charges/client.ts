@@ -8,125 +8,27 @@ import {
   execute,
 } from "@tono/http-runtime-ts";
 import {
+  decodeCardDeclined,
+  decodeCharge,
+  decodeNotFound,
+  durationToMs,
+  encodeCharge,
+  readEnv,
+} from "./internal";
+import {
   APIError,
-  CardDeclined,
   CardDeclinedError,
   Charge,
   ConfigError,
   DecodeError,
   Duration,
-  HTTPCode,
-  NotFound,
   NotFoundError,
-  Timestamp,
   TonoError,
   TransportError,
   ValidationError,
   Violation,
   validateCharge,
-} from "./charges";
-import {
-  decodePaymentMethod,
-  decodeStatus,
-  encodePaymentMethod,
-  encodeStatus,
-} from "./common_serde";
-
-export function encodeI64(v: bigint): string {
-  return v.toString();
-}
-
-export function decodeI64(s: string): bigint {
-  const n = BigInt(s);
-  if (n < -9223372036854775808n || n > 9223372036854775807n) {
-    throw new RangeError(`i64 out of range: ${s}`);
-  }
-  return n;
-}
-
-export function decodeU64(s: string): bigint {
-  const n = BigInt(s);
-  if (n < 0n || n > 18446744073709551615n) {
-    throw new RangeError(`u64 out of range: ${s}`);
-  }
-  return n;
-}
-
-export function encodeBytes(b: Uint8Array): string {
-  return btoa(String.fromCharCode(...b));
-}
-
-export function decodeBytes(s: string): Uint8Array {
-  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-}
-
-export function encodeCharge(value: Charge): unknown {
-  return {
-    id: value.id,
-    amount: encodeI64(value.amount),
-    fee: encodeI64(value.fee),
-    receipt: encodeBytes(value.receipt),
-    currency: value.currency,
-    note: value.note == null ? undefined : value.note,
-    tags: value.tags.map((x) => x),
-    metadata: Object.fromEntries(
-      Object.entries(value.metadata).map(([k, v]) => [k, v]),
-    ),
-    created: value.created,
-    status: encodeStatus(value.status),
-    method: encodePaymentMethod(value.method),
-  };
-}
-
-export function decodeCharge(raw: any): Charge {
-  return {
-    id: raw.id,
-    amount: decodeI64(raw.amount),
-    fee: decodeU64(raw.fee),
-    receipt: decodeBytes(raw.receipt),
-    currency: raw.currency,
-    note: raw.note == null ? undefined : raw.note,
-    tags: raw.tags.map((x: any) => x),
-    metadata: Object.fromEntries(
-      Object.entries(raw.metadata).map(([k, v]: [string, any]) => [k, v]),
-    ),
-    created: raw.created as Timestamp,
-    status: decodeStatus(raw.status),
-    method: decodePaymentMethod(raw.method),
-  };
-}
-
-export function encodeHTTPCode(value: HTTPCode): number {
-  return value;
-}
-
-export function decodeHTTPCode(raw: number): HTTPCode {
-  return raw as HTTPCode;
-}
-
-export function encodeCardDeclined(value: CardDeclined): unknown {
-  return {
-    message: value.message,
-  };
-}
-
-export function decodeCardDeclined(raw: any): CardDeclined {
-  return {
-    message: raw.message,
-  };
-}
-
-export function encodeNotFound(value: NotFound): unknown {
-  return {
-    message: value.message,
-  };
-}
-
-export function decodeNotFound(raw: any): NotFound {
-  return {
-    message: raw.message,
-  };
-}
+} from "./types";
 
 // Settings are the resolved construction values of the client entry,
 // handed to the client_init hook before validation: bespoke code may
@@ -317,57 +219,4 @@ export function decodeCreateChargeError(
     }
   } catch {}
   return new APIError(status, body);
-}
-
-// readEnv treats an unset and an empty variable the same: empty means
-// not set, per the declared-source contract.
-function readEnv(name: string): string | undefined {
-  const env = (
-    globalThis as { process?: { env?: Record<string, string | undefined> } }
-  ).process?.env;
-  const v = env?.[name];
-  return v === undefined || v === "" ? undefined : v;
-}
-
-// durationToMs parses the duration spelling shared across targets
-// (Go's ParseDuration grammar: optional sign, bare zero, unit runs)
-// into the runtime's millisecond values.
-function durationToMs(v: string): number {
-  let rest = v;
-  let sign = 1;
-  if (rest.startsWith("-")) {
-    sign = -1;
-    rest = rest.slice(1);
-  } else if (rest.startsWith("+")) {
-    rest = rest.slice(1);
-  }
-  if (rest === "0") {
-    return 0;
-  }
-  // The number grammar matches Go's: digits, digits.digits,
-  // trailing-dot ("1.s") and leading-dot (".5s") forms.
-  // Sticky alone: exec advances lastIndex, and y already anchors
-  // each match to it (g would be redundant).
-  // Both micro signs Go accepts: U+00B5 (micro) and U+03BC (Greek mu).
-  const re = /(\d+(?:\.\d*)?|\.\d+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h)/y;
-  const unit: Record<string, number> = {
-    ns: 1e-6,
-    us: 1e-3,
-    "\u00b5s": 1e-3,
-    "\u03bcs": 1e-3,
-    ms: 1,
-    s: 1000,
-    m: 60000,
-    h: 3600000,
-  };
-  let total = 0;
-  let consumed = 0;
-  for (let m = re.exec(rest); m !== null; m = re.exec(rest)) {
-    total += Number(m[1]) * unit[m[2]];
-    consumed = re.lastIndex;
-  }
-  if (consumed !== rest.length || rest.length === 0) {
-    throw new Error(`invalid duration ${JSON.stringify(v)}`);
-  }
-  return sign * total;
 }

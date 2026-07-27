@@ -39,8 +39,9 @@ echo "go..."
 mkdir -p "$work/go/conformance"
 cp -R "$work"/sdk/go/. "$work/go/"
 # The bound symbol is called unqualified from inside the generated package, so
-# the bespoke file is dropped into it rather than imported.
-cp "$example/ext/go/notes.go" "$work/go/bespoke.go"
+# the bespoke file is dropped into the module's package directory rather than
+# imported.
+cp "$example/ext/go/notes.go" "$work/go/notes/bespoke.go"
 cp "$example/conformance/go/main.go" "$work/go/conformance/main.go"
 (cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 \
     && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \

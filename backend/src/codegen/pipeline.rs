@@ -8,14 +8,16 @@
 
 use std::path::PathBuf;
 
+use crate::codegen::assemble::{emit_module_files, shared_file};
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::layout::{output_path, package_name, rust_mod_tree};
+use crate::codegen::layout::{go_selector, output_path, repoint_to_groups, SameUnit};
 use crate::codegen::modules::{self, CodegenConfig};
-use crate::codegen::render::render_file_with_companion;
+use crate::codegen::render::render_file_with;
 use crate::codegen::targets::{go, rust, typescript};
 use crate::codegen::tree::ModuleFile;
-use crate::codegen::Formatter;
-use crate::ir::{Model, Module};
+use crate::codegen::visibility::{self, Exposed};
+use crate::codegen::{assemble, reexport, Formatter};
+use crate::ir::Model;
 
 /// The banner every generated file carries. The exact `Code generated … DO NOT
 /// EDIT.` wording is the convention Go tooling recognizes, and reads the same in
@@ -81,22 +83,6 @@ pub struct GeneratedFile {
     pub text: String,
 }
 
-/// Emit every output file a module produces for a target. Most targets emit one
-/// file; Go emits its types and its serialization separately, so this returns one
-/// or more [`ModuleFile`]s.
-fn emit_module_files(
-    module: &Module,
-    target: TargetKind,
-    casing: &CasingConfig,
-    union_ids: &std::collections::HashSet<String>,
-) -> Vec<ModuleFile> {
-    match target {
-        TargetKind::Rust => rust::emit::emit_module(module, casing),
-        TargetKind::Go => go::emit::emit_module(module, casing, union_ids),
-        TargetKind::TypeScript => typescript::emit::emit_module(module, casing),
-    }
-}
-
 /// The idiomatic casing a target starts from, before any manifest override. A
 /// config-driven caller layers `[target.<lang>.casing]` overrides on top with
 /// [`CasingConfig::with`]; [`generate`] uses this base for every target.
@@ -111,45 +97,25 @@ pub fn casing_for(target: TargetKind) -> CasingConfig {
 /// Render one of a module's output files into rough source text: the banner, then
 /// the rendered declarations (with the package clause prepended for Go). The `cat`
 /// passthrough keeps the engine's layout without depending on a real formatter.
-fn render_module(
-    module_file: &ModuleFile,
-    module: &Module,
-    target: TargetKind,
-    config: &CodegenConfig,
-    internal_modules: &std::collections::BTreeSet<String>,
-) -> String {
+fn render_module(module_file: &ModuleFile, target: TargetKind, config: &CodegenConfig) -> String {
     let passthrough = Formatter::new("cat", vec![]);
-    let companion = module_file.imports_companion.as_deref();
+    let resolver = SameUnit { target };
+    let file = &module_file.file;
     let rendered = match target {
-        TargetKind::Rust => {
-            render_file_with_companion(&module_file.file, companion, &rust::RustRules, &passthrough)
-                .text
-        }
+        TargetKind::Rust => render_file_with(file, &resolver, &rust::RustRules, &passthrough).text,
         TargetKind::Go => {
             let go_rules = go::GoRules {
                 go_module: config.go_module.clone(),
-                internal_modules: internal_modules.clone(),
-                current_module: module.name.clone(),
+                current: module_file.group.path(),
             };
-            let rough =
-                render_file_with_companion(&module_file.file, companion, &go_rules, &passthrough)
-                    .text;
-            // The Go package is named for the module's last segment; a dotted
-            // module nests in a directory of that name (see [`output_path`]).
-            format!(
-                "{}{}",
-                go::emit::package_clause(package_name(&module.name)),
-                rough
-            )
+            let rough = render_file_with(file, &resolver, &go_rules, &passthrough).text;
+            // A module's groups are files of one package, named for the module's
+            // last segment; the SDK-root group has its own package name.
+            let package = go_selector(&module_file.group.path()).unwrap_or_default();
+            format!("{}{}", go::emit::package_clause(&package), rough)
         }
         TargetKind::TypeScript => {
-            render_file_with_companion(
-                &module_file.file,
-                companion,
-                &typescript::TsRules,
-                &passthrough,
-            )
-            .text
+            render_file_with(file, &resolver, &typescript::TsRules, &passthrough).text
         }
     };
     format!("{BANNER}{rendered}")
@@ -168,21 +134,14 @@ pub fn parse_targets(csv: &str) -> Result<Vec<TargetKind>, String> {
 
 /// The model and the cross-module indices every generation pass needs: the
 /// module remap/flatten hooks applied once up front (so render rules and output
-/// paths see only effective names), the SDK's own module names (so Go tells an
-/// internal cross-package import from a standard-library one), and every union's
-/// id (so Go can give a struct field a container `UnmarshalJSON` even when its
-/// union type is in another module).
+/// paths see only effective names), every union's id (so Go can give a struct
+/// field a container `UnmarshalJSON` even when its union type is in another
+/// module), and the derived set of shapes the SDK exposes.
 fn prepare(
     model: &Model,
     config: &CodegenConfig,
-) -> (
-    Model,
-    std::collections::HashSet<String>,
-    std::collections::BTreeSet<String>,
-) {
+) -> (Model, std::collections::HashSet<String>, Exposed) {
     let model = modules::apply(config, model);
-    let internal_modules: std::collections::BTreeSet<String> =
-        model.modules.iter().map(|m| m.name.clone()).collect();
     let union_ids: std::collections::HashSet<String> = model
         .modules
         .iter()
@@ -190,30 +149,51 @@ fn prepare(
         .filter(|s| matches!(s.kind, crate::ir::ShapeKind::Union { .. }))
         .map(|s| s.id.clone())
         .collect();
-    (model, union_ids, internal_modules)
+    let exposed = visibility::derive(&model);
+    (model, union_ids, exposed)
 }
 
-/// Emit one target's files over an already-prepared model, with the given casing.
-/// Excludes the Rust module tree, which is synthesized once over the final set.
+/// Emit one target's files over an already-prepared model, with the given casing:
+/// every group's source file, then the per-module re-exports that make the public
+/// groups reachable.
 fn emit_target(
     model: &Model,
     target: TargetKind,
     casing: &CasingConfig,
     config: &CodegenConfig,
     union_ids: &std::collections::HashSet<String>,
-    internal_modules: &std::collections::BTreeSet<String>,
+    exposed: &Exposed,
 ) -> Vec<GeneratedFile> {
-    let mut files = Vec::new();
+    let mut module_files: Vec<ModuleFile> =
+        shared_file(model, target, casing).into_iter().collect();
     for module in &model.modules {
-        for module_file in emit_module_files(module, target, casing, union_ids) {
-            let path = output_path(target, &module.name, module_file.suffix, target.extension());
-            files.push(GeneratedFile {
-                target,
-                path,
-                text: render_module(&module_file, module, target, config, internal_modules),
-            });
-        }
+        module_files.extend(emit_module_files(
+            module, target, casing, union_ids, exposed,
+        ));
     }
+    // One pass over the emitted groups records where each symbol ended up; the
+    // references are then re-pointed at it, which is what keeps import
+    // collection automatic now that a module spans several files.
+    let index = assemble::build_index(&module_files);
+    let mut groups = Vec::with_capacity(module_files.len());
+    let mut files = Vec::with_capacity(module_files.len());
+    for mut module_file in module_files {
+        repoint_to_groups(&mut module_file.file, &index);
+        files.push(GeneratedFile {
+            target,
+            path: output_path(target, &module_file.group),
+            text: render_module(&module_file, target, config),
+        });
+        groups.push(module_file.group);
+    }
+    files.extend(match target {
+        // Rust needs a module tree so the crate paths resolve, and the `pub use`
+        // in it is the module's re-export. Go needs neither: a module is one
+        // package already.
+        TargetKind::Rust => reexport::rust_module_tree(&groups),
+        TargetKind::TypeScript => reexport::typescript_barrels(&groups),
+        TargetKind::Go => Vec::new(),
+    });
     files
 }
 
@@ -232,7 +212,7 @@ pub fn generate(
     let langs: Vec<&[&str]> = targets.iter().map(|t| t.binding_langs()).collect();
     crate::codegen::extensions::validate_impl_coverage(model, &langs)?;
     crate::codegen::entries::validate_entries(model)?;
-    let (model, union_ids, internal_modules) = prepare(model, config);
+    let (model, union_ids, exposed) = prepare(model, config);
     let mut files = Vec::new();
     for &target in targets {
         files.extend(emit_target(
@@ -241,13 +221,8 @@ pub fn generate(
             &casing_for(target),
             config,
             &union_ids,
-            &internal_modules,
+            &exposed,
         ));
-    }
-    // Rust needs a module tree so `use crate::a::b` resolves; a nested layout gets
-    // a `mod.rs` per directory declaring its children.
-    if targets.contains(&TargetKind::Rust) {
-        files.extend(rust_mod_tree(&files));
     }
     Ok(files)
 }
@@ -266,19 +241,10 @@ pub fn generate_target(
     crate::codegen::extensions::validate_extensions(model)?;
     crate::codegen::extensions::validate_impl_coverage(model, &[target.binding_langs()])?;
     crate::codegen::entries::validate_entries(model)?;
-    let (model, union_ids, internal_modules) = prepare(model, config);
-    let mut files = emit_target(
-        &model,
-        target,
-        casing,
-        config,
-        &union_ids,
-        &internal_modules,
-    );
-    if target == TargetKind::Rust {
-        files.extend(rust_mod_tree(&files));
-    }
-    Ok(files)
+    let (model, union_ids, exposed) = prepare(model, config);
+    Ok(emit_target(
+        &model, target, casing, config, &union_ids, &exposed,
+    ))
 }
 
 #[cfg(test)]
@@ -286,7 +252,7 @@ mod tests {
     use super::*;
     use crate::codegen::layout::check_go_layout;
     use crate::codegen::test_support::{member, structure, union_shape};
-    use crate::ir::{Prim, Shape, ShapeKind, Tref};
+    use crate::ir::{Module, Prim, Shape, ShapeKind, Tref};
 
     /// A model whose Go module carries a union, so Go splits into two files while
     /// Rust and TypeScript stay single-file.
@@ -383,31 +349,40 @@ mod tests {
             .map(|f| f.path.to_string_lossy().into_owned())
             .collect();
         let sep = std::path::MAIN_SEPARATOR;
-        // The single i64 field gives Rust a helper module and TypeScript codecs, so
-        // both split; Go's plain tagged struct needs no custom serde, so it stays one
-        // file.
+        // Each module is a directory of groups. The i64 field routes through a
+        // helper module and pulls TypeScript codecs, both of which land in the
+        // internal groups; Go's plain tagged struct needs no serde of its own, so
+        // that module emits only its public group.
         assert_eq!(
             paths,
             vec![
-                format!("rust{sep}payments.rs"),
-                format!("rust{sep}payments_serde.rs"),
-                format!("go{sep}payments.go"),
-                format!("typescript{sep}payments.ts"),
-                format!("typescript{sep}payments_serde.ts"),
+                format!("rust{sep}internal.rs"),
+                format!("rust{sep}payments{sep}types.rs"),
+                format!("rust{sep}lib.rs"),
+                format!("rust{sep}payments{sep}mod.rs"),
+                format!("go{sep}payments{sep}types.go"),
+                format!("typescript{sep}internal.ts"),
+                format!("typescript{sep}payments{sep}types.ts"),
+                format!("typescript{sep}payments{sep}internal.ts"),
+                format!("typescript{sep}payments{sep}index.ts"),
+                format!("typescript{sep}package.json"),
             ]
         );
-        // Every file carries the banner; each target spells the struct its own way
-        // in its types file and Go carries its package clause.
-        assert!(files.iter().all(|f| f.text.starts_with(BANNER)));
-        assert!(files[0].text.contains("pub struct Charge"));
-        assert!(files[1].text.contains("pub mod i64_string"));
-        assert!(files[2].text.contains("package payments"));
-        assert!(files[2].text.contains("type Charge struct"));
-        assert!(files[3].text.contains("export interface Charge"));
-        assert!(files[4].text.contains("export function encodeCharge"));
-        assert!(files[4]
-            .text
-            .contains("import { Charge } from \"./payments\";"));
+        // Every source file carries the banner (the JSON manifest cannot); each
+        // target spells the struct its own way in its public group, and Go carries
+        // its package clause.
+        assert!(files
+            .iter()
+            .filter(|f| f.path.extension().is_some_and(|e| e != "json"))
+            .all(|f| f.text.starts_with(BANNER)));
+        assert!(text_at(&files, "rust/internal.rs").contains("pub mod i64_string"));
+        assert!(text_at(&files, "rust/payments/types.rs").contains("pub struct Charge"));
+        assert!(text_at(&files, "go/payments/types.go").contains("package payments"));
+        assert!(text_at(&files, "go/payments/types.go").contains("type Charge struct"));
+        assert!(text_at(&files, "typescript/payments/types.ts").contains("export interface Charge"));
+        let ts_internal = text_at(&files, "typescript/payments/internal.ts");
+        assert!(ts_internal.contains("export function encodeCharge"));
+        assert!(ts_internal.contains("import { Charge } from \"./types\";"));
     }
 
     #[test]
@@ -422,44 +397,34 @@ mod tests {
             .iter()
             .map(|f| f.path.to_string_lossy().into_owned())
             .collect();
-        let sep = std::path::MAIN_SEPARATOR;
-        // Go needs hand-written union marshaling and TypeScript needs codecs, so both
-        // split. Rust's tagged-union enum derives its serde on the type with no wide
-        // integer, bytes, or open enum in the module, so there is nothing for a serde
-        // file to hold and Rust stays single.
-        assert_eq!(
-            paths,
-            vec![
-                format!("rust{sep}payments.rs"),
-                format!("go{sep}payments.go"),
-                format!("go{sep}payments_serde.go"),
-                format!("typescript{sep}payments.ts"),
-                format!("typescript{sep}payments_serde.ts"),
-            ]
+        // Go needs hand-written union marshaling and TypeScript needs codecs, so
+        // both get an internal group. Rust's tagged-union enum derives its serde on
+        // the type with no wide integer, bytes, or open enum in the module, so
+        // there is nothing internal for it to hold.
+        assert!(
+            paths.contains(&"rust/payments/types.rs".replace('/', std::path::MAIN_SEPARATOR_STR))
         );
-        let go_types = &files[1];
-        let go_serde = &files[2];
-        // Every file keeps its banner and package clause; the split puts the interface
-        // in the types file and the (de)serialization in the serde file.
-        assert!(go_types.text.starts_with(BANNER));
-        assert!(go_types.text.contains("package payments"));
-        assert!(go_types
-            .text
-            .contains("type Method interface{ isMethod() }"));
-        assert!(!go_types.text.contains("import "));
-        assert!(!go_types.text.contains("MarshalJSON"));
+        assert!(!paths
+            .contains(&"rust/payments/internal.rs".replace('/', std::path::MAIN_SEPARATOR_STR)));
+        let go_types = text_at(&files, "go/payments/types.go");
+        let go_internal = text_at(&files, "go/payments/internal.go");
+        // Both groups keep their banner and the module's package clause; the split
+        // puts the interface in the public group and the serialization in the
+        // internal one, and the two are one Go package, so neither imports the
+        // other.
+        assert!(go_types.starts_with(BANNER));
+        assert!(go_types.contains("package payments"));
+        assert!(go_types.contains("type Method interface{ isMethod() }"));
+        assert!(!go_types.contains("import "));
+        assert!(!go_types.contains("MarshalJSON"));
 
-        assert!(go_serde.text.starts_with(BANNER));
-        assert!(go_serde.text.contains("package payments"));
-        assert!(go_serde.text.contains("func marshalVariant("));
-        assert!(go_serde
-            .text
-            .contains("func UnmarshalMethod(b []byte) (Method, error) {"));
-        assert!(go_serde
-            .text
-            .contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
-        assert!(go_serde.text.contains("import \"encoding/json\""));
-        assert!(go_serde.text.contains("import \"fmt\""));
+        assert!(go_internal.starts_with(BANNER));
+        assert!(go_internal.contains("package payments"));
+        assert!(go_internal.contains("func marshalVariant("));
+        assert!(go_internal.contains("func UnmarshalMethod(b []byte) (Method, error) {"));
+        assert!(go_internal.contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
+        assert!(go_internal.contains("import \"encoding/json\""));
+        assert!(go_internal.contains("import \"fmt\""));
     }
 
     /// A model with one async operation declaring one error, so every target
@@ -504,47 +469,42 @@ mod tests {
             &CodegenConfig::default(),
         )
         .unwrap();
-        let text_of = |path: &str| {
-            files
-                .iter()
-                .find(|f| f.path.to_string_lossy().replace('\\', "/") == path)
-                .unwrap_or_else(|| panic!("missing {path}"))
-                .text
-                .clone()
-        };
+        let text_of = |path: &str| text_at(&files, path).to_string();
 
         // Rust: the enum root, the Api payload enum, the async client trait, and
-        // the discriminator next to the serde helpers.
-        let rust_types = text_of("rust/payments.rs");
+        // the discriminator in the internal group.
+        let rust_types = text_of("rust/payments/types.rs");
         assert!(rust_types.contains("pub enum TonoError {"));
         assert!(rust_types.contains("Undeclared(APIError),"));
         assert!(rust_types.contains("async fn get_charge(&self) -> Result<Charge, TonoError>;"));
-        let rust_serde = text_of("rust/payments_serde.rs");
-        assert!(rust_serde
+        // Rust has no generated client, so the error discriminator is part of the
+        // surface a consumer implements the trait against, not something the SDK
+        // keeps to itself.
+        assert!(rust_types
             .contains("pub fn decode_get_charge_error(status: u16, body: &str) -> TonoError {"));
 
         // Go: error values with no root, the blocking interface, and the
         // discriminator in the serde file.
-        let go_types = text_of("go/payments.go");
+        let go_types = text_of("go/payments/types.go");
         assert!(go_types.contains("type APIError struct {"));
         assert!(!go_types.contains("TonoError"));
         assert!(go_types.contains("GetCharge() (Charge, error)"));
         assert!(go_types.contains("func (e *NotFound) Retryable() bool { return false }"));
-        let go_serde = text_of("go/payments_serde.go");
+        let go_serde = text_of("go/payments/internal.go");
         assert!(go_serde.contains("func DecodeGetChargeError(status int, body []byte) error {"));
 
         // TypeScript: the class hierarchy, the Promise-returning client, and the
         // discriminator with the codecs.
-        let ts_types = text_of("typescript/payments.ts");
+        let ts_types = text_of("typescript/payments/types.ts");
         assert!(ts_types.contains("export abstract class TonoError extends Error {"));
         assert!(ts_types.contains("export class NotFoundError extends APIError {"));
         assert!(ts_types.contains("getCharge(): Promise<Charge>;"));
-        let ts_serde = text_of("typescript/payments_serde.ts");
+        let ts_serde = text_of("typescript/payments/internal.ts");
         assert!(ts_serde.contains(
             "export function decodeGetChargeError(status: number, body: string): TonoError {"
         ));
         assert!(ts_serde.contains(
-            "import { APIError, Charge, NotFound, NotFoundError, TonoError } from \"./payments\";"
+            "import { APIError, Charge, NotFound, NotFoundError, TonoError } from \"./types\";"
         ));
     }
 
@@ -561,6 +521,62 @@ mod tests {
             vec![TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript]
         );
         assert!(parse_targets("rust,java").is_err());
+    }
+
+    /// A module declaring two entries, one of them named something other than
+    /// `client`, so the layout has to name a group after each declaration.
+    fn two_entry_model() -> Model {
+        let entry = |name: &str| Shape {
+            id: format!("notes#{name}"),
+            kind: ShapeKind::Entry {
+                fields: vec![crate::ir::EntryField {
+                    name: "endpoint".into(),
+                    target: Tref::Prim(Prim::String),
+                    sources: vec![],
+                    format: None,
+                    transforms: vec![],
+                    select: None,
+                    binds: vec![],
+                    constraints: vec![],
+                    traits: vec![crate::ir::Trait {
+                        id: "arg".into(),
+                        value: serde_json::Value::Null,
+                    }],
+                }],
+                operations: vec![],
+            },
+            traits: vec![],
+        };
+        Model {
+            tono_ir_version: 6,
+            modules: vec![Module {
+                name: "notes".into(),
+                shapes: vec![entry("admin"), entry("reader")],
+                operations: vec![],
+                extensions: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn each_entry_declaration_gets_a_group_named_after_it() {
+        for (target, ext) in [(TargetKind::Go, "go"), (TargetKind::TypeScript, "ts")] {
+            let config = CodegenConfig {
+                go_module: Some("example.com/sdk".into()),
+                ..CodegenConfig::default()
+            };
+            let files = generate(&two_entry_model(), &[target], &config).unwrap();
+            let paths = paths_of(&files);
+            let dir = target.dir();
+            // Two entries in one module are two groups, each named for its
+            // declaration rather than for a fixed `client`.
+            assert!(paths.contains(&format!("{dir}/notes/admin.{ext}")));
+            assert!(paths.contains(&format!("{dir}/notes/reader.{ext}")));
+            // Each holds its own constructor, not the other's.
+            let admin = text_at(&files, &format!("{dir}/notes/admin.{ext}"));
+            assert!(admin.contains("Admin"));
+            assert!(!admin.contains("Reader"));
+        }
     }
 
     // ── Sub-package mapping and config hooks ────────────────────────────
@@ -633,28 +649,38 @@ mod tests {
         let paths = paths_of(&files);
         // Rust and TypeScript use the dotted path as a file path; Go nests the
         // file inside a package directory named for the last segment.
-        assert!(paths.contains(&"rust/payments/common.rs".to_string()));
-        assert!(paths.contains(&"rust/payments/charge.rs".to_string()));
-        assert!(paths.contains(&"go/payments/common/common.go".to_string()));
-        assert!(paths.contains(&"typescript/payments/common.ts".to_string()));
-        assert!(paths.contains(&"typescript/payments/charge.ts".to_string()));
+        assert!(paths.contains(&"rust/payments/common/types.rs".to_string()));
+        assert!(paths.contains(&"rust/payments/charge/types.rs".to_string()));
+        assert!(paths.contains(&"go/payments/common/types.go".to_string()));
+        assert!(paths.contains(&"typescript/payments/common/types.ts".to_string()));
+        assert!(paths.contains(&"typescript/payments/charge/types.ts".to_string()));
 
         // The cross-package reference imports through each language's idiomatic
         // module path: Rust an absolute crate path and TypeScript a path relative
         // to the importing file. The Go cross-package import needs the module path
         // and is covered by [`go_module_prefix_makes_cross_package_imports_absolute`];
         // emitting it without a module path is rejected by [`check_go_layout`].
-        assert!(text_at(&files, "rust/payments/charge.rs")
-            .contains("use crate::payments::common::Money;"));
-        assert!(text_at(&files, "typescript/payments/charge.ts").contains("from \"./common\""));
+        assert!(text_at(&files, "rust/payments/charge/types.rs")
+            .contains("use crate::payments::common::types::Money;"));
+        assert!(text_at(&files, "typescript/payments/charge/types.ts")
+            .contains("from \"../common/types\""));
         // The Go package is named for the last segment, not the dotted path.
-        assert!(text_at(&files, "go/payments/common/common.go").contains("package common"));
+        assert!(text_at(&files, "go/payments/common/types.go").contains("package common"));
 
-        // Rust gets a module tree so the crate paths resolve.
+        // Rust gets a module tree so the crate paths resolve, and each module
+        // re-exports its public groups.
         assert!(paths.contains(&"rust/payments/mod.rs".to_string()));
-        let mod_rs = text_at(&files, "rust/payments/mod.rs");
-        assert!(mod_rs.contains("pub mod common;"));
-        assert!(mod_rs.contains("pub mod charge;"));
+        let namespace = text_at(&files, "rust/payments/mod.rs");
+        assert!(namespace.contains("pub mod common;"));
+        assert!(namespace.contains("pub mod charge;"));
+        assert!(text_at(&files, "rust/payments/common/mod.rs").contains("pub use types::*;"));
+        // TypeScript gets a barrel per module, and the package's exports map lists
+        // exactly those.
+        assert!(text_at(&files, "typescript/payments/common/index.ts")
+            .contains("export * from \"./types\";"));
+        let manifest = text_at(&files, "typescript/package.json");
+        assert!(manifest.contains("\"./payments/common\": \"./payments/common/index.ts\""));
+        assert!(!manifest.contains("internal"));
     }
 
     #[test]
@@ -664,7 +690,7 @@ mod tests {
             ..CodegenConfig::default()
         };
         let files = generate(&sub_package_model(), &[TargetKind::Go], &config).unwrap();
-        assert!(text_at(&files, "go/payments/charge/charge.go")
+        assert!(text_at(&files, "go/payments/charge/types.go")
             .contains("import \"example.com/sdk/payments/common\""));
     }
 
@@ -677,10 +703,10 @@ mod tests {
         };
         let files = generate(&sub_package_model(), &[TargetKind::Rust], &config).unwrap();
         let paths = paths_of(&files);
-        assert!(paths.contains(&"rust/payments_common.rs".to_string()));
-        assert!(paths.contains(&"rust/payments_charge.rs".to_string()));
-        assert!(text_at(&files, "rust/payments_charge.rs")
-            .contains("use crate::payments_common::Money;"));
+        assert!(paths.contains(&"rust/payments_common/types.rs".to_string()));
+        assert!(paths.contains(&"rust/payments_charge/types.rs".to_string()));
+        assert!(text_at(&files, "rust/payments_charge/types.rs")
+            .contains("use crate::payments_common::types::Money;"));
     }
 
     #[test]
@@ -692,18 +718,18 @@ mod tests {
         };
         let files = generate(&sub_package_model(), &[TargetKind::Rust], &config).unwrap();
         let paths = paths_of(&files);
-        assert!(paths.contains(&"rust/billing/common.rs".to_string()));
-        assert!(paths.contains(&"rust/billing/charge.rs".to_string()));
-        assert!(text_at(&files, "rust/billing/charge.rs")
-            .contains("use crate::billing::common::Money;"));
+        assert!(paths.contains(&"rust/billing/common/types.rs".to_string()));
+        assert!(paths.contains(&"rust/billing/charge/types.rs".to_string()));
+        assert!(text_at(&files, "rust/billing/charge/types.rs")
+            .contains("use crate::billing::common::types::Money;"));
     }
 
     #[test]
-    fn single_segment_modules_keep_the_flat_layout() {
-        // The common single-module case is unchanged by the sub-package mapping.
+    fn a_single_segment_module_still_gets_its_own_package_directory() {
+        // A module is a directory of groups in every target, so even the flat
+        // single-module case nests: the groups need somewhere to sit together.
         let files = generate(&demo_model(), &[TargetKind::Go], &CodegenConfig::default()).unwrap();
-        let paths = paths_of(&files);
-        assert!(paths.contains(&"go/payments.go".to_string()));
+        assert_eq!(paths_of(&files), vec!["go/payments/types.go".to_string()]);
     }
 
     #[test]

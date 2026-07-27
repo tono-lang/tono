@@ -125,7 +125,9 @@ fn gen_from_flags(
     // silently-broken source.
     check_go_layout(&model, &targets, config)?;
     for file in generate(&model, &targets, config)? {
-        let formatted = Formatter::for_target(file.target).run(&file.text).text;
+        let formatted = Formatter::for_output(file.target, &file.path)
+            .run(&file.text)
+            .text;
         write_file(&out_root.join(&file.path), &formatted)?;
     }
     Ok(())
@@ -157,7 +159,9 @@ fn gen_from_manifest(config_path: Option<&str>, ir_path: &Option<String>) -> Res
         let casing = resolved_casing(target);
         check_go_layout(&model, &[target.kind], &codegen)?;
         for file in generate_target(&model, target.kind, &codegen, &casing)? {
-            let formatted = Formatter::for_target(file.target).run(&file.text).text;
+            let formatted = Formatter::for_output(file.target, &file.path)
+                .run(&file.text)
+                .text;
             // Paths carry the `<target-dir>/` prefix; strip it so the files land
             // directly under the target's configured `out`.
             let rel = file

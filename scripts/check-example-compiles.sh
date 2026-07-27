@@ -3,10 +3,10 @@
 # guard only proves the output is unchanged; this proves it is correct. Each SDK
 # is built in a throwaway project so nothing leaks into the repo.
 #
-# The example is a two-module project, so the SDKs are laid out as sub-packages:
-# Rust nested modules under a crate root, Go packages under a module path, and
-# TypeScript files under sub-paths. The crate root (lib.rs) and the Go module path
-# are the consumer's to provide; the codegen supplies the module tree beneath them.
+# The example is a two-module project, so the SDKs are laid out as emission
+# groups: Rust modules of a crate (whose root the codegen now emits), Go packages
+# under a module path, and TypeScript files under sub-paths with a package
+# manifest. Only the Go module path is the consumer's to provide.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,19 +18,9 @@ trap 'rm -rf "$work"' EXIT
 
 echo "rust..."
 mkdir -p "$work/rust/src"
+# The crate root is generated: it declares each module and marks the shared
+# internal group crate-visible, so nothing outside the crate can reach it.
 cp -R "$sdk"/rust/. "$work/rust/src/"
-# The crate root declares each top-level generated module (a directory or a bare
-# file); the generated mod.rs files declare everything beneath.
-: >"$work/rust/src/lib.rs"
-for entry in "$work"/rust/src/*; do
-  base="$(basename "$entry")"
-  [ "$base" = "lib.rs" ] && continue
-  if [ -d "$entry" ]; then
-    echo "pub mod $base;" >>"$work/rust/src/lib.rs"
-  else
-    echo "pub mod ${base%.rs};" >>"$work/rust/src/lib.rs"
-  fi
-done
 cat >"$work/rust/Cargo.toml" <<'EOF'
 [package]
 name = "example_rust"
@@ -95,6 +85,35 @@ EOF
     && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
     && go mod tidy >/dev/null \
     && go build ./... && go run ./verify)
+
+# The shared group sits under internal/, which Go enforces: a module outside the
+# SDK cannot import it, however it spells the path.
+echo "go internal fence..."
+mkdir -p "$work/outside"
+cat >"$work/outside/main.go" <<EOF
+package main
+
+import _ "$go_module/internal/tono"
+
+func main() {}
+EOF
+(
+    cd "$work/outside"
+    go mod init example.com/outside >/dev/null 2>&1
+    go mod edit -require="$go_module@v0.0.0"
+    go mod edit -replace="$go_module=$work/go"
+    # Resolution itself is where Go refuses the import, so both steps count as
+    # the fence holding; only a clean build would mean it does not.
+    if go mod tidy >"$work/outside/err.txt" 2>&1 && go build ./... >>"$work/outside/err.txt" 2>&1; then
+        echo "the SDK's internal package must not be importable from outside it" >&2
+        exit 1
+    fi
+    if ! grep -q internal "$work/outside/err.txt"; then
+        echo "expected an internal-package error, got:" >&2
+        cat "$work/outside/err.txt" >&2
+        exit 1
+    fi
+)
 
 echo "typescript..."
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"

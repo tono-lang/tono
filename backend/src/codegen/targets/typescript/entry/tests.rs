@@ -33,7 +33,12 @@ fn with_descriptors(mut module: Module) -> Module {
 }
 
 fn text(module: &Module) -> String {
-    rendered(&entry_decls(module, &ts_casing()), &TsRules)
+    {
+        let emission = emit(module, &ts_casing());
+        let mut decls = emission.shared;
+        decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
+        rendered(&decls, &TsRules)
+    }
 }
 
 #[test]
@@ -421,7 +426,8 @@ fn a_module_without_entries_emits_nothing() {
         operations: vec![],
         extensions: vec![],
     };
-    assert!(entry_decls(&module, &ts_casing()).is_empty());
+    let emission = emit(&module, &ts_casing());
+    assert!(emission.shared.is_empty() && emission.per_entry.is_empty());
 }
 
 #[test]

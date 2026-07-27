@@ -299,3 +299,36 @@ pub fn assert_emits_no_op_stub(target: &impl Target) {
 // source size ceiling; they are part of the same helper surface.
 mod entries;
 pub use entries::*;
+
+/// Resolve a module's emitted groups the way the pipeline does: record which
+/// group declares each symbol, then re-point every reference at it. A unit test
+/// that renders a group in isolation would otherwise see references still
+/// pointing at bare IR module names, and read imports the generated SDK never
+/// gets.
+pub fn resolve_groups(
+    mut files: Vec<crate::codegen::tree::ModuleFile>,
+) -> Vec<crate::codegen::tree::ModuleFile> {
+    crate::codegen::assemble::resolve_groups(&mut files);
+    files
+}
+
+/// Render the group with the given name out of a module's emitted groups,
+/// panicking when the module did not emit it.
+pub fn render_group(
+    files: &[crate::codegen::tree::ModuleFile],
+    group: &str,
+    target: crate::codegen::TargetKind,
+    rules: &dyn RenderRules,
+) -> String {
+    let module_file = files
+        .iter()
+        .find(|f| f.group.name == group)
+        .unwrap_or_else(|| panic!("module did not emit a {group:?} group"));
+    crate::codegen::render::render_file_with(
+        &module_file.file,
+        &crate::codegen::layout::SameUnit { target },
+        rules,
+        &crate::codegen::Formatter::new("cat", vec![]),
+    )
+    .text
+}

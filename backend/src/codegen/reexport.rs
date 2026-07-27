@@ -1,0 +1,232 @@
+//! The per-module re-export each target needs to make its groups reachable.
+//!
+//! Splitting a module across groups is only half the layout; the other half is
+//! saying, once per module, what of it a consumer may reach. Rust declares the
+//! module's groups and re-exports the public ones with `pub use`, leaving the
+//! internal one a private `mod`. TypeScript emits the module's barrel and lists
+//! only the barrels in the package's `exports` map, so a deep import of an
+//! internal file is refused by the resolver. Go needs neither: a module is a
+//! single package, so its groups are already one unit, and the SDK's shared
+//! group is fenced off by `internal/` instead.
+//!
+//! There is deliberately no root barrel aggregating the modules: an SDK's
+//! modules are separate surfaces, and flattening them into one namespace would
+//! make every rename of a module a breaking change to a name that never moved.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+
+use crate::codegen::group::Group;
+use crate::codegen::layout;
+use crate::codegen::pipeline::{GeneratedFile, TargetKind, BANNER};
+
+/// A directory's children in the Rust module tree.
+#[derive(Default)]
+struct RustDir {
+    /// Child directories, each declared as a module of this one.
+    dirs: BTreeSet<String>,
+    /// Child files, as `(module name, public)`.
+    files: BTreeMap<String, bool>,
+}
+
+/// The Rust module tree: a `mod.rs` per directory of generated files and a
+/// `lib.rs` at the crate root, declaring each child and re-exporting the public
+/// groups so a consumer names `sdk::payments::Charge` rather than reaching into
+/// the group a declaration happens to live in.
+pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
+    let root = PathBuf::from(TargetKind::Rust.dir());
+    let mut dirs: BTreeMap<PathBuf, RustDir> = BTreeMap::new();
+    dirs.entry(root.clone()).or_default();
+    for group in groups {
+        let path = layout::output_path(TargetKind::Rust, group);
+        let parent = path.parent().unwrap_or(&root).to_path_buf();
+        dirs.entry(parent.clone())
+            .or_default()
+            .files
+            .insert(group.name.clone(), !group.is_internal());
+        // Register each directory as a child of the one above it, up to the
+        // crate root, so an intermediate namespace directory is declared too.
+        let mut child = parent;
+        while let Some(above) = child.parent().map(PathBuf::from) {
+            if child == root {
+                break;
+            }
+            let name = child
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            dirs.entry(above.clone()).or_default().dirs.insert(name);
+            child = above;
+        }
+    }
+    dirs.into_iter()
+        .map(|(dir, node)| {
+            let mut body = String::new();
+            for name in &node.dirs {
+                body.push_str(&format!("pub mod {name};\n"));
+            }
+            for (name, public) in &node.files {
+                // An internal group is crate-visible and no more: the SDK's own
+                // files reach it, a consumer of the crate has no path to it at
+                // all. Its declarations exist for the SDK's use, so the lint
+                // that wants every item reached is not the right judge of them.
+                if *public {
+                    body.push_str(&format!("pub mod {name};\n"));
+                } else {
+                    body.push_str(&format!("#[allow(dead_code)]\npub(crate) mod {name};\n"));
+                }
+            }
+            let uses: String = node
+                .files
+                .iter()
+                .filter(|(_, public)| **public)
+                .map(|(name, _)| format!("pub use {name}::*;\n"))
+                .collect();
+            if !uses.is_empty() {
+                body.push('\n');
+                body.push_str(&uses);
+            }
+            let name = if dir == root { "lib.rs" } else { "mod.rs" };
+            GeneratedFile {
+                target: TargetKind::Rust,
+                path: dir.join(name),
+                text: format!("{BANNER}{body}"),
+            }
+        })
+        .collect()
+}
+
+/// The TypeScript barrels and the package manifest: one `index.ts` per module
+/// re-exporting its public groups, and a `package.json` whose `exports` map lists
+/// exactly those barrels, so an internal file has no specifier a consumer can
+/// resolve.
+pub fn typescript_barrels(groups: &[Group]) -> Vec<GeneratedFile> {
+    let mut by_module: BTreeMap<&str, Vec<&Group>> = BTreeMap::new();
+    for group in groups {
+        if let Some(module) = group.module.as_deref() {
+            by_module.entry(module).or_default().push(group);
+        }
+    }
+    let mut files = Vec::new();
+    let mut exports: Vec<(String, String)> = Vec::new();
+    for (module, groups) in by_module {
+        let dir = PathBuf::from(TargetKind::TypeScript.dir()).join(layout::module_dir(module));
+        let body: String = groups
+            .iter()
+            .filter(|g| !g.is_internal())
+            .map(|g| format!("export * from \"./{}\";\n", g.name))
+            .collect();
+        files.push(GeneratedFile {
+            target: TargetKind::TypeScript,
+            path: dir.join("index.ts"),
+            text: format!("{BANNER}{body}"),
+        });
+        let sub = layout::module_dir(module)
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        exports.push((format!("./{sub}"), format!("./{sub}/index.ts")));
+    }
+    let entries: Vec<String> = exports
+        .iter()
+        .map(|(key, value)| format!("    \"{key}\": \"{value}\""))
+        .collect();
+    files.push(GeneratedFile {
+        target: TargetKind::TypeScript,
+        path: PathBuf::from(TargetKind::TypeScript.dir()).join("package.json"),
+        // JSON carries no comment, so this one file has no banner.
+        text: format!("{{\n  \"exports\": {{\n{}\n  }}\n}}\n", entries.join(",\n")),
+    });
+    files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_at<'a>(files: &'a [GeneratedFile], path: &str) -> &'a str {
+        let want = path.replace('/', std::path::MAIN_SEPARATOR_STR);
+        &files
+            .iter()
+            .find(|f| f.path.to_string_lossy() == want)
+            .unwrap_or_else(|| panic!("no file at {path}"))
+            .text
+    }
+
+    fn payments() -> Vec<Group> {
+        vec![
+            Group::root_internal(),
+            Group::types("payments.common"),
+            Group::module_internal("payments.common"),
+            Group::types("payments.charges"),
+            Group::entry("payments.charges", "client"),
+            Group::module_internal("payments.charges"),
+        ]
+    }
+
+    #[test]
+    fn the_crate_root_declares_its_children_and_keeps_the_shared_group_private() {
+        let files = rust_module_tree(&payments());
+        let lib = text_at(&files, "rust/lib.rs");
+        assert!(lib.contains("pub mod payments;"));
+        // The shared group is a private module: unreachable from outside the crate.
+        assert!(lib.contains("pub(crate) mod internal;"));
+        assert!(!lib.contains("pub mod internal;"));
+        // No root barrel: the crate root declares modules, it does not flatten
+        // them into one namespace.
+        assert!(!lib.contains("pub use payments"));
+    }
+
+    #[test]
+    fn a_module_declares_its_groups_and_re_exports_the_public_ones() {
+        let files = rust_module_tree(&payments());
+        let charges = text_at(&files, "rust/payments/charges/mod.rs");
+        assert!(charges.contains("pub mod types;"));
+        assert!(charges.contains("pub mod client;"));
+        assert!(charges.contains("pub(crate) mod internal;"));
+        assert!(!charges.contains("pub mod internal;"));
+        assert!(charges.contains("pub use types::*;"));
+        assert!(charges.contains("pub use client::*;"));
+        assert!(!charges.contains("pub use internal::*;"));
+        // The namespace directory above the modules only declares them.
+        let namespace = text_at(&files, "rust/payments/mod.rs");
+        assert!(namespace.contains("pub mod charges;"));
+        assert!(namespace.contains("pub mod common;"));
+    }
+
+    #[test]
+    fn a_barrel_per_module_re_exports_only_the_public_groups() {
+        let files = typescript_barrels(&payments());
+        let barrel = text_at(&files, "typescript/payments/charges/index.ts");
+        assert!(barrel.contains("export * from \"./types\";"));
+        assert!(barrel.contains("export * from \"./client\";"));
+        assert!(!barrel.contains("internal"));
+    }
+
+    #[test]
+    fn the_package_exports_map_lists_the_barrels_and_nothing_else() {
+        let files = typescript_barrels(&payments());
+        let manifest = text_at(&files, "typescript/package.json");
+        assert!(manifest.contains("\"./payments/charges\": \"./payments/charges/index.ts\""));
+        assert!(manifest.contains("\"./payments/common\": \"./payments/common/index.ts\""));
+        // Nothing internal is reachable, and there is no root entry point that
+        // would aggregate the modules.
+        assert!(!manifest.contains("internal"));
+        assert!(!manifest.contains("\".\":"));
+        assert!(serde_json::from_str::<serde_json::Value>(manifest).is_ok());
+    }
+
+    #[test]
+    fn a_single_segment_module_still_gets_its_own_directory_and_barrel() {
+        let groups = vec![
+            Group::types("notes"),
+            Group::entry("notes", "admin"),
+            Group::module_internal("notes"),
+        ];
+        let rust = rust_module_tree(&groups);
+        assert!(text_at(&rust, "rust/lib.rs").contains("pub mod notes;"));
+        assert!(text_at(&rust, "rust/notes/mod.rs").contains("pub use admin::*;"));
+        let ts = typescript_barrels(&groups);
+        assert!(text_at(&ts, "typescript/notes/index.ts").contains("export * from \"./admin\";"));
+        assert!(text_at(&ts, "typescript/package.json").contains("\"./notes\""));
+    }
+}

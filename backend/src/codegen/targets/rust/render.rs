@@ -190,14 +190,15 @@ impl RustRules {
 impl RenderRules for RustRules {
     fn render_import(&self, _from_module: &str, module: &str, names: &[&str]) -> String {
         // Rust paths are absolute from the crate root, so the importer is
-        // irrelevant. A dotted module name is a Rust module path: payments.common
-        // -> payments::common.
-        let path = module.replace('.', "::");
+        // irrelevant. A group is a module of the crate: payments.common's types
+        // group is `crate::payments::common::types`.
+        let path = crate::codegen::layout::rust_path(module)
+            .unwrap_or_else(|| format!("crate::{}", module.replace('.', "::")));
         // A single name needs no braces; several group into one `use`.
         if let [name] = names {
-            format!("use crate::{path}::{name};")
+            format!("use {path}::{name};")
         } else {
-            format!("use crate::{path}::{{{}}};", names.join(", "))
+            format!("use {path}::{{{}}};", names.join(", "))
         }
     }
 

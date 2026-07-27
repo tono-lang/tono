@@ -9,11 +9,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tono_backend::codegen::render::render_file_with_companion;
-use tono_backend::codegen::targets::rust::emit::emit_module;
 use tono_backend::codegen::targets::rust::types::rust_casing;
-use tono_backend::codegen::targets::rust::RustRules;
-use tono_backend::codegen::Formatter;
+use tono_backend::codegen::{generate_target, CodegenConfig, Formatter, TargetKind};
+use tono_backend::ir::Model;
 
 mod common;
 use common::matrix_module as demo_module;
@@ -45,32 +43,43 @@ fn generated_rust_compiles_and_round_trips() {
     }
     let dir = crate_dir();
 
-    // Generate the module and format it with the engine's formatter (rustfmt). Rust
-    // splits each module into a types file and a serde file; write both as the
-    // `models`/`models_serde` modules the harness crate declares.
+    // Generate the whole SDK and format it with the engine's formatter (rustfmt),
+    // then write it as the harness crate's library. The drivers are separate
+    // binaries, so they reach the SDK from outside it: a group the layout marks
+    // internal is out of their reach, exactly as for any consumer.
+    let model = Model {
+        tono_ir_version: 6,
+        modules: vec![demo_module()],
+    };
+    let files = generate_target(
+        &model,
+        TargetKind::Rust,
+        &CodegenConfig::default(),
+        &rust_casing(),
+    )
+    .expect("generates");
+    let root = dir.join("src");
+    let _ = std::fs::remove_dir_all(root.join("models"));
     let formatter = Formatter::new("rustfmt", vec!["--edition".into(), "2021".into()]);
-    for module_file in emit_module(&demo_module(), &rust_casing()) {
-        let formatted = render_file_with_companion(
-            &module_file.file,
-            module_file.imports_companion.as_deref(),
-            &RustRules,
-            &formatter,
-        );
+    for file in files {
+        let formatted = formatter.run(&file.text);
         assert!(
             formatted.warning.is_none(),
             "rustfmt must format cleanly: {:?}",
             formatted.warning
         );
-        std::fs::write(
-            dir.join(format!("src/models{}.rs", module_file.suffix)),
-            &formatted.text,
-        )
-        .expect("write models source");
+        let relative = file
+            .path
+            .strip_prefix(TargetKind::Rust.dir())
+            .expect("target-rooted path");
+        let out = root.join(relative);
+        std::fs::create_dir_all(out.parent().expect("a parent")).expect("create module dir");
+        std::fs::write(&out, &formatted.text).expect("write models source");
     }
 
     // A compile error here is a generation bug; the driver asserts the wire cases.
     let run = Command::new("cargo")
-        .args(["run", "--quiet"])
+        .args(["run", "--quiet", "--bin", "roundtrip"])
         .current_dir(&dir)
         .output()
         .expect("run cargo");

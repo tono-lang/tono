@@ -5,6 +5,7 @@
 //! than written by hand. The tree is target-agnostic: each language backend
 //! supplies a Symbol table plus render rules, but the node set here is shared.
 
+use crate::codegen::group::Group;
 use crate::codegen::symbol::Symbol;
 
 /// A source file: a module name plus its top-level declarations. Imports are
@@ -17,21 +18,42 @@ pub struct File {
     pub decls: Vec<Decl>,
 }
 
-/// One output file for a module: a basename suffix ("" for the main types file,
-/// "_serde" for the serialization file) plus the file itself. A module can emit
-/// more than one so types and serialization land in separate files.
+/// One emission group's output file: the group it belongs to (which decides
+/// where it lands and how visible it is) plus the file itself.
 ///
-/// In Go the split files share one package, so a self-module symbol still needs no
-/// import (`imports_companion` is `None`). In TypeScript and Rust the split files
-/// are separate modules, so the serde file references types that live in the types
-/// file: when `imports_companion` names the companion module path, the import
-/// engine redirects self-module symbols to an import of that companion instead of
-/// dropping them.
+/// `provides` names the symbols the file declares through opaque text (a Raw
+/// item: an `impl` block, a helper module, a macro), which the index that maps a
+/// symbol to its defining group cannot read off the tree. Everything declared
+/// structurally is picked up without being listed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleFile {
-    pub suffix: &'static str,
+    pub group: Group,
     pub file: File,
-    pub imports_companion: Option<String>,
+    pub provides: Vec<String>,
+}
+
+impl ModuleFile {
+    /// A group's file with nothing declared through opaque text. The file's
+    /// module is the group's path, since a group is what a module path denotes
+    /// once a module spans several files.
+    pub fn new(group: Group, decls: Vec<Decl>) -> Self {
+        Self {
+            file: File {
+                module: group.path(),
+                decls,
+            },
+            group,
+            provides: Vec::new(),
+        }
+    }
+
+    /// Declare the symbols this file's raw items define, so references to them
+    /// from other groups resolve to this file.
+    #[must_use]
+    pub fn providing(mut self, provides: Vec<String>) -> Self {
+        self.provides = provides;
+        self
+    }
 }
 
 /// A top-level declaration.

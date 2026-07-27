@@ -3,6 +3,7 @@
 //! the hook wrappers.
 
 use super::*;
+use crate::codegen::targets::typescript::client::import_specifier;
 
 /// The construction-only config interfaces (they never cross the wire, so the
 /// regular type emission skips them).
@@ -208,7 +209,7 @@ pub(super) fn transport_hook_wrappers(bound: &[BoundExtension<'_>], module: &Mod
                 contract = en.contract,
             ),
             vec![
-                Symbol::imported(b.symbol, import_specifier(b.module), b.symbol),
+                Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
                 runtime_import(ty),
                 module_symbol(&en.root, module),
                 module_symbol(&en.contract, module),
@@ -224,7 +225,7 @@ pub(super) fn transport_hook_wrappers(bound: &[BoundExtension<'_>], module: &Mod
                 sym = b.symbol,
             ),
             vec![
-                Symbol::imported(b.symbol, import_specifier(b.module), b.symbol),
+                Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
                 module_symbol(&en.root, module),
                 module_symbol(&en.contract, module),
             ],
@@ -257,32 +258,21 @@ pub(super) fn client_init_wrapper(
         format!(
             "// The client_init bridge: bespoke code runs over the resolved Settings\n\
              // (bespoke wins) before validation.\n\
-             function wrapClientInit(settings: {settings}): void {{\n  try {{\n    {sym}(settings);\n  }} catch (e) {{\n    if (e instanceof {root}) throw e;\n    throw new {contract}(\"client_init\", e);\n  }}\n}}",
+             export function wrapClientInit(settings: {settings}): void {{\n  try {{\n    {sym}(settings);\n  }} catch (e) {{\n    if (e instanceof {root}) throw e;\n    throw new {contract}(\"client_init\", e);\n  }}\n}}",
             settings = n.settings,
             sym = b.symbol,
             root = en.root,
             contract = en.contract,
         ),
         vec![
-            Symbol::imported(b.symbol, import_specifier(b.module), b.symbol),
+            Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
             module_symbol(&en.root, module),
             module_symbol(&en.contract, module),
+            // The resolved Settings are the entry's, so the bridge imports them
+            // from its group.
+            module_symbol(&n.settings, module),
         ],
     )]
-}
-
-/// A bound file path as a TypeScript import specifier (mirrors the loose-op
-/// client's rule).
-pub(super) fn import_specifier(module: &str) -> String {
-    let path = module
-        .strip_suffix(".ts")
-        .or_else(|| module.strip_suffix(".tsx"))
-        .unwrap_or(module);
-    if path.starts_with('.') || path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("./{path}")
-    }
 }
 
 pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
@@ -291,7 +281,7 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
         decls.push(Decl::raw(
             "// readEnv treats an unset and an empty variable the same: empty means\n\
              // not set, per the declared-source contract.\n\
-             function readEnv(name: string): string | undefined {\n\
+             export function readEnv(name: string): string | undefined {\n\
              \x20 const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;\n\
              \x20 const v = env?.[name];\n\
              \x20 return v === undefined || v === \"\" ? undefined : v;\n\
@@ -304,7 +294,7 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
             "// durationToMs parses the duration spelling shared across targets\n\
              // (Go's ParseDuration grammar: optional sign, bare zero, unit runs)\n\
              // into the runtime's millisecond values.\n\
-             function durationToMs(v: string): number {\n\
+             export function durationToMs(v: string): number {\n\
              \x20 let rest = v;\n\
              \x20 let sign = 1;\n\
              \x20 if (rest.startsWith(\"-\")) {\n\
@@ -341,7 +331,7 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
         decls.push(Decl::raw(
             "// strTransformWords splits a resolved value for the casing transforms:\n\
              // runs of spaces, hyphens, and underscores separate words.\n\
-             function strTransformWords(s: string): string[] {\n\
+             export function strTransformWords(s: string): string[] {\n\
              \x20 return s.split(/[ _-]+/).filter((w) => w !== \"\");\n\
              }"
             .to_string(),
@@ -367,7 +357,7 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
                 _ => continue,
             };
             decls.push(Decl::raw(format!(
-                "function {name}(s: string): string {{\n{body}\n}}"
+                "export function {name}(s: string): string {{\n{body}\n}}"
             )));
         }
     }

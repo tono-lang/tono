@@ -17,14 +17,16 @@ use std::collections::HashSet;
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::conventions::has_entries;
+use crate::codegen::group::Group;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::codecs::{
     emit_serde_decls, runtime_serde_helpers, runtime_type_helpers, RuntimeHelpers,
 };
 use crate::codegen::targets::go::errors;
 use crate::codegen::targets::go::types::{emit_type, emit_validators};
-use crate::codegen::tree::{Alias, Decl, File, ModuleFile};
+use crate::codegen::tree::{Alias, Decl, ModuleFile};
 use crate::codegen::validation;
+use crate::codegen::visibility::Exposed;
 use crate::ir::{Module, ShapeKind};
 
 /// The branded well-known types: distinct named string types, so they serialize
@@ -46,6 +48,24 @@ pub fn well_known_decls() -> Vec<Decl> {
 /// declaration).
 pub fn package_clause(name: &str) -> String {
     format!("package {name}\n")
+}
+
+/// The SDK-root group's declarations: the construction helpers every entry of
+/// every module calls. They serve no module in particular, so they sit in the
+/// SDK's shared `internal/` package rather than being repeated per module.
+///
+/// Nothing type-level goes here. A method has to live in its receiver's package,
+/// and a type a public struct exposes has to be nameable by a consumer, which
+/// `internal/` forbids; both keep the module's own package.
+pub fn shared_decls(model: &crate::ir::Model) -> Vec<Decl> {
+    if !model
+        .modules
+        .iter()
+        .any(crate::codegen::entries::has_entries)
+    {
+        return Vec::new();
+    }
+    crate::codegen::targets::go::entry::runtime_decls()
 }
 
 /// Whether any structure member in the module carries the `@entries` escape, which
@@ -79,19 +99,30 @@ pub fn emit_module(
     module: &Module,
     config: &CasingConfig,
     union_ids: &HashSet<String>,
+    exposed: &Exposed,
 ) -> Vec<ModuleFile> {
     let helpers = RuntimeHelpers {
         entries: uses_entries(module),
         variant: uses_union(module),
     };
-
+    // The branded well-known strings and the `Entries` container are part of the
+    // module's public surface (a struct field has one), and a method needs its
+    // receiver's package, so both stay here rather than in the shared package.
     let mut type_decls = well_known_decls();
     type_decls.extend(runtime_type_helpers(helpers));
     let mut serde_decls = runtime_serde_helpers(helpers);
+    // A shape a public type reaches is public; the rest are the module's own
+    // business and stay in its internal group.
+    let mut internal_decls = Vec::new();
     for shape in &module.shapes {
-        type_decls.extend(emit_type(shape, config));
-        // Validators live with the types (same package as the `Violation` record).
-        type_decls.extend(emit_validators(shape, config));
+        let into = if exposed.shape(shape) {
+            &mut type_decls
+        } else {
+            &mut internal_decls
+        };
+        into.extend(emit_type(shape, config));
+        // Validators live with the type they check.
+        into.extend(emit_validators(shape, config));
         serde_decls.extend(emit_serde_decls(shape, config, union_ids, &module.name));
     }
     let module_has_entries = crate::codegen::entries::has_entries(module);
@@ -118,36 +149,24 @@ pub fn emit_module(
         // would otherwise have carried.
         type_decls.extend(errors::standalone_validation_decls());
     }
-    if module_has_entries {
-        type_decls.extend(crate::codegen::targets::go::entry::type_decls(
-            module, config,
-        ));
-        serde_decls.extend(crate::codegen::targets::go::entry::serde_decls(
-            module, config,
-        ));
-    }
+    let entries = crate::codegen::targets::go::entry::emit(module, config);
+    internal_decls.extend(entries.shared);
+    internal_decls.extend(serde_decls);
 
-    let mut files = vec![ModuleFile {
-        suffix: "",
-        file: File {
-            module: module.name.clone(),
-            decls: type_decls,
-        },
-        // Go's split files share one package, so the serde file references the
-        // types with no import: there is no companion to import from.
-        imports_companion: None,
-    }];
-    // A pure-types module (no union, no @entries, no union-bearing container) emits
-    // no serde file at all.
-    if !serde_decls.is_empty() {
-        files.push(ModuleFile {
-            suffix: "_serde",
-            file: File {
-                module: module.name.clone(),
-                decls: serde_decls,
-            },
-            imports_companion: None,
-        });
+    let mut files = vec![ModuleFile::new(Group::types(&module.name), type_decls)];
+    // One group per entry declaration, named after it: the entry's own type, its
+    // constructor, and its operation methods, so the construction surface reads
+    // together instead of being split across a types and a codec file.
+    for (name, decls) in entries.per_entry {
+        files.push(ModuleFile::new(Group::entry(&module.name, &name), decls));
+    }
+    // A pure-types module (no union, no @entries, no union-bearing container,
+    // nothing hidden) has nothing internal to emit.
+    if !internal_decls.is_empty() {
+        files.push(ModuleFile::new(
+            Group::module_internal(&module.name),
+            internal_decls,
+        ));
     }
     files
 }
@@ -155,16 +174,11 @@ pub fn emit_module(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::render::render_file;
+    use crate::codegen::group::{INTERNAL, TYPES};
     use crate::codegen::targets::go::types::go_casing;
     use crate::codegen::targets::go::GoRules;
     use crate::codegen::test_support::{member, structure, union_shape};
-    use crate::codegen::Formatter;
     use crate::ir::{Prim, Tref};
-
-    fn passthrough() -> Formatter {
-        Formatter::new("cat", vec![])
-    }
 
     /// A single module's own union ids, the set the pipeline builds model-wide.
     fn union_ids(module: &Module) -> HashSet<String> {
@@ -176,14 +190,25 @@ mod tests {
             .collect()
     }
 
-    /// Render the text of the file with the given basename suffix ("" types,
-    /// "_serde" serialization), panicking if the module did not emit it.
-    fn rendered(files: &[ModuleFile], suffix: &str) -> String {
-        let mf = files
-            .iter()
-            .find(|f| f.suffix == suffix)
-            .unwrap_or_else(|| panic!("module did not emit a {suffix:?} file"));
-        render_file(&mf.file, &GoRules::default(), &passthrough()).text
+    /// Emit a module's groups with everything exposed, resolved the way the
+    /// pipeline resolves them.
+    fn groups(module: &Module) -> Vec<ModuleFile> {
+        crate::codegen::test_support::resolve_groups(emit_module(
+            module,
+            &go_casing(),
+            &union_ids(module),
+            &Exposed::all(),
+        ))
+    }
+
+    /// Render the named group of a module, panicking if it did not emit one.
+    fn rendered(files: &[ModuleFile], group: &str) -> String {
+        crate::codegen::test_support::render_group(
+            files,
+            group,
+            crate::codegen::TargetKind::Go,
+            &GoRules::default(),
+        )
     }
 
     #[test]
@@ -191,7 +216,7 @@ mod tests {
         // No operation means no taxonomy, but the validator returns the Validation
         // category, so its types must still be emitted or the package cannot compile.
         let module = crate::codegen::test_support::constrained_module();
-        let types = rendered(&emit_module(&module, &go_casing(), &union_ids(&module)), "");
+        let types = rendered(&groups(&module), TYPES);
         assert!(types.contains("type Violation struct {"));
         assert!(types.contains("type ValidationError struct {"));
         assert!(types.contains("func (e *ValidationError) Error() string"));
@@ -218,11 +243,11 @@ mod tests {
             operations: vec![],
             extensions: vec![],
         };
-        let files = emit_module(&module, &go_casing(), &union_ids(&module));
+        let files = groups(&module);
         // A pure-types module emits a single file: there is no serialization to hold.
         assert_eq!(files.len(), 1);
-        assert_eq!(files[0].suffix, "");
-        let out = rendered(&files, "");
+        assert_eq!(files[0].group.name, TYPES);
+        let out = rendered(&files, TYPES);
         // Well-known named strings and the tagged type are present; with no union and
         // no @entries, no runtime helper and no import is emitted.
         assert!(out.contains("type Timestamp string"));
@@ -270,12 +295,12 @@ mod tests {
             operations: vec![],
             extensions: vec![],
         };
-        let files = emit_module(&module, &go_casing(), &union_ids(&module));
+        let files = groups(&module);
         assert_eq!(files.len(), 2);
 
         // The types file holds the interface, wrappers, markers, and the struct types,
         // with no serialization and no import at all.
-        let types = rendered(&files, "");
+        let types = rendered(&files, TYPES);
         assert!(types.contains("type Method interface{ isMethod() }"));
         assert!(types.contains("type MethodCard struct{ Value CardData }"));
         assert!(types.contains("func (MethodCard) isMethod() {}"));
@@ -289,7 +314,7 @@ mod tests {
         // The serde file holds marshalVariant, the wrapper MarshalJSON, the dispatcher,
         // and the container UnmarshalJSON; it pulls encoding/json and fmt, but never
         // imports the module itself (the payload type is same-package).
-        let serde = rendered(&files, "_serde");
+        let serde = rendered(&files, INTERNAL);
         assert!(serde.contains("func marshalVariant("));
         assert!(serde.contains(
             "func (m MethodCard) MarshalJSON() ([]byte, error) { return marshalVariant("
@@ -324,12 +349,12 @@ mod tests {
             operations: vec![],
             extensions: vec![],
         };
-        let files = emit_module(&module, &go_casing(), &union_ids(&module));
+        let files = groups(&module);
         assert_eq!(files.len(), 2);
 
         // The Entry/Entries definitions and the typed field live in the types file,
         // with no imports and no (de)serialization methods.
-        let types = rendered(&files, "");
+        let types = rendered(&files, TYPES);
         assert!(types.contains("type Entry[K comparable, V any] struct {"));
         assert!(types.contains("type Entries[K comparable, V any] []Entry[K, V]"));
         assert!(types.contains("\tCounts Entries[int32, string] `json:\"counts\"`\n"));
@@ -338,7 +363,7 @@ mod tests {
 
         // The Entries methods live in the serde file, which pulls encoding/json; with
         // no union there is no marshalVariant.
-        let serde = rendered(&files, "_serde");
+        let serde = rendered(&files, INTERNAL);
         assert!(serde.contains("func (e Entries[K, V]) MarshalJSON() ([]byte, error) {"));
         assert!(serde.contains("func (e *Entries[K, V]) UnmarshalJSON(b []byte) error {"));
         assert!(serde.contains("import \"encoding/json\""));

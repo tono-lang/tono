@@ -4,14 +4,20 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 # The round-trip driver is the default binary; the conformance harness selects
-# the second binary explicitly with `--bin conformance`.
-default-run = "codegen-tests-rust"
+# the second binary explicitly with `--bin conformance`. Both are consumers of
+# the generated SDK, which is this crate's library: reaching it from outside the
+# crate is what proves the internal group is out of a consumer's reach.
+default-run = "roundtrip"
+
+[lib]
+name = "sdk"
+path = "src/lib.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# serde is used by the generated models.rs (written by the harness, gitignored),
+# serde is used by the generated SDK (written by the harness, gitignored),
 # so the static unused-dependency scan cannot see the usage.
 [package.metadata.cargo-machete]
 ignored = ["serde"]

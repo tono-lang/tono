@@ -66,6 +66,17 @@ impl Formatter {
         }
     }
 
+    /// The official formatter for one generated file. Almost always the target's
+    /// ([`Self::for_target`]); the exception is the TypeScript package manifest,
+    /// which is JSON and gets prettier's JSON parser rather than its TypeScript
+    /// one.
+    pub fn for_output(target: crate::codegen::TargetKind, path: &std::path::Path) -> Self {
+        if path.extension().is_some_and(|ext| ext == "json") {
+            return Formatter::new("prettier", vec!["--parser".into(), "json".into()]);
+        }
+        Self::for_target(target)
+    }
+
     /// Format `rough` by piping it through the subprocess. On a missing binary
     /// or a non-zero exit, return the rough text unchanged with a warning;
     /// never fail.

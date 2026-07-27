@@ -141,7 +141,9 @@ pub fn run(
     // read (a missing formatter degrades to the rough text), and the checker
     // compiles the same bytes the pane shows.
     for file in &mut files {
-        file.text = Formatter::for_target(file.target).run(&file.text).text;
+        file.text = Formatter::for_output(file.target, &file.path)
+            .run(&file.text)
+            .text;
     }
     let generated = assemble(&files);
     let verdict = match check(target, &files, scratch, options) {

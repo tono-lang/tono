@@ -9,7 +9,7 @@
 // The generated serde file imports this hook relative to itself, so drop the
 // ext/ directory next to the generated SDK files.
 
-import type { Settings } from "../../auth_serde";
+import type { Settings } from "../../auth";
 
 export function applyBearer(settings: Settings): void {
   if (settings.apiToken === "") {

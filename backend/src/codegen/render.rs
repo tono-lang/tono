@@ -11,24 +11,23 @@ use crate::codegen::imports;
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::File;
 
-/// Render a file to formatted source. Imports come first (collected and ordered
-/// by the engine), then a blank line, then the declarations separated by blank
-/// lines; the whole rough text is handed to `formatter`.
+/// Render a file to formatted source, dropping references back into the file's
+/// own module. Imports come first (collected and ordered by the engine), then a
+/// blank line, then the declarations separated by blank lines; the whole rough
+/// text is handed to `formatter`.
 pub fn render_file(file: &File, rules: &dyn RenderRules, formatter: &Formatter) -> Formatted {
-    render_file_with_companion(file, None, rules, formatter)
+    render_file_with(file, &imports::SelfModule, rules, formatter)
 }
 
-/// Like [`render_file`], but for a file split off from its module's types: a
-/// self-module symbol is imported from the `companion` module path (the types
-/// file) instead of being dropped. With `companion` `None` this is exactly
-/// [`render_file`].
-pub fn render_file_with_companion(
+/// Like [`render_file`], but each collected reference goes through `resolver`,
+/// which decides which file it points at and whether it needs an import at all.
+pub fn render_file_with(
     file: &File,
-    companion: Option<&str>,
+    resolver: &dyn imports::Resolver,
     rules: &dyn RenderRules,
     formatter: &Formatter,
 ) -> Formatted {
-    let imports = imports::collect_with_companion(file, companion);
+    let imports = imports::collect_with(file, resolver);
     let mut rough = String::new();
     // The imports arrive ordered by (module, imported), so names of the same
     // module are already adjacent; fold them into one statement per module.

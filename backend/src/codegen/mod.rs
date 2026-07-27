@@ -7,6 +7,7 @@
 //! module owns the language-agnostic core; per-language Symbol tables and render
 //! rules are supplied by target backends.
 
+pub mod assemble;
 pub mod casing;
 pub mod check;
 pub mod conventions;
@@ -14,11 +15,13 @@ pub mod doc;
 pub mod entries;
 pub mod extensions;
 pub mod format;
+pub mod group;
 pub mod imports;
 pub mod layout;
 pub mod modules;
 pub mod ops;
 pub mod pipeline;
+pub mod reexport;
 pub mod render;
 pub mod symbol;
 pub mod syntax;
@@ -29,10 +32,13 @@ pub mod test_support;
 mod traits;
 pub mod tree;
 pub mod validation;
+pub mod visibility;
 
+pub use assemble::resolve_groups;
 pub use casing::{CaseStyle, CasingConfig};
 pub use check::{check, CheckOptions, CheckOutcome};
 pub use format::{Formatted, Formatter};
+pub use group::{Audience, Group, Origin};
 pub use layout::check_go_layout;
 pub use modules::CodegenConfig;
 pub use pipeline::{

@@ -12,6 +12,7 @@
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::doc;
+use crate::codegen::layout;
 use crate::codegen::symbol::SymbolKind;
 use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
@@ -63,18 +64,17 @@ fn deprecated_prefix(reason: Option<&str>, indent: &str) -> String {
 }
 
 /// The Go render rules. `go_module` is the SDK's Go module path (from
-/// `--go-module`); a cross-package import to one of the SDK's own modules
-/// (`internal_modules`) needs it as a prefix, since Go has no relative imports.
-/// Standard-library imports (`encoding/json`, `fmt`) are not SDK modules, so they
-/// are never prefixed. Both are empty for the flat single-package layout, where no
-/// cross-package import arises.
+/// `--go-module`); a cross-package import to one of the SDK's own groups needs it
+/// as a prefix, since Go has no relative imports. Standard-library imports
+/// (`encoding/json`, `fmt`) are not the SDK's, so they are never prefixed.
 #[derive(Default)]
 pub struct GoRules {
     pub go_module: Option<String>,
-    pub internal_modules: std::collections::BTreeSet<String>,
-    /// The module of the file being rendered, so a reference to another package
-    /// gets a `pkg.` selector while a same-package one stays bare.
-    pub current_module: String,
+    /// The group path of the file being rendered, so a reference to another
+    /// package gets a `pkg.` selector while a same-package one stays bare. A
+    /// module's groups are files of one package, so only a reference out of the
+    /// module (or into the SDK's shared package) qualifies.
+    pub current: String,
 }
 
 /// The generic type-parameter clause of a definition (`[T any]`, `[T any, U any]`),
@@ -95,17 +95,16 @@ fn type_params(params: &[String]) -> String {
 impl TypeSyntax for GoRules {
     fn leaf(&self, symbol: &crate::codegen::symbol::Symbol) -> String {
         // A reference to another SDK package is qualified with that package's
-        // selector (its module's last segment); a same-package reference and a
-        // built-in stay bare. Only the SDK's own modules qualify, so a nested
-        // layout gets `common.Status` while the flat single-package layout (empty
-        // `internal_modules`) leaves every name bare.
+        // selector; a same-package reference and a built-in stay bare. Only the
+        // SDK's own groups qualify, so a cross-module reference gets
+        // `common.Status` while a sibling group of the same module, being the
+        // same package, leaves the name bare.
         match &symbol.import {
-            Some(import)
-                if import.module != self.current_module
-                    && self.internal_modules.contains(&import.module) =>
-            {
-                let pkg = import.module.rsplit('.').next().unwrap_or(&import.module);
-                format!("{pkg}.{}", symbol.name)
+            Some(import) if !layout::same_go_package(&self.current, &import.module) => {
+                match layout::go_selector(&import.module) {
+                    Some(pkg) => format!("{pkg}.{}", symbol.name),
+                    None => symbol.name.clone(),
+                }
             }
             _ => symbol.name.clone(),
         }
@@ -241,18 +240,20 @@ impl GoRules {
 
 impl RenderRules for GoRules {
     fn render_import(&self, _from_module: &str, module: &str, names: &[&str]) -> String {
-        // Go imports the whole package, so the per-symbol names play no part. An
-        // SDK module is a package sub-path (payments.common -> payments/common)
-        // prefixed with the SDK's Go module path so it resolves; a standard-library
-        // import (encoding/json, fmt) and an external module path (which already
-        // carries slashes, and whose dots are host-name dots) are left verbatim.
-        let is_internal = self.go_module.is_some() && self.internal_modules.contains(module);
-        let full = match &self.go_module {
-            Some(root) if is_internal => {
-                format!("{root}/{}", module.replace('.', "/"))
-            }
-            _ if module.contains('/') => module.to_string(),
-            _ => module.replace('.', "/"),
+        // Go imports the whole package, so the per-symbol names play no part. One
+        // of the SDK's own groups is a package sub-path prefixed with the SDK's
+        // Go module path so it resolves; a standard-library import
+        // (encoding/json, fmt) and an external module path (which already carries
+        // slashes, and whose dots are host-name dots) are left verbatim.
+        let sdk = self
+            .go_module
+            .as_deref()
+            .and_then(|root| layout::go_import(root, module));
+        let is_internal = sdk.is_some();
+        let full = match sdk {
+            Some(path) => path,
+            None if module.contains('/') => module.to_string(),
+            None => module.replace('.', "/"),
         };
         // Go infers the package selector from the path's last segment, but only
         // when that segment is a legal identifier. The runtimes/http-go package
@@ -330,22 +331,30 @@ mod tests {
         // Go imports the whole package, so the per-symbol names are ignored. With
         // no module path the flat package name stands alone.
         assert_eq!(
-            GoRules::default().render_import("billing", "payments", &["Charge", "Card"]),
-            "import \"payments\""
+            GoRules::default().render_import("billing::types", "encoding/json", &["json"]),
+            "import \"encoding/json\""
         );
         // A module path prefixes an SDK sub-package so the import resolves, but a
         // standard-library import is left verbatim.
         let rules = GoRules {
             go_module: Some("example.com/sdk".into()),
-            internal_modules: ["payments.common".to_string()].into_iter().collect(),
-            current_module: "payments.charges".into(),
+            current: "payments.charges::types".into(),
         };
         assert_eq!(
-            rules.render_import("payments.charges", "payments.common", &["Money"]),
+            rules.render_import(
+                "payments.charges::types",
+                "payments.common::types",
+                &["Money"]
+            ),
             "import \"example.com/sdk/payments/common\""
         );
+        // The SDK's shared group is a package of its own, under internal/.
         assert_eq!(
-            rules.render_import("payments.charges", "encoding/json", &[]),
+            rules.render_import("payments.charges::types", "::internal", &["MustDescriptor"]),
+            "import \"example.com/sdk/internal/tono\""
+        );
+        assert_eq!(
+            rules.render_import("payments.charges::types", "encoding/json", &[]),
             "import \"encoding/json\""
         );
         // An external package whose path segment is not a legal identifier (the
@@ -353,7 +362,7 @@ mod tests {
         // references resolve without leaning on the package clause.
         assert_eq!(
             rules.render_import(
-                "payments.charges",
+                "payments.charges::types",
                 "github.com/tono-lang/tono/runtimes/http-go",
                 &["tonohttp"]
             ),
