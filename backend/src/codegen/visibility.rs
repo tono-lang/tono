@@ -110,7 +110,14 @@ pub fn derive(model: &Model) -> Exposed {
 
 /// A module's public roots: every declaration the spec marks `pub`, every entry
 /// (its whole point is to be constructed by a consumer), and every loose
-/// operation (they become the module's client surface).
+/// operation.
+///
+/// A loose operation is a root whether or not it is marked, because the ones a
+/// module declares become a single client interface, and that interface is
+/// public: hiding one operation's types would leave a public signature naming
+/// them. Honoring the marker on an operation means splitting that interface by
+/// visibility first, which is a change to the client surface rather than to the
+/// layout.
 fn seeds(module: &Module) -> Vec<String> {
     module
         .shapes

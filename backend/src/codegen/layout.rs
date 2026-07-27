@@ -87,12 +87,10 @@ pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
             .join(GO_ROOT_PACKAGE)
             .join(format!("{GO_ROOT_PACKAGE}.{ext}")),
         (None, _) => root.join(format!("{}.{ext}", grp.name)),
-        (Some(module), TargetKind::Go) if grp.is_internal() && !grp.is_colocated() => {
-            let package = package_name(module);
-            root.join("internal")
-                .join(package)
-                .join(format!("{package}.{ext}"))
-        }
+        (Some(module), TargetKind::Go) if grp.is_internal() && !grp.is_colocated() => root
+            .join("internal")
+            .join(module_dir(module))
+            .join(format!("{}.{ext}", package_name(module))),
         (Some(module), _) => root
             .join(module_dir(module))
             .join(format!("{}.{ext}", grp.name)),
@@ -148,7 +146,7 @@ pub fn go_import(go_module: &str, path: &str) -> Option<String> {
     Some(match module {
         None => format!("{go_module}/internal/{GO_ROOT_PACKAGE}"),
         Some(module) if name == group::INTERNAL => {
-            format!("{go_module}/internal/{}", package_name(module))
+            format!("{go_module}/internal/{}", module.replace('.', "/"))
         }
         Some(module) => format!("{go_module}/{}", module.replace('.', "/")),
     })
@@ -387,14 +385,19 @@ mod tests {
             "payments.charges::internal"
         ));
         assert_eq!(
-            output_path(TargetKind::Go, &Group::module_internal("payments.charges"))
-                .to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/"),
-            "go/internal/charges/charges.go"
+            path_of(TargetKind::Go, &Group::module_internal("payments.charges")),
+            "go/internal/payments/charges/charges.go"
         );
         assert_eq!(
             go_import("example.com/sdk", "payments.charges::internal").as_deref(),
-            Some("example.com/sdk/internal/charges")
+            Some("example.com/sdk/internal/payments/charges")
+        );
+        // The relocated package keeps the module's whole path, like the public
+        // one: flattening to the last segment would land two modules that share
+        // it on the same file.
+        assert_ne!(
+            path_of(TargetKind::Go, &Group::module_internal("payments.common")),
+            path_of(TargetKind::Go, &Group::module_internal("billing.common"))
         );
         assert!(!same_go_package(
             "payments.charges::types",

@@ -95,7 +95,7 @@ cat >"$work/outside/main.go" <<EOF
 package main
 
 import (
-	_ "$go_module/internal/charges"
+	_ "$go_module/internal/payments/charges"
 	_ "$go_module/internal/tono"
 )
 

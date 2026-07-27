@@ -103,7 +103,10 @@ pub fn emit_module(
     };
     // The branded well-known strings and the `Entries` container are part of the
     // module's public surface (a struct field has one), and a method needs its
-    // receiver's package, so both stay here rather than in the shared package.
+    // receiver's package, so both stay here rather than in the shared package,
+    // which `internal/` would put out of a consumer's reach. The cost is that
+    // two modules' `Timestamp` are distinct named types: sharing them needs a
+    // *public* root group, which is a surface change of its own.
     let mut type_decls = well_known_decls();
     type_decls.extend(runtime_type_helpers(helpers));
     let mut codec_decls = runtime_serde_helpers(helpers);

@@ -197,6 +197,26 @@ fn emit_target(
     files
 }
 
+/// Reject two files claiming the same path.
+///
+/// The writer takes the file set in order, so a duplicate would not fail: the
+/// second write would replace the first and the SDK would come out silently
+/// short. Every path is a function of a group, so a duplicate means two groups
+/// map to one place, which is a layout defect and not something a caller can
+/// fix by editing the spec. Failing here names both groups instead.
+fn reject_duplicate_paths(files: &[GeneratedFile]) -> Result<(), String> {
+    let mut seen: std::collections::HashSet<&std::path::Path> = std::collections::HashSet::new();
+    for file in files {
+        if !seen.insert(&file.path) {
+            return Err(format!(
+                "codegen defect: two emission groups both map to {}",
+                file.path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Generate the SDK source for every `(target, module)` pair, mapping each module
 /// to its idiomatic sub-package (steered by `config`) with each target's idiomatic
 /// casing. Each file's text is rough (unformatted) so callers run the real
@@ -224,6 +244,7 @@ pub fn generate(
             &exposed,
         ));
     }
+    reject_duplicate_paths(&files)?;
     Ok(files)
 }
 
@@ -242,9 +263,9 @@ pub fn generate_target(
     crate::codegen::extensions::validate_impl_coverage(model, &[target.binding_langs()])?;
     crate::codegen::entries::validate_entries(model)?;
     let (model, union_ids, exposed) = prepare(model, config);
-    Ok(emit_target(
-        &model, target, casing, config, &union_ids, &exposed,
-    ))
+    let files = emit_target(&model, target, casing, config, &union_ids, &exposed);
+    reject_duplicate_paths(&files)?;
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -507,6 +528,18 @@ mod tests {
         assert!(ts_serde.contains(
             "import { APIError, Charge, NotFound, NotFoundError, TonoError } from \"./types\";"
         ));
+    }
+
+    #[test]
+    fn two_groups_mapping_to_one_path_is_a_defect_not_a_silent_overwrite() {
+        let file = |path: &str| GeneratedFile {
+            target: TargetKind::Go,
+            path: PathBuf::from(path),
+            text: String::new(),
+        };
+        assert!(reject_duplicate_paths(&[file("a.go"), file("b.go")]).is_ok());
+        let err = reject_duplicate_paths(&[file("a.go"), file("a.go")]).unwrap_err();
+        assert!(err.contains("a.go"));
     }
 
     #[test]

@@ -31,7 +31,10 @@ use crate::ir::Module;
 /// file at all.
 pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) -> Vec<ModuleFile> {
     // The branded well-known newtypes are part of the module's public surface (a
-    // struct field has one), so they stay with the module's types.
+    // struct field has one), so they stay with the module's types rather than in
+    // the shared module, which is crate-visible only. The cost is that two
+    // modules' `Timestamp` are distinct newtypes: sharing them needs a *public*
+    // root group, which is a surface change of its own.
     let mut type_decls = well_known_decls();
     let mut internal_type_decls = Vec::new();
     let mut codec_shape_decls = Vec::new();
