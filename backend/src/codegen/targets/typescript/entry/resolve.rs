@@ -62,10 +62,17 @@ impl Resolver<'_, '_> {
     fn env_parse(&mut self, field: &EntryField, dest: &str, label: &str) -> String {
         let t = &field.target;
         match t {
-            Tref::Prim(Prim::Bool) => format!(
-                "if (v === \"true\" || v === \"1\") {{\n  {dest} = true;\n}} else if (v === \"false\" || v === \"0\") {{\n  {dest} = false;\n}} else {{\n  throw new Error(`${{{label}}}: invalid bool ${{JSON.stringify(v)}} (want true/false/1/0)`);\n}}"
-            ),
-            Tref::Prim(p @ (Prim::I8 | Prim::I16 | Prim::I32 | Prim::U8 | Prim::U16 | Prim::U32)) => {
+            Tref::Prim(Prim::Bool) => {
+                let fail = config_error(&format!(
+                    "`${{{label}}}: invalid bool ${{JSON.stringify(v)}} (want true/false/1/0)`"
+                ));
+                format!(
+                    "if (v === \"true\" || v === \"1\") {{\n  {dest} = true;\n}} else if (v === \"false\" || v === \"0\") {{\n  {dest} = false;\n}} else {{\n  {fail}\n}}"
+                )
+            }
+            Tref::Prim(
+                p @ (Prim::I8 | Prim::I16 | Prim::I32 | Prim::U8 | Prim::U16 | Prim::U32),
+            ) => {
                 // Decimal digits only plus the type's own range, matching the Go
                 // boundary (strconv with an explicit bit size, which takes a
                 // sign only for the signed types).
@@ -75,37 +82,58 @@ impl Resolver<'_, '_> {
                 } else {
                     "/^[0-9]+$/"
                 };
-                format!(
-                    "{{\n  if (!{regex}.test(v)) {{\n    throw new Error(`${{{label}}}: invalid {prim} ${{JSON.stringify(v)}}`);\n  }}\n  const n = Number(v);\n  if (!Number.isInteger(n) || n < {min} || n > {max}) {{\n    throw new Error(`${{{label}}}: invalid {prim} ${{JSON.stringify(v)}}`);\n  }}\n  {dest} = n;\n}}",
+                let fail = config_error(&format!(
+                    "`${{{label}}}: invalid {prim} ${{JSON.stringify(v)}}`",
                     prim = prim_name(p),
+                ));
+                format!(
+                    "{{\n  if (!{regex}.test(v)) {{\n    {fail}\n  }}\n  const n = Number(v);\n  if (!Number.isInteger(n) || n < {min} || n > {max}) {{\n    {fail}\n  }}\n  {dest} = n;\n}}",
                 )
             }
             Tref::Prim(p @ (Prim::I64 | Prim::U64)) => {
                 let (regex, min, max) = if matches!(p, Prim::I64) {
-                    ("/^[+-]?[0-9]+$/", "-9223372036854775808n", "9223372036854775807n")
+                    (
+                        "/^[+-]?[0-9]+$/",
+                        "-9223372036854775808n",
+                        "9223372036854775807n",
+                    )
                 } else {
                     // ParseUint takes no sign at all, so neither does this.
                     ("/^[0-9]+$/", "0n", "18446744073709551615n")
                 };
-                format!(
-                    "{{\n  if (!{regex}.test(v)) {{\n    throw new Error(`${{{label}}}: invalid {prim} ${{JSON.stringify(v)}}`);\n  }}\n  const n = BigInt(v.startsWith(\"+\") ? v.slice(1) : v);\n  if (n < {min} || n > {max}) {{\n    throw new Error(`${{{label}}}: invalid {prim} ${{JSON.stringify(v)}}`);\n  }}\n  {dest} = n;\n}}",
+                let fail = config_error(&format!(
+                    "`${{{label}}}: invalid {prim} ${{JSON.stringify(v)}}`",
                     prim = prim_name(p),
+                ));
+                format!(
+                    "{{\n  if (!{regex}.test(v)) {{\n    {fail}\n  }}\n  const n = BigInt(v.startsWith(\"+\") ? v.slice(1) : v);\n  if (n < {min} || n > {max}) {{\n    {fail}\n  }}\n  {dest} = n;\n}}",
                 )
             }
-            Tref::Prim(Prim::Float) => format!(
+            Tref::Prim(Prim::Float) => {
+                let fail = config_error(&format!(
+                    "`${{{label}}}: invalid float ${{JSON.stringify(v)}}`"
+                ));
                 // Decimal notation only: bare Number() also accepts hex and
                 // Infinity spellings the Go boundary rejects.
-                "{{\n  if (!/^[+-]?(\\d+(\\.\\d*)?|\\.\\d+)([eE][+-]?\\d+)?$/.test(v)) {{\n    throw new Error(`${{{label}}}: invalid float ${{JSON.stringify(v)}}`);\n  }}\n  const n = Number(v);\n  if (!Number.isFinite(n)) {{\n    throw new Error(`${{{label}}}: invalid float ${{JSON.stringify(v)}}`);\n  }}\n  {dest} = n;\n}}"
-            ),
-            Tref::Prim(Prim::Bytes) => format!(
+                format!(
+                    "{{\n  if (!/^[+-]?(\\d+(\\.\\d*)?|\\.\\d+)([eE][+-]?\\d+)?$/.test(v)) {{\n    {fail}\n  }}\n  const n = Number(v);\n  if (!Number.isFinite(n)) {{\n    {fail}\n  }}\n  {dest} = n;\n}}"
+                )
+            }
+            Tref::Prim(Prim::Bytes) => {
+                let fail = config_error(&format!(
+                    "`${{{label}}}: invalid base64 ${{JSON.stringify(v)}}`"
+                ));
                 // The env boundary carries bytes the same way the wire does:
                 // base64 text.
-                "try {{\n  {dest} = decodeBytes(v);\n}} catch {{\n  throw new Error(`${{{label}}}: invalid base64 ${{JSON.stringify(v)}}`);\n}}"
-            ),
+                format!("try {{\n  {dest} = decodeBytes(v);\n}} catch {{\n  {fail}\n}}")
+            }
             Tref::Prim(Prim::Duration) => {
                 self.helpers.duration_ms = true;
+                let fail = config_error(&format!(
+                    "`${{{label}}}: invalid duration ${{JSON.stringify(v)}}`"
+                ));
                 format!(
-                    "try {{\n  durationToMs(v);\n}} catch {{\n  throw new Error(`${{{label}}}: invalid duration ${{JSON.stringify(v)}}`);\n}}\n{dest} = v as Duration;"
+                    "try {{\n  durationToMs(v);\n}} catch {{\n  {fail}\n}}\n{dest} = v as Duration;"
                 )
             }
             _ => format!("{dest} = {};", cast_string(t, "v")),
@@ -384,11 +412,11 @@ impl Emitter for Resolver<'_, '_> {
         guaranteed: bool,
     ) -> Leaf {
         if guaranteed {
-            Leaf(format!(
-                "throw new Error(`{field}: match on {subject}: unmatched value ${{String({subject_expr})}}`);",
+            Leaf(config_error(&format!(
+                "`{field}: match on {subject}: unmatched value ${{String({subject_expr})}}`",
                 field = field.name,
                 subject = subject_head,
-            ))
+            )))
         } else {
             Leaf(format!(
                 "{} = \"match: unmatched value\";",
@@ -441,8 +469,9 @@ impl Emitter for Resolver<'_, '_> {
                 if m.required {
                     // An explicit null is as absent as a missing key, the same
                     // rule the Go probe applies.
+                    let fail = config_error(&format!("`${{__LABEL__}}: missing field {name}`"));
                     required_checks.push_str(&format!(
-                        "if (!({name:?} in parsed) || record[{name:?}] === null) {{\n  throw new Error(`${{__LABEL__}}: missing field {name}`);\n}}\n",
+                        "if (!({name:?} in parsed) || record[{name:?}] === null) {{\n  {fail}\n}}\n",
                     ));
                 }
                 // Scalar wire-type checks keep the strictness on par with the Go
@@ -477,8 +506,11 @@ impl Emitter for Resolver<'_, '_> {
                     } else {
                         format!("record[{name:?}] !== undefined && record[{name:?}] !== null && ")
                     };
+                    let fail = config_error(&format!(
+                        "`${{__LABEL__}}: field {name} must be {describe}`"
+                    ));
                     type_checks.push_str(&format!(
-                        "if ({guard}{present}typeof record[{name:?}] !== {ts_typeof:?}) {{\n  throw new Error(`${{__LABEL__}}: field {name} must be {describe}`);\n}}\n",
+                        "if ({guard}{present}typeof record[{name:?}] !== {ts_typeof:?}) {{\n  {fail}\n}}\n",
                         present = if m.required {
                             format!("{name:?} in parsed && ")
                         } else {
@@ -507,14 +539,17 @@ impl Emitter for Resolver<'_, '_> {
             // the cascade renders them against its own env label.
             let required = required_tpl.replace("__LABEL__", label);
             let types = types_tpl.replace("__LABEL__", label);
+            let fail_parse = config_error(&format!("`${{{label}}}: ${{String(e)}}`"));
+            let fail_object = config_error(&format!("`${{{label}}}: expected an object`"));
+            let fail_unknown = config_error(&format!("`${{{label}}}: unknown field ${{key}}`"));
             format!(
                 "{pre}const raw = {lookup};\nif (raw !== undefined) {{\n\
                  \x20 let parsed: unknown;\n\
-                 \x20 try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    throw new Error(`${{{label}}}: ${{String(e)}}`);\n  }}\n\
-                 \x20 if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n    throw new Error(`${{{label}}}: expected an object`);\n  }}\n\
+                 \x20 try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    {fail_parse}\n  }}\n\
+                 \x20 if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n    {fail_object}\n  }}\n\
                  \x20 const record = parsed as Record<string, unknown>;\n\
                  {required}\
-                 \x20 for (const key of Object.keys(parsed)) {{\n    if (![{known}].includes(key)) {{\n      throw new Error(`${{{label}}}: unknown field ${{key}}`);\n    }}\n  }}\n\
+                 \x20 for (const key of Object.keys(parsed)) {{\n    if (![{known}].includes(key)) {{\n      {fail_unknown}\n    }}\n  }}\n\
                  {types}\
                  \x20 const decoded = decode{ty}(parsed);\n\
                  {validate}\
@@ -543,8 +578,9 @@ impl Emitter for Resolver<'_, '_> {
             // Container and element checks keep the boundary as strict as Go's
             // typed unmarshal: the same env value must construct in both targets.
             let checks = block1(&json_shape_checks(&target, label));
+            let fail_parse = config_error(&format!("`${{{label}}}: ${{String(e)}}`"));
             format!(
-                "{pre}const raw = {lookup};\nif (raw !== undefined) {{\n  let parsed: any;\n  try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    throw new Error(`${{{label}}}: ${{String(e)}}`);\n  }}\n{checks}  {dc} = {decode} as {ty};\n  {wc} = \"\";\n}} else {{\n  {wc} = {miss};\n}}"
+                "{pre}const raw = {lookup};\nif (raw !== undefined) {{\n  let parsed: any;\n  try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    {fail_parse}\n  }}\n{checks}  {dc} = {decode} as {ty};\n  {wc} = \"\";\n}} else {{\n  {wc} = {miss};\n}}"
             )
         });
         out.push_str(&body);

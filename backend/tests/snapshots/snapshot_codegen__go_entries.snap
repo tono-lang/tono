@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 196
 expression: "render_files(files, &go::GoRules::default(), \"go\", Some(&header))"
 ---
 // ==== models.go ====
@@ -301,19 +300,19 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	if raw, ok := os.LookupEnv("SERVICE_CREDENTIALS"); ok && raw != "" {
 		var probe map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(raw), &probe); err != nil {
-			return nil, fmt.Errorf("%s: %v", "SERVICE_CREDENTIALS", err)
+			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_CREDENTIALS", err)}
 		}
 		if rv, ok := probe["token"]; !ok || string(rv) == "null" {
-			return nil, fmt.Errorf("%s: missing field token", "SERVICE_CREDENTIALS")
+			return nil, &ConfigError{Message: fmt.Sprintf("%s: missing field token", "SERVICE_CREDENTIALS")}
 		}
 		if rv, ok := probe["account_id"]; !ok || string(rv) == "null" {
-			return nil, fmt.Errorf("%s: missing field account_id", "SERVICE_CREDENTIALS")
+			return nil, &ConfigError{Message: fmt.Sprintf("%s: missing field account_id", "SERVICE_CREDENTIALS")}
 		}
 		dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
 		dec.DisallowUnknownFields()
 		var decoded Credentials
 		if err := dec.Decode(&decoded); err != nil {
-			return nil, fmt.Errorf("%s: %v", "SERVICE_CREDENTIALS", err)
+			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_CREDENTIALS", err)}
 		}
 		if vs := ValidateCredentials(decoded); len(vs) > 0 {
 			return nil, &ValidationError{Violations: vs}
@@ -326,7 +325,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	labelsWhy := "no source"
 	if raw, ok := os.LookupEnv("SERVICE_LABELS"); ok && raw != "" {
 		if err := json.Unmarshal([]byte(raw), &s.Labels); err != nil {
-			return nil, fmt.Errorf("%s: %v", "SERVICE_LABELS", err)
+			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_LABELS", err)}
 		}
 		labelsWhy = ""
 	} else {
@@ -364,7 +363,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	{
 		ms, err := durationMs(string(s.Timeout))
 		if err != nil {
-			return nil, fmt.Errorf("timeout: invalid duration %q", string(s.Timeout))
+			return nil, &ConfigError{Message: fmt.Sprintf("timeout: invalid duration %q", string(s.Timeout))}
 		}
 		values["timeout"] = ms
 	}

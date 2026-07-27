@@ -100,7 +100,9 @@ fn the_env_boundary_parses_by_type_naming_variable_and_type() {
     );
     let serde = serde_text(&module);
     assert!(serde.contains("strconv.ParseInt(v, 10, 32)"));
-    assert!(serde.contains("fmt.Errorf(\"%s: invalid i32 %q\", \"PORT\", v)"));
+    assert!(
+        serde.contains("&ConfigError{Message: fmt.Sprintf(\"%s: invalid i32 %q\", \"PORT\", v)}")
+    );
 }
 
 #[test]
@@ -256,7 +258,9 @@ fn structured_sources_decode_strictly_and_honor_explicit_values() {
     let serde = serde_text(&module);
     // Strict decode: probe for required members, unknown fields rejected,
     // declared validation at construction, the env name as context.
-    assert!(serde.contains("fmt.Errorf(\"%s: missing field token\", \"SERVICE_CREDENTIALS\")"));
+    assert!(serde.contains(
+        "&ConfigError{Message: fmt.Sprintf(\"%s: missing field token\", \"SERVICE_CREDENTIALS\")}"
+    ));
     // An explicit null in a required member is as absent as a missing key
     // (the TypeScript decode rejects it too).
     assert!(serde.contains("if rv, ok := probe[\"token\"]; !ok || string(rv) == \"null\" {"));
@@ -393,7 +397,7 @@ fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     push_entry_field(&mut module, choice);
     let serde = serde_text(&module);
     assert!(serde.contains(
-            "return nil, fmt.Errorf(\"choice: match on client_name: unmatched value %v\", s.ClientName)"
+            "return nil, &ConfigError{Message: fmt.Sprintf(\"choice: match on client_name: unmatched value %v\", s.ClientName)}"
         ));
 }
 
@@ -461,7 +465,8 @@ fn the_env_boundary_decodes_bytes_and_rejects_non_decimal_floats() {
     let serde = serde_text(&module);
     // Bytes ride the env boundary as base64, the same encoding the wire uses.
     assert!(serde.contains("base64.StdEncoding.DecodeString(v)"));
-    assert!(serde.contains("fmt.Errorf(\"%s: invalid base64 %q\", \"SECRET\", v)"));
+    assert!(serde
+        .contains("&ConfigError{Message: fmt.Sprintf(\"%s: invalid base64 %q\", \"SECRET\", v)}"));
     // Floats take decimal notation only (no Inf/NaN/hex), like the TS boundary.
     assert!(serde.contains("strings.ContainsRune(\"0123456789+-.eE\", r)"));
 }
@@ -601,7 +606,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(serde.contains("case 1:"));
     assert!(serde.contains("pickedWhy = \"no source\""));
     assert!(serde.contains(
-        "return nil, fmt.Errorf(\"sure_pick: match on sure_name: unmatched value %v\", s.SureName)"
+        "return nil, &ConfigError{Message: fmt.Sprintf(\"sure_pick: match on sure_name: unmatched value %v\", s.SureName)}"
     ));
     // Composition: binds layered over member chains, an int member parsing.
     assert!(serde.contains("composed.Key = s.Naming"));

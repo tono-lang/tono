@@ -2,6 +2,7 @@
 //! client_init bridge, the consumed-chain requires, declared validation,
 //! and the frozen runtime values.
 
+use super::resolve::config_errorf;
 use super::*;
 use crate::codegen::entries::plan;
 
@@ -171,8 +172,12 @@ pub(super) fn new_decl(
         let assign = if let Tref::Prim(Prim::Duration) = vp.target {
             helpers.duration_ms = true;
             refs.push(import("fmt", "fmt"));
+            let fail = config_errorf(&format!(
+                "\"{path}: invalid duration %q\", string({expr})",
+                path = vp.path,
+            ));
             format!(
-                "\t{{\n\t\tms, err := durationMs(string({expr}))\n\t\tif err != nil {{\n\t\t\treturn nil, fmt.Errorf(\"{path}: invalid duration %q\", string({expr}))\n\t\t}}\n\t\tvalues[{path:?}] = ms\n\t}}\n",
+                "\t{{\n\t\tms, err := durationMs(string({expr}))\n\t\tif err != nil {{\n\t\t\t{fail}\n\t\t}}\n\t\tvalues[{path:?}] = ms\n\t}}\n",
                 path = vp.path,
             )
         } else {

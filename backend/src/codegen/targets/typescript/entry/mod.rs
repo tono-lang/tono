@@ -354,11 +354,6 @@ fn class_decl(
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 1, &r);
         r.body.push_str(&text);
-        // A non-empty requires block throws ConfigError for an unresolved
-        // consumed chain, so the class file imports that category.
-        if !text.is_empty() {
-            refs.push(module_symbol(&en.config, module));
-        }
     }
 
     // Declared validation runs last, over what bespoke left in place.
@@ -458,8 +453,12 @@ fn class_decl(
         };
         let assign = if let Tref::Prim(Prim::Duration) = vp.target {
             helpers.duration_ms = true;
+            let fail = config_error(&format!(
+                "`{path}: invalid duration ${{JSON.stringify(String({expr}))}}`",
+                path = vp.path,
+            ));
             format!(
-                "    try {{\n      values[{path:?}] = durationToMs(String({expr}));\n    }} catch {{\n      throw new Error(`{path}: invalid duration ${{JSON.stringify(String({expr}))}}`);\n    }}\n",
+                "    try {{\n      values[{path:?}] = durationToMs(String({expr}));\n    }} catch {{\n      {fail}\n    }}\n",
                 path = vp.path,
             )
         } else {
@@ -539,6 +538,12 @@ fn class_decl(
         settings = n.settings,
         params = params.join(", "),
     );
+    // Any construction-time failure (a bad env value, a malformed blob, an
+    // unmatched select, an unresolved consumed chain) throws ConfigError, so
+    // the class file imports that category when the body emits one.
+    if text.contains(&format!("new {}(", en.config)) {
+        refs.push(module_symbol(&en.config, module));
+    }
     Decl::raw_with(text, refs)
 }
 
@@ -737,6 +742,6 @@ mod surface;
 #[cfg(test)]
 mod tests;
 
-use checks::{access, presence_guard, value_cast, value_expr};
+use checks::{access, config_error, presence_guard, value_cast, value_expr};
 use resolve::Resolver;
 use surface::*;

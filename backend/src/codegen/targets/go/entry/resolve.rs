@@ -64,27 +64,36 @@ impl Resolver<'_, '_> {
         match t {
             Tref::Prim(Prim::Bool) => {
                 self.import("fmt", "fmt");
+                let fail = config_errorf(&format!(
+                    "\"%s: invalid bool %q (want true/false/1/0)\", {label}, v"
+                ));
                 format!(
-                    "switch v {{\ncase \"true\", \"1\":\n\t{dest} = true\ncase \"false\", \"0\":\n\t{dest} = false\ndefault:\n\treturn nil, fmt.Errorf(\"%s: invalid bool %q (want true/false/1/0)\", {label}, v)\n}}"
+                    "switch v {{\ncase \"true\", \"1\":\n\t{dest} = true\ncase \"false\", \"0\":\n\t{dest} = false\ndefault:\n\t{fail}\n}}"
                 )
             }
             Tref::Prim(p @ (Prim::I8 | Prim::I16 | Prim::I32 | Prim::I64)) => {
                 self.import("strconv", "strconv");
                 self.import("fmt", "fmt");
+                let fail = config_errorf(&format!(
+                    "\"%s: invalid {prim} %q\", {label}, v",
+                    prim = prim_name(p)
+                ));
                 format!(
-                    "n, err := strconv.ParseInt(v, 10, {bits})\nif err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid {prim} %q\", {label}, v)\n}}\n{dest} = {cast}(n)",
+                    "n, err := strconv.ParseInt(v, 10, {bits})\nif err != nil {{\n\t{fail}\n}}\n{dest} = {cast}(n)",
                     bits = int_bits(p),
-                    prim = prim_name(p),
                     cast = prim_spelling(p).go,
                 )
             }
             Tref::Prim(p @ (Prim::U8 | Prim::U16 | Prim::U32 | Prim::U64)) => {
                 self.import("strconv", "strconv");
                 self.import("fmt", "fmt");
+                let fail = config_errorf(&format!(
+                    "\"%s: invalid {prim} %q\", {label}, v",
+                    prim = prim_name(p)
+                ));
                 format!(
-                    "n, err := strconv.ParseUint(v, 10, {bits})\nif err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid {prim} %q\", {label}, v)\n}}\n{dest} = {cast}(n)",
+                    "n, err := strconv.ParseUint(v, 10, {bits})\nif err != nil {{\n\t{fail}\n}}\n{dest} = {cast}(n)",
                     bits = int_bits(p),
-                    prim = prim_name(p),
                     cast = prim_spelling(p).go,
                 )
             }
@@ -92,27 +101,30 @@ impl Resolver<'_, '_> {
                 self.import("strconv", "strconv");
                 self.import("strings", "strings");
                 self.import("fmt", "fmt");
+                let fail = config_errorf(&format!("\"%s: invalid float %q\", {label}, v"));
                 // Decimal notation only: ParseFloat alone also accepts Inf,
                 // NaN, hex floats, and digit separators, which the TypeScript
                 // boundary rejects; the same env value must construct in both.
                 format!(
-                    "if strings.ContainsFunc(v, func(r rune) bool {{ return !strings.ContainsRune(\"0123456789+-.eE\", r) }}) {{\n\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n}}\nn, err := strconv.ParseFloat(v, 64)\nif err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid float %q\", {label}, v)\n}}\n{dest} = n"
+                    "if strings.ContainsFunc(v, func(r rune) bool {{ return !strings.ContainsRune(\"0123456789+-.eE\", r) }}) {{\n\t{fail}\n}}\nn, err := strconv.ParseFloat(v, 64)\nif err != nil {{\n\t{fail}\n}}\n{dest} = n"
                 )
             }
             Tref::Prim(Prim::Bytes) => {
                 self.import("base64", "encoding/base64");
                 self.import("fmt", "fmt");
+                let fail = config_errorf(&format!("\"%s: invalid base64 %q\", {label}, v"));
                 // The env boundary carries bytes the same way the wire does:
                 // base64 text.
                 format!(
-                    "b, err := base64.StdEncoding.DecodeString(v)\nif err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid base64 %q\", {label}, v)\n}}\n{dest} = b"
+                    "b, err := base64.StdEncoding.DecodeString(v)\nif err != nil {{\n\t{fail}\n}}\n{dest} = b"
                 )
             }
             Tref::Prim(Prim::Duration) => {
                 self.import("time", "time");
                 self.import("fmt", "fmt");
+                let fail = config_errorf(&format!("\"%s: invalid duration %q\", {label}, v"));
                 format!(
-                    "if _, err := time.ParseDuration(v); err != nil {{\n\treturn nil, fmt.Errorf(\"%s: invalid duration %q\", {label}, v)\n}}\n{dest} = Duration(v)"
+                    "if _, err := time.ParseDuration(v); err != nil {{\n\t{fail}\n}}\n{dest} = Duration(v)"
                 )
             }
             _ => format!("{dest} = {}", cast_string(t, "v")),
@@ -394,11 +406,11 @@ impl Emitter for Resolver<'_, '_> {
     ) -> Leaf {
         if guaranteed {
             self.import("fmt", "fmt");
-            Leaf(format!(
-                "return nil, fmt.Errorf(\"{field}: match on {subject}: unmatched value %v\", {subject_expr})",
+            Leaf(config_errorf(&format!(
+                "\"{field}: match on {subject}: unmatched value %v\", {subject_expr}",
                 field = field.name,
                 subject = subject_head,
-            ))
+            )))
         } else {
             Leaf(format!(
                 "{} = \"match: unmatched value\"",
@@ -451,8 +463,9 @@ impl Emitter for Resolver<'_, '_> {
                 // the wire key (the @wire override the codec serializes under), not
                 // the in-code member name.
                 let name = wire_key(m);
+                let fail = config_errorf(&format!("\"%s: missing field {name}\", {{LABEL}}"));
                 required_checks.push_str(&format!(
-                    "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn nil, fmt.Errorf(\"%s: missing field {name}\", {{LABEL}})\n\t}}\n",
+                    "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\t{fail}\n\t}}\n",
                 ));
             }
         }
@@ -470,15 +483,16 @@ impl Emitter for Resolver<'_, '_> {
         let (dc, wc) = (dest.clone(), why.clone());
         let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
             let required = required_checks.replace("{LABEL}", label);
+            let fail = config_errorf(&format!("\"%s: %v\", {label}, err"));
             format!(
                 "{pre}if raw, ok := {lookup}; ok && raw != \"\" {{\n\
                  \tvar probe map[string]json.RawMessage\n\
-                 \tif err := json.Unmarshal([]byte(raw), &probe); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
+                 \tif err := json.Unmarshal([]byte(raw), &probe); err != nil {{\n\t\t{fail}\n\t}}\n\
                  {required}\
                  \tdec := json.NewDecoder(bytes.NewReader([]byte(raw)))\n\
                  \tdec.DisallowUnknownFields()\n\
                  \tvar decoded {ty}\n\
-                 \tif err := dec.Decode(&decoded); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
+                 \tif err := dec.Decode(&decoded); err != nil {{\n\t\t{fail}\n\t}}\n\
                  {validate}\
                  \t{dc} = decoded\n\
                  \t{wc} = \"\"\n\
@@ -498,9 +512,10 @@ impl Emitter for Resolver<'_, '_> {
         };
         let (dc, wc) = (dest.clone(), why.clone());
         let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+            let fail = config_errorf(&format!("\"%s: %v\", {label}, err"));
             format!(
                 "{pre}if raw, ok := {lookup}; ok && raw != \"\" {{\n\
-                 \tif err := json.Unmarshal([]byte(raw), &{dc}); err != nil {{\n\t\treturn nil, fmt.Errorf(\"%s: %v\", {label}, err)\n\t}}\n\
+                 \tif err := json.Unmarshal([]byte(raw), &{dc}); err != nil {{\n\t\t{fail}\n\t}}\n\
                  \t{wc} = \"\"\n\
                  }} else {{\n\t{wc} = {miss}\n}}"
             )
@@ -557,6 +572,19 @@ impl Emitter for Resolver<'_, '_> {
             config = error_names().config,
         )
     }
+}
+
+/// A construction-time failure returning the SDK's dedicated ConfigError
+/// category (message formatted from `sprintf_args`, the argument list a
+/// `fmt.Errorf` would take). Every bad env value, malformed blob, absent
+/// member, or unmatched select is a config problem, discriminable via
+/// `errors.As` from a transport, validation, or declared error. Callers that
+/// use this must import `fmt`.
+pub(super) fn config_errorf(sprintf_args: &str) -> String {
+    format!(
+        "return nil, &{config}{{Message: fmt.Sprintf({sprintf_args})}}",
+        config = error_names().config,
+    )
 }
 
 /// Indent every non-empty line of `s` by `n` tabs, dropping any trailing

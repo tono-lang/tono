@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 206
 expression: "render_files(files, &typescript::TsRules, \"ts\", None)"
 ---
 // ==== models.ts ====
@@ -333,28 +332,28 @@ export class Client {
     try {
       parsed = JSON.parse(raw);
     } catch (e) {
-      throw new Error(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
+      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
     }
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error(`${"SERVICE_CREDENTIALS"}: expected an object`);
+      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: expected an object`);
     }
     const record = parsed as Record<string, unknown>;
     if (!("token" in parsed) || record["token"] === null) {
-      throw new Error(`${"SERVICE_CREDENTIALS"}: missing field token`);
+      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: missing field token`);
     }
     if (!("account_id" in parsed) || record["account_id"] === null) {
-      throw new Error(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
+      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
     }
     for (const key of Object.keys(parsed)) {
       if (!["token", "account_id"].includes(key)) {
-        throw new Error(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
+        throw new ConfigError(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
       }
     }
     if ("token" in parsed && typeof record["token"] !== "string") {
-      throw new Error(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
+      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
     }
     if ("account_id" in parsed && typeof record["account_id"] !== "string") {
-      throw new Error(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
+      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
     }
     const decoded = decodeCredentials(parsed);
     const vs = validateCredentials(decoded);
@@ -373,14 +372,14 @@ export class Client {
     try {
       parsed = JSON.parse(raw);
     } catch (e) {
-      throw new Error(`${"SERVICE_LABELS"}: ${String(e)}`);
+      throw new ConfigError(`${"SERVICE_LABELS"}: ${String(e)}`);
     }
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error(`${"SERVICE_LABELS"}: expected an object`);
+      throw new ConfigError(`${"SERVICE_LABELS"}: expected an object`);
     }
     for (const [key, val] of Object.entries(parsed)) {
       if (typeof val !== "string") {
-        throw new Error(`${"SERVICE_LABELS"}: field ${key} must be a string`);
+        throw new ConfigError(`${"SERVICE_LABELS"}: field ${key} must be a string`);
       }
     }
     s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
@@ -416,7 +415,7 @@ export class Client {
     try {
       values["timeout"] = durationToMs(String(s.timeout));
     } catch {
-      throw new Error(`timeout: invalid duration ${JSON.stringify(String(s.timeout))}`);
+      throw new ConfigError(`timeout: invalid duration ${JSON.stringify(String(s.timeout))}`);
     }
     values["max_retries"] = s.maxRetries;
     if ((s.settings.apiKey ?? "") !== "") {

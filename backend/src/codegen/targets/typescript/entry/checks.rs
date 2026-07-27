@@ -5,6 +5,19 @@
 
 use super::*;
 
+/// A construction-time failure throwing the SDK's dedicated ConfigError
+/// category with `message` (a string or template-literal expression). Every
+/// bad env value, malformed blob, absent member, or unmatched select is a
+/// config problem, discriminable via `instanceof` from a transport,
+/// validation, or declared error. The class file imports this category when
+/// the resolver emits one.
+pub(super) fn config_error(message: &str) -> String {
+    format!(
+        "throw new {config}({message});",
+        config = error_names().config
+    )
+}
+
 pub(super) fn access(vp: &crate::codegen::entries::ValuePath<'_>, config: &CasingConfig) -> String {
     let head = field_camel_ren(
         &vp.field.name,
@@ -122,11 +135,15 @@ pub(super) fn json_shape_checks(t: &Tref, label: &str) -> String {
     match t {
         Tref::Map(_, v) => {
             let mut out = format!(
-                "if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n  throw new Error(`${{{label}}}: expected an object`);\n}}"
+                "if (typeof parsed !== \"object\" || parsed === null || Array.isArray(parsed)) {{\n  {}\n}}",
+                config_error(&format!("`${{{label}}}: expected an object`")),
             );
             if let Some((ts_typeof, describe, int)) = scalar_expectation(v) {
+                let fail = config_error(&format!(
+                    "`${{{label}}}: field ${{key}} must be {describe}`"
+                ));
                 out.push_str(&format!(
-                    "\nfor (const [key, val] of Object.entries(parsed)) {{\n  if (typeof val !== {ts_typeof:?}{ic}) {{\n    throw new Error(`${{{label}}}: field ${{key}} must be {describe}`);\n  }}\n}}",
+                    "\nfor (const [key, val] of Object.entries(parsed)) {{\n  if (typeof val !== {ts_typeof:?}{ic}) {{\n    {fail}\n  }}\n}}",
                     ic = int_guard(int),
                 ));
             }
@@ -134,11 +151,15 @@ pub(super) fn json_shape_checks(t: &Tref, label: &str) -> String {
         }
         Tref::List(v) => {
             let mut out = format!(
-                "if (!Array.isArray(parsed)) {{\n  throw new Error(`${{{label}}}: expected an array`);\n}}"
+                "if (!Array.isArray(parsed)) {{\n  {}\n}}",
+                config_error(&format!("`${{{label}}}: expected an array`")),
             );
             if let Some((ts_typeof, describe, int)) = scalar_expectation(v) {
+                let fail = config_error(&format!(
+                    "`${{{label}}}: element ${{i}} must be {describe}`"
+                ));
                 out.push_str(&format!(
-                    "\n(parsed as unknown[]).forEach((val, i) => {{\n  if (typeof val !== {ts_typeof:?}{ic}) {{\n    throw new Error(`${{{label}}}: element ${{i}} must be {describe}`);\n  }}\n}});",
+                    "\n(parsed as unknown[]).forEach((val, i) => {{\n  if (typeof val !== {ts_typeof:?}{ic}) {{\n    {fail}\n  }}\n}});",
                     ic = int_guard(int),
                 ));
             }

@@ -388,7 +388,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     // Both select flavors, the guaranteed one failing on an undeclared value.
     assert!(out.contains("case 1: {"));
     assert!(out.contains(
-        "throw new Error(`sure_pick: match on sure_name: unmatched value ${String(s.sureName)}`);"
+        "throw new ConfigError(`sure_pick: match on sure_name: unmatched value ${String(s.sureName)}`);"
     ));
     // Composition with member chains, including an int member parse.
     assert!(out.contains("composed.key = s.naming;"));

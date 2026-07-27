@@ -12,6 +12,7 @@ import {
   CardDeclined,
   CardDeclinedError,
   Charge,
+  ConfigError,
   DecodeError,
   Duration,
   HTTPCode,
@@ -214,7 +215,7 @@ export class Client {
     try {
       values["timeout"] = durationToMs(String(s.timeout));
     } catch {
-      throw new Error(
+      throw new ConfigError(
         `timeout: invalid duration ${JSON.stringify(String(s.timeout))}`,
       );
     }

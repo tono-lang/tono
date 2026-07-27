@@ -95,7 +95,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	{
 		ms, err := durationMs(string(s.Timeout))
 		if err != nil {
-			return nil, fmt.Errorf("timeout: invalid duration %q", string(s.Timeout))
+			return nil, &ConfigError{Message: fmt.Sprintf("timeout: invalid duration %q", string(s.Timeout))}
 		}
 		values["timeout"] = ms
 	}
