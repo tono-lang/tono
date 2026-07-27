@@ -88,7 +88,7 @@ pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
             .join(GO_SUPPORT_PACKAGE)
             .join(format!("{GO_SUPPORT_PACKAGE}.{ext}")),
         (None, _) => root.join(format!("{}.{ext}", grp.name)),
-        (Some(module), TargetKind::Go) if grp.is_internal() && !grp.is_colocated() => root
+        (Some(module), TargetKind::Go) if grp.is_internal() && !grp.colocated => root
             .join("internal")
             .join(module_dir(module))
             .join(format!("{}.{ext}", package_name(module))),

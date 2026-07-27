@@ -75,6 +75,12 @@ pub struct Group {
     pub name: String,
     pub origin: Origin,
     pub audience: Audience,
+    /// Whether the group has to stay beside the module it belongs to. Internal
+    /// and yet unmovable: its declarations extend the module's own types, and a
+    /// method is declared where its receiver is (Go), an impl where its type is
+    /// (Rust). Every other internal group is free to move where the target
+    /// fences it off.
+    pub colocated: bool,
 }
 
 impl Group {
@@ -86,6 +92,7 @@ impl Group {
             name: INTERNAL.into(),
             origin: Origin::Generator,
             audience: Audience::Internal,
+            colocated: false,
         }
     }
 
@@ -97,6 +104,7 @@ impl Group {
             name: SUPPORT.into(),
             origin: Origin::Generator,
             audience: Audience::Public,
+            colocated: false,
         }
     }
 
@@ -107,6 +115,7 @@ impl Group {
             name: TYPES.into(),
             origin: Origin::Generator,
             audience: Audience::Public,
+            colocated: false,
         }
     }
 
@@ -122,6 +131,7 @@ impl Group {
             name: CODEC.into(),
             origin: Origin::Generator,
             audience: Audience::Internal,
+            colocated: true,
         }
     }
 
@@ -134,13 +144,8 @@ impl Group {
             name: INTERNAL.into(),
             origin: Origin::Generator,
             audience: Audience::Internal,
+            colocated: false,
         }
-    }
-
-    /// Whether this group has to stay beside the module it belongs to, because
-    /// its declarations extend the module's own types.
-    pub fn is_colocated(&self) -> bool {
-        self.name == CODEC
     }
 
     /// The group of one entry, named after the entry declaration. Two entries in
@@ -151,6 +156,7 @@ impl Group {
             name: entry.into(),
             origin: Origin::Spec,
             audience: Audience::Public,
+            colocated: false,
         }
     }
 
@@ -189,18 +195,21 @@ pub fn module_of(path: &str) -> Option<&str> {
 /// instead of at the module as a whole.
 #[derive(Debug, Default, Clone)]
 pub struct SymbolIndex {
-    by_symbol: HashMap<(String, String), String>,
+    /// Nested rather than keyed on a pair, so a lookup borrows both halves
+    /// instead of allocating a key for every reference the engine resolves.
+    by_symbol: HashMap<String, HashMap<String, String>>,
     default_group: HashMap<String, String>,
 }
 
 impl SymbolIndex {
     /// Where a symbol of `module` resolves when no group claimed it by name.
     ///
-    /// A declaration emitted as opaque text (a Go union's interface and its
-    /// variant wrappers) has no name the tree can be read for, so it would
-    /// otherwise leave a reference pointing at a bare module name, which no
-    /// target can spell. The module's public group is the right answer: opaque
-    /// or not, a name another module references is part of the surface.
+    /// The last resort, not the normal path: an emitter that declares a name
+    /// through opaque text lists it (`provides`), so the index knows it exactly.
+    /// This catches a name no emitter listed, and answers with the module's
+    /// public group, which is the only answer that cannot make the output worse:
+    /// a name another module references is part of the surface, and pointing at
+    /// a bare module name would leave a path no target can spell.
     pub fn set_default(&mut self, module: &str, group: &str) {
         self.default_group
             .insert(module.to_string(), group.to_string());
@@ -211,7 +220,9 @@ impl SymbolIndex {
     /// (a Go union's marker methods, say) resolves to where it is defined.
     pub fn insert(&mut self, module: &str, symbol: &str, group: &str) {
         self.by_symbol
-            .entry((module.to_string(), symbol.to_string()))
+            .entry(module.to_string())
+            .or_default()
+            .entry(symbol.to_string())
             .or_insert_with(|| group.to_string());
     }
 
@@ -219,7 +230,8 @@ impl SymbolIndex {
     /// is not the SDK's (a standard-library or runtime-package import).
     pub fn group_of(&self, module: &str, symbol: &str) -> Option<&str> {
         self.by_symbol
-            .get(&(module.to_string(), symbol.to_string()))
+            .get(module)
+            .and_then(|names| names.get(symbol))
             .or_else(|| self.default_group.get(module))
             .map(String::as_str)
     }
@@ -278,10 +290,15 @@ mod tests {
     }
 
     #[test]
-    fn generator_groups_carry_their_audience() {
+    fn generator_groups_carry_their_audience_and_whether_they_can_move() {
         assert!(!Group::types("notes").is_internal());
         assert!(Group::module_internal("notes").is_internal());
         assert_eq!(Group::types("notes").origin, Origin::Generator);
+        // Both are internal; only the codec group is pinned beside its module,
+        // because its declarations extend that module's own types.
+        assert!(Group::codec("notes").is_internal());
+        assert!(Group::codec("notes").colocated);
+        assert!(!Group::module_internal("notes").colocated);
     }
 
     #[test]

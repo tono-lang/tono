@@ -263,6 +263,17 @@ fn variant_ident(m: &Member) -> String {
 /// definitions (no serialization), so they belong in the types file; the wrapper
 /// `MarshalJSON`s and the `unmarshalX` dispatcher are serde and live in
 /// [`union_serde`]. Used by the type phase.
+/// The type names a union's declarations introduce: the marker interface and one
+/// wrapper per variant. Go has no sum type, so these are emitted as opaque text
+/// and the tree cannot be read for them; the emitter lists them so a reference
+/// from another module resolves to the group that declares them.
+pub fn union_type_names(shape: &Shape, members: &[Member]) -> Vec<String> {
+    let ty = type_ident(shape, LANG);
+    std::iter::once(ty.clone())
+        .chain(members.iter().map(|m| format!("{ty}{}", variant_ident(m))))
+        .collect()
+}
+
 pub fn union_type_decls(
     shape: &Shape,
     members: &[Member],

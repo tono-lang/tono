@@ -111,15 +111,27 @@ pub fn emit_module(
     // them (a method has to be declared where its receiver is).
     let mut internal_decls = Vec::new();
     let mut hidden_helpers = RuntimeHelpers::default();
+    // A union's interface and wrappers are opaque text, so the index cannot read
+    // their names off the tree; the emitter is what knows them.
+    let mut type_provides = Vec::new();
+    let mut internal_provides = Vec::new();
     for shape in &module.shapes {
         let mut types = emit_type(shape, config);
         // Validators live with the type they check.
         types.extend(emit_validators(shape, config));
         let serde = emit_serde_decls(shape, config, union_ids, &module.name);
+        let names = match &shape.kind {
+            ShapeKind::Union { members, .. } => {
+                crate::codegen::targets::go::codecs::union_type_names(shape, members)
+            }
+            _ => Vec::new(),
+        };
         if exposed.shape(shape) {
+            type_provides.extend(names);
             type_decls.extend(types);
             codec_decls.extend(serde);
         } else {
+            internal_provides.extend(names);
             hidden_helpers.variant |= matches!(shape.kind, ShapeKind::Union { .. });
             internal_decls.extend(types);
             internal_decls.extend(serde);
@@ -162,7 +174,8 @@ pub fn emit_module(
     // package that holds the machinery import each other.
     codec_decls.extend(entries.shared);
 
-    let mut files = vec![ModuleFile::new(Group::types(&module.name), type_decls)];
+    let mut files =
+        vec![ModuleFile::new(Group::types(&module.name), type_decls).providing(type_provides)];
     // One group per entry declaration, named after it: the entry's own type, its
     // constructor, and its operation methods, so the construction surface reads
     // together instead of being split across a types and a codec file.
@@ -176,10 +189,10 @@ pub fn emit_module(
         files.push(ModuleFile::new(Group::codec(&module.name), codec_decls));
     }
     if !internal_decls.is_empty() {
-        files.push(ModuleFile::new(
-            Group::module_internal(&module.name),
-            internal_decls,
-        ));
+        files.push(
+            ModuleFile::new(Group::module_internal(&module.name), internal_decls)
+                .providing(internal_provides),
+        );
     }
     files
 }
