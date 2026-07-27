@@ -145,6 +145,41 @@ cat >"$work/ts/tsconfig.json" <<EOF
 EOF
 (cd "$work/ts" && "$tsc" -p tsconfig.json)
 
+# The package's exports map is the TypeScript fence: Node refuses to resolve a
+# subpath it does not list, which is every internal one.
+echo "typescript exports fence..."
+fence="$work/ts-fence"
+mkdir -p "$fence/node_modules/sdk"
+cp -R "$sdk"/typescript/. "$fence/node_modules/sdk/"
+cat >"$fence/probe.mjs" <<'EOF'
+const refused = [
+  "sdk/payments/charges/internal",
+  "sdk/payments/charges/codec",
+  "sdk/internal",
+];
+let bad = 0;
+try {
+  await import.meta.resolve("sdk/payments/charges");
+} catch (e) {
+  console.error(`the module barrel must resolve: ${e.code}`);
+  bad++;
+}
+for (const spec of refused) {
+  try {
+    await import.meta.resolve(spec);
+    console.error(`${spec} must not resolve: it is not in the exports map`);
+    bad++;
+  } catch (e) {
+    if (e.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") {
+      console.error(`${spec} failed for the wrong reason: ${e.code}`);
+      bad++;
+    }
+  }
+}
+process.exit(bad === 0 ? 0 : 1);
+EOF
+(cd "$fence" && node probe.mjs)
+
 echo "auth-bearer..."
 # The recipe is source only, so its Settings bridge only exists after a
 # regeneration; this is its compile gate: frontend -> gen -> hook -> tsc.

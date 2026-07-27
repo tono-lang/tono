@@ -99,7 +99,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	values["api_key"] = s.APIKey
 	values["endpoint"] = s.Endpoint
 	{
-		ms, err := durationMs(string(s.Timeout))
+		ms, err := tono.DurationMs(string(s.Timeout))
 		if err != nil {
 			return nil, &ConfigError{Message: fmt.Sprintf("timeout: invalid duration %q", string(s.Timeout))}
 		}

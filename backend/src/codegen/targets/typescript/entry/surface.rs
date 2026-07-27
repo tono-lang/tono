@@ -275,9 +275,41 @@ pub(super) fn client_init_wrapper(
     )]
 }
 
-pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
+pub(super) fn apply_transforms(
+    expr: String,
+    transforms: &[String],
+    helpers: &mut Helpers,
+) -> String {
+    crate::codegen::entries::plan::apply_transforms(
+        expr,
+        transforms,
+        &mut helpers.transforms,
+        |t, out| match t {
+            "trim" => Some(format!("({out}).trim()")),
+            "lower" => Some(format!("({out}).toLowerCase()")),
+            "upper" => Some(format!("({out}).toUpperCase()")),
+            _ => None,
+        },
+        // The helper is imported by name, and TypeScript spells a function in
+        // camelCase, so the canonical name is lowered at the first letter.
+        |name| {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => first.to_lowercase().chain(chars).collect(),
+                None => String::new(),
+            }
+        },
+    )
+}
+
+/// The resolution helpers, which are pure string, environment and duration
+/// work: they serve every entry of every module, so they live in the SDK's
+/// shared group rather than beside any one of them. Emitted whole rather than
+/// per use, so an entry group's imports do not depend on which transforms a
+/// spec happens to name.
+pub fn resolution_helpers() -> Vec<Decl> {
     let mut decls = Vec::new();
-    if helpers.read_env {
+    {
         decls.push(Decl::raw(
             "// readEnv treats an unset and an empty variable the same: empty means\n\
              // not set, per the declared-source contract.\n\
@@ -289,7 +321,7 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
             .to_string(),
         ));
     }
-    if helpers.duration_ms {
+    {
         decls.push(Decl::raw(
             "// durationToMs parses the duration spelling shared across targets\n\
              // (Go's ParseDuration grammar: optional sign, bare zero, unit runs)\n\
@@ -327,7 +359,7 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
             .to_string(),
         ));
     }
-    if !helpers.transforms.is_empty() {
+    {
         decls.push(Decl::raw(
             "// strTransformWords splits a resolved value for the casing transforms:\n\
              // runs of spaces, hyphens, and underscores separate words.\n\
@@ -336,8 +368,8 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
              }"
             .to_string(),
         ));
-        for t in &helpers.transforms {
-            let (name, body) = match *t {
+        for t in ["upper_snake", "snake", "kebab", "pascal"] {
+            let (name, body) = match t {
                 "upper_snake" => (
                     "strUpperSnake",
                     "  return strTransformWords(s).map((w) => w.toUpperCase()).join(\"_\");",
@@ -362,22 +394,4 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
         }
     }
     decls
-}
-
-pub(super) fn apply_transforms(
-    expr: String,
-    transforms: &[String],
-    helpers: &mut Helpers,
-) -> String {
-    crate::codegen::entries::plan::apply_transforms(
-        expr,
-        transforms,
-        &mut helpers.transforms,
-        |t, out| match t {
-            "trim" => Some(format!("({out}).trim()")),
-            "lower" => Some(format!("({out}).toLowerCase()")),
-            "upper" => Some(format!("({out}).toUpperCase()")),
-            _ => None,
-        },
-    )
 }

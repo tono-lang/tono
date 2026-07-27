@@ -4,7 +4,6 @@ package charges
 
 import "encoding/json"
 import "example.com/sdk/payments/common"
-import "time"
 
 func (c *Charge) UnmarshalJSON(b []byte) error {
 	type alias Charge
@@ -25,14 +24,4 @@ func (c *Charge) UnmarshalJSON(b []byte) error {
 		c.Method = m
 	}
 	return nil
-}
-
-// durationMs parses a duration field for the runtime's millisecond value
-// positions.
-func durationMs(v string) (float64, error) {
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, err
-	}
-	return float64(d) / float64(time.Millisecond), nil
 }

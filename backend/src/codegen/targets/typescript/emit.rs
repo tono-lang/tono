@@ -35,11 +35,14 @@ pub fn well_known_decls() -> Vec<Decl> {
         .collect()
 }
 
-/// The SDK-root group's declarations: the codec runtime helpers every module's
-/// codecs call. They serve no module in particular, so the whole SDK carries one
-/// copy instead of one per module.
+/// The SDK-root internal group's declarations: the codec runtime helpers every
+/// module's codecs call and the resolution helpers every entry calls. They serve
+/// no module in particular, so the whole SDK carries one copy instead of one per
+/// module.
 pub fn shared_decls() -> Vec<Decl> {
-    runtime_helpers()
+    let mut decls = runtime_helpers();
+    decls.extend(crate::codegen::targets::typescript::entry::resolution_helpers());
+    decls
 }
 
 /// The text of a declaration that carries opaque source, or `None` for one the
@@ -118,7 +121,9 @@ fn attach_text_refs(decls: &mut [Decl], names: &[(String, String)]) {
 fn runtime_helper_refs() -> Vec<(String, String)> {
     RUNTIME_HELPER_NAMES
         .iter()
-        .map(|name| ((*name).to_string(), crate::codegen::group::ROOT.to_string()))
+        .copied()
+        .chain(exported_in_text(&shared_decls()).iter().map(String::as_str))
+        .map(|name| (name.to_string(), crate::codegen::group::ROOT.to_string()))
         .collect()
 }
 

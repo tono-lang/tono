@@ -295,7 +295,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         decls.extend(discriminator_decls_for(entry, &n, module, &bound));
         per_entry.push((entry.name.to_string(), decls));
     }
-    shared.extend(helper_decls(&helpers));
     EntryEmission { shared, per_entry }
 }
 
@@ -316,7 +315,7 @@ fn shared_symbol(name: &str) -> Symbol {
 /// exported because a Go package boundary is what makes them shared, and
 /// `internal/` is what keeps them out of a consumer's reach.
 pub fn runtime_decls() -> Vec<Decl> {
-    vec![Decl::raw_with(
+    let mut decls = vec![Decl::raw_with(
         "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
          // load; a parse failure is a build defect, never a runtime input.\n\
          func MustDescriptor(literal string) *tonohttp.WireDescriptor {\n\
@@ -335,50 +334,50 @@ pub fn runtime_decls() -> Vec<Decl> {
          }"
         .to_string(),
         vec![runtime_symbol(), import("json", "encoding/json")],
-    )]
+    )];
+    decls.extend(resolution_helpers());
+    decls
 }
 
 /// The on-demand helpers the resolution used.
-fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
-    let mut decls = Vec::new();
-    if helpers.duration_ms {
-        decls.push(Decl::raw_with(
-            "// durationMs parses a duration field for the runtime's millisecond value\n\
+/// The resolution helpers, which are pure string and duration work: they serve
+/// every entry of every module, so they live in the SDK's shared package rather
+/// than beside any one of them. Emitted whole rather than per use, so the
+/// qualification the raw text bakes in is the same in every SDK.
+fn resolution_helpers() -> Vec<Decl> {
+    vec![
+        Decl::raw_with(
+            "// DurationMs parses a duration field for the runtime's millisecond value\n\
              // positions.\n\
-             func durationMs(v string) (float64, error) {\n\
+             func DurationMs(v string) (float64, error) {\n\
              \td, err := time.ParseDuration(v)\n\
              \tif err != nil {\n\t\treturn 0, err\n\t}\n\
              \treturn float64(d) / float64(time.Millisecond), nil\n\
              }"
             .to_string(),
             vec![import("time", "time")],
-        ));
-    }
-    if !helpers.transforms.is_empty() {
-        decls.push(Decl::raw_with(
-            "// strTransformWords splits a resolved value for the casing transforms:\n\
+        ),
+        Decl::raw_with(
+            "// StrTransformWords splits a resolved value for the casing transforms:\n\
              // runs of spaces, hyphens, and underscores separate words.\n\
-             func strTransformWords(s string) []string {\n\
+             func StrTransformWords(s string) []string {\n\
              \treturn strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == '-' || r == '_' })\n\
              }"
             .to_string(),
             vec![import("strings", "strings")],
-        ));
-        for t in &helpers.transforms {
-            let (name, body) = match *t {
-                "upper_snake" => ("strUpperSnake", "\tws := strTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToUpper(ws[i])\n\t}\n\treturn strings.Join(ws, \"_\")"),
-                "snake" => ("strSnake", "\tws := strTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToLower(ws[i])\n\t}\n\treturn strings.Join(ws, \"_\")"),
-                "kebab" => ("strKebab", "\tws := strTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToLower(ws[i])\n\t}\n\treturn strings.Join(ws, \"-\")"),
-                "pascal" => ("strPascal", "\tws := strTransformWords(s)\n\tfor i := range ws {\n\t\tif ws[i] != \"\" {\n\t\t\tws[i] = strings.ToUpper(ws[i][:1]) + strings.ToLower(ws[i][1:])\n\t\t}\n\t}\n\treturn strings.Join(ws, \"\")"),
-                _ => continue,
-            };
-            decls.push(Decl::raw_with(
-                format!("func {name}(s string) string {{\n{body}\n}}"),
-                vec![import("strings", "strings")],
-            ));
-        }
-    }
-    decls
+        ),
+        casing_helper("StrUpperSnake", "\tws := StrTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToUpper(ws[i])\n\t}\n\treturn strings.Join(ws, \"_\")"),
+        casing_helper("StrSnake", "\tws := StrTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToLower(ws[i])\n\t}\n\treturn strings.Join(ws, \"_\")"),
+        casing_helper("StrKebab", "\tws := StrTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToLower(ws[i])\n\t}\n\treturn strings.Join(ws, \"-\")"),
+        casing_helper("StrPascal", "\tws := StrTransformWords(s)\n\tfor i := range ws {\n\t\tif ws[i] != \"\" {\n\t\t\tws[i] = strings.ToUpper(ws[i][:1]) + strings.ToLower(ws[i][1:])\n\t\t}\n\t}\n\treturn strings.Join(ws, \"\")"),
+    ]
+}
+
+fn casing_helper(name: &str, body: &str) -> Decl {
+    Decl::raw_with(
+        format!("func {name}(s string) string {{\n{body}\n}}"),
+        vec![import("strings", "strings")],
+    )
 }
 
 /// The transform-application expression, innermost first in declared order.
@@ -395,6 +394,7 @@ fn apply_transforms(expr: String, transforms: &[String], helpers: &mut Helpers) 
             "upper" => Some(format!("strings.ToUpper({out})")),
             _ => None,
         },
+        |name| format!("{SHARED}.{name}"),
     )
 }
 

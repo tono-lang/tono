@@ -570,8 +570,8 @@ fn a_consumed_config_member_requires_a_value_at_construction() {
 
 #[test]
 fn duration_parsing_accepts_both_micro_signs() {
-    let module = crate::codegen::test_support::entries_matrix_module();
-    let out = text(&module);
+    // The helper is the SDK's, not the entry's, so it is read where it lives.
+    let out = rendered(&resolution_helpers(), &TsRules);
     // Go's ParseDuration takes U+00B5 and U+03BC; the shared grammar must too.
     assert!(out.contains("\\u00b5s"));
     assert!(out.contains("\\u03bcs"));

@@ -282,7 +282,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         own.extend(discriminator_decls_for(entry, &n, module, &bound));
         per_entry.push((entry.name.to_string(), own));
     }
-    decls.extend(helper_decls(&helpers));
     EntryEmission {
         shared: decls,
         per_entry,
@@ -701,4 +700,5 @@ mod tests;
 
 use checks::{access, config_error, presence_guard, value_cast, value_expr};
 use resolve::Resolver;
+pub use surface::resolution_helpers;
 use surface::*;

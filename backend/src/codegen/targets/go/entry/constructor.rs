@@ -181,7 +181,7 @@ pub(super) fn new_decl(
                 path = vp.path,
             ));
             format!(
-                "\t{{\n\t\tms, err := durationMs(string({expr}))\n\t\tif err != nil {{\n\t\t\t{fail}\n\t\t}}\n\t\tvalues[{path:?}] = ms\n\t}}\n",
+                "\t{{\n\t\tms, err := tono.DurationMs(string({expr}))\n\t\tif err != nil {{\n\t\t\t{fail}\n\t\t}}\n\t\tvalues[{path:?}] = ms\n\t}}\n",
                 path = vp.path,
             )
         } else {

@@ -27,3 +27,86 @@ export function encodeBytes(b: Uint8Array): string {
 export function decodeBytes(s: string): Uint8Array {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 }
+
+// readEnv treats an unset and an empty variable the same: empty means
+// not set, per the declared-source contract.
+export function readEnv(name: string): string | undefined {
+  const env = (
+    globalThis as { process?: { env?: Record<string, string | undefined> } }
+  ).process?.env;
+  const v = env?.[name];
+  return v === undefined || v === "" ? undefined : v;
+}
+
+// durationToMs parses the duration spelling shared across targets
+// (Go's ParseDuration grammar: optional sign, bare zero, unit runs)
+// into the runtime's millisecond values.
+export function durationToMs(v: string): number {
+  let rest = v;
+  let sign = 1;
+  if (rest.startsWith("-")) {
+    sign = -1;
+    rest = rest.slice(1);
+  } else if (rest.startsWith("+")) {
+    rest = rest.slice(1);
+  }
+  if (rest === "0") {
+    return 0;
+  }
+  // The number grammar matches Go's: digits, digits.digits,
+  // trailing-dot ("1.s") and leading-dot (".5s") forms.
+  // Sticky alone: exec advances lastIndex, and y already anchors
+  // each match to it (g would be redundant).
+  // Both micro signs Go accepts: U+00B5 (micro) and U+03BC (Greek mu).
+  const re = /(\d+(?:\.\d*)?|\.\d+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h)/y;
+  const unit: Record<string, number> = {
+    ns: 1e-6,
+    us: 1e-3,
+    "\u00b5s": 1e-3,
+    "\u03bcs": 1e-3,
+    ms: 1,
+    s: 1000,
+    m: 60000,
+    h: 3600000,
+  };
+  let total = 0;
+  let consumed = 0;
+  for (let m = re.exec(rest); m !== null; m = re.exec(rest)) {
+    total += Number(m[1]) * unit[m[2]];
+    consumed = re.lastIndex;
+  }
+  if (consumed !== rest.length || rest.length === 0) {
+    throw new Error(`invalid duration ${JSON.stringify(v)}`);
+  }
+  return sign * total;
+}
+
+// strTransformWords splits a resolved value for the casing transforms:
+// runs of spaces, hyphens, and underscores separate words.
+export function strTransformWords(s: string): string[] {
+  return s.split(/[ _-]+/).filter((w) => w !== "");
+}
+
+export function strUpperSnake(s: string): string {
+  return strTransformWords(s)
+    .map((w) => w.toUpperCase())
+    .join("_");
+}
+
+export function strSnake(s: string): string {
+  return strTransformWords(s)
+    .map((w) => w.toLowerCase())
+    .join("_");
+}
+
+export function strKebab(s: string): string {
+  return strTransformWords(s)
+    .map((w) => w.toLowerCase())
+    .join("-");
+}
+
+export function strPascal(s: string): string {
+  return strTransformWords(s)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join("");
+}
