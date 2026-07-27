@@ -115,7 +115,6 @@ cat >"$work/ts/tsconfig.json" <<EOF
     "moduleResolution": "bundler",
     "lib": ["ES2020", "DOM"],
     "skipLibCheck": true,
-    "baseUrl": ".",
     "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
   },
   "include": ["**/*.ts"]
@@ -155,7 +154,6 @@ cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
     "moduleResolution": "bundler",
     "lib": ["ES2020", "DOM"],
     "skipLibCheck": true,
-    "baseUrl": ".",
     "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
   },
   "include": ["**/*.ts"]

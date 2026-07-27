@@ -58,7 +58,7 @@ echo "typescript..."
 compile_runtime() {
     local name="$1" src="$2" dest="$work/ts/node_modules/@tono/$1"
     mkdir -p "$dest"
-    "$tsc" "$src"/*.ts --outDir "$dest" --module CommonJS --moduleResolution node \
+    "$tsc" "$src"/*.ts --outDir "$dest" --module CommonJS \
         --target ES2020 --lib ES2020,DOM --declaration --skipLibCheck --strict
     printf '{"name":"@tono/%s","main":"index.js","types":"index.d.ts"}\n' "$name" >"$dest/package.json"
 }
@@ -74,7 +74,6 @@ cat >"$work/ts/tsconfig.json" <<'EOF'
     "strict": true,
     "target": "ES2020",
     "module": "CommonJS",
-    "moduleResolution": "node",
     "lib": ["ES2020", "DOM"],
     "skipLibCheck": true,
     "types": [],

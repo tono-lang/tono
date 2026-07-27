@@ -28,7 +28,7 @@ preview = [
 tono-backend = { path = "../backend" }
 # The preview's terminal UI, behind the `preview` feature. crossterm is used
 # through ratatui's re-export (`ratatui::crossterm`) so the two never drift.
-ratatui = { version = "0.29", optional = true }
+ratatui = { version = "0.30", optional = true }
 # Syntax highlighting for the preview panes: the tono grammar for the source pane
 # and the official grammars of the generated languages (the TypeScript queries
 # extend the JavaScript ones, hence both). tree-sitter-tono is not on crates.io,
