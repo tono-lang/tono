@@ -118,6 +118,7 @@ let decl_word (d : Ast.decl) : string =
   | Ast.DExt { ekind = Ast.EHook; _ } -> "hook"
   | Ast.DExt { ekind = Ast.EContract; _ } -> "contract"
   | Ast.DExt { ekind = Ast.EConstraint; _ } -> "constraint"
+  | Ast.DExt { ekind = Ast.EImpl; _ } -> "impl"
 
 (* A sub-span of [base] starting [skip] bytes in, [len] bytes long. Names are
    single-line tokens, so only the column and offset shift. *)
@@ -387,8 +388,8 @@ let construct_doc (word : string) : string option =
       Some "Brings another module's declarations into dot-qualified scope."
   | "ext" ->
       Some
-        "A bespoke extension point (hook, contract, or constraint), bound per \
-         language to a file#symbol reference."
+        "A bespoke extension point (hook, contract, constraint, or impl), \
+         bound per language to a file#symbol reference."
   | "hook" ->
       Some
         (Printf.sprintf
@@ -401,6 +402,11 @@ let construct_doc (word : string) : string option =
          conformance spec."
   | "constraint" ->
       Some "A bespoke validation predicate attached at the boundary."
+  | "impl" ->
+      Some
+        "Implements the operation it names with bespoke sources, taking that \
+         operation's signature. Add 'raw' to return an outcome the generated \
+         glue decodes and discriminates."
   | _ -> None
 
 (* Primitive and marker hover: the wire decisions that most surprise SDK

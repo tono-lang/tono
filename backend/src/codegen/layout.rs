@@ -8,7 +8,9 @@
 
 use std::path::PathBuf;
 
+use crate::codegen::modules::{self, CodegenConfig};
 use crate::codegen::pipeline::{GeneratedFile, TargetKind, BANNER};
+use crate::ir::Model;
 
 /// The Go package name / Rust module leaf for a dotted module: its last segment.
 pub(crate) fn package_name(module: &str) -> &str {
@@ -83,4 +85,45 @@ pub(crate) fn rust_mod_tree(files: &[GeneratedFile]) -> Vec<GeneratedFile> {
             }
         })
         .collect()
+}
+
+/// Reject a Go layout that would emit source Go cannot compile, so the failure is
+/// a clear error rather than silently-broken output. Go has no relative imports,
+/// so a multi-module SDK's cross-package imports need the module path
+/// (`--go-module`); and a package is named for its module's last segment, so two
+/// modules sharing that segment would render colliding `pkg.` selectors. Config is
+/// applied first, so `--flatten` (which joins the whole path into one segment)
+/// clears both conditions. A no-op when Go is not a requested target.
+pub fn check_go_layout(
+    model: &Model,
+    targets: &[TargetKind],
+    config: &CodegenConfig,
+) -> Result<(), String> {
+    if !targets.contains(&TargetKind::Go) {
+        return Ok(());
+    }
+    let model = modules::apply(config, model);
+    let names: Vec<&str> = model.modules.iter().map(|m| m.name.as_str()).collect();
+    if names.len() > 1 && config.go_module.is_none() {
+        return Err(
+            "Go multi-module output needs --go-module <path>: Go has no relative \
+             imports, so the cross-package imports need the SDK's module path"
+                .into(),
+        );
+    }
+    let mut by_pkg: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for name in &names {
+        by_pkg
+            .entry(name.rsplit('.').next().unwrap_or(name))
+            .or_default()
+            .push(name);
+    }
+    if let Some((pkg, mods)) = by_pkg.iter().find(|(_, v)| v.len() > 1) {
+        return Err(format!(
+            "Go package name collision: modules {} both map to package '{pkg}'; \
+             rename a module so its last segment is unique, or --flatten",
+            mods.join(" and ")
+        ));
+    }
+    Ok(())
 }

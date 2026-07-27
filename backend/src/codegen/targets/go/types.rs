@@ -215,7 +215,7 @@ mod tests {
                 Tref::Prim(Prim::I64),
                 true,
                 vec![crate::ir::Trait {
-                    id: "core#wire".into(),
+                    id: "wire".into(),
                     value: serde_json::json!("amount"),
                 }],
             )],

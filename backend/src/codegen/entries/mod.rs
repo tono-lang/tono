@@ -604,7 +604,7 @@ fn has_source(field: &EntryField, pred: impl Fn(&Source) -> bool) -> bool {
 /// clear all of them, not just the canonical name.
 fn arg_identifiers(field: &EntryField) -> Vec<String> {
     let mut out = vec![field.name.clone()];
-    if let Some(t) = field.traits.iter().find(|t| t.id == "core#rename") {
+    if let Some(t) = crate::codegen::conventions::rename_map(&field.traits) {
         if let Some(map) = t.value.as_object() {
             for v in map.values() {
                 if let Some(s) = v.as_str() {

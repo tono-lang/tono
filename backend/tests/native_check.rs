@@ -16,7 +16,7 @@ use tono_backend::ir::decode_model;
 /// A one-module model with a single `i64` field. The wide integer forces the
 /// serde split (a Rust helper module, TypeScript codecs), so the check exercises
 /// a multi-file layout, not just a lone type.
-const IR: &str = r#"{"tono_ir_version":5,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR: &str = r#"{"tono_ir_version":6,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("tono-native-check-{name}"));

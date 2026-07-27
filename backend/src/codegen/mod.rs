@@ -26,16 +26,17 @@ pub mod target;
 pub mod targets;
 #[cfg(test)]
 pub mod test_support;
+mod traits;
 pub mod tree;
 pub mod validation;
 
 pub use casing::{CaseStyle, CasingConfig};
 pub use check::{check, CheckOptions, CheckOutcome};
 pub use format::{Formatted, Formatter};
+pub use layout::check_go_layout;
 pub use modules::CodegenConfig;
 pub use pipeline::{
-    casing_for, check_go_layout, generate, generate_target, parse_targets, GeneratedFile,
-    TargetKind,
+    casing_for, generate, generate_target, parse_targets, GeneratedFile, TargetKind,
 };
 pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};

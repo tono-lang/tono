@@ -157,23 +157,33 @@ pub(super) fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
 }
 
 /// The discrimination functions for the entry's operations, named through the
-/// entry rule.
+/// entry rule. An operation whose body is a raw bespoke implementation gets the
+/// code-only variant under the same name: its outcome carries no protocol
+/// status to match on. A typed implementation needs none at all, since it
+/// already returns declared errors as typed values.
 pub(super) fn discriminator_decls_for(
     entry: &EntryModel<'_>,
     n: &Names,
     module: &Module,
+    bound: &[BoundExtension<'_>],
 ) -> Vec<Decl> {
+    use crate::codegen::targets::typescript::errors;
     entry
         .operations
         .iter()
         .filter(|op| !declared_errors(op, module).is_empty())
-        .map(|op| {
+        .filter_map(|op| {
             let ordered = crate::codegen::ops::discrimination_order(op, module);
-            crate::codegen::targets::typescript::errors::discriminator_fn_named(
-                &discriminator_name(n, op),
-                &ordered,
-                module,
-            )
+            let name = discriminator_name(n, op);
+            if crate::codegen::ops::wire_descriptor(op).is_some() {
+                return Some(errors::discriminator_fn_named(&name, &ordered, module));
+            }
+            match crate::codegen::extensions::impl_binding(bound, &op.id) {
+                Some(b) if b.raw => Some(errors::outcome_discriminator_fn_named(
+                    &name, &ordered, module,
+                )),
+                _ => None,
+            }
         })
         .collect()
 }

@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 5, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 6, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **5**.
+The current version is **6**.
 
 ## Modules
 

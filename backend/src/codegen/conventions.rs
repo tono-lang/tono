@@ -11,92 +11,14 @@
 use crate::codegen::casing::{self, CaseStyle, CasingConfig};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, Interface, TypeExpr};
-use crate::ir::{EnumBacking, EnumValue, Member, Prim, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{EnumBacking, EnumValue, Member, Prim, Shape, ShapeKind, Tref};
 
-/// The `@rename(lang)` identifier override (trait `core#rename`, a value object
-/// keyed by language). Replaces the in-code identifier only; never the wire key.
-pub fn rename_of(traits: &[Trait], lang: &str) -> Option<String> {
-    traits
-        .iter()
-        .find(|t| t.id == "core#rename")
-        .and_then(|t| t.value.get(lang))
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-}
-
-/// The `@wire` serialization-key override (trait `core#wire`). Replaces the wire
-/// key only; never the in-code identifier.
-pub fn wire_of(traits: &[Trait]) -> Option<String> {
-    traits
-        .iter()
-        .find(|t| t.id == "core#wire")
-        .and_then(|t| t.value.as_str())
-        .map(str::to_string)
-}
-
-/// The serialization key for a member: its `@wire` override, else the canonical
-/// name. Independent of the in-code identifier.
-pub fn wire_key(member: &Member) -> String {
-    wire_of(&member.traits).unwrap_or_else(|| member.name.clone())
-}
-
-/// Whether a member carries the `@entries` map-escape trait (`core#entries`).
-pub fn has_entries(traits: &[Trait]) -> bool {
-    traits.iter().any(|t| t.id == "core#entries")
-}
-
-/// The `@deprecated` reason, or `None` when absent. The trait id is matched by its
-/// local name, tolerating an optional `core#` namespace, so it reads both the
-/// frontend's bare `deprecated` and the golden fixtures' `core#deprecated`. The
-/// reason is the single argument, which the frontend encodes as a one-element array
-/// (`["use v2"]`) and the fixtures as a bare string; a bare `@deprecated` (no
-/// argument) yields `Some("")`. Every target rebases this onto its native
-/// deprecation annotation, keeping the element generated but marked.
-pub fn deprecated_of(traits: &[Trait]) -> Option<String> {
-    traits
-        .iter()
-        .find(|t| t.id == "deprecated" || t.id == "core#deprecated")
-        .map(|t| match &t.value {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Array(items) => items
-                .first()
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            _ => String::new(),
-        })
-}
-
-/// The `@doc` Markdown content, or `None` when absent or empty. The trait id is
-/// matched by its local name with an optional `core#` namespace, tolerating both
-/// the frontend's bare `doc` and the fixtures' `core#doc`. The content is the
-/// single argument, encoded by the frontend as a one-element array (`["text"]`)
-/// and by the fixtures as a bare string. An empty string yields `None`, since a
-/// documentation comment with no content is not worth emitting. Every target
-/// lowers this onto its native doc format (JSDoc, rustdoc, godoc).
-pub fn doc_of(traits: &[Trait]) -> Option<String> {
-    traits
-        .iter()
-        .find(|t| t.id == "doc" || t.id == "core#doc")
-        .and_then(|t| match &t.value {
-            serde_json::Value::String(s) => Some(s.clone()),
-            serde_json::Value::Array(items) => {
-                items.first().and_then(|v| v.as_str()).map(str::to_string)
-            }
-            _ => None,
-        })
-        .filter(|s| !s.is_empty())
-}
-
-/// Reshape a map into an `@entries` pairs-array when the member carries the
-/// `core#entries` trait; any other type is unchanged. The escape only applies to
-/// a map (a non-map `@entries` is rejected upstream by the typechecker).
-pub fn entries_or_map(ty: TypeExpr, traits: &[Trait]) -> TypeExpr {
-    match ty {
-        TypeExpr::Map(key, value) if has_entries(traits) => TypeExpr::Entries(key, value),
-        other => other,
-    }
-}
+// The core trait vocabulary is read through one module, re-exported here so
+// every target keeps reaching it as `conventions::doc_of` and friends.
+pub use crate::codegen::traits::{
+    core_trait, deprecated_of, doc_of, entries_or_map, has_entries, rename_map, rename_of,
+    wire_key, wire_of,
+};
 
 /// Case a snake_case type name to PascalCase — the spelling every current target
 /// uses for type identifiers — honoring the default initialism set. The IR carries
@@ -328,6 +250,7 @@ mod tests {
     use crate::codegen::casing::CaseStyle;
     use crate::codegen::symbol::Import;
     use crate::ir::ShapeKind;
+    use crate::ir::Trait;
     use serde_json::json;
 
     fn member(name: &str, traits: Vec<Trait>) -> Member {

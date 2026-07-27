@@ -154,12 +154,23 @@ let ext_errors () =
   nonempty "non-string binding value"
     (decl_diags Parser.parse_ext "ext hook h { ts: 5 }");
   nonempty "junk in body" (decl_diags Parser.parse_ext "ext hook h { @ }");
+  nonempty "impl name cut after the dot"
+    (decl_diags Parser.parse_ext "ext impl client. { go: \"a#b\" }");
   (* A stray ',' in the body is skipped and the well-formed binding still parses. *)
   let st, _ = state "ext hook before_request { , ts: \"a#b\" }" in
   let decl = Parser.parse_ext st ~pub:false ~dtraits:[] in
   match decl.dkind with
   | Ast.DExt { ebindings = [ { lang = "ts"; _ } ]; _ } -> ()
   | _ -> Alcotest.fail "expected the binding to survive recovery"
+
+(* The impl form: a qualified "entry.op" name and the optional raw flag. *)
+let ext_impl_parse () =
+  let st, _ = state "ext impl client.save raw { go: \"ext/go/s.go#Save\" }" in
+  let decl = Parser.parse_ext st ~pub:false ~dtraits:[] in
+  Alcotest.(check string) "qualified name" "client.save" decl.dname;
+  match decl.dkind with
+  | Ast.DExt { ekind = Ast.EImpl; eraw = Some _; esig = None; _ } -> ()
+  | _ -> Alcotest.fail "expected a raw impl with no signature"
 
 (* Diagnostics point at the offending token, not the start of input. *)
 let diagnostic_span_and_message () =
@@ -248,6 +259,7 @@ let () =
           Alcotest.test_case "union errors" `Quick union_errors;
           Alcotest.test_case "op errors" `Quick op_errors;
           Alcotest.test_case "ext errors" `Quick ext_errors;
+          Alcotest.test_case "ext impl" `Quick ext_impl_parse;
           Alcotest.test_case "diagnostic span and message" `Quick
             diagnostic_span_and_message;
         ] );

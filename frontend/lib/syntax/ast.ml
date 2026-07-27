@@ -85,9 +85,10 @@ type union_variant = {
   vtraits : trait list;
 }
 
-(* The three bespoke extension flavours. [EHook] fills a fixed lifecycle slot;
-   [EContract]/[EConstraint] are named with a typed signature. *)
-type ext_kind = EHook | EContract | EConstraint
+(* The bespoke extension flavours. [EHook] fills a fixed lifecycle slot;
+   [EContract]/[EConstraint] are named with a typed signature; [EImpl] names the
+   operation it implements and takes its signature from that operation. *)
+type ext_kind = EHook | EContract | EConstraint | EImpl
 
 (* One "lang: file#symbol" entry in an extension body. *)
 type ext_binding = { lang : string; lang_span : Span.span; target : string }
@@ -106,6 +107,9 @@ type decl_kind =
       ekind : ext_kind;
       ekind_span : Span.span;
       esig : ext_sig option;
+      eraw : Span.span option;
+          (* the span of the "raw" word when written, so the checker can point at
+             it; [None] means the typed form *)
       ebindings : ext_binding list;
       econformance : string option;
     }

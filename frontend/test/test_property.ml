@@ -157,7 +157,7 @@ let gen_shape : Ir.shape G.t =
   ({ id; kind; traits } : Ir.shape)
 
 let gen_ext_kind : Ir.ext_kind G.t =
-  G.oneof_list [ Ir.Hook; Ir.Contract; Ir.Constraint ]
+  G.oneof_list [ Ir.Hook; Ir.Contract; Ir.Constraint; Ir.Impl ]
 
 let gen_ext_sig : Ir.ext_sig G.t =
   let+ input = gen_tref and+ output = gen_tref in
@@ -177,11 +177,12 @@ let gen_extension : Ir.extension G.t =
   let+ ext_name = gen_name
   and+ ext_kind = gen_ext_kind
   and+ ext_sig = gen_opt gen_ext_sig
+  and+ ext_raw = G.bool
   and+ ext_bindings = gen_bindings
   and+ ext_conformance =
     gen_opt (G.oneof_list [ "vec.json"; "vectors/x.json" ])
   in
-  ({ ext_name; ext_kind; ext_sig; ext_bindings; ext_conformance }
+  ({ ext_name; ext_kind; ext_sig; ext_raw; ext_bindings; ext_conformance }
     : Ir.extension)
 
 let gen_module : Ir.module_ G.t =

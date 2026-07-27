@@ -59,6 +59,17 @@ impl TargetKind {
             Self::TypeScript => "ts",
         }
     }
+
+    /// The `ext` binding keys that reach this target, in preference order. The
+    /// per-target emitters read the same list, so a language spelled one way in
+    /// the manifest and another in a binding still resolves.
+    pub fn binding_langs(self) -> &'static [&'static str] {
+        match self {
+            Self::Rust => &["rust"],
+            Self::Go => &["go"],
+            Self::TypeScript => &["ts", "typescript"],
+        }
+    }
 }
 
 /// A generated source file: which target produced it (so a caller knows which
@@ -155,47 +166,6 @@ pub fn parse_targets(csv: &str) -> Result<Vec<TargetKind>, String> {
         .collect()
 }
 
-/// Reject a Go layout that would emit source Go cannot compile, so the failure is
-/// a clear error rather than silently-broken output. Go has no relative imports,
-/// so a multi-module SDK's cross-package imports need the module path
-/// (`--go-module`); and a package is named for its module's last segment, so two
-/// modules sharing that segment would render colliding `pkg.` selectors. Config is
-/// applied first, so `--flatten` (which joins the whole path into one segment)
-/// clears both conditions. A no-op when Go is not a requested target.
-pub fn check_go_layout(
-    model: &Model,
-    targets: &[TargetKind],
-    config: &CodegenConfig,
-) -> Result<(), String> {
-    if !targets.contains(&TargetKind::Go) {
-        return Ok(());
-    }
-    let model = modules::apply(config, model);
-    let names: Vec<&str> = model.modules.iter().map(|m| m.name.as_str()).collect();
-    if names.len() > 1 && config.go_module.is_none() {
-        return Err(
-            "Go multi-module output needs --go-module <path>: Go has no relative \
-             imports, so the cross-package imports need the SDK's module path"
-                .into(),
-        );
-    }
-    let mut by_pkg: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
-    for name in &names {
-        by_pkg
-            .entry(name.rsplit('.').next().unwrap_or(name))
-            .or_default()
-            .push(name);
-    }
-    if let Some((pkg, mods)) = by_pkg.iter().find(|(_, v)| v.len() > 1) {
-        return Err(format!(
-            "Go package name collision: modules {} both map to package '{pkg}'; \
-             rename a module so its last segment is unique, or --flatten",
-            mods.join(" and ")
-        ));
-    }
-    Ok(())
-}
-
 /// The model and the cross-module indices every generation pass needs: the
 /// module remap/flatten hooks applied once up front (so render rules and output
 /// paths see only effective names), the SDK's own module names (so Go tells an
@@ -259,6 +229,8 @@ pub fn generate(
     config: &CodegenConfig,
 ) -> Result<Vec<GeneratedFile>, String> {
     crate::codegen::extensions::validate_extensions(model)?;
+    let langs: Vec<&[&str]> = targets.iter().map(|t| t.binding_langs()).collect();
+    crate::codegen::extensions::validate_impl_coverage(model, &langs)?;
     crate::codegen::entries::validate_entries(model)?;
     let (model, union_ids, internal_modules) = prepare(model, config);
     let mut files = Vec::new();
@@ -292,6 +264,7 @@ pub fn generate_target(
     casing: &CasingConfig,
 ) -> Result<Vec<GeneratedFile>, String> {
     crate::codegen::extensions::validate_extensions(model)?;
+    crate::codegen::extensions::validate_impl_coverage(model, &[target.binding_langs()])?;
     crate::codegen::entries::validate_entries(model)?;
     let (model, union_ids, internal_modules) = prepare(model, config);
     let mut files = emit_target(
@@ -311,6 +284,7 @@ pub fn generate_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::layout::check_go_layout;
     use crate::codegen::test_support::{member, structure, union_shape};
     use crate::ir::{Prim, Shape, ShapeKind, Tref};
 
@@ -496,7 +470,7 @@ mod tests {
             vec![member("message", Tref::Prim(Prim::String), true)],
         );
         not_found.traits = vec![crate::ir::Trait {
-            id: "core#status".into(),
+            id: "status".into(),
             value: serde_json::json!([404]),
         }];
         let mut model = demo_model();
@@ -515,7 +489,7 @@ mod tests {
                 }],
             },
             traits: vec![crate::ir::Trait {
-                id: "core#http".into(),
+                id: "http".into(),
                 value: serde_json::json!({"method": "GET", "path": "/charges/{id}"}),
             }],
         }];

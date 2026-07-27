@@ -18,7 +18,7 @@ use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_f
 use crate::codegen::entries::{
     companion_name, module_entries, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
 };
-use crate::codegen::extensions::{bound_extensions, hook_binding, BoundExtension};
+use crate::codegen::extensions::{bound_extensions, hook_binding, impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
@@ -96,7 +96,7 @@ fn field_doc(traits: &[crate::ir::Trait], indent: &str) -> String {
     )
 }
 
-fn module_symbol(name: &str, module: &Module) -> Symbol {
+pub(super) fn module_symbol(name: &str, module: &Module) -> Symbol {
     Symbol::imported(name.to_string(), module.name.clone(), name.to_string())
 }
 
@@ -258,7 +258,7 @@ pub fn entry_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
             &mut helpers,
             multi,
         ));
-        decls.extend(discriminator_decls_for(entry, &n, module));
+        decls.extend(discriminator_decls_for(entry, &n, module, &bound));
     }
     decls.extend(helper_decls(&helpers));
     decls
@@ -570,34 +570,6 @@ fn op_method(
         }
     };
 
-    if wire_descriptor(op).is_none() {
-        // A bespoke-bound operation: invoking the bound impl through the
-        // generated glue is not wired yet, so the method reports that plainly
-        // while keeping the declared signature.
-        refs.push(module_symbol(&en.contract, module));
-        let param = match input {
-            Some(t) => {
-                refs.extend(type_refs(t, module));
-                format!("input: {}", render_type(&type_expr_of(t), &TsRules))
-            }
-            None => String::new(),
-        };
-        if let Some(t) = output {
-            refs.extend(type_refs(t, module));
-        }
-        let ret = output
-            .map(|t| render_type(&type_expr_of(t), &TsRules))
-            .unwrap_or_else(|| "void".to_string());
-        return format!(
-            "  async {name}({param}): Promise<{ret}> {{\n    {t}\n  }}",
-            t = throw(format!(
-                "new {}({:?}, new Error(\"operation has no transport binding\"))",
-                en.contract,
-                op_local_name(&op.id),
-            )),
-        );
-    }
-
     let (param, input_expr) = match input {
         Some(t) => {
             refs.extend(type_refs(t, module));
@@ -620,7 +592,8 @@ fn op_method(
         .unwrap_or_else(|| "void".to_string());
 
     // A constrained input is validated before it leaves the process, so a bad
-    // request surfaces as a ValidationError instead of a server round trip.
+    // request surfaces as a ValidationError instead of a server round trip (or
+    // a call into bespoke code that would have to reject it again).
     let mut validate_block = String::new();
     if let Some(Tref::Ref { id, .. }) = input {
         if let Some(shape) = module
@@ -638,6 +611,26 @@ fn op_method(
         }
     }
 
+    if wire_descriptor(op).is_none() {
+        // No protocol binding: the operation is implemented by bespoke sources
+        // the frontend proved are bound, and the generator gate proved are bound
+        // for this target.
+        return impl_op::method(impl_op::Method {
+            op,
+            module,
+            name: &name,
+            param: &param,
+            ret: &ret,
+            input_expr: &input_expr,
+            output,
+            validate_block: &validate_block,
+            binding: impl_binding(bound, &op.id),
+            throw: &throw,
+            discriminator: &discriminator_name(n, op),
+            refs,
+        });
+    }
+
     let error_line = if declared_errors(op, module).is_empty() {
         refs.push(module_symbol(&en.api, module));
         throw(format!("new {}(outcome.status, outcome.body)", en.api))
@@ -647,76 +640,7 @@ fn op_method(
             discriminator_name(n, op)
         ))
     };
-    let success_block = match output {
-        Some(Tref::Ref { id, .. }) => {
-            refs.push(module_symbol(&en.decode, module));
-            let out_name = type_ident_from_id(id);
-            let t = throw(format!(
-                "new {}(\"$\", \"{out_name}\", outcome.body)",
-                en.decode
-            ));
-            // A structured output decodes leniently on what the contract
-            // promises: required members must be present (undefined/null is
-            // absence) and the shape must parse. Declared constraints are NOT
-            // enforced on the response (only on what the client sends), and
-            // unknown fields are tolerated so a server adding a field or
-            // loosening a bound does not break the client.
-            let out_shape = module.shapes.iter().find(|s| s.id == *id);
-            let mut required = String::new();
-            if let Some(shape) = out_shape {
-                if let ShapeKind::Structure { members, .. } = &shape.kind {
-                    for m in members.iter().filter(|m| m.required) {
-                        let name = wire_key(m);
-                        // A missing required member points at that member (`$.tags`),
-                        // not the whole body, so the caller sees which field the
-                        // server omitted.
-                        let miss = throw(format!(
-                            "new {}(\"$.{name}\", \"{out_name}\", outcome.body)",
-                            en.decode
-                        ));
-                        required.push_str(&format!(
-                            "      if (!({name:?} in raw) || raw[{name:?}] === null) {{\n        {miss}\n      }}\n",
-                        ));
-                    }
-                }
-            }
-            if required.is_empty() {
-                format!(
-                    "    try {{\n      return decode{out_name}(JSON.parse(outcome.body));\n    }} catch {{\n      {t}\n    }}",
-                )
-            } else {
-                format!(
-                    "    let raw: any;\n    try {{\n      raw = JSON.parse(outcome.body);\n    }} catch {{\n      {t}\n    }}\n\
-                     \x20   if (typeof raw !== \"object\" || raw === null || Array.isArray(raw)) {{\n      {t}\n    }}\n\
-                     {required}\
-                     \x20   let out: {out_name};\n    try {{\n      out = decode{out_name}(raw);\n    }} catch {{\n      {t}\n    }}\n\
-                     \x20   return out;",
-                )
-            }
-        }
-        Some(t) => {
-            // A 64-bit integer (or a container holding one) rides the wire
-            // as strings: the parsed body runs through the same decode the
-            // codecs use so the method returns bigints, not raw JSON shapes.
-            let decode = crate::codegen::targets::typescript::codecs::decode_expr(
-                "JSON.parse(outcome.body)",
-                t,
-            );
-            if decode == "JSON.parse(outcome.body)" {
-                format!("    return {decode} as {ret};")
-            } else {
-                refs.push(module_symbol(&en.decode, module));
-                format!(
-                    "    try {{\n      return {decode} as {ret};\n    }} catch {{\n      {t}\n    }}",
-                    t = throw(format!(
-                        "new {}(\"$\", {ret:?}, outcome.body)",
-                        en.decode
-                    )),
-                )
-            }
-        }
-        None => "    return;".to_string(),
-    };
+    let success_block = decode::success_block(output, module, &ret, &throw, refs);
     let hooks_arg = if passes_hooks { ", this.hooks" } else { "" };
     let transport_throw = throw(format!("new {}(outcome.cause)", en.transport));
     let doc = doc_of(&op.traits)
@@ -743,6 +667,8 @@ fn why_var(field: &str) -> String {
 }
 
 mod checks;
+mod decode;
+mod impl_op;
 mod resolve;
 mod surface;
 #[cfg(test)]

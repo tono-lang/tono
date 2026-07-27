@@ -72,3 +72,23 @@ let entry_shape_invalid = "TC0046"
 (* A second occurrence of a non-repeatable trait (@doc, @http, ...) on one
    declaration or member; usually the trailing-trait absorption footgun. *)
 let duplicate_trait = "TC0047"
+
+(* Bespoke operation implementations. An "ext impl" names the operation it
+   implements, so the name must reach exactly one operation an entry declares:
+   none is an orphan, a loose one gets no generated body, and several is an
+   ambiguous bare name that "entry.op" resolves. An
+   entry operation is implemented exactly once, by a protocol binding or by an
+   impl but never by both and never by neither. The raw response form belongs to
+   an impl: on any other kind it would silently do nothing. *)
+let ext_impl_unknown_op = "TC0048"
+let ext_impl_ambiguous_op = "TC0049"
+let op_implementation_conflict = "TC0050"
+let op_implementation_missing = "TC0051"
+let ext_raw_rule = "TC0052"
+
+(* A raw implementation reports a failure by its code alone: it carries no
+   protocol status to match on. A declared error with no @errorCode therefore has
+   nothing that could select it, so the generated glue would resolve it to the
+   generic fallback instead. Reported as a warning, not an error: the operation
+   still works, and adding the code is the fix. *)
+let raw_error_unreachable = "TC0053"

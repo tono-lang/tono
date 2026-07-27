@@ -96,6 +96,7 @@ mod tests {
                 input: Tref::Prim(Prim::String),
                 output: Tref::Prim(Prim::String),
             }),
+            raw: false,
             bindings: [("rust".to_string(), target.to_string())]
                 .into_iter()
                 .collect(),

@@ -160,6 +160,11 @@ jobs:
           fi
       - name: Verify the generated SDKs compile
         run: scripts/check-example-compiles.sh
+      # The strong bespoke gate for `ext impl`: the same vectors run through the
+      # generated Go and TypeScript clients, and both must agree with each other
+      # and with the outcome each vector declares.
+      - name: Verify the bespoke implementations conform
+        run: scripts/check-impl-conformance.sh
 
   mutation:
     name: Mutation (bespoke)

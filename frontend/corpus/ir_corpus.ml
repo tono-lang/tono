@@ -312,6 +312,7 @@ let extension_model : Ir.model =
       ext_name = "before_request";
       ext_kind = Ir.Hook;
       ext_sig = None;
+      ext_raw = false;
       ext_bindings =
         [
           ("ts", "ext/ts/auth.ts#addBearer");
@@ -325,6 +326,7 @@ let extension_model : Ir.model =
       ext_name = "sign_request";
       ext_kind = Ir.Contract;
       ext_sig = Some { input = ref_ "canonical_request" []; output = string_t };
+      ext_raw = false;
       ext_bindings =
         [
           ("ts", "ext/ts/sign.ts#signRequest");
@@ -338,6 +340,7 @@ let extension_model : Ir.model =
       ext_name = "luhn";
       ext_kind = Ir.Constraint;
       ext_sig = Some { input = string_t; output = prim Ir.Bool };
+      ext_raw = false;
       ext_bindings = [ ("ts", "ext/ts/luhn.ts#isLuhn") ];
       ext_conformance = None;
     }
@@ -542,6 +545,147 @@ let entries_client : Ir.model =
       ];
   }
 
+(* Example: a hybrid entry (v6). One operation reaches a protocol through @http,
+   one is implemented by bespoke sources in the typed form, and one in the raw
+   form where the bound symbol returns an outcome the generated glue decodes.
+   The impl extensions name their operations in the qualified "entry.op" form. *)
+let bespoke_impl : Ir.model =
+  let field ?(sources = []) name target : Ir.entry_field =
+    {
+      ef_name = name;
+      ef_target = target;
+      ef_sources = sources;
+      ef_format = None;
+      ef_transforms = [];
+      ef_select = None;
+      ef_binds = [];
+      ef_constraints = [];
+      ef_traits = [];
+    }
+  in
+  let op id ~input ~output ~traits : Ir.shape =
+    {
+      id;
+      kind =
+        Ir.Operation
+          {
+            input = Some (ref_ input []);
+            output = Some (ref_ output []);
+            errors = [ ref_ "notes#overloaded" [] ];
+          };
+      traits;
+    }
+  in
+  let fetch_note =
+    op "notes#client.fetch_note" ~input:"notes#note_ref" ~output:"notes#note"
+      ~traits:
+        [
+          trait "http"
+            (`Assoc
+               [
+                 ("method", `String "GET");
+                 ("path", `String "/notes/{id}");
+                 ("endpoint", `Assoc [ ("field", `List [ `String "endpoint" ]) ]);
+               ]);
+        ]
+  in
+  let save_note =
+    op "notes#client.save_note" ~input:"notes#note" ~output:"notes#note"
+      ~traits:[]
+  in
+  let search_notes =
+    op "notes#client.search_notes" ~input:"notes#note_ref" ~output:"notes#note"
+      ~traits:[]
+  in
+  let client : Ir.shape =
+    {
+      id = "notes#client";
+      kind =
+        Ir.Entry
+          {
+            fields =
+              [
+                field "api_key" string_t ~sources:[ Ir.Arg ];
+                field "endpoint" string_t
+                  ~sources:
+                    [
+                      Ir.Env (Ir.Env_name "NOTES_ENDPOINT");
+                      Ir.Default (`String "https://example.com");
+                    ];
+              ];
+            operations = [ fetch_note; save_note; search_notes ];
+          };
+      traits = [ trait "pub" `Null ];
+    }
+  in
+  let note : Ir.shape =
+    {
+      id = "notes#note";
+      kind =
+        Ir.Structure
+          {
+            params = [];
+            members = [ member "id" string_t; member "body" string_t ];
+          };
+      traits = [];
+    }
+  in
+  let note_ref : Ir.shape =
+    {
+      id = "notes#note_ref";
+      kind =
+        Ir.Structure
+          {
+            params = [];
+            members =
+              [ member "id" string_t ~traits:[ trait "httpLabel" `Null ] ];
+          };
+      traits = [];
+    }
+  in
+  let overloaded : Ir.shape =
+    {
+      id = "notes#overloaded";
+      kind =
+        Ir.Structure { params = []; members = [ member "message" string_t ] };
+      traits =
+        [
+          trait "status" (`List [ `Int 529 ]);
+          trait "errorCode" (`List [ `String "overloaded" ]);
+          trait "retryable" `Null;
+        ];
+    }
+  in
+  let impl name ~raw ~conformance : Ir.extension =
+    {
+      ext_name = name;
+      ext_kind = Ir.Impl;
+      ext_sig = None;
+      ext_raw = raw;
+      ext_bindings =
+        [ ("go", "ext/go/notes.go#" ^ name); ("ts", "ext/ts/notes.ts#" ^ name) ];
+      ext_conformance = conformance;
+    }
+  in
+  {
+    tono_ir_version = Ir_json.current_ir_version;
+    modules =
+      [
+        {
+          mod_name = "notes";
+          shapes = [ client; note; note_ref; overloaded ];
+          operations = [];
+          extensions =
+            [
+              impl "client.save_note" ~raw:false
+                ~conformance:(Some "vectors/save_note.json");
+              impl "client.search_notes" ~raw:true
+                ~conformance:(Some "vectors/search_notes.json");
+            ];
+        };
+      ];
+  }
+
 (* The full corpus, keyed by fixture file name. *)
 let examples : (string * Ir.model) list =
   [
@@ -552,4 +696,5 @@ let examples : (string * Ir.model) list =
     ("service_api", service_api);
     ("extension_model", extension_model);
     ("entries_client", entries_client);
+    ("bespoke_impl", bespoke_impl);
   ]

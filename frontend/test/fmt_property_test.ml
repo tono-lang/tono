@@ -84,11 +84,12 @@ let rec erase_kind = function
           input = Option.map erase_ty input;
           output = Option.map erase_ty output;
         }
-  | Ast.DExt { ekind; esig; ebindings; econformance; _ } ->
+  | Ast.DExt { ekind; esig; eraw; ebindings; econformance; _ } ->
       Ast.DExt
         {
           ekind;
           ekind_span = dspan;
+          eraw = Option.map (fun _ -> dspan) eraw;
           esig =
             Option.map
               (fun (s : Ast.ext_sig) ->

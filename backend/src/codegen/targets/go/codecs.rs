@@ -627,7 +627,7 @@ mod tests {
                 },
                 true,
                 vec![crate::ir::Trait {
-                    id: "core#wire".into(),
+                    id: "wire".into(),
                     value: serde_json::json!("pay_method"),
                 }],
             )],

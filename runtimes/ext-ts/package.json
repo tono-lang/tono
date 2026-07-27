@@ -1,0 +1,15 @@
+{
+  "name": "@tono/ext-runtime-ts",
+  "version": "0.0.0",
+  "description": "Types a bespoke operation implementation exchanges with tono-generated TypeScript glue. Data only: no transport, no I/O, no dependencies.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "license": "Apache-2.0"
+}

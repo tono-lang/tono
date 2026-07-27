@@ -517,6 +517,7 @@ let hook_ext : Ir.extension =
     ext_name = "before_request";
     ext_kind = Ir.Hook;
     ext_sig = None;
+    ext_raw = false;
     ext_bindings = [ ("ts", "ext/ts/auth.ts#addBearer") ];
     ext_conformance = None;
   }
@@ -531,6 +532,7 @@ let contract_ext : Ir.extension =
           input = Ir.Ref ("core#CanonicalRequest", []);
           output = Ir.Prim Ir.String;
         };
+    ext_raw = false;
     ext_bindings =
       [
         ("ts", "ext/ts/sign.ts#signRequest"); ("rust", "ext/rust/sign.rs#sign");
@@ -543,8 +545,22 @@ let constraint_ext : Ir.extension =
     ext_name = "luhn";
     ext_kind = Ir.Constraint;
     ext_sig = Some { input = Ir.Prim Ir.String; output = Ir.Prim Ir.Bool };
+    ext_raw = false;
     ext_bindings = [ ("go", "ext/go/luhn.go#IsLuhn") ];
     ext_conformance = None;
+  }
+
+(* An impl takes the operation's signature, so it declares none; [raw] switches
+   the bound symbol to the outcome the generated glue decodes. *)
+let impl_ext : Ir.extension =
+  {
+    ext_name = "client.save_note";
+    ext_kind = Ir.Impl;
+    ext_sig = None;
+    ext_raw = true;
+    ext_bindings =
+      [ ("go", "ext/go/save.go#SaveNote"); ("ts", "ext/ts/save.ts#saveNote") ];
+    ext_conformance = Some "vectors/save_note.json";
   }
 
 let extension_suite =
@@ -552,6 +568,7 @@ let extension_suite =
     roundtrip_extension "hook (no signature)" hook_ext;
     roundtrip_extension "contract (signature + conformance)" contract_ext;
     roundtrip_extension "constraint" constraint_ext;
+    roundtrip_extension "impl (raw)" impl_ext;
   ]
 
 (* ── Model / envelope ──────────────────────────────────────────────────── *)

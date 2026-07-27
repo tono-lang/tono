@@ -1,0 +1,62 @@
+@doc("A stored note.")
+pub struct note {
+  id: string
+  body: string @length(min: 1)
+  // The canonical name is what travels; each language spells it its own way,
+  // and @rename overrides that spelling without touching the wire. The bespoke
+  // implementations see the language spelling, the vectors see the wire one.
+  updated_at: string @rename(go: "Modified", typescript: "modified")
+}
+
+@doc("Names a note without carrying its contents.")
+pub struct note_ref {
+  id: string @httpLabel
+}
+
+@doc("The store is shedding load; the call is safe to retry.")
+@status(529)
+@errorCode("overloaded")
+@retryable
+pub struct overloaded {
+  message: string
+}
+
+@doc("A hybrid SDK: one operation reaches the service over HTTP, the others are implemented by bespoke sources.")
+pub struct client {
+  api_token: string @env("NOTES_TOKEN")
+  endpoint: string @env("NOTES_ENDPOINT") @default("https://api.example.com")
+
+  // Operation traits trail the signature: a trait written above an op would
+  // bind to whatever was declared before it.
+  op fetch_note(note_ref): note
+    @doc("Reads a note from the service.")
+    @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+    @header("X-Api-Token", .api_token)
+    @errors(overloaded)
+
+  op save_note(note): note
+    @doc("Writes a note through the local store.")
+    @errors(overloaded)
+
+  op archive_note(note_ref): note
+    @doc("Archives a note through the local store.")
+    @errors(overloaded)
+}
+
+// The typed form: the bound symbol speaks the operation's own types, so it owns
+// the mapping and returns a declared error as a typed value that crosses the
+// boundary untouched.
+ext impl save_note {
+  go: "ext/go/notes.go#StoreSave"
+  ts: "ext/ts/notes.ts#storeSave"
+  conformance: "vectors/save_note.json"
+}
+
+// The raw form: the bound symbol returns an outcome and the generated glue
+// decodes it into the declared output or discriminates the failure by its code.
+// No mapping code on either side.
+ext impl archive_note raw {
+  go: "ext/go/notes.go#StoreArchive"
+  ts: "ext/ts/notes.ts#storeArchive"
+  conformance: "vectors/archive_note.json"
+}

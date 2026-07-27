@@ -243,7 +243,7 @@ mod tests {
                         }],
                     },
                     traits: vec![Trait {
-                        id: "core#doc".into(),
+                        id: "doc".into(),
                         value: serde_json::Value::String("x".into()),
                     }],
                 }],
@@ -261,7 +261,7 @@ mod tests {
         assert_eq!(m.name, "billing.common");
         assert_eq!(m.shapes[0].id, "billing.common#money");
         // The trait id (core namespace) is left alone.
-        assert_eq!(m.shapes[0].traits[0].id, "core#doc");
+        assert_eq!(m.shapes[0].traits[0].id, "doc");
         match &m.shapes[0].kind {
             ShapeKind::Structure { members, .. } => match &members[0].target {
                 Tref::Ref { id, .. } => assert_eq!(id, "billing.common#money"),

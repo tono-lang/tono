@@ -125,7 +125,7 @@ op create_charge(charge): charge @errors(not_found) @async
       Alcotest.(check string)
         "re-encode is identical" (canon json) (module_json m')
 
-(* The three extension kinds compile into the module's extension table and the
+(* Every extension kind compiles into the module's extension table and the
    IR survives a JSON round-trip, exercising the ext surface end to end. *)
 let extension_roundtrip () =
   let src =
@@ -143,13 +143,29 @@ ext contract sign_request (canonical_request) -> string {
 ext constraint luhn (string) -> bool {
   ts: "ext/ts/luhn.ts#isLuhn"
 }
+
+ext impl save_note raw {
+  go: "ext/go/save.go#SaveNote"
+  ts: "ext/ts/save.ts#saveNote"
+  conformance: "vectors/save_note.json"
+}
+
+struct note {
+  id: string
+}
+
+pub struct client {
+  ep: string @env("EP")
+
+  op save_note(note): note
+}
 |}
   in
   let m, ds = Tono_frontend.compile ~module_name:"payments" src in
   Alcotest.(check int) "compiles cleanly" 0 (List.length ds);
   Alcotest.(check (list string))
     "extension names"
-    [ "before_request"; "sign_request"; "luhn" ]
+    [ "before_request"; "sign_request"; "luhn"; "save_note" ]
     (List.map (fun (e : Ir.extension) -> e.ext_name) m.extensions);
   let json = Ir_json.encode_module m in
   match Ir_json.decode_module json with

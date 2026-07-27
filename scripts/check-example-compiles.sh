@@ -123,16 +123,27 @@ cat >"$work/ts/tsconfig.json" <<EOF
 EOF
 (cd "$work/ts" && "$tsc" -p tsconfig.json)
 
-echo "auth-bearer (typescript)..."
+echo "auth-bearer..."
 # The recipe is source only, so its Settings bridge only exists after a
 # regeneration; this is its compile gate: frontend -> gen -> hook -> tsc.
+#
+# Go is built too even though the hook is bound for TypeScript only: this entry
+# is the one whose fields resolve from the environment with nothing consuming
+# them declaratively, which is exactly the shape that used to emit a Go
+# constructor that would not compile.
 frontend="$root/_build/default/frontend/bin/tono_frontend.exe"
 if [ ! -x "$frontend" ]; then
     (cd "$root" && opam exec -- dune build frontend/bin/tono_frontend.exe)
 fi
 mkdir -p "$work/auth"
 "$frontend" compile "$root/examples/auth-bearer/auth.tono" --module auth >"$work/auth/ir.json"
-"$root/target/debug/tono" gen --target typescript --out "$work/auth/out" "$work/auth/ir.json"
+"$root/target/debug/tono" gen --target go,typescript --out "$work/auth/out" \
+    --go-module example.com/auth "$work/auth/ir.json"
+(cd "$work/auth/out/go" && go mod init example.com/auth >/dev/null 2>&1 \
+    && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
+    && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
+    && go mod tidy >/dev/null \
+    && go build ./...)
 cp -R "$root/examples/auth-bearer/ext" "$work/auth/out/typescript/"
 cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
 {

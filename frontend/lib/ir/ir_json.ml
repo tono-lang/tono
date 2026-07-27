@@ -20,8 +20,10 @@
    v5 added the entry model: "entry"/"config" shape kinds whose fields carry
    value sources, @format templates, transform pipelines, match selection, and
    @bind composition; entry ops nest inside the entry shape and their trait
-   values may carry field references ({"field": [...]}). *)
-let current_ir_version = 5
+   values may carry field references ({"field": [...]}).
+   v6 added the "impl" extension kind (a bespoke operation implementation) and
+   its optional "raw" flag. *)
+let current_ir_version = 6
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -119,6 +121,7 @@ let encode_ext_kind = function
   | Ir.Hook -> "hook"
   | Ir.Contract -> "contract"
   | Ir.Constraint -> "constraint"
+  | Ir.Impl -> "impl"
 
 let encode_ext_sig (s : Ir.ext_sig) : Ir.json =
   `Assoc [ ("input", encode_tref s.input); ("output", encode_tref s.output) ]
@@ -135,6 +138,8 @@ let encode_extension (e : Ir.extension) : Ir.json =
     @ (match e.ext_sig with
       | None -> []
       | Some s -> [ ("signature", encode_ext_sig s) ])
+    (* The typed form is the default, so "raw" rides the wire only when set. *)
+    @ (if e.ext_raw then [ ("raw", `Bool true) ] else [])
     @ [ ("bindings", encode_binding e.ext_bindings) ]
     @
     match e.ext_conformance with
@@ -273,6 +278,7 @@ let decode_ext_kind j =
   | "hook" -> Ok Ir.Hook
   | "contract" -> Ok Ir.Contract
   | "constraint" -> Ok Ir.Constraint
+  | "impl" -> Ok Ir.Impl
   | other -> err "unknown extension kind %S" other
 
 let decode_ext_sig j =
@@ -314,6 +320,9 @@ let decode_extension j =
         let* s = decode_ext_sig v in
         Ok (Some s)
   in
+  let* ext_raw =
+    match get "raw" with None -> Ok false | Some v -> Ir_json_base.as_bool v
+  in
   let* ext_bindings =
     match get "bindings" with None -> Ok [] | Some v -> decode_binding v
   in
@@ -325,7 +334,7 @@ let decode_extension j =
         Ok (Some s)
   in
   Ok
-    ({ ext_name; ext_kind; ext_sig; ext_bindings; ext_conformance }
+    ({ ext_name; ext_kind; ext_sig; ext_raw; ext_bindings; ext_conformance }
       : Ir.extension)
 
 let decode_module j =

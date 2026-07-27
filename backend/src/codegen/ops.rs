@@ -23,13 +23,12 @@ pub enum Effect {
     Sync,
 }
 
-/// Find a trait by its bare name, accepting the `core#`-prefixed spelling too:
-/// the frontend emits bare ids today while hand-authored fixtures already use
-/// the namespaced form the future name-resolution pass will produce.
+/// Find a trait by its bare name, accepting the `core#`-prefixed spelling too.
+/// The rule lives in one place ([`crate::codegen::conventions::core_trait`]) so
+/// no reader can drift into matching only the namespaced form, which is not what
+/// a real project's frontend emits.
 fn find_trait<'a>(traits: &'a [Trait], name: &str) -> Option<&'a Trait> {
-    traits
-        .iter()
-        .find(|t| t.id == name || t.id.strip_prefix("core#") == Some(name))
+    crate::codegen::conventions::core_trait(traits, name)
 }
 
 fn has_trait(traits: &[Trait], name: &str) -> bool {
@@ -358,7 +357,7 @@ mod tests {
         assert_eq!(effect_of(&op(vec![], vec![])), Effect::Sync);
         // The namespaced spelling counts too.
         assert_eq!(
-            effect_of(&op(vec![trait_of("core#async", json!(null))], vec![])),
+            effect_of(&op(vec![trait_of("async", json!(null))], vec![])),
             Effect::Async
         );
     }

@@ -79,7 +79,7 @@ pub fn wire_member(name: &str, payload_id: &str, wire: Option<&str>) -> Member {
     let traits = wire
         .map(|w| {
             vec![Trait {
-                id: "core#wire".into(),
+                id: "wire".into(),
                 value: serde_json::json!(w),
             }]
         })

@@ -96,6 +96,7 @@ fn the_settings_bridge_wires_client_init_by_mutation() {
         name: "client_init".into(),
         kind: crate::ir::ExtKind::Hook,
         signature: None,
+        raw: false,
         bindings: [("ts".to_string(), "ext/ts/init.ts#initSettings".to_string())]
             .into_iter()
             .collect(),
@@ -214,7 +215,7 @@ fn a_structured_decode_probes_the_wire_key_not_the_member_name() {
                 constraints: vec![],
                 // @wire renames the serialized key; the decode must check "tok".
                 traits: vec![crate::ir::Trait {
-                    id: "core#wire".into(),
+                    id: "wire".into(),
                     value: serde_json::json!("tok"),
                 }],
             }],
@@ -313,7 +314,7 @@ fn an_entry_field_rename_retargets_every_ts_identifier() {
     let mut token = bare_entry_field("primary_key", Tref::Prim(Prim::String), vec![Source::Arg]);
     // @rename(lang) is a verbatim identifier, used at every position.
     token.traits = vec![crate::ir::Trait {
-        id: "core#rename".into(),
+        id: "rename".into(),
         value: serde_json::json!({"typescript": "authToken"}),
     }];
     push_entry_field(&mut module, token);
@@ -328,14 +329,68 @@ fn an_entry_field_rename_retargets_every_ts_identifier() {
     assert!(out.contains("values[\"primary_key\"]"));
 }
 
+/// An `ext impl` binding for the fixture's `save_note`, typed or raw.
+fn impl_ext(raw: bool) -> crate::ir::Extension {
+    crate::ir::Extension {
+        name: "save_note".into(),
+        kind: crate::ir::ExtKind::Impl,
+        signature: None,
+        raw,
+        bindings: [("ts".to_string(), "ext/ts/save.ts#saveNote".to_string())]
+            .into_iter()
+            .collect(),
+        conformance: None,
+    }
+}
+
 #[test]
-fn a_bespoke_stub_keeps_the_declared_signature() {
-    // No descriptor on the op (the fixture is pre-protocol): the stub
-    // still takes the declared input.
+fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
+    // The fixture is pre-protocol (no descriptor) and binds no impl, a
+    // combination the emit gate refuses; a direct library caller that skipped
+    // it gets a diagnosable method that still takes the declared input.
     let module = fixture_module();
     let out = text(&module);
     assert!(out.contains("async saveNote(input: Note): Promise<Note> {"));
-    assert!(out.contains("operation has no transport binding"));
+    assert!(out.contains("operation has no implementation for TypeScript"));
+}
+
+#[test]
+fn a_typed_impl_calls_the_bound_symbol_and_guards_the_error_boundary() {
+    let mut module = fixture_module();
+    module.extensions = vec![impl_ext(false)];
+    let out = text(&module);
+    assert!(out.contains("return await saveNote(this.settings, input);"));
+    // A declared SDK error crosses typed; anything else is named.
+    assert!(out.contains("} catch (e) {"));
+    assert!(out.contains("if (e instanceof TonoError) throw e;"));
+    assert!(out.contains("throw new ContractError(\"save_note\", e);"));
+    // The typed form needs no discrimination: declared errors arrive typed.
+    assert!(!out.contains("function decodeSaveNoteError("));
+    // The expected bespoke signature is documented above the method.
+    assert!(out.contains("function saveNote(settings: Settings, input: Note): Promise<Note>"));
+}
+
+#[test]
+fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
+    let mut module = fixture_module();
+    module.extensions = vec![impl_ext(true)];
+    let out = text(&module);
+    // The input travels as its wire text; the outcome comes back raw.
+    assert!(
+        out.contains("outcome = await saveNote(this.settings, JSON.stringify(encodeNote(input)));")
+    );
+    // A failing outcome discriminates on the code alone: a bespoke
+    // implementation carries no protocol status.
+    assert!(out.contains("if (!outcome.success) {"));
+    assert!(out.contains("throw decodeSaveNoteError(outcome.code, outcome.body);"));
+    assert!(out.contains("code === \"overloaded\""));
+    assert!(out.contains("return new APIError(0, body);"));
+    // The success payload decodes exactly as a protocol response does.
+    assert!(out.contains("raw = JSON.parse(outcome.body);"));
+    assert!(out.contains("new DecodeError(\"$.id\", \"Note\", outcome.body)"));
+    assert!(
+        out.contains("function saveNote(settings: Settings, payload: string): Promise<Outcome>")
+    );
 }
 
 #[test]
@@ -407,7 +462,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(out.contains("async ping(): Promise<void> {"));
     assert!(out.contains("async count(): Promise<number> {"));
     assert!(out.contains("async local(input: Note): Promise<string> {"));
-    assert!(out.contains("operation has no transport binding"));
+    assert!(out.contains("operation has no implementation for TypeScript"));
 }
 
 #[test]
