@@ -668,8 +668,15 @@ fn op_method(
                 if let ShapeKind::Structure { members, .. } = &shape.kind {
                     for m in members.iter().filter(|m| m.required) {
                         let name = wire_key(m);
+                        // A missing required member points at that member (`$.tags`),
+                        // not the whole body, so the caller sees which field the
+                        // server omitted.
+                        let miss = throw(format!(
+                            "new {}(\"$.{name}\", \"{out_name}\", outcome.body)",
+                            en.decode
+                        ));
                         required.push_str(&format!(
-                            "      if (!({name:?} in raw) || raw[{name:?}] === null) {{\n        {t}\n      }}\n",
+                            "      if (!({name:?} in raw) || raw[{name:?}] === null) {{\n        {miss}\n      }}\n",
                         ));
                     }
                 }

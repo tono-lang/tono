@@ -273,6 +273,10 @@ fn a_structured_output_decodes_strictly_on_required_members() {
     // tolerated (decodeNote maps only what it knows).
     assert!(out.contains("if (!(\"id\" in raw) || raw[\"id\"] === null) {"));
     assert!(out.contains("if (!(\"body\" in raw) || raw[\"body\"] === null) {"));
+    // A missing required member points at that member, not the whole body.
+    assert!(out.contains("throw new DecodeError(\"$.id\", \"Note\", outcome.body);"));
+    assert!(out.contains("throw new DecodeError(\"$.body\", \"Note\", outcome.body);"));
+    // A whole-body parse failure still points at the root.
     assert!(out.contains("throw new DecodeError(\"$\", \"Note\", outcome.body);"));
     assert!(out.contains("out = decodeNote(raw);"));
 }

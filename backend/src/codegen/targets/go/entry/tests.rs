@@ -557,6 +557,10 @@ fn a_structured_output_decodes_strictly_on_required_members() {
     assert!(serde.contains("var probe map[string]json.RawMessage"));
     assert!(serde.contains("if rv, ok := probe[\"id\"]; !ok || string(rv) == \"null\" {"));
     assert!(serde.contains("if rv, ok := probe[\"body\"]; !ok || string(rv) == \"null\" {"));
+    // A missing required member points at that member, not the whole body.
+    assert!(serde.contains("&DecodeError{Path: \"$.id\", Expected: \"Note\", Raw: outcome.Body}"));
+    assert!(serde.contains("&DecodeError{Path: \"$.body\", Expected: \"Note\", Raw: outcome.Body}"));
+    // A whole-body parse failure still points at the root.
     assert!(serde.contains("&DecodeError{Path: \"$\", Expected: \"Note\", Raw: outcome.Body}"));
     // Unknown fields are still tolerated (a plain Unmarshal into the struct).
     assert!(serde.contains("var out Note"));

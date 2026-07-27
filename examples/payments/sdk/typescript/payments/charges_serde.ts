@@ -257,34 +257,34 @@ export class Client {
       throw new DecodeError("$", "Charge", outcome.body);
     }
     if (!("id" in raw) || raw["id"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.id", "Charge", outcome.body);
     }
     if (!("amount" in raw) || raw["amount"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.amount", "Charge", outcome.body);
     }
     if (!("fee" in raw) || raw["fee"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.fee", "Charge", outcome.body);
     }
     if (!("receipt" in raw) || raw["receipt"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.receipt", "Charge", outcome.body);
     }
     if (!("currency" in raw) || raw["currency"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.currency", "Charge", outcome.body);
     }
     if (!("tags" in raw) || raw["tags"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.tags", "Charge", outcome.body);
     }
     if (!("metadata" in raw) || raw["metadata"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.metadata", "Charge", outcome.body);
     }
     if (!("created" in raw) || raw["created"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.created", "Charge", outcome.body);
     }
     if (!("status" in raw) || raw["status"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.status", "Charge", outcome.body);
     }
     if (!("method" in raw) || raw["method"] === null) {
-      throw new DecodeError("$", "Charge", outcome.body);
+      throw new DecodeError("$.method", "Charge", outcome.body);
     }
     let out: Charge;
     try {

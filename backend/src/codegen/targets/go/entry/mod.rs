@@ -652,8 +652,15 @@ fn op_method_decl(
                 if let ShapeKind::Structure { members, .. } = &shape.kind {
                     for m in members.iter().filter(|m| m.required) {
                         let name = wire_key(m);
+                        // A missing required member points at that member (`$.tags`),
+                        // not the whole body, so the caller sees which field the
+                        // server omitted.
+                        let fail_member = fail(format!(
+                            "&{decode}{{Path: \"$.{name}\", Expected: {ty:?}, Raw: outcome.Body}}",
+                            decode = en.decode,
+                        ));
                         probe.push_str(&format!(
-                            "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn zero, {fail_decode}\n\t}}\n",
+                            "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn zero, {fail_member}\n\t}}\n",
                         ));
                     }
                 }

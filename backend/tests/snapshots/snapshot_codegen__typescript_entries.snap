@@ -453,10 +453,10 @@ export class Client {
       throw new DecodeError("$", "Note", outcome.body);
     }
       if (!("id" in raw) || raw["id"] === null) {
-        throw new DecodeError("$", "Note", outcome.body);
+        throw new DecodeError("$.id", "Note", outcome.body);
       }
       if (!("body" in raw) || raw["body"] === null) {
-        throw new DecodeError("$", "Note", outcome.body);
+        throw new DecodeError("$.body", "Note", outcome.body);
       }
     let out: Note;
     try {

@@ -408,10 +408,10 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 		return zero, &DecodeError{Path: "$", Expected: "Note", Raw: outcome.Body}
 	}
 	if rv, ok := probe["id"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$", Expected: "Note", Raw: outcome.Body}
+		return zero, &DecodeError{Path: "$.id", Expected: "Note", Raw: outcome.Body}
 	}
 	if rv, ok := probe["body"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$", Expected: "Note", Raw: outcome.Body}
+		return zero, &DecodeError{Path: "$.body", Expected: "Note", Raw: outcome.Body}
 	}
 	var out Note
 	if err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {
