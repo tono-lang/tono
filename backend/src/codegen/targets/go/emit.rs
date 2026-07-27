@@ -94,6 +94,7 @@ pub fn emit_module(
         type_decls.extend(emit_validators(shape, config));
         serde_decls.extend(emit_serde_decls(shape, config, union_ids, &module.name));
     }
+    let module_has_entries = crate::codegen::entries::has_entries(module);
     // Operations bring the error values and the blocking client interface
     // into the types file; the discriminators unmarshal, so they land with
     // the serialization.
@@ -106,10 +107,23 @@ pub fn emit_module(
         // the conformance gate, it just emits no wrapper until an operation gives it
         // the error surface (or the concrete client lands).
         type_decls.extend(crate::codegen::targets::go::client::wrapper_decls(module));
+    } else if module_has_entries {
+        // An entry's client maps outcomes onto the same taxonomy; its client
+        // surface is the entry struct, so the loose-op interface stays out.
+        type_decls.extend(errors::taxonomy_and_declared_decls(module));
+        type_decls.extend(crate::codegen::targets::go::client::wrapper_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the `Violation` record a
         // validator references, which the taxonomy would otherwise have carried.
         type_decls.push(errors::violation_decl());
+    }
+    if module_has_entries {
+        type_decls.extend(crate::codegen::targets::go::entry::type_decls(
+            module, config,
+        ));
+        serde_decls.extend(crate::codegen::targets::go::entry::serde_decls(
+            module, config,
+        ));
     }
 
     let mut files = vec![ModuleFile {

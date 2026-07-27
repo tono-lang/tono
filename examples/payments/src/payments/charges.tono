@@ -37,8 +37,17 @@ struct not_found {
   message: string
 }
 
-@doc("Creates a charge.")
-op create_charge(charge): charge
-  @http(method: "POST", path: "/charges")
-  @errors(card_declined, not_found)
-  @async
+@doc("The payments SDK entry: the construction surface and its operations.")
+pub struct client {
+  api_key: string @arg @length(min: 1)
+  endpoint: string @env("PAYMENTS_ENDPOINT") @default("https://api.payments.example.com")
+  timeout: duration @with @default("10s")
+  max_retries: i32 @with @default(2)
+
+  op create_charge(charge): charge
+    @http(method: "POST", path: "/charges", endpoint: .endpoint)
+    @header("X-API-Key", .api_key)
+    @timeout(.timeout)
+    @retry(.max_retries)
+    @errors(card_declined, not_found)
+}

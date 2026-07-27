@@ -1,23 +1,19 @@
-// A bespoke bearer-auth recipe: the before_request hook the generated SDK binds
-// to. The runtime hands it the CanonicalRequest before sending; it returns a
-// copy with the Authorization header set. The SDK wraps this call at the
-// boundary, so a throw here surfaces as a ContractError.
+// A bespoke bearer-auth recipe: the client_init hook the generated SDK binds
+// to. Construction resolves the entry's declared fields (API_TOKEN from the
+// environment) into the Settings; this hook runs on top (bespoke wins) and
+// writes the Authorization header into the transport state, so every request
+// carries it with no per-call plumbing and no environment read of its own.
 //
 // This is a recipe to copy, not a shipped scheme: there is no built-in auth.
-// Swap the token source for your own (env var, config, a refresh call once the
-// async hook slot lands).
+//
+// The generated serde file imports this hook relative to itself, so drop the
+// ext/ directory next to the generated SDK files.
 
-import type { CanonicalRequest } from "@tono/http-runtime-ts";
+import type { Settings } from "../../auth_serde";
 
-// The token source. A real integration reads it from configuration or a secret
-// store rather than a module constant.
-function token(): string {
-  return process.env.API_TOKEN ?? "";
-}
-
-export function addBearer(req: CanonicalRequest): CanonicalRequest {
-  return {
-    ...req,
-    headers: { ...req.headers, authorization: `Bearer ${token()}` },
-  };
+export function applyBearer(settings: Settings): void {
+  if (settings.apiToken === "") {
+    throw new Error("API_TOKEN is not set");
+  }
+  settings.headers["authorization"] = `Bearer ${settings.apiToken}`;
 }

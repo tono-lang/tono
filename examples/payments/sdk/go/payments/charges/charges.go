@@ -2,6 +2,9 @@
 
 package charges
 
+import "context"
+import tonohttp "github.com/tono-lang/tono/runtimes/http-go"
+import "net/http"
 import "example.com/sdk/payments/common"
 import "strconv"
 
@@ -77,6 +80,8 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string { return "validation failed" }
 
+func (e *ValidationError) sdkError() {}
+
 type TransportError struct {
 	Cause error
 }
@@ -85,6 +90,8 @@ func (e *TransportError) Error() string { return "transport failure" }
 
 func (e *TransportError) Unwrap() error { return e.Cause }
 
+func (e *TransportError) sdkError() {}
+
 type DecodeError struct {
 	Path     string
 	Expected string
@@ -92,6 +99,8 @@ type DecodeError struct {
 }
 
 func (e *DecodeError) Error() string { return "response body did not match the declared schema" }
+
+func (e *DecodeError) sdkError() {}
 
 type ContractError struct {
 	ContractName string
@@ -102,6 +111,8 @@ func (e *ContractError) Error() string { return "contract hook '" + e.ContractNa
 
 func (e *ContractError) Unwrap() error { return e.Cause }
 
+func (e *ContractError) sdkError() {}
+
 type APIError struct {
 	Status int
 	Body   string
@@ -109,15 +120,74 @@ type APIError struct {
 
 func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status) }
 
+func (e *APIError) sdkError() {}
+
+type ConfigError struct {
+	Message string
+}
+
+func (e *ConfigError) Error() string { return e.Message }
+
+func (e *ConfigError) sdkError() {}
+
 func (e *CardDeclined) Error() string { return "card_declined" }
 
 func (e *CardDeclined) Retryable() bool { return true }
+
+func (e *CardDeclined) sdkError() {}
 
 func (e *NotFound) Error() string { return "not_found" }
 
 func (e *NotFound) Retryable() bool { return false }
 
-type Client interface {
-	// Creates a charge.
-	CreateCharge(input Charge) (Charge, error)
+func (e *NotFound) sdkError() {}
+
+// Settings are the resolved construction values of the client entry,
+// handed to the client_init hook before validation: bespoke code may
+// overwrite any field (bespoke wins) and set transport through the slots.
+// Exactly one transport slot may be set: HTTPClient (native) or Transport
+// (canonical). Headers are the base request headers (bespoke auth writes
+// here); a declared @header wins only where nothing else set the name.
+type Settings struct {
+	APIKey     string
+	Endpoint   string
+	Timeout    Duration
+	MaxRetries int32
+
+	HTTPClient *http.Client
+	Transport  tonohttp.Transport
+	Headers    map[string]string
 }
+
+// ClientOption configures an optional (@with) construction value of Client.
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	timeout    *Duration
+	maxRetries *int32
+}
+
+// WithTimeout sets the timeout construction value.
+func WithTimeout(v Duration) ClientOption {
+	return func(w *clientOptions) { w.timeout = &v }
+}
+
+// WithMaxRetries sets the max_retries construction value.
+func WithMaxRetries(v int32) ClientOption {
+	return func(w *clientOptions) { w.maxRetries = &v }
+}
+
+// The payments SDK entry: the construction surface and its operations.
+// Client is the generated SDK client the client entry declares.
+type Client struct {
+	settings Settings
+	runtime  *tonohttp.Runtime
+	hooks    *tonohttp.Hooks
+}
+
+// ClientAPI is the operation surface of Client, for mocking.
+type ClientAPI interface {
+	CreateCharge(ctx context.Context, input Charge) (Charge, error)
+}
+
+var _ ClientAPI = (*Client)(nil)

@@ -125,6 +125,13 @@ export class APIError extends TonoError {
   }
 }
 
+export class ConfigError extends TonoError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigError";
+  }
+}
+
 export class CardDeclinedError extends APIError {
   constructor(
     readonly data: CardDeclined,
@@ -146,9 +153,4 @@ export class NotFoundError extends APIError {
     super(404, body);
     this.name = "NotFoundError";
   }
-}
-
-export interface Client {
-  /** Creates a charge. */
-  createCharge(input: Charge): Promise<Charge>;
 }

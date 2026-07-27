@@ -371,3 +371,52 @@ func TestTimeoutDeadlineIsSetOnlyWhenDeclared(t *testing.T) {
 		t.Fatal("declared timeout must set a deadline")
 	}
 }
+
+func TestExecuteResolvesEndpointAndDeclaredHeadersBeforeTheHook(t *testing.T) {
+	transport, calls := recorder(200, "{}", nil)
+	r := newRuntime(t, Options{
+		BaseURL:   "https://fallback.test",
+		Transport: transport,
+		Values:    map[string]any{"endpoint": "https://acme.test", "token": "t0"},
+	})
+	d := desc(func(d *WireDescriptor) {
+		d.Endpoint = []string{"endpoint"}
+		d.RequestHeaders = []RequestHeader{
+			{Key: []TemplatePart{tpLit("Authorization")}, Value: ValueExpr{Template: []TemplatePart{tpLit("Bearer "), {Field: []string{"token"}}}}},
+		}
+	})
+	var hookSaw CanonicalRequest
+	hooks := &Hooks{BeforeRequest: func(ctx context.Context, req CanonicalRequest) (CanonicalRequest, error) {
+		hookSaw = req
+		return req, nil
+	}}
+	outcome, err := r.Execute(context.Background(), d, nil, hooks)
+	if err != nil || outcome.Kind != OutcomeSuccess {
+		t.Fatalf("execute: %+v %v", outcome, err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("attempts: %d", len(*calls))
+	}
+	// The endpoint ref overrides Options.BaseURL for this operation.
+	if (*calls)[0].URL != "https://acme.test/things" {
+		t.Fatalf("url: %q", (*calls)[0].URL)
+	}
+	// The declared header is applied before the BeforeRequest hook runs.
+	if hookSaw.Headers["Authorization"] != "Bearer t0" {
+		t.Fatalf("hook must see the declared header applied: %+v", hookSaw.Headers)
+	}
+}
+
+func TestExecuteFallsBackToBaseURLWhenTheEndpointValueIsAbsent(t *testing.T) {
+	transport, calls := recorder(200, "{}", nil)
+	r := newRuntime(t, Options{BaseURL: "https://fallback.test", Transport: transport})
+	d := desc(func(d *WireDescriptor) {
+		d.Endpoint = []string{"endpoint"}
+	})
+	if _, err := r.Execute(context.Background(), d, nil, nil); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if (*calls)[0].URL != "https://fallback.test/things" {
+		t.Fatalf("url: %q", (*calls)[0].URL)
+	}
+}

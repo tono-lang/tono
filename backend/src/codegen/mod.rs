@@ -11,6 +11,7 @@ pub mod casing;
 pub mod check;
 pub mod conventions;
 pub mod doc;
+pub mod entries;
 pub mod extensions;
 pub mod format;
 pub mod imports;

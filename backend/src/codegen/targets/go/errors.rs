@@ -18,11 +18,23 @@ use crate::codegen::targets::go::types::{type_expr_of, LANG};
 use crate::codegen::tree::Decl;
 use crate::ir::{Module, Shape};
 
+/// The anonymous marker interface a bound hook's boundary wrapper matches with
+/// `errors.As` to tell an SDK-emitted error (preserve it as-is) from a foreign
+/// one (wrap it as a ContractError). Every generated error value carries the
+/// unexported `sdkError()` method, so only this package's types satisfy it and
+/// the taxonomy stays sealed.
+pub const SDK_ERROR_MARKER: &str = "interface{ sdkError() }";
+
+/// The unexported marker method that makes a generated error value part of the
+/// sealed SDK taxonomy (see [`SDK_ERROR_MARKER`]).
+fn marker_method(name: &str) -> Decl {
+    Decl::raw(format!("func (e *{name}) sdkError() {{}}"))
+}
+
 /// The declarations for the types file: the taxonomy error values, the
 /// declared errors' methods, and the blocking client interface.
 pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
-    let mut decls = taxonomy_decls();
-    decls.extend(declared_error_decls(module));
+    let mut decls = taxonomy_and_declared_decls(module);
     // The error channel is the native (T, error) pair on every method.
     decls.push(ops::client_decl(
         module,
@@ -31,6 +43,15 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
         &type_expr_of,
         Some("error"),
     ));
+    decls
+}
+
+/// The taxonomy and the declared errors' methods without the loose-op client
+/// interface: what an entry-only module needs (its client surface is the
+/// entry's own struct and mock interface).
+pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
+    let mut decls = taxonomy_decls();
+    decls.extend(declared_error_decls(module));
     decls
 }
 
@@ -86,9 +107,11 @@ fn taxonomy_decls() -> Vec<Decl> {
             n.validation, n.violation
         )),
         error_method(&n.validation, "\"validation failed\""),
+        marker_method(&n.validation),
         Decl::raw(format!("type {} struct {{\n\tCause error\n}}", n.transport)),
         error_method(&n.transport, "\"transport failure\""),
         unwrap_method(&n.transport),
+        marker_method(&n.transport),
         Decl::raw(format!(
             "type {} struct {{\n\tPath     string\n\tExpected string\n\tRaw      string\n}}",
             n.decode
@@ -97,6 +120,7 @@ fn taxonomy_decls() -> Vec<Decl> {
             &n.decode,
             "\"response body did not match the declared schema\"",
         ),
+        marker_method(&n.decode),
         Decl::raw(format!(
             "type {} struct {{\n\tContractName string\n\tCause        error\n}}",
             n.contract
@@ -106,6 +130,7 @@ fn taxonomy_decls() -> Vec<Decl> {
             "\"contract hook '\" + e.ContractName + \"' failed\"",
         ),
         unwrap_method(&n.contract),
+        marker_method(&n.contract),
         Decl::raw(format!(
             "type {} struct {{\n\tStatus int\n\tBody   string\n}}",
             n.api
@@ -117,6 +142,13 @@ fn taxonomy_decls() -> Vec<Decl> {
             ),
             vec![Symbol::imported("strconv", "strconv", "strconv")],
         ),
+        marker_method(&n.api),
+        // Construction failures (a required source that resolved to nothing) ride
+        // their own category so a caller can tell a misconfigured client from a
+        // request or transport failure.
+        Decl::raw(format!("type {} struct {{\n\tMessage string\n}}", n.config)),
+        error_method(&n.config, "e.Message"),
+        marker_method(&n.config),
     ]
 }
 
@@ -137,6 +169,7 @@ fn declared_error_decls(module: &Module) -> Vec<Decl> {
                     "func (e *{ty}) Retryable() bool {{ return {} }}",
                     err.retryable
                 )),
+                marker_method(&ty),
             ]
         })
         .collect()
@@ -150,6 +183,17 @@ fn discriminator_fn(op: &Shape, ordered: &[DeclaredError], n: &ErrorNames) -> De
         "Decode{}Error",
         crate::codegen::conventions::type_ident_from_id(&op.id)
     );
+    discriminator_fn_body(&fn_name, ordered, n)
+}
+
+/// The same discrimination function under a caller-chosen name (an
+/// entry-nested operation derives its name through the entry rule, not from
+/// the raw shape id).
+pub fn discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) -> Decl {
+    discriminator_fn_body(fn_name, ordered, &error_names())
+}
+
+fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorNames) -> Decl {
     let mut body = String::new();
     body.push_str(&format!(
         "func {fn_name}(status int, body []byte) error {{\n"

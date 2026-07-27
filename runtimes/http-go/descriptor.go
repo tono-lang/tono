@@ -122,6 +122,47 @@ func (e *DeclaredError) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// TemplatePart is one piece of a template position: a literal run, an
+// entry-field placeholder resolved from Options.Values by its dotted path, or
+// an operation-input placeholder resolved from the call's input record.
+// Exactly one of the three is set; the wire form is {"lit"|"field"|"input": ...}.
+type TemplatePart struct {
+	Lit   *string  `json:"lit"`
+	Field []string `json:"field"`
+	Input *string  `json:"input"`
+}
+
+// ValueExpr is a descriptor value position: a literal frozen by the compiler,
+// an entry-field reference resolved from Options.Values, or a template of
+// parts. Exactly one of the three is set.
+type ValueExpr struct {
+	Lit      any            `json:"lit"`
+	Field    []string       `json:"field"`
+	Template []TemplatePart `json:"template"`
+}
+
+// RequestHeader is one declared request header: its name as a template and its
+// value expression. On the wire it is a two-element JSON array.
+type RequestHeader struct {
+	Key   []TemplatePart
+	Value ValueExpr
+}
+
+// UnmarshalJSON reads the compiler's [[part...], valueExpr] pair form.
+func (h *RequestHeader) UnmarshalJSON(data []byte) error {
+	var pair [2]json.RawMessage
+	if err := json.Unmarshal(data, &pair); err != nil {
+		return fmt.Errorf("request header is not a two-element array: %w", err)
+	}
+	if err := json.Unmarshal(pair[0], &h.Key); err != nil {
+		return fmt.Errorf("request header key: %w", err)
+	}
+	if err := json.Unmarshal(pair[1], &h.Value); err != nil {
+		return fmt.Errorf("request header value: %w", err)
+	}
+	return nil
+}
+
 // ValueSource is a descriptor position that yields a number at call time:
 // either a literal frozen by the compiler (Lit) or a reference to a resolved
 // client field looked up in Options.Values by canonical name (Ref).
@@ -153,6 +194,12 @@ type WireDescriptor struct {
 	// means no per-attempt deadline.
 	Retry   *RetrySpec   `json:"retry"`
 	Timeout *ValueSource `json:"timeout"`
+	// Endpoint names the resolved client field (by path) whose value is the
+	// base URL for this operation; absent means Options.BaseURL. RequestHeaders
+	// are the operation's declared headers, applied before the caller's
+	// Options.Headers so a bespoke or caller-supplied header wins.
+	Endpoint       []string        `json:"endpoint"`
+	RequestHeaders []RequestHeader `json:"request_headers"`
 }
 
 // ParseDescriptor decodes the JSON descriptor literal embedded by the

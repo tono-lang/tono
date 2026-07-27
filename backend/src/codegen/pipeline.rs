@@ -259,6 +259,7 @@ pub fn generate(
     config: &CodegenConfig,
 ) -> Result<Vec<GeneratedFile>, String> {
     crate::codegen::extensions::validate_extensions(model)?;
+    crate::codegen::entries::validate_entries(model)?;
     let (model, union_ids, internal_modules) = prepare(model, config);
     let mut files = Vec::new();
     for &target in targets {
@@ -291,6 +292,7 @@ pub fn generate_target(
     casing: &CasingConfig,
 ) -> Result<Vec<GeneratedFile>, String> {
     crate::codegen::extensions::validate_extensions(model)?;
+    crate::codegen::entries::validate_entries(model)?;
     let (model, union_ids, internal_modules) = prepare(model, config);
     let mut files = emit_target(
         &model,

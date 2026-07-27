@@ -20,6 +20,22 @@ export type ResponsePart = { kind: "header"; name: string } | { kind: "statusCod
 // `ClientOptions.values` by canonical name.
 export type ValueSource = { readonly ref: string } | { readonly lit: number };
 
+// One piece of a template position: a literal run, an entry-field placeholder
+// resolved from `ClientOptions.values` by its dotted path, or an
+// operation-input placeholder resolved from the call's input record.
+export type TemplatePart =
+  | { readonly lit: string }
+  | { readonly field: ReadonlyArray<string> }
+  | { readonly input: string };
+
+// A descriptor value position: a literal frozen by the compiler, an
+// entry-field reference resolved from `ClientOptions.values`, or a template of
+// parts.
+export type ValueExpr =
+  | { readonly lit: unknown }
+  | { readonly field: ReadonlyArray<string> }
+  | { readonly template: ReadonlyArray<TemplatePart> };
+
 // Declares that the operation retries, with the maximum number of retries
 // (attempts after the first) read from `max`.
 export interface RetrySpec {
@@ -43,6 +59,13 @@ export interface WireDescriptor {
   // in milliseconds; absent means no per-attempt deadline.
   readonly retry?: RetrySpec | null;
   readonly timeout?: ValueSource | null;
+  // `endpoint` names the resolved client field (by path) whose value is the
+  // base URL for this operation; absent means `ClientOptions.baseUrl`.
+  // `request_headers` are the operation's declared headers (key template ->
+  // value expression), applied before the caller's `headers` so a bespoke or
+  // caller-supplied header wins.
+  readonly endpoint?: ReadonlyArray<string> | null;
+  readonly request_headers?: ReadonlyArray<readonly [ReadonlyArray<TemplatePart>, ValueExpr]> | null;
 }
 
 // The canonical transport slot: adapt any HTTP stack by mapping

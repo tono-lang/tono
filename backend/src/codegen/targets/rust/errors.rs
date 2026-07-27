@@ -35,6 +35,14 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
     decls
 }
 
+/// The taxonomy (with the module's Api payload enum) without the loose-op
+/// client trait: what a module whose operations live in an entry needs. The
+/// Rust construction surface (a builder) has not landed, but consumers keep
+/// the error types the other targets' clients raise.
+pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
+    taxonomy_decls(module, &error_names())
+}
+
 /// The declarations for the serde file: one discrimination function per
 /// operation that declares errors.
 pub fn serde_decls(module: &Module) -> Vec<Decl> {

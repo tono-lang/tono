@@ -184,9 +184,3 @@ impl std::error::Error for TonoError {
         }
     }
 }
-
-#[allow(async_fn_in_trait)]
-pub trait Client {
-    /// Creates a charge.
-    async fn create_charge(&self, input: Charge) -> Result<Charge, TonoError>;
-}

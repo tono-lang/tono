@@ -12,6 +12,8 @@ export type {
   Part,
   ResponsePart,
   RetrySpec,
+  TemplatePart,
+  ValueExpr,
   ValueSource,
   WireDescriptor,
 } from "./descriptor";

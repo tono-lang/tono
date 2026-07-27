@@ -1,6 +1,7 @@
 package tonohttp
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -105,5 +106,41 @@ func TestParseRejectsMalformedShapes(t *testing.T) {
 		if _, err := ParseDescriptor([]byte(raw)); err == nil {
 			t.Errorf("%s: parsed without error", name)
 		}
+	}
+}
+
+func TestRequestHeaderParseErrors(t *testing.T) {
+	// The pair form is [[part...], valueExpr]; each malformed position names
+	// its place in the error.
+	cases := []struct {
+		name string
+		blob string
+		want string
+	}{
+		{"not an array", `{"request_headers": [42]}`, "two-element array"},
+		{"bad key", `{"request_headers": [[42, {"lit": "v"}]]}`, "request header key"},
+		{"bad value", `{"request_headers": [[[{"lit": "K"}], 42]]}`, "request header value"},
+	}
+	for _, c := range cases {
+		d := `{"http_method": "GET", "uri": "/", ` + c.blob[1:]
+		if _, err := ParseDescriptor([]byte(d)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+	}
+}
+
+func TestRequestHeaderParsesThePairForm(t *testing.T) {
+	d, err := ParseDescriptor([]byte(`{"http_method": "GET", "uri": "/", "request_headers": [[[{"lit": "K"}], {"field": ["token"]}]], "endpoint": ["endpoint"]}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(d.RequestHeaders) != 1 || d.RequestHeaders[0].Key[0].Lit == nil || *d.RequestHeaders[0].Key[0].Lit != "K" {
+		t.Fatalf("key: %+v", d.RequestHeaders)
+	}
+	if d.RequestHeaders[0].Value.Field == nil || d.RequestHeaders[0].Value.Field[0] != "token" {
+		t.Fatalf("value: %+v", d.RequestHeaders)
+	}
+	if len(d.Endpoint) != 1 || d.Endpoint[0] != "endpoint" {
+		t.Fatalf("endpoint: %+v", d.Endpoint)
 	}
 }

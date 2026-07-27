@@ -326,6 +326,60 @@
       "input": {},
       "script": [{ "kind": "hang" }],
       "expect": { "outcome": "transport", "attempts": 1, "delays_ms": [] }
+    },
+    {
+      "name": "the endpoint ref and declared headers resolve from the client values",
+      "descriptor": {
+        "http_method": "GET",
+        "uri": "/notes/{.suffix}",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "endpoint": ["endpoint"],
+        "request_headers": [
+          [[{ "lit": "Authorization" }], { "template": [{ "lit": "Bearer " }, { "field": ["token"] }] }],
+          [[{ "lit": "X-Client" }], { "field": ["client_name"] }],
+          [[{ "lit": "X-Missing" }], { "field": ["gone"] }]
+        ]
+      },
+      "values": { "endpoint": "https://acme.test", "token": "t0", "client_name": "demo", "suffix": "s 1" },
+      "input": {},
+      "script": [{ "kind": "response", "status": 200, "body": "{}" }],
+      "expect": {
+        "outcome": "success",
+        "status": 200,
+        "body": "{}",
+        "attempts": 1,
+        "delays_ms": [],
+        "request": {
+          "url": "https://acme.test/notes/s%201",
+          "headers": { "Authorization": "Bearer t0", "X-Client": "demo" }
+        }
+      }
+    },
+    {
+      "name": "an unresolved endpoint falls back to the caller base url",
+      "descriptor": {
+        "http_method": "GET",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+        "errors": [],
+        "endpoint": ["endpoint"]
+      },
+      "values": {},
+      "input": {},
+      "script": [{ "kind": "response", "status": 200, "body": "{}" }],
+      "expect": {
+        "outcome": "success",
+        "status": 200,
+        "body": "{}",
+        "attempts": 1,
+        "delays_ms": [],
+        "request": { "url": "https://api.test/x" }
+      }
     }
   ]
 }

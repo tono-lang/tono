@@ -19,6 +19,8 @@ import type {
   ClientOptions,
   Hooks,
   Outcome,
+  TemplatePart,
+  ValueExpr,
   WireDescriptor,
 } from "./descriptor";
 import { backoffDelayMs, isRetryable, resolveMaxRetries, resolveTimeoutMs } from "./retry";
@@ -48,10 +50,28 @@ function asRecord(input: unknown): Input {
   return input !== null && typeof input === "object" ? (input as Input) : {};
 }
 
-// Substitute each label binding into its `{name}` placeholder. A path parameter
-// must be present, so an absent one substitutes empty rather than the literal
-// "undefined"/"null".
-function buildPath(descriptor: WireDescriptor, record: Input): string {
+// The resolved client values the descriptor's ref positions look up.
+type Values = Readonly<Record<string, unknown>>;
+
+// Render a scalar the way the wire expects it in a path, query, or header
+// position: strings verbatim, numbers and booleans in their canonical JS form,
+// anything else as JSON (matching the other runtimes).
+function formatScalar(value: unknown): string {
+  if (typeof value === "string") return value;
+  // JSON is already the canonical spelling for numbers and booleans; anything
+  // unserializable renders empty rather than failing the request line.
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+// Substitute each label binding into its `{name}` placeholder and each
+// `{.field}` placeholder with the resolved client value under that dotted path
+// in `values`. A path parameter must be present, so an absent one substitutes
+// empty rather than the literal "undefined"/"null".
+function buildPath(descriptor: WireDescriptor, record: Input, values: Values): string {
   let path = descriptor.uri;
   for (const [name, part] of descriptor.bindings) {
     if (part.kind !== "label") continue;
@@ -61,7 +81,79 @@ function buildPath(descriptor: WireDescriptor, record: Input): string {
       value === undefined || value === null ? "" : encodeURIComponent(String(value)),
     );
   }
-  return path;
+  return substituteFieldPlaceholders(path, values);
+}
+
+// Replace every `{.a.b}` run in a path template with the value under "a.b" in
+// the resolved client values, escaped. An absent or null value substitutes
+// empty, the same rule as an absent label; an unterminated `{.` stays verbatim.
+function substituteFieldPlaceholders(path: string, values: Values): string {
+  return path.replace(/\{\.([^}]*)\}/g, (_, key: string) => {
+    return encodeURIComponent(formatScalar(values[key] ?? ""));
+  });
+}
+
+// The operation's base URL from its endpoint field reference: the string value
+// under the dotted path in the resolved client values. An absent declaration,
+// absent value, or non-string falls back to `ClientOptions.baseUrl`.
+function resolveEndpoint(descriptor: WireDescriptor, values: Values): string | undefined {
+  const endpoint = descriptor.endpoint;
+  if (!endpoint?.length) return undefined;
+  const value = values[endpoint.join(".")];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+// Render template parts into one string: literal runs verbatim, entry-field
+// parts from the resolved client values, input parts from the call's input
+// record. Undefined when any field/input part has no value (the caller omits
+// the position rather than emitting a half-rendered one).
+function resolveTemplate(
+  parts: ReadonlyArray<TemplatePart>,
+  values: Values,
+  record: Input,
+): string | undefined {
+  let out = "";
+  for (const part of parts) {
+    if ("lit" in part) {
+      out += part.lit;
+      continue;
+    }
+    const value = "field" in part ? values[part.field.join(".")] : record[part.input];
+    if (value === undefined || value === null) return undefined;
+    out += formatScalar(value);
+  }
+  return out;
+}
+
+// Render a descriptor value position: a literal verbatim, a field reference
+// from the resolved client values, or a template. Undefined when the
+// referenced value is absent.
+function resolveValueExpr(expr: ValueExpr, values: Values, record: Input): string | undefined {
+  if ("field" in expr) {
+    const value = values[expr.field.join(".")];
+    return value === undefined || value === null ? undefined : formatScalar(value);
+  }
+  if ("template" in expr) return resolveTemplate(expr.template, values, record);
+  return expr.lit === undefined || expr.lit === null ? undefined : formatScalar(expr.lit);
+}
+
+// Resolve the operation's declared request headers. A header whose key or
+// value cannot resolve is omitted whole: half a header is worse than none, and
+// the declared chain's absence rules already ran in generated code.
+function declaredHeaders(
+  descriptor: WireDescriptor,
+  values: Values,
+  record: Input,
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, expr] of descriptor.request_headers ?? []) {
+    const name = resolveTemplate(key, values, record);
+    if (name === undefined || name === "") continue;
+    const value = resolveValueExpr(expr, values, record);
+    if (value === undefined) continue;
+    headers[name] = value;
+  }
+  return headers;
 }
 
 // A query value serializes as a repeated entry per element for a list, a single
@@ -82,18 +174,36 @@ function buildQuery(descriptor: WireDescriptor, record: Input): string {
   return query.toString();
 }
 
+// Layer the request headers: the operation's declared headers first, the
+// caller's base headers over them (a bespoke or caller-supplied header wins
+// over a declared one), and the input's header bindings last (the per-call
+// value is the most specific). A `before_request` hook sees the fully layered
+// result.
 function buildHeaders(
   descriptor: WireDescriptor,
   record: Input,
   base: Readonly<Record<string, string>>,
+  values: Values,
 ): Record<string, string> {
-  const headers: Record<string, string> = { ...base };
+  const headers: Record<string, string> = declaredHeaders(descriptor, values, record);
+  for (const [name, value] of Object.entries(base)) setHeader(headers, name, value);
   for (const [name, part] of descriptor.bindings) {
     if (part.kind !== "header") continue;
     const value = record[name];
-    if (value !== undefined && value !== null) headers[part.name] = String(value);
+    if (value !== undefined && value !== null) setHeader(headers, part.name, String(value));
   }
   return headers;
+}
+
+// Override across casings: header names are case-insensitive, so a bespoke
+// "authorization" must replace a declared "Authorization" rather than ride
+// beside it.
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const lower = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lower) delete headers[key];
+  }
+  headers[name] = value;
 }
 
 // The request body: a single @httpPayload member as the whole body, otherwise
@@ -219,13 +329,15 @@ async function attemptCall(
   hooks: Hooks | undefined,
   timeoutMs: number,
 ): Promise<Outcome> {
-  const headers = buildHeaders(descriptor, record, options.headers ?? {});
+  const values = options.values ?? {};
+  const headers = buildHeaders(descriptor, record, options.headers ?? {}, values);
   const body = buildBody(descriptor, record);
   if (body !== undefined && !hasHeader(headers, "content-type")) {
     headers["content-type"] = "application/json";
   }
   const qs = buildQuery(descriptor, record);
-  const url = options.baseUrl + buildPath(descriptor, record) + (qs ? `?${qs}` : "");
+  const base = resolveEndpoint(descriptor, values) ?? options.baseUrl;
+  const url = base + buildPath(descriptor, record, values) + (qs ? `?${qs}` : "");
 
   // The bespoke `before_request` hook runs outside the transport try/catch: a
   // hook that throws must surface as its own error (the generated wrapper turns

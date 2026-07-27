@@ -227,7 +227,7 @@ fn contract_wrapper_name(name: &str) -> String {
 /// runtime-typed signatures); a contract/constraint carries a user-typed one, so
 /// without this a ts-bound contract would generate no code and its binding would
 /// be silently unused.
-fn contract_wrappers(
+pub(crate) fn contract_wrappers(
     bound: &[BoundExtension<'_>],
     module: &Module,
     refs: &mut Vec<Symbol>,

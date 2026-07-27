@@ -3,6 +3,7 @@ package tonohttp
 import (
 	"encoding/json"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -36,10 +37,11 @@ func formatScalar(v any) string {
 	}
 }
 
-// buildPath substitutes each label binding into its {name} placeholder. A path
-// parameter must be present, so an absent or null one substitutes empty rather
-// than a literal "null".
-func buildPath(d *WireDescriptor, record map[string]any) string {
+// buildPath substitutes each label binding into its {name} placeholder and
+// each {.field} placeholder with the resolved client value under that dotted
+// path in values. A path parameter must be present, so an absent or null one
+// substitutes empty rather than a literal "null".
+func buildPath(d *WireDescriptor, record map[string]any, values map[string]any) string {
 	path := d.URI
 	for _, b := range d.Bindings {
 		if b.Part.Kind != "label" {
@@ -51,7 +53,113 @@ func buildPath(d *WireDescriptor, record map[string]any) string {
 		}
 		path = strings.Replace(path, "{"+b.Member+"}", value, 1)
 	}
-	return path
+	return substituteFieldPlaceholders(path, values)
+}
+
+// fieldPlaceholder matches one {.a.b} run in a path template; an unterminated
+// or label-style ({name}) brace pair stays verbatim.
+var fieldPlaceholder = regexp.MustCompile(`\{\.([^}]*)\}`)
+
+// substituteFieldPlaceholders replaces every {.a.b} run in a path template with
+// the value under "a.b" in the resolved client values, path-escaped. An absent
+// or null value substitutes empty, the same rule as an absent label.
+func substituteFieldPlaceholders(path string, values map[string]any) string {
+	return fieldPlaceholder.ReplaceAllStringFunc(path, func(m string) string {
+		if v, ok := values[m[2:len(m)-1]]; ok && v != nil {
+			return url.PathEscape(formatScalar(v))
+		}
+		return ""
+	})
+}
+
+// resolveEndpoint yields the operation's base URL from its endpoint field
+// reference: the string value under the dotted path in the resolved client
+// values. Absent declaration, absent value, or a non-string all yield false
+// (the caller falls back to Options.BaseURL).
+func resolveEndpoint(endpoint []string, values map[string]any) (string, bool) {
+	if len(endpoint) == 0 {
+		return "", false
+	}
+	s, ok := values[strings.Join(endpoint, ".")].(string)
+	if !ok || s == "" {
+		return "", false
+	}
+	return s, true
+}
+
+// resolveTemplate renders template parts into one string: literal runs
+// verbatim, entry-field parts from the resolved client values, input parts
+// from the call's input record. False when any field/input part has no value
+// (the caller omits the position rather than emitting a half-rendered one).
+func resolveTemplate(parts []TemplatePart, values map[string]any, record map[string]any) (string, bool) {
+	var out strings.Builder
+	for _, p := range parts {
+		if p.Lit != nil {
+			out.WriteString(*p.Lit)
+			continue
+		}
+		if p.Field != nil {
+			v, ok := values[strings.Join(p.Field, ".")]
+			if !ok || v == nil {
+				return "", false
+			}
+			out.WriteString(formatScalar(v))
+			continue
+		}
+		if p.Input != nil {
+			v, ok := record[*p.Input]
+			if !ok || v == nil {
+				return "", false
+			}
+			out.WriteString(formatScalar(v))
+			continue
+		}
+		return "", false
+	}
+	return out.String(), true
+}
+
+// resolveValueExpr renders a descriptor value position: a literal verbatim, a
+// field reference from the resolved client values, or a template. False when
+// the referenced value is absent.
+func resolveValueExpr(e ValueExpr, values map[string]any, record map[string]any) (string, bool) {
+	if e.Field != nil {
+		v, ok := values[strings.Join(e.Field, ".")]
+		if !ok || v == nil {
+			return "", false
+		}
+		return formatScalar(v), true
+	}
+	if e.Template != nil {
+		return resolveTemplate(e.Template, values, record)
+	}
+	if e.Lit != nil {
+		return formatScalar(e.Lit), true
+	}
+	return "", false
+}
+
+// declaredHeaders resolves the operation's declared request headers. A header
+// whose key or value cannot resolve is omitted whole: half a header is worse
+// than none, and the declared chain's absence rules already ran in generated
+// code.
+func declaredHeaders(d *WireDescriptor, values map[string]any, record map[string]any) map[string]string {
+	if len(d.RequestHeaders) == 0 {
+		return nil
+	}
+	headers := make(map[string]string, len(d.RequestHeaders))
+	for _, h := range d.RequestHeaders {
+		key, ok := resolveTemplate(h.Key, values, record)
+		if !ok || key == "" {
+			continue
+		}
+		value, ok := resolveValueExpr(h.Value, values, record)
+		if !ok {
+			continue
+		}
+		headers[key] = value
+	}
+	return headers
 }
 
 // buildQuery serializes a query value as a repeated entry per element for a
@@ -82,20 +190,40 @@ func buildQuery(d *WireDescriptor, record map[string]any) string {
 	return strings.Join(entries, "&")
 }
 
-func buildHeaders(d *WireDescriptor, record map[string]any, base map[string]string) map[string]string {
-	headers := make(map[string]string, len(base))
+// buildHeaders layers the request headers: the operation's declared headers
+// first, the caller's base headers over them (a bespoke or caller-supplied
+// header wins over a declared one), and the input's header bindings last (the
+// per-call value is the most specific). A BeforeRequest hook sees the fully
+// layered result.
+func buildHeaders(d *WireDescriptor, record map[string]any, base map[string]string, values map[string]any) map[string]string {
+	headers := declaredHeaders(d, values, record)
+	if headers == nil {
+		headers = make(map[string]string, len(base))
+	}
 	for k, v := range base {
-		headers[k] = v
+		setHeader(headers, k, v)
 	}
 	for _, b := range d.Bindings {
 		if b.Part.Kind != "header" {
 			continue
 		}
 		if v, ok := record[b.Member]; ok && v != nil {
-			headers[b.Part.Name] = formatScalar(v)
+			setHeader(headers, b.Part.Name, formatScalar(v))
 		}
 	}
 	return headers
+}
+
+// setHeader overrides across casings: header names are case-insensitive, so a
+// bespoke "authorization" must replace a declared "Authorization" rather than
+// ride beside it.
+func setHeader(headers map[string]string, name, value string) {
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			delete(headers, key)
+		}
+	}
+	headers[name] = value
 }
 
 // buildBody produces the request body: a single payload member as the whole
