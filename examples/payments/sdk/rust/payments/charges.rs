@@ -38,7 +38,7 @@ pub struct Charge {
 }
 
 impl Charge {
-    pub fn validate(&self) -> Vec<Violation> {
+    pub fn validate(&self) -> Result<(), ValidationError> {
         let mut violations = Vec::new();
         if self.amount < 0 {
             violations.push(Violation {
@@ -61,7 +61,11 @@ impl Charge {
                 message: "currency length must be <= 3".to_string(),
             });
         }
-        violations
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationError { violations })
+        }
     }
 }
 

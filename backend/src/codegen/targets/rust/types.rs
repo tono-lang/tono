@@ -83,20 +83,25 @@ impl ValSyntax for RustVal {
 }
 
 /// Emit the validator for a structure whose members carry `@range`/`@length`
-/// constraints: an `impl` with a `validate(&self) -> Vec<Violation>` that collects
-/// one violation per failed check. It belongs in the types file, next to the struct
-/// and the `Violation` record it references. A shape with no lowerable constraint
-/// (or a generic one, unmodeled here) emits nothing.
+/// constraints: an `impl` with a `validate(&self) -> Result<(), ValidationError>`
+/// that collects one violation per failed check and returns the taxonomy's
+/// Validation category when any check fails. It belongs in the types file, next to
+/// the struct and the error types it references. A shape with no lowerable
+/// constraint (or a generic one, unmodeled here) emits nothing.
 pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     let Some(lines) = validation::structure_guard_lines(shape, &RustVal, "self.", config, LANG)
     else {
         return Vec::new();
     };
-    let violation = error_names().violation;
+    let n = error_names();
+    let violation = &n.violation;
     let inner = validation::validator_body(
         &lines,
         "        let mut violations = Vec::new();\n",
-        "        violations\n",
+        &format!(
+            "        if violations.is_empty() {{\n            Ok(())\n        }} else {{\n            Err({} {{ violations }})\n        }}\n",
+            n.validation
+        ),
         |l| {
             format!(
                 "        if {} {{\n            violations.push({violation} {{ field: {:?}.to_string(), constraint: {:?}.to_string(), message: {:?}.to_string() }});\n        }}\n",
@@ -106,7 +111,8 @@ pub fn emit_validators(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     );
     let ty = conventions::type_ident(shape, LANG);
     vec![Decl::raw(format!(
-        "impl {ty} {{\n    pub fn validate(&self) -> Vec<{violation}> {{\n{inner}    }}\n}}"
+        "impl {ty} {{\n    pub fn validate(&self) -> Result<(), {}> {{\n{inner}    }}\n}}",
+        n.validation
     ))]
 }
 
@@ -164,7 +170,7 @@ mod tests {
         );
         let out = RustRules.render_decl(&emit_validators(&shape, &rust_casing())[0]);
         assert!(out.contains("impl Charge {"));
-        assert!(out.contains("pub fn validate(&self) -> Vec<Violation> {"));
+        assert!(out.contains("pub fn validate(&self) -> Result<(), ValidationError> {"));
         // The i64 bound needs no suffix; the message states the inclusive minimum.
         assert!(out.contains("if self.amount < 0 {"));
         assert!(out.contains(
@@ -173,6 +179,9 @@ mod tests {
         // A string length counts code points and bounds both ends.
         assert!(out.contains("if self.currency.chars().count() < 3 {"));
         assert!(out.contains("if self.currency.chars().count() > 3 {"));
+        // A failed validation is the taxonomy's Validation category, not a bare list.
+        assert!(out.contains("Err(ValidationError { violations })"));
+        assert!(out.contains("Ok(())"));
     }
 
     #[test]

@@ -470,10 +470,8 @@ impl Emitter for Resolver<'_, '_> {
             }
         }
         let validate = if validation::shape_has_checks(shape) {
-            let en = error_names();
             format!(
-                "\tif vs := Validate{ty}(decoded); len(vs) > 0 {{\n\t\treturn nil, &{validation}{{Violations: vs}}\n\t}}\n",
-                validation = en.validation,
+                "\tif invalid := Validate{ty}(decoded); invalid != nil {{\n\t\treturn nil, invalid\n\t}}\n"
             )
         } else {
             String::new()

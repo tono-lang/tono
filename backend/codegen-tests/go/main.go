@@ -132,5 +132,42 @@ func main() {
 		fail("the fallback must keep the status and raw body")
 	}
 
+	// Constraint validation: a valid value passes; a violated @range or @length
+	// surfaces as the taxonomy's Validation category carrying one violation per
+	// failed check, in member order.
+	if err := ValidateAccount(acct); err != nil {
+		fail("a valid account must pass validation: " + err.Error())
+	}
+	invalid := Account{
+		AccountID: -1,
+		Secret:    make([]byte, 65),
+		Status:    StatusActive,
+		Code:      HTTPCodeOk,
+		Method:    MethodCard{Value: CardData{Last4: "4242"}},
+		Counts:    Entries[int32, string]{},
+	}
+	var validation *ValidationError
+	if !errors.As(ValidateAccount(invalid), &validation) {
+		fail("an out-of-bounds account must fail as the Validation category")
+	}
+	constraints := []string{}
+	for _, v := range validation.Violations {
+		constraints = append(constraints, v.Constraint)
+	}
+	if !reflect.DeepEqual(constraints, []string{"range", "length", "length"}) {
+		fail(fmt.Sprintf("expected range+length+length violations, got %v", constraints))
+	}
+
+	// A string @length counts code points, so a short last4 fails with one violation.
+	if !errors.As(ValidateCardData(CardData{Last4: "42"}), &validation) ||
+		len(validation.Violations) != 1 ||
+		validation.Violations[0].Constraint != "length" ||
+		validation.Violations[0].Field != "last4" {
+		fail("a short last4 must fail the length constraint")
+	}
+	if ValidateCardData(CardData{Last4: "𝟜𝟜𝟜𝟜"}) != nil {
+		fail("length must count code points, not bytes")
+	}
+
 	fmt.Println("ROUNDTRIP_OK")
 }

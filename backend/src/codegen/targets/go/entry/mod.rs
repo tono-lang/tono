@@ -580,8 +580,8 @@ fn op_method_decl(
     };
     let validate_block = match &validate_input {
         Some(ty) => format!(
-            "\tif vs := Validate{ty}(input); len(vs) > 0 {{\n\t\treturn {ret_zero}{fail_val}\n\t}}\n",
-            fail_val = fail(format!("&{}{{Violations: vs}}", en.validation)),
+            "\tif invalid := Validate{ty}(input); invalid != nil {{\n\t\treturn {ret_zero}{fail_val}\n\t}}\n",
+            fail_val = fail("invalid".to_string()),
         ),
         None => String::new(),
     };

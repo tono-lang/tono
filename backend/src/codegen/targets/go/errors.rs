@@ -85,6 +85,33 @@ fn declared_message(err: &DeclaredError) -> String {
     })
 }
 
+/// The `Validation` category a validator returns: the error struct carrying its
+/// collected violations, the `Error` method that makes it an error value, and the
+/// marker that keeps it inside the sealed SDK taxonomy.
+fn validation_category_decls() -> Vec<Decl> {
+    let n = error_names();
+    vec![
+        Decl::raw(format!(
+            "type {} struct {{\n\tViolations []{} `json:\"violations\"`\n}}",
+            n.validation, n.violation
+        )),
+        Decl::raw(format!(
+            "func (e *{}) Error() string {{ return \"validation failed\" }}",
+            n.validation
+        )),
+        marker_method(&n.validation),
+    ]
+}
+
+/// The declarations a validator needs when the module has constraints but no
+/// operations (hence no full taxonomy): the `Violation` record and the
+/// `Validation` category itself.
+pub fn standalone_validation_decls() -> Vec<Decl> {
+    let mut decls = vec![violation_decl()];
+    decls.extend(validation_category_decls());
+    decls
+}
+
 /// The closed error taxonomy as error values. Go has no hierarchy to root, so
 /// the categories share nothing but the `error` interface; callers pick one
 /// with `errors.As`.
@@ -100,14 +127,8 @@ fn taxonomy_decls() -> Vec<Decl> {
             "func (e *{name}) Unwrap() error {{ return e.Cause }}"
         ))
     };
-    vec![
-        violation_decl(),
-        Decl::raw(format!(
-            "type {} struct {{\n\tViolations []{} `json:\"violations\"`\n}}",
-            n.validation, n.violation
-        )),
-        error_method(&n.validation, "\"validation failed\""),
-        marker_method(&n.validation),
+    let mut decls = standalone_validation_decls();
+    decls.extend(vec![
         Decl::raw(format!("type {} struct {{\n\tCause error\n}}", n.transport)),
         error_method(&n.transport, "\"transport failure\""),
         unwrap_method(&n.transport),
@@ -149,7 +170,8 @@ fn taxonomy_decls() -> Vec<Decl> {
         Decl::raw(format!("type {} struct {{\n\tMessage string\n}}", n.config)),
         error_method(&n.config, "e.Message"),
         marker_method(&n.config),
-    ]
+    ]);
+    decls
 }
 
 /// The methods that make each declared error struct an error value: `Error`

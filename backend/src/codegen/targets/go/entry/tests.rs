@@ -536,9 +536,10 @@ fn a_constrained_op_input_is_validated_before_transport() {
         }
     }
     let serde = serde_text(&module);
-    // The input is validated and a violation surfaces as a ValidationError.
-    assert!(serde.contains("if vs := ValidateNote(input); len(vs) > 0 {"));
-    assert!(serde.contains("return zero, &ValidationError{Violations: vs}"));
+    // The input is validated and a violation surfaces as the Validation category
+    // the validator itself returns.
+    assert!(serde.contains("if invalid := ValidateNote(input); invalid != nil {"));
+    assert!(serde.contains("return zero, invalid"));
     // The check runs before the transport call, not after.
     let val = serde.find("ValidateNote(input)").expect("validate call");
     let exec = serde

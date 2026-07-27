@@ -24,7 +24,7 @@ export interface Charge {
   method: PaymentMethod;
 }
 
-export function validateCharge(value: Charge): Violation[] {
+export function validateCharge(value: Charge): ValidationError | null {
   const violations: Violation[] = [];
   if (value.amount < 0n) {
     violations.push({
@@ -47,7 +47,7 @@ export function validateCharge(value: Charge): Violation[] {
       message: "currency length must be <= 3",
     });
   }
-  return violations;
+  return violations.length > 0 ? new ValidationError(violations) : null;
 }
 
 export type HTTPCode = 200 | 404 | 500 | (number & {});

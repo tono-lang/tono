@@ -63,9 +63,10 @@ pub fn emit_module(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
         // the generic HttpClient) stays out.
         type_decls.extend(errors::taxonomy_and_declared_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
-        // Constraints without operations still need the `Violation` record a
-        // validator references, which the taxonomy would otherwise have carried.
-        type_decls.push(errors::violation_decl());
+        // Constraints without operations still need the Validation category a
+        // validator returns (root, `Violation`, `ValidationError`), which the
+        // taxonomy would otherwise have carried.
+        type_decls.extend(errors::standalone_validation_decls());
     }
     if module_has_entries {
         // The entry client rides the serde file with the codecs it calls.
@@ -127,6 +128,22 @@ mod tests {
             &passthrough(),
         )
         .text
+    }
+
+    #[test]
+    fn constraints_without_operations_still_carry_the_validation_category() {
+        // No operation means no taxonomy, but the validator returns the Validation
+        // category, so its classes must still be emitted or the module cannot compile.
+        let module = crate::codegen::test_support::constrained_module();
+        let types = rendered(&emit_module(&module, &ts_casing()), "");
+        assert!(types.contains("export interface Violation {"));
+        assert!(types.contains("export class ValidationError extends TonoError {"));
+        // The category extends the root, so the root rides along with it.
+        assert!(types.contains("export abstract class TonoError extends Error {"));
+        assert!(types
+            .contains("export function validateCharge(value: Charge): ValidationError | null {"));
+        // Only the category the validator needs, not the rest of the taxonomy.
+        assert!(!types.contains("export class TransportError"));
     }
 
     #[test]

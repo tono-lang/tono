@@ -23,12 +23,12 @@ export interface Credentials {
   accountID: string;
 }
 
-export function validateCredentials(value: Credentials): Violation[] {
+export function validateCredentials(value: Credentials): ValidationError | null {
   const violations: Violation[] = [];
   if ([...value.token].length < 1) {
     violations.push({ field: "token", constraint: "length", message: "token length must be >= 1" });
   }
-  return violations;
+  return violations.length > 0 ? new ValidationError(violations) : null;
 }
 
 export abstract class TonoError extends Error {
@@ -356,9 +356,9 @@ export class Client {
       throw new ConfigError(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
     }
     const decoded = decodeCredentials(parsed);
-    const vs = validateCredentials(decoded);
-    if (vs.length > 0) {
-      throw new ValidationError(vs);
+    const invalid = validateCredentials(decoded);
+    if (invalid) {
+      throw invalid;
     }
     s.creds = decoded;
     credsWhy = "";
