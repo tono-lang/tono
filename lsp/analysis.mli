@@ -102,9 +102,3 @@ val lsp_of_fdiags :
   text:string -> Tono_frontend.Diagnostic.t list -> Diagnostic.t list
 
 val file_traits : Tono_frontend.Ast.file -> Tono_frontend.Ast.trait list
-
-(* The tooling-facing trait table: hover, completion after `@`, and signature
-   help all read this one source. *)
-type trait_info = { ti_doc : string; ti_keys : (string * string) list }
-
-val trait_registry : (string * trait_info) list

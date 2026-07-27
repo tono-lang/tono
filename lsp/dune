@@ -1,6 +1,6 @@
 (library
  (name tono_lsp_lib)
- (modules analysis project)
+ (modules analysis hover_docs project)
  (libraries tono_frontend lsp))
 
 (executable

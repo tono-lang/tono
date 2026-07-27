@@ -147,21 +147,24 @@ let print_arm_value (v : Ast.arm_value) : string =
   | Ast.AVName n -> n
   | Ast.AVSources ts -> String.concat " " (List.map (fun t -> print_trait t) ts)
 
-let print_field_match (m : Ast.field_match) : string =
+(* [indent] is the indentation of the line the match opens on, so the arms and
+   the closing brace stay anchored to the member however deep it sits. *)
+let print_field_match ~indent (m : Ast.field_match) : string =
   let arm (a : Ast.match_arm) =
-    "    " ^ print_pattern a.Ast.pat ^ " => " ^ print_arm_value a.Ast.value
+    indent ^ "  " ^ print_pattern a.Ast.pat ^ " => "
+    ^ print_arm_value a.Ast.value
   in
   match m.Ast.arms with
   | [] -> "match " ^ print_ref m.Ast.subject ^ " {}"
   | arms ->
       "match " ^ print_ref m.Ast.subject ^ " {\n"
       ^ String.concat "\n" (List.map arm arms)
-      ^ "\n  }"
+      ^ "\n" ^ indent ^ "}"
 
 let print_member (m : Ast.member) : string =
   "  " ^ m.Ast.mname ^ ": " ^ print_ty m.Ast.mtype
   ^ (match m.Ast.mmatch with
-    | Some fm -> " = " ^ print_field_match fm
+    | Some fm -> " = " ^ print_field_match ~indent:"  " fm
     | None -> "")
   ^ trailing_traits m.Ast.mtraits
 
@@ -181,17 +184,26 @@ let braced (header : string) (lines : string list) : string =
   | [] -> header ^ " {}"
   | ls -> header ^ " {\n" ^ String.concat "\n" ls ^ "\n}"
 
-(* The single-line op form, shared by top-level ops and ops nested in a struct
-   body (where [indent] is the body indentation). *)
+(* The op form, shared by top-level ops and ops nested in a struct body (where
+   [indent] is the body indentation). Op traits print one per line below the
+   signature: an operation carries the whole protocol vocabulary (@http,
+   @header, @timeout, @retry, @errors), which on one line runs past any usable
+   width. They stay below, never above: whitespace is not significant, so a
+   trait written above an op would bind to whatever was declared before it. *)
 let print_op ~indent (d : Ast.decl) : string =
   match d.Ast.dkind with
   | Ast.DOp { input; output } ->
       let pub = if d.Ast.pub then "pub " else "" in
-      indent ^ pub ^ "op " ^ d.Ast.dname ^ "("
-      ^ (match input with Some t -> print_ty t | None -> "")
-      ^ ")"
-      ^ (match output with Some t -> ": " ^ print_ty t | None -> "")
-      ^ trailing_traits d.Ast.dtraits
+      let signature =
+        indent ^ pub ^ "op " ^ d.Ast.dname ^ "("
+        ^ (match input with Some t -> print_ty t | None -> "")
+        ^ ")"
+        ^ match output with Some t -> ": " ^ print_ty t | None -> ""
+      in
+      let traits =
+        List.map (fun t -> "\n" ^ indent ^ "  " ^ print_trait t) d.Ast.dtraits
+      in
+      signature ^ String.concat "" traits
   | _ -> assert false
 
 let print_decl (d : Ast.decl) : string =
@@ -212,7 +224,14 @@ let print_decl (d : Ast.decl) : string =
             (* An entry prints its ops after the fields, separated by a blank
                line so the construction surface reads apart from the methods. *)
             let member_lines = List.map print_member members in
-            let op_lines = List.map (print_op ~indent:"  ") ops in
+            (* Ops are blocks (signature plus a trait per line), so they are
+               separated from each other the same way declarations are. *)
+            let op_lines =
+              match List.map (print_op ~indent:"  ") ops with
+              | [] -> []
+              | first :: rest ->
+                  first :: List.concat_map (fun o -> [ ""; o ]) rest
+            in
             let lines =
               match (member_lines, op_lines) with
               | ms, [] -> ms
@@ -243,7 +262,9 @@ let print_decl (d : Ast.decl) : string =
                   " (" ^ print_ty esig_in ^ ") -> " ^ print_ty esig_out
               | None -> ""
             in
-            let entry key value = "  " ^ key ^ ": \"" ^ value ^ "\"" in
+            (* Binding targets are file references, which on some platforms
+               carry characters the literal grammar has to escape. *)
+            let entry key value = "  " ^ key ^ ": " ^ escaped_string value in
             let lines =
               List.map
                 (fun (b : Ast.ext_binding) -> entry b.lang b.target)

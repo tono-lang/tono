@@ -8,6 +8,11 @@ type ctx = { decls : Ast.decl list; roles : (string, Roles.role) Hashtbl.t }
 (* The type under an optional [?]; entry/config rules read through it. *)
 val base_ty : Ast.ty -> Ast.ty
 
+(* The declared value sources, in the order the fallback chain reads them.
+   Exposed so tooling (hover, completion) names exactly the sources this
+   checker enforces and can never grow its own copy. *)
+val source_names : string list
+
 (* The construction-source traits (@arg/@with/@env/@default) of a member. *)
 val source_traits : Ast.member -> Ast.trait list
 val decl_by_name : ctx -> string -> Ast.decl option

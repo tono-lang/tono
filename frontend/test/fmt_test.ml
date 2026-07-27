@@ -53,7 +53,9 @@ union source[t] {
 
 struct empty {}
 
-op create_charge(charge): charge @errors(not_found, conflict) @http(method: "post")
+op create_charge(charge): charge
+  @errors(not_found, conflict)
+  @http(method: "post")
 
 op ping()
 |}
@@ -145,6 +147,108 @@ ext impl client.save raw {
     "same IR"
     (Ir_json.to_canonical_string (Ir_json.encode_module m1))
     (Ir_json.to_canonical_string (Ir_json.encode_module m2))
+
+(* The entry model in one file: stacked value sources, a derived field with a
+   template and a catalog pipeline, a selection table with every arm shape, a
+   composed config with its binding, and operations carrying the protocol
+   vocabulary. Fields stay on one line (a source chain is short by nature);
+   operations become blocks. *)
+let entry_layout () =
+  let src =
+    {|
+struct settings { api_key: string @env("API_KEY") }
+pub struct client { client_name: string @arg @str::trim
+  client_key: string @format("{.client_name}") @str::upper_snake
+  endpoint_env: string @format("ENDPOINT_{.client_key}_V2")
+  version: string @env("ENDPOINT_VERSION") @default("v2")
+  endpoint_v1: string @env("ENDPOINT") endpoint_v2: string @env(.endpoint_env)
+  timeout: duration @with @default("10s")
+  creds: credentials @env("SERVICE_CREDENTIALS")
+  endpoint: string = match .version { "v1" => .endpoint_v1
+    2 => .endpoint_v2
+    _ => @env("FALLBACK") @default("https://x") }
+  conf: settings @bind(api_key, .client_key)
+  op fetch(note_ref): note @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+    @header("Authorization", .creds.token) @timeout(.timeout) @errors(not_found)
+  op ping() }
+|}
+  in
+  let expected =
+    {|struct settings {
+  api_key: string @env("API_KEY")
+}
+
+pub struct client {
+  client_name: string @arg @str::trim
+  client_key: string @format("{.client_name}") @str::upper_snake
+  endpoint_env: string @format("ENDPOINT_{.client_key}_V2")
+  version: string @env("ENDPOINT_VERSION") @default("v2")
+  endpoint_v1: string @env("ENDPOINT")
+  endpoint_v2: string @env(.endpoint_env)
+  timeout: duration @with @default("10s")
+  creds: credentials @env("SERVICE_CREDENTIALS")
+  endpoint: string = match .version {
+    "v1" => .endpoint_v1
+    2 => .endpoint_v2
+    _ => @env("FALLBACK") @default("https://x")
+  }
+  conf: settings @bind(api_key, .client_key)
+
+  op fetch(note_ref): note
+    @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+    @header("Authorization", .creds.token)
+    @timeout(.timeout)
+    @errors(not_found)
+
+  op ping()
+}
+|}
+  in
+  Alcotest.(check string) "canonical entry layout" expected (fmt src);
+  Alcotest.(check string) "idempotent" expected (fmt (fmt src))
+
+(* An entry whose fields and ops all round-trip through the IR: the layout
+   above is not just stable text, it preserves meaning. *)
+let entry_ir_equivalent () =
+  let src =
+    {|
+struct note_ref { id: string @httpLabel }
+struct note { id: string }
+@status(404) @errorCode("not_found") struct not_found { message: string }
+pub struct client {
+  api_key: string @arg
+  endpoint: string @env("ENDPOINT") @default("https://x")
+  op fetch(note_ref): note
+    @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+    @header("X-Api-Key", .api_key)
+    @errors(not_found)
+
+  op store(note): note
+    @errors(not_found)
+}
+ext impl client.store raw { go: "ext/go/n.go#Store" }
+|}
+  in
+  let m1, d1 = Tono_frontend.compile ~module_name:"notes" src in
+  Alcotest.(check int) "source compiles" 0 (List.length (errors_of d1));
+  let m2, d2 = Tono_frontend.compile ~module_name:"notes" (fmt src) in
+  Alcotest.(check int) "formatted compiles" 0 (List.length (errors_of d2));
+  Alcotest.(check string)
+    "same IR"
+    (Ir_json.to_canonical_string (Ir_json.encode_module m1))
+    (Ir_json.to_canonical_string (Ir_json.encode_module m2))
+
+(* A binding target carrying characters the literal grammar escapes still
+   re-parses: the ext body is source, not a verbatim passthrough. *)
+let ext_binding_escapes () =
+  let target = "ext\\go\\a \"b\".go#Save" in
+  let src = "ext impl save { go: " ^ Printer.string_literal target ^ " }" in
+  let file, ds = Parser.parse (fmt src) in
+  Alcotest.(check int) "re-parses cleanly" 0 (List.length (errors_of ds));
+  match file.Ast.decls with
+  | [ { Ast.dkind = Ast.DExt { ebindings = [ b ]; _ }; _ } ] ->
+      Alcotest.(check string) "target survives" target b.Ast.target
+  | _ -> Alcotest.fail "expected one ext declaration with one binding"
 
 (* String and float literals re-lex to the same values. *)
 let literals () =
@@ -268,6 +372,9 @@ let () =
           Alcotest.test_case "op swallows following traits" `Quick
             op_swallows_following_traits;
           Alcotest.test_case "ext layout" `Quick ext_layout;
+          Alcotest.test_case "entry layout" `Quick entry_layout;
+          Alcotest.test_case "entry IR equivalent" `Quick entry_ir_equivalent;
+          Alcotest.test_case "ext binding escapes" `Quick ext_binding_escapes;
         ] );
       ( "format_source",
         [

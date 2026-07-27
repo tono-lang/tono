@@ -12,6 +12,7 @@ module Token = Tono_frontend.Token
 module Lexer = Tono_frontend.Lexer
 module Printer = Tono_frontend.Printer
 module Check_ext = Tono_frontend.Check_ext
+module Check_entries = Tono_frontend.Check_entries
 
 (* The frontend's [Span.pos] is 1-based line/column counted in bytes (the lexer
    scans bytes); an LSP [Position] is 0-based line/character counted in UTF-16
@@ -157,9 +158,10 @@ let rec ty_refs (t : Ast.ty) (acc : (string * Span.span) list) :
 
 (* The types written inside a declaration (member types, union payloads,
    operation input/output). Enum cases carry no types. *)
-let decl_tys (d : Ast.decl) : Ast.ty list =
+let rec decl_tys (d : Ast.decl) : Ast.ty list =
   match d.dkind with
-  | Ast.DStruct { members; _ } -> List.map (fun m -> m.Ast.mtype) members
+  | Ast.DStruct { members; ops; _ } ->
+      List.map (fun m -> m.Ast.mtype) members @ List.concat_map decl_tys ops
   | Ast.DUnion { variants; _ } ->
       List.filter_map (fun v -> v.Ast.vpayload) variants
   | Ast.DOp { input; output } -> List.filter_map Fun.id [ input; output ]
@@ -170,6 +172,15 @@ let decl_tys (d : Ast.decl) : Ast.ty list =
 let file_ty_refs (file : Ast.file) : (string * Span.span) list =
   List.concat_map
     (fun d -> List.concat_map (fun t -> ty_refs t []) (decl_tys d))
+    file.Ast.decls
+
+(* Every declaration reachable in the file: an entry declares its operations
+   in its own body, and they are declarations like any other for hover,
+   navigation, and the outline. *)
+let all_decls (file : Ast.file) : Ast.decl list =
+  List.concat_map
+    (fun (d : Ast.decl) ->
+      d :: (match d.Ast.dkind with Ast.DStruct { ops; _ } -> ops | _ -> []))
     file.Ast.decls
 
 let find_decl (file : Ast.file) (name : string) : Ast.decl option =
@@ -225,115 +236,13 @@ let member_at (file : Ast.file) (off : int) : Ast.member option =
 (* Member hover: name, type, and traits in canonical form, then the member's
    own @doc prose. *)
 let member_hover ~markdown ~text (m : Ast.member) : Hover.t =
-  let code =
-    m.Ast.mname ^ ": "
-    ^ Printer.print_ty m.Ast.mtype
-    ^ String.concat ""
-        (List.map
-           (fun t -> " " ^ Printer.print_trait t)
-           (without_doc m.Ast.mtraits))
-  in
+  (* Rendered by the printer, so a field's sources and its selection table read
+     on hover exactly as they are written in the file. *)
+  let shown = { m with Ast.mtraits = without_doc m.Ast.mtraits } in
+  let code = String.trim (Printer.print_member shown) in
   mk_hover ~markdown ~text ~code
     ~prose:(doc_of_traits m.Ast.mtraits)
     m.Ast.mname_span
-
-(* The trait contracts surfaced on hover, offered after `@`, and expanded by
-   signature help: one table, three consumers, so the documented keys can
-   never drift between them. The frontend has no central trait registry (each
-   checker pattern-matches its own keys); keep entries in step with the
-   checkers that read them (check_http, check_constraints, protocol_http). *)
-type trait_info = { ti_doc : string; ti_keys : (string * string) list }
-
-let trait_registry : (string * trait_info) list =
-  [
-    ( "doc",
-      {
-        ti_doc =
-          "Documentation carried into every generated SDK as the target \
-           language's doc comment.";
-        ti_keys = [ ("text", "string") ];
-      } );
-    ( "http",
-      {
-        ti_doc = "Binds the operation to an HTTP endpoint.";
-        ti_keys = [ ("method", "\"GET\" | \"POST\" | ..."); ("path", "string") ];
-      } );
-    ( "range",
-      {
-        ti_doc = "Numeric bounds validated at the boundary (inclusive).";
-        ti_keys = [ ("min", "int"); ("max", "int") ];
-      } );
-    ( "length",
-      {
-        ti_doc = "String length bounds validated at the boundary (inclusive).";
-        ti_keys = [ ("min", "int"); ("max", "int") ];
-      } );
-    ( "rename",
-      {
-        ti_doc =
-          "Overrides the idiomatic identifier for one language, e.g. \
-           @rename(go: \"ID\"). The wire key is unchanged.";
-        ti_keys = [ ("lang", "string") ];
-      } );
-    ( "deprecated",
-      {
-        ti_doc =
-          "Marks the element deprecated in every generated SDK, with the given \
-           note.";
-        ti_keys = [ ("note", "string") ];
-      } );
-    ( "status",
-      {
-        ti_doc = "The HTTP status this error shape is discriminated by.";
-        ti_keys = [ ("code", "int") ];
-      } );
-    ( "errorCode",
-      {
-        ti_doc =
-          "The value matched against the payload's code field to select this \
-           error shape.";
-        ti_keys = [ ("value", "string") ];
-      } );
-    ( "errors",
-      {
-        ti_doc = "Declares the error shapes an operation can raise.";
-        ti_keys = [ ("shapes", "name, ...") ];
-      } );
-    ( "async",
-      {
-        ti_doc =
-          "Generates the asynchronous variant of the operation in targets that \
-           distinguish it.";
-        ti_keys = [];
-      } );
-    ( "discriminator",
-      {
-        ti_doc =
-          "The union's tag field on the wire, e.g. @discriminator(\"kind\").";
-        ti_keys = [ ("field", "string") ];
-      } );
-    ("retryable", { ti_doc = "Marks the error as safe to retry."; ti_keys = [] });
-    ( "entries",
-      {
-        ti_doc =
-          "Serializes a map as an array of key/value pairs, escaping keys that \
-           cannot be object keys.";
-        ti_keys = [];
-      } );
-  ]
-
-(* The hover prose for a trait: its contract plus the keys it takes, rendered
-   from the same registry entry. *)
-let trait_doc_text (info : trait_info) : string =
-  match info.ti_keys with
-  | [] -> info.ti_doc
-  | keys ->
-      info.ti_doc ^ " Keys: "
-      ^ String.concat ", " (List.map (fun (k, v) -> k ^ ": " ^ v) keys)
-      ^ "."
-
-let trait_docs : (string * string) list =
-  List.map (fun (name, i) -> (name, trait_doc_text i)) trait_registry
 
 let file_traits (file : Ast.file) : Ast.trait list =
   List.concat_map
@@ -350,96 +259,15 @@ let file_traits (file : Ast.file) : Ast.trait list =
             (fun (v : Ast.union_variant) -> v.Ast.vtraits)
             variants
       | Ast.DOp _ | Ast.DExt _ -> [])
-    file.Ast.decls
+    (all_decls file)
 
 let trait_hover ~markdown ~text (t : Ast.trait) : Hover.t option =
-  match List.assoc_opt t.Ast.tname trait_docs with
+  match List.assoc_opt t.Ast.tname Hover_docs.trait_docs with
   | None -> None
   | Some prose ->
       Some
         (mk_hover ~markdown ~text ~code:(Printer.print_trait t)
            ~prose:(Some prose) t.Ast.tspan)
-
-(* Construct hover texts. The hook slot list is rendered from the exact table
-   the typechecker enforces (Check_ext.hook_slots): the enumerated semantics
-   must never grow a second hand-written copy. *)
-let construct_doc (word : string) : string option =
-  match word with
-  | "struct" ->
-      Some "A record shape: named members with types, serialized as an object."
-  | "enum" ->
-      Some
-        "An open enumeration: strict on encode, lenient on decode (an unknown \
-         value is carried, never a failure)."
-  | "union" ->
-      Some
-        "A tagged sum: every variant carries a payload and travels internally \
-         tagged by the discriminator field."
-  | "op" ->
-      Some
-        "An operation: input and output shapes plus traits (transport, errors, \
-         effect)."
-  | "map" ->
-      Some
-        "A homogeneous map type, map[K]V. Keys that cannot be object keys can \
-         escape to a pairs array with @entries."
-  | "pub" -> Some "Exports the declaration across module boundaries."
-  | "import" ->
-      Some "Brings another module's declarations into dot-qualified scope."
-  | "ext" ->
-      Some
-        "A bespoke extension point (hook, contract, constraint, or impl), \
-         bound per language to a file#symbol reference."
-  | "hook" ->
-      Some
-        (Printf.sprintf
-           "Fills a fixed lifecycle slot (%s), bound per language to a \
-            file#symbol reference. Hooks take no signature."
-           (String.concat ", " Check_ext.hook_slots))
-  | "contract" ->
-      Some
-        "A bespoke function with a typed signature; emission is gated on a \
-         conformance spec."
-  | "constraint" ->
-      Some "A bespoke validation predicate attached at the boundary."
-  | "impl" ->
-      Some
-        "Implements the operation it names with bespoke sources, taking that \
-         operation's signature. Add 'raw' to return an outcome the generated \
-         glue decodes and discriminates."
-  | _ -> None
-
-(* Primitive and marker hover: the wire decisions that most surprise SDK
-   consumers belong right under the cursor. *)
-let primitive_doc (p : string) : string option =
-  match p with
-  | "i64" ->
-      Some
-        "64-bit signed integer. Travels as a string on the wire: JSON numbers \
-         lose precision past 2^53."
-  | "u64" -> Some "64-bit unsigned integer. Travels as a string on the wire."
-  | "i8" | "i16" | "i32" ->
-      Some
-        "Signed integer. Arithmetic wraps at the width (two's complement); \
-         division truncates toward zero."
-  | "u8" | "u16" | "u32" ->
-      Some "Unsigned integer. Arithmetic wraps modulo 2^width."
-  | "float" ->
-      Some
-        "IEEE 754 double. There is no decimal type: money is integer minor \
-         units."
-  | "bool" -> Some "Boolean."
-  | "string" -> Some "UTF-8 text."
-  | "bytes" -> Some "Binary payload, base64 on the wire."
-  | "timestamp" -> Some "An instant in time, carried as a branded string."
-  | "date" -> Some "A calendar date, carried as a branded string."
-  | "duration" -> Some "A span of time, carried as a branded string."
-  | "uuid" -> Some "A UUID, carried as a branded string."
-  | _ -> None
-
-let nullable_doc =
-  "Two-state nullability: the value is present or absent, nothing else. Absent \
-   and null collapse; the default encoding omits the field."
 
 (* Keyword, primitive, and marker hover resolve through the real lexer, so the
    word set can never drift from what the language accepts. hook, contract,
@@ -447,23 +275,33 @@ let nullable_doc =
    after `ext`. *)
 let token_hover ~markdown ~text (off : int) : Hover.t option =
   let toks, _ = Lexer.tokenize text in
-  let rec go after_ext = function
+  (* "raw" reads as a construct anywhere inside an ext declaration (it follows
+     the name, not the kind word), "match" only right after the "=" that opens
+     a field's selection table. *)
+  let next_in_ext (k : Token.kind) (in_ext : bool) =
+    match k with Token.KwExt -> true | Token.LBrace -> false | _ -> in_ext
+  in
+  let rec go in_ext after_eq = function
     | [] -> None
     | (t : Token.t) :: rest ->
         if contains t.span off then
           let found =
             match t.kind with
-            | Token.KwStruct -> Some ("struct", construct_doc "struct")
-            | Token.KwEnum -> Some ("enum", construct_doc "enum")
-            | Token.KwUnion -> Some ("union", construct_doc "union")
-            | Token.KwOp -> Some ("op", construct_doc "op")
-            | Token.KwMap -> Some ("map", construct_doc "map")
-            | Token.KwPub -> Some ("pub", construct_doc "pub")
-            | Token.KwImport -> Some ("import", construct_doc "import")
-            | Token.KwExt -> Some ("ext", construct_doc "ext")
-            | Token.Prim p -> Some (p, primitive_doc p)
-            | Token.Question -> Some ("?", Some nullable_doc)
-            | Token.Ident w when after_ext -> Some (w, construct_doc w)
+            | Token.KwStruct ->
+                Some ("struct", Hover_docs.construct_doc "struct")
+            | Token.KwEnum -> Some ("enum", Hover_docs.construct_doc "enum")
+            | Token.KwUnion -> Some ("union", Hover_docs.construct_doc "union")
+            | Token.KwOp -> Some ("op", Hover_docs.construct_doc "op")
+            | Token.KwMap -> Some ("map", Hover_docs.construct_doc "map")
+            | Token.KwPub -> Some ("pub", Hover_docs.construct_doc "pub")
+            | Token.KwImport ->
+                Some ("import", Hover_docs.construct_doc "import")
+            | Token.KwExt -> Some ("ext", Hover_docs.construct_doc "ext")
+            | Token.Prim p -> Some (p, Hover_docs.primitive_doc p)
+            | Token.Question -> Some ("?", Some Hover_docs.nullable_doc)
+            | Token.Ident "match" when after_eq ->
+                Some ("match", Hover_docs.construct_doc "match")
+            | Token.Ident w when in_ext -> Some (w, Hover_docs.construct_doc w)
             | _ -> None
           in
           Option.bind found (fun (code, doc) ->
@@ -471,9 +309,9 @@ let token_hover ~markdown ~text (off : int) : Hover.t option =
                 (fun prose ->
                   mk_hover ~markdown ~text ~code ~prose:(Some prose) t.span)
                 doc)
-        else go (t.kind = Token.KwExt) rest
+        else go (next_in_ext t.kind in_ext) (t.kind = Token.Eq) rest
   in
-  go false toks
+  go false false toks
 
 (* Hover, most specific first: a declaration name, a member name, a type
    reference (which shows the full target declaration), a trait, then the
@@ -484,7 +322,7 @@ let hover_at ~(markdown : bool) ~(text : string) ~(file : Ast.file)
   match
     List.find_opt
       (fun (d : Ast.decl) -> contains d.dname_span off)
-      file.Ast.decls
+      (all_decls file)
   with
   | Some d -> Some (decl_hover ~markdown ~text d d.dname_span)
   | None -> (
@@ -561,7 +399,7 @@ let trait_items : CompletionItem.t list =
     (fun (name, detail) ->
       CompletionItem.create ~label:name ~kind:CompletionItemKind.Property
         ~detail ())
-    trait_docs
+    Hover_docs.trait_docs
 
 (* The lifecycle slots come from the checker's own table, so completion can
    only ever offer what the typechecker accepts. *)
@@ -571,6 +409,69 @@ let slot_items : CompletionItem.t list =
       CompletionItem.create ~label:s ~kind:CompletionItemKind.EnumMember
         ~detail:"lifecycle slot" ())
     Check_ext.hook_slots
+
+(* The extension kinds the parser accepts after `ext`. *)
+let ext_kind_items : CompletionItem.t list =
+  List.map
+    (fun (k, detail) ->
+      CompletionItem.create ~label:k ~kind:CompletionItemKind.Keyword ~detail ())
+    [
+      ("hook", "lifecycle extension");
+      ("contract", "bespoke contract");
+      ("constraint", "bespoke constraint");
+      ("impl", "bespoke operation implementation");
+    ]
+
+(* The @str:: catalog, offered after the separator. *)
+let str_catalog_items : CompletionItem.t list =
+  List.map
+    (fun name ->
+      CompletionItem.create ~label:name ~kind:CompletionItemKind.Function
+        ~detail:"@str:: transform" ())
+    Check_entries.str_transforms
+
+(* The operations an entry declares: what an `ext impl` can name. The bare name
+   is the normal form; the qualified one disambiguates. *)
+let entry_op_items (file : Ast.file) : CompletionItem.t list =
+  List.concat_map
+    (fun (d : Ast.decl) ->
+      match d.Ast.dkind with
+      | Ast.DStruct { ops; _ } ->
+          List.concat_map
+            (fun (o : Ast.decl) ->
+              [
+                CompletionItem.create ~label:o.Ast.dname
+                  ~kind:CompletionItemKind.Method
+                  ~detail:("operation of " ^ d.Ast.dname)
+                  ();
+                CompletionItem.create
+                  ~label:(d.Ast.dname ^ "." ^ o.Ast.dname)
+                  ~kind:CompletionItemKind.Method ~detail:"qualified operation"
+                  ();
+              ])
+            ops
+      | _ -> [])
+    file.Ast.decls
+
+(* The fields of the entry or config the cursor sits in: the only names a
+   `.field` reference can resolve to. The enclosing declaration is the last one
+   whose name starts before the cursor, since the surface AST carries no
+   body span. *)
+let enclosing_fields (file : Ast.file) (off : int) : Ast.member list =
+  List.fold_left
+    (fun acc (d : Ast.decl) ->
+      if d.Ast.dname_span.Span.start.offset > off then acc
+      else
+        match d.Ast.dkind with Ast.DStruct { members; _ } -> members | _ -> [])
+    [] file.Ast.decls
+
+let field_items (file : Ast.file) (off : int) : CompletionItem.t list =
+  List.map
+    (fun (m : Ast.member) ->
+      CompletionItem.create ~label:m.Ast.mname ~kind:CompletionItemKind.Field
+        ~detail:(Printer.print_ty m.Ast.mtype)
+        ())
+    (enclosing_fields file off)
 
 let is_ident_char c =
   (c >= 'a' && c <= 'z')
@@ -607,14 +508,45 @@ let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
   let after_at =
     String.length before > 0 && before.[String.length before - 1] = '@'
   in
+  let words =
+    List.filter
+      (fun w -> w <> "")
+      (String.split_on_char ' ' (String.trim before))
+  in
   let hook_context =
-    match
-      List.filter
-        (fun w -> w <> "")
-        (String.split_on_char ' ' (String.trim before))
-    with
+    match words with
     | [ "ext"; "hook" ] | [ "pub"; "ext"; "hook" ] -> true
     | _ -> false
+  in
+  let ext_kind_context =
+    match words with [ "ext" ] | [ "pub"; "ext" ] -> true | _ -> false
+  in
+  let impl_context =
+    match words with
+    | [ "ext"; "impl" ] | [ "pub"; "ext"; "impl" ] -> true
+    | _ -> false
+  in
+  (* `@str::` and friends: the separator is not an identifier character, so the
+     stem stops at it and the catalog name is what comes next. *)
+  let catalog_context =
+    let n = String.length before in
+    n >= 4
+    && String.sub before (n - 2) 2 = "::"
+    &&
+    let rec back i =
+      if i > 0 && is_ident_char before.[i - 1] then back (i - 1) else i
+    in
+    let name_start = back (n - 2) in
+    name_start > 0 && before.[name_start - 1] = '@' && name_start < n - 2
+  in
+  (* A leading `.` opens a field reference: inside @env(, a match subject, an
+     arm value, a @header value. A dot right after an identifier is a path or a
+     module qualifier instead, and is left alone. *)
+  let ref_context =
+    let n = String.length before in
+    n > 0
+    && before.[n - 1] = '.'
+    && (n = 1 || not (is_ident_char before.[n - 2]))
   in
   let type_context =
     if unclosed_parens > 0 then not (String.contains before '@')
@@ -622,8 +554,12 @@ let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
       let trimmed = String.trim before in
       String.length trimmed > 0 && trimmed.[String.length trimmed - 1] = ':'
   in
-  if after_at then trait_items
+  if catalog_context then str_catalog_items
+  else if after_at then trait_items
   else if hook_context then slot_items
+  else if ext_kind_context then ext_kind_items
+  else if impl_context then entry_op_items file
+  else if ref_context then field_items file off
   else if type_context then prim_items @ decl_items file
   else decl_items file @ prim_items
 
@@ -695,11 +631,16 @@ let leaf ~(text : string) ~(kind : SymbolKind.t) ~(name : string)
 
 let member_symbols ~(text : string) (d : Ast.decl) : DocumentSymbol.t list =
   match d.dkind with
-  | Ast.DStruct { members; _ } ->
+  | Ast.DStruct { members; ops; _ } ->
       List.map
         (fun m ->
           leaf ~text ~kind:SymbolKind.Field ~name:m.Ast.mname ~span:m.mname_span)
         members
+      @ List.map
+          (fun (o : Ast.decl) ->
+            leaf ~text ~kind:SymbolKind.Method ~name:o.Ast.dname
+              ~span:o.Ast.dname_span)
+          ops
   | Ast.DEnum { cases } ->
       List.map
         (fun c ->

@@ -227,9 +227,9 @@ fn removing_an_op_from_an_entry_is_source_breaking() {
     let before = model(vec![entry("billing#client", vec![], vec![op])]);
     let after = model(vec![entry("billing#client", vec![], vec![])]);
     let report = diff(&before, &after);
-    let change = find(&report, "change-shape billing#client");
+    let change = find(&report, "remove-entry-op billing#client.save");
     assert_eq!(change.category, Category::SourceBreaking);
-    assert_eq!(change.detail, "entry changed");
+    assert_eq!(change.detail, "operation removed from billing#client");
 }
 
 #[test]
@@ -239,9 +239,11 @@ fn changing_a_config_field_is_source_breaking() {
         vec![entry_field_ref("creds", "billing#Creds")],
     )]);
     let after = model(vec![config("billing#conf", vec![])]);
+    // The field carries no explicit source, so nothing a caller wrote is gone;
+    // what changed is where the composed value comes from.
     assert_eq!(
-        find(&diff(&before, &after), "change-shape billing#conf").category,
-        Category::SourceBreaking
+        find(&diff(&before, &after), "remove-field billing#conf.creds").category,
+        Category::Behavioral
     );
 }
 

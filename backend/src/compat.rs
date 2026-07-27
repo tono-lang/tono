@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use crate::compat_entry;
 use crate::compat_shape::*;
 use crate::ir::{Constraint, EnumBacking, EnumValue, Member, Model, Shape, ShapeKind, Trait, Tref};
 
@@ -302,20 +303,21 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
         (ShapeKind::Service { operations: bo }, ShapeKind::Service { operations: co }) => {
             diff_service(&b.id, bo, co, current, out)
         }
-        // Entries and configs never cross the wire; removing any part of their
-        // construction surface breaks compiling callers, so any difference is
-        // conservatively one source-breaking change. Field-level categories
-        // (a removed @with vs a changed @env fallback) arrive with the entry
-        // codegen work.
-        (ShapeKind::Entry { .. }, ShapeKind::Entry { .. })
-        | (ShapeKind::Config { .. }, ShapeKind::Config { .. }) => {
-            if b.kind != c.kind {
-                out.push(Change {
-                    key: format!("change-shape {}", b.id),
-                    category: Category::SourceBreaking,
-                    detail: format!("{} changed", kind_name(&b.kind)),
-                });
-            }
+        // Entries and configs never cross the wire: their categories are about
+        // the generated construction surface and about what resolves at
+        // construction, which compat_entry separates field by field.
+        (
+            ShapeKind::Entry {
+                fields: bf,
+                operations: bo,
+            },
+            ShapeKind::Entry {
+                fields: cf,
+                operations: co,
+            },
+        ) => compat_entry::diff_entry(&b.id, bf, bo, cf, co, out),
+        (ShapeKind::Config { fields: bf }, ShapeKind::Config { fields: cf }) => {
+            compat_entry::diff_config(&b.id, bf, cf, out)
         }
         // A shape whose kind changed (structure -> enum, ...) is not a smooth
         // diff: the old kind is gone and a new one takes its id.
@@ -494,7 +496,12 @@ fn diff_variant(id: &str, b: &Member, c: &Member, out: &mut Vec<Change>) {
 
 /// A new constraint, or one tightened to reject previously-valid values, changes
 /// runtime behavior. Pure loosening is backward-compatible and emits nothing.
-fn diff_constraints(path: &str, base: &[Constraint], curr: &[Constraint], out: &mut Vec<Change>) {
+pub(crate) fn diff_constraints(
+    path: &str,
+    base: &[Constraint],
+    curr: &[Constraint],
+    out: &mut Vec<Change>,
+) {
     for cc in curr {
         match base.iter().find(|bc| same_constraint_kind(bc, cc)) {
             None => out.push(Change {
@@ -566,7 +573,7 @@ fn diff_enum(
 /// generated call site (source break); if an input/output type was removed, the
 /// removed-shape pass separately records the wire break.
 #[allow(clippy::too_many_arguments)]
-fn diff_operation(
+pub(crate) fn diff_operation(
     id: &str,
     bi: &Option<Tref>,
     bo: &Option<Tref>,

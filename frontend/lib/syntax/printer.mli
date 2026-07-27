@@ -10,4 +10,9 @@ val string_literal : string -> string
 val float_literal : float -> string
 val print_ty : Ast.ty -> string
 val print_trait : Ast.trait -> string
+
+(* One member line, indented as it appears in a shape body: type, an optional
+   selection table, then its traits. Exposed so tooling (hover) renders a
+   member exactly as `tono fmt` writes it. *)
+val print_member : Ast.member -> string
 val print_file : Ast.file -> string

@@ -19,8 +19,16 @@ let rec erase_ty = function
   | Ast.TNullable (t, _) -> Ast.TNullable (erase_ty t, dspan)
   | Ast.TError _ -> Ast.TError dspan
 
-let erase_trait (t : Ast.trait) = { t with Ast.tspan = dspan }
 let erase_ref (r : Ast.ref_path) = { r with Ast.ref_span = dspan }
+
+(* A trait argument can carry a reference, which carries a span of its own. *)
+let rec erase_arg = function
+  | Ast.ARef r -> Ast.ARef (erase_ref r)
+  | Ast.AKv (k, v) -> Ast.AKv (k, erase_arg v)
+  | (Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _) as a -> a
+
+let erase_trait (t : Ast.trait) =
+  { t with Ast.tspan = dspan; targs = List.map erase_arg t.Ast.targs }
 
 let erase_arm_value = function
   | Ast.AVRef r -> Ast.AVRef (erase_ref r)
@@ -171,13 +179,28 @@ and gen_ty n =
 
 let gen_ty = gen_ty 2
 
+let gen_ref =
+  let+ segs = G.list_size (G.int_range 1 3) gen_lname in
+  { Ast.segs; ref_span = dspan }
+
+let gen_string =
+  G.oneof_list
+    [
+      "plain";
+      "with \"quotes\"";
+      "line\nbreak";
+      "tab\tand \\";
+      "";
+      (* templates are ordinary strings to the printer, but they are the shape
+         the entry model actually writes *)
+      "ENDPOINT_{.client_key}_V2";
+      "/notes/{id}";
+    ]
+
 let gen_scalar =
   G.oneof
     [
-      (let+ s =
-         G.oneof_list
-           [ "plain"; "with \"quotes\""; "line\nbreak"; "tab\tand \\"; "" ]
-       in
+      (let+ s = gen_string in
        Ast.AString s);
       (let+ n = G.oneof_list [ 0; 1; -1; 200; 1000000 ] in
        Ast.AInt n);
@@ -185,6 +208,8 @@ let gen_scalar =
        Ast.AFloat f);
       (let+ n = gen_lname in
        Ast.AName n);
+      (let+ r = gen_ref in
+       Ast.ARef r);
     ]
 
 let gen_arg =
@@ -196,19 +221,79 @@ let gen_arg =
     ]
 
 let gen_trait =
-  let+ name = G.oneof_list [ "doc"; "range"; "http"; "errors"; "deprecated" ]
+  let+ name =
+    G.oneof_list
+      [
+        "doc";
+        "range";
+        "http";
+        "errors";
+        "deprecated";
+        (* the entry model: value sources, derivation, composition, and the
+           builtin catalogs, whose "::" lives inside the trait name *)
+        "arg";
+        "with";
+        "env";
+        "default";
+        "format";
+        "bind";
+        "header";
+        "str::trim";
+        "str::upper_snake";
+      ]
   and+ args = G.list_size (G.int_range 0 3) gen_arg in
   { Ast.tname = name; targs = args; tspan = dspan }
 
 let gen_traits = G.list_size (G.int_range 0 2) gen_trait
 
+let gen_pattern =
+  G.oneof
+    [
+      (let+ s = gen_string in
+       Ast.PString s);
+      (let+ n = G.oneof_list [ 0; 1; -1; 200 ] in
+       Ast.PInt n);
+      (let+ n = gen_lname in
+       Ast.PName n);
+      G.return Ast.PWildcard;
+    ]
+
+let gen_arm_value =
+  G.oneof
+    [
+      (let+ r = gen_ref in
+       Ast.AVRef r);
+      (let+ s = gen_string in
+       Ast.AVString s);
+      (let+ n = G.oneof_list [ 0; 1; -1; 200 ] in
+       Ast.AVInt n);
+      (let+ n = gen_lname in
+       Ast.AVName n);
+      (* a stack of sources resolved in place: never empty, or the arm would
+         print with no value at all *)
+      (let+ ts = G.list_size (G.int_range 1 2) gen_trait in
+       Ast.AVSources ts);
+    ]
+
+let gen_match =
+  let+ subject = gen_ref
+  and+ arms =
+    G.list_size (G.int_range 0 3)
+      (let+ pat = gen_pattern and+ value = gen_arm_value in
+       { Ast.pat; pat_span = dspan; value; value_span = dspan })
+  in
+  { Ast.subject; arms; match_span = dspan }
+
 let gen_member =
-  let+ name = gen_lname and+ ty = gen_ty and+ traits = gen_traits in
+  let+ name = gen_lname
+  and+ ty = gen_ty
+  and+ fm = G.oneof [ G.return None; G.map Option.some gen_match ]
+  and+ traits = gen_traits in
   {
     Ast.mname = name;
     mname_span = dspan;
     mtype = ty;
-    mmatch = None;
+    mmatch = fm;
     mtraits = traits;
   }
 
@@ -226,12 +311,38 @@ let gen_variant =
 
 let gen_opt_ty = G.oneof [ G.return None; G.map Option.some gen_ty ]
 
+(* An op in an entry body takes neither "pub" nor traits above it: the grammar
+   gives it only the signature and its trailing traits. *)
+let gen_entry_op =
+  let+ name = gen_lname
+  and+ input = gen_opt_ty
+  and+ output = gen_opt_ty
+  and+ traits = gen_traits in
+  {
+    Ast.dname = name;
+    dname_span = dspan;
+    pub = false;
+    dtraits = traits;
+    dkind = Ast.DOp { input; output };
+  }
+
+let gen_ext_kind =
+  G.oneof_list [ Ast.EHook; Ast.EContract; Ast.EConstraint; Ast.EImpl ]
+
+(* "conformance" is a reserved key hoisted out of the bindings, so it is never
+   generated as a language tag. *)
+let gen_binding =
+  let+ lang = G.oneof_list [ "ts"; "go"; "rust"; "python"; "java" ]
+  and+ target = G.oneof_list [ "ext/ts/a.ts#f"; "ext\\go\\a \"b\".go#F"; "" ] in
+  { Ast.lang; lang_span = dspan; target }
+
 let gen_kind =
   G.oneof
     [
       (let+ params = gen_params
-       and+ members = G.list_size (G.int_range 0 4) gen_member in
-       Ast.DStruct { params; members; ops = [] });
+       and+ members = G.list_size (G.int_range 0 4) gen_member
+       and+ ops = G.list_size (G.int_range 0 2) gen_entry_op in
+       Ast.DStruct { params; members; ops });
       (let+ cases = G.list_size (G.int_range 0 3) gen_case in
        Ast.DEnum { cases });
       (let+ params = gen_params
@@ -239,6 +350,29 @@ let gen_kind =
        Ast.DUnion { params; variants });
       (let+ input = gen_opt_ty and+ output = gen_opt_ty in
        Ast.DOp { input; output });
+      (let+ ekind = gen_ext_kind
+       and+ raw = G.bool
+       and+ esig =
+         G.oneof
+           [
+             G.return None;
+             (let+ i = gen_ty and+ o = gen_ty in
+              Some { Ast.esig_in = i; esig_out = o });
+           ]
+       and+ ebindings = G.list_size (G.int_range 0 3) gen_binding
+       and+ econformance =
+         G.oneof
+           [ G.return None; G.map Option.some (G.return "vectors/c.json") ]
+       in
+       Ast.DExt
+         {
+           ekind;
+           ekind_span = dspan;
+           esig;
+           eraw = (if raw then Some dspan else None);
+           ebindings;
+           econformance;
+         });
     ]
 
 let gen_decl =
