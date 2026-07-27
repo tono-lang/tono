@@ -127,7 +127,13 @@ pub fn run(
         Err(e) => return stopped(source, target, Verdict::IrError(e)),
     };
 
-    let config = CodegenConfig::default();
+    // The scaffold the checker builds declares a fixed module path, and Go
+    // spells its cross-package imports with it, so generation is given the same
+    // one rather than left to fail the layout gate.
+    let config = CodegenConfig {
+        go_module: Some(tono_backend::codegen::check::GO_SCAFFOLD_MODULE.into()),
+        ..CodegenConfig::default()
+    };
     // The Go layout gate runs first: its message names the module problem, where
     // the compiler would only show the broken import it causes.
     if let Err(e) = check_go_layout(&model, &[target], &config) {

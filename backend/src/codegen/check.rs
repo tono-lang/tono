@@ -144,12 +144,18 @@ fn top_level_rust_modules(src: &Path) -> io::Result<Vec<String>> {
     Ok(modules)
 }
 
-/// A single Go module holding the generated package(s), built with `go build`.
-/// A one-module preview needs no module-path prefix (there are no cross-package
-/// imports), so a fixed local module path suffices.
+/// The module path the Go scaffold declares. A preview is not a real project, so
+/// the path is fixed; generation has to be given the same one, since Go spells
+/// every cross-package import with it.
+pub const GO_SCAFFOLD_MODULE: &str = "tono_preview";
+
+/// A single Go module holding the generated packages, built with `go build`.
 fn scaffold_go(files: &[GeneratedFile], scratch: &Path) -> io::Result<CheckPlan> {
     write_sources(files, TargetKind::Go, scratch)?;
-    fs::write(scratch.join("go.mod"), "module tono_preview\n\ngo 1.21\n")?;
+    fs::write(
+        scratch.join("go.mod"),
+        format!("module {GO_SCAFFOLD_MODULE}\n\ngo 1.21\n"),
+    )?;
     Ok(CheckPlan {
         program: "go".into(),
         args: vec!["build".into(), "./...".into()],
