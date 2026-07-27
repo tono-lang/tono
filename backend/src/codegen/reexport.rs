@@ -66,14 +66,14 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
                 body.push_str(&format!("pub mod {name};\n"));
             }
             for (name, public) in &node.files {
-                // An internal group is crate-visible and no more: the SDK's own
-                // files reach it, a consumer of the crate has no path to it at
-                // all. Its declarations exist for the SDK's use, so the lint
-                // that wants every item reached is not the right judge of them.
+                // An internal group is a private module: no path reaches it from
+                // outside the crate, and inside only its own parent. Its
+                // declarations exist for the SDK's use, so the lint that wants
+                // every item reached is not the right judge of them.
                 if *public {
                     body.push_str(&format!("pub mod {name};\n"));
                 } else {
-                    body.push_str(&format!("#[allow(dead_code)]\npub(crate) mod {name};\n"));
+                    body.push_str(&format!("#[allow(dead_code)]\nmod {name};\n"));
                 }
             }
             let uses: String = node
@@ -169,7 +169,7 @@ mod tests {
         let lib = text_at(&files, "rust/lib.rs");
         assert!(lib.contains("pub mod payments;"));
         // The shared group is a private module: unreachable from outside the crate.
-        assert!(lib.contains("pub(crate) mod internal;"));
+        assert!(lib.contains("mod internal;"));
         assert!(!lib.contains("pub mod internal;"));
         // No root barrel: the crate root declares modules, it does not flatten
         // them into one namespace.
@@ -182,7 +182,7 @@ mod tests {
         let charges = text_at(&files, "rust/payments/charges/mod.rs");
         assert!(charges.contains("pub mod types;"));
         assert!(charges.contains("pub mod client;"));
-        assert!(charges.contains("pub(crate) mod internal;"));
+        assert!(charges.contains("mod internal;"));
         assert!(!charges.contains("pub mod internal;"));
         assert!(charges.contains("pub use types::*;"));
         assert!(charges.contains("pub use client::*;"));
