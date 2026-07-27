@@ -322,7 +322,7 @@ fn a_structured_decode_probes_the_wire_key_not_the_member_name() {
                 constraints: vec![],
                 // @wire renames the serialized key; the decode must probe "tok".
                 traits: vec![crate::ir::Trait {
-                    id: "core#wire".into(),
+                    id: "wire".into(),
                     value: serde_json::json!("tok"),
                 }],
             }],
@@ -370,7 +370,7 @@ fn an_entry_field_rename_retargets_every_go_identifier() {
     // @rename(lang) is a verbatim identifier (it bypasses casing), used at every
     // position the field appears in.
     token.traits = vec![crate::ir::Trait {
-        id: "core#rename".into(),
+        id: "rename".into(),
         value: serde_json::json!({"go": "AuthToken"}),
     }];
     push_entry_field(&mut module, token);
@@ -403,6 +403,22 @@ fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     assert!(serde.contains(
             "return nil, &ConfigError{Message: fmt.Sprintf(\"choice: match on client_name: unmatched value %v\", s.ClientName)}"
         ));
+}
+
+#[test]
+fn a_why_reason_nothing_reads_is_discarded_rather_than_left_unused() {
+    // A chain no other field, trait, or bind consumes still records why it came
+    // up empty, but nothing reads it back, and Go rejects a variable that is
+    // assigned and never read.
+    let mut module = fixture_module();
+    let env = crate::ir::Source::Env(crate::ir::EnvName::Name("SPARE_TOKEN".into()));
+    let field = bare_entry_field("spare_token", Tref::Prim(Prim::String), vec![env]);
+    push_entry_field(&mut module, field);
+    let serde = serde_text(&module);
+    assert!(serde.contains("spareTokenWhy := \"no source\""));
+    assert!(serde.contains("\t_ = spareTokenWhy\n"));
+    // A consumed chain is read by its own check, so it is left alone.
+    assert!(!serde.contains("_ = endpointVersionWhy"));
 }
 
 /// An `ext impl` binding for the fixture's `save_note`, typed or raw.

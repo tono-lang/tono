@@ -64,11 +64,15 @@ val transform_unknown : string
 val entry_shape_invalid : string
 val duplicate_trait : string
 
-(* Bespoke operation implementations: an impl naming no operation or an ambiguous
-   one, an operation implemented twice or not at all, and the raw response form
-   on a kind that cannot carry it. *)
+(* Bespoke operation implementations: an impl naming no implementable operation
+   or an ambiguous one, an operation implemented twice or not at all, and the raw
+   response form on a kind that cannot carry it. *)
 val ext_impl_unknown_op : string
 val ext_impl_ambiguous_op : string
 val op_implementation_conflict : string
 val op_implementation_missing : string
 val ext_raw_rule : string
+
+(* A declared error a raw implementation could never select: the raw path
+   discriminates by @errorCode alone, so an error without one is unreachable. *)
+val raw_error_unreachable : string

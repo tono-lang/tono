@@ -348,6 +348,9 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	if len(violations) > 0 {
 		return nil, &ValidationError{Violations: violations}
 	}
+	_ = endpointV2Why
+	_ = credsWhy
+	_ = labelsWhy
 	values := map[string]any{}
 	values["api_key"] = s.APIKey
 	values["client_name"] = s.ClientName

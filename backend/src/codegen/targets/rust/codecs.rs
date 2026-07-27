@@ -225,13 +225,7 @@ pub(crate) fn union_item(
 
 /// The wire tag for a union member: its `@wire` override, else its name.
 fn wire_tag(member: &Member) -> String {
-    member
-        .traits
-        .iter()
-        .find(|t| t.id == "core#wire")
-        .and_then(|t| t.value.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| member.name.clone())
+    crate::codegen::conventions::wire_key(member)
 }
 
 /// The branded well-known newtypes. They are `#[serde(transparent)]` wrappers

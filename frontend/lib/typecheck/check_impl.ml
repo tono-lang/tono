@@ -6,8 +6,10 @@
    The rules this pass owns, all of which need source spans the IR has dropped:
 
    - an "ext impl" names the operation it implements, so the name must reach an
-     operation declared in this module (TC0048). Extensions are per-module, like
-     hooks, so an impl and its operation live in the same file;
+     operation an entry declares in this module (TC0048). Extensions are
+     per-module, like hooks, so an impl and its operation live in the same file;
+     and only an entry operation gets a generated body, so an impl on a loose one
+     would be declared and then silently never called;
    - a bare operation name must reach exactly one operation: two entries in one
      module may declare the same operation name, and the qualified "entry.op"
      form resolves that (TC0049);
@@ -19,12 +21,27 @@
      entries and tooling reference, and the generators already skip it).
 
    Whether every generated language has a binding is the generator's gate: only
-   the backend knows which targets are being emitted. *)
+   the backend knows which targets are being emitted.
+
+   One rule is about the raw form rather than the count: a raw implementation
+   reports a failure by its code alone, having no protocol status to match on, so
+   a declared error with no @errorCode has nothing that could select it and would
+   silently resolve to the generic fallback (TC0053). *)
 
 let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
+let warn code span fmt = Printf.ksprintf (Diagnostic.warning ~code span) fmt
 
 let find_trait name (traits : Ast.trait list) : Ast.trait option =
   List.find_opt (fun (t : Ast.trait) -> String.equal t.Ast.tname name) traits
+
+(* The shapes an operation names in its @errors traits, in declaration order. *)
+let declared_error_names (op : Ast.decl) : string list =
+  List.concat_map
+    (fun (tr : Ast.trait) ->
+      if String.equal tr.Ast.tname "errors" then
+        List.filter_map (function Ast.AName n -> Some n | _ -> None) tr.targs
+      else [])
+    op.Ast.dtraits
 
 (* One operation declaration and, when it lives in an entry body, the entry that
    holds it. *)
@@ -62,6 +79,36 @@ let impl_decls (decls : Ast.decl list) : Ast.decl list =
       | _ -> false)
     decls
 
+(* A raw implementation discriminates a failure by its code, so an error the
+   operation declares without an @errorCode can never be selected: the glue
+   resolves it to the generic fallback instead. Reported at the impl, which is
+   what makes the errors unreachable. *)
+let unreachable_raw_errors (decls : Ast.decl list) (impl : Ast.decl)
+    (site : op_site) : Diagnostic.t list =
+  let is_raw =
+    match impl.Ast.dkind with
+    | Ast.DExt { eraw = Some _; _ } -> true
+    | _ -> false
+  in
+  if not is_raw then []
+  else
+    List.filter_map
+      (fun name ->
+        match
+          List.find_opt
+            (fun (d : Ast.decl) -> String.equal d.Ast.dname name)
+            decls
+        with
+        | Some target when find_trait "errorCode" target.Ast.dtraits = None ->
+            Some
+              (warn Error_codes.raw_error_unreachable impl.Ast.dname_span
+                 "'%s' declares the error '%s', which has no @errorCode; a raw \
+                  implementation matches on the code alone, so this error can \
+                  only ever surface as the generic failure"
+                 (site_key site) name)
+        | _ -> None)
+      (declared_error_names site.op)
+
 let check_decls (decls : Ast.decl list) : Diagnostic.t list =
   let sites = op_sites decls in
   (* site key -> every impl that reached it, so the conflict rule can name the
@@ -73,9 +120,16 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
         match
           List.filter (fun s -> List.mem d.Ast.dname (site_names s)) sites
         with
-        | [ s ] ->
+        | [ s ] when s.entry <> None ->
             Hashtbl.add bound (site_key s) d;
-            []
+            unreachable_raw_errors decls d s
+        | [ _ ] ->
+            [
+              err Error_codes.ext_impl_unknown_op d.dname_span
+                "'%s' is a loose operation, which no client implements; move \
+                 it into the entry that should expose it"
+                d.dname;
+            ]
         | [] ->
             [
               err Error_codes.ext_impl_unknown_op d.dname_span

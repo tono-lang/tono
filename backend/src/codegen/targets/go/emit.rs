@@ -315,7 +315,7 @@ mod tests {
             true,
         );
         counts.traits = vec![crate::ir::Trait {
-            id: "core#entries".into(),
+            id: "entries".into(),
             value: serde_json::json!(true),
         }];
         let module = Module {

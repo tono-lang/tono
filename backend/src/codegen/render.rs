@@ -230,11 +230,7 @@ mod tests {
         }
 
         fn wire_of(traits: &[crate::ir::Trait]) -> Option<String> {
-            traits
-                .iter()
-                .find(|t| t.id == "core#wire")
-                .and_then(|t| t.value.as_str())
-                .map(str::to_string)
+            crate::codegen::conventions::wire_of(traits)
         }
     }
 
@@ -600,7 +596,7 @@ mod tests {
                         default: None,
                         constraints: vec![],
                         traits: vec![crate::ir::Trait {
-                            id: "core#wire".into(),
+                            id: "wire".into(),
                             value: json!("amount_cents"),
                         }],
                     },

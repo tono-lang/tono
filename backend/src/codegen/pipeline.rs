@@ -470,7 +470,7 @@ mod tests {
             vec![member("message", Tref::Prim(Prim::String), true)],
         );
         not_found.traits = vec![crate::ir::Trait {
-            id: "core#status".into(),
+            id: "status".into(),
             value: serde_json::json!([404]),
         }];
         let mut model = demo_model();
@@ -489,7 +489,7 @@ mod tests {
                 }],
             },
             traits: vec![crate::ir::Trait {
-                id: "core#http".into(),
+                id: "http".into(),
                 value: serde_json::json!({"method": "GET", "path": "/charges/{id}"}),
             }],
         }];

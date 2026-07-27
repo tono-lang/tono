@@ -158,6 +158,10 @@ pub(super) fn new_decl(
         ));
     }
 
+    // Every why-reason has been written and every check that reads one has been
+    // emitted, so this is the point where an unread one can be told apart.
+    body.push_str(&discard_unread_whys(&body, entry));
+
     // Freeze the resolved values for the runtime's ref positions.
     body.push_str("\tvalues := map[string]any{}\n");
     for vp in entry.value_paths(module) {
@@ -248,6 +252,54 @@ pub(super) fn indent(block: &str) -> String {
 
 pub(super) fn why_var(field: &str) -> String {
     camel(&format!("{field}_why"))
+}
+
+/// Discard statements for the why-reasons nothing reads.
+///
+/// Every declared source chain records why it came up empty, but only a field
+/// something consumes gets a check that reads that reason back. A field with a
+/// chain and no consumer therefore leaves a variable that is assigned and never
+/// read, which Go rejects outright. Rather than making the resolver predict
+/// consumption (the checks are chosen by the shared plan, further down), the
+/// reason is kept and explicitly discarded: the chain still records why it
+/// failed, and the emitted source compiles.
+fn discard_unread_whys(body: &str, entry: &EntryModel<'_>) -> String {
+    entry
+        .fields
+        .iter()
+        .map(|f| why_var(&f.name))
+        .filter(|why| is_written_never_read(body, why))
+        .map(|why| format!("\t_ = {why}\n"))
+        .collect()
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Whether `ident` occurs in `body` and every occurrence is the left side of an
+/// assignment (`x = ...` or `x := ...`). `==` is a read, not a write.
+fn is_written_never_read(body: &str, ident: &str) -> bool {
+    let bytes = body.as_bytes();
+    let mut found = false;
+    let mut from = 0;
+    while let Some(rel) = body[from..].find(ident) {
+        let start = from + rel;
+        let end = start + ident.len();
+        from = end;
+        let whole_word = (start == 0 || !is_ident_byte(bytes[start - 1]))
+            && (end == bytes.len() || !is_ident_byte(bytes[end]));
+        if !whole_word {
+            continue;
+        }
+        found = true;
+        let rest = body[end..].trim_start_matches(' ');
+        let is_write = rest.starts_with(":=") || (rest.starts_with('=') && !rest.starts_with("=="));
+        if !is_write {
+            return false;
+        }
+    }
+    found
 }
 
 /// The Go expression reading a resolved value path off the Settings, or `None`

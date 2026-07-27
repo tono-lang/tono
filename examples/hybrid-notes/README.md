@@ -25,7 +25,7 @@ notes.tono ──frontend──▶ ir.json ──tono gen──▶ SDK
 mapping and reports a declared failure as the declared value:
 
 ```go
-func SaveNote(ctx context.Context, s *Settings, input Note) (Note, error)
+func StoreSave(ctx context.Context, s *Settings, input Note) (Note, error)
 ```
 
 Returning `*Overloaded` crosses the boundary untouched, `Retryable()` and all.
@@ -36,7 +36,7 @@ never leaks an error its caller has no type for.
 it, exactly as it integrates an HTTP response:
 
 ```go
-func ArchiveNote(ctx context.Context, s *Settings, payload []byte) (tonoext.Outcome, error)
+func StoreArchive(ctx context.Context, s *Settings, payload []byte) (tonoext.Outcome, error)
 ```
 
 `Outcome{Success, Code, Body}`. On success the body is decoded strictly into the
@@ -90,4 +90,6 @@ tono gen --target go,typescript --out sdk --go-module example.com/notes ir.json
 
 Then drop `ext/go/notes.go` into the generated Go package (Go calls a bound
 symbol unqualified, from inside the package) and `ext/ts` next to the generated
-TypeScript files (the serde file imports it relative to itself).
+TypeScript files (the serde file imports it relative to itself). The bound
+symbols are named for what they do (`StoreSave`), not for the operation, so the
+generated method body reads as a call into the store rather than as recursion.

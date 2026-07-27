@@ -12,11 +12,11 @@ import type { Outcome } from "@tono/ext-runtime-ts";
 import type { Settings } from "../../notes_serde";
 import { type Note, type NoteRef, OverloadedError } from "../../notes";
 
-// saveNote is the typed form: it speaks the operation's own types, so it owns
+// storeSave is the typed form: it speaks the operation's own types, so it owns
 // the mapping and reports a declared failure as the declared value. Throwing
 // OverloadedError crosses the generated boundary untouched, retryable() and
 // all; throwing anything else becomes a ContractError naming the operation.
-export async function saveNote(settings: Settings, input: Note): Promise<Note> {
+export async function storeSave(settings: Settings, input: Note): Promise<Note> {
   switch (input.id) {
     case "overload":
       throw new OverloadedError(
@@ -29,11 +29,11 @@ export async function saveNote(settings: Settings, input: Note): Promise<Note> {
   return { id: input.id, body: input.body, modified: `saved-by-${settings.apiToken}` };
 }
 
-// archiveNote is the raw form: it returns the payload the generated glue
+// storeArchive is the raw form: it returns the payload the generated glue
 // integrates. On success the body is decoded strictly into Note; on failure the
 // code is matched against the operation's declared error codes. Neither side
 // writes mapping code.
-export async function archiveNote(settings: Settings, payload: string): Promise<Outcome> {
+export async function storeArchive(settings: Settings, payload: string): Promise<Outcome> {
   const ref = JSON.parse(payload) as NoteRef;
   switch (ref.id) {
     case "overload":

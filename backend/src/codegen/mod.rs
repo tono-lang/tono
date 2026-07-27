@@ -26,6 +26,7 @@ pub mod target;
 pub mod targets;
 #[cfg(test)]
 pub mod test_support;
+mod traits;
 pub mod tree;
 pub mod validation;
 

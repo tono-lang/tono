@@ -523,93 +523,6 @@ let ext_duplicate_language () =
     (codes
        "ext hook before_request { ts: \"ext/ts/a.ts#f\" ts: \"ext/ts/b.ts#g\" }")
 
-(* ── Bespoke operation implementations (TC0048-TC0052) ─────────────────── *)
-
-(* A hybrid entry: one operation reaches a protocol, one is implemented by
-   bespoke sources in the typed form, one in the raw form. *)
-let impl_entry body =
-  "pub struct client {\n\
-  \  ep: string @env(\"EP\")\n\
-  \  op fetch(): note @http(method: \"GET\", path: \"/n\", endpoint: .ep)\n\
-  \  op save(note): note\n\
-   }\n\
-   struct note { id: string }\n" ^ body
-
-let impl_clean () =
-  Alcotest.(check (list string))
-    "no codes" []
-    (codes (impl_entry "ext impl save raw { go: \"ext/go/s.go#Save\" }"))
-
-let impl_qualified_name_clean () =
-  Alcotest.(check (list string))
-    "entry.op resolves" []
-    (codes (impl_entry "ext impl client.save { go: \"ext/go/s.go#Save\" }"))
-
-let impl_unknown_op () =
-  Alcotest.(check (list string))
-    "impl names no operation" [ "TC0048" ]
-    (codes
-       (impl_entry
-          "ext impl save { go: \"ext/go/s.go#Save\" }\n\
-           ext impl purge { go: \"ext/go/p.go#Purge\" }"))
-
-let impl_ambiguous_op () =
-  Alcotest.(check (list string))
-    "bare name reaches two entries" [ "TC0049" ]
-    (codes
-       "pub struct a {\n\
-       \  ep: string @env(\"EP\")\n\
-       \  op save(): note @http(method: \"GET\", path: \"/n\", endpoint: .ep)\n\
-        }\n\
-        pub struct b {\n\
-       \  ep: string @env(\"EP\")\n\
-       \  op save(): note\n\
-        }\n\
-        struct note { id: string }\n\
-        ext impl save { go: \"ext/go/s.go#Save\" }\n\
-        ext impl b.save { go: \"ext/go/s.go#SaveB\" }")
-
-let impl_conflicts_with_http () =
-  Alcotest.(check (list string))
-    "@http plus impl" [ "TC0050" ]
-    (codes
-       (impl_entry
-          "ext impl fetch { go: \"ext/go/f.go#Fetch\" }\n\
-           ext impl save { go: \"ext/go/s.go#Save\" }"))
-
-let impl_duplicate_for_one_op () =
-  Alcotest.(check (list string))
-    "two impls reach one operation" [ "TC0050" ]
-    (codes
-       (impl_entry
-          "ext impl save { go: \"ext/go/s.go#Save\" }\n\
-           ext impl client.save { ts: \"ext/ts/s.ts#save\" }"))
-
-let impl_missing () =
-  Alcotest.(check (list string))
-    "entry op with no implementation" [ "TC0051" ]
-    (codes (impl_entry ""))
-
-(* A loose operation is a bare contract, so it needs no implementation. *)
-let loose_op_needs_no_impl () =
-  Alcotest.(check (list string))
-    "loose op stays clean" []
-    (codes "struct note { id: string }\nop save(note): note")
-
-let impl_with_signature () =
-  Alcotest.(check (list string))
-    "impl declares no signature" [ "TC0029" ]
-    (codes
-       (impl_entry "ext impl save (note) -> note { go: \"ext/go/s.go#Save\" }"))
-
-let raw_outside_impl () =
-  Alcotest.(check (list string))
-    "raw on a hook" [ "TC0052" ]
-    (codes
-       (impl_entry
-          "ext impl save { go: \"ext/go/s.go#Save\" }\n\
-           ext hook before_request raw { ts: \"ext/ts/a.ts#f\" }"))
-
 let () =
   Alcotest.run "typecheck"
     [
@@ -742,20 +655,5 @@ let () =
           Alcotest.test_case "malformed binding" `Quick ext_malformed_binding;
           Alcotest.test_case "duplicate slot" `Quick ext_duplicate_slot;
           Alcotest.test_case "duplicate language" `Quick ext_duplicate_language;
-        ] );
-      ( "impl",
-        [
-          Alcotest.test_case "clean" `Quick impl_clean;
-          Alcotest.test_case "qualified name" `Quick impl_qualified_name_clean;
-          Alcotest.test_case "unknown op" `Quick impl_unknown_op;
-          Alcotest.test_case "ambiguous op" `Quick impl_ambiguous_op;
-          Alcotest.test_case "conflicts with @http" `Quick
-            impl_conflicts_with_http;
-          Alcotest.test_case "duplicate for one op" `Quick
-            impl_duplicate_for_one_op;
-          Alcotest.test_case "missing implementation" `Quick impl_missing;
-          Alcotest.test_case "loose op needs none" `Quick loose_op_needs_no_impl;
-          Alcotest.test_case "impl with signature" `Quick impl_with_signature;
-          Alcotest.test_case "raw outside impl" `Quick raw_outside_impl;
         ] );
     ]

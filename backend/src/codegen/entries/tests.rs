@@ -545,7 +545,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     // keyword is rejected on the rendered parameter, not just the canonical name.
     let mut renamed = field("kind", vec![Source::Arg]);
     renamed.traits = vec![crate::ir::Trait {
-        id: "core#rename".into(),
+        id: "rename".into(),
         value: json!({"go": "type"}),
     }];
     let err =

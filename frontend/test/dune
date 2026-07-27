@@ -12,6 +12,7 @@
   file_test
   golden_test
   typecheck_test
+  impl_test
   module_test
   calculus_test
   cli_test

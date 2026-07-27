@@ -215,7 +215,7 @@ fn a_structured_decode_probes_the_wire_key_not_the_member_name() {
                 constraints: vec![],
                 // @wire renames the serialized key; the decode must check "tok".
                 traits: vec![crate::ir::Trait {
-                    id: "core#wire".into(),
+                    id: "wire".into(),
                     value: serde_json::json!("tok"),
                 }],
             }],
@@ -314,7 +314,7 @@ fn an_entry_field_rename_retargets_every_ts_identifier() {
     let mut token = bare_entry_field("primary_key", Tref::Prim(Prim::String), vec![Source::Arg]);
     // @rename(lang) is a verbatim identifier, used at every position.
     token.traits = vec![crate::ir::Trait {
-        id: "core#rename".into(),
+        id: "rename".into(),
         value: serde_json::json!({"typescript": "authToken"}),
     }];
     push_entry_field(&mut module, token);

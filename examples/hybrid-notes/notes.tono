@@ -47,8 +47,8 @@ pub struct client {
 // the mapping and returns a declared error as a typed value that crosses the
 // boundary untouched.
 ext impl save_note {
-  go: "ext/go/notes.go#SaveNote"
-  ts: "ext/ts/notes.ts#saveNote"
+  go: "ext/go/notes.go#StoreSave"
+  ts: "ext/ts/notes.ts#storeSave"
   conformance: "vectors/save_note.json"
 }
 
@@ -56,7 +56,7 @@ ext impl save_note {
 // decodes it into the declared output or discriminates the failure by its code.
 // No mapping code on either side.
 ext impl archive_note raw {
-  go: "ext/go/notes.go#ArchiveNote"
-  ts: "ext/ts/notes.ts#archiveNote"
+  go: "ext/go/notes.go#StoreArchive"
+  ts: "ext/ts/notes.ts#storeArchive"
   conformance: "vectors/archive_note.json"
 }

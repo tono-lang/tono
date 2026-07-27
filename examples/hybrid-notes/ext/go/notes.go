@@ -17,11 +17,11 @@ import (
 	tonoext "github.com/tono-lang/tono/runtimes/ext-go"
 )
 
-// SaveNote is the typed form: it speaks the operation's own types, so it owns
+// StoreSave is the typed form: it speaks the operation's own types, so it owns
 // the mapping and reports a declared failure as the declared value. Returning
 // *Overloaded crosses the generated boundary untouched, Retryable() and all;
 // returning anything else becomes a ContractError naming the operation.
-func SaveNote(ctx context.Context, s *Settings, input Note) (Note, error) {
+func StoreSave(ctx context.Context, s *Settings, input Note) (Note, error) {
 	switch input.ID {
 	case "overload":
 		return Note{}, &Overloaded{Message: "the store is shedding load"}
@@ -31,11 +31,11 @@ func SaveNote(ctx context.Context, s *Settings, input Note) (Note, error) {
 	return Note{ID: input.ID, Body: input.Body, Modified: "saved-by-" + s.APIToken}, nil
 }
 
-// ArchiveNote is the raw form: it returns the payload the generated glue
+// StoreArchive is the raw form: it returns the payload the generated glue
 // integrates. On success the body is decoded strictly into Note; on failure the
 // code is matched against the operation's declared error codes. Neither side
 // writes mapping code.
-func ArchiveNote(ctx context.Context, s *Settings, payload []byte) (tonoext.Outcome, error) {
+func StoreArchive(ctx context.Context, s *Settings, payload []byte) (tonoext.Outcome, error) {
 	var ref NoteRef
 	if err := json.Unmarshal(payload, &ref); err != nil {
 		return tonoext.Outcome{}, err
