@@ -9,3 +9,13 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+  # Both npm trees are dev tooling (test runner, formatter), never shipped, but
+  # they were invisible here: security updates run regardless of this file, so
+  # advisories arrived while routine updates never did, and the gap between the
+  # two is what let the toolchain fall a major behind.
+  - package-ecosystem: npm
+    directories:
+      - "/runtimes/http-ts"
+      - "/backend/codegen-tests/typescript"
+    schedule:
+      interval: weekly
