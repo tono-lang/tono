@@ -47,15 +47,16 @@ pub fn wrapper_decls(module: &Module) -> Vec<Decl> {
             let fname = format!("Wrapped{}", exported(e.name));
             let text = format!(
                 "// {fname} is the boundary wrapper for the {name} contract: an existing\n\
-                 // ContractError passes through, any other failure becomes one. The concrete\n\
-                 // client (with the Go HTTP runtime) carries the fuller declared pass-through.\n\
-                 // The bespoke {sym} lives in this package (drop {module} into it): Go's last\n\
-                 // path segment is often a keyword, so there is no importable subpackage name.\n\
+                 // SDK error passes through, any other failure becomes a ContractError. The\n\
+                 // concrete client (with the Go HTTP runtime) carries the fuller declared\n\
+                 // pass-through. The bespoke {sym} lives in this package (drop {module} into\n\
+                 // it): Go's last path segment is often a keyword, so there is no importable\n\
+                 // subpackage name.\n\
                  func {fname}(input {input}) ({output}, error) {{\n\
                  \tout, err := {sym}(input)\n\
                  \tif err != nil {{\n\
-                 \t\tvar wrapped *ContractError\n\
-                 \t\tif errors.As(err, &wrapped) {{\n\
+                 \t\tvar known {marker}\n\
+                 \t\tif errors.As(err, &known) {{\n\
                  \t\t\treturn out, err\n\
                  \t\t}}\n\
                  \t\treturn out, &ContractError{{ContractName: \"{name}\", Cause: err}}\n\
@@ -65,6 +66,7 @@ pub fn wrapper_decls(module: &Module) -> Vec<Decl> {
                 name = e.name,
                 sym = e.symbol,
                 module = e.module,
+                marker = super::errors::SDK_ERROR_MARKER,
             );
             // Only "errors" is imported: unlike Rust's hierarchical modules, the
             // bespoke Go symbol is same-package (the wrapper calls it unqualified),
@@ -115,7 +117,10 @@ mod tests {
         // The idiom: an explicit error check that returns a ContractError.
         assert!(out.contains("out, err := SignRequest(input)"));
         assert!(out.contains("if err != nil {"));
-        assert!(out.contains("if errors.As(err, &wrapped) {"));
+        // Any SDK error (implementing the sealed marker) passes through; only a
+        // foreign error becomes a ContractError.
+        assert!(out.contains("var known interface{ sdkError() }"));
+        assert!(out.contains("if errors.As(err, &known) {"));
         assert!(
             out.contains("return out, &ContractError{ContractName: \"sign_request\", Cause: err}")
         );
