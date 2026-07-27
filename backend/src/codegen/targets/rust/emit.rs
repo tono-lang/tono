@@ -221,11 +221,10 @@ mod tests {
     /// Emit a module's groups with everything exposed, resolved the way the
     /// pipeline resolves them.
     fn groups(module: &Module) -> Vec<ModuleFile> {
-        crate::codegen::test_support::resolve_groups(emit_module(
-            module,
-            &rust_casing(),
-            &Exposed::all(),
-        ))
+        crate::codegen::test_support::resolve_groups(
+            emit_module(module, &rust_casing(), &Exposed::all()),
+            crate::codegen::TargetKind::Rust,
+        )
     }
 
     /// Render the named group of a module, panicking if it did not emit one.
@@ -276,10 +275,10 @@ mod tests {
         assert_eq!(groups(&module).len(), 1);
 
         // The types group holds the struct and pulls only the i64 helper it uses
-        // from the shared module (no u64, no base64); the branded newtypes
-        // belong to the SDK's support group, not to the module.
+        // from the shared module (no u64, no base64); with one module the
+        // branded newtypes fold in here too.
         let types = rendered(&module, TYPES);
-        assert!(!types.contains("pub struct Timestamp(pub String);"));
+        assert!(types.contains("pub struct Timestamp(pub String);"));
         assert!(types.contains("use crate::internal::{i64_string};"));
         assert!(!types.contains("u64_string"));
         assert!(!types.contains("base64_bytes"));

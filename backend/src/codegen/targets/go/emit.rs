@@ -219,12 +219,10 @@ mod tests {
     /// Emit a module's groups with everything exposed, resolved the way the
     /// pipeline resolves them.
     fn groups(module: &Module) -> Vec<ModuleFile> {
-        crate::codegen::test_support::resolve_groups(emit_module(
-            module,
-            &go_casing(),
-            &union_ids(module),
-            &Exposed::all(),
-        ))
+        crate::codegen::test_support::resolve_groups(
+            emit_module(module, &go_casing(), &union_ids(module), &Exposed::all()),
+            crate::codegen::TargetKind::Go,
+        )
     }
 
     /// Render the named group of a module, panicking if it did not emit one.
@@ -274,10 +272,10 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].group.name, TYPES);
         let out = rendered(&files, TYPES);
-        // The branded well-known strings belong to the SDK's shared support
-        // group, not to the module, so only the tagged type is here; with no
-        // union and no @entries, no runtime helper is emitted either.
-        assert!(!out.contains("type Timestamp string"));
+        // With one module the shared support declarations fold into its public
+        // group, so the branded strings are here alongside the tagged type;
+        // with no union and no @entries, no runtime helper is emitted.
+        assert!(out.contains("type Timestamp string"));
         assert!(out.contains("type Charge struct {"));
         // The type holds the 64-bit integer natively, tagged `,string`.
         assert!(out.contains("\tAmountCents int64 `json:\"amount_cents,string\"`\n"));

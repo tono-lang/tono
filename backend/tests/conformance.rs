@@ -126,7 +126,7 @@ fn go_output() -> Option<Value> {
         &union_ids,
         &Exposed::all(),
     );
-    resolve_groups(&mut files);
+    resolve_groups(&mut files, TargetKind::Go);
     for module_file in files {
         let rough = render_file_with(
             &module_file.file,

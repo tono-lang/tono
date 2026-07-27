@@ -61,7 +61,7 @@ fn generated_go_compiles_and_round_trips() {
     let mut files = emit_module(&module, &go_casing(), &union_ids, &Exposed::all());
     // The harness drives the emitter directly, so it resolves the emitted groups
     // itself; without it a reference would still point at the bare IR module.
-    resolve_groups(&mut files);
+    resolve_groups(&mut files, TargetKind::Go);
     for module_file in files {
         let rough = render_file_with(
             &module_file.file,

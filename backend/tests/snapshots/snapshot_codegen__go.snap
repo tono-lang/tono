@@ -26,6 +26,7 @@ type Account struct {
 	Tip *int64 `json:"tip,string,omitempty"`
 	Status Status `json:"status"`
 	Code HTTPCode `json:"code"`
+	Created Timestamp `json:"created"`
 	Method Method `json:"method"`
 	Counts Entries[int32, string] `json:"counts"`
 }

@@ -79,6 +79,9 @@ fn a_change_to_a_shape_the_sdk_never_exposed_is_not_a_change() {
     assert!(diff(&before, &after).changes.is_empty());
 }
 
+/// Visibility is opt-in, so forgetting the marker on a shape that had it drops
+/// that shape from the SDK's surface. This is what catches it: the shape leaves
+/// the compared surface, which reads as a removal, and the gate fails on it.
 #[test]
 fn a_shape_leaving_or_joining_the_surface_is_still_a_change() {
     let hidden = model(vec![

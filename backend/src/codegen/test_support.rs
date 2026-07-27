@@ -318,8 +318,9 @@ pub use entries::*;
 /// gets.
 pub fn resolve_groups(
     mut files: Vec<crate::codegen::tree::ModuleFile>,
+    target: crate::codegen::TargetKind,
 ) -> Vec<crate::codegen::tree::ModuleFile> {
-    crate::codegen::assemble::resolve_groups(&mut files);
+    crate::codegen::assemble::resolve_groups(&mut files, target);
     files
 }
 

@@ -8,7 +8,7 @@
 
 use crate::codegen::assemble::{emit_module_files, shared_file};
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::layout::{go_selector, output_path, repoint_to_groups, SameUnit};
+use crate::codegen::layout::{go_selector, output_path, SameUnit};
 use crate::codegen::modules::{self, CodegenConfig};
 pub use crate::codegen::output::{GeneratedFile, TargetKind};
 use crate::codegen::render::render_file_with;
@@ -112,26 +112,13 @@ fn emit_target(
             module, target, casing, union_ids, exposed,
         ));
     }
-    // With one module there is nothing to share, so the support declarations
-    // ride its public group instead of a group of their own.
-    if model.modules.len() == 1 {
-        if let Some(types) = module_files
-            .iter_mut()
-            .find(|f| f.group.name == crate::codegen::group::TYPES)
-        {
-            let mut decls = assemble::support_decls(target);
-            decls.append(&mut types.file.decls);
-            types.file.decls = decls;
-        }
-    }
     // One pass over the emitted groups records where each symbol ended up; the
     // references are then re-pointed at it, which is what keeps import
     // collection automatic now that a module spans several files.
-    let index = assemble::build_index(&module_files);
+    assemble::resolve_groups(&mut module_files, target);
     let mut groups = Vec::with_capacity(module_files.len());
     let mut files = Vec::with_capacity(module_files.len());
-    for mut module_file in module_files {
-        repoint_to_groups(&mut module_file.file, &index);
+    for module_file in module_files {
         files.push(GeneratedFile {
             target,
             path: output_path(target, &module_file.group),

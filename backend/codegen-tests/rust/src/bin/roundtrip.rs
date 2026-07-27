@@ -8,7 +8,7 @@
 // reaches it: through the module's public groups, never into its internal one.
 use sdk::models::{
     decode_create_charge_error, APIError, APIFailure, Account, CardData, HTTPCode, Method, Status,
-    TonoError,
+    Timestamp, TonoError,
 };
 use serde_json::{json, Value};
 
@@ -20,6 +20,7 @@ fn main() {
         tip: Some(500),
         status: Status::Active,
         code: HTTPCode::Ok,
+        created: Timestamp("2026-01-02T03:04:05Z".into()),
         method: Method::Card(CardData {
             last4: "4242".into(),
         }),
@@ -56,6 +57,7 @@ fn main() {
         "secret": "AAEC/g==",
         "status": "frozen",
         "code": 418,
+        "created": "2026-01-02T03:04:05Z",
         "method": { "type": "card", "last4": "0000" },
         "counts": []
     });
@@ -114,6 +116,7 @@ fn main() {
         tip: None,
         status: Status::Active,
         code: HTTPCode::Ok,
+        created: Timestamp("2026-01-02T03:04:05Z".into()),
         method: Method::Card(CardData {
             last4: "4242".into(),
         }),

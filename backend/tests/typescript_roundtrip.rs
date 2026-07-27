@@ -27,7 +27,7 @@ fn tool(ws: &Path, name: &str) -> Option<PathBuf> {
 }
 
 const DRIVER: &str = r#"
-import { Account, APIError, PaymentDeclinedError, RateLimitedError, TonoError, ValidationError, validateAccount, validateCardData } from "./models";
+import { Account, APIError, PaymentDeclinedError, RateLimitedError, type Timestamp, TonoError, ValidationError, validateAccount, validateCardData } from "./models";
 import { encodeAccount, decodeAccount, decodeCreateChargeError } from "./models/codec";
 
 const big = 9007199254740993n; // 2^53 + 1, not representable as a JS number
@@ -38,6 +38,7 @@ const account: Account = {
   tip: 500n,
   status: "active",
   code: 200,
+  created: "2026-01-02T03:04:05Z" as Timestamp,
   method: { type: "card", last4: "4242" },
   counts: [[7, "a"], [3, "b"]],
 };
@@ -63,6 +64,7 @@ const unknown = decodeAccount({
   secret: "AAEC/g==",
   status: "frozen",
   code: 418,
+  created: "2026-01-02T03:04:05Z",
   method: { type: "card", last4: "0000" },
   counts: [],
 });
@@ -95,6 +97,7 @@ if (undeclared.status !== 500 || undeclared.body !== "not json") throw new Error
 // failed check, in member order.
 if (validateAccount(account) !== null) throw new Error("a valid account must pass validation");
 const invalid: Account = {
+  created: "2026-01-02T03:04:05Z" as Timestamp,
   accountID: -1n,
   secret: new Uint8Array(65),
   status: "active",

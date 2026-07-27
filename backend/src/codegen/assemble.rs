@@ -113,7 +113,18 @@ pub(crate) fn build_index(files: &[ModuleFile]) -> SymbolIndex {
 /// Exposed for a caller that drives one target's emitter directly instead of the
 /// whole pipeline, which would otherwise render references still pointing at bare
 /// IR module names.
-pub fn resolve_groups(files: &mut [ModuleFile]) {
+pub fn resolve_groups(files: &mut [ModuleFile], target: TargetKind) {
+    // With no group of their own, the support declarations ride the public group
+    // of the module they serve. Folding here rather than at each caller is what
+    // keeps a caller that drives one target's emitter directly (the round-trip
+    // harnesses) from emitting a module whose types are not declared anywhere.
+    if !files.iter().any(|f| f.group == Group::root_support()) {
+        if let Some(types) = files.iter_mut().find(|f| f.group.name == group::TYPES) {
+            let mut decls = support_decls(target);
+            decls.append(&mut types.file.decls);
+            types.file.decls = decls;
+        }
+    }
     let index = build_index(files);
     for file in files.iter_mut() {
         repoint_to_groups(&mut file.file, &index);

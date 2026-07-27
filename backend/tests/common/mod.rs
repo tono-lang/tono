@@ -94,6 +94,10 @@ pub fn matrix_module() -> Module {
                     member("tip", Tref::Prim(Prim::I64), false, vec![]),
                     member("status", reference("models#Status"), true, vec![]),
                     member("code", reference("models#http_code"), true, vec![]),
+                    // A branded well-known type: one set of types for the whole
+                    // SDK, so the round trip has to prove it survives the wire
+                    // as its bare value.
+                    member("created", Tref::Prim(Prim::Timestamp), true, vec![]),
                     member("method", reference("models#Method"), true, vec![]),
                     constrained(
                         member(
@@ -235,6 +239,7 @@ pub const CANONICAL_WIRE: &str = concat!(
     "\"tip\":\"500\",",
     "\"status\":\"active\",",
     "\"code\":200,",
+    "\"created\":\"2026-01-02T03:04:05Z\",",
     "\"method\":{\"type\":\"card\",\"last4\":\"4242\"},",
     "\"counts\":[[7,\"a\"],[3,\"b\"]]",
     "}"

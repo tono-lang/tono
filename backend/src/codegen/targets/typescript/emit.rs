@@ -226,11 +226,10 @@ mod tests {
     /// Emit a module's groups with everything exposed, resolved the way the
     /// pipeline resolves them.
     fn groups(module: &Module) -> Vec<ModuleFile> {
-        crate::codegen::test_support::resolve_groups(emit_module(
-            module,
-            &ts_casing(),
-            &Exposed::all(),
-        ))
+        crate::codegen::test_support::resolve_groups(
+            emit_module(module, &ts_casing(), &Exposed::all()),
+            crate::codegen::TargetKind::TypeScript,
+        )
     }
 
     /// Render the named group of a module, panicking if it did not emit one.
@@ -299,9 +298,9 @@ mod tests {
         assert_eq!(files.len(), 2, "TypeScript splits types from serde");
 
         // The types file holds the interface, with no codec and no runtime
-        // helper; the branded aliases belong to the SDK's support group.
+        // helper; with one module the branded aliases fold in here too.
         let types = rendered(&files, TYPES);
-        assert!(!types.contains("export type Timestamp = string"));
+        assert!(types.contains("export type Timestamp = string"));
         assert!(types.contains("export interface Charge {"));
         assert!(types.contains("  amountCents: bigint;"));
         assert!(!types.contains("export function encodeI64"));
