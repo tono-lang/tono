@@ -13,15 +13,25 @@ use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, Interface, TypeExpr};
 use crate::ir::{EnumBacking, EnumValue, Member, Prim, Shape, ShapeKind, Trait, Tref};
 
-/// The `@rename(lang)` identifier override (trait `core#rename`, a value object
-/// keyed by language). Replaces the in-code identifier only; never the wire key.
+/// The `@rename(lang)` identifier override (a value object keyed by language).
+/// Replaces the in-code identifier only; never the wire key. The trait id is
+/// matched by its local name, tolerating an optional `core#` namespace, so it
+/// reads both the frontend's bare `rename` and the golden fixtures' qualified
+/// `core#rename` (matching only the qualified form would silently ignore every
+/// override a real project writes).
 pub fn rename_of(traits: &[Trait], lang: &str) -> Option<String> {
-    traits
-        .iter()
-        .find(|t| t.id == "core#rename")
+    rename_map(traits)
         .and_then(|t| t.value.get(lang))
         .and_then(|v| v.as_str())
         .map(str::to_string)
+}
+
+/// The `@rename` trait itself, for callers that need every override rather than
+/// one language's.
+pub fn rename_map(traits: &[Trait]) -> Option<&Trait> {
+    traits
+        .iter()
+        .find(|t| t.id == "rename" || t.id == "core#rename")
 }
 
 /// The `@wire` serialization-key override (trait `core#wire`). Replaces the wire

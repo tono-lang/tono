@@ -139,6 +139,7 @@ fn bound_hooks_wire_the_settings_bridge_and_the_transport_slots() {
             name: "client_init".into(),
             kind: crate::ir::ExtKind::Hook,
             signature: None,
+            raw: false,
             bindings: [("go".to_string(), "ext/go/init.go#InitSettings".to_string())]
                 .into_iter()
                 .collect(),
@@ -148,6 +149,7 @@ fn bound_hooks_wire_the_settings_bridge_and_the_transport_slots() {
             name: "before_request".into(),
             kind: crate::ir::ExtKind::Hook,
             signature: None,
+            raw: false,
             bindings: [("go".to_string(), "ext/go/auth.go#AddBearer".to_string())]
                 .into_iter()
                 .collect(),
@@ -403,14 +405,73 @@ fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
         ));
 }
 
+/// An `ext impl` binding for the fixture's `save_note`, typed or raw.
+fn impl_ext(raw: bool) -> crate::ir::Extension {
+    crate::ir::Extension {
+        name: "save_note".into(),
+        kind: crate::ir::ExtKind::Impl,
+        signature: None,
+        raw,
+        bindings: [("go".to_string(), "ext/go/save.go#SaveNote".to_string())]
+            .into_iter()
+            .collect(),
+        conformance: None,
+    }
+}
+
 #[test]
-fn an_operation_without_a_descriptor_stubs_with_a_contract_error() {
+fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
     // The schema fixture carries no wire_descriptor (it is the canonical
-    // pre-protocol encoding), so its op method must be the bespoke stub.
+    // pre-protocol encoding) and binds no impl, a combination the emit gate
+    // refuses; a direct library caller that skipped it gets a diagnosable
+    // method rather than one that does not compile.
     let module = fixture_module();
     let serde = serde_text(&module);
     assert!(!serde.contains("var saveNoteDescriptor"));
-    assert!(serde.contains("errors.New(\"operation has no transport binding\")"));
+    assert!(serde.contains("errors.New(\"operation has no implementation for Go\")"));
+}
+
+#[test]
+fn a_typed_impl_calls_the_bound_symbol_and_guards_the_error_boundary() {
+    let mut module = fixture_module();
+    module.extensions = vec![impl_ext(false)];
+    let serde = serde_text(&module);
+    // Settings and input reach the bespoke symbol, called unqualified: the
+    // bound file is dropped into the generated package.
+    assert!(serde.contains("out, err := SaveNote(ctx, &c.settings, input)"));
+    // A declared SDK error crosses typed; anything else is named.
+    assert!(serde.contains("var known interface{ sdkError() }"));
+    assert!(serde.contains("if errors.As(err, &known) {"));
+    assert!(serde.contains("return zero, &ContractError{ContractName: \"save_note\", Cause: err}"));
+    // The typed form needs no discrimination: declared errors arrive typed.
+    assert!(!serde.contains("func DecodeSaveNoteError("));
+    // The expected bespoke signature is documented above the method.
+    assert!(serde
+        .contains("//\tfunc SaveNote(ctx context.Context, s *Settings, input Note) (Note, error)"));
+}
+
+#[test]
+fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
+    let mut module = fixture_module();
+    module.extensions = vec![impl_ext(true)];
+    let serde = serde_text(&module);
+    // The input travels as its wire bytes; the outcome comes back raw.
+    assert!(serde.contains("payload, err := json.Marshal(input)"));
+    assert!(serde.contains("outcome, err := SaveNote(ctx, &c.settings, payload)"));
+    // A failing outcome discriminates on the code alone: a bespoke
+    // implementation carries no protocol status.
+    assert!(serde.contains("if !outcome.Success {"));
+    assert!(serde.contains("return zero, DecodeSaveNoteError(outcome.Code, outcome.Body)"));
+    assert!(serde.contains("func DecodeSaveNoteError(code string, body []byte) error {"));
+    assert!(serde.contains("if code == \"overloaded\" {"));
+    assert!(serde.contains("return &APIError{Status: 0, Body: string(body)}"));
+    // The success payload decodes exactly as a protocol response does.
+    assert!(serde.contains("if err := json.Unmarshal(outcome.Body, &probe); err != nil {"));
+    assert!(serde
+        .contains("&DecodeError{Path: \"$.id\", Expected: \"Note\", Raw: string(outcome.Body)}"));
+    assert!(serde.contains(
+        "//\tfunc SaveNote(ctx context.Context, s *Settings, payload []byte) (tonoext.Outcome, error)"
+    ));
 }
 
 #[test]
@@ -568,12 +629,13 @@ fn a_structured_output_decodes_strictly_on_required_members() {
 }
 
 #[test]
-fn the_bespoke_stub_error_passes_through_the_bound_on_error_hook() {
+fn the_unimplemented_op_error_passes_through_the_bound_on_error_hook() {
     let mut module = fixture_module();
     module.extensions = vec![crate::ir::Extension {
         name: "on_error".into(),
         kind: crate::ir::ExtKind::Hook,
         signature: None,
+        raw: false,
         bindings: [("go".to_string(), "ext/go/err.go#MapError".to_string())]
             .into_iter()
             .collect(),
@@ -581,7 +643,7 @@ fn the_bespoke_stub_error_passes_through_the_bound_on_error_hook() {
     }];
     let serde = serde_text(&module);
     assert!(serde.contains(
-        "return zero, onErrorHook(&ContractError{ContractName: \"save_note\", Cause: errors.New(\"operation has no transport binding\")})"
+        "return zero, onErrorHook(&ContractError{ContractName: \"save_note\", Cause: errors.New(\"operation has no implementation for Go\")})"
     ));
 }
 
@@ -695,6 +757,7 @@ fn after_response_and_on_error_hooks_get_boundary_wrappers() {
         name: name.into(),
         kind: crate::ir::ExtKind::Hook,
         signature: None,
+        raw: false,
         bindings: [("go".to_string(), binding.to_string())]
             .into_iter()
             .collect(),

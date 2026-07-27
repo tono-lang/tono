@@ -103,7 +103,7 @@ op create_charge(charge): charge @errors(not_found)
     (Ir_json.to_canonical_string (Ir_json.encode_module m1))
     (Ir_json.to_canonical_string (Ir_json.encode_module m2))
 
-(* The three extension kinds print to the one canonical layout, and re-parsing
+(* Every extension kind prints to the one canonical layout, and re-parsing
    that layout yields the same IR (printer <-> parser round-trip over ext). *)
 let ext_layout () =
   let src =
@@ -112,6 +112,7 @@ ext hook before_request { ts: "ext/ts/auth.ts#addBearer"  rust: "ext/rust/a.rs#f
 ext contract   sign_request  (canonical_request) -> string {
   ts: "ext/ts/sign.ts#signRequest" conformance: "vectors/sign.json" }
 ext constraint luhn (string) -> bool { ts: "ext/ts/luhn.ts#isLuhn" }
+ext impl   client.save   raw { go: "ext/go/s.go#Save"  ts: "ext/ts/s.ts#save" }
 |}
   in
   let expected =
@@ -127,6 +128,11 @@ ext contract sign_request (canonical_request) -> string {
 
 ext constraint luhn (string) -> bool {
   ts: "ext/ts/luhn.ts#isLuhn"
+}
+
+ext impl client.save raw {
+  go: "ext/go/s.go#Save"
+  ts: "ext/ts/s.ts#save"
 }
 |}
   in

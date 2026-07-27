@@ -418,6 +418,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
         name: "client_init".into(),
         kind: crate::ir::ExtKind::Hook,
         signature: None,
+        raw: false,
         bindings: [("go".to_string(), "ext/go/i.go#I".to_string())]
             .into_iter()
             .collect(),
@@ -617,6 +618,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
         name: "client_init".into(),
         kind: crate::ir::ExtKind::Hook,
         signature: None,
+        raw: false,
         bindings: [("ts".to_string(), "ext/ts/i.ts#init".to_string())]
             .into_iter()
             .collect(),

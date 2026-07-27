@@ -215,6 +215,33 @@ pub fn discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) -> Decl 
     discriminator_fn_body(fn_name, ordered, &error_names())
 }
 
+/// The code-only discrimination a bespoke raw outcome uses. There is no protocol
+/// status to match on, so a declared error is chosen by its `@errorCode` alone
+/// and everything unmatched resolves to the fallback, whose status 0 marks the
+/// absence of a protocol status. An error declared without a code can never be
+/// selected here: nothing in the outcome identifies it.
+pub fn outcome_discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) -> Decl {
+    let n = error_names();
+    let mut body = format!("func {fn_name}(code string, body []byte) error {{\n");
+    for err in ordered.iter().filter(|e| e.code.is_some()) {
+        let ty = error_type_name(err);
+        let code = err.code.as_deref().unwrap_or_default();
+        // A declared match whose body does not unmarshal falls through to the
+        // fallback so a new field or a changed shape never breaks the caller.
+        body.push_str(&format!(
+            "\tif code == \"{code}\" {{\n\t\tvar data {ty}\n\t\tif json.Unmarshal(body, &data) == nil {{\n\t\t\treturn &data\n\t\t}}\n\t}}\n"
+        ));
+    }
+    body.push_str(&format!(
+        "\treturn &{}{{Status: 0, Body: string(body)}}\n}}",
+        n.api
+    ));
+    Decl::raw_with(
+        body,
+        vec![Symbol::imported("json", "encoding/json", "json")],
+    )
+}
+
 fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorNames) -> Decl {
     let mut body = String::new();
     body.push_str(&format!(

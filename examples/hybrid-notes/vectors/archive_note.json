@@ -1,0 +1,39 @@
+{
+  "operation": "archive_note",
+  "settings": { "api_token": "t0" },
+  "cases": [
+    {
+      "name": "a matching outcome decodes with no mapping code",
+      "input": { "id": "n1" },
+      "expect": {
+        "outcome": "ok",
+        "value": { "id": "n1", "body": "archived", "updated_at": "archived-by-t0" }
+      }
+    },
+    {
+      "name": "a declared code discriminates into the typed error",
+      "input": { "id": "overload" },
+      "expect": {
+        "outcome": "declared",
+        "code": "overloaded",
+        "retryable": true,
+        "data": { "message": "the store is shedding load" }
+      }
+    },
+    {
+      "name": "an undeclared code falls back to the generic api error",
+      "input": { "id": "unknown-failure" },
+      "expect": { "outcome": "api", "status": 0, "body": "{\"message\":\"out of quota\"}" }
+    },
+    {
+      "name": "a success payload missing a required member names that member",
+      "input": { "id": "corrupt" },
+      "expect": { "outcome": "decode", "path": "$.body" }
+    },
+    {
+      "name": "a thrown failure becomes a contract error naming the operation",
+      "input": { "id": "boom" },
+      "expect": { "outcome": "contract", "contract": "archive_note" }
+    }
+  ]
+}

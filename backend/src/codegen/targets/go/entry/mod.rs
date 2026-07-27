@@ -19,7 +19,7 @@ use crate::codegen::conventions::{
 use crate::codegen::entries::{
     companion_name, module_entries, op_local_name, ref_is_enum, EntryModel,
 };
-use crate::codegen::extensions::{bound_extensions, hook_binding, BoundExtension};
+use crate::codegen::extensions::{bound_extensions, hook_binding, impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
@@ -60,7 +60,7 @@ fn runtime_symbol() -> Symbol {
     Symbol::imported("tonohttp", RUNTIME_MODULE, "tonohttp")
 }
 
-fn import(name: &str, module: &str) -> Symbol {
+pub(super) fn import(name: &str, module: &str) -> Symbol {
     Symbol::imported(name, module, name)
 }
 
@@ -101,7 +101,7 @@ fn names(entry: &EntryModel<'_>, multi: bool) -> Names {
     }
 }
 
-fn go_type(t: &Tref) -> String {
+pub(super) fn go_type(t: &Tref) -> String {
     render_type(&type_expr_of(t), &GoRules::default())
 }
 
@@ -271,7 +271,7 @@ pub fn serde_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
         for op in entry.operations {
             decls.push(op_method_decl(&n, op, module, config, &bound));
         }
-        decls.extend(discriminator_decls_for(entry, &n, module));
+        decls.extend(discriminator_decls_for(entry, &n, module, &bound));
     }
     decls.extend(helper_decls(&helpers));
     decls
@@ -405,15 +405,33 @@ fn go_string_literal(s: &str) -> String {
 }
 
 /// The discrimination functions for the entry's operations (same shape as the
-/// loose-op ones, named through the entry rule).
-fn discriminator_decls_for(entry: &EntryModel<'_>, n: &Names, module: &Module) -> Vec<Decl> {
+/// loose-op ones, named through the entry rule). An operation whose body is a
+/// raw bespoke implementation gets the code-only variant under the same name:
+/// its outcome carries no protocol status to match on.
+fn discriminator_decls_for(
+    entry: &EntryModel<'_>,
+    n: &Names,
+    module: &Module,
+    bound: &[BoundExtension<'_>],
+) -> Vec<Decl> {
     entry
         .operations
         .iter()
         .filter(|op| !declared_errors(op, module).is_empty())
-        .map(|op| {
+        .filter_map(|op| {
             let ordered = crate::codegen::ops::discrimination_order(op, module);
-            super::errors::discriminator_fn_named(&discriminator_name(n, op), &ordered)
+            let name = discriminator_name(n, op);
+            if wire_descriptor(op).is_some() {
+                return Some(super::errors::discriminator_fn_named(&name, &ordered));
+            }
+            // A typed impl already returns declared errors as typed values, so
+            // it needs no discrimination at all.
+            match impl_binding(bound, &op.id) {
+                Some(b) if b.raw => Some(super::errors::outcome_discriminator_fn_named(
+                    &name, &ordered,
+                )),
+                _ => None,
+            }
         })
         .collect()
 }
@@ -509,6 +527,43 @@ fn hook_wrapper_name(slot: &str) -> String {
     camel(&format!("{slot}_hook"))
 }
 
+/// The zero-value declaration and the return prefix a method needs to bail out
+/// early. `var zero T` is the one zero spelling valid for every Go type (a
+/// composite literal is not, for primitives).
+pub(super) fn zero_of(output: Option<&Tref>) -> (String, &'static str) {
+    match output {
+        Some(t) => (format!("\tvar zero {}\n", go_type(t)), "zero, "),
+        None => (String::new(), ""),
+    }
+}
+
+/// A constrained input is validated before it leaves the process, so a bad
+/// request surfaces as a ValidationError instead of a round trip (or a call into
+/// bespoke code that would have to reject it again).
+pub(super) fn validate_block(
+    input: Option<&Tref>,
+    module: &Module,
+    ret_zero: &str,
+    fail: &dyn Fn(String) -> String,
+) -> String {
+    let validated = match input {
+        Some(Tref::Ref { id, .. }) => module
+            .shapes
+            .iter()
+            .find(|s| s.id == *id)
+            .filter(|s| validation::shape_has_checks(s))
+            .map(|s| type_ident_from_id(&s.id)),
+        _ => None,
+    };
+    match validated {
+        Some(ty) => format!(
+            "\tif invalid := Validate{ty}(input); invalid != nil {{\n\t\treturn {ret_zero}{fail_val}\n\t}}\n",
+            fail_val = fail("invalid".to_string()),
+        ),
+        None => String::new(),
+    }
+}
+
 /// One concrete client method: encode the input record, hand the descriptor to
 /// the runtime, and map the raw outcome onto the generated taxonomy.
 fn op_method_decl(
@@ -521,40 +576,6 @@ fn op_method_decl(
     let en = error_names();
     let (sig, mut refs) = method_signature(op, config);
     let has_on_error = hook_binding(bound, "on_error").is_some();
-    if wire_descriptor(op).is_none() {
-        // An operation without a transport binding is bespoke-bound; invoking
-        // the bound impl through the generated glue is not wired yet, so the
-        // method reports that plainly instead of failing on a missing
-        // descriptor.
-        let (_, output) = crate::codegen::ops::op_io(op);
-        // `var zero T` is the one zero spelling valid for every Go type (a
-        // composite literal is not, for primitives).
-        let (zero_decl, zero) = match output {
-            Some(t) => (format!("\tvar zero {}\n", go_type(t)), "zero, "),
-            None => (String::new(), ""),
-        };
-        refs.push(import("errors", "errors"));
-        // The stub's error leaves the SDK like any other: through the bound
-        // on_error hook when there is one.
-        let contract_err = format!(
-            "&{contract}{{ContractName: {op:?}, Cause: errors.New(\"operation has no transport binding\")}}",
-            contract = en.contract,
-            op = op_local_name(&op.id),
-        );
-        let err_expr = if has_on_error {
-            format!("{}({contract_err})", hook_wrapper_name("on_error"))
-        } else {
-            contract_err
-        };
-        return Decl::raw_with(
-            format!(
-                "func (c *{client}) {sig} {{\n{zero_decl}\treturn {zero}{err_expr}\n}}",
-                client = n.client,
-            ),
-            refs,
-        );
-    }
-    refs.push(runtime_symbol());
     let (input, output) = crate::codegen::ops::op_io(op);
     let fail = |expr: String| {
         if has_on_error {
@@ -563,28 +584,27 @@ fn op_method_decl(
             expr
         }
     };
-    let (zero_decl, ret_zero) = match output {
-        Some(t) => (format!("\tvar zero {}\n", go_type(t)), "zero, "),
-        None => (String::new(), ""),
-    };
-    // A constrained input is validated before it leaves the process, so a bad
-    // request surfaces as a ValidationError instead of a server round trip.
-    let validate_input = match input {
-        Some(Tref::Ref { id, .. }) => module
-            .shapes
-            .iter()
-            .find(|s| s.id == *id)
-            .filter(|s| validation::shape_has_checks(s))
-            .map(|s| type_ident_from_id(&s.id)),
-        _ => None,
-    };
-    let validate_block = match &validate_input {
-        Some(ty) => format!(
-            "\tif invalid := Validate{ty}(input); invalid != nil {{\n\t\treturn {ret_zero}{fail_val}\n\t}}\n",
-            fail_val = fail("invalid".to_string()),
-        ),
-        None => String::new(),
-    };
+    let (zero_decl, ret_zero) = zero_of(output);
+    let validate_block = validate_block(input, module, ret_zero, &fail);
+    if wire_descriptor(op).is_none() {
+        // No protocol binding: the operation is implemented by bespoke sources
+        // the frontend proved are bound, and the generator gate proved are bound
+        // for this target.
+        return impl_op::method_decl(impl_op::Method {
+            n,
+            op,
+            module,
+            sig: &sig,
+            refs,
+            binding: impl_binding(bound, &op.id),
+            zero_decl: &zero_decl,
+            ret_zero,
+            validate_block: &validate_block,
+            fail: &fail,
+            discriminator: &discriminator_name(n, op),
+        });
+    }
+    refs.push(runtime_symbol());
     let record = match input {
         Some(_) => format!(
             "\trecord, err := encodeRecord(input)\n\
@@ -604,89 +624,16 @@ fn op_method_decl(
             discriminator_name(n, op)
         )
     };
-    let success = match output {
-        // A 64-bit integer rides the wire as a string, so the success body is
-        // a JSON string decoded and parsed, not a bare number.
-        Some(t @ Tref::Prim(p @ (Prim::I64 | Prim::U64))) => {
-            refs.push(import("json", "encoding/json"));
-            refs.push(import("strconv", "strconv"));
-            let fail_decode = fail(format!(
-                "&{decode}{{Path: \"$\", Expected: {expected:?}, Raw: outcome.Body}}",
-                decode = en.decode,
-                expected = go_type(t),
-            ));
-            let parse = if matches!(p, Prim::U64) {
-                "strconv.ParseUint"
-            } else {
-                "strconv.ParseInt"
-            };
-            format!(
-                "\tvar wire string\n\
-                 \tif err := json.Unmarshal([]byte(outcome.Body), &wire); err != nil {{\n\
-                 \t\treturn zero, {fail_decode}\n\t}}\n\
-                 \tout, err := {parse}(wire, 10, 64)\n\
-                 \tif err != nil {{\n\
-                 \t\treturn zero, {fail_decode}\n\t}}\n\
-                 \treturn out, nil"
-            )
-        }
-        Some(t) => {
-            refs.push(import("json", "encoding/json"));
-            let ty = go_type(t);
-            let fail_decode = fail(format!(
-                "&{decode}{{Path: \"$\", Expected: {ty:?}, Raw: outcome.Body}}",
-                decode = en.decode,
-            ));
-            // A structured output decodes leniently on what the contract
-            // promises: required members must be present (a zero value is not
-            // absence) and the shape must parse. Declared constraints are NOT
-            // enforced on the response (only on what the client sends), and
-            // unknown fields are tolerated so a server adding a field or
-            // loosening a bound does not break the client.
-            let out_shape = match t {
-                Tref::Ref { id, .. } => module.shapes.iter().find(|s| s.id == *id),
-                _ => None,
-            };
-            let mut probe = String::new();
-            if let Some(shape) = out_shape {
-                if let ShapeKind::Structure { members, .. } = &shape.kind {
-                    for m in members.iter().filter(|m| m.required) {
-                        let name = wire_key(m);
-                        // A missing required member points at that member (`$.tags`),
-                        // not the whole body, so the caller sees which field the
-                        // server omitted.
-                        let fail_member = fail(format!(
-                            "&{decode}{{Path: \"$.{name}\", Expected: {ty:?}, Raw: outcome.Body}}",
-                            decode = en.decode,
-                        ));
-                        probe.push_str(&format!(
-                            "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn zero, {fail_member}\n\t}}\n",
-                        ));
-                    }
-                }
-            }
-            if probe.is_empty() {
-                format!(
-                    "\tvar out {ty}\n\
-                     \tif err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {{\n\
-                     \t\treturn zero, {fail_decode}\n\t}}\n\
-                     \treturn out, nil",
-                )
-            } else {
-                format!(
-                    "\tvar probe map[string]json.RawMessage\n\
-                     \tif err := json.Unmarshal([]byte(outcome.Body), &probe); err != nil {{\n\
-                     \t\treturn zero, {fail_decode}\n\t}}\n\
-                     {probe}\
-                     \tvar out {ty}\n\
-                     \tif err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {{\n\
-                     \t\treturn zero, {fail_decode}\n\t}}\n\
-                     \treturn out, nil",
-                )
-            }
-        }
-        None => "\treturn nil".to_string(),
-    };
+    let success = decode::success_block(
+        output,
+        module,
+        &decode::Payload {
+            text: "outcome.Body",
+            bytes: "[]byte(outcome.Body)",
+        },
+        &fail,
+        &mut refs,
+    );
     let doc = doc_of(&op.traits)
         .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
         .unwrap_or_default();
@@ -714,6 +661,8 @@ fn op_method_decl(
 }
 
 mod constructor;
+mod decode;
+mod impl_op;
 mod resolve;
 mod surface;
 #[cfg(test)]

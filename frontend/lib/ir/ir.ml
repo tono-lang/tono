@@ -151,19 +151,26 @@ and enum_value = {
 
 (* A bespoke extension: logic that does not fit the pure calculus, bound to a
    per-language source file. [Hook] fills a fixed lifecycle slot (its name is the
-   slot); [Contract] and [Constraint] are named with a typed signature. The
-   binding is the escape hatch; conformance gates a contract at emit time. *)
-type ext_kind = Hook | Contract | Constraint
+   slot); [Contract] and [Constraint] are named with a typed signature; [Impl]
+   implements the operation its name points at, taking that operation's signature.
+   The binding is the escape hatch; conformance gates a contract at emit time. *)
+type ext_kind = Hook | Contract | Constraint | Impl
 
-(* The typed boundary of a contract/constraint. Hooks omit it: their signature is
-   fixed by the slot. Signature refs are stored verbatim, not resolved against
-   user shapes (binding-vs-signature validation is deferred). *)
+(* The typed boundary of a contract/constraint. Hooks and impls omit it: a hook's
+   signature is fixed by its slot, an impl's by the operation it names. Signature
+   refs are stored verbatim, not resolved against user shapes
+   (binding-vs-signature validation is deferred). *)
 type ext_sig = { input : tref; output : tref }
 
 type extension = {
-  ext_name : string; (* slot name for a hook, otherwise the contract name *)
+  ext_name : string;
+      (* slot name for a hook, the operation name (bare or "entry.op") for an
+         impl, otherwise the contract name *)
   ext_kind : ext_kind;
   ext_sig : ext_sig option;
+  ext_raw : bool;
+      (* impl only: the bound symbol returns a raw outcome the generated glue
+         decodes, instead of the operation's declared output *)
   ext_bindings : binding; (* lang -> "ext/{lang}/...#symbol" *)
   ext_conformance : string option; (* mandatory for a contract at emit time *)
 }

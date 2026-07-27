@@ -69,6 +69,10 @@ pub struct client {
   op ping()
 }
 
+ext impl ping {
+  go: "ext/go/ping.go#Ping"
+}
+
 struct note {
   id: string @httpLabel
   body: string
@@ -211,8 +215,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_5 () =
-  Alcotest.(check int) "wire version" 5 Ir_json.current_ir_version
+let version_is_6 () =
+  Alcotest.(check int) "wire version" 6 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -419,7 +423,8 @@ let protocol_trait_requires_http () =
         \  t: duration @with\n\
         \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep)\n\
         \  op p(): r @timeout(.t)\n\
-         }\n" ^ wire_struct))
+         }\n\
+         ext impl p { go: \"ext/go/p.go#P\" }\n" ^ wire_struct))
 
 let loose_op_ref_rejected () =
   Alcotest.(check (list string))
@@ -463,7 +468,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 5" `Quick version_is_5;
+          Alcotest.test_case "version 6" `Quick version_is_6;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",

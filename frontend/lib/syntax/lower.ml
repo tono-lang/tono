@@ -563,14 +563,19 @@ let lower_ext_sig ~resolve ~diags (s : Ast.ext_sig) : Ir.ext_sig =
   }
 
 let lower_ext ~resolve ~diags (d : Ast.decl) : Ir.extension =
-  check_snake diags d.dname_span "extension name" d.dname;
+  (* An impl name may be the dotted "entry.op" form, so each segment is checked
+     on its own; every other kind is a single segment and the split is a no-op. *)
+  List.iter
+    (fun seg -> check_snake diags d.dname_span "extension name" seg)
+    (String.split_on_char '.' d.dname);
   match d.dkind with
-  | Ast.DExt { ekind; esig; ebindings; econformance; _ } ->
+  | Ast.DExt { ekind; esig; eraw; ebindings; econformance; _ } ->
       let ext_kind =
         match ekind with
         | Ast.EHook -> Ir.Hook
         | Ast.EContract -> Ir.Contract
         | Ast.EConstraint -> Ir.Constraint
+        | Ast.EImpl -> Ir.Impl
       in
       let ext_bindings =
         List.map (fun (b : Ast.ext_binding) -> (b.lang, b.target)) ebindings
@@ -579,6 +584,7 @@ let lower_ext ~resolve ~diags (d : Ast.decl) : Ir.extension =
         Ir.ext_name = d.dname;
         ext_kind;
         ext_sig = Option.map (lower_ext_sig ~resolve ~diags) esig;
+        ext_raw = Option.is_some eraw;
         ext_bindings;
         ext_conformance = econformance;
       }

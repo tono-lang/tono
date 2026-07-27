@@ -107,7 +107,7 @@ fn wrapper(slot: &str, root: &str, contract: &str, signature: &str, call: &str) 
 /// path is relative to the generated file, so it gets an explicit `./` unless the
 /// user already wrote one; the renderer keeps a dot-prefixed specifier verbatim
 /// rather than reading its dots as module segments.
-fn import_specifier(module: &str) -> String {
+pub(crate) fn import_specifier(module: &str) -> String {
     let path = module
         .strip_suffix(".ts")
         .or_else(|| module.strip_suffix(".tsx"))
@@ -647,6 +647,7 @@ mod tests {
             name: name.into(),
             kind: crate::ir::ExtKind::Hook,
             signature: None,
+            raw: false,
             bindings: [("ts".to_string(), target.to_string())]
                 .into_iter()
                 .collect(),
@@ -733,6 +734,7 @@ mod tests {
                 input: Tref::Prim(Prim::String),
                 output: Tref::Prim(Prim::String),
             }),
+            raw: false,
             bindings: [("ts".to_string(), target.to_string())]
                 .into_iter()
                 .collect(),

@@ -485,8 +485,9 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
 
 (* ── Extensions ────────────────────────────────────────────────────────── *)
 
-(* The kind word after "ext": hook | contract | constraint. An unrecognized word
-   is diagnosed and defaults to a hook so the rest of the body still parses. *)
+(* The kind word after "ext": hook | contract | constraint | impl. An
+   unrecognized word is diagnosed and defaults to a hook so the rest of the body
+   still parses. *)
 let parse_ext_kind st : Ast.ext_kind * Span.span =
   let t = P.peek st in
   match t.kind with
@@ -499,9 +500,13 @@ let parse_ext_kind st : Ast.ext_kind * Span.span =
   | Token.Ident "constraint" ->
       ignore (P.advance st);
       (Ast.EConstraint, t.span)
+  | Token.Ident "impl" ->
+      ignore (P.advance st);
+      (Ast.EImpl, t.span)
   | _ ->
       P.error st t.span
-        "expected an extension kind: 'hook', 'contract', or 'constraint'";
+        "expected an extension kind: 'hook', 'contract', 'constraint', or \
+         'impl'";
       (Ast.EHook, t.span)
 
 (* signature ::= "(" type ")" "->" type *)
@@ -552,13 +557,13 @@ let parse_ext_body st : Ast.ext_binding list * string option =
   in
   go [] None
 
-(* ext ::= "ext" ext_kind name signature? "{" ext_body "}" *)
-let parse_ext st ~pub ~dtraits : Ast.decl =
-  ignore (P.advance st);
-  (* 'ext' *)
-  let ekind, ekind_span = parse_ext_kind st in
+(* An impl names the operation it implements. The bare operation name is the
+   normal form; "entry.op" disambiguates when two entries in one module declare
+   the same operation name. Only an impl reads the dotted form: for the other
+   kinds the name is a slot or a contract name, which is a single segment. *)
+let parse_ext_name st ekind : string * Span.span =
   let nt = P.peek st in
-  let name =
+  let head =
     match nt.kind with
     | Token.Ident n ->
         ignore (P.advance st);
@@ -566,6 +571,35 @@ let parse_ext st ~pub ~dtraits : Ast.decl =
     | _ ->
         P.error st nt.span "expected an extension name";
         ""
+  in
+  match (ekind, (P.peek st).kind) with
+  | Ast.EImpl, Token.Dot -> (
+      ignore (P.advance st);
+      match (P.peek st).kind with
+      | Token.Ident n ->
+          ignore (P.advance st);
+          (head ^ "." ^ n, nt.span)
+      | _ ->
+          P.error st (P.peek st).span
+            "expected an operation name after '.' in \"entry.op\"";
+          (head, nt.span))
+  | _ -> (head, nt.span)
+
+(* ext ::= "ext" ext_kind name "raw"? signature? "{" ext_body "}"  — "raw" is
+   consumed for every kind so a misplaced one is a typecheck diagnostic pointing
+   at the word rather than a confusing parse error. *)
+let parse_ext st ~pub ~dtraits : Ast.decl =
+  ignore (P.advance st);
+  (* 'ext' *)
+  let ekind, ekind_span = parse_ext_kind st in
+  let name, name_span = parse_ext_name st ekind in
+  let eraw =
+    match (P.peek st).kind with
+    | Token.Ident "raw" ->
+        let t = P.peek st in
+        ignore (P.advance st);
+        Some t.span
+    | _ -> None
   in
   let esig =
     match (P.peek st).kind with
@@ -577,10 +611,10 @@ let parse_ext st ~pub ~dtraits : Ast.decl =
   ignore (P.expect st Token.RBrace "'}' to close the extension body");
   {
     Ast.dname = name;
-    dname_span = nt.span;
+    dname_span = name_span;
     pub;
     dtraits;
-    dkind = Ast.DExt { ekind; ekind_span; esig; ebindings; econformance };
+    dkind = Ast.DExt { ekind; ekind_span; esig; eraw; ebindings; econformance };
   }
 
 (* ── Declarations and files ────────────────────────────────────────────── *)

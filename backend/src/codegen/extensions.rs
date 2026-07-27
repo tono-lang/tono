@@ -3,7 +3,7 @@
 //! module path (to import from) and the symbol (to call) split apart, plus a way
 //! to find the binding a given target language provides.
 
-use crate::ir::{ExtKind, Model, Module, Signature};
+use crate::ir::{ExtKind, Model, Module, Shape, ShapeKind, Signature};
 
 /// The four closed lifecycle hook slots, in invocation order.
 pub const HOOK_SLOTS: [&str; 4] = [
@@ -27,6 +27,8 @@ pub struct BoundExtension<'a> {
     pub module: &'a str,
     pub symbol: &'a str,
     pub signature: Option<&'a Signature>,
+    /// Impl only: the bound symbol returns a raw outcome for the glue to decode.
+    pub raw: bool,
 }
 
 /// Every extension in the module that provides a binding for one of `langs`
@@ -50,6 +52,7 @@ pub fn bound_extensions<'a>(module: &'a Module, langs: &[&str]) -> Vec<BoundExte
                 module: path,
                 symbol,
                 signature: ext.signature.as_ref(),
+                raw: ext.raw,
             })
         })
         .collect()
@@ -65,19 +68,94 @@ pub fn hook_binding<'a>(
         .find(|e| e.kind == ExtKind::Hook && e.name == slot)
 }
 
+/// The names an `ext impl` may write to reach the operation with this id. The
+/// frontend accepts the bare operation name and, for an entry operation, the
+/// qualified `entry.op` form; both reduce to the local part of the shape id.
+fn impl_names(op_id: &str) -> Vec<&str> {
+    let local = op_id.rsplit('#').next().unwrap_or(op_id);
+    match local.split_once('.') {
+        Some((_, bare)) => vec![local, bare],
+        None => vec![local],
+    }
+}
+
+/// The impl this language binds for the given operation, if any.
+pub fn impl_binding<'a>(
+    bound: &'a [BoundExtension<'a>],
+    op_id: &str,
+) -> Option<&'a BoundExtension<'a>> {
+    let names = impl_names(op_id);
+    bound
+        .iter()
+        .find(|e| e.kind == ExtKind::Impl && names.contains(&e.name))
+}
+
+/// The operations nested in an entry body. A loose operation is a bare contract
+/// that no target emits a body for, so it carries no implementation duty; the
+/// frontend scopes its own count the same way.
+fn entry_operations(module: &Module) -> Vec<&Shape> {
+    module
+        .shapes
+        .iter()
+        .flat_map(|s| match &s.kind {
+            ShapeKind::Entry { operations, .. } => operations.iter().collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
 /// The strong bespoke gate: a `kind=contract` extension must carry a conformance
-/// reference, or the generator refuses to emit. A hook/constraint is lighter and
-/// needs none. An unknown hook slot cannot reach here: `HookSlot` is not part of
-/// the wire (the frontend validates the closed lifecycle), and an unrecognized
-/// `kind` fails to decode before generation.
+/// reference, or the generator refuses to emit. An `impl` bound in more than one
+/// language falls under the same regime: nothing else proves the implementations
+/// agree, and the whole point of a multi-language binding is that they do. A
+/// hook/constraint is lighter and needs none. An unknown hook slot cannot reach
+/// here: `HookSlot` is not part of the wire (the frontend validates the closed
+/// lifecycle), and an unrecognized `kind` fails to decode before generation.
 pub fn validate_extensions(model: &Model) -> Result<(), String> {
     for module in &model.modules {
         for ext in &module.extensions {
-            if ext.kind == ExtKind::Contract && ext.conformance.is_none() {
+            let needs_conformance = match ext.kind {
+                ExtKind::Contract => true,
+                ExtKind::Impl => ext.bindings.len() > 1,
+                ExtKind::Hook | ExtKind::Constraint => false,
+            };
+            if needs_conformance && ext.conformance.is_none() {
+                let what = match ext.kind {
+                    ExtKind::Impl => "impl extension bound in more than one language",
+                    _ => "contract extension",
+                };
                 return Err(format!(
-                    "contract extension '{}' in module '{}' requires a conformance reference but has none",
+                    "{what} '{}' in module '{}' requires a conformance reference but has none",
                     ext.name, module.name
                 ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The implementation count, per target. The frontend proves every entry
+/// operation has an implementation; only here is it known which languages are
+/// being emitted, so only here can "and one for *this* language" be checked. An
+/// operation with no wire descriptor is bespoke-bound, so it needs a binding for
+/// every target in this run or its generated method would have no body.
+pub fn validate_impl_coverage(model: &Model, langs: &[&[&str]]) -> Result<(), String> {
+    for module in &model.modules {
+        for target in langs {
+            let bound = bound_extensions(module, target);
+            for op in entry_operations(module) {
+                if crate::codegen::ops::wire_descriptor(op).is_some() {
+                    continue;
+                }
+                if impl_binding(&bound, &op.id).is_none() {
+                    return Err(format!(
+                        "operation '{}' in module '{}' has no protocol binding and no '{}' impl; \
+                         bind it with 'ext impl' for every target you generate",
+                        op.id,
+                        module.name,
+                        target.first().copied().unwrap_or("?")
+                    ));
+                }
             }
         }
     }
@@ -120,6 +198,7 @@ mod tests {
                 input: Tref::Prim(Prim::String),
                 output: Tref::Prim(Prim::String),
             }),
+            raw: false,
             bindings: [("ts".to_string(), "ext/ts/s.ts#sign".to_string())]
                 .into_iter()
                 .collect(),
@@ -132,11 +211,117 @@ mod tests {
             name: name.into(),
             kind,
             signature: None,
+            raw: false,
             bindings: [("ts".to_string(), target.to_string())]
                 .into_iter()
                 .collect(),
             conformance: None,
         }
+    }
+
+    /// An impl naming `op_name`, bound in each of `langs`.
+    fn impl_ext(op_name: &str, langs: &[&str], conformance: Option<&str>) -> Extension {
+        Extension {
+            name: op_name.into(),
+            kind: ExtKind::Impl,
+            signature: None,
+            raw: false,
+            bindings: langs
+                .iter()
+                .map(|l| (l.to_string(), format!("ext/{l}/impl#Do")))
+                .collect(),
+            conformance: conformance.map(str::to_string),
+        }
+    }
+
+    /// A module with one entry holding one operation of the given id, and the
+    /// given extensions. The operation carries no wire descriptor, so it is
+    /// bespoke-bound.
+    fn entry_model(op_id: &str, extensions: Vec<Extension>) -> Model {
+        let op = Shape {
+            id: op_id.into(),
+            kind: crate::ir::ShapeKind::Operation {
+                input: None,
+                output: None,
+                errors: vec![],
+            },
+            traits: vec![],
+        };
+        Model {
+            tono_ir_version: crate::ir::TONO_IR_VERSION,
+            modules: vec![Module {
+                name: "m".into(),
+                shapes: vec![Shape {
+                    id: "m#client".into(),
+                    kind: ShapeKind::Entry {
+                        fields: vec![],
+                        operations: vec![op],
+                    },
+                    traits: vec![],
+                }],
+                operations: vec![],
+                extensions,
+            }],
+        }
+    }
+
+    #[test]
+    fn an_impl_is_reached_by_its_bare_or_qualified_name() {
+        let module = &entry_model("m#client.save", vec![]).modules[0];
+        for written in ["save", "client.save"] {
+            let exts = vec![impl_ext(written, &["ts"], None)];
+            let m = Module {
+                extensions: exts,
+                ..module.clone()
+            };
+            let bound = bound_extensions(&m, &["ts"]);
+            assert!(
+                impl_binding(&bound, "m#client.save").is_some(),
+                "'{written}' should reach the operation"
+            );
+            assert!(impl_binding(&bound, "m#client.other").is_none());
+        }
+    }
+
+    #[test]
+    fn a_multi_language_impl_without_conformance_refuses_to_emit() {
+        // Two implementations of one operation are only trustworthy if something
+        // proves they agree, so the conformance regime covers them like a
+        // contract. One language is the lighter case and needs none.
+        let one = entry_model("m#client.save", vec![impl_ext("save", &["ts"], None)]);
+        assert!(validate_extensions(&one).is_ok());
+        let two = entry_model("m#client.save", vec![impl_ext("save", &["ts", "go"], None)]);
+        let err = validate_extensions(&two).unwrap_err();
+        assert!(err.contains("bound in more than one language"), "{err}");
+        let vectored = entry_model(
+            "m#client.save",
+            vec![impl_ext("save", &["ts", "go"], Some("vectors/save.json"))],
+        );
+        assert!(validate_extensions(&vectored).is_ok());
+    }
+
+    #[test]
+    fn the_coverage_gate_counts_one_implementation_per_target() {
+        let ts = &["ts", "typescript"] as &[&str];
+        let go = &["go"] as &[&str];
+        let model = entry_model("m#client.save", vec![impl_ext("save", &["ts"], None)]);
+        assert!(validate_impl_coverage(&model, &[ts]).is_ok());
+        // Generating Go too needs a Go binding: the method would have no body.
+        let err = validate_impl_coverage(&model, &[ts, go]).unwrap_err();
+        assert!(err.contains("m#client.save"), "{err}");
+        assert!(err.contains("'go' impl"), "{err}");
+    }
+
+    #[test]
+    fn an_operation_with_a_descriptor_needs_no_impl() {
+        let mut model = entry_model("m#client.save", vec![]);
+        if let ShapeKind::Entry { operations, .. } = &mut model.modules[0].shapes[0].kind {
+            operations[0].traits.push(crate::ir::Trait {
+                id: "wire_descriptor".into(),
+                value: serde_json::json!({"http_method": "GET"}),
+            });
+        }
+        assert!(validate_impl_coverage(&model, &[&["go"]]).is_ok());
     }
 
     #[test]

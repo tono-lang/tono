@@ -228,13 +228,15 @@ let print_decl (d : Ast.decl) : string =
             braced
               (pub ^ "union " ^ d.Ast.dname ^ print_params params)
               (List.map print_variant variants)
-        | Ast.DExt { ekind; esig; ebindings; econformance; _ } ->
+        | Ast.DExt { ekind; esig; eraw; ebindings; econformance; _ } ->
             let kw =
               match ekind with
               | Ast.EHook -> "hook"
               | Ast.EContract -> "contract"
               | Ast.EConstraint -> "constraint"
+              | Ast.EImpl -> "impl"
             in
+            let raw = match eraw with Some _ -> " raw" | None -> "" in
             let signature =
               match esig with
               | Some { Ast.esig_in; esig_out } ->
@@ -251,7 +253,9 @@ let print_decl (d : Ast.decl) : string =
               | Some c -> [ entry "conformance" c ]
               | None -> []
             in
-            braced (pub ^ "ext " ^ kw ^ " " ^ d.Ast.dname ^ signature) lines
+            braced
+              (pub ^ "ext " ^ kw ^ " " ^ d.Ast.dname ^ raw ^ signature)
+              lines
         | Ast.DOp _ -> assert false
       in
       above ^ body

@@ -182,7 +182,8 @@ let model_suite =
       {|{"tono_ir_version": "x", "modules": []}|};
     fails "model modules not array" Ir_json.decode_model
       {|{"tono_ir_version": 3, "modules": 5}|};
-    ok "model without modules" Ir_json.decode_model {|{"tono_ir_version": 5}|};
+    ok "model without modules" Ir_json.decode_model
+      (Printf.sprintf {|{"tono_ir_version": %d}|} Ir_json.current_ir_version);
     ok "module minimal" Ir_json.decode_module {|{"name": "m"}|};
   ]
 

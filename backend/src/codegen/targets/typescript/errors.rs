@@ -190,6 +190,58 @@ pub fn discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError], module: 
     discriminator_fn_body(fn_name, ordered, module, &error_names())
 }
 
+/// The code-only discrimination a bespoke raw outcome uses. There is no protocol
+/// status to match on, so a declared error is chosen by its `@errorCode` alone
+/// and everything unmatched resolves to the fallback, whose status 0 marks the
+/// absence of a protocol status. An error declared without a code can never be
+/// selected here: nothing in the outcome identifies it.
+pub fn outcome_discriminator_fn_named(
+    fn_name: &str,
+    ordered: &[DeclaredError],
+    module: &Module,
+) -> Decl {
+    let n = error_names();
+    let fallback = format!("new {}(0, body)", n.api);
+    let mut body = format!(
+        "  let parsed: any;\n  try {{\n    parsed = JSON.parse(body);\n  }} catch {{\n    return {fallback};\n  }}\n  try {{\n"
+    );
+    let mut refs: Vec<Symbol> = vec![
+        module_symbol(&n.root, module),
+        module_symbol(&n.api, module),
+    ];
+    for err in ordered.iter().filter(|e| e.code.is_some()) {
+        let class = declared_class_name(err);
+        let data = error_type_name(err);
+        let code = err.code.as_deref().unwrap_or_default();
+        body.push_str(&format!(
+            "    if (code === \"{code}\") {{\n      return new {class}(decode{data}(parsed), body);\n    }}\n"
+        ));
+        refs.push(module_symbol(&class, module));
+    }
+    // The declared-error decode can itself throw; an undecodable declared match
+    // falls back to the generic type so a new field or a changed shape never
+    // breaks the caller.
+    body.push_str("  } catch {}\n");
+    body.push_str(&format!("  return {fallback};"));
+    Decl::Function(Function {
+        name: Symbol::builtin(fn_name.to_string()),
+        params: vec![string_param("code"), string_param("body")],
+        ret: Some(TypeExpr::Ref(module_symbol(&n.root, module))),
+        body: FnBody::Raw { text: body, refs },
+    })
+}
+
+fn string_param(name: &str) -> Field {
+    Field {
+        name: Symbol::builtin(name.to_string()),
+        ty: TypeExpr::Ref(Symbol::builtin("string")),
+        nullable: false,
+        wire: None,
+        deprecated: None,
+        doc: None,
+    }
+}
+
 fn discriminator_fn_body(
     fn_name: &str,
     ordered: &[DeclaredError],
@@ -242,14 +294,7 @@ fn discriminator_fn_body(
                 deprecated: None,
                 doc: None,
             },
-            Field {
-                name: Symbol::builtin("body"),
-                ty: TypeExpr::Ref(Symbol::builtin("string")),
-                nullable: false,
-                wire: None,
-                deprecated: None,
-                doc: None,
-            },
+            string_param("body"),
         ],
         ret: Some(TypeExpr::Ref(module_symbol(&n.root, module))),
         body: FnBody::Raw { text: body, refs },

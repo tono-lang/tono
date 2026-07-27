@@ -19,7 +19,9 @@ use serde_json::Value;
 /// value sources, `@format` templates, transform pipelines, match selection,
 /// and `@bind` composition; entry ops nest inside the entry shape and their
 /// trait values may carry field references (`{"field": [...]}`).
-pub const TONO_IR_VERSION: u32 = 5;
+/// v6 added the `impl` extension kind (a bespoke operation implementation) and
+/// its optional `raw` flag.
+pub const TONO_IR_VERSION: u32 = 6;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -397,13 +399,16 @@ pub struct Shape {
 
 /// A bespoke extension bound to per-language source files. `Hook` fills a fixed
 /// lifecycle slot (its `name` is the slot); `Contract`/`Constraint` are named
-/// with a typed signature. Serializes as the lowercase word under a `kind` key.
+/// with a typed signature; `Impl` implements the operation its `name` points at
+/// (bare, or `entry.op` when the bare name would be ambiguous) and takes that
+/// operation's signature. Serializes as the lowercase word under a `kind` key.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExtKind {
     Hook,
     Contract,
     Constraint,
+    Impl,
 }
 
 /// A contract/constraint boundary: the input and output type refs. Hooks omit
@@ -425,10 +430,19 @@ pub struct Extension {
     pub kind: ExtKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<Signature>,
+    /// Impl only: the bound symbol returns a raw outcome the generated glue
+    /// decodes, instead of the operation's declared output. The typed form is
+    /// the default, so the frontend omits the key when it is false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub raw: bool,
     #[serde(default)]
     pub bindings: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conformance: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

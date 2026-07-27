@@ -135,17 +135,20 @@ and enum_value = {
 
 (* A bespoke extension bound to a per-language source file. [Hook] fills a fixed
    lifecycle slot (its name is the slot); [Contract] and [Constraint] are named
-   with a typed signature. Conformance gates a contract at emit time. *)
-type ext_kind = Hook | Contract | Constraint
+   with a typed signature; [Impl] implements the operation its name points at.
+   Conformance gates a contract at emit time. *)
+type ext_kind = Hook | Contract | Constraint | Impl
 
-(* The typed boundary of a contract/constraint. Hooks omit it: their signature is
-   fixed by the slot. Signature refs are stored verbatim, not resolved. *)
+(* The typed boundary of a contract/constraint. Hooks and impls omit it: their
+   signature is fixed by the slot or by the named operation. Signature refs are
+   stored verbatim, not resolved. *)
 type ext_sig = { input : tref; output : tref }
 
 type extension = {
   ext_name : string;
   ext_kind : ext_kind;
   ext_sig : ext_sig option;
+  ext_raw : bool;
   ext_bindings : binding;
   ext_conformance : string option;
 }

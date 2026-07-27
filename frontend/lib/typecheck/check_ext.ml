@@ -6,7 +6,9 @@
    - a hook must fill one of the four closed lifecycle slots, and only those
      (TC0027);
    - a hook declares no signature (its slot fixes it) while a contract requires
-     one (TC0029);
+     one, and an impl takes the signature of the operation it names (TC0029);
+   - the raw response form is an impl affordance: on any other kind it would be
+     accepted and then silently ignored (TC0052);
    - a binding must target a supported language (TC0028);
    - an extension must carry at least one binding, or it is inert (TC0030);
    - a binding value must be a "file#symbol" reference so the generator can
@@ -28,6 +30,18 @@ let hook_slots =
    aliases the toolchain accepts. *)
 let valid_languages =
   [ "ts"; "typescript"; "rust"; "go"; "py"; "python"; "java" ]
+
+(* [raw] switches the impl to the outcome-decoding path; on a hook, contract, or
+   constraint there is no response to decode, so the word would be inert. *)
+let check_raw ekind eraw : Diagnostic.t list =
+  match (ekind, eraw) with
+  | Ast.EImpl, _ | _, None -> []
+  | _, Some span ->
+      [
+        err Error_codes.ext_raw_rule span
+          "'raw' is the impl response form and applies to no other extension \
+           kind";
+      ]
 
 let check_kind (d : Ast.decl) ekind ekind_span esig : Diagnostic.t list =
   match ekind with
@@ -60,6 +74,14 @@ let check_kind (d : Ast.decl) ekind ekind_span esig : Diagnostic.t list =
         ]
       else []
   | Ast.EConstraint -> []
+  | Ast.EImpl ->
+      if esig <> None then
+        [
+          err Error_codes.ext_signature_rule ekind_span
+            "an impl takes the signature of the operation it names and \
+             declares none";
+        ]
+      else []
 
 (* A binding value must be "ext/{lang}/path#symbol": a single '#' splitting a
    non-empty file path from a non-empty symbol, so the generator can import the
@@ -121,8 +143,9 @@ let check_bindings (d : Ast.decl) (bindings : Ast.ext_binding list) :
 
 let check_decl (d : Ast.decl) : Diagnostic.t list =
   match d.dkind with
-  | Ast.DExt { ekind; ekind_span; esig; ebindings; _ } ->
-      check_kind d ekind ekind_span esig @ check_bindings d ebindings
+  | Ast.DExt { ekind; ekind_span; esig; eraw; ebindings; _ } ->
+      check_kind d ekind ekind_span esig
+      @ check_raw ekind eraw @ check_bindings d ebindings
   | Ast.DStruct _ | Ast.DEnum _ | Ast.DUnion _ | Ast.DOp _ -> []
 
 (* Extensions share one namespace (a hook's name is its slot), and they never
