@@ -28,7 +28,7 @@ fn tool(ws: &Path, name: &str) -> Option<PathBuf> {
 
 const DRIVER: &str = r#"
 import { Account, APIError, PaymentDeclinedError, RateLimitedError, TonoError, ValidationError, validateAccount, validateCardData } from "./models";
-import { encodeAccount, decodeAccount, decodeCreateChargeError } from "./models/internal";
+import { encodeAccount, decodeAccount, decodeCreateChargeError } from "./models/codec";
 
 const big = 9007199254740993n; // 2^53 + 1, not representable as a JS number
 

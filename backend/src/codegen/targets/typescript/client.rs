@@ -699,7 +699,7 @@ mod tests {
         let files = generate(&model, &[TargetKind::TypeScript], &CodegenConfig::default()).unwrap();
         let serde = files
             .iter()
-            .find(|f| f.path.to_string_lossy().replace('\\', "/") == "typescript/m/internal.ts")
+            .find(|f| f.path.to_string_lossy().replace('\\', "/") == "typescript/m/codec.ts")
             .unwrap();
         // The bound path is written against the SDK's output root, so the
         // specifier climbs out of the module's own directory first.

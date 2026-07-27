@@ -86,14 +86,18 @@ EOF
     && go mod tidy >/dev/null \
     && go build ./... && go run ./verify)
 
-# The shared group sits under internal/, which Go enforces: a module outside the
-# SDK cannot import it, however it spells the path.
+# Every group Go moves under internal/ (the SDK's shared helpers, and each
+# module's own hidden declarations) is fenced off by the toolchain: a module
+# outside the SDK cannot import it, however it spells the path.
 echo "go internal fence..."
 mkdir -p "$work/outside"
 cat >"$work/outside/main.go" <<EOF
 package main
 
-import _ "$go_module/internal/tono"
+import (
+	_ "$go_module/internal/charges"
+	_ "$go_module/internal/tono"
+)
 
 func main() {}
 EOF

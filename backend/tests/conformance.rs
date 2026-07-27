@@ -162,7 +162,7 @@ fn go_output() -> Option<Value> {
 /// re-encodes and prints the wire JSON.
 fn ts_driver() -> String {
     format!(
-        "import {{ decodeAccount, encodeAccount }} from \"./models/internal\";\n\
+        "import {{ decodeAccount, encodeAccount }} from \"./models/codec\";\n\
          const input: any = {CANONICAL};\n\
          console.log(JSON.stringify(encodeAccount(decodeAccount(input))));\n"
     )

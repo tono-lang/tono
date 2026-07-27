@@ -79,6 +79,17 @@ pub fn derive(model: &Model) -> Exposed {
         for seed in seeds(module) {
             queue.push(seed);
         }
+        // A name another module references is part of the surface whether or not
+        // it is marked: a target that hides it (Go moves an internal group into
+        // a package the other module cannot import) would emit source that does
+        // not build.
+        for shape in module.shapes.iter().chain(module.operations.iter()) {
+            for id in references(shape) {
+                if id.split_once('#').is_some_and(|(m, _)| m != module.name) {
+                    queue.push(id);
+                }
+            }
+        }
     }
     while let Some(id) = queue.pop() {
         if !exposed.insert(id.clone()) {
@@ -339,6 +350,41 @@ mod tests {
         assert!(exposed.contains("m#note"));
         assert!(exposed.contains("m#not_found"));
         assert!(!exposed.contains("m#helper"));
+    }
+
+    #[test]
+    fn a_shape_another_module_references_is_exposed() {
+        // Hiding it would put it where the referencing module cannot reach it.
+        let model = Model {
+            tono_ir_version: 6,
+            modules: vec![
+                Module {
+                    name: "a".into(),
+                    shapes: vec![refers("a#local", "b#shared")],
+                    operations: vec![],
+                    extensions: vec![],
+                },
+                Module {
+                    name: "b".into(),
+                    shapes: vec![
+                        public(structure(
+                            "b#marked",
+                            vec![member("v", Tref::Prim(Prim::String), true)],
+                        )),
+                        structure(
+                            "b#shared",
+                            vec![member("v", Tref::Prim(Prim::String), true)],
+                        ),
+                        structure("b#own", vec![member("v", Tref::Prim(Prim::String), true)]),
+                    ],
+                    operations: vec![],
+                    extensions: vec![],
+                },
+            ],
+        };
+        let exposed = derive(&model);
+        assert!(exposed.contains("b#shared"));
+        assert!(!exposed.contains("b#own"));
     }
 
     #[test]

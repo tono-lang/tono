@@ -19,7 +19,7 @@ import {
   ValidationError,
 } from "../../notes";
 import { Client } from "../../notes";
-import { encodeNote } from "../../notes/internal";
+import { encodeNote } from "../../notes/codec";
 
 interface VectorFile {
   operation: string;

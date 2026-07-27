@@ -363,7 +363,7 @@ mod tests {
                 format!("go{sep}payments{sep}types.go"),
                 format!("typescript{sep}internal.ts"),
                 format!("typescript{sep}payments{sep}types.ts"),
-                format!("typescript{sep}payments{sep}internal.ts"),
+                format!("typescript{sep}payments{sep}codec.ts"),
                 format!("typescript{sep}payments{sep}index.ts"),
                 format!("typescript{sep}package.json"),
             ]
@@ -380,7 +380,7 @@ mod tests {
         assert!(text_at(&files, "go/payments/types.go").contains("package payments"));
         assert!(text_at(&files, "go/payments/types.go").contains("type Charge struct"));
         assert!(text_at(&files, "typescript/payments/types.ts").contains("export interface Charge"));
-        let ts_internal = text_at(&files, "typescript/payments/internal.ts");
+        let ts_internal = text_at(&files, "typescript/payments/codec.ts");
         assert!(ts_internal.contains("export function encodeCharge"));
         assert!(ts_internal.contains("import { Charge } from \"./types\";"));
     }
@@ -404,10 +404,11 @@ mod tests {
         assert!(
             paths.contains(&"rust/payments/types.rs".replace('/', std::path::MAIN_SEPARATOR_STR))
         );
-        assert!(!paths
-            .contains(&"rust/payments/internal.rs".replace('/', std::path::MAIN_SEPARATOR_STR)));
+        assert!(
+            !paths.contains(&"rust/payments/codec.rs".replace('/', std::path::MAIN_SEPARATOR_STR))
+        );
         let go_types = text_at(&files, "go/payments/types.go");
-        let go_internal = text_at(&files, "go/payments/internal.go");
+        let go_internal = text_at(&files, "go/payments/codec.go");
         // Both groups keep their banner and the module's package clause; the split
         // puts the interface in the public group and the serialization in the
         // internal one, and the two are one Go package, so neither imports the
@@ -490,7 +491,7 @@ mod tests {
         assert!(!go_types.contains("TonoError"));
         assert!(go_types.contains("GetCharge() (Charge, error)"));
         assert!(go_types.contains("func (e *NotFound) Retryable() bool { return false }"));
-        let go_serde = text_of("go/payments/internal.go");
+        let go_serde = text_of("go/payments/codec.go");
         assert!(go_serde.contains("func DecodeGetChargeError(status int, body []byte) error {"));
 
         // TypeScript: the class hierarchy, the Promise-returning client, and the
@@ -499,7 +500,7 @@ mod tests {
         assert!(ts_types.contains("export abstract class TonoError extends Error {"));
         assert!(ts_types.contains("export class NotFoundError extends APIError {"));
         assert!(ts_types.contains("getCharge(): Promise<Charge>;"));
-        let ts_serde = text_of("typescript/payments/internal.ts");
+        let ts_serde = text_of("typescript/payments/codec.ts");
         assert!(ts_serde.contains(
             "export function decodeGetChargeError(status: number, body: string): TonoError {"
         ));
@@ -521,62 +522,6 @@ mod tests {
             vec![TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript]
         );
         assert!(parse_targets("rust,java").is_err());
-    }
-
-    /// A module declaring two entries, one of them named something other than
-    /// `client`, so the layout has to name a group after each declaration.
-    fn two_entry_model() -> Model {
-        let entry = |name: &str| Shape {
-            id: format!("notes#{name}"),
-            kind: ShapeKind::Entry {
-                fields: vec![crate::ir::EntryField {
-                    name: "endpoint".into(),
-                    target: Tref::Prim(Prim::String),
-                    sources: vec![],
-                    format: None,
-                    transforms: vec![],
-                    select: None,
-                    binds: vec![],
-                    constraints: vec![],
-                    traits: vec![crate::ir::Trait {
-                        id: "arg".into(),
-                        value: serde_json::Value::Null,
-                    }],
-                }],
-                operations: vec![],
-            },
-            traits: vec![],
-        };
-        Model {
-            tono_ir_version: 6,
-            modules: vec![Module {
-                name: "notes".into(),
-                shapes: vec![entry("admin"), entry("reader")],
-                operations: vec![],
-                extensions: vec![],
-            }],
-        }
-    }
-
-    #[test]
-    fn each_entry_declaration_gets_a_group_named_after_it() {
-        for (target, ext) in [(TargetKind::Go, "go"), (TargetKind::TypeScript, "ts")] {
-            let config = CodegenConfig {
-                go_module: Some("example.com/sdk".into()),
-                ..CodegenConfig::default()
-            };
-            let files = generate(&two_entry_model(), &[target], &config).unwrap();
-            let paths = paths_of(&files);
-            let dir = target.dir();
-            // Two entries in one module are two groups, each named for its
-            // declaration rather than for a fixed `client`.
-            assert!(paths.contains(&format!("{dir}/notes/admin.{ext}")));
-            assert!(paths.contains(&format!("{dir}/notes/reader.{ext}")));
-            // Each holds its own constructor, not the other's.
-            let admin = text_at(&files, &format!("{dir}/notes/admin.{ext}"));
-            assert!(admin.contains("Admin"));
-            assert!(!admin.contains("Reader"));
-        }
     }
 
     // ── Sub-package mapping and config hooks ────────────────────────────

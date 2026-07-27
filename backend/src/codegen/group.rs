@@ -43,6 +43,8 @@ pub enum Audience {
 /// The generator-owned group holding a module's public types and its error
 /// surface.
 pub const TYPES: &str = "types";
+/// The generator-owned group holding a module's serialization.
+pub const CODEC: &str = "codec";
 /// The generator-owned internal group, both at the SDK root and per module.
 pub const INTERNAL: &str = "internal";
 
@@ -87,8 +89,24 @@ impl Group {
         }
     }
 
-    /// A module's internal group: its serialization and the declarations no
-    /// public type reaches.
+    /// A module's codec group: the serialization of the types it exposes.
+    ///
+    /// Internal, but it cannot be moved away from them: a method has to be
+    /// declared where its receiver is (Go), and an impl where its type is
+    /// (Rust). So this group sits beside the module rather than under the SDK's
+    /// internal tree, and each target hides it in place.
+    pub fn codec(module: &str) -> Self {
+        Self {
+            module: Some(module.into()),
+            name: CODEC.into(),
+            origin: Origin::Generator,
+            audience: Audience::Internal,
+        }
+    }
+
+    /// A module's internal group: the declarations no public type reaches, and
+    /// their serialization. Nothing outside the SDK names them, so this group is
+    /// free to move where the target fences it off.
     pub fn module_internal(module: &str) -> Self {
         Self {
             module: Some(module.into()),
@@ -96,6 +114,12 @@ impl Group {
             origin: Origin::Generator,
             audience: Audience::Internal,
         }
+    }
+
+    /// Whether this group has to stay beside the module it belongs to, because
+    /// its declarations extend the module's own types.
+    pub fn is_colocated(&self) -> bool {
+        self.name == CODEC
     }
 
     /// The group of one entry, named after the entry declaration. Two entries in

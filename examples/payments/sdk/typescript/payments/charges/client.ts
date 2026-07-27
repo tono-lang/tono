@@ -14,7 +14,7 @@ import {
   durationToMs,
   encodeCharge,
   readEnv,
-} from "./internal";
+} from "./codec";
 import {
   APIError,
   CardDeclinedError,

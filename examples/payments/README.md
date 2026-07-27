@@ -33,14 +33,16 @@ src/**.tono ──frontend──▶ ir.json ──tono gen──▶ sdk/{rust,go
   backend consumes). Shape ids are module-qualified (`payments.charges#charge`).
 - [`sdk/`](sdk) — the generated source, laid out in emission groups. Each module
   is a directory holding one file per group: `types` (the public surface),
-  `internal` (its serialization and anything no public type reaches), and one
-  named after each entry declaration (`client`), holding that entry's type,
-  constructor, and operation methods. What crosses module boundaries sits in the
-  SDK-root `internal` group instead, which every target fences off: a Go package
-  under `internal/`, a crate-visible Rust `mod`, a TypeScript file left out of
-  the package's `exports`. Each module re-exports its public groups (a `pub use`
-  in Rust, a barrel in TypeScript); there is no root barrel aggregating the
-  modules.
+  `codec` (the serialization of those types), one named after each entry
+  declaration (`client`), and `internal` (whatever no public type reaches).
+  Everything a consumer must not reach is fenced off by the target's own
+  mechanism: in Go a package under `internal/`, which the toolchain refuses to
+  resolve from outside the SDK, so the module's own package holds only files
+  named for what they contain; in Rust a crate-visible `mod`; in TypeScript a
+  file left out of the package's `exports`. What crosses module boundaries (the
+  runtime helpers) sits in the SDK-root internal group. Each module re-exports
+  its public groups (a `pub use` in Rust, a barrel in TypeScript); there is no
+  root barrel aggregating the modules.
 
 ## Generated — do not edit
 

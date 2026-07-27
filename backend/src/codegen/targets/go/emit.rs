@@ -1,13 +1,15 @@
-//! Assembling a Go module from an IR module into separate output files so the types
-//! can be read without the serialization noise: a types file (the branded well-known
-//! named strings, the `Entry`/`Entries` definitions when `@entries` is used, and
-//! each shape's type declarations — structs, enums, and a union's interface,
-//! wrappers, and markers) and, when there is anything to serialize, a serde file
-//! (`marshalVariant`, the `Entries` (de)serialization methods, each union's wrapper
-//! `MarshalJSON`s and `UnmarshalX`, and each container's `UnmarshalJSON`). Imports
-//! are derived per file from the symbols its declarations reference, so the types
-//! file pulls nothing while the serde file pulls `encoding/json` (plus `fmt` for a
-//! union); a module of plain tagged structs emits only the types file.
+//! Assembling a Go module from an IR module into its emission groups: `types`
+//! (the branded well-known named strings, the `Entry`/`Entries` definitions when
+//! `@entries` is used, and the type declarations of everything the module
+//! exposes), `codec` (the serialization of those types, which has to sit beside
+//! them because a method is declared where its receiver is), and `internal`
+//! (whatever no public type reaches, plus its serialization). Imports are derived
+//! per file from the symbols its declarations reference, so the types file pulls
+//! nothing while the codec file pulls `encoding/json` (plus `fmt` for a union).
+//!
+//! Only the internal group moves: Go maps it to a package under `internal/`,
+//! which the toolchain refuses to resolve from outside the SDK. The module's own
+//! package therefore holds only files named for what they contain.
 //!
 //! The Go package clause is not part of a rendered file (the engine emits imports
 //! first); the caller prepends `package <name>` before formatting, once per file.
@@ -85,16 +87,10 @@ fn uses_union(module: &Module) -> bool {
         .any(|s| matches!(s.kind, ShapeKind::Union { .. }))
 }
 
-/// Assemble a Go module into separate output files: the types file (well-known
-/// named strings, the `Entry`/`Entries` definitions when `@entries` is used, and
-/// each shape's type declarations) and, when there is any serialization to emit,
-/// the serde file (`marshalVariant`, the `Entries` (de)serialization methods, each
-/// union's wrapper `MarshalJSON`s and `UnmarshalX`, and each container's
-/// `UnmarshalJSON`). A module of plain tagged structs emits only the types file:
-/// `encoding/json` does all its work, so there is nothing for the serde file to
-/// hold. Imports are derived per file from the symbols its declarations reference,
-/// so the types file pulls nothing while the serde file pulls `encoding/json`
-/// (plus `fmt` when a union is present).
+/// Assemble a Go module into its emission groups: `types`, `codec`, and
+/// `internal`. A module of plain tagged structs emits only its types:
+/// `encoding/json` does all its work, so there is nothing to serialize, and with
+/// nothing hidden there is nothing to move under `internal/`.
 pub fn emit_module(
     module: &Module,
     config: &CasingConfig,
@@ -110,20 +106,32 @@ pub fn emit_module(
     // receiver's package, so both stay here rather than in the shared package.
     let mut type_decls = well_known_decls();
     type_decls.extend(runtime_type_helpers(helpers));
-    let mut serde_decls = runtime_serde_helpers(helpers);
+    let mut codec_decls = runtime_serde_helpers(helpers);
     // A shape a public type reaches is public; the rest are the module's own
-    // business and stay in its internal group.
+    // business and move to its internal group, taking their serialization with
+    // them (a method has to be declared where its receiver is).
     let mut internal_decls = Vec::new();
+    let mut hidden_helpers = RuntimeHelpers::default();
     for shape in &module.shapes {
-        let into = if exposed.shape(shape) {
-            &mut type_decls
-        } else {
-            &mut internal_decls
-        };
-        into.extend(emit_type(shape, config));
+        let mut types = emit_type(shape, config);
         // Validators live with the type they check.
-        into.extend(emit_validators(shape, config));
-        serde_decls.extend(emit_serde_decls(shape, config, union_ids, &module.name));
+        types.extend(emit_validators(shape, config));
+        let serde = emit_serde_decls(shape, config, union_ids, &module.name);
+        if exposed.shape(shape) {
+            type_decls.extend(types);
+            codec_decls.extend(serde);
+        } else {
+            hidden_helpers.variant |= matches!(shape.kind, ShapeKind::Union { .. });
+            internal_decls.extend(types);
+            internal_decls.extend(serde);
+        }
+    }
+    // The relocated group is a package of its own, so a helper its own
+    // declarations call cannot be borrowed from the module's.
+    if hidden_helpers.variant {
+        let mut helpers = runtime_serde_helpers(hidden_helpers);
+        helpers.append(&mut internal_decls);
+        internal_decls = helpers;
     }
     let module_has_entries = crate::codegen::entries::has_entries(module);
     // Operations bring the error values and the blocking client interface
@@ -131,7 +139,7 @@ pub fn emit_module(
     // the serialization.
     if !module.operations.is_empty() {
         type_decls.extend(errors::type_decls(module, config));
-        serde_decls.extend(errors::serde_decls(module));
+        codec_decls.extend(errors::serde_decls(module));
         // Bespoke boundary wrappers sit next to the error values they map to, so
         // they ride the operation surface: a module with no operations has no
         // ContractError to wrap a failure into. A pure-contract module still trips
@@ -150,8 +158,10 @@ pub fn emit_module(
         type_decls.extend(errors::standalone_validation_decls());
     }
     let entries = crate::codegen::targets::go::entry::emit(module, config);
-    internal_decls.extend(entries.shared);
-    internal_decls.extend(serde_decls);
+    // The entry's shared machinery names the module's own types, so it stays in
+    // its package: moving it would make the package that holds the entry and the
+    // package that holds the machinery import each other.
+    codec_decls.extend(entries.shared);
 
     let mut files = vec![ModuleFile::new(Group::types(&module.name), type_decls)];
     // One group per entry declaration, named after it: the entry's own type, its
@@ -160,8 +170,12 @@ pub fn emit_module(
     for (name, decls) in entries.per_entry {
         files.push(ModuleFile::new(Group::entry(&module.name, &name), decls));
     }
-    // A pure-types module (no union, no @entries, no union-bearing container,
-    // nothing hidden) has nothing internal to emit.
+    // A pure-types module (no union, no @entries, no union-bearing container)
+    // has nothing to serialize, and one whose every shape is reachable from its
+    // surface hides nothing.
+    if !codec_decls.is_empty() {
+        files.push(ModuleFile::new(Group::codec(&module.name), codec_decls));
+    }
     if !internal_decls.is_empty() {
         files.push(ModuleFile::new(
             Group::module_internal(&module.name),
@@ -174,7 +188,7 @@ pub fn emit_module(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::group::{INTERNAL, TYPES};
+    use crate::codegen::group::{CODEC, TYPES};
     use crate::codegen::targets::go::types::go_casing;
     use crate::codegen::targets::go::GoRules;
     use crate::codegen::test_support::{member, structure, union_shape};
@@ -314,7 +328,7 @@ mod tests {
         // The serde file holds marshalVariant, the wrapper MarshalJSON, the dispatcher,
         // and the container UnmarshalJSON; it pulls encoding/json and fmt, but never
         // imports the module itself (the payload type is same-package).
-        let serde = rendered(&files, INTERNAL);
+        let serde = rendered(&files, CODEC);
         assert!(serde.contains("func marshalVariant("));
         assert!(serde.contains(
             "func (m MethodCard) MarshalJSON() ([]byte, error) { return marshalVariant("
@@ -363,7 +377,7 @@ mod tests {
 
         // The Entries methods live in the serde file, which pulls encoding/json; with
         // no union there is no marshalVariant.
-        let serde = rendered(&files, INTERNAL);
+        let serde = rendered(&files, CODEC);
         assert!(serde.contains("func (e Entries[K, V]) MarshalJSON() ([]byte, error) {"));
         assert!(serde.contains("func (e *Entries[K, V]) UnmarshalJSON(b []byte) error {"));
         assert!(serde.contains("import \"encoding/json\""));

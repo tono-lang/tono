@@ -56,20 +56,43 @@ pub fn go_has_shared_package(model: &Model) -> bool {
         .any(crate::codegen::entries::has_entries)
 }
 
+/// Whether a Go SDK emits more than the modules' own packages, which is what
+/// makes a cross-package import (and so a module path) unavoidable: the shared
+/// helpers, or any declaration Go moves under `internal/`.
+pub fn go_needs_module_path(model: &Model) -> bool {
+    if go_has_shared_package(model) || model.modules.len() > 1 {
+        return true;
+    }
+    let exposed = crate::codegen::visibility::derive(model);
+    model
+        .modules
+        .iter()
+        .flat_map(|m| m.shapes.iter())
+        .any(|shape| !exposed.shape(shape))
+}
+
 /// Where a group's source file lands, relative to the output root.
 pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
     let root = PathBuf::from(target.dir());
     let ext = target.extension();
     match (&grp.module, target) {
-        // The SDK-root group. Go needs a package directory, and `internal/` is
-        // what makes it unimportable from outside the SDK; Rust and TypeScript
-        // express the same thing with a private module and an unlisted subpath,
-        // so a single file is enough.
+        // Go has exactly one thing that fences a declaration off: the `internal/`
+        // directory, which the toolchain refuses to resolve from outside the SDK.
+        // So every group Go can move lands there, as a package of its own, and a
+        // module's public package holds only files named for what they contain.
+        // Rust and TypeScript need no relocation: a private module and an
+        // unlisted subpath fence a file in place.
         (None, TargetKind::Go) => root
             .join("internal")
             .join(GO_ROOT_PACKAGE)
             .join(format!("{GO_ROOT_PACKAGE}.{ext}")),
         (None, _) => root.join(format!("{}.{ext}", grp.name)),
+        (Some(module), TargetKind::Go) if grp.is_internal() && !grp.is_colocated() => {
+            let package = package_name(module);
+            root.join("internal")
+                .join(package)
+                .join(format!("{package}.{ext}"))
+        }
         (Some(module), _) => root
             .join(module_dir(module))
             .join(format!("{}.{ext}", grp.name)),
@@ -90,11 +113,22 @@ pub fn target_relative_path(target: TargetKind, grp: &Group) -> PathBuf {
 /// across them needs no import: a module's groups are files of one package, and
 /// the SDK-root group is a package of its own.
 pub fn same_go_package(a: &str, b: &str) -> bool {
-    a == b
-        || match (group::parse_path(a), group::parse_path(b)) {
-            (Some((Some(x), _)), Some((Some(y), _))) => x == y,
-            _ => false,
-        }
+    if a == b {
+        return true;
+    }
+    // A module's groups are one package, except the one Go moves under
+    // `internal/`, which is a package of its own.
+    match (go_package_of(a), go_package_of(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// The Go package a group path belongs to, as a `(module, relocated)` pair, or
+/// `None` when the path is not a group path.
+fn go_package_of(path: &str) -> Option<(&str, bool)> {
+    let (module, name) = group::parse_path(path)?;
+    Some((module?, name == group::INTERNAL))
 }
 
 /// The Rust crate path of a group, or `None` when the path is not a group path
@@ -110,9 +144,12 @@ pub fn rust_path(path: &str) -> Option<String> {
 /// The Go import path of a group under the SDK's module path, or `None` when the
 /// path is not a group path.
 pub fn go_import(go_module: &str, path: &str) -> Option<String> {
-    let (module, _) = group::parse_path(path)?;
+    let (module, name) = group::parse_path(path)?;
     Some(match module {
         None => format!("{go_module}/internal/{GO_ROOT_PACKAGE}"),
+        Some(module) if name == group::INTERNAL => {
+            format!("{go_module}/internal/{}", package_name(module))
+        }
         Some(module) => format!("{go_module}/{}", module.replace('.', "/")),
     })
 }
@@ -123,6 +160,8 @@ pub fn go_selector(path: &str) -> Option<String> {
     let (module, _) = group::parse_path(path)?;
     Some(match module {
         None => GO_ROOT_PACKAGE.to_string(),
+        // The relocated group keeps the module's name as its package name; it is
+        // only ever referenced from inside itself, so the two never collide.
         Some(module) => package_name(module).to_string(),
     })
 }
@@ -215,7 +254,7 @@ pub fn check_go_layout(
     let model = modules::apply(config, model);
     let names: Vec<&str> = model.modules.iter().map(|m| m.name.as_str()).collect();
     let shared = go_has_shared_package(&model);
-    if (names.len() > 1 || shared) && config.go_module.is_none() {
+    if go_needs_module_path(&model) && config.go_module.is_none() {
         return Err(
             "Go output with more than one package needs --go-module <path>: Go has \
              no relative imports, so a cross-package import needs the SDK's module \
@@ -250,7 +289,8 @@ pub fn check_go_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Module;
+    use crate::codegen::generate;
+    use crate::ir::{Module, Prim, Shape, ShapeKind, Tref};
 
     fn path_of(target: TargetKind, grp: &Group) -> String {
         output_path(target, grp)
@@ -338,8 +378,24 @@ mod tests {
     fn go_groups_of_one_module_share_a_package() {
         assert!(same_go_package(
             "payments.charges::types",
+            "payments.charges::codec"
+        ));
+        // The group Go moves under internal/ is a package of its own, which is
+        // what puts it out of a consumer's reach.
+        assert!(!same_go_package(
+            "payments.charges::types",
             "payments.charges::internal"
         ));
+        assert_eq!(
+            output_path(TargetKind::Go, &Group::module_internal("payments.charges"))
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+            "go/internal/charges/charges.go"
+        );
+        assert_eq!(
+            go_import("example.com/sdk", "payments.charges::internal").as_deref(),
+            Some("example.com/sdk/internal/charges")
+        );
         assert!(!same_go_package(
             "payments.charges::types",
             "payments.common::types"
@@ -462,5 +518,78 @@ mod tests {
         assert!(err.contains("shared internal package"));
         // With nothing shared there is no such package, so the name is free.
         assert!(check_go_layout(&model(&["tono", "notes"]), &[TargetKind::Go], &config).is_ok());
+    }
+
+    /// A module declaring two entries, one of them named something other than
+    /// `client`, so the layout has to name a group after each declaration.
+    fn two_entry_model() -> Model {
+        let field = crate::ir::EntryField {
+            name: "endpoint".into(),
+            target: Tref::Prim(Prim::String),
+            sources: vec![],
+            format: None,
+            transforms: vec![],
+            select: None,
+            binds: vec![],
+            constraints: vec![],
+            traits: vec![crate::ir::Trait {
+                id: "arg".into(),
+                value: serde_json::Value::Null,
+            }],
+        };
+        let entry = |name: &str| Shape {
+            id: format!("notes#{name}"),
+            kind: ShapeKind::Entry {
+                fields: vec![field.clone()],
+                operations: vec![],
+            },
+            traits: vec![],
+        };
+        Model {
+            tono_ir_version: 6,
+            modules: vec![Module {
+                name: "notes".into(),
+                shapes: vec![entry("admin"), entry("reader")],
+                operations: vec![],
+                extensions: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn each_entry_declaration_gets_a_group_named_after_it() {
+        for (target, ext) in [(TargetKind::Go, "go"), (TargetKind::TypeScript, "ts")] {
+            let config = CodegenConfig {
+                go_module: Some("example.com/sdk".into()),
+                ..CodegenConfig::default()
+            };
+            let files = generate(&two_entry_model(), &[target], &config).unwrap();
+            let paths = files
+                .iter()
+                .map(|f| {
+                    f.path
+                        .to_string_lossy()
+                        .replace(std::path::MAIN_SEPARATOR, "/")
+                })
+                .collect::<Vec<_>>();
+            let dir = target.dir();
+            // Two entries in one module are two groups, each named for its
+            // declaration rather than for a fixed `client`.
+            assert!(paths.contains(&format!("{dir}/notes/admin.{ext}")));
+            assert!(paths.contains(&format!("{dir}/notes/reader.{ext}")));
+            // Each holds its own constructor, not the other's.
+            let admin = &files
+                .iter()
+                .find(|f| {
+                    f.path
+                        .to_string_lossy()
+                        .replace(std::path::MAIN_SEPARATOR, "/")
+                        == format!("{dir}/notes/admin.{ext}")
+                })
+                .expect("the entry's own group")
+                .text;
+            assert!(admin.contains("Admin"));
+            assert!(!admin.contains("Reader"));
+        }
     }
 }

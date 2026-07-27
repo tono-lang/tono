@@ -34,7 +34,8 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     // struct field has one), so they stay with the module's types.
     let mut type_decls = well_known_decls();
     let mut internal_type_decls = Vec::new();
-    let mut serde_shape_decls = Vec::new();
+    let mut codec_shape_decls = Vec::new();
+    let mut hidden_serde_decls = Vec::new();
     // The helper modules are imported per file, since a `#[serde(with = "...")]`
     // path resolves in the scope of the struct carrying it; a group that routes
     // no field through a helper must not import one.
@@ -67,9 +68,16 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         into.extend(types);
         // Validators live with the type they check.
         into.extend(emit_validators(shape, config));
+        // A hidden shape's impls go with it; a public one's stay in the codec
+        // group, which sits beside the types (an impl has to be where its type
+        // is).
         let serde = emit_serde(shape);
-        serde_needs_types |= public && !serde.is_empty();
-        serde_shape_decls.extend(serde);
+        if public {
+            serde_needs_types |= !serde.is_empty();
+            codec_shape_decls.extend(serde);
+        } else {
+            hidden_serde_decls.extend(serde);
+        }
     }
 
     // Operations bring the taxonomy (with the Api payload enum) and the client
@@ -98,6 +106,7 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         type_decls.extend(errors::standalone_validation_decls());
     }
 
+    let mut codec_decls = Vec::new();
     let mut internal_decls = Vec::new();
     // The helper modules live in the SDK's shared internal module, and the
     // `with = "..."` attribute paths resolve through this import.
@@ -111,21 +120,28 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         internal_type_decls.insert(0, helpers_use(&shared, &internal_names));
     }
 
-    // The open enums' impls and the discriminators reference the module's public
-    // types, so the internal group pulls them in; with neither, nothing
-    // references them and the glob would be unused. The `open_enum!` macro is
-    // defined once, before the invocations that expand it, so each open enum is
-    // one invocation rather than a repeated impl block.
+    // The open enums' impls reference the types they are for, so the codec group
+    // pulls the public ones in; without one, nothing references them and the
+    // glob would be unused. The `open_enum!` macro is defined once per group,
+    // before the invocations that expand it, so each open enum is one invocation
+    // rather than a repeated impl block.
     if serde_needs_types {
-        internal_decls.push(types_glob_use(&Group::types(&module.name)));
+        codec_decls.push(types_glob_use(&Group::types(&module.name)));
     }
-    if !serde_shape_decls.is_empty() {
+    if !codec_shape_decls.is_empty() {
+        codec_decls.push(open_enum_macro());
+    }
+    codec_decls.extend(codec_shape_decls);
+    if !hidden_serde_decls.is_empty() {
         internal_decls.push(open_enum_macro());
     }
-    internal_decls.extend(serde_shape_decls);
+    internal_decls.extend(hidden_serde_decls);
     internal_decls.extend(internal_type_decls);
 
     let mut files = vec![ModuleFile::new(Group::types(&module.name), type_decls)];
+    if !codec_decls.is_empty() {
+        files.push(ModuleFile::new(Group::codec(&module.name), codec_decls));
+    }
     if !internal_decls.is_empty() {
         files.push(ModuleFile::new(
             Group::module_internal(&module.name),
@@ -185,7 +201,7 @@ fn raw_use(text: String) -> Decl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::group::{INTERNAL, TYPES};
+    use crate::codegen::group::{CODEC, TYPES};
     use crate::codegen::targets::rust::types::rust_casing;
     use crate::codegen::targets::rust::RustRules;
     use crate::codegen::test_support::{
@@ -370,7 +386,7 @@ mod tests {
 
         // The serde file pulls the module's types in, defines the shared codec macro
         // once, and expands it per enum through an invocation.
-        let serde = rendered(&module, INTERNAL);
+        let serde = rendered(&module, CODEC);
         assert!(serde.contains("use crate::billing::types::*;"));
         assert!(serde.contains("macro_rules! open_enum {"));
         assert!(serde.contains("impl serde::Serialize for $name"));

@@ -133,31 +133,33 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     // The branded well-known aliases are part of the module's public surface (an
     // interface field has one), so they stay with the module's types.
     let mut type_decls = well_known_decls();
-    let mut serde_decls = Vec::new();
+    let mut codec_decls = Vec::new();
     // A shape a public type reaches is public; the rest are the module's own
-    // business and stay in its internal group.
+    // business and move to its internal group, taking their codecs with them.
     let mut internal_decls = Vec::new();
     for shape in &module.shapes {
-        let into = if exposed.shape(shape) {
-            &mut type_decls
-        } else {
-            &mut internal_decls
-        };
-        into.extend(emit_type(shape, config));
+        let mut types = emit_type(shape, config);
         // Validators live with the type they check.
-        into.extend(emit_validators(shape, config));
-        serde_decls.extend(emit_codecs(shape, config, &module.name));
+        types.extend(emit_validators(shape, config));
+        let codecs = emit_codecs(shape, config, &module.name);
+        if exposed.shape(shape) {
+            type_decls.extend(types);
+            codec_decls.extend(codecs);
+        } else {
+            internal_decls.extend(types);
+            internal_decls.extend(codecs);
+        }
     }
     let module_has_entries = crate::codegen::entries::has_entries(module);
     // Operations bring the error classes and the client interface into the
     // types file and the discriminators in with the codecs they call.
     if !module.operations.is_empty() {
         type_decls.extend(errors::type_decls(module, config));
-        serde_decls.extend(errors::serde_decls(module));
+        codec_decls.extend(errors::serde_decls(module));
         // The transport client lives with the codecs it calls (encode input,
         // decode output, the error discriminator) and embeds each operation's
         // opaque wire descriptor.
-        serde_decls.extend(client::client_decls(module, config));
+        codec_decls.extend(client::client_decls(module, config));
     } else if module_has_entries {
         // An entry's client maps outcomes onto the same taxonomy; its client
         // surface is its own exported class, so the loose-op interface (and
@@ -170,16 +172,18 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         type_decls.extend(errors::standalone_validation_decls());
     }
     let entries = crate::codegen::targets::typescript::entry::emit(module, config);
-    internal_decls.extend(entries.shared);
-    internal_decls.extend(serde_decls);
+    // The entry's shared machinery names the module's own types, so it rides the
+    // codec group beside them rather than the group that moves away.
+    codec_decls.extend(entries.shared);
+    attach_text_refs(&mut codec_decls, &runtime_helper_refs());
     attach_text_refs(&mut internal_decls, &runtime_helper_refs());
 
-    // What the internal group declares as opaque text (the codecs, the
-    // resolution helpers, the bound-hook wrappers) is what an entry group calls,
-    // so those names are what its imports are recovered from.
-    let internal_names: Vec<(String, String)> = exported_in_text(&internal_decls)
+    // What the codec group declares as opaque text (the codecs, the resolution
+    // helpers, the bound-hook wrappers) is what an entry group calls, so those
+    // names are what its imports are recovered from.
+    let codec_names: Vec<(String, String)> = exported_in_text(&codec_decls)
         .into_iter()
-        .chain(crate::codegen::imports::declared_symbols(&internal_decls))
+        .chain(crate::codegen::imports::declared_symbols(&codec_decls))
         .map(|name| (name, module.name.clone()))
         .chain(runtime_helper_refs())
         .collect();
@@ -189,9 +193,13 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     // Settings, and its operation methods, so the construction surface reads
     // together instead of riding the file named for serialization.
     for (name, mut decls) in entries.per_entry {
-        attach_text_refs(&mut decls, &internal_names);
+        attach_text_refs(&mut decls, &codec_names);
         let provides = exported_in_text(&decls);
         files.push(ModuleFile::new(Group::entry(&module.name, &name), decls).providing(provides));
+    }
+    if !codec_decls.is_empty() {
+        let provides = exported_in_text(&codec_decls);
+        files.push(ModuleFile::new(Group::codec(&module.name), codec_decls).providing(provides));
     }
     if !internal_decls.is_empty() {
         let provides = exported_in_text(&internal_decls);
@@ -206,7 +214,7 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::group::{INTERNAL, TYPES};
+    use crate::codegen::group::{CODEC, TYPES};
     use crate::codegen::target::RenderRules;
     use crate::codegen::targets::typescript::types::ts_casing;
     use crate::codegen::targets::typescript::TsRules;
@@ -299,7 +307,7 @@ mod tests {
 
         // The serde file holds the runtime helpers and the codecs, and imports the
         // types it references from the types file.
-        let serde = rendered(&files, INTERNAL);
+        let serde = rendered(&files, CODEC);
         assert!(serde.contains("import { Charge } from \"./types\";"));
         // The runtime helpers are the SDK's, not the module's, so they are
         // imported rather than repeated here.

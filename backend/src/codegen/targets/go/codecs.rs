@@ -40,7 +40,7 @@ const LANG: &str = "go";
 /// Which shared runtime helpers a file needs. `entries` pulls the generic
 /// `Entry`/`Entries` types; `variant` pulls `marshalVariant`. Each is emitted only
 /// when some shape in the file uses it, so a tags-only file imports nothing.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct RuntimeHelpers {
     pub entries: bool,
     pub variant: bool,
