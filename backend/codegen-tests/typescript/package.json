@@ -5,6 +5,6 @@
   "description": "Toolchain for compiling and round-tripping the TypeScript the codegen engine emits. Not shipped; a dev dependency of the generator's tests.",
   "devDependencies": {
     "prettier": "3.3.3",
-    "typescript": "5.6.3"
+    "typescript": "7.0.2"
   }
 }
