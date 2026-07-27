@@ -18,7 +18,7 @@ jobs:
       - name: Note when token is absent
         if: env.SONAR_TOKEN == ''
         run: echo "SONAR_TOKEN secret not set; skipping analysis until the Sonar account is connected."
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.SONAR_TOKEN != ''
         with:
           fetch-depth: 0
@@ -44,14 +44,14 @@ jobs:
         run: |
           opam install yojson lsp jsonrpc --yes
           opam exec -- dune build frontend/bin/tono_frontend.exe
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: env.SONAR_TOKEN != ''
         with:
           go-version: "1.21"
       - name: Generate Rust coverage for Sonar
         if: env.SONAR_TOKEN != ''
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: env.SONAR_TOKEN != ''
         with:
           node-version: 20
@@ -80,6 +80,6 @@ jobs:
         run: sed -i 's#github.com/tono-lang/tono/runtimes/http-go/#runtimes/http-go/#' runtimes/http-go/coverage.out
       - name: SonarQube Scan
         if: env.SONAR_TOKEN != ''
-        uses: SonarSource/sonarqube-scan-action@v6
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
