@@ -637,16 +637,17 @@ fn op_method_decl(
                 "&{decode}{{Path: \"$\", Expected: {ty:?}, Raw: outcome.Body}}",
                 decode = en.decode,
             ));
-            // A structured output decodes strictly on what the contract promises:
-            // required members must be present (a zero value is not absence) and
-            // declared validation must pass. Unknown fields are tolerated so a
-            // server adding a field does not break the client.
+            // A structured output decodes leniently on what the contract
+            // promises: required members must be present (a zero value is not
+            // absence) and the shape must parse. Declared constraints are NOT
+            // enforced on the response (only on what the client sends), and
+            // unknown fields are tolerated so a server adding a field or
+            // loosening a bound does not break the client.
             let out_shape = match t {
                 Tref::Ref { id, .. } => module.shapes.iter().find(|s| s.id == *id),
                 _ => None,
             };
             let mut probe = String::new();
-            let mut validate = String::new();
             if let Some(shape) = out_shape {
                 if let ShapeKind::Structure { members, .. } = &shape.kind {
                     for m in members.iter().filter(|m| m.required) {
@@ -656,13 +657,8 @@ fn op_method_decl(
                         ));
                     }
                 }
-                if validation::shape_has_checks(shape) {
-                    validate = format!(
-                        "\tif vs := Validate{ty}(out); len(vs) > 0 {{\n\t\treturn zero, {fail_decode}\n\t}}\n",
-                    );
-                }
             }
-            if probe.is_empty() && validate.is_empty() {
+            if probe.is_empty() {
                 format!(
                     "\tvar out {ty}\n\
                      \tif err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {{\n\
@@ -678,7 +674,6 @@ fn op_method_decl(
                      \tvar out {ty}\n\
                      \tif err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {{\n\
                      \t\treturn zero, {fail_decode}\n\t}}\n\
-                     {validate}\
                      \treturn out, nil",
                 )
             }

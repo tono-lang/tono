@@ -164,9 +164,6 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	if err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {
 		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
 	}
-	if vs := ValidateCharge(out); len(vs) > 0 {
-		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
-	}
 	return out, nil
 }
 

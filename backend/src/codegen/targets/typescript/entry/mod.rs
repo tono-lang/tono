@@ -651,13 +651,14 @@ fn op_method(
                 "new {}(\"$\", \"{out_name}\", outcome.body)",
                 en.decode
             ));
-            // A structured output decodes strictly on what the contract promises:
-            // required members must be present (undefined/null is absence) and
-            // declared validation must pass. Unknown fields are tolerated so a
-            // server adding a field does not break the client.
+            // A structured output decodes leniently on what the contract
+            // promises: required members must be present (undefined/null is
+            // absence) and the shape must parse. Declared constraints are NOT
+            // enforced on the response (only on what the client sends), and
+            // unknown fields are tolerated so a server adding a field or
+            // loosening a bound does not break the client.
             let out_shape = module.shapes.iter().find(|s| s.id == *id);
             let mut required = String::new();
-            let mut validate = String::new();
             if let Some(shape) = out_shape {
                 if let ShapeKind::Structure { members, .. } = &shape.kind {
                     for m in members.iter().filter(|m| m.required) {
@@ -667,16 +668,8 @@ fn op_method(
                         ));
                     }
                 }
-                if validation::shape_has_checks(shape) {
-                    refs.push(module_symbol(&format!("validate{out_name}"), module));
-                    // A distinct name: the same method may also validate its input
-                    // (which binds `vs`), and both live in the method scope.
-                    validate = format!(
-                        "      const outVs = validate{out_name}(out);\n      if (outVs.length > 0) {{\n        {t}\n      }}\n",
-                    );
-                }
             }
-            if required.is_empty() && validate.is_empty() {
+            if required.is_empty() {
                 format!(
                     "    try {{\n      return decode{out_name}(JSON.parse(outcome.body));\n    }} catch {{\n      {t}\n    }}",
                 )
@@ -686,7 +679,6 @@ fn op_method(
                      \x20   if (typeof raw !== \"object\" || raw === null || Array.isArray(raw)) {{\n      {t}\n    }}\n\
                      {required}\
                      \x20   let out: {out_name};\n    try {{\n      out = decode{out_name}(raw);\n    }} catch {{\n      {t}\n    }}\n\
-                     {validate}\
                      \x20   return out;",
                 )
             }
