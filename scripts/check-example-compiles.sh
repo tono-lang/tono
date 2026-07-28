@@ -35,6 +35,38 @@ EOF
 # fails here rather than in a downstream consumer's stricter build.
 (cd "$work/rust" && RUSTFLAGS="-D warnings" cargo build --quiet)
 
+# Rust fences with visibility rather than with a location: a declaration no
+# public type reaches is `pub(crate)`, so a consumer crate cannot name it however
+# it spells the path.
+echo "rust visibility fence..."
+mkdir -p "$work/rust-fence/src"
+cat >"$work/rust-fence/src/main.rs" <<'EOF'
+fn main() {
+    let _: Option<example_rust::payments::charges::HTTPCode> = None;
+}
+EOF
+cat >"$work/rust-fence/Cargo.toml" <<EOF
+[package]
+name = "rust_fence"
+version = "0.0.0"
+edition = "2021"
+[dependencies]
+example_rust = { path = "$work/rust" }
+[workspace]
+EOF
+(
+    cd "$work/rust-fence"
+    if cargo build --quiet >"$work/rust-fence/err.txt" 2>&1; then
+        echo "a crate-visible declaration must not be nameable from another crate" >&2
+        exit 1
+    fi
+    if ! grep -qE "private|E0603|E0433" "$work/rust-fence/err.txt"; then
+        echo "expected a privacy error, got:" >&2
+        cat "$work/rust-fence/err.txt" >&2
+        exit 1
+    fi
+)
+
 echo "go..."
 mkdir -p "$work/go"
 cp -R "$sdk"/go/. "$work/go/"

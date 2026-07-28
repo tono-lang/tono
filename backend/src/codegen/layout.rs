@@ -34,6 +34,12 @@ use crate::ir::Model;
 /// name no module can take (see [`check_go_layout`]).
 pub(crate) const ROOT_UNIT: &str = "tono";
 
+/// The Rust module holding the SDK-root internal group. Named for what it is
+/// (how a value is spelled on the wire), not for who may read it: Rust SDKs name
+/// modules for their contents and fence with visibility, so `mod wire;` without
+/// `pub` is both the fence and the name.
+pub(crate) const RUST_ROOT_MODULE: &str = "wire";
+
 /// The directory every target fences its relocatable internal groups into. Named
 /// for Go, whose toolchain refuses to resolve it from outside the SDK; the other
 /// targets fence with a private module and an unlisted subpath, and share the
@@ -110,6 +116,9 @@ pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
         (None, TargetKind::TypeScript) if grp.is_internal() => {
             root.join(INTERNAL_DIR).join(format!("{ROOT_UNIT}.{ext}"))
         }
+        (None, TargetKind::Rust) if grp.is_internal() => {
+            root.join(format!("{RUST_ROOT_MODULE}.{ext}"))
+        }
         (None, TargetKind::Go) => root
             .join(GO_SUPPORT_PACKAGE)
             .join(format!("{GO_SUPPORT_PACKAGE}.{ext}")),
@@ -123,6 +132,13 @@ pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
         (Some(module), TargetKind::TypeScript) if grp.is_internal() && !grp.colocated => root
             .join(INTERNAL_DIR)
             .join(module_dir(module).with_extension(ext)),
+        // Rust needs no unit of its own for it: the declarations ride the
+        // module's public file with crate visibility, which is how a Rust SDK
+        // says "part of this module, not part of its surface". A module named
+        // for its audience would say nothing about what it holds.
+        (Some(module), TargetKind::Rust) if grp.is_internal() && !grp.colocated => root
+            .join(module_dir(module))
+            .join(format!("{}.{ext}", group::TYPES)),
         (Some(module), _) => root
             .join(module_dir(module))
             .join(format!("{}.{ext}", grp.name)),
@@ -388,18 +404,19 @@ mod tests {
             path_of(TargetKind::Rust, &Group::types("payments.common")),
             "rust/payments/common/types.rs"
         );
-        // Rust fences in place: an internal group is a private `mod` beside what
-        // it serves, which is both the language's fence and its convention.
+        // Rust fences with visibility, so nothing moves and no file is named for
+        // its audience: the SDK-root group is a module named for its contents,
+        // and a module's internal group rides its public file as `pub(crate)`.
         assert_eq!(
             path_of(TargetKind::Rust, &Group::root_internal()),
-            "rust/internal.rs"
+            "rust/wire.rs"
         );
         assert_eq!(
             path_of(
                 TargetKind::Rust,
                 &Group::module_internal("payments.charges")
             ),
-            "rust/payments/charges/internal.rs"
+            path_of(TargetKind::Rust, &Group::types("payments.charges"))
         );
         // The codec cannot move (an impl lives where its type does), so it is
         // fenced where it sits.
@@ -470,10 +487,10 @@ mod tests {
             rust_path("payments.common::types").as_deref(),
             Some("crate::payments::common::types")
         );
-        assert_eq!(rust_path("::internal").as_deref(), Some("crate::internal"));
+        assert_eq!(rust_path("::internal").as_deref(), Some("crate::wire"));
         assert_eq!(
             rust_path("payments.charges::internal").as_deref(),
-            Some("crate::payments::charges::internal")
+            Some("crate::payments::charges::types")
         );
 
         assert_eq!(

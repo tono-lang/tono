@@ -234,7 +234,7 @@ mod tests {
             &groups(module),
             group,
             crate::codegen::TargetKind::Rust,
-            &RustRules,
+            &RustRules::default(),
         )
     }
 
@@ -286,7 +286,7 @@ mod tests {
         assert!(types.contains("pub struct Timestamp(pub String);"));
         assert!(!types.contains("pub struct LocalDate"));
         assert!(!types.contains("pub struct Duration"));
-        assert!(types.contains("use crate::internal::{i64_string};"));
+        assert!(types.contains("use crate::wire::{i64_string};"));
         assert!(!types.contains("u64_string"));
         assert!(!types.contains("base64_bytes"));
         assert!(types.contains("pub struct Charge {"));
@@ -312,7 +312,7 @@ mod tests {
             )],
             "internal",
             crate::codegen::TargetKind::Rust,
-            &RustRules,
+            &RustRules::default(),
         );
         assert!(shared.contains("pub mod i64_string {"));
         assert!(shared.contains("if s.is_human_readable() {"));

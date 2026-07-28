@@ -37,12 +37,25 @@ pub fn casing_for(target: TargetKind) -> CasingConfig {
 /// Render one of a module's output files into rough source text: the banner, then
 /// the rendered declarations (with the package clause prepended for Go). The `cat`
 /// passthrough keeps the engine's layout without depending on a real formatter.
-fn render_module(module_file: &ModuleFile, target: TargetKind, config: &CodegenConfig) -> String {
+fn render_module(
+    module_file: &ModuleFile,
+    target: TargetKind,
+    config: &CodegenConfig,
+    shares_a_public_unit: bool,
+) -> String {
     let passthrough = Formatter::new("cat", vec![]);
     let resolver = SameUnit { target };
     let file = &module_file.file;
     let rendered = match target {
-        TargetKind::Rust => render_file_with(file, &resolver, &rust::RustRules, &passthrough).text,
+        TargetKind::Rust => {
+            // Only a group sharing a file with a public one has to restate its
+            // visibility; one that got a fenced file of its own is already out of
+            // reach, and saying it twice reads worse.
+            let rules = rust::RustRules {
+                crate_visible: shares_a_public_unit,
+            };
+            render_file_with(file, &resolver, &rules, &passthrough).text
+        }
         TargetKind::Go => {
             let go_rules = go::GoRules {
                 go_module: config.go_module.clone(),
@@ -116,14 +129,28 @@ fn emit_target(
     // references are then re-pointed at it, which is what keeps import
     // collection automatic now that a module spans several files.
     assemble::resolve_groups(&mut module_files, target);
+    // Which files a public group claims, so an internal group that lands in one
+    // of them knows it has to restate its visibility per declaration.
+    let public_units: std::collections::HashSet<std::path::PathBuf> = module_files
+        .iter()
+        .filter(|f| !f.group.is_internal())
+        .map(|f| output_path(target, &f.group))
+        .collect();
     let mut groups = Vec::with_capacity(module_files.len());
-    let mut files = Vec::with_capacity(module_files.len());
+    let mut files: Vec<GeneratedFile> = Vec::with_capacity(module_files.len());
     for module_file in module_files {
-        files.push(GeneratedFile {
-            target,
-            path: output_path(target, &module_file.group),
-            text: render_module(&module_file, target, config),
-        });
+        let path = output_path(target, &module_file.group);
+        let shared = module_file.group.is_internal() && public_units.contains(&path);
+        let text = render_module(&module_file, target, config, shared);
+        // A target may express several of a module's groups in one unit: Rust
+        // fences with visibility, so a module's internal group rides its public
+        // file rather than moving to one named for its audience. The groups keep
+        // their identity (they are still what the symbol index and the re-export
+        // tree read); only the file they land in is shared, in emission order.
+        match files.iter_mut().find(|f| f.path == path) {
+            Some(existing) => existing.text.push_str(text.trim_start_matches(BANNER)),
+            None => files.push(GeneratedFile { target, path, text }),
+        }
         groups.push(module_file.group);
     }
     files.extend(match target {
@@ -292,6 +319,43 @@ mod tests {
     }
 
     #[test]
+    fn rust_folds_a_modules_internal_group_into_its_public_file() {
+        // Rust fences with visibility, not with a location, so a declaration no
+        // public type reaches stays in the module's own file and says
+        // `pub(crate)`. No file is named for its audience, and the module tree
+        // still declares and re-exports exactly one module.
+        let mut model = demo_model();
+        model.modules[0].shapes[0]
+            .traits
+            .push(crate::codegen::test_support::trait_of(
+                "pub",
+                serde_json::Value::Null,
+            ));
+        // A shape no public declaration reaches: the module's own business.
+        model.modules[0].shapes.push(structure(
+            "payments#Ledger",
+            vec![member("entries", Tref::Prim(Prim::String), true)],
+        ));
+        let files = generate(&model, &[TargetKind::Rust], &CodegenConfig::default())
+            .expect("generate a Rust SDK");
+        let paths: Vec<String> = files
+            .iter()
+            .map(|f| f.path.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !paths.iter().any(|p| p.contains("internal")),
+            "no Rust file is named for its audience, got {paths:?}"
+        );
+        let types = text_at(&files, "rust/payments/types.rs");
+        assert!(types.contains("pub struct Charge {"));
+        // The ledger is reached from nothing public, so it is the module's own
+        // business and rides the same file, out of reach.
+        assert!(types.contains("pub(crate) struct Ledger {"));
+        assert!(types.contains("#[allow(dead_code)]"));
+        assert!(text_at(&files, "rust/payments/mod.rs").contains("pub mod types;"));
+    }
+
+    #[test]
     fn generate_splits_each_target_that_has_serialization_to_emit() {
         let model = demo_model();
         let files = generate(
@@ -312,7 +376,7 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                format!("rust{sep}internal.rs"),
+                format!("rust{sep}wire.rs"),
                 format!("rust{sep}payments{sep}types.rs"),
                 format!("rust{sep}lib.rs"),
                 format!("rust{sep}payments{sep}mod.rs"),
@@ -331,7 +395,7 @@ mod tests {
             .iter()
             .filter(|f| f.path.extension().is_some_and(|e| e != "json"))
             .all(|f| f.text.starts_with(BANNER)));
-        assert!(text_at(&files, "rust/internal.rs").contains("pub mod i64_string"));
+        assert!(text_at(&files, "rust/wire.rs").contains("pub mod i64_string"));
         // One module shares nothing, so the branded well-known types would ride
         // its public group rather than a group of their own; no field names one,
         // so none is emitted at all.

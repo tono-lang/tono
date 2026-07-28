@@ -41,8 +41,8 @@ pub fn wrapper_decls(module: &Module) -> Vec<Decl> {
         .filter(|e| e.kind != ExtKind::Hook)
         .filter_map(|e| {
             let sig = e.signature?;
-            let input = render_type(&type_expr_of(&sig.input), &RustRules);
-            let output = render_type(&type_expr_of(&sig.output), &RustRules);
+            let input = render_type(&type_expr_of(&sig.input), &RustRules::default());
+            let output = render_type(&type_expr_of(&sig.output), &RustRules::default());
             let text = format!(
                 "/// Boundary wrapper for the `{name}` contract: a declared error passes\n\
                  /// through typed; any other failure becomes a {contract}. The concrete\n\
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn a_contract_wrapper_maps_err_to_contract_error() {
         let module = module_with(contract("sign_request", "ext/rust/sign.rs#sign_request"));
-        let out = rendered(&wrapper_decls(&module), &RustRules);
+        let out = rendered(&wrapper_decls(&module), &RustRules::default());
         assert!(out
             .contains("pub fn wrapped_sign_request(input: String) -> Result<String, TonoError> {"));
         // The idiom: map_err with a declared-pass-through, else a ContractError.

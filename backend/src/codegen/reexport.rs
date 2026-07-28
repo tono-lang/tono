@@ -25,8 +25,11 @@ use crate::codegen::pipeline::{GeneratedFile, TargetKind, BANNER};
 struct RustDir {
     /// Child directories, each declared as a module of this one.
     dirs: BTreeSet<String>,
-    /// Child files, as `(module name, group)`.
-    files: BTreeMap<String, Group>,
+    /// Child files, as `(module name, public)`. Several groups can share one
+    /// file (Rust fences a module's internal group with visibility rather than
+    /// with a file of its own), and the file is declared for the widest audience
+    /// among them.
+    files: BTreeMap<String, bool>,
 }
 
 /// How a child module is declared: `pub mod`, or a private `mod` for an internal
@@ -61,10 +64,13 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
             .file_stem()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let public = !group.is_internal();
         dirs.entry(parent.clone())
             .or_default()
             .files
-            .insert(stem, group.clone());
+            .entry(stem)
+            .and_modify(|seen| *seen |= public)
+            .or_insert(public);
         // Register each directory as a child of the one above it, up to the
         // crate root, so an intermediate namespace directory is declared too.
         let mut child = parent;
@@ -88,8 +94,8 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
                 // internal is expressed here.
                 body.push_str(&declare(name, false));
             }
-            for (name, group) in &node.files {
-                body.push_str(&declare(name, group.is_internal()));
+            for (name, public) in &node.files {
+                body.push_str(&declare(name, !public));
             }
             // The crate root declares its children and stops there: flattening
             // them into one namespace is the root barrel this layout refuses,
@@ -99,7 +105,7 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
             } else {
                 node.files
                     .iter()
-                    .filter(|(_, group)| !group.is_internal())
+                    .filter(|(_, public)| **public)
                     .map(|(name, _)| format!("pub use {name}::*;\n"))
                     .collect()
             };
@@ -195,10 +201,10 @@ mod tests {
         let files = rust_module_tree(&payments());
         let lib = text_at(&files, "rust/lib.rs");
         assert!(lib.contains("pub mod payments;"));
-        // The shared group is a private module: unreachable from outside the
-        // crate, reachable from inside it.
-        assert!(lib.contains("mod internal;"));
-        assert!(!lib.contains("pub mod internal;"));
+        // The shared group is a private module named for its contents:
+        // unreachable from outside the crate, reachable from inside it.
+        assert!(lib.contains("mod wire;"));
+        assert!(!lib.contains("pub mod wire;"));
         // No root barrel: the crate root declares its children and does not
         // flatten them into one namespace.
         assert!(!lib.contains("pub use"));
@@ -212,11 +218,11 @@ mod tests {
         assert!(charges.contains("pub mod client;"));
         assert!(charges.contains("pub use types::*;"));
         assert!(charges.contains("pub use client::*;"));
-        // The internal group sits beside them as a private module: declared, so
-        // the crate reaches it, and never re-exported.
-        assert!(charges.contains("mod internal;"));
-        assert!(!charges.contains("pub mod internal;"));
-        assert!(!charges.contains("pub use internal::*;"));
+        // The internal group has no module of its own: it rides the public file
+        // with crate visibility, so nothing here is named for an audience and
+        // the public file is still declared and re-exported.
+        assert!(!charges.contains("internal"));
+        assert!(charges.contains("pub mod types;"));
         // The namespace directory above the modules only declares them.
         let namespace = text_at(&files, "rust/payments/mod.rs");
         assert!(namespace.contains("pub mod charges;"));

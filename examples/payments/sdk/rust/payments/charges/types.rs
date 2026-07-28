@@ -3,7 +3,7 @@
 use crate::payments::common::types::{PaymentMethod, Status};
 use crate::support::Timestamp;
 
-use crate::internal::{base64_bytes, i64_string, u64_string};
+use crate::wire::{base64_bytes, i64_string, u64_string};
 
 /// A small payments API that exercises the hard wire cases end to end.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -160,4 +160,49 @@ impl std::error::Error for TonoError {
             _ => None,
         }
     }
+}
+macro_rules! open_enum {
+    ($name:ident : $wire:ty { $($variant:ident => $repr:expr),* $(,)? }) => {
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                match self {
+                    $($name::$variant => serde::Serialize::serialize(&$repr, s),)*
+                    $name::Unknown(v) => serde::Serialize::serialize(v, s),
+                }
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let v = <$wire as serde::Deserialize>::deserialize(d)?;
+                $(if v == $repr {
+                    return Ok($name::$variant);
+                })*
+                Ok($name::Unknown(v))
+            }
+        }
+    };
+}
+
+open_enum!(HTTPCode: i64 {
+    Ok => 200i64,
+    NotFound => 404i64,
+    Error => 500i64,
+});
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) enum HTTPCode {
+    Ok,
+    NotFound,
+    Error,
+    Unknown(i64),
+}
+
+/// A page of results with an optional continuation cursor.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[allow(dead_code)]
+pub(crate) struct Page<T> {
+    pub items: Vec<T>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }

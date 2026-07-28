@@ -219,7 +219,7 @@ mod tests {
     use crate::codegen::test_support::{error_demo_module, operation, rendered};
 
     fn types_text(module: &Module) -> String {
-        rendered(&type_decls(module, &rust_casing()), &RustRules)
+        rendered(&type_decls(module, &rust_casing()), &RustRules::default())
     }
 
     #[test]
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn the_discriminator_matches_status_and_code_then_falls_back() {
-        let out = rendered(&serde_decls(&error_demo_module()), &RustRules);
+        let out = rendered(&serde_decls(&error_demo_module()), &RustRules::default());
         assert!(out
             .contains("pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {"));
         assert!(out.contains("if status == 402 && code == Some(\"payment_declined\") {"));
