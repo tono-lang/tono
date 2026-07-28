@@ -125,6 +125,7 @@ fn raw(text: impl Into<String>, refs: Vec<Symbol>) -> Decl {
     Decl::Raw(Raw {
         text: text.into(),
         refs,
+        ..Raw::default()
     })
 }
 

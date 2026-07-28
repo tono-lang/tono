@@ -20,6 +20,14 @@ use crate::ir::{ExtKind, Module};
 /// The binding-language key the Go target reads.
 const BINDING_LANGS: [&str; 1] = ["go"];
 
+/// Whether the module binds any bespoke Go code. That is what puts a boundary
+/// in the package (a contract wrapper, a bound operation, a hook wrapper), and
+/// the boundary is the only thing that has to tell an SDK error from a foreign
+/// one.
+pub fn binds_bespoke(module: &Module) -> bool {
+    !bound_extensions(module, &BINDING_LANGS).is_empty()
+}
+
 /// An exported Go identifier (PascalCase) for a canonical snake_case name.
 fn exported(name: &str) -> String {
     transform(
@@ -126,6 +134,32 @@ mod tests {
             out.contains("return out, &ContractError{ContractName: \"sign_request\", Cause: err}")
         );
         let _ = go_casing();
+    }
+
+    #[test]
+    fn the_marker_is_emitted_exactly_when_something_binds_bespoke_code() {
+        // The marker exists to be matched at a boundary, and only a binding puts
+        // a boundary in the package. It is unexported, so no consumer outside the
+        // package could have matched it either.
+        let bound = module_with(contract("sign_request", "ext/go/sign.go#SignRequest"));
+        assert!(binds_bespoke(&bound));
+        let taxonomy = rendered(
+            &super::super::errors::taxonomy_and_declared_decls(&bound),
+            &GoRules::default(),
+        );
+        assert!(taxonomy.contains("func (e *ValidationError) sdkError() {}"));
+        assert!(taxonomy.contains("func (e *ContractError) sdkError() {}"));
+
+        let mut unbound = bound.clone();
+        unbound.extensions[0].bindings.clear();
+        assert!(!binds_bespoke(&unbound));
+        let taxonomy = rendered(
+            &super::super::errors::taxonomy_and_declared_decls(&unbound),
+            &GoRules::default(),
+        );
+        assert!(!taxonomy.contains("sdkError()"));
+        // The categories themselves are unchanged: only the marker goes.
+        assert!(taxonomy.contains("type ContractError struct {"));
     }
 
     #[test]

@@ -139,10 +139,13 @@ pub fn item_refs(decl: &Decl) -> &[Symbol] {
 /// node set does not model (an `impl` block, a helper module, a method with a
 /// receiver). Its `refs` declare the symbols the text references so import
 /// collection still reaches them, exactly like a function body.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Raw {
     pub text: String,
     pub refs: Vec<Symbol>,
+    /// The names the text declares. Opaque text cannot be read for them, so an
+    /// item that something else may reference by name says so here.
+    pub provides: Vec<String>,
 }
 
 impl Decl {
@@ -150,7 +153,7 @@ impl Decl {
     pub fn raw(text: impl Into<String>) -> Decl {
         Decl::Raw(Raw {
             text: text.into(),
-            refs: Vec::new(),
+            ..Raw::default()
         })
     }
 
@@ -160,7 +163,32 @@ impl Decl {
         Decl::Raw(Raw {
             text: text.into(),
             refs,
+            ..Raw::default()
         })
+    }
+
+    /// A verbatim item that names what it declares, so a reference from another
+    /// group resolves to it and an unreferenced one can be left out.
+    pub fn raw_providing(name: &str, text: impl Into<String>, refs: Vec<Symbol>) -> Decl {
+        Decl::Raw(Raw {
+            text: text.into(),
+            refs,
+            provides: vec![name.to_string()],
+        })
+    }
+
+    /// The verbatim source of an item that carries opaque text, or `None` for one
+    /// the tree models structurally. What a reader has to scan when the tree
+    /// cannot answer which names an item reaches.
+    pub fn opaque_text(&self) -> Option<&str> {
+        match self {
+            Decl::Raw(raw) => Some(&raw.text),
+            Decl::Function(f) => {
+                let FnBody::Raw { text, .. } = &f.body;
+                Some(text)
+            }
+            _ => None,
+        }
     }
 }
 

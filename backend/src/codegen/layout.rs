@@ -29,10 +29,16 @@ use crate::codegen::pipeline::TargetKind;
 use crate::codegen::symbol::Import;
 use crate::ir::Model;
 
-/// The Go package name of the SDK-root group, and its directory under
-/// `internal/`. Go needs a package directory below `internal/`, and the name has
-/// to be one no module can take (see [`check_go_layout`]).
-pub(crate) const GO_ROOT_PACKAGE: &str = "tono";
+/// The name of the unit holding the SDK-root internal group: a Go package
+/// directory under `internal/`, a Rust module, a TypeScript file. It has to be a
+/// name no module can take (see [`check_go_layout`]).
+pub(crate) const ROOT_UNIT: &str = "tono";
+
+/// The directory every target fences its relocatable internal groups into. Named
+/// for Go, whose toolchain refuses to resolve it from outside the SDK; the other
+/// targets fence with a private module and an unlisted subpath, and share the
+/// directory so one SDK has one shape.
+pub(crate) const INTERNAL_DIR: &str = "internal";
 
 /// The Go package name of the SDK-root support group. Public, so it sits beside
 /// the modules rather than under `internal/`: a consumer names these types.
@@ -80,24 +86,32 @@ pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
     let root = PathBuf::from(target.dir());
     let ext = target.extension();
     match (&grp.module, target) {
-        // Go has exactly one thing that fences a declaration off: the `internal/`
-        // directory, which the toolchain refuses to resolve from outside the SDK.
-        // So every group Go can move lands there, as a package of its own, and a
-        // module's public package holds only files named for what they contain.
-        // Rust and TypeScript need no relocation: a private module and an
-        // unlisted subpath fence a file in place.
+        // Every relocatable internal group lands under one `internal/` tree at the
+        // SDK root, named for what it holds rather than for who may read it. Go
+        // has to move them (its only fence is the directory), and the other two
+        // follow the same shape so an SDK reads the same way in every language:
+        // a public directory holds files named for their contents, and the
+        // private tree mirrors the module structure.
         (None, TargetKind::Go) if grp.is_internal() => root
-            .join("internal")
-            .join(GO_ROOT_PACKAGE)
-            .join(format!("{GO_ROOT_PACKAGE}.{ext}")),
+            .join(INTERNAL_DIR)
+            .join(ROOT_UNIT)
+            .join(format!("{ROOT_UNIT}.{ext}")),
+        (None, _) if grp.is_internal() => {
+            root.join(INTERNAL_DIR).join(format!("{ROOT_UNIT}.{ext}"))
+        }
         (None, TargetKind::Go) => root
             .join(GO_SUPPORT_PACKAGE)
             .join(format!("{GO_SUPPORT_PACKAGE}.{ext}")),
         (None, _) => root.join(format!("{}.{ext}", grp.name)),
+        // Go needs a package directory; a Rust module and a TypeScript file are
+        // single files, so the module path becomes the file name.
         (Some(module), TargetKind::Go) if grp.is_internal() && !grp.colocated => root
-            .join("internal")
+            .join(INTERNAL_DIR)
             .join(module_dir(module))
             .join(format!("{}.{ext}", package_name(module))),
+        (Some(module), _) if grp.is_internal() && !grp.colocated => root
+            .join(INTERNAL_DIR)
+            .join(module_dir(module).with_extension(ext)),
         (Some(module), _) => root
             .join(module_dir(module))
             .join(format!("{}.{ext}", grp.name)),
@@ -143,11 +157,13 @@ fn go_package_of(path: &str) -> Option<(&str, bool)> {
 /// The Rust crate path of a group, or `None` when the path is not a group path
 /// (an external crate or a standard-library module).
 pub fn rust_path(path: &str) -> Option<String> {
-    let (module, name) = group::parse_path(path)?;
-    Some(match module {
-        None => format!("crate::{name}"),
-        Some(module) => format!("crate::{}::{name}", module.replace('.', "::")),
-    })
+    let file = target_relative_path(TargetKind::Rust, &Group::from_path(path)?);
+    let segments: Vec<String> = file
+        .with_extension("")
+        .iter()
+        .map(|c| c.to_string_lossy().into_owned())
+        .collect();
+    Some(format!("crate::{}", segments.join("::")))
 }
 
 /// The Go import path of a group under the SDK's module path, or `None` when the
@@ -155,7 +171,7 @@ pub fn rust_path(path: &str) -> Option<String> {
 pub fn go_import(go_module: &str, path: &str) -> Option<String> {
     let (module, name) = group::parse_path(path)?;
     Some(match module {
-        None if name == group::INTERNAL => format!("{go_module}/internal/{GO_ROOT_PACKAGE}"),
+        None if name == group::INTERNAL => format!("{go_module}/internal/{ROOT_UNIT}"),
         None => format!("{go_module}/{GO_SUPPORT_PACKAGE}"),
         Some(module) if name == group::INTERNAL => {
             format!("{go_module}/internal/{}", module.replace('.', "/"))
@@ -169,7 +185,7 @@ pub fn go_import(go_module: &str, path: &str) -> Option<String> {
 pub fn go_selector(path: &str) -> Option<String> {
     let (module, name) = group::parse_path(path)?;
     Some(match module {
-        None if name == group::INTERNAL => GO_ROOT_PACKAGE.to_string(),
+        None if name == group::INTERNAL => ROOT_UNIT.to_string(),
         None => GO_SUPPORT_PACKAGE.to_string(),
         // The relocated group keeps the module's name as its package name; it is
         // only ever referenced from inside itself, so the two never collide.
@@ -183,11 +199,10 @@ pub fn go_selector(path: &str) -> Option<String> {
 /// group path.
 pub fn ts_specifier(from: &str, to: &str) -> Option<String> {
     let file = |path: &str| -> Option<PathBuf> {
-        let (module, name) = group::parse_path(path)?;
-        Some(match module {
-            None => PathBuf::from(name),
-            Some(module) => module_dir(module).join(name),
-        })
+        Some(
+            target_relative_path(TargetKind::TypeScript, &Group::from_path(path)?)
+                .with_extension(""),
+        )
     };
     let from = file(from)?;
     let to = file(to)?;
@@ -285,10 +300,10 @@ pub fn check_go_layout(
         ));
     }
     if shared {
-        if let Some(mods) = by_pkg.get(GO_ROOT_PACKAGE) {
+        if let Some(mods) = by_pkg.get(ROOT_UNIT) {
             return Err(format!(
                 "Go package name collision: module {} maps to package \
-                 '{GO_ROOT_PACKAGE}', which the SDK's shared internal package \
+                 '{ROOT_UNIT}', which the SDK's shared internal package \
                  takes; rename the module, or --flatten",
                 mods.join(" and ")
             ));
@@ -362,20 +377,36 @@ mod tests {
             path_of(TargetKind::Rust, &Group::types("payments.common")),
             "rust/payments/common/types.rs"
         );
+        // The relocatable internal groups mirror Go: one `internal/` tree at the
+        // SDK root, each file named for the module it holds rather than for its
+        // audience.
         assert_eq!(
             path_of(TargetKind::Rust, &Group::root_internal()),
-            "rust/internal.rs"
+            "rust/internal/tono.rs"
+        );
+        assert_eq!(
+            path_of(
+                TargetKind::Rust,
+                &Group::module_internal("payments.charges")
+            ),
+            "rust/internal/payments/charges.rs"
+        );
+        // The codec cannot move (an impl lives where its type does), so it is
+        // fenced where it sits.
+        assert_eq!(
+            path_of(TargetKind::Rust, &Group::codec("payments.charges")),
+            "rust/payments/charges/codec.rs"
         );
         assert_eq!(
             path_of(
                 TargetKind::TypeScript,
                 &Group::module_internal("payments.charges")
             ),
-            "typescript/payments/charges/internal.ts"
+            "typescript/internal/payments/charges.ts"
         );
         assert_eq!(
             path_of(TargetKind::TypeScript, &Group::root_internal()),
-            "typescript/internal.ts"
+            "typescript/internal/tono.ts"
         );
         assert_eq!(
             target_relative_path(TargetKind::TypeScript, &Group::types("notes"))
@@ -429,7 +460,14 @@ mod tests {
             rust_path("payments.common::types").as_deref(),
             Some("crate::payments::common::types")
         );
-        assert_eq!(rust_path("::internal").as_deref(), Some("crate::internal"));
+        assert_eq!(
+            rust_path("::internal").as_deref(),
+            Some("crate::internal::tono")
+        );
+        assert_eq!(
+            rust_path("payments.charges::internal").as_deref(),
+            Some("crate::internal::payments::charges")
+        );
 
         assert_eq!(
             go_import("example.com/sdk", "payments.common::types").as_deref(),
@@ -452,15 +490,19 @@ mod tests {
         );
         assert_eq!(
             ts_specifier("payments.charges::types", "::internal").as_deref(),
-            Some("../../internal")
+            Some("../../internal/tono")
         );
         assert_eq!(
             ts_specifier("payments.charges::types", "payments.charges::internal").as_deref(),
-            Some("./internal")
+            Some("../../internal/payments/charges")
+        );
+        assert_eq!(
+            ts_specifier("payments.charges::types", "payments.charges::codec").as_deref(),
+            Some("./codec")
         );
         assert_eq!(
             ts_specifier("notes::types", "::internal").as_deref(),
-            Some("../internal")
+            Some("../internal/tono")
         );
         assert_eq!(ts_specifier("notes::types", "@tono/http-runtime-ts"), None);
     }

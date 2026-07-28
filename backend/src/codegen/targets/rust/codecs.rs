@@ -91,6 +91,7 @@ pub(crate) fn enum_item(
     Decl::Raw(Raw {
         text,
         refs: Vec::new(),
+        ..Raw::default()
     })
 }
 
@@ -139,6 +140,7 @@ pub(crate) fn enum_serde_item(backing: &EnumBacking, values: &[EnumValue], name:
     Decl::Raw(Raw {
         text,
         refs: Vec::new(),
+        ..Raw::default()
     })
 }
 
@@ -155,6 +157,7 @@ pub(crate) fn open_enum_macro() -> Decl {
     Decl::Raw(Raw {
         text: OPEN_ENUM_MACRO.to_string(),
         refs: Vec::new(),
+        ..Raw::default()
     })
 }
 
@@ -220,7 +223,11 @@ pub(crate) fn union_item(
     text.push('}');
 
     let refs: Vec<Symbol> = members.iter().map(|m| symbol_of(&m.target)).collect();
-    Decl::Raw(Raw { text, refs })
+    Decl::Raw(Raw {
+        text,
+        refs,
+        ..Raw::default()
+    })
 }
 
 /// The wire tag for a union member: its `@wire` override, else its name.
@@ -235,14 +242,15 @@ pub(crate) fn well_known_decls() -> Vec<Decl> {
     ["Timestamp", "LocalDate", "Duration"]
         .iter()
         .map(|name| {
-            Decl::Raw(Raw {
-                text: format!(
+            Decl::raw_providing(
+                name,
+                format!(
                     "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]\n\
                      #[serde(transparent)]\n\
                      pub struct {name}(pub String);"
                 ),
-                refs: Vec::new(),
-            })
+                Vec::new(),
+            )
         })
         .collect()
 }
@@ -309,6 +317,7 @@ pub(crate) fn runtime_helpers(helpers: HelperSet) -> Vec<Decl> {
             Decl::Raw(Raw {
                 text,
                 refs: Vec::new(),
+                ..Raw::default()
             })
         })
         .collect()

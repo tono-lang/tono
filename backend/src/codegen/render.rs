@@ -394,6 +394,7 @@ mod tests {
             decls: vec![Decl::Raw(Raw {
                 text: "impl Charge {\n    fn pay(&self) -> Receipt { todo!() }\n}".into(),
                 refs: vec![Symbol::imported("Receipt", "billing_receipts", "Receipt")],
+                ..Raw::default()
             })],
         };
         let out = render_file(&file, &RustRules, &passthrough()).text;

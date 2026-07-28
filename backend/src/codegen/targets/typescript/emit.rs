@@ -326,9 +326,10 @@ mod tests {
         assert_eq!(files.len(), 2, "TypeScript splits types from serde");
 
         // The types file holds the interface, with no codec and no runtime
-        // helper; with one module the branded aliases fold in here too.
+        // helper. The branded aliases would fold in here with one module, but no
+        // field names one, so none is emitted.
         let types = rendered(&files, TYPES);
-        assert!(types.contains("export type Timestamp = string"));
+        assert!(!types.contains("export type Timestamp"));
         assert!(types.contains("export interface Charge {"));
         assert!(types.contains("  amountCents: bigint;"));
         assert!(!types.contains("export function encodeI64"));
@@ -341,7 +342,7 @@ mod tests {
         assert!(serde.contains("import { Charge } from \"./types\";"));
         // The runtime helpers are the SDK's, not the module's, so they are
         // imported rather than repeated here.
-        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../internal\";"));
+        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../internal/tono\";"));
         assert!(serde.contains("export function encodeCharge(value: Charge): unknown {"));
         assert!(serde.contains("amount_cents: encodeI64(value.amountCents),"));
         assert!(!serde.contains("export interface Charge"));

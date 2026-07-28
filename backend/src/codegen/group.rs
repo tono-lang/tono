@@ -169,6 +169,26 @@ impl Group {
     pub fn is_internal(&self) -> bool {
         self.audience == Audience::Internal
     }
+
+    /// The group a path names, or `None` for a string that is not a group path.
+    ///
+    /// A path carries only the module and the name, but every generator-owned
+    /// name has a fixed audience and any other name is an entry's (spec-named
+    /// and public), so the rest of the group is recoverable. This is what lets
+    /// the layout answer a reference (which arrives as a path) with the same
+    /// rules it placed the file by.
+    pub fn from_path(path: &str) -> Option<Self> {
+        let (module, name) = parse_path(path)?;
+        Some(match (module, name) {
+            (None, INTERNAL) => Self::root_internal(),
+            (None, SUPPORT) => Self::root_support(),
+            (None, _) => return None,
+            (Some(module), TYPES) => Self::types(module),
+            (Some(module), CODEC) => Self::codec(module),
+            (Some(module), INTERNAL) => Self::module_internal(module),
+            (Some(module), entry) => Self::entry(module, entry),
+        })
+    }
 }
 
 /// Split a group path back into its module (`None` at the SDK root) and group
@@ -250,6 +270,26 @@ mod tests {
             Some((Some("payments.common"), "types"))
         );
         assert_eq!(module_of(&group.path()), Some("payments.common"));
+    }
+
+    #[test]
+    fn every_group_is_recoverable_from_its_path() {
+        // A reference arrives as a path, so the layout has to answer it with the
+        // same group it placed the file by.
+        for group in [
+            Group::root_internal(),
+            Group::root_support(),
+            Group::types("payments.common"),
+            Group::codec("payments.common"),
+            Group::module_internal("payments.common"),
+            Group::entry("payments.charges", "client"),
+        ] {
+            assert_eq!(Group::from_path(&group.path()).as_ref(), Some(&group));
+        }
+        // Anything that is not a group path has no group.
+        assert_eq!(Group::from_path("payments.common"), None);
+        assert_eq!(Group::from_path("encoding/json"), None);
+        assert_eq!(Group::from_path("::client"), None);
     }
 
     #[test]

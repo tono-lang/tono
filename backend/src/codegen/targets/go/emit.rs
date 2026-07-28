@@ -166,7 +166,9 @@ pub fn emit_module(
         // Constraints without operations still need the Validation category a
         // validator returns (`Violation`, `ValidationError`), which the taxonomy
         // would otherwise have carried.
-        type_decls.extend(errors::standalone_validation_decls());
+        type_decls.extend(errors::standalone_validation_decls(
+            crate::codegen::targets::go::client::binds_bespoke(module),
+        ));
     }
     let entries = crate::codegen::targets::go::entry::emit(module, config);
     // The entry's shared machinery names the module's own types, so it stays in
@@ -244,8 +246,9 @@ mod tests {
         assert!(types.contains("type Violation struct {"));
         assert!(types.contains("type ValidationError struct {"));
         assert!(types.contains("func (e *ValidationError) Error() string"));
-        // The category stays inside the sealed taxonomy a bound hook matches on.
-        assert!(types.contains("func (e *ValidationError) sdkError() {}"));
+        // Nothing is bound, so there is no boundary to tell an SDK error from a
+        // foreign one and the marker that seals the taxonomy is left out.
+        assert!(!types.contains("sdkError()"));
         assert!(types.contains("func ValidateCharge(value Charge) error {"));
         // Only the category the validator needs, not the rest of the taxonomy.
         assert!(!types.contains("type TransportError struct"));
@@ -297,7 +300,10 @@ mod tests {
             name: "models".into(),
             shapes: vec![structure(
                 "models#Charge",
-                vec![member("amount_cents", Tref::Prim(Prim::I64), true)],
+                vec![
+                    member("amount_cents", Tref::Prim(Prim::I64), true),
+                    member("created", Tref::Prim(Prim::Timestamp), true),
+                ],
             )],
             operations: vec![],
             extensions: vec![],
@@ -308,9 +314,12 @@ mod tests {
         assert_eq!(files[0].group.name, TYPES);
         let out = rendered(&files, TYPES);
         // With one module the shared support declarations fold into its public
-        // group, so the branded strings are here alongside the tagged type;
-        // with no union and no @entries, no runtime helper is emitted.
+        // group, so the branded string the field names is here alongside the
+        // tagged type. The ones nothing names are left out, and with no union and
+        // no @entries no runtime helper is emitted.
         assert!(out.contains("type Timestamp string"));
+        assert!(!out.contains("type LocalDate string"));
+        assert!(!out.contains("type Duration string"));
         assert!(out.contains("type Charge struct {"));
         // The type holds the 64-bit integer natively, tagged `,string`.
         assert!(out.contains("\tAmountCents int64 `json:\"amount_cents,string\"`\n"));

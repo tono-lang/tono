@@ -61,8 +61,6 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string { return "validation failed" }
 
-func (e *ValidationError) sdkError() {}
-
 type TransportError struct {
 	Cause error
 }
@@ -71,8 +69,6 @@ func (e *TransportError) Error() string { return "transport failure" }
 
 func (e *TransportError) Unwrap() error { return e.Cause }
 
-func (e *TransportError) sdkError() {}
-
 type DecodeError struct {
 	Path     string
 	Expected string
@@ -80,8 +76,6 @@ type DecodeError struct {
 }
 
 func (e *DecodeError) Error() string { return "response body did not match the declared schema" }
-
-func (e *DecodeError) sdkError() {}
 
 type ContractError struct {
 	ContractName string
@@ -92,8 +86,6 @@ func (e *ContractError) Error() string { return "contract hook '" + e.ContractNa
 
 func (e *ContractError) Unwrap() error { return e.Cause }
 
-func (e *ContractError) sdkError() {}
-
 type APIError struct {
 	Status int
 	Body   string
@@ -101,24 +93,16 @@ type APIError struct {
 
 func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status) }
 
-func (e *APIError) sdkError() {}
-
 type ConfigError struct {
 	Message string
 }
 
 func (e *ConfigError) Error() string { return e.Message }
 
-func (e *ConfigError) sdkError() {}
-
 func (e *CardDeclined) Error() string { return "card_declined" }
 
 func (e *CardDeclined) Retryable() bool { return true }
 
-func (e *CardDeclined) sdkError() {}
-
 func (e *NotFound) Error() string { return "not_found" }
 
 func (e *NotFound) Retryable() bool { return false }
-
-func (e *NotFound) sdkError() {}

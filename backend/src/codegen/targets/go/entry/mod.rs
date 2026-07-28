@@ -330,15 +330,22 @@ fn shared_slot(name: &str) -> String {
 /// exported because a Go package boundary is what makes them shared, and
 /// `internal/` is what keeps them out of a consumer's reach.
 pub fn runtime_decls() -> Vec<Decl> {
-    let mut decls = vec![Decl::raw_with(
-        "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
+    let mut decls = vec![
+        Decl::raw_providing(
+            "MustDescriptor",
+            "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
          // load; a parse failure is a build defect, never a runtime input.\n\
          func MustDescriptor(literal string) *tonohttp.WireDescriptor {\n\
          \td, err := tonohttp.ParseDescriptor([]byte(literal))\n\
          \tif err != nil {\n\t\tpanic(err)\n\t}\n\
          \treturn d\n\
-         }\n\n\
-         // EncodeRecord turns a typed input into the wire record the runtime binds\n\
+         }"
+            .to_string(),
+            vec![runtime_symbol()],
+        ),
+        Decl::raw_providing(
+            "EncodeRecord",
+            "// EncodeRecord turns a typed input into the wire record the runtime binds\n\
          // from, through the type's own JSON tags.\n\
          func EncodeRecord(v any) (map[string]any, error) {\n\
          \tb, err := json.Marshal(v)\n\
@@ -347,9 +354,10 @@ pub fn runtime_decls() -> Vec<Decl> {
          \tif err := json.Unmarshal(b, &m); err != nil {\n\t\treturn nil, err\n\t}\n\
          \treturn m, nil\n\
          }"
-        .to_string(),
-        vec![runtime_symbol(), import("json", "encoding/json")],
-    )];
+            .to_string(),
+            vec![import("json", "encoding/json")],
+        ),
+    ];
     decls.extend(resolution_helpers());
     decls
 }
@@ -361,7 +369,8 @@ pub fn runtime_decls() -> Vec<Decl> {
 /// qualification the raw text bakes in is the same in every SDK.
 fn resolution_helpers() -> Vec<Decl> {
     vec![
-        Decl::raw_with(
+        Decl::raw_providing(
+            "DurationMs",
             "// DurationMs parses a duration field for the runtime's millisecond value\n\
              // positions.\n\
              func DurationMs(v string) (float64, error) {\n\
@@ -372,7 +381,8 @@ fn resolution_helpers() -> Vec<Decl> {
             .to_string(),
             vec![import("time", "time")],
         ),
-        Decl::raw_with(
+        Decl::raw_providing(
+            "StrTransformWords",
             "// StrTransformWords splits a resolved value for the casing transforms:\n\
              // runs of spaces, hyphens, and underscores separate words.\n\
              func StrTransformWords(s string) []string {\n\
@@ -389,7 +399,8 @@ fn resolution_helpers() -> Vec<Decl> {
 }
 
 fn casing_helper(name: &str, body: &str) -> Decl {
-    Decl::raw_with(
+    Decl::raw_providing(
+        name,
         format!("func {name}(s string) string {{\n{body}\n}}"),
         vec![import("strings", "strings")],
     )
@@ -407,7 +418,10 @@ fn apply_transforms(
     helpers: &mut Helpers,
     refs: &mut Vec<Symbol>,
 ) -> String {
-    let before = helpers.transforms.len();
+    // The fold names each helper it reaches; recording them here is what keeps
+    // the reference exact, so an entry that upper-snakes a value does not pull
+    // the other three casing helpers behind it.
+    let reached = std::cell::RefCell::new(Vec::new());
     let out = crate::codegen::entries::plan::apply_transforms(
         expr,
         transforms,
@@ -418,13 +432,13 @@ fn apply_transforms(
             "upper" => Some(format!("strings.ToUpper({out})")),
             _ => None,
         },
-        shared_slot,
+        |name| {
+            reached.borrow_mut().push(name.to_string());
+            shared_slot(name)
+        },
     );
-    if helpers.transforms.len() != before || out.contains('\u{1}') {
-        refs.push(shared_symbol("StrTransformWords"));
-        for name in ["StrUpperSnake", "StrSnake", "StrKebab", "StrPascal"] {
-            refs.push(shared_symbol(name));
-        }
+    for name in reached.into_inner() {
+        refs.push(shared_symbol(&name));
     }
     out
 }

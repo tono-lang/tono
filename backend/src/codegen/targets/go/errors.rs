@@ -27,8 +27,13 @@ pub const SDK_ERROR_MARKER: &str = "interface{ sdkError() }";
 
 /// The unexported marker method that makes a generated error value part of the
 /// sealed SDK taxonomy (see [`SDK_ERROR_MARKER`]).
-fn marker_method(name: &str) -> Decl {
-    Decl::raw(format!("func (e *{name}) sdkError() {{}}"))
+///
+/// Only a boundary wrapper matches it, and only bespoke bindings produce one, so
+/// `sealed` is false for a module that binds nothing and the method is left out
+/// rather than shipped as a method nothing can call. It is unexported, so no
+/// consumer outside the package could have matched it either.
+fn marker_method(sealed: bool, name: &str) -> Option<Decl> {
+    sealed.then(|| Decl::raw(format!("func (e *{name}) sdkError() {{}}")))
 }
 
 /// The declarations for the types file: the taxonomy error values, the
@@ -50,8 +55,9 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
 /// interface: what an entry-only module needs (its client surface is the
 /// entry's own struct and mock interface).
 pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
-    let mut decls = taxonomy_decls();
-    decls.extend(declared_error_decls(module));
+    let sealed = super::client::binds_bespoke(module);
+    let mut decls = taxonomy_decls(sealed);
+    decls.extend(declared_error_decls(module, sealed));
     decls
 }
 
@@ -88,9 +94,9 @@ fn declared_message(err: &DeclaredError) -> String {
 /// The `Validation` category a validator returns: the error struct carrying its
 /// collected violations, the `Error` method that makes it an error value, and the
 /// marker that keeps it inside the sealed SDK taxonomy.
-fn validation_category_decls() -> Vec<Decl> {
+fn validation_category_decls(sealed: bool) -> Vec<Decl> {
     let n = error_names();
-    vec![
+    let mut decls = vec![
         Decl::raw(format!(
             "type {} struct {{\n\tViolations []{} `json:\"violations\"`\n}}",
             n.validation, n.violation
@@ -99,23 +105,24 @@ fn validation_category_decls() -> Vec<Decl> {
             "func (e *{}) Error() string {{ return \"validation failed\" }}",
             n.validation
         )),
-        marker_method(&n.validation),
-    ]
+    ];
+    decls.extend(marker_method(sealed, &n.validation));
+    decls
 }
 
 /// The declarations a validator needs when the module has constraints but no
 /// operations (hence no full taxonomy): the `Violation` record and the
 /// `Validation` category itself.
-pub fn standalone_validation_decls() -> Vec<Decl> {
+pub fn standalone_validation_decls(sealed: bool) -> Vec<Decl> {
     let mut decls = vec![violation_decl()];
-    decls.extend(validation_category_decls());
+    decls.extend(validation_category_decls(sealed));
     decls
 }
 
 /// The closed error taxonomy as error values. Go has no hierarchy to root, so
 /// the categories share nothing but the `error` interface; callers pick one
 /// with `errors.As`.
-fn taxonomy_decls() -> Vec<Decl> {
+fn taxonomy_decls(sealed: bool) -> Vec<Decl> {
     let n = error_names();
     let error_method = |name: &str, message: &str| {
         Decl::raw(format!(
@@ -127,62 +134,92 @@ fn taxonomy_decls() -> Vec<Decl> {
             "func (e *{name}) Unwrap() error {{ return e.Cause }}"
         ))
     };
-    let mut decls = standalone_validation_decls();
-    decls.extend(vec![
-        Decl::raw(format!("type {} struct {{\n\tCause error\n}}", n.transport)),
-        error_method(&n.transport, "\"transport failure\""),
-        unwrap_method(&n.transport),
-        marker_method(&n.transport),
-        Decl::raw(format!(
-            "type {} struct {{\n\tPath     string\n\tExpected string\n\tRaw      string\n}}",
-            n.decode
-        )),
-        error_method(
-            &n.decode,
-            "\"response body did not match the declared schema\"",
-        ),
-        marker_method(&n.decode),
-        Decl::raw(format!(
-            "type {} struct {{\n\tContractName string\n\tCause        error\n}}",
-            n.contract
-        )),
-        error_method(
-            &n.contract,
-            "\"contract hook '\" + e.ContractName + \"' failed\"",
-        ),
-        unwrap_method(&n.contract),
-        marker_method(&n.contract),
-        Decl::raw(format!(
-            "type {} struct {{\n\tStatus int\n\tBody   string\n}}",
-            n.api
-        )),
-        Decl::raw_with(
-            format!(
-                "func (e *{}) Error() string {{ return \"api error \" + strconv.Itoa(e.Status) }}",
-                n.api
+    // Each category is a struct plus its error methods plus the marker; the
+    // marker is what makes the set closed, so it rides the same emission rather
+    // than being appended out of order.
+    let category = |decls: &mut Vec<Decl>, name: &str, items: Vec<Decl>| {
+        decls.extend(items);
+        decls.extend(marker_method(sealed, name));
+    };
+    let mut decls = standalone_validation_decls(sealed);
+    category(
+        &mut decls,
+        &n.transport,
+        vec![
+            Decl::raw(format!("type {} struct {{\n\tCause error\n}}", n.transport)),
+            error_method(&n.transport, "\"transport failure\""),
+            unwrap_method(&n.transport),
+        ],
+    );
+    category(
+        &mut decls,
+        &n.decode,
+        vec![
+            Decl::raw(format!(
+                "type {} struct {{\n\tPath     string\n\tExpected string\n\tRaw      string\n}}",
+                n.decode
+            )),
+            error_method(
+                &n.decode,
+                "\"response body did not match the declared schema\"",
             ),
-            vec![Symbol::imported("strconv", "strconv", "strconv")],
-        ),
-        marker_method(&n.api),
-        // Construction failures (a required source that resolved to nothing) ride
-        // their own category so a caller can tell a misconfigured client from a
-        // request or transport failure.
-        Decl::raw(format!("type {} struct {{\n\tMessage string\n}}", n.config)),
-        error_method(&n.config, "e.Message"),
-        marker_method(&n.config),
-    ]);
+        ],
+    );
+    category(
+        &mut decls,
+        &n.contract,
+        vec![
+            Decl::raw(format!(
+                "type {} struct {{\n\tContractName string\n\tCause        error\n}}",
+                n.contract
+            )),
+            error_method(
+                &n.contract,
+                "\"contract hook '\" + e.ContractName + \"' failed\"",
+            ),
+            unwrap_method(&n.contract),
+        ],
+    );
+    category(
+        &mut decls,
+        &n.api,
+        vec![
+            Decl::raw(format!(
+                "type {} struct {{\n\tStatus int\n\tBody   string\n}}",
+                n.api
+            )),
+            Decl::raw_with(
+                format!(
+                    "func (e *{}) Error() string {{ return \"api error \" + strconv.Itoa(e.Status) }}",
+                    n.api
+                ),
+                vec![Symbol::imported("strconv", "strconv", "strconv")],
+            ),
+        ],
+    );
+    // Construction failures (a required source that resolved to nothing) ride
+    // their own category so a caller can tell a misconfigured client from a
+    // request or transport failure.
+    category(
+        &mut decls,
+        &n.config,
+        vec![
+            Decl::raw(format!("type {} struct {{\n\tMessage string\n}}", n.config)),
+            error_method(&n.config, "e.Message"),
+        ],
+    );
     decls
 }
 
 /// The methods that make each declared error struct an error value: `Error`
 /// (its body code, or its canonical name) and the `Retryable` predicate from
 /// `@retryable`.
-fn declared_error_decls(module: &Module) -> Vec<Decl> {
+fn declared_error_decls(module: &Module, sealed: bool) -> Vec<Decl> {
     module_declared_errors(module)
         .iter()
         .flat_map(|err| {
             let ty = error_type_name(err);
-            vec![
+            let mut decls = vec![
                 Decl::raw(format!(
                     "func (e *{ty}) Error() string {{ return \"{}\" }}",
                     declared_message(err)
@@ -191,8 +228,9 @@ fn declared_error_decls(module: &Module) -> Vec<Decl> {
                     "func (e *{ty}) Retryable() bool {{ return {} }}",
                     err.retryable
                 )),
-                marker_method(&ty),
-            ]
+            ];
+            decls.extend(marker_method(sealed, &ty));
+            decls
         })
         .collect()
 }

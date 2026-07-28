@@ -712,6 +712,7 @@ mod tests {
         let raw = Decl::Raw(Raw {
             text: "func (m Method) foo() {}".into(),
             refs: vec![],
+            ..Raw::default()
         });
         assert_eq!(
             GoRules::default().render_decl(&raw),

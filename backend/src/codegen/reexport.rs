@@ -25,8 +25,26 @@ use crate::codegen::pipeline::{GeneratedFile, TargetKind, BANNER};
 struct RustDir {
     /// Child directories, each declared as a module of this one.
     dirs: BTreeSet<String>,
-    /// Child files, as `(module name, public)`.
-    files: BTreeMap<String, bool>,
+    /// Child files, as `(module name, group)`.
+    files: BTreeMap<String, Group>,
+}
+
+/// How a child module is declared: `pub mod` unless it is where the SDK's
+/// surface stops.
+///
+/// The fence is a single place per subtree, not a mark on every internal item.
+/// The `internal/` tree is fenced at the crate root, so everything inside it is
+/// `pub mod` and still unreachable from outside the crate; a group that stays
+/// beside the module it serves (the codec) is fenced where it sits.
+fn declare(name: &str, fenced: bool) -> String {
+    if fenced {
+        // The declarations inside exist for the SDK's own use, so the lint that
+        // wants every item reached is not the right judge of them. The allowance
+        // covers the whole subtree below the fence.
+        format!("#[allow(dead_code)]\nmod {name};\n")
+    } else {
+        format!("pub mod {name};\n")
+    }
 }
 
 /// The Rust module tree: a `mod.rs` per directory of generated files and a
@@ -40,10 +58,14 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
     for group in groups {
         let path = layout::output_path(TargetKind::Rust, group);
         let parent = path.parent().unwrap_or(&root).to_path_buf();
+        let stem = path
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         dirs.entry(parent.clone())
             .or_default()
             .files
-            .insert(group.name.clone(), !group.is_internal());
+            .insert(stem, group.clone());
         // Register each directory as a child of the one above it, up to the
         // crate root, so an intermediate namespace directory is declared too.
         let mut child = parent;
@@ -63,18 +85,13 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
         .map(|(dir, node)| {
             let mut body = String::new();
             for name in &node.dirs {
-                body.push_str(&format!("pub mod {name};\n"));
+                // The `internal/` tree is the crate's fence: private here, so no
+                // path from outside reaches into it, and `pub` all the way down
+                // so the SDK's own modules still can.
+                body.push_str(&declare(name, dir == root && name == layout::INTERNAL_DIR));
             }
-            for (name, public) in &node.files {
-                // An internal group is a private module: no path reaches it from
-                // outside the crate, and inside only its own parent. Its
-                // declarations exist for the SDK's use, so the lint that wants
-                // every item reached is not the right judge of them.
-                if *public {
-                    body.push_str(&format!("pub mod {name};\n"));
-                } else {
-                    body.push_str(&format!("#[allow(dead_code)]\nmod {name};\n"));
-                }
+            for (name, group) in &node.files {
+                body.push_str(&declare(name, group.is_internal() && group.colocated));
             }
             // The crate root declares its children and stops there: flattening
             // them into one namespace is the root barrel this layout refuses,
@@ -84,7 +101,7 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
             } else {
                 node.files
                     .iter()
-                    .filter(|(_, public)| **public)
+                    .filter(|(_, group)| !group.is_internal())
                     .map(|(name, _)| format!("pub use {name}::*;\n"))
                     .collect()
             };
@@ -180,9 +197,11 @@ mod tests {
         let files = rust_module_tree(&payments());
         let lib = text_at(&files, "rust/lib.rs");
         assert!(lib.contains("pub mod payments;"));
-        // The shared group is a private module: unreachable from outside the crate.
+        // The private tree is fenced once, at the crate root: unreachable from
+        // outside the crate, and `pub` all the way down so the SDK reaches it.
         assert!(lib.contains("mod internal;"));
         assert!(!lib.contains("pub mod internal;"));
+        assert!(text_at(&files, "rust/internal/mod.rs").contains("pub mod tono;"));
         // No root barrel: the crate root declares its children and does not
         // flatten them into one namespace.
         assert!(!lib.contains("pub use"));
@@ -194,11 +213,14 @@ mod tests {
         let charges = text_at(&files, "rust/payments/charges/mod.rs");
         assert!(charges.contains("pub mod types;"));
         assert!(charges.contains("pub mod client;"));
-        assert!(charges.contains("mod internal;"));
-        assert!(!charges.contains("pub mod internal;"));
         assert!(charges.contains("pub use types::*;"));
         assert!(charges.contains("pub use client::*;"));
-        assert!(!charges.contains("pub use internal::*;"));
+        // The module's own directory holds only what a consumer may reach: its
+        // private group moved under the crate's `internal/` tree.
+        assert!(!charges.contains("internal"));
+        let private = text_at(&files, "rust/internal/payments/mod.rs");
+        assert!(private.contains("pub mod charges;"));
+        assert!(!private.contains("pub use"));
         // The namespace directory above the modules only declares them.
         let namespace = text_at(&files, "rust/payments/mod.rs");
         assert!(namespace.contains("pub mod charges;"));

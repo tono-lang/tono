@@ -6,7 +6,7 @@ import {
   decodeU64,
   encodeBytes,
   encodeI64,
-} from "../../internal";
+} from "../../internal/tono";
 import { Timestamp } from "../../support";
 import { CardDeclined, Charge, NotFound } from "./types";
 import {

@@ -310,7 +310,8 @@ pub(super) fn apply_transforms(
 pub fn resolution_helpers() -> Vec<Decl> {
     let mut decls = Vec::new();
     {
-        decls.push(Decl::raw(
+        decls.push(Decl::raw_providing(
+            "readEnv",
             "// readEnv treats an unset and an empty variable the same: empty means\n\
              // not set, per the declared-source contract.\n\
              export function readEnv(name: string): string | undefined {\n\
@@ -319,10 +320,12 @@ pub fn resolution_helpers() -> Vec<Decl> {
              \x20 return v === undefined || v === \"\" ? undefined : v;\n\
              }"
             .to_string(),
+            Vec::new(),
         ));
     }
     {
-        decls.push(Decl::raw(
+        decls.push(Decl::raw_providing(
+            "durationToMs",
             "// durationToMs parses the duration spelling shared across targets\n\
              // (Go's ParseDuration grammar: optional sign, bare zero, unit runs)\n\
              // into the runtime's millisecond values.\n\
@@ -357,16 +360,19 @@ pub fn resolution_helpers() -> Vec<Decl> {
              \x20 return sign * total;\n\
              }"
             .to_string(),
+            Vec::new(),
         ));
     }
     {
-        decls.push(Decl::raw(
+        decls.push(Decl::raw_providing(
+            "strTransformWords",
             "// strTransformWords splits a resolved value for the casing transforms:\n\
              // runs of spaces, hyphens, and underscores separate words.\n\
              export function strTransformWords(s: string): string[] {\n\
              \x20 return s.split(/[ _-]+/).filter((w) => w !== \"\");\n\
              }"
             .to_string(),
+            Vec::new(),
         ));
         for t in ["upper_snake", "snake", "kebab", "pascal"] {
             let (name, body) = match t {
@@ -388,9 +394,11 @@ pub fn resolution_helpers() -> Vec<Decl> {
                 ),
                 _ => continue,
             };
-            decls.push(Decl::raw(format!(
-                "export function {name}(s: string): string {{\n{body}\n}}"
-            )));
+            decls.push(Decl::raw_providing(
+                name,
+                format!("export function {name}(s: string): string {{\n{body}\n}}"),
+                Vec::new(),
+            ));
         }
     }
     decls

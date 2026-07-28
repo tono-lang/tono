@@ -4,7 +4,6 @@ package tono
 
 import "encoding/json"
 import tonohttp "github.com/tono-lang/tono/runtimes/http-go"
-import "strings"
 import "time"
 
 // MustDescriptor parses a compiler-emitted descriptor literal at package
@@ -39,44 +38,4 @@ func DurationMs(v string) (float64, error) {
 		return 0, err
 	}
 	return float64(d) / float64(time.Millisecond), nil
-}
-
-// StrTransformWords splits a resolved value for the casing transforms:
-// runs of spaces, hyphens, and underscores separate words.
-func StrTransformWords(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == '-' || r == '_' })
-}
-
-func StrUpperSnake(s string) string {
-	ws := StrTransformWords(s)
-	for i := range ws {
-		ws[i] = strings.ToUpper(ws[i])
-	}
-	return strings.Join(ws, "_")
-}
-
-func StrSnake(s string) string {
-	ws := StrTransformWords(s)
-	for i := range ws {
-		ws[i] = strings.ToLower(ws[i])
-	}
-	return strings.Join(ws, "_")
-}
-
-func StrKebab(s string) string {
-	ws := StrTransformWords(s)
-	for i := range ws {
-		ws[i] = strings.ToLower(ws[i])
-	}
-	return strings.Join(ws, "-")
-}
-
-func StrPascal(s string) string {
-	ws := StrTransformWords(s)
-	for i := range ws {
-		if ws[i] != "" {
-			ws[i] = strings.ToUpper(ws[i][:1]) + strings.ToLower(ws[i][1:])
-		}
-	}
-	return strings.Join(ws, "")
 }

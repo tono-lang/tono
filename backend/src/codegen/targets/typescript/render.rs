@@ -272,10 +272,10 @@ mod tests {
         assert_eq!(
             TsRules.render_import(
                 "payments.charges::types",
-                "payments.charges::internal",
+                "payments.charges::codec",
                 &["encodeCharge"]
             ),
-            "import { encodeCharge } from \"./internal\";"
+            "import { encodeCharge } from \"./codec\";"
         );
         assert_eq!(
             TsRules.render_import(
@@ -554,6 +554,7 @@ mod tests {
         let raw = Decl::Raw(Raw {
             text: "export const VERSION = \"1\";".into(),
             refs: vec![],
+            ..Raw::default()
         });
         assert_eq!(TsRules.render_decl(&raw), "export const VERSION = \"1\";");
     }

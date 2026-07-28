@@ -80,33 +80,3 @@ export function durationToMs(v: string): number {
   }
   return sign * total;
 }
-
-// strTransformWords splits a resolved value for the casing transforms:
-// runs of spaces, hyphens, and underscores separate words.
-export function strTransformWords(s: string): string[] {
-  return s.split(/[ _-]+/).filter((w) => w !== "");
-}
-
-export function strUpperSnake(s: string): string {
-  return strTransformWords(s)
-    .map((w) => w.toUpperCase())
-    .join("_");
-}
-
-export function strSnake(s: string): string {
-  return strTransformWords(s)
-    .map((w) => w.toLowerCase())
-    .join("_");
-}
-
-export function strKebab(s: string): string {
-  return strTransformWords(s)
-    .map((w) => w.toLowerCase())
-    .join("-");
-}
-
-export function strPascal(s: string): string {
-  return strTransformWords(s)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join("");
-}

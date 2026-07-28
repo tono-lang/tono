@@ -559,6 +559,7 @@ mod tests {
         let raw = Decl::Raw(Raw {
             text: "impl Charge {}".into(),
             refs: vec![],
+            ..Raw::default()
         });
         assert_eq!(RustRules.render_decl(&raw), "impl Charge {}");
     }

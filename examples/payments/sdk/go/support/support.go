@@ -4,6 +4,4 @@ package support
 
 type Timestamp string
 
-type LocalDate string
-
 type Duration string

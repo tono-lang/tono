@@ -3,11 +3,3 @@
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(transparent)]
 pub struct Timestamp(pub String);
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(transparent)]
-pub struct LocalDate(pub String);
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(transparent)]
-pub struct Duration(pub String);

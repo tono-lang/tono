@@ -2,6 +2,4 @@
 
 export type Timestamp = string & { readonly __brand: "Timestamp" };
 
-export type LocalDate = string & { readonly __brand: "LocalDate" };
-
 export type Duration = string & { readonly __brand: "Duration" };

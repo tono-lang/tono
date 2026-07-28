@@ -147,15 +147,15 @@ fn repoint_type(ty: &mut TypeExpr, f: &dyn Fn(&mut Symbol)) {
 pub fn declared_symbols(decls: &[Decl]) -> Vec<String> {
     decls
         .iter()
-        .filter_map(|decl| match decl {
-            Decl::Interface(x) => Some(x.name.name.clone()),
-            Decl::Enum(x) => Some(x.name.name.clone()),
-            Decl::Union(x) => Some(x.name.name.clone()),
-            Decl::Method(x) => Some(x.name.name.clone()),
-            Decl::Function(x) => Some(x.name.name.clone()),
-            Decl::Alias(x) => Some(x.name.name.clone()),
-            Decl::Client(x) => Some(x.name.name.clone()),
-            Decl::Raw(_) => None,
+        .flat_map(|decl| match decl {
+            Decl::Interface(x) => vec![x.name.name.clone()],
+            Decl::Enum(x) => vec![x.name.name.clone()],
+            Decl::Union(x) => vec![x.name.name.clone()],
+            Decl::Method(x) => vec![x.name.name.clone()],
+            Decl::Function(x) => vec![x.name.name.clone()],
+            Decl::Alias(x) => vec![x.name.name.clone()],
+            Decl::Client(x) => vec![x.name.name.clone()],
+            Decl::Raw(x) => x.provides.clone(),
         })
         .collect()
 }
@@ -569,6 +569,7 @@ mod tests {
                 // The text mentions a type, but only the declared refs are walked.
                 text: "impl Charge { fn touch(&self) -> Helper { Helper } }".into(),
                 refs: vec![Symbol::imported("Helper", "helpers", "Helper")],
+                ..Raw::default()
             })],
         };
         assert_eq!(

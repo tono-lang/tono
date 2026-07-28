@@ -153,9 +153,9 @@ mkdir -p "$fence/node_modules/sdk"
 cp -R "$sdk"/typescript/. "$fence/node_modules/sdk/"
 cat >"$fence/probe.mjs" <<'EOF'
 const refused = [
-  "sdk/payments/charges/internal",
+  "sdk/internal/payments/charges",
   "sdk/payments/charges/codec",
-  "sdk/internal",
+  "sdk/internal/tono",
 ];
 let bad = 0;
 try {

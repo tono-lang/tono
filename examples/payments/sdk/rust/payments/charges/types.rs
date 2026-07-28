@@ -3,7 +3,7 @@
 use crate::payments::common::types::{PaymentMethod, Status};
 use crate::support::Timestamp;
 
-use crate::internal::{base64_bytes, i64_string, u64_string};
+use crate::internal::tono::{base64_bytes, i64_string, u64_string};
 
 /// A small payments API that exercises the hard wire cases end to end.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

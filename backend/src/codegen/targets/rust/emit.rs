@@ -191,6 +191,7 @@ fn raw_use(text: String) -> Decl {
     Decl::Raw(Raw {
         text,
         refs: Vec::new(),
+        ..Raw::default()
     })
 }
 
@@ -267,7 +268,10 @@ mod tests {
             name: "billing".into(),
             shapes: vec![structure(
                 "billing#Charge",
-                vec![member("amount_cents", Tref::Prim(Prim::I64), true)],
+                vec![
+                    member("amount_cents", Tref::Prim(Prim::I64), true),
+                    member("created", Tref::Prim(Prim::Timestamp), true),
+                ],
             )],
             operations: vec![],
             extensions: vec![],
@@ -276,10 +280,13 @@ mod tests {
 
         // The types group holds the struct and pulls only the i64 helper it uses
         // from the shared module (no u64, no base64); with one module the
-        // branded newtypes fold in here too.
+        // branded newtype the field names folds in here too, and the ones nothing
+        // names are left out.
         let types = rendered(&module, TYPES);
         assert!(types.contains("pub struct Timestamp(pub String);"));
-        assert!(types.contains("use crate::internal::{i64_string};"));
+        assert!(!types.contains("pub struct LocalDate"));
+        assert!(!types.contains("pub struct Duration"));
+        assert!(types.contains("use crate::internal::tono::{i64_string};"));
         assert!(!types.contains("u64_string"));
         assert!(!types.contains("base64_bytes"));
         assert!(types.contains("pub struct Charge {"));
