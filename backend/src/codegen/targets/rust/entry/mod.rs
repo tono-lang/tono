@@ -433,6 +433,18 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         for import in surface::helper_imports(&helpers).into_iter().rev() {
             decls.insert(0, import);
         }
+        // The whole surface freely names the module's error taxonomy and any
+        // declared-error shape (`TonoError`, `ConfigError`, `APIFailure`, a
+        // declared error's own type, ...) as bare text; a glob import of the
+        // module's public group, the same technique the open enums' impls
+        // already use, resolves them all without tracking a `Symbol` ref
+        // through every place one of those names gets interpolated.
+        decls.insert(
+            0,
+            crate::codegen::targets::rust::emit::types_glob_use(
+                &crate::codegen::group::Group::types(&module.name),
+            ),
+        );
         per_entry.push((entry.name.to_string(), decls));
     }
     EntryEmission { shared, per_entry }

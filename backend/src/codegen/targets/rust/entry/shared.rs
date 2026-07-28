@@ -7,9 +7,16 @@
 //! group of its own: it reuses the `bytes` group's `base64_bytes::decode`,
 //! the same helper a wire struct field routes through.
 //!
-//! Declared unconditionally; the assembler prunes whatever the emitted SDK
-//! never references, down to the individual function (an SDK with no
-//! `@str::kebab` field does not ship `strKebab`).
+//! Declared with no `provides` list (matching this target's own
+//! `number`/`bytes` helper modules): the assembler's per-declaration pruning
+//! only trims a declaration it can name-check against a real reference, and
+//! this crate builds an entry's `use` of these unconditionally on the
+//! `Helpers` flags its own resolution logic set ([`super::surface::
+//! helper_imports`]) rather than through a `Symbol` ref threaded to every
+//! call site — so an unnamed declaration here is the one that survives.
+//! Whichever of these groups a model reaches ships whole, mirroring Go's own
+//! `duration`/`casing` root groups (gated only on "does the model have any
+//! entry", not on which specific helper a given entry calls).
 
 use crate::codegen::tree::Decl;
 
@@ -17,15 +24,12 @@ use crate::codegen::tree::Decl;
 /// same: empty means not set, per the declared-source contract every target
 /// shares.
 pub(super) fn env_helpers() -> Vec<Decl> {
-    vec![Decl::raw_providing(
-        "read_env",
-        "fn read_env(name: &str) -> Option<String> {\n    \
+    vec![Decl::raw(
+        "pub fn read_env(name: &str) -> Option<String> {\n    \
          match std::env::var(name) {\n        \
          Ok(v) if !v.is_empty() => Some(v),\n        \
          _ => None,\n    \
-         }\n}"
-            .to_string(),
-        Vec::new(),
+         }\n}",
     )]
 }
 
@@ -35,9 +39,8 @@ pub(super) fn env_helpers() -> Vec<Decl> {
 /// pairs (`ns`, `us`/`µs`/`μs`, `ms`, `s`, `m`, `h`); a syntactically invalid
 /// remainder fails to parse.
 pub(super) fn duration_helpers() -> Vec<Decl> {
-    vec![Decl::raw_providing(
-        "parse_duration_ms",
-        "fn parse_duration_ms(v: &str) -> Result<f64, ()> {\n\
+    vec![Decl::raw(
+        "pub fn parse_duration_ms(v: &str) -> Result<f64, ()> {\n\
          \x20   let mut rest = v;\n\
          \x20   let mut sign = 1.0;\n\
          \x20   if let Some(r) = rest.strip_prefix('-') {\n\
@@ -97,9 +100,7 @@ pub(super) fn duration_helpers() -> Vec<Decl> {
          \x20       return Err(());\n\
          \x20   }\n\
          \x20   Ok(sign * total)\n\
-         }"
-            .to_string(),
-        Vec::new(),
+         }",
     )]
 }
 
@@ -111,13 +112,10 @@ pub(super) fn duration_helpers() -> Vec<Decl> {
 /// Rust identifier is not snake_case, and it is a deliberate cross-target
 /// contract, not an oversight.
 pub(super) fn casing_helpers() -> Vec<Decl> {
-    let mut decls = vec![Decl::raw_providing(
-        "entry_transform_words",
-        "fn entry_transform_words(s: &str) -> Vec<&str> {\n    \
+    let mut decls = vec![Decl::raw(
+        "pub fn entry_transform_words(s: &str) -> Vec<&str> {\n    \
          s.split(|c: char| c == ' ' || c == '-' || c == '_').filter(|w| !w.is_empty()).collect()\n\
-         }"
-            .to_string(),
-        Vec::new(),
+         }",
     )];
     for (name, body) in [
         (
@@ -143,18 +141,15 @@ pub(super) fn casing_helpers() -> Vec<Decl> {
         // by value covers both — a bare place read this way is always
         // immediately reassigned by the caller (`dest = strSnake(dest)`),
         // which Rust accepts (the move and the reassignment do not overlap).
-        decls.push(Decl::raw_providing(
-            name,
-            format!("#[allow(non_snake_case)]\nfn {name}(s: String) -> String {{\n{body}\n}}"),
-            Vec::new(),
-        ));
+        decls.push(Decl::raw(format!(
+            "#[allow(non_snake_case)]\npub fn {name}(s: String) -> String {{\n{body}\n}}"
+        )));
     }
     decls
 }
 
 /// The SDK-root groups this target emits, each named for what it holds.
-/// Called whenever the model has any entry at all; the assembler prunes what
-/// nothing in the emitted SDK references.
+/// Called whenever the model has any entry at all.
 pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
     vec![
         ("env", env_helpers()),

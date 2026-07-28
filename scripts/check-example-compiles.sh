@@ -48,8 +48,9 @@ EOF
 # (including a cross-module union field, same as the Go verify driver).
 mkdir -p "$work/rust/verify"
 cat >"$work/rust/verify/main.rs" <<'EOF'
-use example_rust::payments::charges::{Charge, Client, Timestamp};
+use example_rust::payments::charges::{Charge, Client};
 use example_rust::payments::common::{Card, PaymentMethod, Status};
+use example_rust::support::Timestamp;
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)

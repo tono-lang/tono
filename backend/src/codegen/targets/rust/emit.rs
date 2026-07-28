@@ -236,9 +236,12 @@ pub(crate) fn helpers_use(from: &Group, names: &[&str]) -> Decl {
     ))
 }
 
-/// The glob `use` that brings a group's types into scope, so the open enums'
-/// impls (and the orphan-rule local-type requirement) resolve.
-fn types_glob_use(types: &Group) -> Decl {
+/// The glob `use` that brings a group's types into scope: the open enums'
+/// impls (and the orphan-rule local-type requirement), or an entry's own
+/// group reaching the module's error taxonomy and declared-error types
+/// without threading a `Symbol` ref through every generated call site that
+/// names one.
+pub(crate) fn types_glob_use(types: &Group) -> Decl {
     raw_use(format!(
         "use {}::*;",
         crate::codegen::layout::rust_path(&types.path()).unwrap_or_default()
