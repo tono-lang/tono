@@ -7,11 +7,11 @@
 //! `internal/`, a private Rust `mod`, a TypeScript subpath left out of the
 //! package's `exports`.
 //!
-//! A group belongs either to an IR module or to the SDK root. The root group
-//! holds what crosses module boundaries (the branded well-known types, the
-//! serde runtime helpers), so a two-module SDK carries one copy rather than one
-//! per module; everything that serves a single module lives in that module's
-//! groups.
+//! A group belongs either to an IR module or to the SDK root. The root groups
+//! hold what crosses module boundaries (the branded well-known types, the
+//! serialization, the resolution of declared construction values), so a
+//! two-module SDK carries one copy rather than one per module; everything that
+//! serves a single module lives in that module's groups.
 //!
 //! Groups are referenced by a *path*: a single string, since the component tree
 //! and the import engine key on module paths and a group is what a module path
@@ -145,8 +145,8 @@ impl Group {
     ///
     /// Internal, but it cannot be moved away from them: a method has to be
     /// declared where its receiver is (Go), and an impl where its type is
-    /// (Rust). So this group sits beside the module rather than under the SDK's
-    /// internal tree, and each target hides it in place.
+    /// (Rust). So this group stays beside the module wherever the target could
+    /// otherwise have moved it, and each target hides it in place.
     pub fn codec(module: &str) -> Self {
         Self {
             module: Some(module.into()),

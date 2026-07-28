@@ -34,10 +34,10 @@ use crate::ir::Model;
 /// name no module can take (see [`check_layout`]).
 pub(crate) const ROOT_UNIT: &str = "tono";
 
-/// The directory every target fences its relocatable internal groups into. Named
-/// for Go, whose toolchain refuses to resolve it from outside the SDK; the other
-/// targets fence with a private module and an unlisted subpath, and share the
-/// directory so one SDK has one shape.
+/// The directory Go fences its relocatable internal groups into: the one thing
+/// its toolchain refuses to resolve from outside the SDK. Go alone needs it,
+/// because a Rust `mod` without `pub` and a TypeScript subpath left out of
+/// `exports` fence a declaration where it already sits.
 pub(crate) const INTERNAL_DIR: &str = "internal";
 
 /// The Go package name of the SDK-root support group. Public, so it sits beside
@@ -285,14 +285,17 @@ impl Resolver for SameUnit {
     }
 }
 
-/// Reject a Go layout that would emit source Go cannot compile, so the failure is
-/// a clear error rather than silently-broken output. Go has no relative imports,
-/// so an SDK whose modules import each other (or the shared internal package)
-/// needs the module path (`--go-module`); and a package is named for its module's
-/// last segment, so two modules sharing that segment, or one taking the shared
-/// package's name, would render colliding selectors. Config is applied first, so
-/// `--flatten` (which joins the whole path into one segment) clears the
-/// collision. A no-op when Go is not a requested target.
+/// Reject a layout that would emit source the target cannot compile, so the
+/// failure is a clear error rather than silently-broken output.
+///
+/// Go has no relative imports, so an SDK whose modules import each other (or a
+/// shared internal package) needs the module path (`--go-module`); and a package
+/// is named for its module's last segment, so two modules sharing that segment,
+/// or one taking a shared package's name, would render colliding selectors. Rust
+/// and TypeScript put their shared groups at the root of the output instead, so
+/// there a module of that name collides with the file. Config is applied first,
+/// so `--flatten` (which joins the whole path into one segment) clears either
+/// collision. Each check is a no-op when its target was not requested.
 pub fn check_layout(
     model: &Model,
     targets: &[TargetKind],
