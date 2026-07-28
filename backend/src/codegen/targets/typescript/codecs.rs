@@ -56,7 +56,14 @@ pub fn runtime_helpers() -> Vec<Decl> {
             "decodeBytes",
             &[("s", "string")],
             "Uint8Array",
-            "  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));",
+            "  // Line breaks are not data. atob is lenient about a missing pad,\n\
+             \x20 // so the length and padding are checked here: a malformed value is\n\
+             \x20 // an error rather than bytes nobody sent.\n\
+             \x20 const t = s.replace(/[\\r\\n]/g, \"\");\n\
+             \x20 if (t.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(t)) {\n\
+             \x20   throw new Error(`invalid base64: ${JSON.stringify(s)}`);\n\
+             \x20 }\n\
+             \x20 return Uint8Array.from(atob(t), (c) => c.charCodeAt(0));",
         ),
     ]
 }

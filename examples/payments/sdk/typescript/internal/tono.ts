@@ -25,7 +25,14 @@ export function encodeBytes(b: Uint8Array): string {
 }
 
 export function decodeBytes(s: string): Uint8Array {
-  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  // Line breaks are not data. atob is lenient about a missing pad,
+  // so the length and padding are checked here: a malformed value is
+  // an error rather than bytes nobody sent.
+  const t = s.replace(/[\r\n]/g, "");
+  if (t.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(t)) {
+    throw new Error(`invalid base64: ${JSON.stringify(s)}`);
+  }
+  return Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
 }
 
 // readEnv treats an unset and an empty variable the same: empty means

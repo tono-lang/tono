@@ -22,7 +22,27 @@ use tono_backend::codegen::{generate_target, resolve_groups, CodegenConfig, Targ
 use tono_backend::ir::Model;
 
 mod common;
-use common::{matrix_module as shared_module, CANONICAL_WIRE as CANONICAL};
+use common::{
+    matrix_module as shared_module, wire_with_secret, BASE64_ACCEPTED, BASE64_REJECTED,
+    CANONICAL_WIRE as CANONICAL,
+};
+
+/// The line a driver prints for a document its SDK refuses to decode.
+const REJECT: &str = "REJECT";
+
+/// Every document the drivers are fed, canonical first. The rest probe the one
+/// field each target decodes by hand, which is where the three drifted apart.
+fn documents() -> Vec<String> {
+    let mut documents = vec![CANONICAL.to_string(), wire_with_secret(BASE64_ACCEPTED)];
+    documents.extend(BASE64_REJECTED.iter().map(|s| wire_with_secret(s)));
+    documents
+}
+
+/// The drivers' input: one JSON array of documents, so a language pays its
+/// toolchain start-up once however many documents there are.
+fn driver_input() -> String {
+    format!("[{}]", documents().join(","))
+}
 
 fn tests_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests")
@@ -85,7 +105,7 @@ fn write_sdk(root: &Path, target: TargetKind, casing: &tono_backend::codegen::Ca
     }
 }
 
-fn rust_output() -> Option<Value> {
+fn rust_output() -> Option<Vec<String>> {
     if !have("cargo", "--version") {
         return None;
     }
@@ -101,12 +121,30 @@ fn rust_output() -> Option<Value> {
         &dir,
         "cargo",
         &["run", "--quiet", "--bin", "conformance"],
-        Some(CANONICAL),
+        Some(&driver_input()),
     );
-    Some(serde_json::from_str(out.trim()).expect("rust output is json"))
+    Some(lines(&out))
 }
 
-fn go_output() -> Option<Value> {
+/// One line per document, in the order they were fed.
+fn lines(out: &str) -> Vec<String> {
+    out.lines().map(str::to_string).collect()
+}
+
+/// A driver's answers as data rather than bytes: `None` where it refused the
+/// document, else the re-encoded JSON parsed, since key order carries no
+/// meaning and the targets do not agree on it.
+fn answers(lines: &[String]) -> Vec<Option<Value>> {
+    lines
+        .iter()
+        .map(|line| {
+            (line != REJECT)
+                .then(|| serde_json::from_str(line).expect("a driver line is REJECT or json"))
+        })
+        .collect()
+}
+
+fn go_output() -> Option<Vec<String>> {
     if !have("go", "version") {
         return None;
     }
@@ -152,23 +190,30 @@ fn go_output() -> Option<Value> {
         &dir,
         "go",
         &["run", "-tags", "conformance", "."],
-        Some(CANONICAL),
+        Some(&driver_input()),
     );
-    Some(serde_json::from_str(out.trim()).expect("go output is json"))
+    Some(lines(&out))
 }
 
-/// The TypeScript conformance driver. The canonical input is embedded (so the
-/// driver needs no Node type declarations to read stdin); it decodes then
-/// re-encodes and prints the wire JSON.
+/// The TypeScript conformance driver. The documents are embedded (so the driver
+/// needs no Node type declarations to read stdin); it decodes then re-encodes
+/// each and prints the wire JSON, or REJECT for one the SDK refuses.
 fn ts_driver() -> String {
     format!(
         "import {{ decodeAccount, encodeAccount }} from \"./models/codec\";\n\
-         const input: any = {CANONICAL};\n\
-         console.log(JSON.stringify(encodeAccount(decodeAccount(input))));\n"
+         const documents: any[] = {input};\n\
+         for (const document of documents) {{\n\
+         \x20 try {{\n\
+         \x20   console.log(JSON.stringify(encodeAccount(decodeAccount(document))));\n\
+         \x20 }} catch {{\n\
+         \x20   console.log(\"{REJECT}\");\n\
+         \x20 }}\n\
+         }}\n",
+        input = driver_input()
     )
 }
 
-fn ts_output() -> Option<Value> {
+fn ts_output() -> Option<Vec<String>> {
     let ws = tests_dir().join("typescript");
     let tsc = ws.join("node_modules/.bin/tsc");
     if !tsc.exists() || !have("node", "--version") {
@@ -198,7 +243,7 @@ fn ts_output() -> Option<Value> {
         String::from_utf8_lossy(&compile.stderr)
     );
     let out = run(&ws, "node", &["work-conformance/dist/conformance.js"], None);
-    Some(serde_json::from_str(out.trim()).expect("ts output is json"))
+    Some(lines(&out))
 }
 
 #[test]
@@ -224,12 +269,45 @@ fn the_three_targets_agree_on_the_wire() {
     );
     eprintln!("conformance checked across: {present:?}");
 
+    let expected = documents();
     for (name, output) in &outputs {
-        if let Some(value) = output {
+        let Some(lines) = output else { continue };
+        assert_eq!(
+            lines.len(),
+            expected.len(),
+            "{name} answered {} of {} documents",
+            lines.len(),
+            expected.len()
+        );
+        // The canonical document round-trips to itself.
+        assert_eq!(
+            serde_json::from_str::<Value>(&lines[0]).expect("{name} output is json"),
+            canonical,
+            "{name} re-encoded JSON is not canonically equal to the fixture"
+        );
+        // The one unusual spelling every target accepts decodes to the same
+        // bytes, so re-encoding it lands back on the canonical spelling.
+        assert_ne!(
+            lines[1], REJECT,
+            "{name} refused a base64 spelling the contract accepts"
+        );
+        for (line, document) in lines[2..].iter().zip(&expected[2..]) {
             assert_eq!(
-                value, &canonical,
-                "{name} re-encoded JSON is not canonically equal to the fixture"
+                line, REJECT,
+                "{name} accepted a malformed document instead of refusing it: {document}"
             );
         }
+    }
+    // Beyond each target being right on its own, the three have to answer
+    // identically: a divergence here is the wire contract splitting in two.
+    let answered: Vec<(&str, Vec<Option<Value>>)> = outputs
+        .iter()
+        .filter_map(|(name, out)| out.as_ref().map(|lines| (*name, answers(lines))))
+        .collect();
+    for pair in answered.windows(2) {
+        let [(a, left), (b, right)] = pair else {
+            continue;
+        };
+        assert_eq!(left, right, "{a} and {b} do not agree on the wire");
     }
 }

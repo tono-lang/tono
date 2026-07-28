@@ -434,9 +434,17 @@ const BASE64_BYTES_MODULE: &str = r#"pub mod base64_bytes {
                 _ => Err("invalid base64".to_string()),
             }
         }
-        let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'=').collect();
+        // Line breaks are not data; every other length and padding rule is
+        // checked before any byte is produced, so a malformed value is an error
+        // rather than bytes nobody sent.
+        let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'\n' && c != b'\r').collect();
+        let pad = bytes.iter().rev().take_while(|&&c| c == b'=').count();
+        let body = &bytes[..bytes.len() - pad];
+        if bytes.len() % 4 != 0 || pad > 2 || body.contains(&b'=') {
+            return Err("invalid base64".to_string());
+        }
         let mut out = Vec::new();
-        for chunk in bytes.chunks(4) {
+        for chunk in body.chunks(4) {
             let mut n = 0u32;
             for (i, &c) in chunk.iter().enumerate() {
                 n |= val(c)? << (18 - 6 * i);

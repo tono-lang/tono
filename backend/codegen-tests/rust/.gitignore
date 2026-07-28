@@ -4,4 +4,5 @@ Cargo.lock
 # harness at run time.
 src/lib.rs
 src/models/
-src/internal.rs
+src/codec.rs
+src/support.rs
