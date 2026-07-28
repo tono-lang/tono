@@ -171,6 +171,44 @@ impl Resolver<'_, '_> {
             _ => format!("{dest} = {};", cast_string(t, "v")),
         }
     }
+
+    /// Fold a field's declared sources into a presence cascade: `@with`
+    /// shares its own step spelling ([`Emitter::with_step_body`]) across
+    /// every target shape, and env is the only source whose step differs by
+    /// target (a scalar/enum parse, a structured decode, a whole-JSON
+    /// decode) — so the caller supplies just that one step, and everything
+    /// around it (folding the steps into `if {why} != "" { ... }` guards) is
+    /// written once. `env_step` takes `&mut Self` explicitly rather than
+    /// capturing it, so it can still call the `&mut self` env helpers while
+    /// this method holds its own `&mut self` borrow across the loop.
+    fn source_cascade(
+        &mut self,
+        field: &EntryField,
+        dest: &str,
+        why: &str,
+        mut env_step: impl FnMut(&mut Self, &EnvName) -> String,
+    ) -> String {
+        let mut steps: Vec<String> = Vec::new();
+        for source in &field.sources {
+            match source {
+                Source::With => steps.push(self.with_step_body(field, dest, why)),
+                Source::Env(name) => steps.push(env_step(self, name)),
+                Source::Default(_) | Source::Arg => {}
+            }
+        }
+        steps
+            .iter()
+            .enumerate()
+            .map(|(i, step)| {
+                if i == 0 {
+                    step.clone()
+                } else {
+                    format!("if {why} != \"\" {{\n{}\n}}", indent(step, 1))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 impl Emitter for Resolver<'_, '_> {
@@ -530,37 +568,18 @@ impl Emitter for Resolver<'_, '_> {
             String::new()
         };
 
-        let mut steps: Vec<String> = Vec::new();
-        for source in &field.sources {
-            match source {
-                Source::With => steps.push(self.with_step_body(field, &dest, &why)),
-                Source::Env(name) => {
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    let miss = self.env_miss_reason(name);
-                    let pre = self.env_name_prereq(name, &why);
-                    let fail_parse = checks::config_error("format!(\"{}: {}\", label, e)");
-                    steps.push(format!(
-                        "{pre}if let Some(raw) = {lookup} {{\n    let label = {label};\n    let probe: serde_json::Value = match serde_json::from_str(&raw) {{\n        Ok(v) => v,\n        Err(e) => {{ {fail_parse} }}\n    }};\n{required}    let decoded: {ty} = match serde_json::from_str(&raw) {{\n        Ok(v) => v,\n        Err(e) => {{ {fail_parse} }}\n    }};\n{validate}    {dest} = decoded;\n    {why} = String::new();\n}} else {{\n    {why} = {miss};\n}}",
-                        required = indent(&required_checks, 1),
-                        validate = indent(&validate, 1),
-                    ));
-                }
-                Source::Default(_) | Source::Arg => {}
-            }
-        }
-        let cascade = steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                if i == 0 {
-                    step.clone()
-                } else {
-                    format!("if {why} != \"\" {{\n{}\n}}", indent(step, 1))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let cascade = self.source_cascade(field, &dest, &why, |this, name| {
+            let lookup = this.env_lookup(name);
+            let label = this.env_label(name);
+            let miss = this.env_miss_reason(name);
+            let pre = this.env_name_prereq(name, &why);
+            let fail_parse = checks::config_error("format!(\"{}: {}\", label, e)");
+            format!(
+                "{pre}if let Some(raw) = {lookup} {{\n    let label = {label};\n    let probe: serde_json::Value = match serde_json::from_str(&raw) {{\n        Ok(v) => v,\n        Err(e) => {{ {fail_parse} }}\n    }};\n{required}    let decoded: {ty} = match serde_json::from_str(&raw) {{\n        Ok(v) => v,\n        Err(e) => {{ {fail_parse} }}\n    }};\n{validate}    {dest} = decoded;\n    {why} = String::new();\n}} else {{\n    {why} = {miss};\n}}",
+                required = indent(&required_checks, 1),
+                validate = indent(&validate, 1),
+            )
+        });
         out.push_str(&cascade);
         out
     }
@@ -574,35 +593,16 @@ impl Emitter for Resolver<'_, '_> {
         }
         let why = why_var(&field.name);
         let mut out = format!("let mut {why} = \"no source\".to_string();\n");
-        let mut steps: Vec<String> = Vec::new();
-        for source in &field.sources {
-            match source {
-                Source::With => steps.push(self.with_step_body(field, &dest, &why)),
-                Source::Env(name) => {
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    let miss = self.env_miss_reason(name);
-                    let pre = self.env_name_prereq(name, &why);
-                    let fail = checks::config_error("format!(\"{}: {}\", label, e)");
-                    steps.push(format!(
-                        "{pre}if let Some(raw) = {lookup} {{\n    let label = {label};\n    match serde_json::from_str(&raw) {{\n        Ok(v) => {{ {dest} = v; }}\n        Err(e) => {{ {fail} }}\n    }}\n    {why} = String::new();\n}} else {{\n    {why} = {miss};\n}}",
-                    ));
-                }
-                Source::Default(_) | Source::Arg => {}
-            }
-        }
-        let cascade = steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                if i == 0 {
-                    step.clone()
-                } else {
-                    format!("if {why} != \"\" {{\n{}\n}}", indent(step, 1))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let cascade = self.source_cascade(field, &dest, &why, |this, name| {
+            let lookup = this.env_lookup(name);
+            let label = this.env_label(name);
+            let miss = this.env_miss_reason(name);
+            let pre = this.env_name_prereq(name, &why);
+            let fail = checks::config_error("format!(\"{}: {}\", label, e)");
+            format!(
+                "{pre}if let Some(raw) = {lookup} {{\n    let label = {label};\n    match serde_json::from_str(&raw) {{\n        Ok(v) => {{ {dest} = v; }}\n        Err(e) => {{ {fail} }}\n    }}\n    {why} = String::new();\n}} else {{\n    {why} = {miss};\n}}",
+            )
+        });
         out.push_str(&cascade);
         out
     }
