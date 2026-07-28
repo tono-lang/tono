@@ -65,7 +65,7 @@ fn the_resolution_follows_the_declared_chains() {
     assert!(serde.contains("if w.clientName != nil {"));
     assert!(serde.contains("s.ClientName = \"demo\""));
     // @format with @str transforms.
-    assert!(serde.contains("s.ClientKey = config.StrUpperSnake(strings.TrimSpace(s.ClientName))"));
+    assert!(serde.contains("s.ClientKey = casing.StrUpperSnake(strings.TrimSpace(s.ClientName))"));
     assert!(serde.contains("s.EndpointEnv = \"ENDPOINT_\" + s.ClientKey + \"_V2\""));
     // A dynamic env name reads through the resolved field.
     assert!(serde.contains("os.LookupEnv(s.EndpointEnv)"));
@@ -83,7 +83,7 @@ fn the_resolution_follows_the_declared_chains() {
     // The resolved values freeze for the runtime's ref positions, ints
     // widened and durations in milliseconds.
     assert!(serde.contains("values[\"max_retries\"] = int64(s.MaxRetries)"));
-    assert!(serde.contains("ms, err := config.DurationMs(string(s.Timeout))"));
+    assert!(serde.contains("ms, err := duration.DurationMs(string(s.Timeout))"));
     assert!(serde.contains("values[\"settings.api_key\"] = s.Settings.APIKey"));
 }
 
@@ -153,7 +153,7 @@ fn the_method_maps_the_raw_outcome_onto_the_taxonomy() {
     let module = with_descriptors(fixture_module());
     let serde = entry_text(&module);
     // The descriptor is embedded verbatim, an opaque blob.
-    assert!(serde.contains("var saveNoteDescriptor = codec.MustDescriptor("));
+    assert!(serde.contains("var saveNoteDescriptor = descriptor.MustDescriptor("));
     assert!(serde
         .contains("outcome, err := c.runtime.Execute(ctx, saveNoteDescriptor, record, c.hooks)"));
     assert!(serde.contains("case tonohttp.OutcomeTransport:"));
@@ -398,7 +398,7 @@ fn transforms_apply_to_chain_and_match_resolved_values() {
     push_entry_field(&mut module, picked);
     let serde = entry_text(&module);
     // The pipeline runs over the resolved value whatever idiom produced it.
-    assert!(serde.contains("s.Team = config.StrSnake(s.Team)"));
+    assert!(serde.contains("s.Team = casing.StrSnake(s.Team)"));
     assert!(serde.contains("s.Picked = strings.ToUpper(s.Picked)"));
 }
 
@@ -552,7 +552,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(serde.contains("os.LookupEnv(s.SureName)"));
     assert!(serde.contains("dynamicWhy = \"naming <- \" + namingWhy"));
     // Transforms compose innermost-first; the input placeholder renders empty.
-    assert!(serde.contains("config.StrUpperSnake(config.StrPascal(config.StrKebab(config.StrSnake(strings.ToUpper(strings.ToLower(strings.TrimSpace("));
+    assert!(serde.contains("casing.StrUpperSnake(casing.StrPascal(casing.StrKebab(casing.StrSnake(strings.ToUpper(strings.ToLower(strings.TrimSpace("));
     // Both select flavors: why-tracked with an inline source arm, and a
     // guaranteed one that fails construction on an undeclared value.
     assert!(serde.contains("case 1:"));

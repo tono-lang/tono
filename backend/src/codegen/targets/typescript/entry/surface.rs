@@ -307,7 +307,8 @@ pub(super) fn apply_transforms(
 /// shared group rather than beside any one of them. Emitted whole rather than
 /// per use, so an entry group's imports do not depend on which transforms a
 /// spec happens to name.
-pub fn resolution_helpers() -> Vec<Decl> {
+/// Reading an environment variable, which a declared source resolves from.
+pub fn env_helpers() -> Vec<Decl> {
     let mut decls = Vec::new();
     {
         decls.push(Decl::raw_providing(
@@ -323,6 +324,12 @@ pub fn resolution_helpers() -> Vec<Decl> {
             Vec::new(),
         ));
     }
+    decls
+}
+
+/// Parsing the duration spelling the targets share into milliseconds.
+pub fn duration_helpers() -> Vec<Decl> {
+    let mut decls = Vec::new();
     {
         decls.push(Decl::raw_providing(
             "durationToMs",
@@ -363,6 +370,12 @@ pub fn resolution_helpers() -> Vec<Decl> {
             Vec::new(),
         ));
     }
+    decls
+}
+
+/// The casing transforms an `@str::` pipeline lowers to.
+pub fn casing_helpers() -> Vec<Decl> {
+    let mut decls = Vec::new();
     {
         decls.push(Decl::raw_providing(
             "strTransformWords",
@@ -401,5 +414,13 @@ pub fn resolution_helpers() -> Vec<Decl> {
             ));
         }
     }
+    decls
+}
+
+/// Every resolution helper, for a caller that wants them as one list.
+pub fn resolution_helpers() -> Vec<Decl> {
+    let mut decls = env_helpers();
+    decls.extend(duration_helpers());
+    decls.extend(casing_helpers());
     decls
 }

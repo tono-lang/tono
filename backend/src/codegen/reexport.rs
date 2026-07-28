@@ -236,7 +236,7 @@ mod tests {
 
     fn payments() -> Vec<Group> {
         vec![
-            Group::root_codec(),
+            Group::root("duration"),
             Group::types("payments.common"),
             Group::module_internal("payments.common"),
             Group::types("payments.charges"),
@@ -252,8 +252,8 @@ mod tests {
         assert!(lib.contains("pub mod payments;"));
         // The shared group is a private module named for its contents:
         // unreachable from outside the crate, reachable from inside it.
-        assert!(lib.contains("mod codec;"));
-        assert!(!lib.contains("pub mod codec;"));
+        assert!(lib.contains("mod duration;"));
+        assert!(!lib.contains("pub mod duration;"));
         // No root barrel: the crate root declares its children and does not
         // flatten them into one namespace.
         assert!(!lib.contains("pub use"));

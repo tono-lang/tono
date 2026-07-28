@@ -52,28 +52,19 @@ pub fn package_clause(name: &str) -> String {
     format!("package {name}\n")
 }
 
-/// The SDK-root serialization group's declarations: turning a typed input into
-/// the wire record the runtime binds from, and reading a compiler-emitted
-/// descriptor. They serve no module in particular, so they sit in the SDK's
-/// shared `internal/` packages rather than being repeated per module.
+/// The SDK-root groups this target emits, each named for what it holds. They
+/// serve no module in particular, so they sit in the SDK's own `internal/`
+/// packages rather than being repeated per module, and nothing in them names a
+/// declaration the spec wrote.
 ///
 /// Nothing type-level goes here. A method has to live in its receiver's package,
 /// and a type a public struct exposes has to be nameable by a consumer, which
 /// `internal/` forbids; both keep the module's own package.
-pub fn codec_decls(model: &crate::ir::Model) -> Vec<Decl> {
+pub fn shared_groups(model: &crate::ir::Model) -> Vec<(&'static str, Vec<Decl>)> {
     if !model_has_entries(model) {
         return Vec::new();
     }
-    crate::codegen::targets::go::entry::wire_decls()
-}
-
-/// The SDK-root configuration group's declarations: resolving the declared
-/// construction values (a duration, a casing transform) every entry reads.
-pub fn config_decls(model: &crate::ir::Model) -> Vec<Decl> {
-    if !model_has_entries(model) {
-        return Vec::new();
-    }
-    crate::codegen::targets::go::entry::resolution_decls()
+    crate::codegen::targets::go::entry::shared_groups()
 }
 
 /// Whether anything in the model declares an entry, which is what puts anything

@@ -12,26 +12,12 @@ use crate::codegen::targets::typescript::types::LANG;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Tref};
 
-/// The names of the shared runtime helpers, so a file calling one from a codec
-/// body can declare the reference and have the import collected.
-pub const RUNTIME_HELPER_NAMES: &[&str] = &[
-    "encodeI64",
-    "decodeI64",
-    "decodeU64",
-    "encodeBytes",
-    "decodeBytes",
-];
-
 /// The shared runtime helpers every module's codecs call, emitted once for the
 /// whole SDK with zero dependencies.
-pub fn runtime_helpers() -> Vec<Decl> {
+/// The number helpers: a 64-bit integer travels as a string, so both directions
+/// are spelled out once for the whole SDK.
+pub fn number_helpers() -> Vec<Decl> {
     vec![
-        // Not exported: the alphabet is the codecs' own, and the barrel never
-        // names it, so a consumer has nothing to reach for.
-        Decl::raw(
-            "const BASE64_ALPHABET =\n\
-             \x20 \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\";",
-        ),
         function(
             "encodeI64",
             &[("v", "bigint")],
@@ -51,6 +37,23 @@ pub fn runtime_helpers() -> Vec<Decl> {
             &[("s", "string")],
             "bigint",
             "  const n = BigInt(s);\n  if (n < 0n || n > 18446744073709551615n) {\n    throw new RangeError(`u64 out of range: ${s}`);\n  }\n  return n;",
+        ),
+    ]
+}
+
+/// The bytes helpers: `bytes` travels as base64, built from the alphabet rather
+/// than through `btoa`/`atob`, which are DOM globals an SDK cannot assume.
+pub fn bytes_helpers() -> Vec<Decl> {
+    vec![
+        // Not exported: the alphabet is the codecs' own, and the barrel never
+        // names it, so a consumer has nothing to reach for. Named all the same,
+        // so an SDK with no bytes field drops it with the codecs that read it
+        // instead of shipping a table nothing indexes.
+        Decl::raw_providing(
+            "BASE64_ALPHABET",
+            "const BASE64_ALPHABET =\n\
+             \x20 \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\";",
+            Vec::new(),
         ),
         function(
             "encodeBytes",
@@ -485,7 +488,7 @@ mod tests {
 
     #[test]
     fn runtime_helpers_cover_i64_and_bytes() {
-        let out = rendered(&runtime_helpers());
+        let out = rendered(&[number_helpers(), bytes_helpers()].concat());
         assert!(out.contains("export function encodeI64(v: bigint): string {"));
         assert!(out.contains("return v.toString();"));
         assert!(out.contains("export function decodeI64(s: string): bigint {"));

@@ -312,24 +312,35 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     EntryEmission { shared, per_entry }
 }
 
-/// A reference to a name in the SDK's shared internal package, so the import is
+/// The SDK-root groups this target emits, each named for what it holds.
+pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
+    vec![
+        ("descriptor", vec![descriptor_decl()]),
+        ("record", vec![record_decl()]),
+        ("duration", vec![duration_decl()]),
+        ("casing", casing_decls()),
+    ]
+}
+
+/// Which SDK-root group declares a shared helper. Read off the emitters rather
+/// than listed here, so the answer cannot drift from where the declaration
+/// actually lands.
+fn shared_group(name: &str) -> String {
+    shared_groups()
+        .into_iter()
+        .find(|(_, decls)| {
+            crate::codegen::imports::declared_symbols(decls)
+                .iter()
+                .any(|declared| declared == name)
+        })
+        .map(|(group, _)| crate::codegen::group::Group::root(group).path())
+        .unwrap_or_default()
+}
+
+/// A reference to a name in one of the SDK's shared packages, so the import is
 /// collected wherever the raw text calls it.
 fn shared_symbol(name: &str) -> Symbol {
     Symbol::imported(name, shared_group(name), name)
-}
-
-/// Which SDK-root group declares a shared helper. Derived from the emitters
-/// themselves rather than listed here, so the answer cannot drift from where the
-/// declaration actually lands.
-fn shared_group(name: &str) -> &'static str {
-    let in_wire = crate::codegen::imports::declared_symbols(&wire_decls())
-        .iter()
-        .any(|declared| declared == name);
-    if in_wire {
-        crate::codegen::group::ROOT_CODEC
-    } else {
-        crate::codegen::group::ROOT_CONFIG
-    }
 }
 
 /// A shared helper named inside opaque text: a slot, so the package selector is
@@ -338,28 +349,29 @@ fn shared_slot(name: &str) -> String {
     crate::codegen::tree::symbol_slot(name)
 }
 
-/// The entry construction helpers, which serve every entry of every module and
-/// so live in the SDK's shared internal package: descriptor parsing at package
-/// load and the struct-to-record encoding the runtime input takes. They are
-/// exported because a Go package boundary is what makes them shared, and
-/// `internal/` is what keeps them out of a consumer's reach.
-pub fn wire_decls() -> Vec<Decl> {
-    vec![
-        Decl::raw_providing(
-            "MustDescriptor",
-            "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
+/// Reading a compiler-emitted descriptor literal at package load. Exported
+/// because a Go package boundary is what makes it shared, and `internal/` is
+/// what keeps it out of a consumer's reach.
+fn descriptor_decl() -> Decl {
+    Decl::raw_providing(
+        "MustDescriptor",
+        "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
          // load; a parse failure is a build defect, never a runtime input.\n\
          func MustDescriptor(literal string) *tonohttp.WireDescriptor {\n\
          \td, err := tonohttp.ParseDescriptor([]byte(literal))\n\
          \tif err != nil {\n\t\tpanic(err)\n\t}\n\
          \treturn d\n\
          }"
-            .to_string(),
-            vec![runtime_symbol()],
-        ),
-        Decl::raw_providing(
-            "EncodeRecord",
-            "// EncodeRecord turns a typed input into the wire record the runtime binds\n\
+        .to_string(),
+        vec![runtime_symbol()],
+    )
+}
+
+/// Turning a typed input into the wire record the runtime binds from.
+fn record_decl() -> Decl {
+    Decl::raw_providing(
+        "EncodeRecord",
+        "// EncodeRecord turns a typed input into the wire record the runtime binds\n\
          // from, through the type's own JSON tags.\n\
          func EncodeRecord(v any) (map[string]any, error) {\n\
          \tb, err := json.Marshal(v)\n\
@@ -368,36 +380,32 @@ pub fn wire_decls() -> Vec<Decl> {
          \tif err := json.Unmarshal(b, &m); err != nil {\n\t\treturn nil, err\n\t}\n\
          \treturn m, nil\n\
          }"
-            .to_string(),
-            vec![import("json", "encoding/json")],
-        ),
-    ]
+        .to_string(),
+        vec![import("json", "encoding/json")],
+    )
 }
 
-/// The resolution helpers, which belong to the SDK's configuration group.
-pub fn resolution_decls() -> Vec<Decl> {
-    resolution_helpers()
+/// Reading a duration field into the millisecond value the runtime takes.
+fn duration_decl() -> Decl {
+    Decl::raw_providing(
+        "DurationMs",
+        "// DurationMs parses a duration field for the runtime's millisecond value\n\
+         // positions.\n\
+         func DurationMs(v string) (float64, error) {\n\
+         \td, err := time.ParseDuration(v)\n\
+         \tif err != nil {\n\t\treturn 0, err\n\t}\n\
+         \treturn float64(d) / float64(time.Millisecond), nil\n\
+         }"
+        .to_string(),
+        vec![import("time", "time")],
+    )
 }
 
-/// The on-demand helpers the resolution used.
-/// The resolution helpers, which are pure string and duration work: they serve
-/// every entry of every module, so they live in the SDK's shared package rather
-/// than beside any one of them. Emitted whole rather than per use, so the
-/// qualification the raw text bakes in is the same in every SDK.
-fn resolution_helpers() -> Vec<Decl> {
+/// The casing transforms an `@str::` pipeline lowers to. They serve every entry
+/// of every module, so they live in the SDK's shared package rather than beside
+/// any one of them.
+fn casing_decls() -> Vec<Decl> {
     vec![
-        Decl::raw_providing(
-            "DurationMs",
-            "// DurationMs parses a duration field for the runtime's millisecond value\n\
-             // positions.\n\
-             func DurationMs(v string) (float64, error) {\n\
-             \td, err := time.ParseDuration(v)\n\
-             \tif err != nil {\n\t\treturn 0, err\n\t}\n\
-             \treturn float64(d) / float64(time.Millisecond), nil\n\
-             }"
-            .to_string(),
-            vec![import("time", "time")],
-        ),
         Decl::raw_providing(
             "StrTransformWords",
             "// StrTransformWords splits a resolved value for the casing transforms:\n\

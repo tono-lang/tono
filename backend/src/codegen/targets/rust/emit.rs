@@ -106,14 +106,13 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     let mut internal_decls = Vec::new();
     // The helper modules live in the SDK's shared internal module, and the
     // `with = "..."` attribute paths resolve through this import.
-    let shared = Group::root_codec();
-    let public_names = public_helpers.names();
-    if !public_names.is_empty() {
-        type_decls.insert(0, helpers_use(&shared, &public_names));
+    // One `use` per shared group the fields reach, since a helper's group is
+    // named for what it holds and a module may route through more than one.
+    for (group, names) in public_helpers.by_group().into_iter().rev() {
+        type_decls.insert(0, helpers_use(&Group::root(group), &names));
     }
-    let internal_names = internal_helpers.names();
-    if !internal_names.is_empty() {
-        internal_type_decls.insert(0, helpers_use(&shared, &internal_names));
+    for (group, names) in internal_helpers.by_group().into_iter().rev() {
+        internal_type_decls.insert(0, helpers_use(&Group::root(group), &names));
     }
 
     // The open enums' impls reference the types they are for, so the codec group
@@ -151,7 +150,20 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
 /// field in the model routes through. They serve no module in particular, so the
 /// whole crate carries one copy instead of one per module, and the `with =`
 /// attribute paths resolve through an import of this module.
-pub fn shared_decls(model: &crate::ir::Model, config: &CasingConfig) -> Vec<Decl> {
+pub fn shared_groups(
+    model: &crate::ir::Model,
+    config: &CasingConfig,
+) -> Vec<(&'static str, Vec<Decl>)> {
+    let helpers = shared_helpers(model, config);
+    helpers
+        .by_group()
+        .into_iter()
+        .map(|(group, _)| (group, runtime_helpers(helpers, group)))
+        .collect()
+}
+
+/// Which `#[serde(with)]` helper modules the whole model reaches.
+fn shared_helpers(model: &crate::ir::Model, config: &CasingConfig) -> HelperSet {
     let mut helpers = HelperSet::default();
     for module in &model.modules {
         for shape in &module.shapes {
@@ -164,7 +176,7 @@ pub fn shared_decls(model: &crate::ir::Model, config: &CasingConfig) -> Vec<Decl
             }
         }
     }
-    runtime_helpers(helpers)
+    helpers
 }
 
 /// The `use` that brings the named `#[serde(with)]` helper modules into scope.
@@ -286,7 +298,7 @@ mod tests {
         assert!(types.contains("pub struct Timestamp(pub String);"));
         assert!(!types.contains("pub struct LocalDate"));
         assert!(!types.contains("pub struct Duration"));
-        assert!(types.contains("use crate::codec::{i64_string};"));
+        assert!(types.contains("use crate::number::{i64_string};"));
         assert!(!types.contains("u64_string"));
         assert!(!types.contains("base64_bytes"));
         assert!(types.contains("pub struct Charge {"));
@@ -297,27 +309,28 @@ mod tests {
         assert!(!types.contains("use crate::billing::types::*;"));
 
         // The helper module itself is shared across the SDK, so it is not the
-        // module's to emit; with no open enum the module has no internal group
-        // at all.
+        // module's to emit, and it lands in the group named for what it holds.
+        let groups = shared_groups(
+            &crate::ir::Model {
+                tono_ir_version: 6,
+                modules: vec![module.clone()],
+            },
+            &rust_casing(),
+        );
+        let names: Vec<&str> = groups.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, vec!["number"], "no bytes field, so no bytes group");
         let shared = crate::codegen::test_support::render_group(
             &[ModuleFile::new(
-                Group::root_codec(),
-                shared_decls(
-                    &crate::ir::Model {
-                        tono_ir_version: 6,
-                        modules: vec![module.clone()],
-                    },
-                    &rust_casing(),
-                ),
+                Group::root(groups[0].0),
+                groups[0].1.clone(),
             )],
-            crate::codegen::group::ROOT_CODEC_NAME,
+            groups[0].0,
             crate::codegen::TargetKind::Rust,
             &RustRules::default(),
         );
         assert!(shared.contains("pub mod i64_string {"));
         assert!(shared.contains("if s.is_human_readable() {"));
         assert!(!shared.contains("pub mod u64_string {"));
-        assert!(!shared.contains("pub mod base64_bytes {"));
     }
 
     #[test]

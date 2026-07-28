@@ -122,12 +122,12 @@ fn generate_splits_each_target_that_has_serialization_to_emit() {
     assert_eq!(
         paths,
         vec![
-            format!("rust{sep}codec.rs"),
+            format!("rust{sep}number.rs"),
             format!("rust{sep}payments{sep}types.rs"),
             format!("rust{sep}lib.rs"),
             format!("rust{sep}payments{sep}mod.rs"),
             format!("go{sep}payments{sep}types.go"),
-            format!("typescript{sep}codec.ts"),
+            format!("typescript{sep}number.ts"),
             format!("typescript{sep}payments{sep}types.ts"),
             format!("typescript{sep}payments{sep}codec.ts"),
             format!("typescript{sep}payments{sep}index.ts"),
@@ -141,7 +141,7 @@ fn generate_splits_each_target_that_has_serialization_to_emit() {
         .iter()
         .filter(|f| f.path.extension().is_some_and(|e| e != "json"))
         .all(|f| f.text.starts_with(BANNER)));
-    assert!(text_at(&files, "rust/codec.rs").contains("pub mod i64_string"));
+    assert!(text_at(&files, "rust/number.rs").contains("pub mod i64_string"));
     // One module shares nothing, so the branded well-known types would ride
     // its public group rather than a group of their own; no field names one,
     // so none is emitted at all.

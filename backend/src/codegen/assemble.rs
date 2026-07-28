@@ -42,18 +42,15 @@ pub(crate) fn shared_files(
     target: TargetKind,
     casing: &CasingConfig,
 ) -> Vec<ModuleFile> {
-    let (codec, config) = match target {
-        TargetKind::Rust => (rust::emit::shared_decls(model, casing), Vec::new()),
-        TargetKind::Go => (go::emit::codec_decls(model), go::emit::config_decls(model)),
-        TargetKind::TypeScript => (
-            typescript::emit::codec_decls(),
-            typescript::emit::config_decls(),
-        ),
+    let groups = match target {
+        TargetKind::Rust => rust::emit::shared_groups(model, casing),
+        TargetKind::Go => go::emit::shared_groups(model),
+        TargetKind::TypeScript => typescript::emit::shared_groups(),
     };
-    [(Group::root_codec(), codec), (Group::root_config(), config)]
+    groups
         .into_iter()
         .filter(|(_, decls)| !decls.is_empty())
-        .map(|(group, decls)| ModuleFile::new(group, decls))
+        .map(|(name, decls)| ModuleFile::new(Group::root(name), decls))
         .collect()
 }
 
@@ -224,9 +221,16 @@ pub fn resolve_groups(files: &mut Vec<ModuleFile>, target: TargetKind) {
             types.file.decls = decls;
         }
     }
-    prune_root_group(files, group::ROOT_SUPPORT);
-    prune_root_group(files, group::ROOT_CODEC);
-    prune_root_group(files, group::ROOT_CONFIG);
+    // Every root group is pruned to what the rest of the SDK reaches; the paths
+    // are read from the files themselves, since the emitters own that vocabulary.
+    let roots: Vec<String> = files
+        .iter()
+        .filter(|f| f.group.module.is_none())
+        .map(|f| f.group.path())
+        .collect();
+    for path in roots {
+        prune_root_group(files, &path);
+    }
     let index = build_index(files);
     for file in files.iter_mut() {
         repoint_to_groups(&mut file.file, &index);
@@ -268,16 +272,20 @@ mod tests {
     fn a_root_group_carries_only_what_the_rest_of_the_sdk_reaches() {
         let mut files = vec![
             ModuleFile::new(
-                Group::root_codec(),
+                Group::root("duration"),
                 vec![
                     named("used", "fn used() { helper() }"),
                     named("helper", "fn helper() {}"),
                     named("unused", "fn unused() {}"),
                 ],
             ),
-            referencing(Group::types("notes"), group::ROOT_CODEC, &["used"]),
+            referencing(
+                Group::types("notes"),
+                &Group::root("duration").path(),
+                &["used"],
+            ),
         ];
-        prune_root_group(&mut files, group::ROOT_CODEC);
+        prune_root_group(&mut files, &Group::root("duration").path());
         let kept: Vec<String> = crate::codegen::imports::declared_symbols(&files[0].file.decls);
         // `helper` is reached through the kept declaration's own text, which the
         // tree cannot be read for, so the wanted set has to close over it.

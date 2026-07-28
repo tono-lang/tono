@@ -700,5 +700,5 @@ mod tests;
 
 use checks::{access, config_error, presence_guard, value_cast, value_expr};
 use resolve::Resolver;
-pub use surface::resolution_helpers;
 use surface::*;
+pub use surface::{casing_helpers, duration_helpers, env_helpers, resolution_helpers};

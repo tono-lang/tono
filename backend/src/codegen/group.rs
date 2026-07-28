@@ -48,26 +48,9 @@ pub const CODEC: &str = "codec";
 /// The generator-owned internal group of a module.
 pub const INTERNAL: &str = "internal";
 
-/// The SDK-root group holding the serialization every module shares.
-pub const ROOT_CODEC_NAME: &str = CODEC;
-
-/// The SDK-root group holding the resolution of declared construction values
-/// (an environment variable, a duration, a casing transform), which every
-/// module's entry clients share.
-pub const ROOT_CONFIG_NAME: &str = "config";
-
 /// The generator-owned group holding what every module of the SDK shares and a
 /// consumer names: the branded well-known types.
 pub const SUPPORT: &str = "support";
-
-/// The SDK-root groups' paths, spelled out for the emitters that reference a
-/// shared helper from raw text and need to name where it lives.
-///
-/// There are two rather than one because a single name for both would be a name
-/// for neither: an SDK reader meeting `codec` and `config` knows what each holds,
-/// and one named for the generator tells them nothing.
-pub const ROOT_CODEC: &str = "::codec";
-pub const ROOT_CONFIG: &str = "::config";
 
 /// The SDK-root support group's path. A symbol table names it when it maps a
 /// well-known primitive, since those are one set of types for the whole SDK
@@ -97,18 +80,13 @@ pub struct Group {
 }
 
 impl Group {
-    /// The SDK-root serialization group: the encoding every module shares.
-    pub fn root_codec() -> Self {
-        Self::root(ROOT_CODEC_NAME)
-    }
-
-    /// The SDK-root configuration group: resolving the declared construction
-    /// values every module's entry clients read.
-    pub fn root_config() -> Self {
-        Self::root(ROOT_CONFIG_NAME)
-    }
-
-    fn root(name: &str) -> Self {
+    /// An SDK-root group, named for what it holds.
+    ///
+    /// There is one per subject rather than one bucket, because the contents are
+    /// the only honest name: everything here is the generator's own and names no
+    /// declaration the spec wrote, so a name for the audience (`internal`) or for
+    /// the phase that calls it (`config`) would say less than `duration` does.
+    pub fn root(name: &str) -> Self {
         Self {
             module: None,
             name: name.into(),
@@ -202,10 +180,10 @@ impl Group {
     pub fn from_path(path: &str) -> Option<Self> {
         let (module, name) = parse_path(path)?;
         Some(match (module, name) {
-            (None, ROOT_CODEC_NAME) => Self::root_codec(),
-            (None, ROOT_CONFIG_NAME) => Self::root_config(),
             (None, SUPPORT) => Self::root_support(),
-            (None, _) => return None,
+            // Any other root name is a subject group: the emitters own that
+            // vocabulary, so the model does not enumerate it.
+            (None, name) => Self::root(name),
             (Some(module), TYPES) => Self::types(module),
             (Some(module), CODEC) => Self::codec(module),
             (Some(module), INTERNAL) => Self::module_internal(module),
@@ -300,7 +278,7 @@ mod tests {
         // A reference arrives as a path, so the layout has to answer it with the
         // same group it placed the file by.
         for group in [
-            Group::root_codec(),
+            Group::root("duration"),
             Group::root_support(),
             Group::types("payments.common"),
             Group::codec("payments.common"),
@@ -312,7 +290,6 @@ mod tests {
         // Anything that is not a group path has no group.
         assert_eq!(Group::from_path("payments.common"), None);
         assert_eq!(Group::from_path("encoding/json"), None);
-        assert_eq!(Group::from_path("::client"), None);
     }
 
     #[test]
@@ -325,11 +302,11 @@ mod tests {
 
     #[test]
     fn the_root_groups_carry_no_module_and_are_named_for_their_contents() {
-        for (group, path, name) in [
-            (Group::root_codec(), ROOT_CODEC, ROOT_CODEC_NAME),
-            (Group::root_config(), ROOT_CONFIG, ROOT_CONFIG_NAME),
-        ] {
-            assert_eq!(group.path(), path);
+        // The name is the subject, so any subject the emitters own is a group;
+        // the model does not enumerate them.
+        for name in ["duration", "casing", "bytes"] {
+            let group = Group::root(name);
+            assert_eq!(group.path(), format!("::{name}"));
             assert_eq!(parse_path(&group.path()), Some((None, name)));
             assert_eq!(module_of(&group.path()), None);
             assert!(group.is_internal());

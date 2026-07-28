@@ -2,8 +2,9 @@
 
 package charges
 
-import "example.com/sdk/internal/codec"
-import "example.com/sdk/internal/config"
+import "example.com/sdk/internal/descriptor"
+import "example.com/sdk/internal/duration"
+import "example.com/sdk/internal/record"
 import "example.com/sdk/support"
 import "context"
 import "encoding/json"
@@ -62,7 +63,7 @@ type ClientAPI interface {
 
 var _ ClientAPI = (*Client)(nil)
 
-var createChargeDescriptor = codec.MustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[402,\"payments.charges#card_declined\",\"card_declined\",true],[404,\"payments.charges#not_found\",null]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}")
+var createChargeDescriptor = descriptor.MustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[402,\"payments.charges#card_declined\",\"card_declined\",true],[404,\"payments.charges#not_found\",null]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}")
 
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, client_init on top (bespoke wins),
@@ -100,7 +101,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	values["api_key"] = s.APIKey
 	values["endpoint"] = s.Endpoint
 	{
-		ms, err := config.DurationMs(string(s.Timeout))
+		ms, err := duration.DurationMs(string(s.Timeout))
 		if err != nil {
 			return nil, &ConfigError{Message: fmt.Sprintf("timeout: invalid duration %q", string(s.Timeout))}
 		}
@@ -119,7 +120,7 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	if invalid := ValidateCharge(input); invalid != nil {
 		return zero, invalid
 	}
-	record, err := codec.EncodeRecord(input)
+	record, err := record.EncodeRecord(input)
 	if err != nil {
 		return zero, err
 	}

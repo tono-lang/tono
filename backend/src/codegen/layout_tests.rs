@@ -54,12 +54,12 @@ fn go_maps_a_module_to_a_package_directory_and_each_group_to_a_file() {
     // Each SDK-root group is a package of its own under internal/, named for
     // what it holds.
     assert_eq!(
-        path_of(TargetKind::Go, &Group::root_codec()),
-        "go/internal/codec/codec.go"
+        path_of(TargetKind::Go, &Group::root("duration")),
+        "go/internal/duration/duration.go"
     );
     assert_eq!(
-        path_of(TargetKind::Go, &Group::root_config()),
-        "go/internal/config/config.go"
+        path_of(TargetKind::Go, &Group::root("casing")),
+        "go/internal/casing/casing.go"
     );
 }
 
@@ -73,8 +73,8 @@ fn rust_and_typescript_map_every_group_to_a_file() {
     // its audience: the SDK-root group is a module named for its contents,
     // and a module's internal group rides its public file as `pub(crate)`.
     assert_eq!(
-        path_of(TargetKind::Rust, &Group::root_codec()),
-        "rust/codec.rs"
+        path_of(TargetKind::Rust, &Group::root("duration")),
+        "rust/duration.rs"
     );
     assert_eq!(
         path_of(
@@ -97,12 +97,12 @@ fn rust_and_typescript_map_every_group_to_a_file() {
         path_of(TargetKind::TypeScript, &Group::types("payments.charges"))
     );
     assert_eq!(
-        path_of(TargetKind::TypeScript, &Group::root_codec()),
-        "typescript/codec.ts"
+        path_of(TargetKind::TypeScript, &Group::root("duration")),
+        "typescript/duration.ts"
     );
     assert_eq!(
-        path_of(TargetKind::TypeScript, &Group::root_config()),
-        "typescript/config.ts"
+        path_of(TargetKind::TypeScript, &Group::root("casing")),
+        "typescript/casing.ts"
     );
     assert_eq!(
         target_relative_path(TargetKind::TypeScript, &Group::types("notes"))
@@ -156,8 +156,8 @@ fn import_paths_follow_each_language_idiom() {
         rust_path("payments.common::types").as_deref(),
         Some("crate::payments::common::types")
     );
-    assert_eq!(rust_path("::codec").as_deref(), Some("crate::codec"));
-    assert_eq!(rust_path("::config").as_deref(), Some("crate::config"));
+    assert_eq!(rust_path("::number").as_deref(), Some("crate::number"));
+    assert_eq!(rust_path("::casing").as_deref(), Some("crate::casing"));
     assert_eq!(
         rust_path("payments.charges::internal").as_deref(),
         Some("crate::payments::charges::types")
@@ -176,8 +176,8 @@ fn import_paths_follow_each_language_idiom() {
         go_selector("payments.common::types").as_deref(),
         Some("common")
     );
-    assert_eq!(go_selector("::codec").as_deref(), Some("codec"));
-    assert_eq!(go_selector("::config").as_deref(), Some("config"));
+    assert_eq!(go_selector("::record").as_deref(), Some("record"));
+    assert_eq!(go_selector("::casing").as_deref(), Some("casing"));
 
     assert_eq!(
         ts_specifier("payments.charges::types", "payments.common::types").as_deref(),
@@ -243,11 +243,11 @@ fn a_module_taking_a_shared_modules_name_is_rejected() {
     // would be a directory beside it: Rust reads both as one module and
     // refuses the crate, and a TypeScript relative import resolves to the
     // file. Either way the collision has to fail here, with a name to act on.
-    let collides = model_with_wide_int(&["codec", "notes"]);
+    let collides = model_with_wide_int(&["number", "notes"]);
     let err = check_layout(&collides, &[TargetKind::Rust], &CodegenConfig::default()).unwrap_err();
     assert!(err.contains("module name collision"), "got {err}");
     // Flatten joins the path into one segment, so a nested module clears it.
-    let nested = model_with_wide_int(&["codec.charges"]);
+    let nested = model_with_wide_int(&["number.charges"]);
     assert!(
         check_layout(&nested, &[TargetKind::Rust], &CodegenConfig::default()).is_err(),
         "a first segment is enough to collide: it is the directory Rust sees"
@@ -259,7 +259,7 @@ fn a_module_taking_a_shared_modules_name_is_rejected() {
     assert!(check_layout(&nested, &[TargetKind::Rust], &flat).is_ok());
     // With nothing shared there is no file to collide with.
     assert!(check_layout(
-        &model(&["codec"]),
+        &model(&["number"]),
         &[TargetKind::Rust],
         &CodegenConfig::default()
     )
@@ -267,7 +267,7 @@ fn a_module_taking_a_shared_modules_name_is_rejected() {
     // TypeScript puts its shared groups at the package root too, so the
     // same module collides there.
     assert!(check_layout(
-        &model_with_wide_int(&["codec"]),
+        &model_with_wide_int(&["number"]),
         &[TargetKind::TypeScript],
         &CodegenConfig::default()
     )
@@ -277,7 +277,7 @@ fn a_module_taking_a_shared_modules_name_is_rejected() {
         go_module: Some("example.com/sdk".into()),
         ..CodegenConfig::default()
     };
-    assert!(check_layout(&model_with_wide_int(&["codec"]), &[TargetKind::Go], &go).is_ok());
+    assert!(check_layout(&model_with_wide_int(&["number"]), &[TargetKind::Go], &go).is_ok());
 }
 
 #[test]

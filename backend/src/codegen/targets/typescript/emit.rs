@@ -11,9 +11,7 @@ use crate::codegen::casing::CasingConfig;
 use crate::codegen::group::Group;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::client;
-use crate::codegen::targets::typescript::codecs::{
-    emit_codecs, runtime_helpers, RUNTIME_HELPER_NAMES,
-};
+use crate::codegen::targets::typescript::codecs::emit_codecs;
 use crate::codegen::targets::typescript::errors;
 use crate::codegen::targets::typescript::types::{emit_type, emit_validators};
 use crate::codegen::tree::{Alias, Decl, FnBody, ModuleFile};
@@ -79,17 +77,24 @@ pub fn exports_of(decls: &[Decl]) -> Exports {
     exports
 }
 
-/// The SDK-root serialization group's declarations: the codec runtime helpers
-/// every module's codecs call. They serve no module in particular, so the whole
-/// SDK carries one copy instead of one per module.
-pub fn codec_decls() -> Vec<Decl> {
-    runtime_helpers()
-}
-
-/// The SDK-root configuration group's declarations: reading an environment
-/// variable and parsing a duration, which every entry client resolves through.
-pub fn config_decls() -> Vec<Decl> {
-    crate::codegen::targets::typescript::entry::resolution_helpers()
+/// The SDK-root groups this target emits, each named for what it holds. They
+/// serve no module in particular, so the whole SDK carries one copy instead of
+/// one per module, and nothing in them names a declaration the spec wrote.
+pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
+    use crate::codegen::targets::typescript::entry;
+    vec![
+        (
+            "number",
+            crate::codegen::targets::typescript::codecs::number_helpers(),
+        ),
+        (
+            "bytes",
+            crate::codegen::targets::typescript::codecs::bytes_helpers(),
+        ),
+        ("env", entry::env_helpers()),
+        ("duration", entry::duration_helpers()),
+        ("casing", entry::casing_helpers()),
+    ]
 }
 
 /// The text of a declaration that carries opaque source, or `None` for one the
@@ -203,25 +208,15 @@ fn attach_text_refs(decls: &mut [Decl], names: &[(String, String)]) {
 
 /// The shared runtime helpers, paired with the group that declares them.
 fn runtime_helper_refs() -> Vec<(String, String)> {
-    let group = |names: Vec<String>, path: &str| -> Vec<(String, String)> {
-        names
-            .into_iter()
-            .map(|name| (name, path.to_string()))
-            .collect()
-    };
-    let mut refs = group(
-        RUNTIME_HELPER_NAMES.iter().map(|n| n.to_string()).collect(),
-        crate::codegen::group::ROOT_CODEC,
-    );
-    refs.extend(group(
-        exported_in_text(&codec_decls()),
-        crate::codegen::group::ROOT_CODEC,
-    ));
-    refs.extend(group(
-        exported_in_text(&config_decls()),
-        crate::codegen::group::ROOT_CONFIG,
-    ));
-    refs
+    shared_groups()
+        .into_iter()
+        .flat_map(|(name, decls)| {
+            let path = crate::codegen::group::Group::root(name).path();
+            let mut names = exported_in_text(&decls);
+            names.extend(crate::codegen::imports::declared_symbols(&decls));
+            names.into_iter().map(move |n| (n, path.clone()))
+        })
+        .collect()
 }
 
 /// Assemble a TypeScript module into separate output files: a types file (the
@@ -423,7 +418,7 @@ mod tests {
         assert!(serde.contains("import { Charge } from \"./types\";"));
         // The runtime helpers are the SDK's, not the module's, so they are
         // imported rather than repeated here.
-        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../codec\";"));
+        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../number\";"));
         assert!(serde.contains("export function encodeCharge(value: Charge): unknown {"));
         assert!(serde.contains("amount_cents: encodeI64(value.amountCents),"));
         assert!(!serde.contains("export interface Charge"));
