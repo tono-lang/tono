@@ -26,6 +26,12 @@ pub const RUNTIME_HELPER_NAMES: &[&str] = &[
 /// whole SDK with zero dependencies.
 pub fn runtime_helpers() -> Vec<Decl> {
     vec![
+        // Not exported: the alphabet is the codecs' own, and the barrel never
+        // names it, so a consumer has nothing to reach for.
+        Decl::raw(
+            "const BASE64_ALPHABET =\n\
+             \x20 \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\";",
+        ),
         function(
             "encodeI64",
             &[("v", "bigint")],
@@ -50,20 +56,45 @@ pub fn runtime_helpers() -> Vec<Decl> {
             "encodeBytes",
             &[("b", "Uint8Array")],
             "string",
-            "  return btoa(String.fromCharCode(...b));",
+            "  // Built from the alphabet rather than through btoa: btoa is a DOM\n\
+             \x20 // global an SDK cannot assume, and spreading the array into\n\
+             \x20 // String.fromCharCode overflows the call stack past ~128KB.\n\
+             \x20 let out = \"\";\n\
+             \x20 for (let i = 0; i < b.length; i += 3) {\n\
+             \x20   const n = (b[i] << 16) | ((b[i + 1] ?? 0) << 8) | (b[i + 2] ?? 0);\n\
+             \x20   out +=\n\
+             \x20     BASE64_ALPHABET[(n >> 18) & 63] +\n\
+             \x20     BASE64_ALPHABET[(n >> 12) & 63] +\n\
+             \x20     (i + 1 < b.length ? BASE64_ALPHABET[(n >> 6) & 63] : \"=\") +\n\
+             \x20     (i + 2 < b.length ? BASE64_ALPHABET[n & 63] : \"=\");\n\
+             \x20 }\n\
+             \x20 return out;",
         ),
         function(
             "decodeBytes",
             &[("s", "string")],
             "Uint8Array",
-            "  // Line breaks are not data. atob is lenient about a missing pad,\n\
-             \x20 // so the length and padding are checked here: a malformed value is\n\
-             \x20 // an error rather than bytes nobody sent.\n\
+            "  // Line breaks are not data. Every other length and padding rule is\n\
+             \x20 // checked before a byte is produced, so a malformed value is an\n\
+             \x20 // error rather than bytes nobody sent.\n\
              \x20 const t = s.replace(/[\\r\\n]/g, \"\");\n\
              \x20 if (t.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(t)) {\n\
              \x20   throw new Error(`invalid base64: ${JSON.stringify(s)}`);\n\
              \x20 }\n\
-             \x20 return Uint8Array.from(atob(t), (c) => c.charCodeAt(0));",
+             \x20 const body = t.replace(/=+$/, \"\");\n\
+             \x20 const out = new Uint8Array((body.length * 3) >> 2);\n\
+             \x20 let at = 0;\n\
+             \x20 for (let i = 0; i < body.length; i += 4) {\n\
+             \x20   let n = 0;\n\
+             \x20   const run = Math.min(4, body.length - i);\n\
+             \x20   for (let k = 0; k < run; k++) {\n\
+             \x20     n |= BASE64_ALPHABET.indexOf(body[i + k]) << (18 - 6 * k);\n\
+             \x20   }\n\
+             \x20   out[at++] = (n >> 16) & 255;\n\
+             \x20   if (run > 2) out[at++] = (n >> 8) & 255;\n\
+             \x20   if (run > 3) out[at++] = n & 255;\n\
+             \x20 }\n\
+             \x20 return out;",
         ),
     ]
 }

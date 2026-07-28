@@ -127,7 +127,7 @@ fn generate_splits_each_target_that_has_serialization_to_emit() {
             format!("rust{sep}lib.rs"),
             format!("rust{sep}payments{sep}mod.rs"),
             format!("go{sep}payments{sep}types.go"),
-            format!("typescript{sep}internal{sep}codec.ts"),
+            format!("typescript{sep}codec.ts"),
             format!("typescript{sep}payments{sep}types.ts"),
             format!("typescript{sep}payments{sep}codec.ts"),
             format!("typescript{sep}payments{sep}index.ts"),

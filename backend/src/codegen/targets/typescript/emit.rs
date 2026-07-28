@@ -423,7 +423,7 @@ mod tests {
         assert!(serde.contains("import { Charge } from \"./types\";"));
         // The runtime helpers are the SDK's, not the module's, so they are
         // imported rather than repeated here.
-        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../internal/codec\";"));
+        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../codec\";"));
         assert!(serde.contains("export function encodeCharge(value: Charge): unknown {"));
         assert!(serde.contains("amount_cents: encodeI64(value.amountCents),"));
         assert!(!serde.contains("export interface Charge"));

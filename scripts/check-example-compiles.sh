@@ -188,8 +188,8 @@ cat >"$fence/probe.mjs" <<'EOF'
 const refused = [
   "sdk/payments/charges/types",
   "sdk/payments/charges/codec",
-  "sdk/internal/codec",
-  "sdk/internal/config",
+  "sdk/codec",
+  "sdk/config",
 ];
 let bad = 0;
 try {
