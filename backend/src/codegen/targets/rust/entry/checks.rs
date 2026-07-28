@@ -147,6 +147,11 @@ mod tests {
             ),
         );
         let out = entry_text(&module, &rust_casing());
-        assert!(out.contains("use crate::duration::{parse_duration_ms};"));
+        // `entry_text` renders declarations in isolation, without the
+        // assembler's cross-group import resolution (see
+        // `crate::codegen::pipeline_tests::rust_entry_resolution_helpers_prune_to_only_what_the_model_uses`
+        // for the full-pipeline proof that the `use` this call site pulls
+        // in actually lands); this asserts only the call site itself.
+        assert!(out.contains("match parse_duration_ms(&s.wait.0) {"));
     }
 }

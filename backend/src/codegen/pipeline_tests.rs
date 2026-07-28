@@ -532,3 +532,145 @@ fn go_modules_sharing_a_last_segment_are_rejected() {
     };
     assert!(check_layout(&model, &[TargetKind::Go], &flat).is_ok());
 }
+
+/// A model with one entry declaring no fields, for the resolution-helper
+/// pruning test below to add exactly the field it needs.
+fn bare_entry_model() -> Model {
+    Model {
+        tono_ir_version: 6,
+        modules: vec![Module {
+            name: "payments".into(),
+            shapes: vec![Shape {
+                id: "payments#client".into(),
+                kind: ShapeKind::Entry {
+                    fields: vec![],
+                    operations: vec![],
+                },
+                traits: vec![],
+            }],
+            operations: vec![],
+            extensions: vec![],
+        }],
+    }
+}
+
+#[test]
+fn rust_entry_resolution_helpers_prune_to_only_what_the_model_uses() {
+    use crate::codegen::test_support::{bare_entry_field, push_entry_field};
+    use crate::ir::{EntryField, EnvName, Source};
+
+    // An entry with an env-sourced string field pulls in `read_env` alone:
+    // no `@str::` transform and no duration field means the `casing` and
+    // `duration` root groups never even appear, rather than shipping empty
+    // or (as an earlier, unnamed-declaration approach did) shipping their
+    // full contents unconditionally as dead code.
+    let mut plain = bare_entry_model();
+    push_entry_field(
+        &mut plain.modules[0],
+        bare_entry_field(
+            "name",
+            Tref::Prim(Prim::String),
+            vec![Source::Env(EnvName::Name("NAME".into()))],
+        ),
+    );
+    let files = generate(&plain, &[TargetKind::Rust], &CodegenConfig::default()).unwrap();
+    let paths = paths_of(&files);
+    assert!(paths.contains(&"rust/env.rs".to_string()));
+    assert!(!paths.iter().any(|p| p.contains("casing")));
+    assert!(!paths.iter().any(|p| p.contains("duration")));
+    let env = text_at(&files, "rust/env.rs");
+    assert!(env.contains("pub fn read_env"));
+    let entry = text_at(&files, "rust/payments/client.rs");
+    assert!(entry.contains("use crate::env::read_env;"));
+
+    // A single `@str::kebab` transform pulls in exactly that transform (and
+    // the word-splitter it shares the group with), not its three siblings.
+    let mut kebabed = bare_entry_model();
+    push_entry_field(
+        &mut kebabed.modules[0],
+        EntryField {
+            transforms: vec!["kebab".to_string()],
+            ..bare_entry_field(
+                "name",
+                Tref::Prim(Prim::String),
+                vec![Source::Default(serde_json::json!("x"))],
+            )
+        },
+    );
+    let files = generate(&kebabed, &[TargetKind::Rust], &CodegenConfig::default()).unwrap();
+    let paths = paths_of(&files);
+    assert!(paths.contains(&"rust/casing.rs".to_string()));
+    let casing = text_at(&files, "rust/casing.rs");
+    assert!(casing.contains("fn str_kebab"));
+    assert!(!casing.contains("fn str_snake"));
+    assert!(!casing.contains("fn str_pascal"));
+    assert!(!casing.contains("fn str_upper_snake"));
+    assert!(!casing.contains("non_snake_case"));
+}
+
+#[test]
+fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
+    let model = Model {
+        tono_ir_version: 6,
+        modules: vec![
+            Module {
+                name: "payments.common".into(),
+                shapes: vec![structure(
+                    "payments.common#money",
+                    vec![member("amount", Tref::Prim(Prim::I64), true)],
+                )],
+                operations: vec![],
+                extensions: vec![],
+            },
+            Module {
+                name: "payments.charges".into(),
+                shapes: vec![
+                    structure(
+                        "payments.charges#charge",
+                        vec![member("id", Tref::Prim(Prim::String), true)],
+                    ),
+                    Shape {
+                        id: "payments.charges#client".into(),
+                        kind: ShapeKind::Entry {
+                            fields: vec![],
+                            operations: vec![Shape {
+                                id: "payments.charges#client.create".into(),
+                                kind: ShapeKind::Operation {
+                                    input: Some(Tref::Ref {
+                                        id: "payments.charges#charge".into(),
+                                        args: vec![],
+                                    }),
+                                    output: Some(Tref::Ref {
+                                        id: "payments.common#money".into(),
+                                        args: vec![],
+                                    }),
+                                    errors: vec![],
+                                },
+                                traits: vec![crate::ir::Trait {
+                                    id: "wire_descriptor".into(),
+                                    value: serde_json::json!({
+                                        "http_method": "POST",
+                                        "uri": "/charges",
+                                    }),
+                                }],
+                            }],
+                        },
+                        traits: vec![],
+                    },
+                ],
+                operations: vec![],
+                extensions: vec![],
+            },
+        ],
+    };
+    let files = generate(&model, &[TargetKind::Rust], &CodegenConfig::default()).unwrap();
+    let entry = text_at(&files, "rust/payments/charges/client.rs");
+    assert!(entry.contains("use crate::payments::charges::types::*;"));
+    // The op's input type is declared in the entry's own module, already
+    // covered by the glob above; a second, individually-collected import
+    // naming it would be dead weight.
+    assert!(!entry.contains("use crate::payments::charges::types::Charge;"));
+    // The output type crosses modules, so it still needs its own import: the
+    // glob only reaches the entry's own module.
+    assert!(entry.contains("use crate::payments::common::types::Money;"));
+}

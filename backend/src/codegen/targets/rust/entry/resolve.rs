@@ -22,9 +22,12 @@ use crate::ir::EnvName;
 
 /// The Rust resolution emitter: holds the entry model and flags the shared
 /// on-demand helpers the leaves use. `body` receives the rendered plan for
-/// each field. `arg_prefix` is `"self."` when reading an `@arg` value off a
-/// builder (`build(self)` consumes it) or empty when reading it off a bare
-/// function parameter (`new`'s own arguments).
+/// each field; `refs` collects the `Symbol` for every SDK-root resolution
+/// helper a leaf actually calls, so the import is collected and the
+/// assembler's pruning ships only what this entry reaches. `arg_prefix` is
+/// `"self."` when reading an `@arg` value off a builder (`build(self)`
+/// consumes it) or empty when reading it off a bare function parameter
+/// (`new`'s own arguments).
 pub(super) struct Resolver<'a, 'b> {
     pub(super) entry: &'a EntryModel<'a>,
     pub(super) module: &'a Module,
@@ -32,6 +35,7 @@ pub(super) struct Resolver<'a, 'b> {
     pub(super) helpers: &'b mut Helpers,
     pub(super) arg_prefix: &'static str,
     pub(super) body: &'b mut String,
+    pub(super) refs: &'b mut Vec<Symbol>,
 }
 
 /// An expression casting a Rust `String` into the field's target type. Only
@@ -166,18 +170,25 @@ impl Resolver<'_, '_> {
                 )
             }
             Tref::Prim(Prim::Bytes) => {
-                self.helpers.base64_bytes = true;
+                self.refs.push(Symbol::imported(
+                    "base64_bytes",
+                    crate::codegen::group::Group::root("bytes").path(),
+                    "base64_bytes",
+                ));
                 let fail = checks::config_error(&format!(
                     "format!(\"{{}}: invalid base64 {{:?}}\", {label_expr}, v)"
                 ));
-                format!("match base64_bytes::decode(&v) {{\n    Ok(b) => {{ {dest} = b; }}\n    Err(_) => {{ {fail} }}\n}}")
+                format!("match {}::decode(&v) {{\n    Ok(b) => {{ {dest} = b; }}\n    Err(_) => {{ {fail} }}\n}}", shared_slot("base64_bytes"))
             }
             Tref::Prim(Prim::Duration) => {
-                self.helpers.duration_ms = true;
+                self.refs.push(shared_symbol("parse_duration_ms"));
                 let fail = checks::config_error(&format!(
                     "format!(\"{{}}: invalid duration {{:?}}\", {label_expr}, v)"
                 ));
-                format!("if parse_duration_ms(&v).is_err() {{\n    {fail}\n}}\n{dest} = Duration(v.clone());")
+                format!(
+                    "if {}(&v).is_err() {{\n    {fail}\n}}\n{dest} = Duration(v.clone());",
+                    shared_slot("parse_duration_ms")
+                )
             }
             _ => format!("{dest} = {};", cast_string(t, "v")),
         }
@@ -307,14 +318,14 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     fn env_read_call(&mut self, name_expr: &str) -> String {
-        self.helpers.read_env = true;
+        self.refs.push(shared_symbol("read_env"));
         // `name_expr` is a `String`-typed expression when the variable name
         // is itself dynamic (`to_string_expr`'s output; a literal name is
         // `&'static str`, already reference-shaped); `read_env` takes `&str`,
         // and a leading `&` here satisfies both through deref coercion
         // (`&String -> &str`, `&&str -> &str`) without needing to know which
         // one it is.
-        format!("read_env(&{name_expr})")
+        format!("{}(&{name_expr})", shared_slot("read_env"))
     }
 
     fn env_miss_reason(&mut self, name: &EnvName) -> String {
@@ -518,7 +529,7 @@ impl Emitter for Resolver<'_, '_> {
         } else {
             format!("format!({template:?}, {})", args.join(", "))
         };
-        let expr = apply_transforms(concat, &field.transforms, self.helpers);
+        let expr = apply_transforms(concat, &field.transforms, self.helpers, self.refs);
         format!("{dest} = {};", cast_string(&field.target, &expr))
     }
 
@@ -529,7 +540,7 @@ impl Emitter for Resolver<'_, '_> {
             return None;
         }
         let expr = self.to_string_expr(dest, &field.target);
-        let expr = apply_transforms(expr, &field.transforms, self.helpers);
+        let expr = apply_transforms(expr, &field.transforms, self.helpers, self.refs);
         Some(format!("{dest} = {};", cast_string(&field.target, &expr)))
     }
 

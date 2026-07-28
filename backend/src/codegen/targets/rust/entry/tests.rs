@@ -477,7 +477,11 @@ fn a_bytes_field_sourced_from_env_pulls_in_the_base64_decoder() {
         ),
     );
     let out = text(&module);
-    assert!(out.contains("use crate::bytes::{base64_bytes};"));
+    // `entry_text` renders declarations in isolation, without the
+    // assembler's cross-group import resolution (see
+    // `crate::codegen::pipeline_tests::rust_entry_resolution_helpers_prune_to_only_what_the_model_uses`
+    // for the full-pipeline proof the `use` this call site pulls in lands);
+    // this asserts only the call site itself.
     assert!(out.contains("match base64_bytes::decode(&v) {"));
 }
 
@@ -516,7 +520,8 @@ fn a_duration_field_freezes_as_milliseconds_and_pulls_the_parser() {
         ),
     );
     let out = text(&module);
-    assert!(out.contains("use crate::duration::{parse_duration_ms};"));
+    // See the note on the base64 test above: the `use` this call site pulls
+    // in is proven at the full-pipeline level, not here.
     assert!(out.contains("match parse_duration_ms(&s.wait.0) {"));
 }
 
@@ -552,7 +557,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     // Transforms compose innermost-first; the shared casing helpers chain
     // around the target-specific trim/lower/upper.
     assert!(out.contains(
-        "strUpperSnake(strPascal(strKebab(strSnake((((format!(\"k-{}{}\", s.naming, s.tiny.to_string())).trim().to_string()).to_lowercase()).to_uppercase()))))"
+        "str_upper_snake(str_pascal(str_kebab(str_snake((((format!(\"k-{}{}\", s.naming, s.tiny.to_string())).trim().to_string()).to_lowercase()).to_uppercase()))))"
     ));
     // Both select flavors: why-tracked with an inline source arm and a
     // fallback chain, and a guaranteed one that fails construction on an

@@ -100,12 +100,18 @@ pub(super) fn rust_type(t: &Tref) -> String {
 }
 
 /// The symbols a declared type references, for import collection off a raw
-/// declaration. The engine drops a same-module symbol automatically (every
-/// entry declaration lives in one file, so a sibling shape or a config type
-/// this same pass emits needs no `use`), so this needs no special-casing:
-/// only an actually cross-module reference produces a real import.
-pub(super) fn push_type_symbols(t: &Tref, refs: &mut Vec<Symbol>) {
-    type_expr_of(t).flatten_symbols(refs);
+/// declaration. Every entry group already carries a glob `use` of its own
+/// module's public types ([`emit`]'s `types_glob_use`), so a same-module
+/// reference needs no ref of its own here — pushing one anyway would render
+/// as a second, redundant `use` naming exactly what the glob already brings
+/// in; only an actually cross-module reference produces a real import.
+pub(super) fn push_type_symbols(t: &Tref, module_name: &str, refs: &mut Vec<Symbol>) {
+    let mut collected = Vec::new();
+    type_expr_of(t).flatten_symbols(&mut collected);
+    refs.extend(collected.into_iter().filter(|s| match &s.import {
+        Some(i) => i.module != module_name,
+        None => true,
+    }));
 }
 
 /// The per-entry generated names, derived once.
@@ -314,25 +320,34 @@ pub(super) fn numeric_zero(t: &Tref) -> &'static str {
     }
 }
 
-/// Which on-demand helper functions the emitted code pulled in; each is
-/// emitted once per module, only when actually used.
+/// Which on-demand casing-transform functions the emitted code pulled in
+/// ([`apply_transforms`]'s own bookkeeping for its `helper` closure); every
+/// other shared resolution helper ([`shared_symbol`]/[`shared_slot`]) is
+/// tracked directly as a `Symbol` ref instead, since that is what drives the
+/// assembler's real import collection and pruning.
 #[derive(Default)]
 pub(super) struct Helpers {
-    pub read_env: bool,
-    pub duration_ms: bool,
-    pub base64_bytes: bool,
     pub transforms: BTreeSet<&'static str>,
 }
 
 /// The transform-application expression, innermost first in declared order.
 /// Only the language-specific `trim`/`lower`/`upper` spellings are Rust's;
-/// the shared pipeline folds them and the case-fold helpers.
+/// the shared pipeline folds them and the case-fold helpers. Records a real
+/// reference for every shared casing helper it reaches into `refs`, so the
+/// import is collected and an SDK that never transforms casing ships none of
+/// [`shared::casing_helpers`] at all (mirrors Go's own `apply_transforms`).
 pub(super) fn apply_transforms(
     expr: String,
     transforms: &[String],
     helpers: &mut Helpers,
+    refs: &mut Vec<Symbol>,
 ) -> String {
-    plan::apply_transforms(
+    // The fold's `helper` closure is `Fn`, not `FnMut` (the shared plan may
+    // invoke it more than once), so the reached names are staged through a
+    // `RefCell` and only pushed into `refs` after the call returns (mirrors
+    // Go's own `apply_transforms`).
+    let reached = std::cell::RefCell::new(Vec::new());
+    let out = plan::apply_transforms(
         expr,
         transforms,
         &mut helpers.transforms,
@@ -343,21 +358,54 @@ pub(super) fn apply_transforms(
             _ => None,
         },
         // The shared plan's own vocabulary is PascalCase (`StrUpperSnake`);
-        // this crate's generated casing helpers are camelCase (the one place
-        // a generated Rust identifier is not snake_case, a deliberate
-        // cross-target contract with the shared plan and Go/TypeScript's
-        // own `Str*`/`str*` helpers), so the first letter is lowered. The
-        // `use` that brings the reached name into scope is built separately
-        // from `helpers.transforms` ([`surface::helper_imports`]), so this
-        // closure need not record anything itself.
+        // this crate's generated casing helper is snake_case like every
+        // other Rust identifier here (`str_upper_snake`), so the fixed,
+        // known vocabulary is translated directly rather than lowering only
+        // the first letter (which would land on `strUpperSnake`, Go/
+        // TypeScript's own spelling, not Rust's).
         |name| {
-            let mut chars = name.chars();
-            match chars.next() {
-                Some(first) => first.to_lowercase().chain(chars).collect(),
-                None => String::new(),
-            }
+            let snake = match name {
+                "StrUpperSnake" => "str_upper_snake",
+                "StrSnake" => "str_snake",
+                "StrKebab" => "str_kebab",
+                "StrPascal" => "str_pascal",
+                _ => name,
+            };
+            reached.borrow_mut().push(snake.to_string());
+            shared_slot(snake)
         },
-    )
+    );
+    for name in reached.into_inner() {
+        refs.push(shared_symbol(&name));
+    }
+    out
+}
+
+/// A reference to a name in one of the SDK's shared root groups, so the
+/// import is collected wherever the raw text calls it.
+fn shared_symbol(name: &str) -> Symbol {
+    Symbol::imported(name, shared_group(name), name)
+}
+
+/// A shared helper named inside opaque text: a slot, so its call spelling is
+/// applied (or, for Rust, simply kept bare) when the file is rendered.
+fn shared_slot(name: &str) -> String {
+    crate::codegen::tree::symbol_slot(name)
+}
+
+/// Which SDK-root group declares a shared resolution helper, read off the
+/// emitters rather than listed here so the answer cannot drift from where
+/// the declaration actually lands.
+fn shared_group(name: &str) -> String {
+    shared::shared_groups()
+        .into_iter()
+        .find(|(_, decls)| {
+            crate::codegen::imports::declared_symbols(decls)
+                .iter()
+                .any(|declared| declared == name)
+        })
+        .map(|(group, _)| crate::codegen::group::Group::root(group).path())
+        .unwrap_or_default()
 }
 
 /// A module's entry emission, split the way the layout groups it: the
@@ -413,9 +461,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             multi,
         ));
         decls.extend(surface::discriminator_decls_for(entry, &n, module, &bound));
-        for import in surface::helper_imports(&helpers).into_iter().rev() {
-            decls.insert(0, import);
-        }
         // The whole surface freely names the module's error taxonomy and any
         // declared-error shape (`TonoError`, `ConfigError`, `APIFailure`, a
         // declared error's own type, ...) as bare text; a glob import of the
@@ -534,13 +579,13 @@ fn op_method(
 
     let (param, input_ty) = match input {
         Some(t) => {
-            push_type_symbols(t, refs);
+            push_type_symbols(t, &module.name, refs);
             (format!("input: {}", rust_type(t)), Some(rust_type(t)))
         }
         None => (String::new(), None),
     };
     if let Some(t) = output {
-        push_type_symbols(t, refs);
+        push_type_symbols(t, &module.name, refs);
     }
     let ret = output.map(rust_type).unwrap_or_else(|| "()".into());
 

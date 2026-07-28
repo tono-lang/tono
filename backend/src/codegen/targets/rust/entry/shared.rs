@@ -7,16 +7,12 @@
 //! group of its own: it reuses the `bytes` group's `base64_bytes::decode`,
 //! the same helper a wire struct field routes through.
 //!
-//! Declared with no `provides` list (matching this target's own
-//! `number`/`bytes` helper modules): the assembler's per-declaration pruning
-//! only trims a declaration it can name-check against a real reference, and
-//! this crate builds an entry's `use` of these unconditionally on the
-//! `Helpers` flags its own resolution logic set ([`super::surface::
-//! helper_imports`]) rather than through a `Symbol` ref threaded to every
-//! call site — so an unnamed declaration here is the one that survives.
-//! Whichever of these groups a model reaches ships whole, mirroring Go's own
-//! `duration`/`casing` root groups (gated only on "does the model have any
-//! entry", not on which specific helper a given entry calls).
+//! Each declaration names itself (`Decl::raw_providing`), and every call site
+//! records a real reference ([`super::shared_symbol`]/[`super::shared_slot`],
+//! mirroring Go's own `apply_transforms`), so the assembler's pruning reaches
+//! them exactly like any other declaration: an SDK that never transforms
+//! casing ships none of [`casing_helpers`], down to the individual function
+//! (one `@str::kebab` field pulls in `str_kebab` alone, not its siblings).
 
 use crate::codegen::tree::Decl;
 
@@ -24,12 +20,14 @@ use crate::codegen::tree::Decl;
 /// same: empty means not set, per the declared-source contract every target
 /// shares.
 pub(super) fn env_helpers() -> Vec<Decl> {
-    vec![Decl::raw(
+    vec![Decl::raw_providing(
+        "read_env",
         "pub fn read_env(name: &str) -> Option<String> {\n    \
          match std::env::var(name) {\n        \
          Ok(v) if !v.is_empty() => Some(v),\n        \
          _ => None,\n    \
          }\n}",
+        Vec::new(),
     )]
 }
 
@@ -39,7 +37,8 @@ pub(super) fn env_helpers() -> Vec<Decl> {
 /// pairs (`ns`, `us`/`µs`/`μs`, `ms`, `s`, `m`, `h`); a syntactically invalid
 /// remainder fails to parse.
 pub(super) fn duration_helpers() -> Vec<Decl> {
-    vec![Decl::raw(
+    vec![Decl::raw_providing(
+        "parse_duration_ms",
         "pub fn parse_duration_ms(v: &str) -> Result<f64, ()> {\n\
          \x20   let mut rest = v;\n\
          \x20   let mut sign = 1.0;\n\
@@ -101,37 +100,37 @@ pub(super) fn duration_helpers() -> Vec<Decl> {
          \x20   }\n\
          \x20   Ok(sign * total)\n\
          }",
+        Vec::new(),
     )]
 }
 
-/// The casing transforms an `@str::` pipeline lowers to. The call sites are
-/// spelled by the shared plan (`codegen::entries::plan::casing_transform`),
-/// identically across every target (`strUpperSnake`/`strSnake`/`strKebab`/
-/// `strPascal`), so the definitions here match that spelling exactly rather
-/// than this crate's own snake_case convention — the one place a generated
-/// Rust identifier is not snake_case, and it is a deliberate cross-target
-/// contract, not an oversight.
+/// The casing transforms an `@str::` pipeline lowers to, named the way every
+/// other Rust identifier here is (snake_case) — the shared plan's own
+/// vocabulary is PascalCase (`StrUpperSnake`), which is translated at the
+/// call site ([`super::apply_transforms`]), not spelled here.
 pub(super) fn casing_helpers() -> Vec<Decl> {
-    let mut decls = vec![Decl::raw(
-        "pub fn entry_transform_words(s: &str) -> Vec<&str> {\n    \
+    let mut decls = vec![Decl::raw_providing(
+        "entry_transform_words",
+        "fn entry_transform_words(s: &str) -> Vec<&str> {\n    \
          s.split(|c: char| c == ' ' || c == '-' || c == '_').filter(|w| !w.is_empty()).collect()\n\
          }",
+        Vec::new(),
     )];
     for (name, body) in [
         (
-            "strUpperSnake",
+            "str_upper_snake",
             "    entry_transform_words(&s).iter().map(|w| w.to_uppercase()).collect::<Vec<_>>().join(\"_\")",
         ),
         (
-            "strSnake",
+            "str_snake",
             "    entry_transform_words(&s).iter().map(|w| w.to_lowercase()).collect::<Vec<_>>().join(\"_\")",
         ),
         (
-            "strKebab",
+            "str_kebab",
             "    entry_transform_words(&s).iter().map(|w| w.to_lowercase()).collect::<Vec<_>>().join(\"-\")",
         ),
         (
-            "strPascal",
+            "str_pascal",
             "    entry_transform_words(&s)\n        .iter()\n        .map(|w| {\n            let mut c = w.chars();\n            match c.next() {\n                Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(),\n                None => String::new(),\n            }\n        })\n        .collect::<String>()",
         ),
     ] {
@@ -139,17 +138,21 @@ pub(super) fn casing_helpers() -> Vec<Decl> {
         // directly, which is sometimes a bare place (`s.team`) and sometimes
         // an owned temporary (a chained transform's result); taking `String`
         // by value covers both — a bare place read this way is always
-        // immediately reassigned by the caller (`dest = strSnake(dest)`),
+        // immediately reassigned by the caller (`dest = str_snake(dest)`),
         // which Rust accepts (the move and the reassignment do not overlap).
-        decls.push(Decl::raw(format!(
-            "#[allow(non_snake_case)]\npub fn {name}(s: String) -> String {{\n{body}\n}}"
-        )));
+        decls.push(Decl::raw_providing(
+            name,
+            format!("pub fn {name}(s: String) -> String {{\n{body}\n}}"),
+            Vec::new(),
+        ));
     }
     decls
 }
 
 /// The SDK-root groups this target emits, each named for what it holds.
-/// Called whenever the model has any entry at all.
+/// Called whenever the model has any entry at all; each declaration's own
+/// name is what lets the assembler prune it down to exactly what the model's
+/// entries reference.
 pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
     vec![
         ("env", env_helpers()),

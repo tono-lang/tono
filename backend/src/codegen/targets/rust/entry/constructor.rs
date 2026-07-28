@@ -215,6 +215,7 @@ fn resolution_body(
             helpers,
             arg_prefix,
             body: &mut body,
+            refs,
         };
         let fields = plan::emit_fields(entry, module, &mut r);
         r.body.push_str(&fields);
@@ -238,6 +239,7 @@ fn resolution_body(
             helpers,
             arg_prefix,
             body: &mut body,
+            refs,
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 0, &r);
@@ -294,14 +296,15 @@ fn resolution_body(
             continue;
         };
         let assign = if let Tref::Prim(Prim::Duration) = vp.target {
-            helpers.duration_ms = true;
+            refs.push(shared_symbol("parse_duration_ms"));
             let fail = checks::config_error(&format!(
                 "format!(\"{path}: invalid duration {{:?}}\", {expr}.0)",
                 path = vp.path,
             ));
             format!(
-                "match parse_duration_ms(&{expr}.0) {{\n    Ok(ms) => {{\n        values.insert({path:?}.to_string(), serde_json::Value::from(ms));\n    }}\n    Err(_) => {{\n        {fail}\n    }}\n}}\n",
+                "match {parse}(&{expr}.0) {{\n    Ok(ms) => {{\n        values.insert({path:?}.to_string(), serde_json::Value::from(ms));\n    }}\n    Err(_) => {{\n        {fail}\n    }}\n}}\n",
                 path = vp.path,
+                parse = shared_slot("parse_duration_ms"),
             )
         } else {
             format!(

@@ -201,11 +201,13 @@ pub fn shared_groups(
     groups
 }
 
-/// Which `#[serde(with)]` helper modules the whole model reaches. A model with
-/// any entry unconditionally reaches for `base64_bytes` too, since an entry's
-/// own bytes-typed field (an env value, say) decodes through the same group a
-/// wire struct field would — the assembler prunes it back out if nothing
-/// actually calls it.
+/// Which `#[serde(with)]` helper modules the whole model reaches. An entry's
+/// own bytes-typed field also reaches `base64_bytes` when it declares `@env`
+/// as a source (the only entry construction path that calls it, mirroring a
+/// wire struct field's own env-sourced boundary); this set gates whether the
+/// `base64_bytes` module is emitted at all, so it has to be exact, unlike the
+/// `env`/`duration`/`casing` groups whose declarations the assembler prunes
+/// after the fact.
 fn shared_helpers(model: &crate::ir::Model, config: &CasingConfig) -> HelperSet {
     let mut helpers = HelperSet::default();
     for module in &model.modules {
@@ -218,9 +220,18 @@ fn shared_helpers(model: &crate::ir::Model, config: &CasingConfig) -> HelperSet 
                 }
             }
         }
-    }
-    if model_has_entries(model) {
-        helpers.base64_bytes.plain = true;
+        for entry in crate::codegen::entries::module_entries(module) {
+            for field in &entry.fields {
+                if matches!(field.target, crate::ir::Tref::Prim(crate::ir::Prim::Bytes))
+                    && field
+                        .sources
+                        .iter()
+                        .any(|s| matches!(s, crate::ir::Source::Env(_)))
+                {
+                    helpers.base64_bytes.plain = true;
+                }
+            }
+        }
     }
     helpers
 }
