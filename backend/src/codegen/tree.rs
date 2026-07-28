@@ -366,6 +366,30 @@ impl TypeExpr {
     pub fn entries(key: TypeExpr, value: TypeExpr) -> Self {
         TypeExpr::Entries(Box::new(key), Box::new(value))
     }
+
+    /// Every Symbol this expression names, flattened out of its nesting
+    /// (`List<Charge>` yields `Charge`, `Page<Charge>` yields `Page` and
+    /// `Charge`). For a `Decl::Raw`'s `refs`, which the engine only reads one
+    /// level deep (each Symbol's own `references` carries its transitive
+    /// closure, not the `TypeExpr` that produced it) — so opaque text naming
+    /// a composite type needs its Symbols lifted out to this flat form before
+    /// import collection can reach them.
+    pub fn flatten_symbols(&self, out: &mut Vec<Symbol>) {
+        match self {
+            TypeExpr::Ref(s) => out.push(s.clone()),
+            TypeExpr::List(inner) | TypeExpr::Nullable(inner) => inner.flatten_symbols(out),
+            TypeExpr::Map(k, v) | TypeExpr::Entries(k, v) => {
+                k.flatten_symbols(out);
+                v.flatten_symbols(out);
+            }
+            TypeExpr::Generic(s, args) => {
+                out.push(s.clone());
+                for a in args {
+                    a.flatten_symbols(out);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

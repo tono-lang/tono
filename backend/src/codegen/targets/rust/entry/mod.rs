@@ -105,24 +105,7 @@ pub(super) fn rust_type(t: &Tref) -> String {
 /// this same pass emits needs no `use`), so this needs no special-casing:
 /// only an actually cross-module reference produces a real import.
 pub(super) fn push_type_symbols(t: &Tref, refs: &mut Vec<Symbol>) {
-    fn walk(e: &crate::codegen::tree::TypeExpr, refs: &mut Vec<Symbol>) {
-        use crate::codegen::tree::TypeExpr;
-        match e {
-            TypeExpr::Ref(s) => refs.push(s.clone()),
-            TypeExpr::List(inner) | TypeExpr::Nullable(inner) => walk(inner, refs),
-            TypeExpr::Map(k, v) | TypeExpr::Entries(k, v) => {
-                walk(k, refs);
-                walk(v, refs);
-            }
-            TypeExpr::Generic(s, args) => {
-                refs.push(s.clone());
-                for a in args {
-                    walk(a, refs);
-                }
-            }
-        }
-    }
-    walk(&type_expr_of(t), refs);
+    type_expr_of(t).flatten_symbols(refs);
 }
 
 /// The per-entry generated names, derived once.
