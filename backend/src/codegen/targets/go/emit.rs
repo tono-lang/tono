@@ -200,7 +200,7 @@ pub fn emit_module(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::group::{CODEC, TYPES};
+    use crate::codegen::group::{CODEC, INTERNAL, TYPES};
     use crate::codegen::targets::go::types::go_casing;
     use crate::codegen::targets::go::GoRules;
     use crate::codegen::test_support::{member, structure, union_shape};
@@ -249,6 +249,41 @@ mod tests {
         assert!(types.contains("func ValidateCharge(value Charge) error {"));
         // Only the category the validator needs, not the rest of the taxonomy.
         assert!(!types.contains("type TransportError struct"));
+    }
+
+    #[test]
+    fn a_hidden_unions_names_are_listed_by_the_group_that_declares_them() {
+        // Go emits a union's interface and wrappers as opaque text, so the index
+        // cannot read their names off the tree. Without the emitter listing
+        // them, a reference would fall back to the module's public group, and
+        // land on a file that does not declare them.
+        let module = Module {
+            name: "models".into(),
+            shapes: vec![union_shape(
+                "models#hidden",
+                "kind",
+                vec![member("card", Tref::Prim(Prim::String), true)],
+            )],
+            operations: vec![],
+            extensions: vec![],
+        };
+        let files = emit_module(
+            &module,
+            &go_casing(),
+            &union_ids(&module),
+            &Exposed::default(),
+        );
+        let internal = files
+            .iter()
+            .find(|f| f.group.name == INTERNAL)
+            .expect("nothing public reaches it, so it is the internal group's");
+        assert_eq!(
+            internal.provides,
+            vec!["Hidden".to_string(), "HiddenCard".to_string()]
+        );
+        // And the public group claims none of them.
+        let types = files.iter().find(|f| f.group.name == TYPES).unwrap();
+        assert!(types.provides.is_empty());
     }
 
     #[test]
