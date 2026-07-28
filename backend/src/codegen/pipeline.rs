@@ -312,10 +312,9 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                format!("rust{sep}internal{sep}tono.rs"),
+                format!("rust{sep}internal.rs"),
                 format!("rust{sep}payments{sep}types.rs"),
                 format!("rust{sep}lib.rs"),
-                format!("rust{sep}internal{sep}mod.rs"),
                 format!("rust{sep}payments{sep}mod.rs"),
                 format!("go{sep}payments{sep}types.go"),
                 format!("typescript{sep}internal{sep}tono.ts"),
@@ -332,7 +331,7 @@ mod tests {
             .iter()
             .filter(|f| f.path.extension().is_some_and(|e| e != "json"))
             .all(|f| f.text.starts_with(BANNER)));
-        assert!(text_at(&files, "rust/internal/tono.rs").contains("pub mod i64_string"));
+        assert!(text_at(&files, "rust/internal.rs").contains("pub mod i64_string"));
         // One module shares nothing, so the branded well-known types would ride
         // its public group rather than a group of their own; no field names one,
         // so none is emitted at all.

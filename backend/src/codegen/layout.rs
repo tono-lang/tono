@@ -86,30 +86,41 @@ pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
     let root = PathBuf::from(target.dir());
     let ext = target.extension();
     match (&grp.module, target) {
-        // Every relocatable internal group lands under one `internal/` tree at the
-        // SDK root, named for what it holds rather than for who may read it. Go
-        // has to move them (its only fence is the directory), and the other two
-        // follow the same shape so an SDK reads the same way in every language:
-        // a public directory holds files named for their contents, and the
-        // private tree mirrors the module structure.
+        // Each target fences an internal group with what its own ecosystem
+        // reaches for, which is not the same shape in all three.
+        //
+        // Go has one fence and it is positional: the `internal/` directory the
+        // toolchain refuses to resolve from outside the SDK. So every group Go
+        // can move becomes a package under it.
+        //
+        // TypeScript has no per-symbol fence (an export is an export), so the
+        // fence is the file plus the package's `exports` map, and an `internal/`
+        // subtree is what the ecosystem uses for it (rxjs, effect).
+        //
+        // Rust needs no relocation at all: `mod` without `pub` fences a module
+        // where it sits, so an `internal` module beside what it serves is both
+        // the fence and the convention (bitflags, nom, bytemuck, crossbeam-epoch
+        // all carry a private `src/internal.rs`). Moving it into a parallel tree
+        // would break the rule a Rust reader relies on, that the file tree is the
+        // module tree.
         (None, TargetKind::Go) if grp.is_internal() => root
             .join(INTERNAL_DIR)
             .join(ROOT_UNIT)
             .join(format!("{ROOT_UNIT}.{ext}")),
-        (None, _) if grp.is_internal() => {
+        (None, TargetKind::TypeScript) if grp.is_internal() => {
             root.join(INTERNAL_DIR).join(format!("{ROOT_UNIT}.{ext}"))
         }
         (None, TargetKind::Go) => root
             .join(GO_SUPPORT_PACKAGE)
             .join(format!("{GO_SUPPORT_PACKAGE}.{ext}")),
         (None, _) => root.join(format!("{}.{ext}", grp.name)),
-        // Go needs a package directory; a Rust module and a TypeScript file are
-        // single files, so the module path becomes the file name.
+        // Go needs a package directory; a TypeScript module is a single file, so
+        // the module path becomes the file name.
         (Some(module), TargetKind::Go) if grp.is_internal() && !grp.colocated => root
             .join(INTERNAL_DIR)
             .join(module_dir(module))
             .join(format!("{}.{ext}", package_name(module))),
-        (Some(module), _) if grp.is_internal() && !grp.colocated => root
+        (Some(module), TargetKind::TypeScript) if grp.is_internal() && !grp.colocated => root
             .join(INTERNAL_DIR)
             .join(module_dir(module).with_extension(ext)),
         (Some(module), _) => root
@@ -377,19 +388,18 @@ mod tests {
             path_of(TargetKind::Rust, &Group::types("payments.common")),
             "rust/payments/common/types.rs"
         );
-        // The relocatable internal groups mirror Go: one `internal/` tree at the
-        // SDK root, each file named for the module it holds rather than for its
-        // audience.
+        // Rust fences in place: an internal group is a private `mod` beside what
+        // it serves, which is both the language's fence and its convention.
         assert_eq!(
             path_of(TargetKind::Rust, &Group::root_internal()),
-            "rust/internal/tono.rs"
+            "rust/internal.rs"
         );
         assert_eq!(
             path_of(
                 TargetKind::Rust,
                 &Group::module_internal("payments.charges")
             ),
-            "rust/internal/payments/charges.rs"
+            "rust/payments/charges/internal.rs"
         );
         // The codec cannot move (an impl lives where its type does), so it is
         // fenced where it sits.
@@ -460,13 +470,10 @@ mod tests {
             rust_path("payments.common::types").as_deref(),
             Some("crate::payments::common::types")
         );
-        assert_eq!(
-            rust_path("::internal").as_deref(),
-            Some("crate::internal::tono")
-        );
+        assert_eq!(rust_path("::internal").as_deref(), Some("crate::internal"));
         assert_eq!(
             rust_path("payments.charges::internal").as_deref(),
-            Some("crate::internal::payments::charges")
+            Some("crate::payments::charges::internal")
         );
 
         assert_eq!(
