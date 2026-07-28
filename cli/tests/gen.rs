@@ -50,7 +50,7 @@ fn gen_writes_a_file_per_target_from_stdin() {
     let out = tmpdir("stdin");
     assert!(gen_via_stdin(&out, "rust,go,typescript"));
     for (sub, ext) in [("rust", "rs"), ("go", "go"), ("typescript", "ts")] {
-        let path = out.join(sub).join(format!("demo.{ext}"));
+        let path = out.join(sub).join("demo").join(format!("types.{ext}"));
         let text = std::fs::read_to_string(&path).expect("generated file exists");
         assert!(text.contains("DO NOT EDIT"), "{sub} carries the banner");
     }
@@ -76,7 +76,7 @@ fn gen_reads_the_ir_path_argument() {
         .status()
         .unwrap();
     assert!(status.success());
-    assert!(out.join("rust").join("demo.rs").exists());
+    assert!(out.join("rust").join("demo").join("types.rs").exists());
     let _ = std::fs::remove_dir_all(&out);
 }
 
@@ -196,7 +196,12 @@ fn gen_dotted(out: &Path, extra: &[&str]) {
 fn gen_maps_a_dotted_module_to_a_sub_package_path() {
     let out = tmpdir("subpkg");
     gen_dotted(&out, &[]);
-    assert!(out.join("rust").join("payments").join("common.rs").exists());
+    assert!(out
+        .join("rust")
+        .join("payments")
+        .join("common")
+        .join("types.rs")
+        .exists());
     let _ = std::fs::remove_dir_all(&out);
 }
 
@@ -204,7 +209,11 @@ fn gen_maps_a_dotted_module_to_a_sub_package_path() {
 fn gen_flatten_writes_a_flat_package_file() {
     let out = tmpdir("flatten");
     gen_dotted(&out, &["--flatten"]);
-    assert!(out.join("rust").join("payments_common.rs").exists());
+    assert!(out
+        .join("rust")
+        .join("payments_common")
+        .join("types.rs")
+        .exists());
     let _ = std::fs::remove_dir_all(&out);
 }
 
@@ -212,7 +221,12 @@ fn gen_flatten_writes_a_flat_package_file() {
 fn gen_module_remap_rewrites_the_prefix() {
     let out = tmpdir("remap");
     gen_dotted(&out, &["--module-remap", "payments=billing"]);
-    assert!(out.join("rust").join("billing").join("common.rs").exists());
+    assert!(out
+        .join("rust")
+        .join("billing")
+        .join("common")
+        .join("types.rs")
+        .exists());
     let _ = std::fs::remove_dir_all(&out);
 }
 
@@ -294,8 +308,8 @@ fn manifest_drives_enabled_targets_and_out_dirs() {
     ok_or_stderr(&out);
     // Each enabled target lands under its own configured out (no shared root, no
     // `<target>/` prefix); the disabled python target emits nothing.
-    assert!(base.join("gen/rust/demo.rs").is_file());
-    assert!(base.join("gen/ts/demo.ts").is_file());
+    assert!(base.join("gen/rust/demo/types.rs").is_file());
+    assert!(base.join("gen/ts/demo/types.ts").is_file());
     assert!(!base.join("gen/python").exists());
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -309,7 +323,7 @@ fn manifest_is_auto_discovered_from_a_subdirectory() {
     let out = gen_stdin_in(&nested, &[], IR);
     ok_or_stderr(&out);
     // out resolves against the manifest's directory, not the working directory.
-    assert!(base.join("out/go/demo.go").is_file());
+    assert!(base.join("out/go/demo/types.go").is_file());
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -322,9 +336,10 @@ fn manifest_module_mapping_flat_flattens_the_layout() {
     );
     let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], DOTTED_IR);
     ok_or_stderr(&out);
-    // flat collapses payments.common into one segment; nested would be r/payments/common.rs.
-    assert!(base.join("r/payments_common.rs").is_file());
-    assert!(!base.join("r/payments/common.rs").exists());
+    // flat collapses payments.common into one segment; nested would be
+    // r/payments/common/types.rs.
+    assert!(base.join("r/payments_common/types.rs").is_file());
+    assert!(!base.join("r/payments/common/types.rs").exists());
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -337,7 +352,7 @@ fn manifest_module_remap_rewrites_the_prefix() {
     );
     let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], DOTTED_IR);
     ok_or_stderr(&out);
-    assert!(base.join("r/billing/common.rs").is_file());
+    assert!(base.join("r/billing/common/types.rs").is_file());
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -355,7 +370,7 @@ fn manifest_go_package_supplies_the_go_module_path() {
         TWO_MODULE_IR,
     );
     ok_or_stderr(&out);
-    assert!(ok.join("g/payments/common/common.go").is_file());
+    assert!(ok.join("g/payments/common/types.go").is_file());
 
     // Without a package the Go layout check rejects the multi-module output.
     let bad = tmpdir("m-go-bad");
@@ -379,7 +394,7 @@ fn manifest_casing_override_changes_the_emitted_field() {
     );
     let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], CASING_IR);
     ok_or_stderr(&out);
-    let text = std::fs::read_to_string(base.join("t/demo.ts")).unwrap();
+    let text = std::fs::read_to_string(base.join("t/demo/types.ts")).unwrap();
     // TypeScript fields are camelCase by default; the override renders them snake.
     assert!(text.contains("created_at"), "{text}");
     assert!(!text.contains("createdAt"), "{text}");

@@ -12,7 +12,7 @@ pub fn symbol_of(t: &Tref) -> Symbol {
 
 /// The Go spelling of a primitive (the `go` column of the shared table).
 fn prim_symbol(p: &Prim) -> Symbol {
-    Symbol::builtin(prim_spelling(p).go)
+    crate::codegen::conventions::prim_symbol(p, prim_spelling(p).go)
 }
 
 #[cfg(test)]

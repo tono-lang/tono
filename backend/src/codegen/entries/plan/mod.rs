@@ -61,32 +61,38 @@ pub(crate) fn why_var(field: &str) -> String {
 /// transforms lower to the same generated `str*` helper). Returns `None` for the
 /// language-specific transforms (`trim`/`lower`/`upper`) each target spells
 /// itself. The key is the transform's own name.
-fn casing_transform(t: &str, out: &str) -> Option<(&'static str, String)> {
+fn casing_transform(
+    t: &str,
+    out: &str,
+    helper: &impl Fn(&str) -> String,
+) -> Option<(&'static str, String)> {
     let (key, name) = match t {
-        "upper_snake" => ("upper_snake", "strUpperSnake"),
-        "snake" => ("snake", "strSnake"),
-        "kebab" => ("kebab", "strKebab"),
-        "pascal" => ("pascal", "strPascal"),
+        "upper_snake" => ("upper_snake", "StrUpperSnake"),
+        "snake" => ("snake", "StrSnake"),
+        "kebab" => ("kebab", "StrKebab"),
+        "pascal" => ("pascal", "StrPascal"),
         _ => return None,
     };
-    Some((key, format!("{name}({out})")))
+    Some((key, format!("{}({out})", helper(name))))
 }
 
 /// Fold an `@str::*` pipeline over `expr`, innermost first: `simple` spells the
 /// language-specific transforms (`trim`/`lower`/`upper`) and the shared casing
-/// transforms lower to the generated `str*` helpers, recording each used key in
-/// `used`. The loop is language-neutral; only `simple` differs per target.
+/// transforms lower to the generated `Str*` helpers, recording each used key in
+/// `used`. The loop is language-neutral; `simple` and `helper` (how the target
+/// names a helper that lives in the SDK's shared group) differ per target.
 pub(crate) fn apply_transforms(
     expr: String,
     transforms: &[String],
     used: &mut std::collections::BTreeSet<&'static str>,
     simple: impl Fn(&str, &str) -> Option<String>,
+    helper: impl Fn(&str) -> String,
 ) -> String {
     let mut out = expr;
     for t in transforms {
         out = if let Some(s) = simple(t, &out) {
             s
-        } else if let Some((key, e)) = casing_transform(t, &out) {
+        } else if let Some((key, e)) = casing_transform(t, &out, &helper) {
             used.insert(key);
             e
         } else {

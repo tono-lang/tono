@@ -18,7 +18,8 @@ import {
   OverloadedError,
   ValidationError,
 } from "../../notes";
-import { Client, encodeNote } from "../../notes_serde";
+import { Client } from "../../notes";
+import { encodeNote } from "../../notes/codec";
 
 interface VectorFile {
   operation: string;

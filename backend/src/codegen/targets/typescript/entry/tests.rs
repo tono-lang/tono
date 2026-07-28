@@ -33,7 +33,12 @@ fn with_descriptors(mut module: Module) -> Module {
 }
 
 fn text(module: &Module) -> String {
-    rendered(&entry_decls(module, &ts_casing()), &TsRules)
+    {
+        let emission = emit(module, &ts_casing());
+        let mut decls = emission.shared;
+        decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
+        rendered(&decls, &TsRules)
+    }
 }
 
 #[test]
@@ -421,7 +426,8 @@ fn a_module_without_entries_emits_nothing() {
         operations: vec![],
         extensions: vec![],
     };
-    assert!(entry_decls(&module, &ts_casing()).is_empty());
+    let emission = emit(&module, &ts_casing());
+    assert!(emission.shared.is_empty() && emission.per_entry.is_empty());
 }
 
 #[test]
@@ -564,8 +570,8 @@ fn a_consumed_config_member_requires_a_value_at_construction() {
 
 #[test]
 fn duration_parsing_accepts_both_micro_signs() {
-    let module = crate::codegen::test_support::entries_matrix_module();
-    let out = text(&module);
+    // The helper is the SDK's, not the entry's, so it is read where it lives.
+    let out = rendered(&resolution_helpers(), &TsRules);
     // Go's ParseDuration takes U+00B5 and U+03BC; the shared grammar must too.
     assert!(out.contains("\\u00b5s"));
     assert!(out.contains("\\u03bcs"));

@@ -3,6 +3,7 @@
 //! the hook wrappers.
 
 use super::*;
+use crate::codegen::targets::typescript::client::import_specifier;
 
 /// The construction-only config interfaces (they never cross the wire, so the
 /// regular type emission skips them).
@@ -208,7 +209,7 @@ pub(super) fn transport_hook_wrappers(bound: &[BoundExtension<'_>], module: &Mod
                 contract = en.contract,
             ),
             vec![
-                Symbol::imported(b.symbol, import_specifier(b.module), b.symbol),
+                Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
                 runtime_import(ty),
                 module_symbol(&en.root, module),
                 module_symbol(&en.contract, module),
@@ -224,7 +225,7 @@ pub(super) fn transport_hook_wrappers(bound: &[BoundExtension<'_>], module: &Mod
                 sym = b.symbol,
             ),
             vec![
-                Symbol::imported(b.symbol, import_specifier(b.module), b.symbol),
+                Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
                 module_symbol(&en.root, module),
                 module_symbol(&en.contract, module),
             ],
@@ -257,54 +258,85 @@ pub(super) fn client_init_wrapper(
         format!(
             "// The client_init bridge: bespoke code runs over the resolved Settings\n\
              // (bespoke wins) before validation.\n\
-             function wrapClientInit(settings: {settings}): void {{\n  try {{\n    {sym}(settings);\n  }} catch (e) {{\n    if (e instanceof {root}) throw e;\n    throw new {contract}(\"client_init\", e);\n  }}\n}}",
+             export function wrapClientInit(settings: {settings}): void {{\n  try {{\n    {sym}(settings);\n  }} catch (e) {{\n    if (e instanceof {root}) throw e;\n    throw new {contract}(\"client_init\", e);\n  }}\n}}",
             settings = n.settings,
             sym = b.symbol,
             root = en.root,
             contract = en.contract,
         ),
         vec![
-            Symbol::imported(b.symbol, import_specifier(b.module), b.symbol),
+            Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
             module_symbol(&en.root, module),
             module_symbol(&en.contract, module),
+            // The resolved Settings are the entry's, so the bridge imports them
+            // from its group.
+            module_symbol(&n.settings, module),
         ],
     )]
 }
 
-/// A bound file path as a TypeScript import specifier (mirrors the loose-op
-/// client's rule).
-pub(super) fn import_specifier(module: &str) -> String {
-    let path = module
-        .strip_suffix(".ts")
-        .or_else(|| module.strip_suffix(".tsx"))
-        .unwrap_or(module);
-    if path.starts_with('.') || path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("./{path}")
-    }
+pub(super) fn apply_transforms(
+    expr: String,
+    transforms: &[String],
+    helpers: &mut Helpers,
+) -> String {
+    crate::codegen::entries::plan::apply_transforms(
+        expr,
+        transforms,
+        &mut helpers.transforms,
+        |t, out| match t {
+            "trim" => Some(format!("({out}).trim()")),
+            "lower" => Some(format!("({out}).toLowerCase()")),
+            "upper" => Some(format!("({out}).toUpperCase()")),
+            _ => None,
+        },
+        // The helper is imported by name, and TypeScript spells a function in
+        // camelCase, so the canonical name is lowered at the first letter.
+        |name| {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => first.to_lowercase().chain(chars).collect(),
+                None => String::new(),
+            }
+        },
+    )
 }
 
-pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
+/// The resolution helpers, which are pure string, environment and duration
+/// work: they serve every entry of every module, so they live in the SDK's
+/// shared group rather than beside any one of them. Emitted whole rather than
+/// per use, so an entry group's imports do not depend on which transforms a
+/// spec happens to name.
+/// Reading an environment variable, which a declared source resolves from.
+pub fn env_helpers() -> Vec<Decl> {
     let mut decls = Vec::new();
-    if helpers.read_env {
-        decls.push(Decl::raw(
+    {
+        decls.push(Decl::raw_providing(
+            "readEnv",
             "// readEnv treats an unset and an empty variable the same: empty means\n\
              // not set, per the declared-source contract.\n\
-             function readEnv(name: string): string | undefined {\n\
+             export function readEnv(name: string): string | undefined {\n\
              \x20 const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;\n\
              \x20 const v = env?.[name];\n\
              \x20 return v === undefined || v === \"\" ? undefined : v;\n\
              }"
             .to_string(),
+            Vec::new(),
         ));
     }
-    if helpers.duration_ms {
-        decls.push(Decl::raw(
+    decls
+}
+
+/// Parsing the duration spelling the targets share into milliseconds.
+pub fn duration_helpers() -> Vec<Decl> {
+    let mut decls = Vec::new();
+    {
+        decls.push(Decl::raw_providing(
+            "durationToMs",
             "// durationToMs parses the duration spelling shared across targets\n\
              // (Go's ParseDuration grammar: optional sign, bare zero, unit runs)\n\
              // into the runtime's millisecond values.\n\
-             function durationToMs(v: string): number {\n\
+             export function durationToMs(v: string): number {\n\
              \x20 let rest = v;\n\
              \x20 let sign = 1;\n\
              \x20 if (rest.startsWith(\"-\")) {\n\
@@ -335,19 +367,28 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
              \x20 return sign * total;\n\
              }"
             .to_string(),
+            Vec::new(),
         ));
     }
-    if !helpers.transforms.is_empty() {
-        decls.push(Decl::raw(
+    decls
+}
+
+/// The casing transforms an `@str::` pipeline lowers to.
+pub fn casing_helpers() -> Vec<Decl> {
+    let mut decls = Vec::new();
+    {
+        decls.push(Decl::raw_providing(
+            "strTransformWords",
             "// strTransformWords splits a resolved value for the casing transforms:\n\
              // runs of spaces, hyphens, and underscores separate words.\n\
-             function strTransformWords(s: string): string[] {\n\
+             export function strTransformWords(s: string): string[] {\n\
              \x20 return s.split(/[ _-]+/).filter((w) => w !== \"\");\n\
              }"
             .to_string(),
+            Vec::new(),
         ));
-        for t in &helpers.transforms {
-            let (name, body) = match *t {
+        for t in ["upper_snake", "snake", "kebab", "pascal"] {
+            let (name, body) = match t {
                 "upper_snake" => (
                     "strUpperSnake",
                     "  return strTransformWords(s).map((w) => w.toUpperCase()).join(\"_\");",
@@ -366,28 +407,20 @@ pub(super) fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
                 ),
                 _ => continue,
             };
-            decls.push(Decl::raw(format!(
-                "function {name}(s: string): string {{\n{body}\n}}"
-            )));
+            decls.push(Decl::raw_providing(
+                name,
+                format!("export function {name}(s: string): string {{\n{body}\n}}"),
+                Vec::new(),
+            ));
         }
     }
     decls
 }
 
-pub(super) fn apply_transforms(
-    expr: String,
-    transforms: &[String],
-    helpers: &mut Helpers,
-) -> String {
-    crate::codegen::entries::plan::apply_transforms(
-        expr,
-        transforms,
-        &mut helpers.transforms,
-        |t, out| match t {
-            "trim" => Some(format!("({out}).trim()")),
-            "lower" => Some(format!("({out}).toLowerCase()")),
-            "upper" => Some(format!("({out}).toUpperCase()")),
-            _ => None,
-        },
-    )
+/// Every resolution helper, for a caller that wants them as one list.
+pub fn resolution_helpers() -> Vec<Decl> {
+    let mut decls = env_helpers();
+    decls.extend(duration_helpers());
+    decls.extend(casing_helpers());
+    decls
 }

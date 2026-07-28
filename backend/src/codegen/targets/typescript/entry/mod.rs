@@ -96,6 +96,11 @@ fn field_doc(traits: &[crate::ir::Trait], indent: &str) -> String {
     )
 }
 
+/// A reference to a declaration of the SDK's shared support group.
+fn support_symbol(name: &str) -> Symbol {
+    Symbol::imported(name, crate::codegen::group::ROOT_SUPPORT, name)
+}
+
 pub(super) fn module_symbol(name: &str, module: &Module) -> Symbol {
     Symbol::imported(name.to_string(), module.name.clone(), name.to_string())
 }
@@ -104,9 +109,10 @@ pub(super) fn module_symbol(name: &str, module: &Module) -> Symbol {
 /// branded well-known aliases and any named shape.
 fn type_refs(t: &Tref, module: &Module) -> Vec<Symbol> {
     match t {
-        Tref::Prim(Prim::Timestamp) => vec![module_symbol("Timestamp", module)],
-        Tref::Prim(Prim::Date) => vec![module_symbol("LocalDate", module)],
-        Tref::Prim(Prim::Duration) => vec![module_symbol("Duration", module)],
+        // A branded well-known type is the SDK's, not the module's.
+        Tref::Prim(Prim::Timestamp) => vec![support_symbol("Timestamp")],
+        Tref::Prim(Prim::Date) => vec![support_symbol("LocalDate")],
+        Tref::Prim(Prim::Duration) => vec![support_symbol("Duration")],
         Tref::Ref { id, .. } => {
             // A config interface lives in this same serde file (it is part of
             // the entry surface), so it needs no companion import.
@@ -204,14 +210,28 @@ struct Helpers {
     transforms: BTreeSet<&'static str>,
 }
 
-/// Every serde-file declaration of the module's entry surface: the config and
-/// Settings interfaces, the hook wrappers (when this module has no loose-op
-/// client already emitting them), and per entry the descriptor constants, the
-/// class, and its methods.
-pub fn entry_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
+/// A module's entry emission, split the way the layout groups it: what every
+/// entry of the module shares (the construction-only config interfaces, the hook
+/// wrappers, the resolution helpers) and, per entry, everything named after that
+/// entry.
+pub struct EntryEmission {
+    /// Shared across the module's entries, so they ride its internal group.
+    pub shared: Vec<Decl>,
+    /// Each entry's own group: its name and its declarations.
+    pub per_entry: Vec<(String, Vec<Decl>)>,
+}
+
+/// Emit a module's entries: the Settings and config interfaces, the descriptor
+/// constants, the class and its methods, grouped per entry so the construction
+/// surface reads together; the wrappers and helpers every entry shares stay in
+/// the module's internal group, emitted once.
+pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let entries = module_entries(module);
     if entries.is_empty() {
-        return Vec::new();
+        return EntryEmission {
+            shared: Vec::new(),
+            per_entry: Vec::new(),
+        };
     }
     let multi = entries.len() > 1;
     let bound = bound_extensions(module, &BINDING_LANGS);
@@ -244,12 +264,13 @@ pub fn entry_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
         // combination upstream, so the bridge is only emitted here.
         decls.extend(client_init_wrapper(&bound, &entries, multi, module));
     }
+    let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
-        decls.push(settings_interface(entry, &n, config, module));
-        decls.extend(config_object_interface(entry, &n, config, module));
-        decls.extend(descriptor_decls(entry, &n));
-        decls.push(class_decl(
+        let mut own = vec![settings_interface(entry, &n, config, module)];
+        own.extend(config_object_interface(entry, &n, config, module));
+        own.extend(descriptor_decls(entry, &n));
+        own.push(class_decl(
             entry,
             &n,
             module,
@@ -258,10 +279,13 @@ pub fn entry_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
             &mut helpers,
             multi,
         ));
-        decls.extend(discriminator_decls_for(entry, &n, module, &bound));
+        own.extend(discriminator_decls_for(entry, &n, module, &bound));
+        per_entry.push((entry.name.to_string(), own));
     }
-    decls.extend(helper_decls(&helpers));
-    decls
+    EntryEmission {
+        shared: decls,
+        per_entry,
+    }
 }
 
 /// The class per entry: constructor (resolution, bridge, validation, frozen
@@ -677,3 +701,4 @@ mod tests;
 use checks::{access, config_error, presence_guard, value_cast, value_expr};
 use resolve::Resolver;
 use surface::*;
+pub use surface::{casing_helpers, duration_helpers, env_helpers, resolution_helpers};

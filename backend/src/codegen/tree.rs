@@ -5,6 +5,7 @@
 //! than written by hand. The tree is target-agnostic: each language backend
 //! supplies a Symbol table plus render rules, but the node set here is shared.
 
+use crate::codegen::group::Group;
 use crate::codegen::symbol::Symbol;
 
 /// A source file: a module name plus its top-level declarations. Imports are
@@ -17,21 +18,42 @@ pub struct File {
     pub decls: Vec<Decl>,
 }
 
-/// One output file for a module: a basename suffix ("" for the main types file,
-/// "_serde" for the serialization file) plus the file itself. A module can emit
-/// more than one so types and serialization land in separate files.
+/// One emission group's output file: the group it belongs to (which decides
+/// where it lands and how visible it is) plus the file itself.
 ///
-/// In Go the split files share one package, so a self-module symbol still needs no
-/// import (`imports_companion` is `None`). In TypeScript and Rust the split files
-/// are separate modules, so the serde file references types that live in the types
-/// file: when `imports_companion` names the companion module path, the import
-/// engine redirects self-module symbols to an import of that companion instead of
-/// dropping them.
+/// `provides` names the symbols the file declares through opaque text (a Raw
+/// item: an `impl` block, a helper module, a macro), which the index that maps a
+/// symbol to its defining group cannot read off the tree. Everything declared
+/// structurally is picked up without being listed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleFile {
-    pub suffix: &'static str,
+    pub group: Group,
     pub file: File,
-    pub imports_companion: Option<String>,
+    pub provides: Vec<String>,
+}
+
+impl ModuleFile {
+    /// A group's file with nothing declared through opaque text. The file's
+    /// module is the group's path, since a group is what a module path denotes
+    /// once a module spans several files.
+    pub fn new(group: Group, decls: Vec<Decl>) -> Self {
+        Self {
+            file: File {
+                module: group.path(),
+                decls,
+            },
+            group,
+            provides: Vec::new(),
+        }
+    }
+
+    /// Declare the symbols this file's raw items define, so references to them
+    /// from other groups resolve to this file.
+    #[must_use]
+    pub fn providing(mut self, provides: Vec<String>) -> Self {
+        self.provides = provides;
+        self
+    }
 }
 
 /// A top-level declaration.
@@ -56,14 +78,74 @@ pub struct Alias {
     pub value: String,
 }
 
+/// A placeholder for a reference inside opaque text, replaced when the file is
+/// rendered by the target's spelling of that symbol.
+///
+/// Opaque text is the one thing the engine cannot re-point the way it re-points
+/// the tree, so a name that may turn out to live in another compilation unit
+/// (Go writes a package selector for one) has to be written as a slot rather
+/// than spelled where it is emitted. The slot names the symbol; the emitter
+/// carries the matching `Symbol` in the item's `refs`, which is also what makes
+/// the import collected.
+///
+/// The delimiter is a control character, so it cannot occur in source a spec
+/// could produce.
+pub fn symbol_slot(name: &str) -> String {
+    format!("\u{1}{name}\u{1}")
+}
+
+/// Replace every [`symbol_slot`] in `text` with `spell(symbol)` for the matching
+/// reference. A slot with no matching reference keeps the bare name: the import
+/// would be missing either way, and a control character in the output would turn
+/// a missing declaration into an unreadable one.
+pub fn fill_symbol_slots(text: &str, refs: &[Symbol], spell: &dyn Fn(&Symbol) -> String) -> String {
+    if !text.contains('\u{1}') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut parts = text.split('\u{1}');
+    if let Some(first) = parts.next() {
+        out.push_str(first);
+    }
+    let mut in_slot = true;
+    for part in parts {
+        if in_slot {
+            match refs.iter().find(|s| s.name == part) {
+                Some(symbol) => out.push_str(&spell(symbol)),
+                None => out.push_str(part),
+            }
+        } else {
+            out.push_str(part);
+        }
+        in_slot = !in_slot;
+    }
+    out
+}
+
+/// The references an item declares, which is what a slot in its text resolves
+/// against. Only the items carrying opaque text have any.
+pub fn item_refs(decl: &Decl) -> &[Symbol] {
+    match decl {
+        Decl::Raw(raw) => &raw.refs,
+        Decl::Function(function) => {
+            let FnBody::Raw { refs, .. } = &function.body;
+            refs
+        }
+        _ => &[],
+    }
+}
+
 /// A fully-formed top-level item rendered verbatim, for constructs the shared
 /// node set does not model (an `impl` block, a helper module, a method with a
 /// receiver). Its `refs` declare the symbols the text references so import
 /// collection still reaches them, exactly like a function body.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Raw {
     pub text: String,
     pub refs: Vec<Symbol>,
+    /// The names the text declares. Opaque text cannot be read for them, so an
+    /// item that something else may reference by name says so here.
+    pub provides: Vec<String>,
 }
 
 impl Decl {
@@ -71,7 +153,7 @@ impl Decl {
     pub fn raw(text: impl Into<String>) -> Decl {
         Decl::Raw(Raw {
             text: text.into(),
-            refs: Vec::new(),
+            ..Raw::default()
         })
     }
 
@@ -81,7 +163,32 @@ impl Decl {
         Decl::Raw(Raw {
             text: text.into(),
             refs,
+            ..Raw::default()
         })
+    }
+
+    /// A verbatim item that names what it declares, so a reference from another
+    /// group resolves to it and an unreferenced one can be left out.
+    pub fn raw_providing(name: &str, text: impl Into<String>, refs: Vec<Symbol>) -> Decl {
+        Decl::Raw(Raw {
+            text: text.into(),
+            refs,
+            provides: vec![name.to_string()],
+        })
+    }
+
+    /// The verbatim source of an item that carries opaque text, or `None` for one
+    /// the tree models structurally. What a reader has to scan when the tree
+    /// cannot answer which names an item reaches.
+    pub fn opaque_text(&self) -> Option<&str> {
+        match self {
+            Decl::Raw(raw) => Some(&raw.text),
+            Decl::Function(f) => {
+                let FnBody::Raw { text, .. } = &f.body;
+                Some(text)
+            }
+            _ => None,
+        }
     }
 }
 

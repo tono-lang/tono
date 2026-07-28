@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use tono_backend::codegen::{
-    casing_for, check_go_layout, generate, generate_target, parse_targets, CasingConfig,
-    CheckOptions, CodegenConfig, Formatter, TargetKind,
+    casing_for, check_layout, generate, generate_target, parse_targets, CasingConfig, CheckOptions,
+    CodegenConfig, Formatter, TargetKind,
 };
 use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::config as manifest;
@@ -123,9 +123,11 @@ fn gen_from_flags(
     // Fail loud on a Go layout that could not compile (a multi-module SDK with no
     // module path, or two modules mapping to the same package) instead of writing
     // silently-broken source.
-    check_go_layout(&model, &targets, config)?;
+    check_layout(&model, &targets, config)?;
     for file in generate(&model, &targets, config)? {
-        let formatted = Formatter::for_target(file.target).run(&file.text).text;
+        let formatted = Formatter::for_output(file.target, &file.path)
+            .run(&file.text)
+            .text;
         write_file(&out_root.join(&file.path), &formatted)?;
     }
     Ok(())
@@ -155,9 +157,11 @@ fn gen_from_manifest(config_path: Option<&str>, ir_path: &Option<String>) -> Res
     for target in &cfg.targets {
         let codegen = codegen_config_for(target);
         let casing = resolved_casing(target);
-        check_go_layout(&model, &[target.kind], &codegen)?;
+        check_layout(&model, &[target.kind], &codegen)?;
         for file in generate_target(&model, target.kind, &codegen, &casing)? {
-            let formatted = Formatter::for_target(file.target).run(&file.text).text;
+            let formatted = Formatter::for_output(file.target, &file.path)
+                .run(&file.text)
+                .text;
             // Paths carry the `<target-dir>/` prefix; strip it so the files land
             // directly under the target's configured `out`.
             let rel = file

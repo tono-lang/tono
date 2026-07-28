@@ -236,20 +236,31 @@ pub fn error_demo_module() -> Module {
 pub fn rendered(decls: &[Decl], rules: &impl RenderRules) -> String {
     decls
         .iter()
-        .map(|d| rules.render_decl(d))
+        .map(|d| {
+            // Same last step the engine takes: a slot in opaque text is spelled
+            // by the target, so a test reads what the file would carry.
+            crate::codegen::tree::fill_symbol_slots(
+                &rules.render_decl(d),
+                crate::codegen::tree::item_refs(d),
+                &|symbol| rules.render_symbol(symbol),
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 /// Assert a symbol table maps each primitive to the expected in-code name and
-/// imports none of them.
+/// imports none of them, except a branded well-known type, which is a
+/// declaration of the SDK's shared support group.
 pub fn assert_prim_symbols(symbol_of: impl Fn(&Tref) -> Symbol, cases: &[(Prim, &str)]) {
     for (prim, expected) in cases {
         let symbol = symbol_of(&Tref::Prim(prim.clone()));
         assert_eq!(&symbol.name, expected, "{prim:?}");
+        let shared = matches!(prim, Prim::Timestamp | Prim::Date | Prim::Duration);
         assert_eq!(
-            symbol.import, None,
-            "primitives are not imported ({prim:?})"
+            symbol.import.is_some(),
+            shared,
+            "only a well-known primitive is imported ({prim:?})"
         );
     }
 }
@@ -299,3 +310,37 @@ pub fn assert_emits_no_op_stub(target: &impl Target) {
 // source size ceiling; they are part of the same helper surface.
 mod entries;
 pub use entries::*;
+
+/// Resolve a module's emitted groups the way the pipeline does: record which
+/// group declares each symbol, then re-point every reference at it. A unit test
+/// that renders a group in isolation would otherwise see references still
+/// pointing at bare IR module names, and read imports the generated SDK never
+/// gets.
+pub fn resolve_groups(
+    mut files: Vec<crate::codegen::tree::ModuleFile>,
+    target: crate::codegen::TargetKind,
+) -> Vec<crate::codegen::tree::ModuleFile> {
+    crate::codegen::assemble::resolve_groups(&mut files, target);
+    files
+}
+
+/// Render the group with the given name out of a module's emitted groups,
+/// panicking when the module did not emit it.
+pub fn render_group(
+    files: &[crate::codegen::tree::ModuleFile],
+    group: &str,
+    target: crate::codegen::TargetKind,
+    rules: &dyn RenderRules,
+) -> String {
+    let module_file = files
+        .iter()
+        .find(|f| f.group.name == group)
+        .unwrap_or_else(|| panic!("module did not emit a {group:?} group"));
+    crate::codegen::render::render_file_with(
+        &module_file.file,
+        &crate::codegen::layout::SameUnit { target },
+        rules,
+        &crate::codegen::Formatter::new("cat", vec![]),
+    )
+    .text
+}

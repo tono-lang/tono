@@ -11,24 +11,23 @@ use crate::codegen::imports;
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::File;
 
-/// Render a file to formatted source. Imports come first (collected and ordered
-/// by the engine), then a blank line, then the declarations separated by blank
-/// lines; the whole rough text is handed to `formatter`.
+/// Render a file to formatted source, dropping references back into the file's
+/// own module. Imports come first (collected and ordered by the engine), then a
+/// blank line, then the declarations separated by blank lines; the whole rough
+/// text is handed to `formatter`.
 pub fn render_file(file: &File, rules: &dyn RenderRules, formatter: &Formatter) -> Formatted {
-    render_file_with_companion(file, None, rules, formatter)
+    render_file_with(file, &imports::SelfModule, rules, formatter)
 }
 
-/// Like [`render_file`], but for a file split off from its module's types: a
-/// self-module symbol is imported from the `companion` module path (the types
-/// file) instead of being dropped. With `companion` `None` this is exactly
-/// [`render_file`].
-pub fn render_file_with_companion(
+/// Like [`render_file`], but each collected reference goes through `resolver`,
+/// which decides which file it points at and whether it needs an import at all.
+pub fn render_file_with(
     file: &File,
-    companion: Option<&str>,
+    resolver: &dyn imports::Resolver,
     rules: &dyn RenderRules,
     formatter: &Formatter,
 ) -> Formatted {
-    let imports = imports::collect_with_companion(file, companion);
+    let imports = imports::collect_with(file, resolver);
     let mut rough = String::new();
     // The imports arrive ordered by (module, imported), so names of the same
     // module are already adjacent; fold them into one statement per module.
@@ -41,19 +40,29 @@ pub fn render_file_with_companion(
             _ => groups.push((import.module.clone(), vec![import.imported.clone()])),
         }
     }
-    for (module, names) in &groups {
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        rough.push_str(&rules.render_import(&file.module, module, &names));
-        rough.push('\n');
-    }
-    if !groups.is_empty() {
-        rough.push('\n');
+    let statements: Vec<String> = groups
+        .iter()
+        .map(|(module, names)| {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            rules.render_import(&file.module, module, &names)
+        })
+        .collect();
+    if !statements.is_empty() {
+        rough.push_str(&rules.render_imports(statements));
+        rough.push_str("\n\n");
     }
     for (index, decl) in file.decls.iter().enumerate() {
         if index > 0 {
             rough.push('\n');
         }
-        rough.push_str(&rules.render_decl(decl));
+        // Opaque text carries a slot where a reference could not be spelled at
+        // emission; the target spells it now, when the file it lands in is known.
+        let rendered = rules.render_decl(decl);
+        rough.push_str(&crate::codegen::tree::fill_symbol_slots(
+            &rendered,
+            crate::codegen::tree::item_refs(decl),
+            &|symbol| rules.render_symbol(symbol),
+        ));
         rough.push('\n');
     }
     formatter.run(&rough)
@@ -388,6 +397,7 @@ mod tests {
             decls: vec![Decl::Raw(Raw {
                 text: "impl Charge {\n    fn pay(&self) -> Receipt { todo!() }\n}".into(),
                 refs: vec![Symbol::imported("Receipt", "billing_receipts", "Receipt")],
+                ..Raw::default()
             })],
         };
         let out = render_file(&file, &RustRules, &passthrough()).text;

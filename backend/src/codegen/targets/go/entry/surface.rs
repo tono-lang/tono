@@ -16,9 +16,14 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
                 return None;
             };
             let name = config_type_ident(&shape.id);
+            // A member's type can be one the SDK shares (a branded well-known),
+            // which is a different package: the text names it, so the reference
+            // has to be declared or the import is not collected.
+            let mut refs = Vec::new();
             let members: String = fields
                 .iter()
                 .map(|f| {
+                    push_type_symbols(&f.target, &mut refs);
                     format!(
                         "{doc}\t{} {}\n",
                         field_pascal(&f.name, config),
@@ -27,11 +32,14 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
                     )
                 })
                 .collect();
-            Some(Decl::raw(format!(
-                "// {name} is a construction-only composition of the entry surface; it\n\
-                 // never crosses the wire and is unexported (the SDK builds it).\n\
-                 type {name} struct {{\n{members}}}"
-            )))
+            Some(Decl::raw_with(
+                format!(
+                    "// {name} is a construction-only composition of the entry surface; it\n\
+                     // never crosses the wire and is unexported (the SDK builds it).\n\
+                     type {name} struct {{\n{members}}}"
+                ),
+                refs,
+            ))
         })
         .collect()
 }
@@ -46,7 +54,9 @@ pub(super) fn settings_decl(
     module: &Module,
 ) -> Decl {
     let mut fields = String::new();
+    let mut refs = vec![import("http", "net/http"), runtime_symbol()];
     for f in entry.declared() {
+        push_type_symbols(&f.target, &mut refs);
         fields.push_str(&format!(
             "{doc}\t{} {}\n",
             field_pascal_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
@@ -65,7 +75,7 @@ pub(super) fn settings_decl(
         settings = n.settings,
         entry = entry.name,
     );
-    Decl::raw_with(text, vec![import("http", "net/http"), runtime_symbol()])
+    Decl::raw_with(text, refs)
 }
 
 /// The functional-option surface: one `With*` per `@with` field over a private
@@ -77,18 +87,25 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
         return Vec::new();
     }
     let mut decls = Vec::new();
+    let mut carrier_refs = Vec::new();
     let carrier_fields: String = configurable
         .iter()
-        .map(|f| format!("\t{} *{}\n", camel(&f.name), go_type(&f.target)))
+        .map(|f| {
+            push_type_symbols(&f.target, &mut carrier_refs);
+            format!("\t{} *{}\n", camel(&f.name), go_type(&f.target))
+        })
         .collect();
-    decls.push(Decl::raw(format!(
-        "// {option} configures an optional (@with) construction value of {client}.\n\
+    decls.push(Decl::raw_with(
+        format!(
+            "// {option} configures an optional (@with) construction value of {client}.\n\
          type {option} func(*{carrier})\n\n\
          type {carrier} struct {{\n{carrier_fields}}}",
-        option = n.option,
-        client = n.client,
-        carrier = n.carrier,
-    )));
+            option = n.option,
+            client = n.client,
+            carrier = n.carrier,
+        ),
+        carrier_refs,
+    ));
     for f in configurable {
         // The public option name honors @rename(go); the carrier member stays
         // the plain camel name (it is internal and read the same way in resolve).
@@ -100,7 +117,10 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
         // godoc reads a doc comment as documentation only when it opens with the
         // declared identifier, so the canonical sentence leads and any @doc /
         // @deprecated lines follow as continuation.
-        decls.push(Decl::raw(format!(
+        let mut option_refs = Vec::new();
+        push_type_symbols(&f.target, &mut option_refs);
+        decls.push(Decl::raw_with(
+            format!(
             "// {fn_name} sets the {field} construction value.\n\
              {doc}func {fn_name}(v {ty}) {option} {{\n\treturn func(w *{carrier_ty}) {{ w.{member} = &v }}\n}}",
             field = f.name,
@@ -109,7 +129,9 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
             carrier_ty = n.carrier,
             member = camel(&f.name),
             doc = field_doc(&f.traits, ""),
-        )));
+            ),
+            option_refs,
+        ));
     }
     decls
 }
@@ -184,19 +206,17 @@ pub(super) fn method_name(op: &Shape, config: &CasingConfig) -> String {
     )
 }
 
-/// Every type-file declaration of the module's entry surface.
-pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
-    let entries = module_entries(module);
-    if entries.is_empty() {
-        return Vec::new();
-    }
-    let multi = entries.len() > 1;
-    let mut decls = config_structs(module, config);
-    for entry in &entries {
-        let n = names(entry, multi);
-        decls.push(settings_decl(entry, &n, config, module));
-        decls.extend(option_decls(entry, &n, multi));
-        decls.extend(client_decls(entry, &n, config));
-    }
+/// One entry's type surface: its resolved Settings, its functional options, and
+/// its client struct with the mock interface.
+pub(super) fn entry_type_decls(
+    entry: &EntryModel<'_>,
+    n: &Names,
+    module: &Module,
+    config: &CasingConfig,
+    multi: bool,
+) -> Vec<Decl> {
+    let mut decls = vec![settings_decl(entry, n, config, module)];
+    decls.extend(option_decls(entry, n, multi));
+    decls.extend(client_decls(entry, n, config));
     decls
 }

@@ -12,9 +12,11 @@ use crate::codegen::targets::typescript::types::LANG;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{EnumBacking, Member, Prim, Shape, ShapeKind, Tref};
 
-/// The shared runtime helpers a generated file relies on, emitted once per file
-/// with zero dependencies.
-pub fn runtime_helpers() -> Vec<Decl> {
+/// The shared runtime helpers every module's codecs call, emitted once for the
+/// whole SDK with zero dependencies.
+/// The number helpers: a 64-bit integer travels as a string, so both directions
+/// are spelled out once for the whole SDK.
+pub fn number_helpers() -> Vec<Decl> {
     vec![
         function(
             "encodeI64",
@@ -36,17 +38,66 @@ pub fn runtime_helpers() -> Vec<Decl> {
             "bigint",
             "  const n = BigInt(s);\n  if (n < 0n || n > 18446744073709551615n) {\n    throw new RangeError(`u64 out of range: ${s}`);\n  }\n  return n;",
         ),
+    ]
+}
+
+/// The bytes helpers: `bytes` travels as base64, built from the alphabet rather
+/// than through `btoa`/`atob`, which are DOM globals an SDK cannot assume.
+pub fn bytes_helpers() -> Vec<Decl> {
+    vec![
+        // Not exported: the alphabet is the codecs' own, and the barrel never
+        // names it, so a consumer has nothing to reach for. Named all the same,
+        // so an SDK with no bytes field drops it with the codecs that read it
+        // instead of shipping a table nothing indexes.
+        Decl::raw_providing(
+            "BASE64_ALPHABET",
+            "const BASE64_ALPHABET =\n\
+             \x20 \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\";",
+            Vec::new(),
+        ),
         function(
             "encodeBytes",
             &[("b", "Uint8Array")],
             "string",
-            "  return btoa(String.fromCharCode(...b));",
+            "  // Built from the alphabet rather than through btoa: btoa is a DOM\n\
+             \x20 // global an SDK cannot assume, and spreading the array into\n\
+             \x20 // String.fromCharCode overflows the call stack past ~128KB.\n\
+             \x20 let out = \"\";\n\
+             \x20 for (let i = 0; i < b.length; i += 3) {\n\
+             \x20   const n = (b[i] << 16) | ((b[i + 1] ?? 0) << 8) | (b[i + 2] ?? 0);\n\
+             \x20   out +=\n\
+             \x20     BASE64_ALPHABET[(n >> 18) & 63] +\n\
+             \x20     BASE64_ALPHABET[(n >> 12) & 63] +\n\
+             \x20     (i + 1 < b.length ? BASE64_ALPHABET[(n >> 6) & 63] : \"=\") +\n\
+             \x20     (i + 2 < b.length ? BASE64_ALPHABET[n & 63] : \"=\");\n\
+             \x20 }\n\
+             \x20 return out;",
         ),
         function(
             "decodeBytes",
             &[("s", "string")],
             "Uint8Array",
-            "  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));",
+            "  // Line breaks are not data. Every other length and padding rule is\n\
+             \x20 // checked before a byte is produced, so a malformed value is an\n\
+             \x20 // error rather than bytes nobody sent.\n\
+             \x20 const t = s.replace(/[\\r\\n]/g, \"\");\n\
+             \x20 if (t.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(t)) {\n\
+             \x20   throw new Error(`invalid base64: ${JSON.stringify(s)}`);\n\
+             \x20 }\n\
+             \x20 const body = t.replace(/=+$/, \"\");\n\
+             \x20 const out = new Uint8Array((body.length * 3) >> 2);\n\
+             \x20 let at = 0;\n\
+             \x20 for (let i = 0; i < body.length; i += 4) {\n\
+             \x20   let n = 0;\n\
+             \x20   const run = Math.min(4, body.length - i);\n\
+             \x20   for (let k = 0; k < run; k++) {\n\
+             \x20     n |= BASE64_ALPHABET.indexOf(body[i + k]) << (18 - 6 * k);\n\
+             \x20   }\n\
+             \x20   out[at++] = (n >> 16) & 255;\n\
+             \x20   if (run > 2) out[at++] = (n >> 8) & 255;\n\
+             \x20   if (run > 3) out[at++] = n & 255;\n\
+             \x20 }\n\
+             \x20 return out;",
         ),
     ]
 }
@@ -84,9 +135,11 @@ pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str) -> Vec<De
         .collect()
 }
 
-/// Cross-module codec references: for each member (or union payload) whose type
-/// points to another module, the `encode`/`decode` functions live in that
-/// module's serde file, so the codecs here import them from `<module>_serde`.
+/// Codec references: for each member (or union payload) whose type is a named
+/// shape, the `encode`/`decode` functions the codec dispatches to. Naming them
+/// as symbols of the module they belong to is what lets the engine find the
+/// group that declares them and emit the import, whether that is another
+/// module's internal group or this one's.
 fn codec_refs(shape: &Shape, self_module: &str) -> Vec<Symbol> {
     let members: &[Member] = match &shape.kind {
         ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => members,
@@ -102,10 +155,9 @@ fn codec_refs(shape: &Shape, self_module: &str) -> Vec<Symbol> {
                 continue; // a same-module codec is in this very file
             }
             let suffix = type_suffix(&id);
-            let serde = format!("{module}_serde");
             for op in ["encode", "decode"] {
                 let name = format!("{op}{suffix}");
-                refs.push(Symbol::imported(name.clone(), serde.clone(), name));
+                refs.push(Symbol::imported(name.clone(), module, name));
             }
         }
     }
@@ -137,16 +189,23 @@ fn ref_ids(t: &Tref) -> Vec<String> {
 /// file imports them from the types file: the shape's own type and, for a structure
 /// or union, any branded well-known type a member decode mentions.
 fn attach_type_refs(decls: Vec<Decl>, shape: &Shape, module: &str) -> Vec<Decl> {
-    let mut names: Vec<String> = vec![type_ident(shape, LANG)];
+    let mut refs: Vec<Symbol> = vec![{
+        let name = type_ident(shape, LANG);
+        Symbol::imported(name.clone(), module.to_string(), name)
+    }];
     if let ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } = &shape.kind {
         for member in members {
-            names.extend(branded_types(&member.target));
+            // A branded well-known type belongs to the SDK's shared support
+            // group, not to the module whose codec casts to it.
+            refs.extend(branded_types(&member.target).into_iter().map(|name| {
+                Symbol::imported(
+                    name.clone(),
+                    crate::codegen::group::ROOT_SUPPORT.to_string(),
+                    name,
+                )
+            }));
         }
     }
-    let refs: Vec<Symbol> = names
-        .into_iter()
-        .map(|name| Symbol::imported(name.clone(), module.to_string(), name))
-        .collect();
     decls
         .into_iter()
         .map(|decl| with_refs(decl, &refs))
@@ -429,7 +488,7 @@ mod tests {
 
     #[test]
     fn runtime_helpers_cover_i64_and_bytes() {
-        let out = rendered(&runtime_helpers());
+        let out = rendered(&[number_helpers(), bytes_helpers()].concat());
         assert!(out.contains("export function encodeI64(v: bigint): string {"));
         assert!(out.contains("return v.toString();"));
         assert!(out.contains("export function decodeI64(s: string): bigint {"));
@@ -513,10 +572,11 @@ mod tests {
         let names: Vec<&str> = refs.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"encodeStatus"));
         assert!(names.contains(&"decodeStatus"));
-        // Both are imported from the referenced module's serde file.
+        // Both are named against the module they belong to; which of its groups
+        // declares them is the engine's to resolve.
         assert!(refs
             .iter()
-            .all(|s| s.import.as_ref().unwrap().module == "payments.common_serde"));
+            .all(|s| s.import.as_ref().unwrap().module == "payments.common"));
         // A same-module reference is in this very file, so it contributes no import.
         let local = structure(
             "payments.charge#Line",

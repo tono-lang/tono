@@ -56,11 +56,52 @@ fn deprecated_prefix(reason: Option<&str>, indent: &str) -> String {
 /// Render a component-tree type expression into Rust surface syntax. Free so the
 /// codec layer (which builds union payload types) can reuse it.
 pub(crate) fn type_string(ty: &TypeExpr) -> String {
-    syntax::render_type(ty, &RustRules)
+    syntax::render_type(ty, &RustRules::default())
 }
 
 /// The Rust render rules.
-pub struct RustRules;
+///
+/// `crate_visible` renders a group Rust does not move: an internal group rides
+/// the module's own file, so each item it declares says `pub(crate)` instead of
+/// `pub`. That is how Rust expresses "part of this module, not part of its
+/// surface", and it is why no Rust file here is named for its audience.
+#[derive(Default)]
+pub struct RustRules {
+    pub crate_visible: bool,
+}
+
+/// The visibility an item is declared with, and the lint allowance that goes
+/// with it. Only the item head carries either, so a rendered declaration says
+/// them once.
+///
+/// A crate-visible declaration exists for the SDK's own use, so the lint that
+/// wants every item reached is not the right judge of it: the file it shares
+/// with the public group carries no blanket allowance.
+fn vis(crate_visible: bool) -> &'static str {
+    if crate_visible {
+        "#[allow(dead_code)]\npub(crate)"
+    } else {
+        "pub"
+    }
+}
+
+/// Restate the visibility of every item in verbatim source.
+///
+/// Only an item head sits at column zero in the Rust the emitters build (a
+/// nested `pub fn` inside an `impl` is always indented), so anchoring on the
+/// line start reaches exactly the declarations a reader could otherwise name.
+fn restate_visibility(text: &str, crate_visible: bool) -> String {
+    if !crate_visible {
+        return text.to_string();
+    }
+    text.lines()
+        .map(|line| match line.strip_prefix("pub ") {
+            Some(rest) => format!("{} {rest}", vis(true)),
+            None => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// The generic type-parameter clause of a definition (`<T>`, `<T, U>`), or the
 /// empty string for a non-generic shape. The serde derives generate the bound on
@@ -180,9 +221,10 @@ impl RustRules {
             .unwrap_or_default();
         let FnBody::Raw { text, .. } = &function.body;
         format!(
-            "pub fn {}({}){ret} {{\n{text}\n}}",
+            "{vis} fn {}({}){ret} {{\n{text}\n}}",
             function.name.name,
-            params.join(", ")
+            params.join(", "),
+            vis = vis(self.crate_visible),
         )
     }
 }
@@ -190,14 +232,15 @@ impl RustRules {
 impl RenderRules for RustRules {
     fn render_import(&self, _from_module: &str, module: &str, names: &[&str]) -> String {
         // Rust paths are absolute from the crate root, so the importer is
-        // irrelevant. A dotted module name is a Rust module path: payments.common
-        // -> payments::common.
-        let path = module.replace('.', "::");
+        // irrelevant. A group is a module of the crate: payments.common's types
+        // group is `crate::payments::common::types`.
+        let path = crate::codegen::layout::rust_path(module)
+            .unwrap_or_else(|| format!("crate::{}", module.replace('.', "::")));
         // A single name needs no braces; several group into one `use`.
         if let [name] = names {
-            format!("use crate::{path}::{name};")
+            format!("use {path}::{name};")
         } else {
-            format!("use crate::{path}::{{{}}};", names.join(", "))
+            format!("use {path}::{{{}}};", names.join(", "))
         }
     }
 
@@ -216,16 +259,22 @@ impl RenderRules for RustRules {
                     .unwrap_or_default();
                 let dep = deprecated_prefix(interface.deprecated.as_deref(), "");
                 format!(
-                    "{doc}{dep}{DERIVES}\npub struct {}{} {{\n{fields}}}",
+                    "{doc}{dep}{DERIVES}\n{vis} struct {}{} {{\n{fields}}}",
                     interface.name.name,
-                    type_params(&interface.params)
+                    type_params(&interface.params),
+                    vis = vis(self.crate_visible),
                 )
             }
             Decl::Function(function) => self.render_function(function),
             Decl::Alias(alias) => {
-                format!("pub type {} = {};", alias.name.name, alias.value)
+                format!(
+                    "{} type {} = {};",
+                    vis(self.crate_visible),
+                    alias.name.name,
+                    alias.value
+                )
             }
-            Decl::Raw(raw) => raw.text.clone(),
+            Decl::Raw(raw) => restate_visibility(&raw.text, self.crate_visible),
             Decl::Client(client) => {
                 let methods: String = client
                     .methods
@@ -271,17 +320,17 @@ mod tests {
     #[test]
     fn imports_render_as_crate_paths() {
         assert_eq!(
-            RustRules.render_import("billing", "payments", &["Charge"]),
+            RustRules::default().render_import("billing", "payments", &["Charge"]),
             "use crate::payments::Charge;"
         );
         // Several names from one module group into a single braced use.
         assert_eq!(
-            RustRules.render_import("billing", "payments", &["Card", "Charge"]),
+            RustRules::default().render_import("billing", "payments", &["Card", "Charge"]),
             "use crate::payments::{Card, Charge};"
         );
         // A dotted module becomes a nested crate path.
         assert_eq!(
-            RustRules.render_import("payments.charges", "payments.common", &["Money"]),
+            RustRules::default().render_import("payments.charges", "payments.common", &["Money"]),
             "use crate::payments::common::Money;"
         );
     }
@@ -301,7 +350,7 @@ mod tests {
             doc: None,
         });
         assert_eq!(
-            RustRules.render_decl(&decl),
+            RustRules::default().render_decl(&decl),
             "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]\n\
              pub struct Charge {\n    pub id: String,\n}"
         );
@@ -324,7 +373,7 @@ mod tests {
             doc: None,
         });
         assert_eq!(
-            RustRules.render_decl(&decl),
+            RustRules::default().render_decl(&decl),
             "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]\n\
              pub struct Page<T> {\n    pub items: Vec<T>,\n}"
         );
@@ -344,7 +393,7 @@ mod tests {
             deprecated: None,
             doc: None,
         });
-        let out = RustRules.render_decl(&decl);
+        let out = RustRules::default().render_decl(&decl);
         assert!(out.contains("    #[serde(rename = \"memo\")]\n"));
         assert!(out.contains("    pub memo_text: String,\n"));
     }
@@ -372,7 +421,7 @@ mod tests {
             deprecated: None,
             doc: None,
         });
-        let out = RustRules.render_decl(&decl);
+        let out = RustRules::default().render_decl(&decl);
         // The wire rename and the string codec combine into one serde attribute.
         assert!(out.contains("    #[serde(rename = \"amount\", with = \"i64_string\")]\n"));
         assert!(out.contains("    pub amount_cents: i64,\n"));
@@ -399,7 +448,7 @@ mod tests {
             deprecated: None,
             doc: None,
         });
-        let out = RustRules.render_decl(&decl);
+        let out = RustRules::default().render_decl(&decl);
         assert!(out.contains("    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n"));
         assert!(out.contains("    pub note: Option<String>,\n"));
     }
@@ -418,7 +467,7 @@ mod tests {
             deprecated: None,
             doc: None,
         });
-        let out = RustRules.render_decl(&decl);
+        let out = RustRules::default().render_decl(&decl);
         assert!(out.contains(
             "    #[serde(rename = \"memo\", default, skip_serializing_if = \"Option::is_none\")]\n"
         ));
@@ -450,7 +499,7 @@ mod tests {
             deprecated: Some("use ChargeV2".into()),
             doc: None,
         });
-        let out = RustRules.render_decl(&decl);
+        let out = RustRules::default().render_decl(&decl);
         // The struct attribute leads the derive so it attaches to the type.
         assert!(out.contains("#[deprecated(note = \"use ChargeV2\")]\n#[derive("));
         // A field with a reason carries the note; a bare one the plain attribute.
@@ -476,7 +525,7 @@ mod tests {
             deprecated: None,
             doc: Some("A billing charge.\n\nMarkdown rides rustdoc verbatim.".into()),
         });
-        let out = RustRules.render_decl(&decl);
+        let out = RustRules::default().render_decl(&decl);
         // The struct doc leads, one `///` per line (a blank line stays a bare `///`).
         assert!(out.starts_with(
             "/// A billing charge.\n///\n/// Markdown rides rustdoc verbatim.\n#[derive("
@@ -488,7 +537,7 @@ mod tests {
 
     #[test]
     fn type_expressions_render_idiomatically() {
-        let rules = RustRules;
+        let rules = RustRules::default();
         assert_eq!(
             rules.render_type(&TypeExpr::list(TypeExpr::Ref(Symbol::builtin("Charge")))),
             "Vec<Charge>"
@@ -539,7 +588,7 @@ mod tests {
             },
         });
         assert_eq!(
-            RustRules.render_decl(&function),
+            RustRules::default().render_decl(&function),
             "pub fn decode_i64(s: &str) -> i64 {\n    s.parse().unwrap()\n}"
         );
     }
@@ -550,7 +599,10 @@ mod tests {
             name: Symbol::builtin("Uuid"),
             value: "String".into(),
         });
-        assert_eq!(RustRules.render_decl(&alias), "pub type Uuid = String;");
+        assert_eq!(
+            RustRules::default().render_decl(&alias),
+            "pub type Uuid = String;"
+        );
     }
 
     #[test]
@@ -558,8 +610,9 @@ mod tests {
         let raw = Decl::Raw(Raw {
             text: "impl Charge {}".into(),
             refs: vec![],
+            ..Raw::default()
         });
-        assert_eq!(RustRules.render_decl(&raw), "impl Charge {}");
+        assert_eq!(RustRules::default().render_decl(&raw), "impl Charge {}");
     }
 
     #[test]
@@ -590,9 +643,9 @@ mod tests {
             is_async: false,
             doc: None,
         });
-        assert_eq!(RustRules.render_decl(&enum_decl), "");
-        assert_eq!(RustRules.render_decl(&union_decl), "");
-        assert_eq!(RustRules.render_decl(&method), "");
+        assert_eq!(RustRules::default().render_decl(&enum_decl), "");
+        assert_eq!(RustRules::default().render_decl(&union_decl), "");
+        assert_eq!(RustRules::default().render_decl(&method), "");
     }
 
     #[test]
@@ -624,7 +677,7 @@ mod tests {
             ],
         });
         assert_eq!(
-            RustRules.render_decl(&decl),
+            RustRules::default().render_decl(&decl),
             "#[allow(async_fn_in_trait)]\npub trait Client {\n    async fn \
              create_charge(&self, input: CreateChargeInput) -> Result<Charge, \
              TonoError>;\n    fn local_op(&self) -> Result<(), TonoError>;\n}"
@@ -644,6 +697,8 @@ mod tests {
                 doc: None,
             }],
         });
-        assert!(!RustRules.render_decl(&decl).contains("async_fn_in_trait"));
+        assert!(!RustRules::default()
+            .render_decl(&decl)
+            .contains("async_fn_in_trait"));
     }
 }

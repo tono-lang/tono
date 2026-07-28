@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"os"
 
-	notes "example.com/notes"
+	notes "example.com/notes/notes"
 )
 
 type vectorFile struct {

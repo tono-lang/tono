@@ -2,60 +2,70 @@
 
 package charges
 
-import "context"
-import "encoding/json"
-import "fmt"
-import tonohttp "github.com/tono-lang/tono/runtimes/http-go"
-import "os"
-import "example.com/sdk/payments/common"
-import "time"
+import (
+	"context"
+	"encoding/json"
+	"example.com/sdk/internal/descriptor"
+	"example.com/sdk/internal/duration"
+	"example.com/sdk/internal/record"
+	"example.com/sdk/support"
+	"fmt"
+	tonohttp "github.com/tono-lang/tono/runtimes/http-go"
+	"net/http"
+	"os"
+)
 
-func (c *Charge) UnmarshalJSON(b []byte) error {
-	type alias Charge
-	var tmp struct {
-		alias
-		Method json.RawMessage `json:"method"`
-	}
-	tmp.alias = alias(*c)
-	if err := json.Unmarshal(b, &tmp); err != nil {
-		return err
-	}
-	*c = Charge(tmp.alias)
-	if len(tmp.Method) > 0 {
-		m, err := common.UnmarshalPaymentMethod(tmp.Method)
-		if err != nil {
-			return err
-		}
-		c.Method = m
-	}
-	return nil
+// Settings are the resolved construction values of the client entry,
+// handed to the client_init hook before validation: bespoke code may
+// overwrite any field (bespoke wins) and set transport through the slots.
+// Exactly one transport slot may be set: HTTPClient (native) or Transport
+// (canonical). Headers are the base request headers (bespoke auth writes
+// here); a declared @header wins only where nothing else set the name.
+type Settings struct {
+	APIKey     string
+	Endpoint   string
+	Timeout    support.Duration
+	MaxRetries int32
+
+	HTTPClient *http.Client
+	Transport  tonohttp.Transport
+	Headers    map[string]string
 }
 
-// mustDescriptor parses a compiler-emitted descriptor literal at package
-// load; a parse failure is a build defect, never a runtime input.
-func mustDescriptor(literal string) *tonohttp.WireDescriptor {
-	d, err := tonohttp.ParseDescriptor([]byte(literal))
-	if err != nil {
-		panic(err)
-	}
-	return d
+// ClientOption configures an optional (@with) construction value of Client.
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	timeout    *support.Duration
+	maxRetries *int32
 }
 
-// encodeRecord turns a typed input into the wire record the runtime binds
-// from, through the type's own JSON tags.
-func encodeRecord(v any) (map[string]any, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
-	}
-	return m, nil
+// WithTimeout sets the timeout construction value.
+func WithTimeout(v support.Duration) ClientOption {
+	return func(w *clientOptions) { w.timeout = &v }
 }
 
-var createChargeDescriptor = mustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[402,\"payments.charges#card_declined\",\"card_declined\",true],[404,\"payments.charges#not_found\",null]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}")
+// WithMaxRetries sets the max_retries construction value.
+func WithMaxRetries(v int32) ClientOption {
+	return func(w *clientOptions) { w.maxRetries = &v }
+}
+
+// The payments SDK entry: the construction surface and its operations.
+// Client is the generated SDK client the client entry declares.
+type Client struct {
+	settings Settings
+	runtime  *tonohttp.Runtime
+	hooks    *tonohttp.Hooks
+}
+
+// ClientAPI is the operation surface of Client, for mocking.
+type ClientAPI interface {
+	CreateCharge(ctx context.Context, input Charge) (Charge, error)
+}
+
+var _ ClientAPI = (*Client)(nil)
+
+var createChargeDescriptor = descriptor.MustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[402,\"payments.charges#card_declined\",\"card_declined\",true],[404,\"payments.charges#not_found\",null]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}")
 
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, client_init on top (bespoke wins),
@@ -75,7 +85,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	if w.timeout != nil {
 		s.Timeout = *w.timeout
 	} else {
-		s.Timeout = Duration("10s")
+		s.Timeout = support.Duration("10s")
 	}
 	if w.maxRetries != nil {
 		s.MaxRetries = *w.maxRetries
@@ -93,7 +103,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	values["api_key"] = s.APIKey
 	values["endpoint"] = s.Endpoint
 	{
-		ms, err := durationMs(string(s.Timeout))
+		ms, err := duration.DurationMs(string(s.Timeout))
 		if err != nil {
 			return nil, &ConfigError{Message: fmt.Sprintf("timeout: invalid duration %q", string(s.Timeout))}
 		}
@@ -112,7 +122,7 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	if invalid := ValidateCharge(input); invalid != nil {
 		return zero, invalid
 	}
-	record, err := encodeRecord(input)
+	record, err := record.EncodeRecord(input)
 	if err != nil {
 		return zero, err
 	}
@@ -185,14 +195,4 @@ func DecodeCreateChargeError(status int, body []byte) error {
 		}
 	}
 	return &APIError{Status: status, Body: string(body)}
-}
-
-// durationMs parses a duration field for the runtime's millisecond value
-// positions.
-func durationMs(v string) (float64, error) {
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, err
-	}
-	return float64(d) / float64(time.Millisecond), nil
 }

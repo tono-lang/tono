@@ -4,29 +4,49 @@
 //! reachable from the file's declarations. Walking gathers each referenced
 //! symbol's import, recurses into the symbol's `references` (so a generic
 //! `Page<Charge>` pulls both `Page` and `Charge`), deduplicates, and orders
-//! deterministically so the output is byte-stable across runs. Imports whose
-//! module equals the file's own module are dropped, since a type defined in this
-//! file needs no import.
+//! deterministically so the output is byte-stable across runs.
+//!
+//! What a collected import then *points at* is the [`Resolver`]'s call. A symbol
+//! table can only say which IR module a type belongs to; which file of that
+//! module declares it is decided later, when the module is split into emission
+//! groups. The resolver closes that gap: it re-points each import at the group
+//! that declares the symbol, and drops the ones that turn out to be in the
+//! importing file's own compilation unit.
 
 use std::collections::{BTreeSet, HashSet};
 
 use crate::codegen::symbol::{Import, Symbol};
 use crate::codegen::tree::{Decl, Field, File, FnBody, TypeExpr};
 
-/// Collect the deduplicated, deterministically-ordered import set of a file.
-///
-/// Determinism comes from a `BTreeSet`, which orders imports by `(module,
-/// imported)` regardless of discovery order; the self-module imports are
-/// filtered out on the way to the returned `Vec`.
-pub fn collect(file: &File) -> Vec<Import> {
-    collect_with_companion(file, None)
+/// How a collected reference becomes (or stops being) an import statement.
+pub trait Resolver {
+    /// The import the file at `from` needs for `import`, or `None` when the
+    /// symbol is already in that file's compilation unit.
+    fn resolve(&self, from: &str, import: &Import) -> Option<Import>;
 }
 
-/// Like [`collect`], but for a split-out file whose companion holds the module's
-/// types. A self-module symbol is then not dropped but re-pointed at `companion`
-/// (a module path), so the serde file imports each type it references from the
-/// types file. With `companion` `None` this is exactly [`collect`].
-pub fn collect_with_companion(file: &File, companion: Option<&str>) -> Vec<Import> {
+/// The resolver for a file that is a module unto itself: a reference back to the
+/// file's own module needs no import, and everything else is kept verbatim.
+pub struct SelfModule;
+
+impl Resolver for SelfModule {
+    fn resolve(&self, from: &str, import: &Import) -> Option<Import> {
+        (import.module != from).then(|| import.clone())
+    }
+}
+
+/// Collect the deduplicated, deterministically-ordered import set of a file,
+/// dropping references back into the file's own module.
+///
+/// Determinism comes from a `BTreeSet`, which orders imports by `(module,
+/// imported)` regardless of discovery order.
+pub fn collect(file: &File) -> Vec<Import> {
+    collect_with(file, &SelfModule)
+}
+
+/// Like [`collect`], but each reference is put through `resolver`, which decides
+/// what it points at and whether it survives at all.
+pub fn collect_with(file: &File, resolver: &dyn Resolver) -> Vec<Import> {
     let mut acc: BTreeSet<Import> = BTreeSet::new();
     // Guards against reference cycles and skips re-walking a symbol already
     // seen. Keyed on (name, import) so two distinct same-named symbols from
@@ -35,17 +55,107 @@ pub fn collect_with_companion(file: &File, companion: Option<&str>) -> Vec<Impor
     for decl in &file.decls {
         walk_decl(decl, &mut acc, &mut visited);
     }
-    acc.into_iter()
-        .filter_map(|import| {
-            if import.module != file.module {
-                return Some(import);
+    // Resolving can map two references onto one import (two groups collapsing
+    // into one Go package), so the result is re-ordered and deduplicated.
+    acc.iter()
+        .filter_map(|import| resolver.resolve(&file.module, import))
+        .collect::<BTreeSet<Import>>()
+        .into_iter()
+        .collect()
+}
+
+/// Apply `f` to every symbol the file's declarations reference, including the
+/// transitive `references` a symbol carries.
+///
+/// This is what re-points a file's references from the IR module a symbol table
+/// knows to the group that actually declares them. It has to happen on the tree
+/// rather than on the collected import set, because a target also reads a
+/// symbol's import when rendering the reference itself (Go qualifies a
+/// cross-package name with the package's selector).
+pub fn repoint(file: &mut File, f: &dyn Fn(&mut Symbol)) {
+    for decl in &mut file.decls {
+        match decl {
+            Decl::Interface(interface) => repoint_fields(&mut interface.fields, f),
+            Decl::Union(union) => {
+                for variant in &mut union.variants {
+                    repoint_fields(&mut variant.fields, f);
+                    if let Some(ty) = &mut variant.payload {
+                        repoint_type(ty, f);
+                    }
+                }
             }
-            // A self-module symbol: redirected to the companion when this file is
-            // split off from its types, otherwise dropped.
-            companion.map(|module| Import {
-                module: module.to_string(),
-                imported: import.imported,
-            })
+            Decl::Method(method) => repoint_method(method, f),
+            Decl::Client(client) => {
+                for method in &mut client.methods {
+                    repoint_method(method, f);
+                }
+            }
+            Decl::Function(function) => {
+                repoint_fields(&mut function.params, f);
+                if let Some(ty) = &mut function.ret {
+                    repoint_type(ty, f);
+                }
+                let FnBody::Raw { refs, .. } = &mut function.body;
+                repoint_symbols(refs, f);
+            }
+            Decl::Raw(raw) => repoint_symbols(&mut raw.refs, f),
+            Decl::Enum(_) | Decl::Alias(_) => {}
+        }
+    }
+}
+
+fn repoint_method(method: &mut crate::codegen::tree::Method, f: &dyn Fn(&mut Symbol)) {
+    repoint_fields(&mut method.params, f);
+    for ty in method.ret.iter_mut().chain(method.err.iter_mut()) {
+        repoint_type(ty, f);
+    }
+}
+
+fn repoint_fields(fields: &mut [Field], f: &dyn Fn(&mut Symbol)) {
+    for field in fields {
+        repoint_type(&mut field.ty, f);
+    }
+}
+
+fn repoint_symbols(symbols: &mut [Symbol], f: &dyn Fn(&mut Symbol)) {
+    for symbol in symbols {
+        f(symbol);
+        repoint_symbols(&mut symbol.references, f);
+    }
+}
+
+fn repoint_type(ty: &mut TypeExpr, f: &dyn Fn(&mut Symbol)) {
+    match ty {
+        TypeExpr::Ref(symbol) => repoint_symbols(std::slice::from_mut(symbol), f),
+        TypeExpr::List(inner) | TypeExpr::Nullable(inner) => repoint_type(inner, f),
+        TypeExpr::Map(key, value) | TypeExpr::Entries(key, value) => {
+            repoint_type(key, f);
+            repoint_type(value, f);
+        }
+        TypeExpr::Generic(symbol, args) => {
+            repoint_symbols(std::slice::from_mut(symbol), f);
+            for arg in args {
+                repoint_type(arg, f);
+            }
+        }
+    }
+}
+
+/// The symbols a file declares, so the pass that builds the symbol-to-group index
+/// knows which group defines what. A raw item's text is opaque, so what it
+/// declares is carried alongside it by the emitter rather than inferred here.
+pub fn declared_symbols(decls: &[Decl]) -> Vec<String> {
+    decls
+        .iter()
+        .flat_map(|decl| match decl {
+            Decl::Interface(x) => vec![x.name.name.clone()],
+            Decl::Enum(x) => vec![x.name.name.clone()],
+            Decl::Union(x) => vec![x.name.name.clone()],
+            Decl::Method(x) => vec![x.name.name.clone()],
+            Decl::Function(x) => vec![x.name.name.clone()],
+            Decl::Alias(x) => vec![x.name.name.clone()],
+            Decl::Client(x) => vec![x.name.name.clone()],
+            Decl::Raw(x) => x.provides.clone(),
         })
         .collect()
 }
@@ -459,6 +569,7 @@ mod tests {
                 // The text mentions a type, but only the declared refs are walked.
                 text: "impl Charge { fn touch(&self) -> Helper { Helper } }".into(),
                 refs: vec![Symbol::imported("Helper", "helpers", "Helper")],
+                ..Raw::default()
             })],
         };
         assert_eq!(

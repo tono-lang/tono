@@ -102,21 +102,25 @@ fn wrapper(slot: &str, root: &str, contract: &str, signature: &str, call: &str) 
 }
 
 /// A bound file path (`ext/ts/auth.ts`) as a TypeScript import specifier. The
-/// extension is dropped (`./ext/ts/auth`), matching the SDK's own extensionless
-/// imports and staying valid where a `.ts` specifier is not (NodeNext/ESM). The
-/// path is relative to the generated file, so it gets an explicit `./` unless the
-/// user already wrote one; the renderer keeps a dot-prefixed specifier verbatim
-/// rather than reading its dots as module segments.
-pub(crate) fn import_specifier(module: &str) -> String {
+/// extension is dropped, matching the SDK's own extensionless imports and staying
+/// valid where a `.ts` specifier is not (NodeNext/ESM).
+///
+/// The path is written relative to the SDK's output root, which is not where the
+/// importing file sits: a module's groups live in a directory named for it, so
+/// the specifier climbs back out to the root first. `from_module` is the IR
+/// module doing the importing, and its dotted depth is how far that is. An
+/// absolute path is left alone.
+pub(crate) fn import_specifier(module: &str, from_module: &str) -> String {
     let path = module
         .strip_suffix(".ts")
         .or_else(|| module.strip_suffix(".tsx"))
         .unwrap_or(module);
-    if path.starts_with('.') || path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("./{path}")
+    if path.starts_with('/') {
+        return path.to_string();
     }
+    let up = "../".repeat(from_module.split('.').count());
+    let path = path.trim_start_matches("./");
+    format!("{up}{path}")
 }
 
 /// The generated name of a slot's boundary wrapper.
@@ -151,7 +155,7 @@ fn hook_wrappers(bound: &[BoundExtension<'_>], module: &Module, refs: &mut Vec<S
         };
         refs.push(Symbol::imported(
             binding.symbol,
-            import_specifier(binding.module),
+            import_specifier(binding.module, &module.name),
             binding.symbol,
         ));
         let (signature, call) = match slot {
@@ -249,7 +253,7 @@ pub(crate) fn contract_wrappers(
         let sig = e.signature.expect("filtered to Some");
         refs.push(Symbol::imported(
             e.symbol,
-            import_specifier(e.module),
+            import_specifier(e.module, &module.name),
             e.symbol,
         ));
         let input = render_type(&type_expr_of(&sig.input), &TsRules);
@@ -695,11 +699,13 @@ mod tests {
         let files = generate(&model, &[TargetKind::TypeScript], &CodegenConfig::default()).unwrap();
         let serde = files
             .iter()
-            .find(|f| f.path.to_string_lossy().replace('\\', "/") == "typescript/m_serde.ts")
+            .find(|f| f.path.to_string_lossy().replace('\\', "/") == "typescript/m/codec.ts")
             .unwrap();
+        // The bound path is written against the SDK's output root, so the
+        // specifier climbs out of the module's own directory first.
         assert!(serde
             .text
-            .contains("import { addBearer } from \"./ext/ts/auth\";"));
+            .contains("import { addBearer } from \"../ext/ts/auth\";"));
         assert!(serde
             .text
             .contains("private readonly hooks: Hooks = { before_request: wrapBeforeRequest };"));

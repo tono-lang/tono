@@ -1,0 +1,7 @@
+{
+  "exports": {
+    "./support": "./support.ts",
+    "./payments/charges": "./payments/charges/index.ts",
+    "./payments/common": "./payments/common/index.ts"
+  }
+}

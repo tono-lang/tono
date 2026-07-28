@@ -23,7 +23,6 @@ use crate::codegen::extensions::{bound_extensions, hook_binding, impl_binding, B
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
-use crate::codegen::targets::go::render::GoRules;
 use crate::codegen::targets::go::types::{type_expr_of, GoVal, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
@@ -101,8 +100,23 @@ fn names(entry: &EntryModel<'_>, multi: bool) -> Names {
     }
 }
 
+/// The Go spelling of a type inside opaque text. An imported leaf renders as a
+/// slot, so the package selector (or its absence) is decided when the file is
+/// rendered; the caller declares the matching symbols with
+/// [`push_type_symbols`].
 pub(super) fn go_type(t: &Tref) -> String {
-    render_type(&type_expr_of(t), &GoRules::default())
+    render_type(&type_expr_of(t), &crate::codegen::targets::go::SlotRules)
+}
+
+/// The Go spelling of a type as *data*: the name that goes into a message a
+/// consumer reads, not into a code position. A slot would be wrong here twice
+/// over: it never reaches the renderer intact through a quoted literal, and a
+/// package selector is noise in an error string.
+pub(super) fn go_type_label(t: &Tref) -> String {
+    render_type(
+        &type_expr_of(t),
+        &crate::codegen::targets::go::GoRules::default(),
+    )
 }
 
 /// The unexported Go name of a composed config type. A config is construction
@@ -244,20 +258,41 @@ struct Helpers {
     transforms: BTreeSet<&'static str>,
 }
 
-/// Every serde-file declaration: the shared helpers, the bound-hook wrappers,
-/// and per entry the descriptor constants, the constructor, and the methods.
-pub fn serde_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
+/// A module's entry emission, split the way the layout groups it: the
+/// declarations every entry of the module shares (the construction-only config
+/// structs, the descriptor and record helpers, the bound-hook wrappers) and, per
+/// entry, everything named after that entry.
+pub struct EntryEmission {
+    /// Shared across the module's entries, so they ride its internal group.
+    pub shared: Vec<Decl>,
+    /// Each entry's own group: its name and its declarations.
+    pub per_entry: Vec<(String, Vec<Decl>)>,
+}
+
+/// Emit a module's entries. The surface (Settings, options, the client struct)
+/// and the behavior (the constructor, the operation methods) of one entry are
+/// emitted together, so an entry's group holds the whole thing rather than
+/// leaving the constructor in a file named for serialization.
+///
+/// The on-demand helpers are gathered across every entry and emitted once, since
+/// Go would reject a second declaration of the same function in the package.
+pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let entries = module_entries(module);
     if entries.is_empty() {
-        return Vec::new();
+        return EntryEmission {
+            shared: Vec::new(),
+            per_entry: Vec::new(),
+        };
     }
     let multi = entries.len() > 1;
     let bound = bound_extensions(module, &BINDING_LANGS);
     let mut helpers = Helpers::default();
-    let mut decls = vec![shared_helpers_decl()];
-    decls.extend(hook_wrapper_decls(&bound, &entries, multi));
+    let mut shared = surface::config_structs(module, config);
+    shared.extend(hook_wrapper_decls(&bound, &entries, multi));
+    let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
+        let mut decls = surface::entry_type_decls(entry, &n, module, config, multi);
         decls.extend(descriptor_decls(entry, &n));
         decls.push(new_decl(
             entry,
@@ -272,25 +307,73 @@ pub fn serde_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
             decls.push(op_method_decl(&n, op, module, config, &bound));
         }
         decls.extend(discriminator_decls_for(entry, &n, module, &bound));
+        per_entry.push((entry.name.to_string(), decls));
     }
-    decls.extend(helper_decls(&helpers));
-    decls
+    EntryEmission { shared, per_entry }
 }
 
-/// The always-needed helpers: descriptor parsing at package load and the
-/// struct-to-record encoding the runtime input takes.
-fn shared_helpers_decl() -> Decl {
-    Decl::raw_with(
-        "// mustDescriptor parses a compiler-emitted descriptor literal at package\n\
+/// The SDK-root groups this target emits, each named for what it holds.
+pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
+    vec![
+        ("descriptor", vec![descriptor_decl()]),
+        ("record", vec![record_decl()]),
+        ("duration", vec![duration_decl()]),
+        ("casing", casing_decls()),
+    ]
+}
+
+/// Which SDK-root group declares a shared helper. Read off the emitters rather
+/// than listed here, so the answer cannot drift from where the declaration
+/// actually lands.
+fn shared_group(name: &str) -> String {
+    shared_groups()
+        .into_iter()
+        .find(|(_, decls)| {
+            crate::codegen::imports::declared_symbols(decls)
+                .iter()
+                .any(|declared| declared == name)
+        })
+        .map(|(group, _)| crate::codegen::group::Group::root(group).path())
+        .unwrap_or_default()
+}
+
+/// A reference to a name in one of the SDK's shared packages, so the import is
+/// collected wherever the raw text calls it.
+fn shared_symbol(name: &str) -> Symbol {
+    Symbol::imported(name, shared_group(name), name)
+}
+
+/// A shared helper named inside opaque text: a slot, so the package selector is
+/// applied (or dropped) when the file is rendered.
+fn shared_slot(name: &str) -> String {
+    crate::codegen::tree::symbol_slot(name)
+}
+
+/// Reading a compiler-emitted descriptor literal at package load. Exported
+/// because a Go package boundary is what makes it shared, and `internal/` is
+/// what keeps it out of a consumer's reach.
+fn descriptor_decl() -> Decl {
+    Decl::raw_providing(
+        "MustDescriptor",
+        "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
          // load; a parse failure is a build defect, never a runtime input.\n\
-         func mustDescriptor(literal string) *tonohttp.WireDescriptor {\n\
+         func MustDescriptor(literal string) *tonohttp.WireDescriptor {\n\
          \td, err := tonohttp.ParseDescriptor([]byte(literal))\n\
          \tif err != nil {\n\t\tpanic(err)\n\t}\n\
          \treturn d\n\
-         }\n\n\
-         // encodeRecord turns a typed input into the wire record the runtime binds\n\
+         }"
+        .to_string(),
+        vec![runtime_symbol()],
+    )
+}
+
+/// Turning a typed input into the wire record the runtime binds from.
+fn record_decl() -> Decl {
+    Decl::raw_providing(
+        "EncodeRecord",
+        "// EncodeRecord turns a typed input into the wire record the runtime binds\n\
          // from, through the type's own JSON tags.\n\
-         func encodeRecord(v any) (map[string]any, error) {\n\
+         func EncodeRecord(v any) (map[string]any, error) {\n\
          \tb, err := json.Marshal(v)\n\
          \tif err != nil {\n\t\treturn nil, err\n\t}\n\
          \tvar m map[string]any\n\
@@ -298,58 +381,73 @@ fn shared_helpers_decl() -> Decl {
          \treturn m, nil\n\
          }"
         .to_string(),
-        vec![runtime_symbol(), import("json", "encoding/json")],
+        vec![import("json", "encoding/json")],
     )
 }
 
-/// The on-demand helpers the resolution used.
-fn helper_decls(helpers: &Helpers) -> Vec<Decl> {
-    let mut decls = Vec::new();
-    if helpers.duration_ms {
-        decls.push(Decl::raw_with(
-            "// durationMs parses a duration field for the runtime's millisecond value\n\
-             // positions.\n\
-             func durationMs(v string) (float64, error) {\n\
-             \td, err := time.ParseDuration(v)\n\
-             \tif err != nil {\n\t\treturn 0, err\n\t}\n\
-             \treturn float64(d) / float64(time.Millisecond), nil\n\
-             }"
-            .to_string(),
-            vec![import("time", "time")],
-        ));
-    }
-    if !helpers.transforms.is_empty() {
-        decls.push(Decl::raw_with(
-            "// strTransformWords splits a resolved value for the casing transforms:\n\
+/// Reading a duration field into the millisecond value the runtime takes.
+fn duration_decl() -> Decl {
+    Decl::raw_providing(
+        "DurationMs",
+        "// DurationMs parses a duration field for the runtime's millisecond value\n\
+         // positions.\n\
+         func DurationMs(v string) (float64, error) {\n\
+         \td, err := time.ParseDuration(v)\n\
+         \tif err != nil {\n\t\treturn 0, err\n\t}\n\
+         \treturn float64(d) / float64(time.Millisecond), nil\n\
+         }"
+        .to_string(),
+        vec![import("time", "time")],
+    )
+}
+
+/// The casing transforms an `@str::` pipeline lowers to. They serve every entry
+/// of every module, so they live in the SDK's shared package rather than beside
+/// any one of them.
+fn casing_decls() -> Vec<Decl> {
+    vec![
+        Decl::raw_providing(
+            "StrTransformWords",
+            "// StrTransformWords splits a resolved value for the casing transforms:\n\
              // runs of spaces, hyphens, and underscores separate words.\n\
-             func strTransformWords(s string) []string {\n\
+             func StrTransformWords(s string) []string {\n\
              \treturn strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == '-' || r == '_' })\n\
              }"
             .to_string(),
             vec![import("strings", "strings")],
-        ));
-        for t in &helpers.transforms {
-            let (name, body) = match *t {
-                "upper_snake" => ("strUpperSnake", "\tws := strTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToUpper(ws[i])\n\t}\n\treturn strings.Join(ws, \"_\")"),
-                "snake" => ("strSnake", "\tws := strTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToLower(ws[i])\n\t}\n\treturn strings.Join(ws, \"_\")"),
-                "kebab" => ("strKebab", "\tws := strTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToLower(ws[i])\n\t}\n\treturn strings.Join(ws, \"-\")"),
-                "pascal" => ("strPascal", "\tws := strTransformWords(s)\n\tfor i := range ws {\n\t\tif ws[i] != \"\" {\n\t\t\tws[i] = strings.ToUpper(ws[i][:1]) + strings.ToLower(ws[i][1:])\n\t\t}\n\t}\n\treturn strings.Join(ws, \"\")"),
-                _ => continue,
-            };
-            decls.push(Decl::raw_with(
-                format!("func {name}(s string) string {{\n{body}\n}}"),
-                vec![import("strings", "strings")],
-            ));
-        }
-    }
-    decls
+        ),
+        casing_helper("StrUpperSnake", "\tws := StrTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToUpper(ws[i])\n\t}\n\treturn strings.Join(ws, \"_\")"),
+        casing_helper("StrSnake", "\tws := StrTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToLower(ws[i])\n\t}\n\treturn strings.Join(ws, \"_\")"),
+        casing_helper("StrKebab", "\tws := StrTransformWords(s)\n\tfor i := range ws {\n\t\tws[i] = strings.ToLower(ws[i])\n\t}\n\treturn strings.Join(ws, \"-\")"),
+        casing_helper("StrPascal", "\tws := StrTransformWords(s)\n\tfor i := range ws {\n\t\tif ws[i] != \"\" {\n\t\t\tws[i] = strings.ToUpper(ws[i][:1]) + strings.ToLower(ws[i][1:])\n\t\t}\n\t}\n\treturn strings.Join(ws, \"\")"),
+    ]
+}
+
+fn casing_helper(name: &str, body: &str) -> Decl {
+    Decl::raw_providing(
+        name,
+        format!("func {name}(s string) string {{\n{body}\n}}"),
+        vec![import("strings", "strings")],
+    )
 }
 
 /// The transform-application expression, innermost first in declared order.
 /// Only the language-specific `trim`/`lower`/`upper` spellings are Go's; the
 /// shared pipeline folds them and the case-fold helpers.
-fn apply_transforms(expr: String, transforms: &[String], helpers: &mut Helpers) -> String {
-    crate::codegen::entries::plan::apply_transforms(
+/// Fold the `@str::*` pipeline, declaring a reference for every shared helper it
+/// reaches: the helper lives in the SDK's shared package, so without the
+/// reference the call would render with no import behind it.
+fn apply_transforms(
+    expr: String,
+    transforms: &[String],
+    helpers: &mut Helpers,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    // The fold names each helper it reaches; recording them here is what keeps
+    // the reference exact, so an entry that upper-snakes a value does not pull
+    // the other three casing helpers behind it.
+    let reached = std::cell::RefCell::new(Vec::new());
+    let out = crate::codegen::entries::plan::apply_transforms(
         expr,
         transforms,
         &mut helpers.transforms,
@@ -359,7 +457,15 @@ fn apply_transforms(expr: String, transforms: &[String], helpers: &mut Helpers) 
             "upper" => Some(format!("strings.ToUpper({out})")),
             _ => None,
         },
-    )
+        |name| {
+            reached.borrow_mut().push(name.to_string());
+            shared_slot(name)
+        },
+    );
+    for name in reached.into_inner() {
+        refs.push(shared_symbol(&name));
+    }
+    out
 }
 
 /// One `var <op>Descriptor = mustDescriptor(...)` per operation. The literal
@@ -371,11 +477,15 @@ fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
         .filter_map(|op| {
             let descriptor = wire_descriptor(op)?;
             let json = serde_json::to_string(descriptor).unwrap_or_else(|_| "null".into());
-            Some(Decl::raw(format!(
-                "var {var} = mustDescriptor({literal})",
-                var = descriptor_var(n, op),
-                literal = go_string_literal(&json),
-            )))
+            Some(Decl::raw_with(
+                format!(
+                    "var {var} = {helper}({literal})",
+                    var = descriptor_var(n, op),
+                    helper = shared_slot("MustDescriptor"),
+                    literal = go_string_literal(&json),
+                ),
+                vec![shared_symbol("MustDescriptor")],
+            ))
         })
         .collect()
 }
@@ -585,6 +695,10 @@ fn op_method_decl(
         }
     };
     let (zero_decl, ret_zero) = zero_of(output);
+    // The zero value and the decode both name the output type in opaque text.
+    if let Some(t) = output {
+        push_type_symbols(t, &mut refs);
+    }
     let validate_block = validate_block(input, module, ret_zero, &fail);
     if wire_descriptor(op).is_none() {
         // No protocol binding: the operation is implemented by bespoke sources
@@ -605,10 +719,14 @@ fn op_method_decl(
         });
     }
     refs.push(runtime_symbol());
+    if input.is_some() {
+        refs.push(shared_symbol("EncodeRecord"));
+    }
     let record = match input {
         Some(_) => format!(
-            "\trecord, err := encodeRecord(input)\n\
+            "\trecord, err := {encode}(input)\n\
              \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
+            encode = shared_slot("EncodeRecord"),
             fail_enc = fail("err".to_string()),
         ),
         None => "\tvar record map[string]any\n".to_string(),
@@ -660,6 +778,8 @@ fn op_method_decl(
     Decl::raw_with(text, refs)
 }
 
+#[cfg(test)]
+mod bespoke_tests;
 mod constructor;
 mod decode;
 mod impl_op;
@@ -671,4 +791,3 @@ mod tests;
 use constructor::{new_decl, why_var};
 use resolve::Resolver;
 use surface::method_signature;
-pub use surface::type_decls;

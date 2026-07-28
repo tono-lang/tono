@@ -113,6 +113,20 @@ pub struct PrimSpelling {
     pub typescript: &'static str,
 }
 
+/// The symbol for a primitive's spelling. A branded well-known type is a
+/// declaration of the SDK's shared support group, not of the module that
+/// happens to use it, so it carries that import: without it every module would
+/// declare its own `Timestamp`, and Go and Rust would treat the two as
+/// unrelated named types that do not interconvert.
+pub fn prim_symbol(p: &Prim, spelling: &str) -> Symbol {
+    match p {
+        Prim::Timestamp | Prim::Date | Prim::Duration => {
+            Symbol::imported(spelling, crate::codegen::group::ROOT_SUPPORT, spelling)
+        }
+        _ => Symbol::builtin(spelling),
+    }
+}
+
 /// The per-language spelling of a primitive. Integers map to their exact-width
 /// type in Rust and Go (64-bit included, held natively); TypeScript has only
 /// `number` (precise to 2^53) and `bigint`, so the wide integers become `bigint`

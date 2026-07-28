@@ -73,7 +73,7 @@ pub(super) fn method(m: Method<'_>) -> String {
     };
     refs.push(Symbol::imported(
         binding.symbol,
-        import_specifier(binding.module),
+        import_specifier(binding.module, &module.name),
         binding.symbol,
     ));
     refs.push(module_symbol(&en.root, module));

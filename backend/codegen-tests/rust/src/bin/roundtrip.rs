@@ -3,16 +3,13 @@
 // 2^53 travels as a JSON string, bytes travel as base64, an internally-tagged
 // union carries its discriminator, the open enum decodes an unknown tag
 // leniently, and a decode/re-encode is canonical (Value-equal) round-trip.
-#![allow(dead_code)]
 
-mod models;
-// The generated serde file is a sibling module of the crate: it holds the
-// `#[serde(with)]` helper modules and the open enum's impls, and references the
-// types via `use crate::models::*`.
-mod models_serde;
-
-use models::{APIError, APIFailure, Account, CardData, HTTPCode, Method, Status, TonoError};
-use models_serde::decode_create_charge_error;
+// The generated SDK is a crate of its own, reached exactly the way a consumer
+// reaches it: through the module's public groups, never into its internal one.
+use sdk::models::{
+    decode_create_charge_error, APIError, APIFailure, Account, CardData, HTTPCode, Method, Status,
+    Timestamp, TonoError,
+};
 use serde_json::{json, Value};
 
 fn main() {
@@ -23,6 +20,7 @@ fn main() {
         tip: Some(500),
         status: Status::Active,
         code: HTTPCode::Ok,
+        created: Timestamp("2026-01-02T03:04:05Z".into()),
         method: Method::Card(CardData {
             last4: "4242".into(),
         }),
@@ -59,6 +57,7 @@ fn main() {
         "secret": "AAEC/g==",
         "status": "frozen",
         "code": 418,
+        "created": "2026-01-02T03:04:05Z",
         "method": { "type": "card", "last4": "0000" },
         "counts": []
     });
@@ -117,6 +116,7 @@ fn main() {
         tip: None,
         status: Status::Active,
         code: HTTPCode::Ok,
+        created: Timestamp("2026-01-02T03:04:05Z".into()),
         method: Method::Card(CardData {
             last4: "4242".into(),
         }),

@@ -94,6 +94,10 @@ pub fn matrix_module() -> Module {
                     member("tip", Tref::Prim(Prim::I64), false, vec![]),
                     member("status", reference("models#Status"), true, vec![]),
                     member("code", reference("models#http_code"), true, vec![]),
+                    // A branded well-known type: one set of types for the whole
+                    // SDK, so the round trip has to prove it survives the wire
+                    // as its bare value.
+                    member("created", Tref::Prim(Prim::Timestamp), true, vec![]),
                     member("method", reference("models#Method"), true, vec![]),
                     constrained(
                         member(
@@ -235,7 +239,39 @@ pub const CANONICAL_WIRE: &str = concat!(
     "\"tip\":\"500\",",
     "\"status\":\"active\",",
     "\"code\":200,",
+    "\"created\":\"2026-01-02T03:04:05Z\",",
     "\"method\":{\"type\":\"card\",\"last4\":\"4242\"},",
     "\"counts\":[[7,\"a\"],[3,\"b\"]]",
     "}"
 );
+
+/// The base64 spellings every target must refuse, and the one unusual spelling
+/// every target must accept.
+///
+/// `bytes` is the only field whose decoder each target writes by hand, so it is
+/// the one place the three can disagree about what a malformed value means. They
+/// did: the hand-rolled Rust decoder used to produce bytes for input no encoder
+/// could have produced, and TypeScript's `atob` used to accept a missing pad
+/// that Go refuses. The contract is Go's `base64.StdEncoding`: standard
+/// alphabet, padding required, length a multiple of four, line breaks ignored,
+/// and non-canonical trailing bits accepted.
+pub const BASE64_REJECTED: &[&str] = &[
+    // One leftover character encodes nothing: six bits is not a byte.
+    "A", // Length is not a multiple of four, with and without a leftover group.
+    "AAAAA", "Zg",
+    // Padding that does not close the last group, or that is the whole value.
+    "Zm9vYg=", "====", // Padding in the middle, and a character outside the alphabet.
+    "Zg=A", "Zm 9v",
+];
+
+/// A spelling every target must accept, so the rejection vectors cannot pass by
+/// refusing everything: one pad closes a two-byte group, and the trailing bits
+/// are not canonical (`Zh==` and `Zg==` both decode to a single `f`), which the
+/// contract tolerates.
+pub const BASE64_ACCEPTED: &str = "Zh==";
+
+/// A wire document that is canonical except for its `secret`, for driving the
+/// per-target decoders at the one field they hand-write.
+pub fn wire_with_secret(secret: &str) -> String {
+    CANONICAL_WIRE.replace("AQID/g==", secret)
+}

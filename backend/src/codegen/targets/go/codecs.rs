@@ -40,7 +40,7 @@ const LANG: &str = "go";
 /// Which shared runtime helpers a file needs. `entries` pulls the generic
 /// `Entry`/`Entries` types; `variant` pulls `marshalVariant`. Each is emitted only
 /// when some shape in the file uses it, so a tags-only file imports nothing.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct RuntimeHelpers {
     pub entries: bool,
     pub variant: bool,
@@ -125,6 +125,7 @@ fn raw(text: impl Into<String>, refs: Vec<Symbol>) -> Decl {
     Decl::Raw(Raw {
         text: text.into(),
         refs,
+        ..Raw::default()
     })
 }
 
@@ -258,6 +259,17 @@ fn variant_ident(m: &Member) -> String {
     transform(&m.name, SymbolKind::Variant, &pascal, None)
 }
 
+/// The type names a union's declarations introduce: the marker interface and one
+/// wrapper per variant. Go has no sum type, so these are emitted as opaque text
+/// and the tree cannot be read for them; the emitter lists them so a reference
+/// from another module resolves to the group that declares them.
+pub fn union_type_names(shape: &Shape, members: &[Member]) -> Vec<String> {
+    let ty = type_ident(shape, LANG);
+    std::iter::once(ty.clone())
+        .chain(members.iter().map(|m| format!("{ty}{}", variant_ident(m))))
+        .collect()
+}
+
 /// Emit a union's type declarations: the marker interface and one wrapper struct
 /// per variant, each carrying its `is<Union>()` marker method. These are type
 /// definitions (no serialization), so they belong in the types file; the wrapper
@@ -363,7 +375,47 @@ mod tests {
     use crate::codegen::targets::go::types::go_casing;
     use crate::codegen::targets::go::GoRules;
     use crate::codegen::test_support::{enum_shape, member, structure, union_shape};
-    use crate::ir::{Prim, ShapeKind};
+    use crate::ir::{Prim, ShapeKind, Tref};
+
+    /// The names a union introduces, which the index needs listed because Go
+    /// emits them as opaque text: the marker interface plus one wrapper per
+    /// variant, each the union's name with the variant appended.
+    #[test]
+    fn a_unions_type_names_are_the_interface_and_one_wrapper_per_variant() {
+        let members = vec![
+            member("card", Tref::Prim(Prim::String), true),
+            member("bank_account", Tref::Prim(Prim::String), true),
+        ];
+        let shape = union_shape("payments#payment_method", "kind", members.clone());
+        assert_eq!(
+            union_type_names(&shape, &members),
+            vec![
+                "PaymentMethod".to_string(),
+                "PaymentMethodCard".to_string(),
+                "PaymentMethodBankAccount".to_string(),
+            ]
+        );
+        // A union with no variant is still a type another module can name.
+        assert_eq!(
+            union_type_names(&union_shape("payments#empty", "kind", vec![]), &[]),
+            vec!["Empty".to_string()]
+        );
+    }
+
+    /// The names have to match what the declarations actually spell, or a
+    /// reference would resolve to a group that does not hold them.
+    #[test]
+    fn the_type_names_match_the_declarations_they_describe() {
+        let members = vec![member("card", Tref::Prim(Prim::String), true)];
+        let shape = union_shape("payments#payment_method", "kind", members.clone());
+        let out = rendered(&union_type_decls(&shape, &members, None, None));
+        for name in union_type_names(&shape, &members) {
+            assert!(
+                out.contains(&format!("type {name} ")),
+                "{name} is listed but not declared:\n{out}"
+            );
+        }
+    }
 
     fn rendered(decls: &[Decl]) -> String {
         decls

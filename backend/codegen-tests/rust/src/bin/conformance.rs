@@ -1,25 +1,27 @@
-// The conformance driver: read a canonical wire JSON from stdin, decode it into
-// the generated types, re-encode it, and print the result. The conformance
-// harness pipes the same fixture to every language and asserts the re-encoded
-// JSON is Value-equal across all of them.
-#![allow(dead_code)]
+// The conformance driver: read a JSON array of wire documents from stdin,
+// decode and re-encode each into the generated types, and print one line per
+// document: the re-encoded JSON, or REJECT for a document the SDK refuses. The
+// conformance harness pipes the same documents to every language and asserts
+// the lines agree across all of them, so the three have to refuse the same
+// malformed input, not just agree on the canonical one.
 
-#[path = "../models.rs"]
-mod models;
-// The generated serde file: the helper modules and the open enum's impls, which
-// reference the types through `use crate::models::*`.
-#[path = "../models_serde.rs"]
-mod models_serde;
-
-use models::Account;
+use sdk::models::Account;
 use std::io::Read;
+
+const REJECT: &str = "REJECT";
 
 fn main() {
     let mut input = String::new();
     std::io::stdin()
         .read_to_string(&mut input)
         .expect("read stdin");
-    let account: Account = serde_json::from_str(&input).expect("decode");
-    let out = serde_json::to_string(&account).expect("encode");
-    println!("{out}");
+    let documents: Vec<serde_json::Value> =
+        serde_json::from_str(&input).expect("stdin is a json array of documents");
+    for document in documents {
+        let line = serde_json::from_value::<Account>(document)
+            .ok()
+            .and_then(|account| serde_json::to_string(&account).ok())
+            .unwrap_or_else(|| REJECT.to_string());
+        println!("{line}");
+    }
 }

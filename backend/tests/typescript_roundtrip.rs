@@ -10,11 +10,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tono_backend::codegen::render::render_file_with_companion;
-use tono_backend::codegen::targets::typescript::emit::emit_module;
 use tono_backend::codegen::targets::typescript::types::ts_casing;
-use tono_backend::codegen::targets::typescript::TsRules;
-use tono_backend::codegen::Formatter;
+use tono_backend::codegen::{generate_target, CodegenConfig, Formatter, TargetKind};
+use tono_backend::ir::Model;
 
 mod common;
 use common::matrix_module as demo_module;
@@ -29,8 +27,8 @@ fn tool(ws: &Path, name: &str) -> Option<PathBuf> {
 }
 
 const DRIVER: &str = r#"
-import { Account, APIError, PaymentDeclinedError, RateLimitedError, TonoError, ValidationError, validateAccount, validateCardData } from "./models";
-import { encodeAccount, decodeAccount, decodeCreateChargeError } from "./models_serde";
+import { Account, APIError, PaymentDeclinedError, RateLimitedError, type Timestamp, TonoError, ValidationError, validateAccount, validateCardData } from "./models";
+import { encodeAccount, decodeAccount, decodeCreateChargeError } from "./models/codec";
 
 const big = 9007199254740993n; // 2^53 + 1, not representable as a JS number
 
@@ -40,6 +38,7 @@ const account: Account = {
   tip: 500n,
   status: "active",
   code: 200,
+  created: "2026-01-02T03:04:05Z" as Timestamp,
   method: { type: "card", last4: "4242" },
   counts: [[7, "a"], [3, "b"]],
 };
@@ -65,6 +64,7 @@ const unknown = decodeAccount({
   secret: "AAEC/g==",
   status: "frozen",
   code: 418,
+  created: "2026-01-02T03:04:05Z",
   method: { type: "card", last4: "0000" },
   counts: [],
 });
@@ -97,6 +97,7 @@ if (undeclared.status !== 500 || undeclared.body !== "not json") throw new Error
 // failed check, in member order.
 if (validateAccount(account) !== null) throw new Error("a valid account must pass validation");
 const invalid: Account = {
+  created: "2026-01-02T03:04:05Z" as Timestamp,
   accountID: -1n,
   secret: new Uint8Array(65),
   status: "active",
@@ -128,32 +129,48 @@ fn generated_typescript_compiles_and_round_trips() {
         return;
     };
 
-    // Generate the module and format it with the engine's formatter (prettier).
-    // TypeScript splits each module into a types file and a serde file; write both
-    // as `models`/`models_serde` plus the driver into the workspace.
+    // Generate the whole SDK and format it with the engine's formatter
+    // (prettier), then write the tree plus the driver into the workspace. The
+    // driver reaches the module through its barrel, the way a consumer does.
     let formatter = Formatter::new(
         prettier.to_string_lossy(),
         vec!["--parser".into(), "typescript".into()],
     );
     let work = ws.join("work");
+    let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).expect("create work dir");
-    for module_file in emit_module(&demo_module(), &ts_casing()) {
-        let formatted = render_file_with_companion(
-            &module_file.file,
-            module_file.imports_companion.as_deref(),
-            &TsRules,
-            &formatter,
-        );
-        assert!(
-            formatted.warning.is_none(),
-            "prettier must format cleanly: {:?}",
-            formatted.warning
-        );
-        std::fs::write(
-            work.join(format!("models{}.ts", module_file.suffix)),
-            &formatted.text,
-        )
-        .expect("write models source");
+    let model = Model {
+        tono_ir_version: 6,
+        modules: vec![demo_module()],
+    };
+    let files = generate_target(
+        &model,
+        TargetKind::TypeScript,
+        &CodegenConfig::default(),
+        &ts_casing(),
+    )
+    .expect("generates");
+    for file in files {
+        let relative = file
+            .path
+            .strip_prefix(TargetKind::TypeScript.dir())
+            .expect("target-rooted path");
+        // The package manifest is JSON; only the sources go through prettier's
+        // TypeScript parser.
+        let text = if relative.extension().is_some_and(|e| e == "json") {
+            file.text.clone()
+        } else {
+            let formatted = formatter.run(&file.text);
+            assert!(
+                formatted.warning.is_none(),
+                "prettier must format cleanly: {:?}",
+                formatted.warning
+            );
+            formatted.text
+        };
+        let out = work.join(relative);
+        std::fs::create_dir_all(out.parent().expect("a parent")).expect("create module dir");
+        std::fs::write(&out, &text).expect("write models source");
     }
     std::fs::write(work.join("driver.ts"), DRIVER).expect("write driver.ts");
 

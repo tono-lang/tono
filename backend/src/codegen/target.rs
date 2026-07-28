@@ -55,8 +55,28 @@ pub trait RenderRules {
     /// into a single statement.
     fn render_import(&self, from_module: &str, module: &str, names: &[&str]) -> String;
 
+    /// Join the rendered imports into the file's import section.
+    ///
+    /// The default writes one statement per line, which is what a language with
+    /// per-statement imports wants. A language that groups them (Go's
+    /// `import ( ... )`) overrides this, since the formatter will not group them
+    /// after the fact: `gofmt` sorts inside a block but leaves loose statements
+    /// exactly where they are.
+    fn render_imports(&self, statements: Vec<String>) -> String {
+        statements.join("\n")
+    }
+
     /// Render one declaration into rough but syntactically valid surface text.
     fn render_decl(&self, decl: &Decl) -> String;
+
+    /// How this target spells a reference to `symbol` where the tree does not
+    /// model the position (inside a raw item's text, through a
+    /// [`symbol_slot`](crate::codegen::tree::symbol_slot)). The bare name is
+    /// right for a language that imports names; a language that qualifies a
+    /// cross-unit reference with a package selector overrides this.
+    fn render_symbol(&self, symbol: &Symbol) -> String {
+        symbol.name.clone()
+    }
 }
 
 /// Declare a target's zero-sized struct and its [`Target`] impl from the

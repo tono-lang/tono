@@ -9,11 +9,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tono_backend::codegen::render::render_file;
+use tono_backend::codegen::layout::SameUnit;
+use tono_backend::codegen::render::render_file_with;
 use tono_backend::codegen::targets::go::emit::{emit_module, package_clause};
 use tono_backend::codegen::targets::go::types::go_casing;
 use tono_backend::codegen::targets::go::GoRules;
+use tono_backend::codegen::visibility::Exposed;
 use tono_backend::codegen::Formatter;
+use tono_backend::codegen::{resolve_groups, TargetKind};
 
 mod common;
 use common::matrix_module as demo_module;
@@ -55,10 +58,20 @@ fn generated_go_compiles_and_round_trips() {
         .filter(|s| matches!(s.kind, tono_backend::ir::ShapeKind::Union { .. }))
         .map(|s| s.id.clone())
         .collect();
-    for module_file in emit_module(&module, &go_casing(), &union_ids) {
-        let rough = render_file(
+    let mut files = emit_module(&module, &go_casing(), &union_ids, &Exposed::all());
+    // The harness drives the emitter directly, so it resolves the emitted groups
+    // itself; without it a reference would still point at the bare IR module.
+    resolve_groups(&mut files, TargetKind::Go);
+    for module_file in files {
+        let rough = render_file_with(
             &module_file.file,
-            &GoRules::default(),
+            &SameUnit {
+                target: TargetKind::Go,
+            },
+            &GoRules {
+                go_module: None,
+                current: module_file.group.path(),
+            },
             &Formatter::new("cat", vec![]),
         )
         .text;
@@ -70,7 +83,7 @@ fn generated_go_compiles_and_round_trips() {
             formatted.warning
         );
         std::fs::write(
-            dir.join(format!("models{}.go", module_file.suffix)),
+            dir.join(format!("models_{}.go", module_file.group.name)),
             &formatted.text,
         )
         .expect("write go source");

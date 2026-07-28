@@ -16,7 +16,7 @@ pub mod render;
 pub mod symbols;
 pub mod types;
 
-pub use render::GoRules;
+pub use render::{GoRules, SlotRules};
 
 crate::declare_target! {
     /// The Go target: the Symbol table and emitters. Render rules live in

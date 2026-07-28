@@ -168,7 +168,7 @@ mod tests {
                 ),
             ],
         );
-        let out = RustRules.render_decl(&emit_validators(&shape, &rust_casing())[0]);
+        let out = RustRules::default().render_decl(&emit_validators(&shape, &rust_casing())[0]);
         assert!(out.contains("impl Charge {"));
         assert!(out.contains("pub fn validate(&self) -> Result<(), ValidationError> {"));
         // The i64 bound needs no suffix; the message states the inclusive minimum.

@@ -11,32 +11,6 @@ use crate::codegen::tree::{Decl, EnumRepr, Field, FnBody, Function, Method, Type
 /// The TypeScript render rules.
 pub struct TsRules;
 
-/// The relative module specifier from the importing file to the imported module's
-/// file. A dotted module is a directory path (`payments.common` ->
-/// `payments/common.ts`); the importer's directory is its own path minus the file
-/// segment. The result always starts with `./` or `../` so it is an explicit
-/// relative import. Same directory (including a module's own serde companion)
-/// yields `./<name>`.
-fn relative_module_path(from_module: &str, to_module: &str) -> String {
-    let mut from_dir: Vec<&str> = from_module.split('.').collect();
-    from_dir.pop(); // drop the importing file's own segment
-    let to_path: Vec<&str> = to_module.split('.').collect();
-    let common = from_dir
-        .iter()
-        .zip(to_path.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let ups = from_dir.len() - common;
-    let mut parts: Vec<&str> = vec![".."; ups];
-    parts.extend_from_slice(&to_path[common..]);
-    let joined = parts.join("/");
-    if joined.starts_with("..") {
-        joined
-    } else {
-        format!("./{joined}")
-    }
-}
-
 /// The generic type-parameter clause of a definition (`<T>`, `<T, U>`), or the
 /// empty string for a non-generic shape. TypeScript needs no parameter bound, so
 /// each name renders bare.
@@ -153,15 +127,12 @@ impl TsRules {
 
 impl RenderRules for TsRules {
     fn render_import(&self, from_module: &str, module: &str, names: &[&str]) -> String {
-        // A bare package specifier (the hand-written runtime, a scoped
-        // `@scope/name`) or an already-relative path is imported as-is; a dotted
-        // module name maps to a path relative to the importing file
-        // (payments.charges importing payments.common -> ./common).
-        let path = if module.starts_with('@') || module.starts_with('.') {
-            module.to_string()
-        } else {
-            relative_module_path(from_module, module)
-        };
+        // One of the SDK's own groups is a file, so it is imported by a path
+        // relative to the importing file; a bare package specifier (the
+        // hand-written runtime, a scoped `@scope/name`) is not a group and is
+        // imported as-is.
+        let path = crate::codegen::layout::ts_specifier(from_module, module)
+            .unwrap_or_else(|| module.to_string());
         format!("import {{ {} }} from \"{path}\";", names.join(", "))
     }
 
@@ -266,13 +237,17 @@ mod tests {
     #[test]
     fn imports_render_as_named_imports() {
         assert_eq!(
-            TsRules.render_import("billing", "payments", &["Charge"]),
-            "import { Charge } from \"./payments\";"
+            TsRules.render_import("billing::types", "payments::types", &["Charge"]),
+            "import { Charge } from \"../payments/types\";"
         );
         // Several names from one module group into one import statement.
         assert_eq!(
-            TsRules.render_import("billing", "payments", &["BankAccount", "Card", "Charge"]),
-            "import { BankAccount, Card, Charge } from \"./payments\";"
+            TsRules.render_import(
+                "billing::types",
+                "payments::types",
+                &["BankAccount", "Card", "Charge"],
+            ),
+            "import { BankAccount, Card, Charge } from \"../payments/types\";"
         );
     }
 
@@ -291,24 +266,34 @@ mod tests {
     }
 
     #[test]
-    fn nested_module_imports_are_relative_to_the_importer() {
-        // A sibling module in the same directory is `./name`, including a module's
-        // own serde companion.
+    fn a_group_is_imported_by_a_path_relative_to_the_importer() {
+        // A sibling group of the same module is `./name`; another module walks
+        // up out of its directory and back down.
         assert_eq!(
-            relative_module_path("payments.charges", "payments.common"),
-            "./common"
+            TsRules.render_import(
+                "payments.charges::types",
+                "payments.charges::codec",
+                &["encodeCharge"]
+            ),
+            "import { encodeCharge } from \"./codec\";"
         );
         assert_eq!(
-            relative_module_path("payments.charges", "payments.charges"),
-            "./charges"
+            TsRules.render_import(
+                "payments.charges::types",
+                "payments.common::types",
+                &["Money"]
+            ),
+            "import { Money } from \"../common/types\";"
         );
-        // A module in a different subtree walks up then down.
-        assert_eq!(relative_module_path("a.b.c", "x.y"), "../../x/y");
-        // A single-segment (flat) module stays `./name`.
-        assert_eq!(relative_module_path("billing", "payments"), "./payments");
+        // Anything that is not one of the SDK's groups (the hand-written
+        // runtime) is imported by its bare specifier.
         assert_eq!(
-            TsRules.render_import("payments.charges", "payments.common", &["Money"]),
-            "import { Money } from \"./common\";"
+            TsRules.render_import(
+                "payments.charges::types",
+                "@tono/http-runtime-ts",
+                &["execute"]
+            ),
+            "import { execute } from \"@tono/http-runtime-ts\";"
         );
     }
 
@@ -569,6 +554,7 @@ mod tests {
         let raw = Decl::Raw(Raw {
             text: "export const VERSION = \"1\";".into(),
             refs: vec![],
+            ..Raw::default()
         });
         assert_eq!(TsRules.render_decl(&raw), "export const VERSION = \"1\";");
     }

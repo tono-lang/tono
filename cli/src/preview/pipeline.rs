@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use tono_backend::codegen::{
-    check, check_go_layout, generate, CheckOptions, CheckOutcome, CodegenConfig, Formatter,
+    check, check_layout, generate, CheckOptions, CheckOutcome, CodegenConfig, Formatter,
     GeneratedFile, TargetKind,
 };
 use tono_backend::ir::decode_model;
@@ -127,10 +127,16 @@ pub fn run(
         Err(e) => return stopped(source, target, Verdict::IrError(e)),
     };
 
-    let config = CodegenConfig::default();
+    // The scaffold the checker builds declares a fixed module path, and Go
+    // spells its cross-package imports with it, so generation is given the same
+    // one rather than left to fail the layout gate.
+    let config = CodegenConfig {
+        go_module: Some(tono_backend::codegen::check::GO_SCAFFOLD_MODULE.into()),
+        ..CodegenConfig::default()
+    };
     // The Go layout gate runs first: its message names the module problem, where
     // the compiler would only show the broken import it causes.
-    if let Err(e) = check_go_layout(&model, &[target], &config) {
+    if let Err(e) = check_layout(&model, &[target], &config) {
         return stopped(source, target, Verdict::GenerateRejected(e));
     }
     let mut files = match generate(&model, &[target], &config) {
@@ -141,7 +147,9 @@ pub fn run(
     // read (a missing formatter degrades to the rough text), and the checker
     // compiles the same bytes the pane shows.
     for file in &mut files {
-        file.text = Formatter::for_target(file.target).run(&file.text).text;
+        file.text = Formatter::for_output(file.target, &file.path)
+            .run(&file.text)
+            .text;
     }
     let generated = assemble(&files);
     let verdict = match check(target, &files, scratch, options) {

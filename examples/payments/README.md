@@ -31,10 +31,20 @@ src/**.tono ──frontend──▶ ir.json ──tono gen──▶ sdk/{rust,go
     header, timeout, and retry references resolve against those frozen values.
 - [`ir.json`](ir.json) — the canonical IR the frontend emits (the contract the
   backend consumes). Shape ids are module-qualified (`payments.charges#charge`).
-- [`sdk/`](sdk) — the generated source. Each module maps to an idiomatic
-  sub-package: Rust modules under `rust/payments/` (with a generated `mod.rs`
-  tree), Go packages under `go/payments/`, and TypeScript sub-paths under
-  `typescript/payments/`.
+- [`sdk/`](sdk) — the generated source, laid out in emission groups. Each module
+  is a directory holding one file per group: `types` (the public surface),
+  `codec` (the serialization of those types), one named after each entry
+  declaration (`client`), and `internal` (whatever no public type reaches).
+  Everything a consumer must not reach is fenced off by the target's own
+  mechanism: in Go a package under `internal/`, which the toolchain refuses to
+  resolve from outside the SDK, so the module's own package holds only files
+  named for what they contain; in Rust a crate-visible `mod`; in TypeScript a
+  file left out of the package's `exports`. What crosses module boundaries sits
+  in an SDK-root group: `support` for what a consumer names (the branded
+  well-known types, so two modules' `Timestamp` are one type), `internal` for
+  the runtime helpers. Each module re-exports
+  its public groups (a `pub use` in Rust, a barrel in TypeScript); there is no
+  root barrel aggregating the modules.
 
 ## Generated — do not edit
 
