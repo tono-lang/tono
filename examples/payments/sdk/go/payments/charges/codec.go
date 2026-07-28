@@ -2,8 +2,10 @@
 
 package charges
 
-import "encoding/json"
-import "example.com/sdk/payments/common"
+import (
+	"encoding/json"
+	"example.com/sdk/payments/common"
+)
 
 func (c *Charge) UnmarshalJSON(b []byte) error {
 	type alias Charge

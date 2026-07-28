@@ -2,8 +2,10 @@
 
 package common
 
-import "encoding/json"
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 func marshalVariant(payload any, disc, tag string) ([]byte, error) {
 	b, err := json.Marshal(payload)

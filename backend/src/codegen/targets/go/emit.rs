@@ -396,9 +396,9 @@ mod tests {
         ));
         assert!(serde.contains("func UnmarshalMethod(b []byte) (Method, error) {"));
         assert!(serde.contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
-        assert!(serde.contains("import \"encoding/json\""));
-        assert!(serde.contains("import \"fmt\""));
-        assert!(!serde.contains("import \"models\""));
+        assert!(serde.contains("\"encoding/json\""));
+        assert!(serde.contains("\"fmt\""));
+        assert!(!serde.contains("\"models\""));
         // The interface and wrapper definitions stay out of the serde file.
         assert!(!serde.contains("type Method interface"));
         assert!(!serde.contains("type MethodCard struct"));

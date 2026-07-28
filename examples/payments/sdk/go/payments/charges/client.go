@@ -2,16 +2,18 @@
 
 package charges
 
-import "example.com/sdk/internal/descriptor"
-import "example.com/sdk/internal/duration"
-import "example.com/sdk/internal/record"
-import "example.com/sdk/support"
-import "context"
-import "encoding/json"
-import "fmt"
-import tonohttp "github.com/tono-lang/tono/runtimes/http-go"
-import "net/http"
-import "os"
+import (
+	"context"
+	"encoding/json"
+	"example.com/sdk/internal/descriptor"
+	"example.com/sdk/internal/duration"
+	"example.com/sdk/internal/record"
+	"example.com/sdk/support"
+	"fmt"
+	tonohttp "github.com/tono-lang/tono/runtimes/http-go"
+	"net/http"
+	"os"
+)
 
 // Settings are the resolved construction values of the client entry,
 // handed to the client_init hook before validation: bespoke code may

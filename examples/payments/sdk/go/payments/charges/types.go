@@ -2,9 +2,11 @@
 
 package charges
 
-import "example.com/sdk/support"
-import "example.com/sdk/payments/common"
-import "strconv"
+import (
+	"example.com/sdk/payments/common"
+	"example.com/sdk/support"
+	"strconv"
+)
 
 // A small payments API that exercises the hard wire cases end to end.
 type Charge struct {

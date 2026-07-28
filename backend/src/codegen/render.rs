@@ -40,13 +40,16 @@ pub fn render_file_with(
             _ => groups.push((import.module.clone(), vec![import.imported.clone()])),
         }
     }
-    for (module, names) in &groups {
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        rough.push_str(&rules.render_import(&file.module, module, &names));
-        rough.push('\n');
-    }
-    if !groups.is_empty() {
-        rough.push('\n');
+    let statements: Vec<String> = groups
+        .iter()
+        .map(|(module, names)| {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            rules.render_import(&file.module, module, &names)
+        })
+        .collect();
+    if !statements.is_empty() {
+        rough.push_str(&rules.render_imports(statements));
+        rough.push_str("\n\n");
     }
     for (index, decl) in file.decls.iter().enumerate() {
         if index > 0 {

@@ -190,8 +190,8 @@ fn a_union_module_splits_go_and_typescript_but_rusts_derive_keeps_it_single() {
     assert!(go_internal.contains("func marshalVariant("));
     assert!(go_internal.contains("func UnmarshalMethod(b []byte) (Method, error) {"));
     assert!(go_internal.contains("func (a *Account) UnmarshalJSON(b []byte) error {"));
-    assert!(go_internal.contains("import \"encoding/json\""));
-    assert!(go_internal.contains("import \"fmt\""));
+    assert!(go_internal.contains("\"encoding/json\""));
+    assert!(go_internal.contains("\"fmt\""));
 }
 
 /// A model with one async operation declaring one error, so every target
