@@ -78,6 +78,20 @@ jobs:
         # go test writes module-path-prefixed file names; Sonar resolves them
         # from the repo root, so swap the module prefix for the package path.
         run: sed -i 's#github.com/tono-lang/tono/runtimes/http-go/#runtimes/http-go/#' runtimes/http-go/coverage.out
+      - name: Generate Rust runtime coverage for Sonar
+        if: env.SONAR_TOKEN != ''
+        working-directory: runtimes/http-rust
+        # A detached workspace (like http-go/http-ts), so it gets its own
+        # cargo-llvm-cov run rather than folding into the root --workspace one.
+        run: cargo llvm-cov --lcov --output-path lcov.info
+        env:
+          TONO_PARITY_VECTORS: ${{ github.workspace }}/runtimes/parity/vectors.json
+      - name: Rebase Rust runtime lcov paths to the repo root
+        if: env.SONAR_TOKEN != ''
+        # cargo llvm-cov (run outside --workspace mode) writes SF as the
+        # absolute build path; Sonar resolves paths from the repo root, so
+        # strip everything up to and including the crate directory.
+        run: sed -i 's#^SF:.*/runtimes/http-rust/#SF:runtimes/http-rust/#' runtimes/http-rust/lcov.info
       - name: SonarQube Scan
         if: env.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@v8

@@ -8,6 +8,12 @@
 //! it routes fields through (`use crate::<module>_serde::{...}`), and the serde
 //! file pulls the module's types so its enum impls resolve (`use crate::<module>::*`).
 //! Imports of cross-*module* types are still derived by the engine.
+//!
+//! A declared entry gets a group of its own per declaration (see
+//! [`crate::codegen::targets::rust::entry`]), named after it, since its
+//! construction surface references only itself, the module's shared config
+//! structs, and the SDK-root resolution helpers — never the types/serde split
+//! above.
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::group::Group;
@@ -93,8 +99,10 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     } else if crate::codegen::entries::has_entries(module) {
         // A module whose operations live in an entry keeps the error taxonomy
         // (the wire error shapes reference it, and downstream consumers match
-        // on it) even though the Rust construction surface has not landed.
+        // on it) plus the boundary wrappers any bound contract/constraint
+        // needs (mirrors the loose-op branch above).
         type_decls.extend(errors::taxonomy_and_declared_decls(module));
+        type_decls.extend(crate::codegen::targets::rust::client::wrapper_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the Validation category a
         // validator returns (`Violation`, `ValidationError`), which the taxonomy
@@ -133,6 +141,18 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     internal_decls.extend(hidden_serde_decls);
     internal_decls.extend(internal_type_decls);
 
+    // A module's entries own their own construction surface (Settings,
+    // builder/constructor, Client, op methods, discriminators), independent
+    // of whether the module also has loose operations (today a module never
+    // has both). The construction-only config structs `@bind` composes into
+    // may serve more than one entry, so they ride the module's public group
+    // alongside its other shared types; each entry declaration otherwise gets
+    // its own group, named after it (mirrors Go's `targets/go/emit.rs`), so
+    // the construction surface reads together instead of being split across a
+    // types and a codec file.
+    let entries = crate::codegen::targets::rust::entry::emit(module, config);
+    type_decls.extend(entries.shared);
+
     let mut files = vec![ModuleFile::new(Group::types(&module.name), type_decls)];
     if !codec_decls.is_empty() {
         files.push(ModuleFile::new(Group::codec(&module.name), codec_decls));
@@ -143,26 +163,49 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
             internal_decls,
         ));
     }
+    for (name, decls) in entries.per_entry {
+        files.push(ModuleFile::new(Group::entry(&module.name, &name), decls));
+    }
     files
 }
 
+/// Whether any module in the model declares an entry, which is what puts
+/// anything in the entry resolution's shared groups.
+fn model_has_entries(model: &crate::ir::Model) -> bool {
+    model
+        .modules
+        .iter()
+        .any(crate::codegen::entries::has_entries)
+}
+
 /// The SDK-root group's declarations: the `#[serde(with)]` helper modules any
-/// field in the model routes through. They serve no module in particular, so the
-/// whole crate carries one copy instead of one per module, and the `with =`
-/// attribute paths resolve through an import of this module.
+/// field in the model routes through, plus (when the model declares any entry)
+/// the resolution helpers every entry's construction logic may call — reading
+/// an environment variable, parsing a duration, and the `@str::` casing
+/// transforms. They serve no module in particular, so the whole crate carries
+/// one copy instead of one per module, and the assembler prunes what nothing
+/// in the emitted SDK references.
 pub fn shared_groups(
     model: &crate::ir::Model,
     config: &CasingConfig,
 ) -> Vec<(&'static str, Vec<Decl>)> {
     let helpers = shared_helpers(model, config);
-    helpers
+    let mut groups: Vec<(&'static str, Vec<Decl>)> = helpers
         .by_group()
         .into_iter()
         .map(|(group, _)| (group, runtime_helpers(helpers, group)))
-        .collect()
+        .collect();
+    if model_has_entries(model) {
+        groups.extend(crate::codegen::targets::rust::entry::shared_groups());
+    }
+    groups
 }
 
-/// Which `#[serde(with)]` helper modules the whole model reaches.
+/// Which `#[serde(with)]` helper modules the whole model reaches. A model with
+/// any entry unconditionally reaches for `base64_bytes` too, since an entry's
+/// own bytes-typed field (an env value, say) decodes through the same group a
+/// wire struct field would — the assembler prunes it back out if nothing
+/// actually calls it.
 fn shared_helpers(model: &crate::ir::Model, config: &CasingConfig) -> HelperSet {
     let mut helpers = HelperSet::default();
     for module in &model.modules {
@@ -176,11 +219,16 @@ fn shared_helpers(model: &crate::ir::Model, config: &CasingConfig) -> HelperSet 
             }
         }
     }
+    if model_has_entries(model) {
+        helpers.base64_bytes.plain = true;
+    }
     helpers
 }
 
-/// The `use` that brings the named `#[serde(with)]` helper modules into scope.
-fn helpers_use(from: &Group, names: &[&str]) -> Decl {
+/// The `use` that brings the named declarations of an SDK-root group into
+/// scope: the `#[serde(with)]` helper modules a struct field routes through,
+/// or the resolution helpers an entry's construction logic calls.
+pub(crate) fn helpers_use(from: &Group, names: &[&str]) -> Decl {
     raw_use(format!(
         "use {}::{{{}}};",
         crate::codegen::layout::rust_path(&from.path()).unwrap_or_default(),
@@ -252,9 +300,9 @@ mod tests {
 
     #[test]
     fn a_module_whose_operations_live_in_an_entry_keeps_the_error_taxonomy() {
-        // The Rust construction surface has not landed, but consumers keep
-        // the error types the other targets' clients raise; only the loose-op
-        // client trait stays out.
+        // An entry with no operations of its own still keeps the error
+        // taxonomy consumers match on; only the loose-op client trait, which
+        // has no operation here to interface, stays out.
         let module = Module {
             name: "notes".into(),
             shapes: vec![crate::ir::Shape {
