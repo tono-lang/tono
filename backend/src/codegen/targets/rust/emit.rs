@@ -286,7 +286,7 @@ mod tests {
         assert!(types.contains("pub struct Timestamp(pub String);"));
         assert!(!types.contains("pub struct LocalDate"));
         assert!(!types.contains("pub struct Duration"));
-        assert!(types.contains("use crate::wire::{i64_string};"));
+        assert!(types.contains("use crate::codec::{i64_string};"));
         assert!(!types.contains("u64_string"));
         assert!(!types.contains("base64_bytes"));
         assert!(types.contains("pub struct Charge {"));

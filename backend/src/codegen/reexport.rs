@@ -203,8 +203,8 @@ mod tests {
         assert!(lib.contains("pub mod payments;"));
         // The shared group is a private module named for its contents:
         // unreachable from outside the crate, reachable from inside it.
-        assert!(lib.contains("mod wire;"));
-        assert!(!lib.contains("pub mod wire;"));
+        assert!(lib.contains("mod codec;"));
+        assert!(!lib.contains("pub mod codec;"));
         // No root barrel: the crate root declares its children and does not
         // flatten them into one namespace.
         assert!(!lib.contains("pub use"));

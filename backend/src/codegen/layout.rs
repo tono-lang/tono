@@ -31,14 +31,15 @@ use crate::ir::Model;
 
 /// The name of the unit holding the SDK-root internal group: a Go package
 /// directory under `internal/`, a Rust module, a TypeScript file. It has to be a
-/// name no module can take (see [`check_go_layout`]).
+/// name no module can take (see [`check_layout`]).
 pub(crate) const ROOT_UNIT: &str = "tono";
 
-/// The Rust module holding the SDK-root internal group. Named for what it is
-/// (how a value is spelled on the wire), not for who may read it: Rust SDKs name
-/// modules for their contents and fence with visibility, so `mod wire;` without
-/// `pub` is both the fence and the name.
-pub(crate) const RUST_ROOT_MODULE: &str = "wire";
+/// The Rust module holding the SDK-root internal group: the serialization every
+/// module shares. Named for its contents, not for who may read it (Rust SDKs
+/// fence with visibility, so `mod codec;` without `pub` is the fence), and named
+/// the same as a module's own serialization group, so a reader learns one word
+/// for one idea rather than meeting a second name for it at the crate root.
+pub(crate) const RUST_ROOT_MODULE: &str = group::CODEC;
 
 /// The directory every target fences its relocatable internal groups into. Named
 /// for Go, whose toolchain refuses to resolve it from outside the SDK; the other
@@ -296,11 +297,12 @@ impl Resolver for SameUnit {
 /// package's name, would render colliding selectors. Config is applied first, so
 /// `--flatten` (which joins the whole path into one segment) clears the
 /// collision. A no-op when Go is not a requested target.
-pub fn check_go_layout(
+pub fn check_layout(
     model: &Model,
     targets: &[TargetKind],
     config: &CodegenConfig,
 ) -> Result<(), String> {
+    check_rust_layout(model, targets, config)?;
     if !targets.contains(&TargetKind::Go) {
         return Ok(());
     }
@@ -337,6 +339,45 @@ pub fn check_go_layout(
         }
     }
     Ok(())
+}
+
+/// Reject a Rust layout that would emit source Rust cannot compile. The SDK-root
+/// group is a file at the crate root, and a module of the same name is a
+/// directory beside it: Rust reads both as one module and refuses the crate. A
+/// no-op when Rust is not a requested target, or when nothing shared is emitted.
+fn check_rust_layout(
+    model: &Model,
+    targets: &[TargetKind],
+    config: &CodegenConfig,
+) -> Result<(), String> {
+    if !targets.contains(&TargetKind::Rust) {
+        return Ok(());
+    }
+    let model = modules::apply(config, model);
+    // Ask the emitter rather than restating which fields pull a helper, so the
+    // check cannot drift from what actually gets written.
+    let shared = crate::codegen::targets::rust::emit::shared_decls(
+        &model,
+        &crate::codegen::targets::rust::types::rust_casing(),
+    );
+    if shared.is_empty() {
+        return Ok(());
+    }
+    let taken: Vec<&str> = model
+        .modules
+        .iter()
+        .map(|m| m.name.as_str())
+        .filter(|name| name.split('.').next() == Some(RUST_ROOT_MODULE))
+        .collect();
+    if taken.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Rust module name collision: module {} maps to a directory named \
+         '{RUST_ROOT_MODULE}', which the SDK's shared serialization module \
+         takes; rename the module, or --flatten",
+        taken.join(" and ")
+    ))
 }
 
 #[cfg(test)]
@@ -409,7 +450,7 @@ mod tests {
         // and a module's internal group rides its public file as `pub(crate)`.
         assert_eq!(
             path_of(TargetKind::Rust, &Group::root_internal()),
-            "rust/wire.rs"
+            "rust/codec.rs"
         );
         assert_eq!(
             path_of(
@@ -487,7 +528,7 @@ mod tests {
             rust_path("payments.common::types").as_deref(),
             Some("crate::payments::common::types")
         );
-        assert_eq!(rust_path("::internal").as_deref(), Some("crate::wire"));
+        assert_eq!(rust_path("::internal").as_deref(), Some("crate::codec"));
         assert_eq!(
             rust_path("payments.charges::internal").as_deref(),
             Some("crate::payments::charges::types")
@@ -538,7 +579,7 @@ mod tests {
         assert!(!go_has_shared_package(&model(&["notes"])));
         assert!(go_has_shared_package(&model_with_entry(&["notes"])));
         // A second package means the cross-package imports need a module path.
-        let err = check_go_layout(
+        let err = check_layout(
             &model_with_entry(&["notes"]),
             &[TargetKind::Go],
             &CodegenConfig::default(),
@@ -547,19 +588,71 @@ mod tests {
         assert!(err.contains("--go-module"));
     }
 
+    /// A model whose first module has a wide-integer field, which is what puts
+    /// anything in the Rust crate's shared serialization module.
+    fn model_with_wide_int(names: &[&str]) -> Model {
+        let mut model = model(names);
+        model.modules[0]
+            .shapes
+            .push(crate::codegen::test_support::structure(
+                &format!("{}#Charge", names[0]),
+                vec![crate::codegen::test_support::member(
+                    "amount",
+                    Tref::Prim(Prim::I64),
+                    true,
+                )],
+            ));
+        model
+    }
+
+    #[test]
+    fn a_rust_module_taking_the_shared_modules_name_is_rejected() {
+        // The shared group is a file at the crate root and the module would be a
+        // directory beside it; Rust reads both as one module and refuses the
+        // crate, so the collision has to fail here with a name to act on.
+        let collides = model_with_wide_int(&["codec", "notes"]);
+        let err =
+            check_layout(&collides, &[TargetKind::Rust], &CodegenConfig::default()).unwrap_err();
+        assert!(err.contains("module name collision"), "got {err}");
+        // Flatten joins the path into one segment, so a nested module clears it.
+        let nested = model_with_wide_int(&["codec.charges"]);
+        assert!(
+            check_layout(&nested, &[TargetKind::Rust], &CodegenConfig::default()).is_err(),
+            "a first segment is enough to collide: it is the directory Rust sees"
+        );
+        let flat = CodegenConfig {
+            flatten: true,
+            ..CodegenConfig::default()
+        };
+        assert!(check_layout(&nested, &[TargetKind::Rust], &flat).is_ok());
+        // With nothing shared there is no file to collide with.
+        assert!(check_layout(
+            &model(&["codec"]),
+            &[TargetKind::Rust],
+            &CodegenConfig::default()
+        )
+        .is_ok());
+        // And the name is Rust's alone: Go and TypeScript never emit it.
+        assert!(check_layout(
+            &model_with_wide_int(&["codec"]),
+            &[TargetKind::TypeScript],
+            &CodegenConfig::default()
+        )
+        .is_ok());
+    }
+
     #[test]
     fn go_multi_module_without_a_module_path_is_rejected() {
         let model = model(&["payments.common", "payments.charges"]);
-        let err =
-            check_go_layout(&model, &[TargetKind::Go], &CodegenConfig::default()).unwrap_err();
+        let err = check_layout(&model, &[TargetKind::Go], &CodegenConfig::default()).unwrap_err();
         assert!(err.contains("--go-module"));
         let config = CodegenConfig {
             go_module: Some("example.com/sdk".into()),
             ..CodegenConfig::default()
         };
-        assert!(check_go_layout(&model, &[TargetKind::Go], &config).is_ok());
+        assert!(check_layout(&model, &[TargetKind::Go], &config).is_ok());
         // Rust and TypeScript have relative imports, so the same layout is fine.
-        assert!(check_go_layout(
+        assert!(check_layout(
             &model,
             &[TargetKind::Rust, TargetKind::TypeScript],
             &CodegenConfig::default()
@@ -574,7 +667,7 @@ mod tests {
             go_module: Some("example.com/sdk".into()),
             ..CodegenConfig::default()
         };
-        let err = check_go_layout(&model, &[TargetKind::Go], &config).unwrap_err();
+        let err = check_layout(&model, &[TargetKind::Go], &config).unwrap_err();
         assert!(err.contains("package name collision"));
         // Flatten joins the whole path into one segment, so the packages differ.
         let flat = CodegenConfig {
@@ -582,7 +675,7 @@ mod tests {
             go_module: Some("example.com/sdk".into()),
             ..CodegenConfig::default()
         };
-        assert!(check_go_layout(&model, &[TargetKind::Go], &flat).is_ok());
+        assert!(check_layout(&model, &[TargetKind::Go], &flat).is_ok());
     }
 
     #[test]
@@ -591,7 +684,7 @@ mod tests {
             go_module: Some("example.com/sdk".into()),
             ..CodegenConfig::default()
         };
-        let err = check_go_layout(
+        let err = check_layout(
             &model_with_entry(&["tono", "notes"]),
             &[TargetKind::Go],
             &config,
@@ -599,7 +692,7 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("shared internal package"));
         // With nothing shared there is no such package, so the name is free.
-        assert!(check_go_layout(&model(&["tono", "notes"]), &[TargetKind::Go], &config).is_ok());
+        assert!(check_layout(&model(&["tono", "notes"]), &[TargetKind::Go], &config).is_ok());
     }
 
     /// A module declaring two entries, one of them named something other than

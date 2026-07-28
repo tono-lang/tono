@@ -40,7 +40,7 @@ pub use casing::{CaseStyle, CasingConfig};
 pub use check::{check, CheckOptions, CheckOutcome};
 pub use format::{Formatted, Formatter};
 pub use group::{Audience, Group, Origin};
-pub use layout::check_go_layout;
+pub use layout::check_layout;
 pub use modules::CodegenConfig;
 pub use output::{GeneratedFile, TargetKind};
 pub use pipeline::{casing_for, generate, generate_target, parse_targets};

@@ -256,7 +256,7 @@ pub fn generate_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::layout::check_go_layout;
+    use crate::codegen::layout::check_layout;
     use crate::codegen::test_support::{member, structure, union_shape};
     use crate::ir::{Module, Prim, Shape, ShapeKind, Tref};
     use std::path::PathBuf;
@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                format!("rust{sep}wire.rs"),
+                format!("rust{sep}codec.rs"),
                 format!("rust{sep}payments{sep}types.rs"),
                 format!("rust{sep}lib.rs"),
                 format!("rust{sep}payments{sep}mod.rs"),
@@ -395,7 +395,7 @@ mod tests {
             .iter()
             .filter(|f| f.path.extension().is_some_and(|e| e != "json"))
             .all(|f| f.text.starts_with(BANNER)));
-        assert!(text_at(&files, "rust/wire.rs").contains("pub mod i64_string"));
+        assert!(text_at(&files, "rust/codec.rs").contains("pub mod i64_string"));
         // One module shares nothing, so the branded well-known types would ride
         // its public group rather than a group of their own; no field names one,
         // so none is emitted at all.
@@ -653,7 +653,7 @@ mod tests {
         // module path: Rust an absolute crate path and TypeScript a path relative
         // to the importing file. The Go cross-package import needs the module path
         // and is covered by [`go_module_prefix_makes_cross_package_imports_absolute`];
-        // emitting it without a module path is rejected by [`check_go_layout`].
+        // emitting it without a module path is rejected by [`check_layout`].
         assert!(text_at(&files, "rust/payments/charge/types.rs")
             .contains("use crate::payments::common::types::Money;"));
         assert!(text_at(&files, "typescript/payments/charge/types.ts")
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn go_multi_module_without_a_module_path_is_rejected() {
         // Multi-module Go with no module path would emit unresolvable bare imports.
-        let err = check_go_layout(
+        let err = check_layout(
             &sub_package_model(),
             &[TargetKind::Go],
             &CodegenConfig::default(),
@@ -741,9 +741,9 @@ mod tests {
             go_module: Some("example.com/sdk".into()),
             ..CodegenConfig::default()
         };
-        assert!(check_go_layout(&sub_package_model(), &[TargetKind::Go], &config).is_ok());
+        assert!(check_layout(&sub_package_model(), &[TargetKind::Go], &config).is_ok());
         // Rust and TypeScript have relative imports, so the same layout is fine.
-        assert!(check_go_layout(
+        assert!(check_layout(
             &sub_package_model(),
             &[TargetKind::Rust, TargetKind::TypeScript],
             &CodegenConfig::default()
@@ -781,7 +781,7 @@ mod tests {
             go_module: Some("example.com/sdk".into()),
             ..CodegenConfig::default()
         };
-        let err = check_go_layout(&model, &[TargetKind::Go], &config).unwrap_err();
+        let err = check_layout(&model, &[TargetKind::Go], &config).unwrap_err();
         assert!(err.contains("package name collision"));
         // Flatten joins the whole path into one segment, so the packages differ.
         let flat = CodegenConfig {
@@ -789,6 +789,6 @@ mod tests {
             go_module: Some("example.com/sdk".into()),
             ..CodegenConfig::default()
         };
-        assert!(check_go_layout(&model, &[TargetKind::Go], &flat).is_ok());
+        assert!(check_layout(&model, &[TargetKind::Go], &flat).is_ok());
     }
 }

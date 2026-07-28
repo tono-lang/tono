@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use tono_backend::codegen::{
-    check, check_go_layout, generate, CheckOptions, CheckOutcome, CodegenConfig, Formatter,
+    check, check_layout, generate, CheckOptions, CheckOutcome, CodegenConfig, Formatter,
     GeneratedFile, TargetKind,
 };
 use tono_backend::ir::decode_model;
@@ -136,7 +136,7 @@ pub fn run(
     };
     // The Go layout gate runs first: its message names the module problem, where
     // the compiler would only show the broken import it causes.
-    if let Err(e) = check_go_layout(&model, &[target], &config) {
+    if let Err(e) = check_layout(&model, &[target], &config) {
         return stopped(source, target, Verdict::GenerateRejected(e));
     }
     let mut files = match generate(&model, &[target], &config) {
