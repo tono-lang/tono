@@ -111,30 +111,4 @@ pub mod base64_bytes {
             <Vec<u8> as serde::Deserialize>::deserialize(d)
         }
     }
-    pub mod option {
-        pub fn serialize<S: serde::Serializer>(
-            v: &Option<Vec<u8>>,
-            s: S,
-        ) -> Result<S::Ok, S::Error> {
-            match v {
-                Some(b) => super::serialize(b, s),
-                None => s.serialize_none(),
-            }
-        }
-        pub fn deserialize<'de, D: serde::Deserializer<'de>>(
-            d: D,
-        ) -> Result<Option<Vec<u8>>, D::Error> {
-            if d.is_human_readable() {
-                let o = <Option<String> as serde::Deserialize>::deserialize(d)?;
-                match o {
-                    Some(s) => super::decode(&s)
-                        .map(Some)
-                        .map_err(serde::de::Error::custom),
-                    None => Ok(None),
-                }
-            } else {
-                <Option<Vec<u8>> as serde::Deserialize>::deserialize(d)
-            }
-        }
-    }
 }

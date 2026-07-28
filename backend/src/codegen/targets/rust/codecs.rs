@@ -261,20 +261,42 @@ pub(crate) fn well_known_decls() -> Vec<Decl> {
 /// through that `use`). A module with no wide integer and no bytes needs none.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct HelperSet {
-    pub i64_string: bool,
-    pub u64_string: bool,
-    pub base64_bytes: bool,
+    pub i64_string: Used,
+    pub u64_string: Used,
+    pub base64_bytes: Used,
+}
+
+/// How a helper module is reached: directly, through its `option` submodule, or
+/// both. Tracked apart because the submodule is a separate declaration, and an
+/// SDK with no nullable field of that type must not carry it.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Used {
+    pub plain: bool,
+    pub option: bool,
+}
+
+impl Used {
+    fn any(self) -> bool {
+        self.plain || self.option
+    }
 }
 
 impl HelperSet {
     /// Fold the helper a single field routes through (if any) into the set.
     pub(crate) fn add_field(&mut self, field: &Field) {
         if let TypeExpr::Ref(symbol) = &field.ty {
-            match symbol.name.as_str() {
-                "i64" => self.i64_string = true,
-                "u64" => self.u64_string = true,
-                "Vec<u8>" => self.base64_bytes = true,
-                _ => {}
+            let used = match symbol.name.as_str() {
+                "i64" => &mut self.i64_string,
+                "u64" => &mut self.u64_string,
+                "Vec<u8>" => &mut self.base64_bytes,
+                _ => return,
+            };
+            // Which of the two the field routes through is what `serde_with`
+            // decides, so the same test decides what gets emitted.
+            if field.nullable {
+                used.option = true;
+            } else {
+                used.plain = true;
             }
         }
     }
@@ -283,13 +305,13 @@ impl HelperSet {
     /// the items the types file imports from the serde file.
     pub(crate) fn names(self) -> Vec<&'static str> {
         let mut names = Vec::new();
-        if self.i64_string {
+        if self.i64_string.any() {
             names.push("i64_string");
         }
-        if self.u64_string {
+        if self.u64_string.any() {
             names.push("u64_string");
         }
-        if self.base64_bytes {
+        if self.base64_bytes.any() {
             names.push("base64_bytes");
         }
         names
@@ -302,14 +324,14 @@ impl HelperSet {
 /// emitted, into the serde file.
 pub(crate) fn runtime_helpers(helpers: HelperSet) -> Vec<Decl> {
     let mut texts: Vec<String> = Vec::new();
-    if helpers.i64_string {
-        texts.push(int_string_module("i64"));
+    if helpers.i64_string.any() {
+        texts.push(int_string_module("i64", helpers.i64_string.option));
     }
-    if helpers.u64_string {
-        texts.push(int_string_module("u64"));
+    if helpers.u64_string.any() {
+        texts.push(int_string_module("u64", helpers.u64_string.option));
     }
-    if helpers.base64_bytes {
-        texts.push(BASE64_BYTES_MODULE.to_string());
+    if helpers.base64_bytes.any() {
+        texts.push(base64_bytes_module(helpers.base64_bytes.option));
     }
     texts
         .into_iter()
@@ -328,7 +350,12 @@ const INDENT: &str = "    ";
 /// The `{ty}_string` module: a 64-bit integer that travels as a string only in
 /// human-readable formats (JSON), staying native in binary ones. Branching on
 /// `is_human_readable` keeps the type format-agnostic — it never hardcodes JSON.
-fn int_string_module(ty: &str) -> String {
+fn int_string_module(ty: &str, nullable: bool) -> String {
+    let option = if nullable {
+        int_string_option(ty)
+    } else {
+        String::new()
+    };
     format!(
         "pub mod {ty}_string {{\n\
          {INDENT}pub fn serialize<S: serde::Serializer>(v: &{ty}, s: S) -> Result<S::Ok, S::Error> {{\n\
@@ -346,7 +373,15 @@ fn int_string_module(ty: &str) -> String {
          {INDENT}{INDENT}{INDENT}<{ty} as serde::Deserialize>::deserialize(d)\n\
          {INDENT}{INDENT}}}\n\
          {INDENT}}}\n\
-         {INDENT}pub mod option {{\n\
+         {option}}}"
+    )
+}
+
+/// The `option` submodule of `{ty}_string`, emitted only when some nullable
+/// field routes through it: a null stays null, a value goes through the parent.
+fn int_string_option(ty: &str) -> String {
+    format!(
+        "{INDENT}pub mod option {{\n\
          {INDENT}{INDENT}pub fn serialize<S: serde::Serializer>(v: &Option<{ty}>, s: S) -> Result<S::Ok, S::Error> {{\n\
          {INDENT}{INDENT}{INDENT}match v {{\n\
          {INDENT}{INDENT}{INDENT}{INDENT}Some(n) => super::serialize(n, s),\n\
@@ -364,8 +399,7 @@ fn int_string_module(ty: &str) -> String {
          {INDENT}{INDENT}{INDENT}{INDENT}<Option<{ty}> as serde::Deserialize>::deserialize(d)\n\
          {INDENT}{INDENT}{INDENT}}}\n\
          {INDENT}{INDENT}}}\n\
-         {INDENT}}}\n\
-         }}"
+         {INDENT}}}\n"
     )
 }
 
@@ -433,7 +467,11 @@ const BASE64_BYTES_MODULE: &str = r#"pub mod base64_bytes {
             <Vec<u8> as serde::Deserialize>::deserialize(d)
         }
     }
-    pub mod option {
+"#;
+
+/// The `option` submodule of `base64_bytes`, emitted only when some nullable
+/// bytes field routes through it.
+const BASE64_BYTES_OPTION: &str = r#"    pub mod option {
         pub fn serialize<S: serde::Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
             match v {
                 Some(b) => super::serialize(b, s),
@@ -452,7 +490,14 @@ const BASE64_BYTES_MODULE: &str = r#"pub mod base64_bytes {
             }
         }
     }
-}"#;
+"#;
+
+/// The base64 helper module, with the `option` submodule only when something
+/// nullable reaches it.
+fn base64_bytes_module(nullable: bool) -> String {
+    let option = if nullable { BASE64_BYTES_OPTION } else { "" };
+    format!("{BASE64_BYTES_MODULE}{option}}}")
+}
 
 #[cfg(test)]
 mod tests {
@@ -703,11 +748,44 @@ mod tests {
         ));
         // A narrow integer folds into nothing.
         set.add_field(&field("d", TypeExpr::Ref(Symbol::builtin("i32")), false));
-        assert!(set.i64_string && set.u64_string && set.base64_bytes);
+        assert!(set.i64_string.plain && set.u64_string.plain && set.base64_bytes.plain);
+        // Nothing nullable reached them, so no `option` submodule is wanted.
+        assert!(!set.i64_string.option && !set.u64_string.option && !set.base64_bytes.option);
         // Emitted in this fixed order so the types file's import is byte-stable.
         assert_eq!(
             set.names(),
             vec!["i64_string", "u64_string", "base64_bytes"]
         );
+    }
+
+    #[test]
+    fn the_option_submodule_is_emitted_only_for_a_nullable_field() {
+        fn text_of(decls: Vec<Decl>) -> String {
+            decls
+                .iter()
+                .filter_map(|d| d.opaque_text())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        // It is a declaration of its own, and `serde_with` routes a field to it
+        // only when the field is nullable, so the same test decides both.
+        let mut plain = HelperSet::default();
+        plain.add_field(&field("a", TypeExpr::Ref(Symbol::builtin("i64")), false));
+        let out = text_of(runtime_helpers(plain));
+        assert!(out.contains("pub mod i64_string {"));
+        assert!(!out.contains("pub mod option {"));
+
+        let mut nullable = HelperSet::default();
+        nullable.add_field(&field("a", TypeExpr::Ref(Symbol::builtin("i64")), true));
+        let out = text_of(runtime_helpers(nullable));
+        assert!(out.contains("pub mod option {"));
+        assert!(out.contains("Option<i64>"));
+
+        let mut bytes = HelperSet::default();
+        bytes.add_field(&field("a", TypeExpr::Ref(Symbol::builtin("Vec<u8>")), true));
+        let out = text_of(runtime_helpers(bytes));
+        assert!(out.contains("pub mod option {"));
+        assert!(out.contains("Option<Vec<u8>>"));
     }
 }
