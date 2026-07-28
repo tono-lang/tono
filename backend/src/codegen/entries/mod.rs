@@ -15,9 +15,11 @@ use crate::ir::{
     ArmValue, EntryField, Member, Module, Shape, ShapeKind, Source, TemplatePart, Tref,
 };
 
+mod checks;
 mod order;
 pub mod plan;
 
+pub use checks::{needs_presence_guard, value_path_access, value_path_frozen_expr};
 use order::resolution_order;
 
 /// An entry field seen as a required struct member, so the declared-validation
@@ -274,18 +276,6 @@ pub struct ValuePath<'a> {
     /// The declared type at the path's leaf (the member's own type when the
     /// path reaches into a composed/structured field).
     pub target: &'a Tref,
-}
-
-/// Whether a frozen value entry needs a presence guard before it is written to
-/// the runtime values. A guaranteed non-member field is always present, and a
-/// non-string value freezes unconditionally (its zero reads the same as its
-/// absence to the runtime's value positions). Shared so each target spells only
-/// the comparison operator, not the decision.
-pub fn needs_presence_guard(entry: &EntryModel, vp: &ValuePath) -> bool {
-    if entry.is_guaranteed(vp.field) && vp.member.is_none() {
-        return false;
-    }
-    plan::string_like(vp.target)
 }
 
 /// The bare operation name of an entry-nested op: the id is

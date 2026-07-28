@@ -18,37 +18,16 @@ pub(super) fn config_error(message_expr: &str) -> String {
     format!("return Err(TonoError::Config(ConfigError {{ message: {message_expr} }}));")
 }
 
-/// The settings-field read for a value path's own field, honoring its
-/// `@rename(rust)` override; a member path tail is plain (unrenamed).
-pub(super) fn access(vp: &crate::codegen::entries::ValuePath<'_>, config: &CasingConfig) -> String {
-    let head = field_snake_ren(
-        &vp.field.name,
-        rename_of(&vp.field.traits, LANG).as_deref(),
-        config,
-    );
-    match &vp.member {
-        None => head,
-        Some(member) => format!("{}.{}", head, field_snake(member, config)),
-    }
-}
-
 /// Whether a value path freezes into the runtime values, and if so, the
-/// (already-Rust) expression reading it off `s`. A named reference freezes
-/// when it resolves to a scalar (an enum is a branded string on the wire),
-/// which is what `scalar_ref` says; a map/list never freezes as a single
-/// value.
+/// (already-Rust) expression reading it off `s`. See
+/// [`crate::codegen::entries::value_path_frozen_expr`] for the shared
+/// decision this only forwards to.
 pub(super) fn value_expr(
     vp: &crate::codegen::entries::ValuePath<'_>,
     config: &CasingConfig,
     scalar_ref: bool,
 ) -> Option<String> {
-    if matches!(vp.target, Tref::Ref { .. }) && !scalar_ref {
-        return None;
-    }
-    if matches!(vp.target, Tref::Map(_, _) | Tref::List(_)) {
-        return None;
-    }
-    Some(format!("s.{}", access(vp, config)))
+    crate::codegen::entries::value_path_frozen_expr(vp, config, LANG, scalar_ref)
 }
 
 /// The conversion of a resolved field expression into a `serde_json::Value`

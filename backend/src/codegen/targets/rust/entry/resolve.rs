@@ -94,6 +94,17 @@ impl Resolver<'_, '_> {
         )
     }
 
+    /// The casing-transformed identifier for one canonical field name,
+    /// honoring its `@rename(rust)` override — the leaf `ident` and
+    /// `path_expr`'s own head segment both read a field through.
+    fn field_ren(&self, name: &str) -> String {
+        field_snake_ren(
+            name,
+            self.entry.field_rename(name, LANG).as_deref(),
+            self.config,
+        )
+    }
+
     /// The prereq guard when the env variable's own name comes from a
     /// sibling field that may itself be absent; the env step chains onto its
     /// `else`.
@@ -237,14 +248,7 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     fn ident(&self, name: &str) -> String {
-        format!(
-            "s.{}",
-            field_snake_ren(
-                name,
-                self.entry.field_rename(name, LANG).as_deref(),
-                self.config
-            )
-        )
+        format!("s.{}", self.field_ren(name))
     }
 
     fn path_expr(&self, path: &[String]) -> String {
@@ -252,11 +256,7 @@ impl Emitter for Resolver<'_, '_> {
         for (i, seg) in path.iter().enumerate() {
             out.push('.');
             if i == 0 {
-                out.push_str(&field_snake_ren(
-                    seg,
-                    self.entry.field_rename(seg, LANG).as_deref(),
-                    self.config,
-                ));
+                out.push_str(&self.field_ren(seg));
             } else {
                 out.push_str(&field_snake(seg, self.config));
             }
