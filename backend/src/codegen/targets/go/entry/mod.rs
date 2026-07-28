@@ -315,7 +315,21 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
 /// A reference to a name in the SDK's shared internal package, so the import is
 /// collected wherever the raw text calls it.
 fn shared_symbol(name: &str) -> Symbol {
-    Symbol::imported(name, crate::codegen::group::ROOT, name)
+    Symbol::imported(name, shared_group(name), name)
+}
+
+/// Which SDK-root group declares a shared helper. Derived from the emitters
+/// themselves rather than listed here, so the answer cannot drift from where the
+/// declaration actually lands.
+fn shared_group(name: &str) -> &'static str {
+    let in_wire = crate::codegen::imports::declared_symbols(&wire_decls())
+        .iter()
+        .any(|declared| declared == name);
+    if in_wire {
+        crate::codegen::group::ROOT_CODEC
+    } else {
+        crate::codegen::group::ROOT_CONFIG
+    }
 }
 
 /// A shared helper named inside opaque text: a slot, so the package selector is
@@ -329,8 +343,8 @@ fn shared_slot(name: &str) -> String {
 /// load and the struct-to-record encoding the runtime input takes. They are
 /// exported because a Go package boundary is what makes them shared, and
 /// `internal/` is what keeps them out of a consumer's reach.
-pub fn runtime_decls() -> Vec<Decl> {
-    let mut decls = vec![
+pub fn wire_decls() -> Vec<Decl> {
+    vec![
         Decl::raw_providing(
             "MustDescriptor",
             "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
@@ -357,9 +371,12 @@ pub fn runtime_decls() -> Vec<Decl> {
             .to_string(),
             vec![import("json", "encoding/json")],
         ),
-    ];
-    decls.extend(resolution_helpers());
-    decls
+    ]
+}
+
+/// The resolution helpers, which belong to the SDK's configuration group.
+pub fn resolution_decls() -> Vec<Decl> {
+    resolution_helpers()
 }
 
 /// The on-demand helpers the resolution used.

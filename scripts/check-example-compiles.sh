@@ -177,17 +177,19 @@ cat >"$work/ts/tsconfig.json" <<EOF
 EOF
 (cd "$work/ts" && "$tsc" -p tsconfig.json)
 
-# The package's exports map is the TypeScript fence: Node refuses to resolve a
-# subpath it does not list, which is every internal one.
+# TypeScript has no per-symbol visibility, so its fence is two things: the
+# package's exports map, which Node refuses to resolve past, and what the
+# module's barrel names, which is the only way in once the map is closed.
 echo "typescript exports fence..."
 fence="$work/ts-fence"
 mkdir -p "$fence/node_modules/sdk"
 cp -R "$sdk"/typescript/. "$fence/node_modules/sdk/"
 cat >"$fence/probe.mjs" <<'EOF'
 const refused = [
-  "sdk/internal/payments/charges",
+  "sdk/payments/charges/types",
   "sdk/payments/charges/codec",
-  "sdk/internal/tono",
+  "sdk/internal/codec",
+  "sdk/internal/config",
 ];
 let bad = 0;
 try {
@@ -211,6 +213,54 @@ for (const spec of refused) {
 process.exit(bad === 0 ? 0 : 1);
 EOF
 (cd "$fence" && node probe.mjs)
+
+# The other half of the fence: a declaration the barrel does not name has no way
+# in, even though it shares a file with the module's public types.
+echo "typescript barrel fence..."
+mkdir -p "$work/ts-barrel"
+cp -R "$fence/node_modules" "$work/ts-barrel/"
+cat >"$work/ts-barrel/probe.ts" <<'EOF'
+import { HTTPCode } from "sdk/payments/charges";
+export const probe: HTTPCode = 200;
+EOF
+cat >"$work/ts-barrel/tsconfig.json" <<EOF
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
+  },
+  "include": ["probe.ts"]
+}
+EOF
+(
+    cd "$work/ts-barrel"
+    # The same probe importing a name the barrel does name compiles clean, so a
+    # failure here is the fence and not the workspace.
+    sed 's/HTTPCode/Charge/g;s/= 200;/| undefined = undefined;/' probe.ts >control.ts
+    mv probe.ts fenced.ts && mv control.ts probe.ts
+    if ! "$tsc" -p tsconfig.json >control.txt 2>&1; then
+        echo "the barrel probe must compile for a name the barrel exports:" >&2
+        cat control.txt >&2
+        exit 1
+    fi
+    mv fenced.ts probe.ts.fenced && mv probe.ts control.ts && mv probe.ts.fenced probe.ts
+    if "$tsc" -p tsconfig.json >err.txt 2>&1; then
+        echo "a declaration the barrel does not name must not be importable" >&2
+        exit 1
+    fi
+    if ! grep -q "HTTPCode" err.txt; then
+        echo "expected an error naming HTTPCode, got:" >&2
+        cat err.txt >&2
+        exit 1
+    fi
+)
 
 echo "auth-bearer..."
 # The recipe is source only, so its Settings bridge only exists after a

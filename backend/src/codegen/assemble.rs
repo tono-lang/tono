@@ -37,17 +37,24 @@ pub(crate) fn emit_module_files(
 /// runtime helpers that serve every module, so the SDK carries one copy rather
 /// than one per module. Marked internal, so each target fences it off from a
 /// consumer.
-pub(crate) fn shared_file(
+pub(crate) fn shared_files(
     model: &Model,
     target: TargetKind,
     casing: &CasingConfig,
-) -> Option<ModuleFile> {
-    let decls = match target {
-        TargetKind::Rust => rust::emit::shared_decls(model, casing),
-        TargetKind::Go => go::emit::shared_decls(model),
-        TargetKind::TypeScript => typescript::emit::shared_decls(),
+) -> Vec<ModuleFile> {
+    let (codec, config) = match target {
+        TargetKind::Rust => (rust::emit::shared_decls(model, casing), Vec::new()),
+        TargetKind::Go => (go::emit::codec_decls(model), go::emit::config_decls(model)),
+        TargetKind::TypeScript => (
+            typescript::emit::codec_decls(),
+            typescript::emit::config_decls(),
+        ),
     };
-    (!decls.is_empty()).then(|| ModuleFile::new(Group::root_internal(), decls))
+    [(Group::root_codec(), codec), (Group::root_config(), config)]
+        .into_iter()
+        .filter(|(_, decls)| !decls.is_empty())
+        .map(|(group, decls)| ModuleFile::new(group, decls))
+        .collect()
 }
 
 /// The SDK-root support group's declarations: the branded well-known types,
@@ -218,7 +225,8 @@ pub fn resolve_groups(files: &mut Vec<ModuleFile>, target: TargetKind) {
         }
     }
     prune_root_group(files, group::ROOT_SUPPORT);
-    prune_root_group(files, group::ROOT);
+    prune_root_group(files, group::ROOT_CODEC);
+    prune_root_group(files, group::ROOT_CONFIG);
     let index = build_index(files);
     for file in files.iter_mut() {
         repoint_to_groups(&mut file.file, &index);
@@ -260,16 +268,16 @@ mod tests {
     fn a_root_group_carries_only_what_the_rest_of_the_sdk_reaches() {
         let mut files = vec![
             ModuleFile::new(
-                Group::root_internal(),
+                Group::root_codec(),
                 vec![
                     named("used", "fn used() { helper() }"),
                     named("helper", "fn helper() {}"),
                     named("unused", "fn unused() {}"),
                 ],
             ),
-            referencing(Group::types("notes"), group::ROOT, &["used"]),
+            referencing(Group::types("notes"), group::ROOT_CODEC, &["used"]),
         ];
-        prune_root_group(&mut files, group::ROOT);
+        prune_root_group(&mut files, group::ROOT_CODEC);
         let kept: Vec<String> = crate::codegen::imports::declared_symbols(&files[0].file.decls);
         // `helper` is reached through the kept declaration's own text, which the
         // tree cannot be read for, so the wanted set has to close over it.

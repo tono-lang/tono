@@ -141,3 +141,18 @@ export class NotFoundError extends APIError {
     this.name = "NotFoundError";
   }
 }
+export type HTTPCode = 200 | 404 | 500 | (number & {});
+
+export function encodeHTTPCode(value: HTTPCode): number {
+  return value;
+}
+
+export function decodeHTTPCode(raw: number): HTTPCode {
+  return raw as HTTPCode;
+}
+
+/** A page of results with an optional continuation cursor. */
+export interface Page<T> {
+  items: T[];
+  nextCursor?: string | null;
+}

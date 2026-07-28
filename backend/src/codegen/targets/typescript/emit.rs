@@ -35,14 +35,61 @@ pub fn well_known_decls() -> Vec<Decl> {
         .collect()
 }
 
-/// The SDK-root internal group's declarations: the codec runtime helpers every
-/// module's codecs call and the resolution helpers every entry calls. They serve
-/// no module in particular, so the whole SDK carries one copy instead of one per
-/// module.
-pub fn shared_decls() -> Vec<Decl> {
-    let mut decls = runtime_helpers();
-    decls.extend(crate::codegen::targets::typescript::entry::resolution_helpers());
-    decls
+/// What a group exports, split by what a re-export of it has to spell.
+///
+/// The barrel names the module's surface one export at a time rather than
+/// re-exporting a file whole, because that list is the fence: a declaration the
+/// barrel does not name has no specifier a consumer can resolve, which is how a
+/// module keeps its own types to itself in a language with no per-symbol
+/// visibility.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Exports {
+    pub types: Vec<String>,
+    pub values: Vec<String>,
+}
+
+/// Split a group's declarations into the names a barrel re-exports as types and
+/// as values. Every structured declaration this target emits is a type (an
+/// `interface` or a `type` alias); a function and anything built as verbatim
+/// source carry their own answer.
+pub fn exports_of(decls: &[Decl]) -> Exports {
+    let mut exports = Exports::default();
+    for decl in decls {
+        match decl {
+            Decl::Function(f) => exports.values.push(f.name.name.clone()),
+            Decl::Interface(x) => exports.types.push(x.name.name.clone()),
+            Decl::Enum(x) => exports.types.push(x.name.name.clone()),
+            Decl::Union(x) => exports.types.push(x.name.name.clone()),
+            Decl::Alias(x) => exports.types.push(x.name.name.clone()),
+            Decl::Client(x) => exports.types.push(x.name.name.clone()),
+            Decl::Method(_) | Decl::Raw(_) => {}
+        }
+    }
+    for (name, is_type) in exported_in_text_kinds(decls) {
+        if is_type {
+            exports.types.push(name);
+        } else {
+            exports.values.push(name);
+        }
+    }
+    exports.types.sort();
+    exports.types.dedup();
+    exports.values.sort();
+    exports.values.dedup();
+    exports
+}
+
+/// The SDK-root serialization group's declarations: the codec runtime helpers
+/// every module's codecs call. They serve no module in particular, so the whole
+/// SDK carries one copy instead of one per module.
+pub fn codec_decls() -> Vec<Decl> {
+    runtime_helpers()
+}
+
+/// The SDK-root configuration group's declarations: reading an environment
+/// variable and parsing a duration, which every entry client resolves through.
+pub fn config_decls() -> Vec<Decl> {
+    crate::codegen::targets::typescript::entry::resolution_helpers()
 }
 
 /// The text of a declaration that carries opaque source, or `None` for one the
@@ -63,6 +110,16 @@ fn raw_text(decl: &Decl) -> Option<&str> {
 /// from it: an exported declaration is a line starting with `export` and naming
 /// what it declares.
 fn exported_in_text(decls: &[Decl]) -> Vec<String> {
+    exported_in_text_kinds(decls)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// The names verbatim source exports, each with whether it is a type. A type has
+/// no value at run time, so a re-export has to spell it `export type`; a build
+/// with `isolatedModules` refuses the two mixed.
+fn exported_in_text_kinds(decls: &[Decl]) -> Vec<(String, bool)> {
     let mut names = Vec::new();
     for text in decls.iter().filter_map(raw_text) {
         for line in text.lines() {
@@ -70,12 +127,23 @@ fn exported_in_text(decls: &[Decl]) -> Vec<String> {
                 continue;
             };
             let mut words = rest.split_whitespace();
-            let (Some(keyword), Some(name)) = (words.next(), words.next()) else {
+            let Some(mut keyword) = words.next() else {
+                continue;
+            };
+            // `abstract` qualifies the keyword rather than being one, so the name
+            // is one word further along.
+            if keyword == "abstract" {
+                let Some(next) = words.next() else {
+                    continue;
+                };
+                keyword = next;
+            }
+            let Some(name) = words.next() else {
                 continue;
             };
             if !matches!(
                 keyword,
-                "function" | "const" | "class" | "interface" | "type" | "abstract"
+                "function" | "const" | "class" | "interface" | "type"
             ) {
                 continue;
             }
@@ -84,7 +152,7 @@ fn exported_in_text(decls: &[Decl]) -> Vec<String> {
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !name.is_empty() {
-                names.push(name);
+                names.push((name, matches!(keyword, "interface" | "type")));
             }
         }
     }
@@ -135,12 +203,25 @@ fn attach_text_refs(decls: &mut [Decl], names: &[(String, String)]) {
 
 /// The shared runtime helpers, paired with the group that declares them.
 fn runtime_helper_refs() -> Vec<(String, String)> {
-    RUNTIME_HELPER_NAMES
-        .iter()
-        .copied()
-        .chain(exported_in_text(&shared_decls()).iter().map(String::as_str))
-        .map(|name| (name.to_string(), crate::codegen::group::ROOT.to_string()))
-        .collect()
+    let group = |names: Vec<String>, path: &str| -> Vec<(String, String)> {
+        names
+            .into_iter()
+            .map(|name| (name, path.to_string()))
+            .collect()
+    };
+    let mut refs = group(
+        RUNTIME_HELPER_NAMES.iter().map(|n| n.to_string()).collect(),
+        crate::codegen::group::ROOT_CODEC,
+    );
+    refs.extend(group(
+        exported_in_text(&codec_decls()),
+        crate::codegen::group::ROOT_CODEC,
+    ));
+    refs.extend(group(
+        exported_in_text(&config_decls()),
+        crate::codegen::group::ROOT_CONFIG,
+    ));
+    refs
 }
 
 /// Assemble a TypeScript module into separate output files: a types file (the
@@ -342,7 +423,7 @@ mod tests {
         assert!(serde.contains("import { Charge } from \"./types\";"));
         // The runtime helpers are the SDK's, not the module's, so they are
         // imported rather than repeated here.
-        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../internal/tono\";"));
+        assert!(serde.contains("import { decodeI64, encodeI64 } from \"../internal/codec\";"));
         assert!(serde.contains("export function encodeCharge(value: Charge): unknown {"));
         assert!(serde.contains("amount_cents: encodeI64(value.amountCents),"));
         assert!(!serde.contains("export interface Charge"));

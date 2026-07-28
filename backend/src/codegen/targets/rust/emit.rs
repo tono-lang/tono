@@ -106,7 +106,7 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     let mut internal_decls = Vec::new();
     // The helper modules live in the SDK's shared internal module, and the
     // `with = "..."` attribute paths resolve through this import.
-    let shared = Group::root_internal();
+    let shared = Group::root_codec();
     let public_names = public_helpers.names();
     if !public_names.is_empty() {
         type_decls.insert(0, helpers_use(&shared, &public_names));
@@ -301,7 +301,7 @@ mod tests {
         // at all.
         let shared = crate::codegen::test_support::render_group(
             &[ModuleFile::new(
-                Group::root_internal(),
+                Group::root_codec(),
                 shared_decls(
                     &crate::ir::Model {
                         tono_ir_version: 6,
@@ -310,7 +310,7 @@ mod tests {
                     &rust_casing(),
                 ),
             )],
-            "internal",
+            crate::codegen::group::ROOT_CODEC_NAME,
             crate::codegen::TargetKind::Rust,
             &RustRules::default(),
         );

@@ -386,8 +386,8 @@ mod tests {
         );
         // The SDK's shared group is a package of its own, under internal/.
         assert_eq!(
-            rules.render_import("payments.charges::types", "::internal", &["MustDescriptor"]),
-            "import \"example.com/sdk/internal/tono\""
+            rules.render_import("payments.charges::types", "::codec", &["MustDescriptor"]),
+            "import \"example.com/sdk/internal/codec\""
         );
         assert_eq!(
             rules.render_import("payments.charges::types", "encoding/json", &[]),

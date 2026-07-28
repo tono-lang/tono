@@ -52,22 +52,37 @@ pub fn package_clause(name: &str) -> String {
     format!("package {name}\n")
 }
 
-/// The SDK-root group's declarations: the construction helpers every entry of
-/// every module calls. They serve no module in particular, so they sit in the
-/// SDK's shared `internal/` package rather than being repeated per module.
+/// The SDK-root serialization group's declarations: turning a typed input into
+/// the wire record the runtime binds from, and reading a compiler-emitted
+/// descriptor. They serve no module in particular, so they sit in the SDK's
+/// shared `internal/` packages rather than being repeated per module.
 ///
 /// Nothing type-level goes here. A method has to live in its receiver's package,
 /// and a type a public struct exposes has to be nameable by a consumer, which
 /// `internal/` forbids; both keep the module's own package.
-pub fn shared_decls(model: &crate::ir::Model) -> Vec<Decl> {
-    if !model
+pub fn codec_decls(model: &crate::ir::Model) -> Vec<Decl> {
+    if !model_has_entries(model) {
+        return Vec::new();
+    }
+    crate::codegen::targets::go::entry::wire_decls()
+}
+
+/// The SDK-root configuration group's declarations: resolving the declared
+/// construction values (a duration, a casing transform) every entry reads.
+pub fn config_decls(model: &crate::ir::Model) -> Vec<Decl> {
+    if !model_has_entries(model) {
+        return Vec::new();
+    }
+    crate::codegen::targets::go::entry::resolution_decls()
+}
+
+/// Whether anything in the model declares an entry, which is what puts anything
+/// in the shared packages.
+fn model_has_entries(model: &crate::ir::Model) -> bool {
+    model
         .modules
         .iter()
         .any(crate::codegen::entries::has_entries)
-    {
-        return Vec::new();
-    }
-    crate::codegen::targets::go::entry::runtime_decls()
 }
 
 /// Whether any structure member in the module carries the `@entries` escape, which
