@@ -246,11 +246,44 @@ jobs:
           version: v0.6.0
           workdir: runtimes/http-go
 
+  runtime-rust:
+    name: Rust runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: runtimes/http-rust
+      - name: Format
+        run: cargo fmt --check
+        working-directory: runtimes/http-rust
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: runtimes/http-rust
+      # TONO_PARITY_VECTORS makes the cross-runtime parity suite mandatory
+      # here: without it the test skips when the file is out of reach (as it
+      # is inside the mutation tool's crate-only sandbox).
+      - name: Test
+        run: cargo test
+        working-directory: runtimes/http-rust
+        env:
+          TONO_PARITY_VECTORS: ${{ github.workspace }}/runtimes/parity/vectors.json
+      - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
+        with:
+          tool: cargo-mutants
+      # The runtime is hand-written (bespoke), so it carries the strong mutation
+      # gate too: a surviving mutant exits non-zero and fails the build. Scope
+      # comes from runtimes/http-rust/.cargo/mutants.toml.
+      - name: Mutation (a live mutant fails the build)
+        run: cargo mutants --jobs 4
+        working-directory: runtimes/http-rust
+
   # Single aggregating check - this is the one to mark "required" in branch protection.
   ci-success:
     name: CI success
     runs-on: ubuntu-latest
-    needs: [rust, ocaml, typescript, rust-codegen, go-codegen, conformance, e2e, mutation, runtime-ts, runtime-go]
+    needs: [rust, ocaml, typescript, rust-codegen, go-codegen, conformance, e2e, mutation, runtime-ts, runtime-go, runtime-rust]
     if: always()
     steps:
       - name: Verify required jobs
@@ -264,7 +297,8 @@ jobs:
             || [ "${{ needs.e2e.result }}" != "success" ] \
             || [ "${{ needs.mutation.result }}" != "success" ] \
             || [ "${{ needs.runtime-ts.result }}" != "success" ] \
-            || [ "${{ needs.runtime-go.result }}" != "success" ]; then
+            || [ "${{ needs.runtime-go.result }}" != "success" ] \
+            || [ "${{ needs.runtime-rust.result }}" != "success" ]; then
             echo "One or more required jobs failed."
             exit 1
           fi

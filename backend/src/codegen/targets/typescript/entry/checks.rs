@@ -18,33 +18,24 @@ pub(super) fn config_error(message: &str) -> String {
     )
 }
 
+/// The settings-field read for a value path's own field, honoring its
+/// `@rename(ts)` override. The casing transform itself has no TypeScript-
+/// specific step, so it lives once as
+/// [`crate::codegen::entries::value_path_access`], shared with Rust (the
+/// other target whose settings receiver is a bare `s`).
 pub(super) fn access(vp: &crate::codegen::entries::ValuePath<'_>, config: &CasingConfig) -> String {
-    let head = field_camel_ren(
-        &vp.field.name,
-        rename_of(&vp.field.traits, LANG).as_deref(),
-        config,
-    );
-    match &vp.member {
-        None => head,
-        Some(member) => format!("{}.{}", head, field_camel(member, config)),
-    }
+    crate::codegen::entries::value_path_access(vp, config, LANG)
 }
 
-/// Whether a value path freezes into the runtime values. A named reference
-/// freezes when it resolves to a scalar (an enum is a branded string), which
-/// is what `scalar_ref` says.
+/// Whether a value path freezes into the runtime values. See
+/// [`crate::codegen::entries::value_path_frozen_expr`] for the shared
+/// decision this only forwards to.
 pub(super) fn value_expr(
     vp: &crate::codegen::entries::ValuePath<'_>,
     config: &CasingConfig,
     scalar_ref: bool,
 ) -> Option<String> {
-    if matches!(vp.target, Tref::Ref { .. }) && !scalar_ref {
-        return None;
-    }
-    if matches!(vp.target, Tref::Map(_, _) | Tref::List(_)) {
-        return None;
-    }
-    Some(format!("s.{}", access(vp, config)))
+    crate::codegen::entries::value_path_frozen_expr(vp, config, LANG, scalar_ref)
 }
 
 /// The conversion into the runtime's value positions: bigints narrow to

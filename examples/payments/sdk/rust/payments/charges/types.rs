@@ -109,6 +109,11 @@ pub struct APIError {
 }
 
 #[derive(Debug)]
+pub struct ConfigError {
+    pub message: String,
+}
+
+#[derive(Debug)]
 pub enum APIFailure {
     CardDeclined(CardDeclined),
     NotFound(NotFound),
@@ -131,6 +136,7 @@ pub enum TonoError {
     Api(APIFailure),
     Decode(DecodeError),
     Contract(ContractError),
+    Config(ConfigError),
 }
 
 impl TonoError {
@@ -150,6 +156,7 @@ impl std::fmt::Display for TonoError {
             TonoError::Api(_) => write!(f, "api error"),
             TonoError::Decode(_) => write!(f, "response body did not match the declared schema"),
             TonoError::Contract(e) => write!(f, "contract hook '{}' failed", e.contract_name),
+            TonoError::Config(e) => write!(f, "{}", e.message),
         }
     }
 }
@@ -182,6 +189,18 @@ macro_rules! open_enum {
                 Ok($name::Unknown(v))
             }
         }
+        // The entry construction surface reads a resolved enum value back as
+        // its wire spelling (a dynamic env-name lookup, a match subject, a
+        // frozen descriptor value): Display gives it that conversion without
+        // a serde round trip.
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $($name::$variant => write!(f, "{}", $repr),)*
+                    $name::Unknown(v) => write!(f, "{}", v),
+                }
+            }
+        }
     };
 }
 
@@ -191,7 +210,7 @@ open_enum!(HTTPCode: i64 {
     Error => 500i64,
 });
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
 pub(crate) enum HTTPCode {
     Ok,

@@ -78,7 +78,11 @@ pub(crate) fn enum_item(
         text.push_str(&attr);
         text.push('\n');
     }
-    text.push_str("#[derive(Clone, Debug)]\n");
+    // PartialEq lets the generated entry construction compare a resolved enum
+    // value against its zero (the Unknown catch-all over an empty backing
+    // value) for its presence guard, without every caller needing its own
+    // comparison scheme.
+    text.push_str("#[derive(Clone, Debug, PartialEq)]\n");
     text.push_str(&format!("pub enum {name} {{\n"));
     for v in values {
         if let Some(d) = doc_of(&v.traits) {
@@ -180,6 +184,18 @@ const OPEN_ENUM_MACRO: &str = r#"macro_rules! open_enum {
                 Ok($name::Unknown(v))
             }
         }
+        // The entry construction surface reads a resolved enum value back as
+        // its wire spelling (a dynamic env-name lookup, a match subject, a
+        // frozen descriptor value): Display gives it that conversion without
+        // a serde round trip.
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $($name::$variant => write!(f, "{}", $repr),)*
+                    $name::Unknown(v) => write!(f, "{}", v),
+                }
+            }
+        }
     };
 }"#;
 
@@ -245,9 +261,15 @@ pub(crate) fn well_known_decls() -> Vec<Decl> {
             Decl::raw_providing(
                 name,
                 format!(
-                    "#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]\n\
+                    // PartialEq lets the generated entry construction compare a
+                    // resolved value against its zero for its presence guard;
+                    // Display lets it stringify one for a dynamic env-name
+                    // lookup or a frozen runtime value, without either caller
+                    // needing its own conversion.
+                    "#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]\n\
                      #[serde(transparent)]\n\
-                     pub struct {name}(pub String);"
+                     pub struct {name}(pub String);\n\n\
+                     impl std::fmt::Display for {name} {{\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{\n        write!(f, \"{{}}\", self.0)\n    }}\n}}"
                 ),
                 Vec::new(),
             )

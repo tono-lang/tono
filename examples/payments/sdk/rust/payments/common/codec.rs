@@ -21,6 +21,18 @@ macro_rules! open_enum {
                 Ok($name::Unknown(v))
             }
         }
+        // The entry construction surface reads a resolved enum value back as
+        // its wire spelling (a dynamic env-name lookup, a match subject, a
+        // frozen descriptor value): Display gives it that conversion without
+        // a serde round trip.
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $($name::$variant => write!(f, "{}", $repr),)*
+                    $name::Unknown(v) => write!(f, "{}", v),
+                }
+            }
+        }
     };
 }
 

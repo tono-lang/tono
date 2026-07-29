@@ -37,8 +37,9 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
 
 /// The taxonomy (with the module's Api payload enum) without the loose-op
 /// client trait: what a module whose operations live in an entry needs. The
-/// Rust construction surface (a builder) has not landed, but consumers keep
-/// the error types the other targets' clients raise.
+/// entry's own construction surface (its builder, its op methods) lives in
+/// its own group (`rust/entry`); this only carries the error types its
+/// methods and its consumers match on.
 pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
     taxonomy_decls(module, &error_names())
 }
@@ -105,6 +106,10 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
             "    pub contract_name: String,\n    pub cause: Box<dyn std::error::Error + Send + Sync>,\n",
         ),
         data_struct(&n.api, "    pub status: u16,\n    pub body: String,\n"),
+        // Construction failures (a required source that resolved to nothing)
+        // ride their own category so a caller can tell a misconfigured client
+        // from a request or transport failure.
+        data_struct(&n.config, "    pub message: String,\n"),
     ];
 
     let mut failure_variants: Vec<String> = declared
@@ -140,13 +145,14 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
     )));
 
     decls.push(Decl::raw(format!(
-        "#[derive(Debug)]\npub enum {root} {{\n    Validation({validation}),\n    Transport({transport}),\n    Api({api_failure}),\n    Decode({decode}),\n    Contract({contract}),\n}}",
+        "#[derive(Debug)]\npub enum {root} {{\n    Validation({validation}),\n    Transport({transport}),\n    Api({api_failure}),\n    Decode({decode}),\n    Contract({contract}),\n    Config({config}),\n}}",
         root = n.root,
         validation = n.validation,
         transport = n.transport,
         api_failure = n.api_failure,
         decode = n.decode,
         contract = n.contract,
+        config = n.config,
     )));
 
     decls.push(Decl::raw(format!(
@@ -155,7 +161,7 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
     )));
 
     decls.push(Decl::raw(format!(
-        "impl std::fmt::Display for {root} {{\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{\n        match self {{\n            {root}::Validation(_) => write!(f, \"validation failed\"),\n            {root}::Transport(_) => write!(f, \"transport failure\"),\n            {root}::Api(_) => write!(f, \"api error\"),\n            {root}::Decode(_) => write!(f, \"response body did not match the declared schema\"),\n            {root}::Contract(e) => write!(f, \"contract hook '{{}}' failed\", e.contract_name),\n        }}\n    }}\n}}",
+        "impl std::fmt::Display for {root} {{\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{\n        match self {{\n            {root}::Validation(_) => write!(f, \"validation failed\"),\n            {root}::Transport(_) => write!(f, \"transport failure\"),\n            {root}::Api(_) => write!(f, \"api error\"),\n            {root}::Decode(_) => write!(f, \"response body did not match the declared schema\"),\n            {root}::Contract(e) => write!(f, \"contract hook '{{}}' failed\", e.contract_name),\n            {root}::Config(e) => write!(f, \"{{}}\", e.message),\n        }}\n    }}\n}}",
         root = n.root
     )));
 
@@ -171,15 +177,58 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
 /// tries the declared errors and resolves everything else to `Undeclared`
 /// carrying the concrete fallback type.
 fn discriminator_fn(op: &Shape, ordered: &[DeclaredError], n: &ErrorNames) -> Decl {
+    let fn_name = format!(
+        "decode_{}_error",
+        op.id.rsplit('#').next().unwrap_or(&op.id)
+    );
+    discriminator_fn_body(&fn_name, ordered, n)
+}
+
+/// The same discrimination function under a caller-chosen name (an
+/// entry-nested operation derives its name through the entry rule, not from
+/// the raw shape id, and a multi-entry module prefixes it).
+pub fn discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) -> Decl {
+    discriminator_fn_body(fn_name, ordered, &error_names())
+}
+
+/// The code-only discrimination a bespoke raw outcome uses. There is no
+/// protocol status to match on, so a declared error is chosen by its
+/// `@errorCode` alone and everything unmatched resolves to the fallback,
+/// whose status 0 marks the absence of a protocol status. An error declared
+/// without a code can never be selected here: nothing in the outcome
+/// identifies it.
+pub fn outcome_discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) -> Decl {
+    let n = error_names();
+    let mut body = format!(
+        "pub fn {fn_name}(code: Option<&str>, body: &str) -> {root} {{\n",
+        root = n.root
+    );
+    for err in ordered.iter().filter(|e| e.code.is_some()) {
+        let data = error_type_name(err);
+        let declared_code = err.code.as_deref().unwrap_or_default();
+        // A declared match whose body does not decode falls through to the
+        // fallback so a new field or a changed shape never breaks the caller.
+        body.push_str(&format!(
+            "    if code == Some({declared_code:?}) {{\n        if let Ok(data) = serde_json::from_str::<{data}>(body) {{\n            return {root}::Api({failure}::{data}(data));\n        }}\n    }}\n",
+            root = n.root,
+            failure = n.api_failure,
+        ));
+    }
+    body.push_str(&format!(
+        "    {root}::Api({failure}::Undeclared({api} {{ status: 0, body: body.to_string() }}))\n}}",
+        root = n.root,
+        failure = n.api_failure,
+        api = n.api,
+    ));
+    Decl::raw(body)
+}
+
+fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorNames) -> Decl {
     let fallback = format!(
         "{root}::Api({failure}::Undeclared({api} {{ status, body: body.to_string() }}))",
         root = n.root,
         failure = n.api_failure,
         api = n.api
-    );
-    let fn_name = format!(
-        "decode_{}_error",
-        op.id.rsplit('#').next().unwrap_or(&op.id)
     );
     let mut body = String::new();
     body.push_str(&format!(
@@ -246,6 +295,40 @@ mod tests {
         // Display and Error are implemented on the root.
         assert!(out.contains("impl std::fmt::Display for TonoError {"));
         assert!(out.contains("impl std::error::Error for TonoError {"));
+    }
+
+    #[test]
+    fn outcome_discriminator_matches_by_code_alone_and_falls_back_to_status_zero() {
+        let ordered = vec![
+            DeclaredError {
+                shape_id: "m#quota_exceeded".into(),
+                status: Some(429),
+                code: Some("quota_exceeded".into()),
+                retryable: false,
+            },
+            // A declared error with no code can never be selected here
+            // (nothing in a raw outcome identifies it), so it contributes no
+            // arm to the generated function.
+            DeclaredError {
+                shape_id: "m#opaque_failure".into(),
+                status: Some(500),
+                code: None,
+                retryable: false,
+            },
+        ];
+        let out = rendered(
+            &[outcome_discriminator_fn_named(
+                "decode_save_outcome",
+                &ordered,
+            )],
+            &RustRules::default(),
+        );
+        assert!(out
+            .contains("pub fn decode_save_outcome(code: Option<&str>, body: &str) -> TonoError {"));
+        assert!(out.contains("if code == Some(\"quota_exceeded\") {"));
+        assert!(out.contains("serde_json::from_str::<QuotaExceeded>(body)"));
+        assert!(!out.contains("OpaqueFailure"));
+        assert!(out.contains("TonoError::Api(APIFailure::Undeclared(APIError { status: 0, body: body.to_string() }))"));
     }
 
     #[test]
