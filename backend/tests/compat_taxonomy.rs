@@ -60,10 +60,12 @@ fn entry(id: &str, operations: Vec<Shape>) -> Shape {
 }
 
 /// A `before_request` hook bound for TypeScript only, so the flip this drives
-/// is isolated to the `typescript` target: Rust's Contract liveness for a
-/// wire-op entry never depends on `module.extensions` at all (its runtime
-/// call wraps unconditionally, see `taxonomy::derive_rust_entry`), and Go's
-/// hook slot here is unbound in both the baseline and the current model.
+/// is isolated to the `typescript` target: the binding table only has a
+/// `typescript` key, so `bound_extensions` finds nothing for `go` in either
+/// model (Go's Contract liveness does not move). Rust's Contract liveness for
+/// a wire-op entry is always true regardless of this binding (see
+/// `taxonomy::derive_rust_entry`), so it does not move either, for a
+/// different reason.
 fn ts_before_request_hook() -> Extension {
     Extension {
         name: "before_request".into(),

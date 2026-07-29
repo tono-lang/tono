@@ -20,7 +20,7 @@ use crate::codegen::group::Group;
 use crate::codegen::targets::rust::codecs::{open_enum_macro, runtime_helpers, HelperSet};
 use crate::codegen::targets::rust::errors;
 use crate::codegen::targets::rust::types::{emit_serde, emit_type, emit_validators};
-use crate::codegen::taxonomy::{self, TaxonomyLiveness};
+use crate::codegen::taxonomy;
 use crate::codegen::tree::{Decl, ModuleFile, Raw};
 use crate::codegen::validation;
 use crate::codegen::visibility::Exposed;
@@ -29,10 +29,6 @@ use crate::ir::Module;
 /// The binding-language key the Rust target reads, as [`taxonomy::derive`]
 /// and [`crate::codegen::extensions::bound_extensions`] take it.
 const BINDING_LANGS: [&str; 1] = ["rust"];
-
-fn entry_taxonomy_liveness(module: &Module) -> TaxonomyLiveness {
-    taxonomy::derive_rust_entry(module, &BINDING_LANGS)
-}
 
 /// Assemble a Rust module into separate output files: a types file (well-known
 /// newtypes and each shape's type declaration) and, when there is custom serde, a
@@ -112,7 +108,7 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         // needs (mirrors the loose-op branch above).
         type_decls.extend(errors::taxonomy_and_declared_decls(
             module,
-            &entry_taxonomy_liveness(module),
+            &taxonomy::derive_rust_entry(module, &BINDING_LANGS),
         ));
         type_decls.extend(crate::codegen::targets::rust::client::wrapper_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
@@ -385,11 +381,11 @@ mod tests {
         assert!(types.contains("pub struct DecodeError"));
         assert!(types.contains("pub struct APIError"));
         assert!(types.contains("pub enum APIFailure"));
-        // No hook is bound, but Rust's entry runtime call wraps any downcast
-        // failure into ContractError at that one call site regardless (see
-        // `entry_taxonomy_liveness`), since Rust does not wire the
-        // before_request/after_response hooks that would make it provably
-        // dead yet.
+        // No hook is bound, but the entry runtime call's catch-all match arm
+        // (`entry/mod.rs::op_method`) wraps any downcast failure into
+        // ContractError as unconditional generated text for every wire-op
+        // entry method, regardless of whether this module binds a hook (see
+        // `taxonomy::derive_rust_entry`).
         assert!(types.contains("pub struct ContractError"));
         assert!(!types.contains("pub struct Violation"));
         assert!(!types.contains("pub struct ValidationError"));

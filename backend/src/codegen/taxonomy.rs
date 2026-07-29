@@ -105,11 +105,15 @@ fn contract_live(module: &Module, langs: &[&str]) -> bool {
 }
 
 /// An entry module's taxonomy liveness for Rust: [`derive`]'s general
-/// predicate, widened for `Contract` because the entry runtime call
-/// (`rust/entry/mod.rs`) wraps any downcast failure into `ContractError` at
-/// that one call site regardless of whether a hook is bound, since Rust does
-/// not wire `before_request`/`after_response` hooks into the runtime yet. See
-/// [`has_wire_entry_op`]. Shared by the Rust emitter and `compat.rs` (a
+/// predicate, widened for `Contract` because every wire-op entry method's
+/// generated body (`rust/entry/mod.rs::op_method`) contains a
+/// `Runtime::execute(...).map_err(...)` match arm that wraps any downcast
+/// failure into `ContractError`. That text is emitted the same way for every
+/// wire-op entry method regardless of whether *this* module binds a hook for
+/// it — only whether the arm is reachable at runtime depends on the binding
+/// (the runtime's `hooks` field is `Some` only when a `before_request`/
+/// `after_response` hook is bound); the reference itself is unconditional.
+/// See [`has_wire_entry_op`]. Shared by the Rust emitter and `compat.rs` (a
 /// pruned-declaration breaking change has to apply the same rule the emitter
 /// does, or it would flag a category as newly-dead that Rust still emits
 /// unconditionally).
@@ -122,15 +126,8 @@ pub fn derive_rust_entry(module: &Module, langs: &[&str]) -> TaxonomyLiveness {
 }
 
 /// Whether any entry in the module has at least one wire-descriptor
-/// (`@http`-bound) operation. Exposed for a target whose HTTP-op glue
-/// unconditionally references a category regardless of what
-/// [`derive`] computes for it (e.g. Rust's entry runtime call wraps any
-/// downcast failure into `ContractError` at the same call site regardless of
-/// whether a hook is bound, since Rust does not wire `before_request`/
-/// `after_response` hooks into the runtime yet — a separate, larger gap this
-/// pass does not attempt to close). A target with that gap should treat the
-/// affected category as live whenever this is true, on top of whatever
-/// [`derive`] reports.
+/// (`@http`-bound) operation: the module has a real HTTP call site, as
+/// opposed to entries made only of bespoke (`ext impl`-bound) operations.
 pub fn has_wire_entry_op(module: &Module) -> bool {
     module_entries(module)
         .iter()
