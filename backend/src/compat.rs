@@ -16,7 +16,9 @@ use serde::Deserialize;
 use crate::codegen::taxonomy::{self, TaxonomyLiveness};
 use crate::compat_entry;
 use crate::compat_shape::*;
-use crate::ir::{Constraint, EnumBacking, EnumValue, Member, Model, Module, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{
+    Constraint, EnumBacking, EnumValue, Member, Model, Module, Shape, ShapeKind, Trait, Tref,
+};
 
 /// The break level a change falls into. The order is severity-ascending only for
 /// tie-breaking display; the effective severity comes from [`Config`], not from
@@ -232,8 +234,11 @@ const TAXONOMY_TARGETS: [(&str, &[&str], bool); 3] = [
 /// its taxonomy here would be a duplicate, so this only compares modules
 /// present on both sides.
 fn diff_taxonomy(baseline: &Model, current: &Model, out: &mut Vec<Change>) {
-    let curr_modules: BTreeMap<&str, &Module> =
-        current.modules.iter().map(|m| (m.name.as_str(), m)).collect();
+    let curr_modules: BTreeMap<&str, &Module> = current
+        .modules
+        .iter()
+        .map(|m| (m.name.as_str(), m))
+        .collect();
     for module in &baseline.modules {
         let Some(curr_module) = curr_modules.get(module.name.as_str()) else {
             continue;

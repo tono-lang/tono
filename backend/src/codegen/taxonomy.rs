@@ -74,8 +74,11 @@ impl TaxonomyLiveness {
 /// how the operation is bound, and both need the `Api` category (the
 /// `Undeclared` fallback, the declared-error base class) to exist.
 pub fn derive(module: &Module, langs: &[&str]) -> TaxonomyLiveness {
-    let has_wire_ops =
-        module.operations.iter().any(|op| wire_descriptor(op).is_some()) || has_wire_entry_op(module);
+    let has_wire_ops = module
+        .operations
+        .iter()
+        .any(|op| wire_descriptor(op).is_some())
+        || has_wire_entry_op(module);
     TaxonomyLiveness {
         validation: module.shapes.iter().any(shape_has_checks),
         transport: has_wire_ops,
@@ -129,9 +132,12 @@ pub fn derive_rust_entry(module: &Module, langs: &[&str]) -> TaxonomyLiveness {
 /// (`@http`-bound) operation: the module has a real HTTP call site, as
 /// opposed to entries made only of bespoke (`ext impl`-bound) operations.
 pub fn has_wire_entry_op(module: &Module) -> bool {
-    module_entries(module)
-        .iter()
-        .any(|entry| entry.operations.iter().any(|op| wire_descriptor(op).is_some()))
+    module_entries(module).iter().any(|entry| {
+        entry
+            .operations
+            .iter()
+            .any(|op| wire_descriptor(op).is_some())
+    })
 }
 
 #[cfg(test)]
@@ -303,7 +309,11 @@ mod tests {
     #[test]
     fn an_entry_lights_up_config_even_with_no_bound_extension() {
         let liveness = derive(
-            &module(vec![entry("m#client", vec![wire_op("m#client.ping")])], vec![], vec![]),
+            &module(
+                vec![entry("m#client", vec![wire_op("m#client.ping")])],
+                vec![],
+                vec![],
+            ),
             &["rust"],
         );
         assert!(liveness.transport);

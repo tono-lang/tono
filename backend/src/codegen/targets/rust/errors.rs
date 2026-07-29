@@ -134,7 +134,10 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames, liveness: &TaxonomyLiveness) 
         ));
     }
     if liveness.api {
-        decls.push(data_struct(&n.api, "    pub status: u16,\n    pub body: String,\n"));
+        decls.push(data_struct(
+            &n.api,
+            "    pub status: u16,\n    pub body: String,\n",
+        ));
     }
     if liveness.config {
         // Construction failures (a required source that resolved to nothing)

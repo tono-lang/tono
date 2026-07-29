@@ -28,7 +28,11 @@ use crate::ir::{Module, Shape};
 /// `HttpClient` in TypeScript, so `liveness` here is real, derived liveness
 /// (not [`TaxonomyLiveness::all_live`]): the caller passes what
 /// [`crate::codegen::taxonomy::derive`] reports for this module.
-pub fn type_decls(module: &Module, config: &CasingConfig, liveness: &TaxonomyLiveness) -> Vec<Decl> {
+pub fn type_decls(
+    module: &Module,
+    config: &CasingConfig,
+    liveness: &TaxonomyLiveness,
+) -> Vec<Decl> {
     let mut decls = taxonomy_and_declared_decls(module, liveness);
     // Errors are thrown in TypeScript, so the client's error channel stays out
     // of the signatures (`None`).
@@ -378,14 +382,17 @@ mod tests {
 
     #[test]
     fn a_module_where_nothing_is_live_gets_no_taxonomy_at_all() {
-        let out = types_text_with(&error_demo_module(), &TaxonomyLiveness {
-            validation: false,
-            transport: false,
-            decode: false,
-            api: false,
-            config: false,
-            contract: false,
-        });
+        let out = types_text_with(
+            &error_demo_module(),
+            &TaxonomyLiveness {
+                validation: false,
+                transport: false,
+                decode: false,
+                api: false,
+                config: false,
+                contract: false,
+            },
+        );
         assert!(!out.contains("TonoError"));
     }
 
@@ -404,12 +411,42 @@ mod tests {
             contract: false,
         };
         let cases: [(&str, TaxonomyLiveness); 6] = [
-            ("validation", TaxonomyLiveness { validation: true, ..none }),
-            ("transport", TaxonomyLiveness { transport: true, ..none }),
-            ("decode", TaxonomyLiveness { decode: true, ..none }),
-            ("contract", TaxonomyLiveness { contract: true, ..none }),
+            (
+                "validation",
+                TaxonomyLiveness {
+                    validation: true,
+                    ..none
+                },
+            ),
+            (
+                "transport",
+                TaxonomyLiveness {
+                    transport: true,
+                    ..none
+                },
+            ),
+            (
+                "decode",
+                TaxonomyLiveness {
+                    decode: true,
+                    ..none
+                },
+            ),
+            (
+                "contract",
+                TaxonomyLiveness {
+                    contract: true,
+                    ..none
+                },
+            ),
             ("api", TaxonomyLiveness { api: true, ..none }),
-            ("config", TaxonomyLiveness { config: true, ..none }),
+            (
+                "config",
+                TaxonomyLiveness {
+                    config: true,
+                    ..none
+                },
+            ),
         ];
         for (label, liveness) in cases {
             let out = types_text_with(&error_demo_module(), &liveness);

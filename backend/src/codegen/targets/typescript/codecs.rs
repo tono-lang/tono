@@ -112,7 +112,12 @@ pub fn bytes_helpers() -> Vec<Decl> {
 /// never a member type, an operation input, or an operation output: a client
 /// only ever *decodes* an error response, never encodes one to send, so its
 /// `encode` function is skipped rather than generated and left unreferenced.
-pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str, error_only: bool) -> Vec<Decl> {
+pub fn emit_codecs(
+    shape: &Shape,
+    config: &CasingConfig,
+    module: &str,
+    error_only: bool,
+) -> Vec<Decl> {
     let decls = match &shape.kind {
         // A generic structure has no monomorphic codec: `encodePage(value: Page)`
         // would reference the type without its required argument, and a parameter's
@@ -303,7 +308,12 @@ fn payload_codec_name(target: &Tref) -> String {
     }
 }
 
-fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig, error_only: bool) -> Vec<Decl> {
+fn struct_codecs(
+    shape: &Shape,
+    members: &[Member],
+    config: &CasingConfig,
+    error_only: bool,
+) -> Vec<Decl> {
     let ty = type_ident(shape, LANG);
     let decode_fields: String = members
         .iter()

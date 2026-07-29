@@ -7,9 +7,7 @@
 //! Separate from `compat.rs` so each file stays within the repo size gate.
 
 use tono_backend::compat::{diff, Category};
-use tono_backend::ir::{
-    EntryField, ExtKind, Extension, Prim, Shape, ShapeKind, Trait, Tref,
-};
+use tono_backend::ir::{EntryField, ExtKind, Extension, Prim, Shape, ShapeKind, Trait, Tref};
 
 fn model(shapes: Vec<Shape>, extensions: Vec<Extension>) -> tono_backend::ir::Model {
     tono_backend::ir::Model {
@@ -95,9 +93,16 @@ fn dropping_the_only_bound_hook_prunes_contract_for_typescript_only() {
         .iter()
         .filter(|c| c.key.starts_with("prune-declaration"))
         .collect();
-    assert_eq!(pruned.len(), 1, "expected exactly one pruned category, got {pruned:?}");
+    assert_eq!(
+        pruned.len(),
+        1,
+        "expected exactly one pruned category, got {pruned:?}"
+    );
     let change = pruned[0];
-    assert_eq!(change.key, "prune-declaration notes@typescript#ContractError");
+    assert_eq!(
+        change.key,
+        "prune-declaration notes@typescript#ContractError"
+    );
     assert_eq!(change.category, Category::SourceBreaking);
 }
 

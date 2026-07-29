@@ -215,10 +215,7 @@ fn entry_model_json(bound: bool) -> String {
 
 #[test]
 fn dropping_a_bound_hook_reports_a_pruned_declaration_as_source_breaking() {
-    let dir = std::env::temp_dir().join(format!(
-        "tono-breaking-{}-taxonomy",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("tono-breaking-{}-taxonomy", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     git(&dir, &["init", "-q"]);
