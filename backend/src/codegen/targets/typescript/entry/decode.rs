@@ -127,7 +127,7 @@ pub(super) fn output_decode_decl(shape: &Shape, module: &Module) -> Option<Decl>
          \x20* a missing member) as a plain string, for the caller to build its\n\
          \x20* own DecodeError.\n\
          \x20*/\n\
-         function {fn_name}(raw: string): {ty} {{\n\
+         export function {fn_name}(raw: string): {ty} {{\n\
          \x20 let obj: any;\n\
          \x20 try {{\n\
          \x20   obj = JSON.parse(raw);\n\
@@ -145,7 +145,8 @@ pub(super) fn output_decode_decl(shape: &Shape, module: &Module) -> Option<Decl>
          \x20 return decode{ty}(obj);\n\
          }}",
     );
-    Some(Decl::raw_with(
+    Some(Decl::raw_providing(
+        &fn_name,
         text,
         vec![module_symbol(&format!("decode{ty}"), module)],
     ))

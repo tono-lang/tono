@@ -395,7 +395,7 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
     // implementation carries no protocol status.
     assert!(out.contains("if (!outcome.success) {"));
     assert!(out.contains("throw decodeSaveNoteError(outcome.code, outcome.body);"));
-    assert!(out.contains("code === \"overloaded\""));
+    assert!(out.contains("code === CODE_OVERLOADED"));
     assert!(out.contains("return new APIError(0, body);"));
     // The success payload decodes exactly as a protocol response does,
     // through the same per-type parseNote a protocol operation returning

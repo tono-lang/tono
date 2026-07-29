@@ -152,6 +152,9 @@ func (e *ConfigError) Error() string { return e.Message }
 
 func (e *ConfigError) Unwrap() error { return e.Cause }
 
+const statusOverloaded = 529
+const codeOverloaded = "overloaded"
+
 func (e *Overloaded) Error() string { return "overloaded" }
 
 func (e *Overloaded) Retryable() bool { return true }
@@ -240,8 +243,6 @@ type ClientAPI interface {
 }
 
 var _ ClientAPI = (*Client)(nil)
-
-var saveNoteDescriptor = descriptor.MustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"label\"}],[\"body\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[529,\"notes#overloaded\",\"overloaded\",true]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-Client-Name\"}],{\"field\":[\"client_name\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,null]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/notes/{id}\"}")
 
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, client_init on top (bespoke wins),
@@ -408,6 +409,65 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	return &Client{settings: s, runtime: runtime, hooks: nil}, nil
 }
 
+var saveNoteDescriptor = descriptor.MustDescriptor(`{
+  "bindings": [
+    [
+      "id",
+      {
+        "kind": "label"
+      }
+    ],
+    [
+      "body",
+      {
+        "kind": "body"
+      }
+    ]
+  ],
+  "endpoint": [
+    "endpoint"
+  ],
+  "errors": [
+    [
+      529,
+      "notes#overloaded",
+      "overloaded",
+      true
+    ]
+  ],
+  "http_method": "POST",
+  "request_headers": [
+    [
+      [
+        {
+          "lit": "X-Client-Name"
+        }
+      ],
+      {
+        "field": [
+          "client_name"
+        ]
+      }
+    ]
+  ],
+  "response_bindings": [],
+  "retry": {
+    "max": {
+      "ref": "max_retries"
+    }
+  },
+  "success": [
+    [
+      200,
+      null
+    ]
+  ],
+  "timeout": {
+    "ref": "timeout"
+  },
+  "uri": "/notes/{id}"
+}`)
+
 func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	var zero Note
 	record, err := record.EncodeRecord(input)
@@ -436,7 +496,7 @@ func DecodeSaveNoteError(status int, body []byte) error {
 		Code string `json:"code"`
 	}
 	_ = json.Unmarshal(body, &probe)
-	if status == 529 && probe.Code == "overloaded" {
+	if status == statusOverloaded && probe.Code == codeOverloaded {
 		var data Overloaded
 		if json.Unmarshal(body, &data) == nil {
 			return &data
