@@ -523,6 +523,63 @@ let ext_duplicate_language () =
     (codes
        "ext hook before_request { ts: \"ext/ts/a.ts#f\" ts: \"ext/ts/b.ts#g\" }")
 
+(* ── Unknown traits (TC0054) ───────────────────────────────────────────── *)
+
+(* A trait outside the compiler's vocabulary is reported: nothing reads it, so
+   it would otherwise reach the IR and generate nothing, in silence. *)
+let unknown_trait_is_reported () =
+  Alcotest.(check (list string))
+    "unknown decl trait" [ "TC0054" ]
+    (codes {|@invented struct s { a: i64 }|});
+  Alcotest.(check (list string))
+    "unknown member trait" [ "TC0054" ]
+    (codes {|struct s { a: i64 @invented }|})
+
+(* Every trait the compiler acts on stays silent. Filtered to TC0054 on
+   purpose: the snippets may raise unrelated diagnostics, and the claim here is
+   only that a name the checkers read is never called unknown. *)
+let unknown_codes src = List.filter (fun c -> c = "TC0054") (codes src)
+
+let known_traits_are_silent () =
+  Alcotest.(check (list string))
+    "member and constraint vocabulary" []
+    (unknown_codes
+       {|@doc("d") @deprecated struct s {
+           a: i64 @required @range(min: 1, max: 2) @multipleOf(2)
+           b: string @length(min: 1) @pattern("^x$") @wire("bee")
+         }|});
+  Alcotest.(check (list string))
+    "http surface" []
+    (unknown_codes
+       {|@http(method: "get", path: "/x/{id}") @async @retryable
+         op o(): i64|});
+  Alcotest.(check (list string))
+    "entry vocabulary" []
+    (unknown_codes
+       {|struct s {
+           a: string @arg @default("d") @format("{x}") @bind("b")
+           b: string @env("E") @header("H") @rename("go")
+         }|})
+
+(* The near miss is the case worth catching, so the message names the trait it
+   was probably meant to be. *)
+let contains (needle : string) (haystack : string) : bool =
+  let n = String.length needle and h = String.length haystack in
+  let rec go i =
+    i + n <= h && (String.sub haystack i n = needle || go (i + 1))
+  in
+  n = 0 || go 0
+
+let unknown_trait_suggests_the_nearest_name () =
+  let messages =
+    List.map
+      (fun (d : Diagnostic.t) -> d.message)
+      (check {|@statu("x") struct s { a: i64 }|})
+  in
+  Alcotest.(check bool)
+    "suggests @status" true
+    (List.exists (contains "did you mean @status") messages)
+
 let () =
   Alcotest.run "typecheck"
     [
@@ -655,5 +712,14 @@ let () =
           Alcotest.test_case "malformed binding" `Quick ext_malformed_binding;
           Alcotest.test_case "duplicate slot" `Quick ext_duplicate_slot;
           Alcotest.test_case "duplicate language" `Quick ext_duplicate_language;
+        ] );
+      ( "unknown-traits",
+        [
+          Alcotest.test_case "unknown trait reported" `Quick
+            unknown_trait_is_reported;
+          Alcotest.test_case "known traits silent" `Quick
+            known_traits_are_silent;
+          Alcotest.test_case "suggests nearest" `Quick
+            unknown_trait_suggests_the_nearest_name;
         ] );
     ]

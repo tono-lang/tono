@@ -369,9 +369,34 @@ let completion_after_dot_offers_sibling_fields () =
     "not a type position" false
     (List.mem "i64" labels || List.mem "client" labels)
 
+(* The editor's trait vocabulary is the compiler's. The registry carries prose
+   the compiler has no use for, so it cannot be derived outright, but it must
+   never fall behind: a trait the checkers read with nothing to say about it
+   would hover blank and never be offered, and one documented here that the
+   compiler does not read would be advertised and then warned about. *)
+let trait_docs_cover_the_compiler_vocabulary () =
+  let documented = List.map fst Tono_lsp_lib.Hover_docs.trait_registry in
+  let missing =
+    List.filter
+      (fun name -> not (List.mem name documented))
+      Tono_frontend.Trait_vocab.known
+  in
+  let extra =
+    List.filter
+      (fun name -> not (Tono_frontend.Trait_vocab.is_known name))
+      documented
+  in
+  Alcotest.(check (list string)) "every known trait is documented" [] missing;
+  Alcotest.(check (list string)) "nothing documented is unknown" [] extra
+
 let () =
   Alcotest.run "analysis"
     [
+      ( "vocabulary",
+        [
+          Alcotest.test_case "trait docs cover the compiler" `Quick
+            trait_docs_cover_the_compiler_vocabulary;
+        ] );
       ( "diagnostics",
         [
           Alcotest.test_case "clean" `Quick diagnostics_clean;

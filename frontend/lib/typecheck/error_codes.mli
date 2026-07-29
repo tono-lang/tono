@@ -76,3 +76,7 @@ val ext_raw_rule : string
 (* A declared error a raw implementation could never select: the raw path
    discriminates by @errorCode alone, so an error without one is unreachable. *)
 val raw_error_unreachable : string
+
+(* A bare trait outside the compiler's vocabulary: carried into the IR but read
+   by nothing, so almost always a misspelling. *)
+val unknown_trait : string

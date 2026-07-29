@@ -88,6 +88,61 @@ let trait_registry : (string * trait_info) list =
         ti_keys = [ ("field", "string") ];
       } );
     ("retryable", { ti_doc = "Marks the error as safe to retry."; ti_keys = [] });
+    ( "required",
+      {
+        ti_doc =
+          "The member must be present. Absent by default, which is the \
+           two-state nullability the wire carries.";
+        ti_keys = [];
+      } );
+    ( "pattern",
+      {
+        ti_doc =
+          "Regular expression a string must match, validated at the boundary.";
+        ti_keys = [ ("", "string") ];
+      } );
+    ( "multipleOf",
+      {
+        ti_doc = "The number must be an exact multiple of this divisor.";
+        ti_keys = [ ("", "int") ];
+      } );
+    ( "wire",
+      {
+        ti_doc =
+          "The member's serialization key. Overrides the wire name only, never \
+           the identifier the generated code exposes.";
+        ti_keys = [ ("", "string") ];
+      } );
+    ( "httpLabel",
+      {
+        ti_doc =
+          "Binds the member to the matching {placeholder} in the operation's \
+           @http path. A nullable member cannot fill one.";
+        ti_keys = [];
+      } );
+    ( "httpQuery",
+      {
+        ti_doc = "Binds the member to a query string parameter.";
+        ti_keys = [ ("", "string") ];
+      } );
+    ( "httpHeader",
+      {
+        ti_doc = "Binds the member to a request header.";
+        ti_keys = [ ("", "string") ];
+      } );
+    ( "httpPayload",
+      {
+        ti_doc =
+          "The member is the whole request or response body, instead of one \
+           field within it. At most one per operation, and never alongside \
+           unmarked body members.";
+        ti_keys = [];
+      } );
+    ( "httpResponseCode",
+      {
+        ti_doc = "The member receives the response's HTTP status code.";
+        ti_keys = [];
+      } );
     ( "entries",
       {
         ti_doc =
