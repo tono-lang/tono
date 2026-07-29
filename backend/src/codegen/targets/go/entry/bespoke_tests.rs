@@ -109,7 +109,7 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
     assert!(serde.contains("if !outcome.Success {"));
     assert!(serde.contains("return zero, DecodeSaveNoteError(outcome.Code, outcome.Body)"));
     assert!(serde.contains("func DecodeSaveNoteError(code string, body []byte) error {"));
-    assert!(serde.contains("if code == \"overloaded\" {"));
+    assert!(serde.contains("if code == codeOverloaded {"));
     assert!(serde.contains("return &APIError{Status: 0, Body: string(body)}"));
     // The success payload decodes exactly as a protocol response does, through
     // the same per-type DecodeNote a protocol operation returning Note shares.

@@ -242,26 +242,49 @@ fn taxonomy_decls(sealed: bool, liveness: &TaxonomyLiveness) -> Vec<Decl> {
 
 /// The methods that make each declared error struct an error value: `Error`
 /// (its body code, or its canonical name) and the `Retryable` predicate from
-/// `@retryable`.
+/// `@retryable`. The status and `@errorCode` a spec declares are constants
+/// beside the type they describe (see [`declared_error_const_decl`]), not
+/// literals in the decoder that happens to consult them.
 fn declared_error_decls(module: &Module, sealed: bool) -> Vec<Decl> {
     module_declared_errors(module)
         .iter()
         .flat_map(|err| {
             let ty = error_type_name(err);
-            let mut decls = vec![
-                Decl::raw(format!(
-                    "func (e *{ty}) Error() string {{ return \"{}\" }}",
-                    declared_message(err)
-                )),
-                Decl::raw(format!(
-                    "func (e *{ty}) Retryable() bool {{ return {} }}",
-                    err.retryable
-                )),
-            ];
+            let mut decls: Vec<Decl> = declared_error_const_decl(err).into_iter().collect();
+            decls.push(Decl::raw(format!(
+                "func (e *{ty}) Error() string {{ return \"{}\" }}",
+                declared_message(err)
+            )));
+            decls.push(Decl::raw(format!(
+                "func (e *{ty}) Retryable() bool {{ return {} }}",
+                err.retryable
+            )));
             decls.extend(marker_method(sealed, &ty));
             decls
         })
         .collect()
+}
+
+/// The named constants a declared error's own status and `@errorCode` become,
+/// declared beside the type they describe. `None` for the (frontend-rejected
+/// in practice) case of an error with no status.
+fn declared_error_const_decl(err: &DeclaredError) -> Option<Decl> {
+    let ty = error_type_name(err);
+    let status = err.status?;
+    Some(match &err.code {
+        Some(code) => Decl::raw(format!(
+            "const status{ty} = {status}\nconst code{ty} = {code:?}"
+        )),
+        None => Decl::raw(format!("const status{ty} = {status}")),
+    })
+}
+
+fn status_const(ty: &str) -> String {
+    format!("status{ty}")
+}
+
+fn code_const(ty: &str) -> String {
+    format!("code{ty}")
 }
 
 /// One discrimination function: `(status, raw body) -> error`. The mapping
@@ -292,11 +315,11 @@ pub fn outcome_discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) 
     let mut body = format!("func {fn_name}(code string, body []byte) error {{\n");
     for err in ordered.iter().filter(|e| e.code.is_some()) {
         let ty = error_type_name(err);
-        let code = err.code.as_deref().unwrap_or_default();
         // A declared match whose body does not unmarshal falls through to the
         // fallback so a new field or a changed shape never breaks the caller.
         body.push_str(&format!(
-            "\tif code == \"{code}\" {{\n\t\tvar data {ty}\n\t\tif json.Unmarshal(body, &data) == nil {{\n\t\t\treturn &data\n\t\t}}\n\t}}\n"
+            "\tif code == {code_const} {{\n\t\tvar data {ty}\n\t\tif json.Unmarshal(body, &data) == nil {{\n\t\t\treturn &data\n\t\t}}\n\t}}\n",
+            code_const = code_const(&ty),
         ));
     }
     body.push_str(&format!(
@@ -321,10 +344,20 @@ fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorName
     }
     for err in ordered {
         let ty = error_type_name(err);
-        let status = err.status.unwrap_or(0);
+        // A declared error always has a status in practice (the frontend
+        // rejects one without); the literal fallback only guards the type
+        // against that theoretical gap.
+        let status_expr = if err.status.is_some() {
+            status_const(&ty)
+        } else {
+            "0".to_string()
+        };
         let guard = match &err.code {
-            Some(code) => format!("status == {status} && probe.Code == \"{code}\""),
-            None => format!("status == {status}"),
+            Some(_) => format!(
+                "status == {status_expr} && probe.Code == {code_expr}",
+                code_expr = code_const(&ty)
+            ),
+            None => format!("status == {status_expr}"),
         };
         // A declared match whose body does not unmarshal falls through to the
         // fallback so new server fields or shapes never break the caller.
@@ -402,10 +435,20 @@ mod tests {
         let out = rendered(&serde_decls(&error_demo_module()), &GoRules::default());
         assert!(out.contains("func DecodeCreateChargeError(status int, body []byte) error {"));
         assert!(out.contains("Code string `json:\"code\"`"));
-        assert!(out.contains("if status == 402 && probe.Code == \"payment_declined\" {"));
+        assert!(out
+            .contains("if status == statusPaymentDeclined && probe.Code == codePaymentDeclined {"));
         assert!(out.contains("var data PaymentDeclined"));
-        assert!(out.contains("if status == 429 {"));
+        assert!(out.contains("if status == statusRateLimited {"));
         assert!(out.contains("return &APIError{Status: status, Body: string(body)}"));
+    }
+
+    #[test]
+    fn declared_errors_gain_named_constants_beside_their_type() {
+        let out = types_text(&error_demo_module());
+        assert!(out.contains("const statusPaymentDeclined = 402"));
+        assert!(out.contains("const codePaymentDeclined = \"payment_declined\""));
+        assert!(out.contains("const statusRateLimited = 429"));
+        assert!(!out.contains("codeRateLimited"));
     }
 
     #[test]
@@ -417,6 +460,6 @@ mod tests {
         module.operations = vec![operation("m#fetch", vec![], vec!["m#slow_down"])];
         let out = rendered(&serde_decls(&module), &GoRules::default());
         assert!(!out.contains("probe"));
-        assert!(out.contains("if status == 503 {"));
+        assert!(out.contains("if status == statusSlowDown {"));
     }
 }

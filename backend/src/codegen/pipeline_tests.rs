@@ -280,7 +280,7 @@ fn a_module_with_operations_generates_the_error_surface_in_every_target() {
         "export function decodeGetChargeError(status: number, body: string): TonoError {"
     ));
     assert!(ts_serde.contains(
-        "import { APIError, Charge, Client, DecodeError, NotFound, NotFoundError, TonoError, TransportError } from \"./types\";"
+        "import { APIError, Charge, Client, DecodeError, NotFound, NotFoundError, STATUS_NOT_FOUND, TonoError, TransportError } from \"./types\";"
     ));
 }
 
