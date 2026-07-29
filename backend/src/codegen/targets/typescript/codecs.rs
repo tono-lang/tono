@@ -107,14 +107,19 @@ pub fn bytes_helpers() -> Vec<Decl> {
 /// it names (its own type, plus any branded well-known type a decode `as`-cast
 /// mentions) as references imported from `module`; the engine then redirects those
 /// to an import of the types file.
-pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str) -> Vec<Decl> {
+///
+/// `error_only` marks a shape that is only ever a declared operation error,
+/// never a member type, an operation input, or an operation output: a client
+/// only ever *decodes* an error response, never encodes one to send, so its
+/// `encode` function is skipped rather than generated and left unreferenced.
+pub fn emit_codecs(shape: &Shape, config: &CasingConfig, module: &str, error_only: bool) -> Vec<Decl> {
     let decls = match &shape.kind {
         // A generic structure has no monomorphic codec: `encodePage(value: Page)`
         // would reference the type without its required argument, and a parameter's
         // element codec is unknown here. Emitting the parameterized type is the
         // scope; serializing a generic instance is a separate, later concern.
         ShapeKind::Structure { params, members } if params.is_empty() => {
-            struct_codecs(shape, members, config)
+            struct_codecs(shape, members, config, error_only)
         }
         ShapeKind::Enum { .. } => enum_codecs(shape),
         ShapeKind::Union {
@@ -298,16 +303,8 @@ fn payload_codec_name(target: &Tref) -> String {
     }
 }
 
-fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Vec<Decl> {
+fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig, error_only: bool) -> Vec<Decl> {
     let ty = type_ident(shape, LANG);
-    let encode_fields: String = members
-        .iter()
-        .map(|m| {
-            let access = format!("value.{}", field_ident(m, config, LANG));
-            let expr = guard_null(m, &access, member_encode(&access, m));
-            format!("    {}: {expr},\n", wire_key(m))
-        })
-        .collect();
     let decode_fields: String = members
         .iter()
         .map(|m| {
@@ -316,20 +313,30 @@ fn struct_codecs(shape: &Shape, members: &[Member], config: &CasingConfig) -> Ve
             format!("    {}: {expr},\n", field_ident(m, config, LANG))
         })
         .collect();
-    vec![
-        function_owned(
+    let mut decls = Vec::new();
+    if !error_only {
+        let encode_fields: String = members
+            .iter()
+            .map(|m| {
+                let access = format!("value.{}", field_ident(m, config, LANG));
+                let expr = guard_null(m, &access, member_encode(&access, m));
+                format!("    {}: {expr},\n", wire_key(m))
+            })
+            .collect();
+        decls.push(function_owned(
             &format!("encode{ty}"),
             &[("value", &ty)],
             "unknown",
             format!("  return {{\n{encode_fields}  }};"),
-        ),
-        function_owned(
-            &format!("decode{ty}"),
-            &[("raw", "any")],
-            &ty,
-            format!("  return {{\n{decode_fields}  }};"),
-        ),
-    ]
+        ));
+    }
+    decls.push(function_owned(
+        &format!("decode{ty}"),
+        &[("raw", "any")],
+        &ty,
+        format!("  return {{\n{decode_fields}  }};"),
+    ));
+    decls
 }
 
 fn enum_codecs(shape: &Shape) -> Vec<Decl> {
@@ -510,7 +517,7 @@ mod tests {
                 member("note", Tref::Prim(Prim::String), false),
             ],
         );
-        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing", false));
         assert!(out.contains("export function encodeCharge(value: Charge): unknown {"));
         // encode: wire key out, in-code identifier read, i64 routed.
         assert!(out.contains("amount_cents: encodeI64(value.amountCents),"));
@@ -518,6 +525,20 @@ mod tests {
         assert!(out.contains("note: value.note == null ? undefined : value.note,"));
         assert!(out.contains("export function decodeCharge(raw: any): Charge {"));
         assert!(out.contains("amountCents: decodeI64(raw.amount_cents),"));
+    }
+
+    #[test]
+    fn an_error_only_shape_gets_a_decoder_but_no_encoder() {
+        // A client only ever decodes an error response, never encodes one to
+        // send, so the encoder is dead weight for a shape reachable only as a
+        // declared error.
+        let shape = structure(
+            "billing#not_found",
+            vec![member("message", Tref::Prim(Prim::String), true)],
+        );
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing", true));
+        assert!(!out.contains("encodeNotFound"));
+        assert!(out.contains("export function decodeNotFound(raw: any): NotFound {"));
     }
 
     #[test]
@@ -535,7 +556,7 @@ mod tests {
             value: serde_json::json!(true),
         }];
         let shape = structure("billing#Doc", vec![counts]);
-        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing", false));
         // The pairs array is mapped element-wise; the i64 value routes through its
         // codec, the i32 key passes through.
         assert!(out.contains("counts: value.counts.map(([k, v]) => [k, encodeI64(v)]),"));
@@ -545,7 +566,7 @@ mod tests {
     #[test]
     fn open_enum_codec_is_identity_and_lenient() {
         let shape = enum_shape("billing#Status", vec![("pending".into(), None)]);
-        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing", false));
         assert!(out.contains("export function encodeStatus(value: Status): string {"));
         assert!(out.contains("return value;"));
         assert!(out.contains("export function decodeStatus(raw: string): Status {"));
@@ -595,7 +616,7 @@ mod tests {
     #[test]
     fn int_backed_enum_codec_is_identity_over_number() {
         let shape = int_enum_shape("billing#http_code", vec![("ok".into(), Some(200))]);
-        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing", false));
         // The wire scalar is a number, not a string; encode/decode stay identity.
         assert!(out.contains("export function encodeHTTPCode(value: HTTPCode): number {"));
         assert!(out.contains("return value;"));
@@ -617,7 +638,7 @@ mod tests {
                 true,
             )],
         );
-        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing"));
+        let out = rendered(&emit_codecs(&shape, &ts_casing(), "billing", false));
         assert!(
             out.contains("export function encodePaymentMethod(value: PaymentMethod): unknown {")
         );
@@ -655,7 +676,7 @@ mod tests {
             },
             traits: vec![],
         };
-        assert!(emit_codecs(&generic, &ts_casing(), "billing").is_empty());
+        assert!(emit_codecs(&generic, &ts_casing(), "billing", false).is_empty());
         // The same members on a non-generic struct do produce a codec, so the guard
         // is what makes the difference, not the shape being empty.
         let concrete = structure(
@@ -666,7 +687,7 @@ mod tests {
                 true,
             )],
         );
-        assert!(!emit_codecs(&concrete, &ts_casing(), "billing").is_empty());
+        assert!(!emit_codecs(&concrete, &ts_casing(), "billing", false).is_empty());
     }
 
     #[test]
@@ -676,7 +697,7 @@ mod tests {
             kind: ShapeKind::Service { operations: vec![] },
             traits: vec![],
         };
-        assert!(emit_codecs(&service, &ts_casing(), "billing").is_empty());
+        assert!(emit_codecs(&service, &ts_casing(), "billing", false).is_empty());
     }
 
     #[test]

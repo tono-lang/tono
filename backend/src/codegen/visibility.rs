@@ -255,6 +255,26 @@ mod tests {
     }
 
     #[test]
+    fn a_pub_marked_shape_nothing_references_is_still_exposed() {
+        // Reachability here is about what a *consumer* can reach, not what the
+        // spec's own declarations reach: a `pub` marker is the contract, so it
+        // is a root regardless of whether anything in the module happens to
+        // reference it. Emitting only what is reachable must never silently
+        // drop a declaration the spec itself asked to be public.
+        let exposed = derive(&model(vec![
+            public(structure(
+                "m#unused_but_public",
+                vec![member("v", Tref::Prim(Prim::String), true)],
+            )),
+            public(structure(
+                "m#other",
+                vec![member("v", Tref::Prim(Prim::String), true)],
+            )),
+        ]));
+        assert!(exposed.contains("m#unused_but_public"));
+    }
+
+    #[test]
     fn an_unmarked_shape_nothing_public_reaches_stays_internal() {
         let exposed = derive(&model(vec![
             public(structure(

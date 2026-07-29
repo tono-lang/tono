@@ -222,10 +222,16 @@ pub fn error_demo_module() -> Module {
         ],
         operations: vec![operation(
             "m#create_charge",
-            vec![trait_of(
-                "http",
-                serde_json::json!({"method": "POST", "path": "/charges"}),
-            )],
+            vec![
+                trait_of(
+                    "http",
+                    serde_json::json!({"method": "POST", "path": "/charges"}),
+                ),
+                // The Protocol resolver always attaches this to a real wire
+                // operation; without it a target's taxonomy-liveness pass would
+                // wrongly read this as a purely local operation.
+                trait_of("wire_descriptor", serde_json::json!({})),
+            ],
             vec!["m#payment_declined", "m#rate_limited"],
         )],
         extensions: vec![],

@@ -6,12 +6,15 @@
 # In scope:
 #   - ops.rs                : effect classification, error-taxonomy derivation,
 #                             discrimination ordering
+#   - taxonomy.rs           : which error-taxonomy categories a module's
+#                             generated code can actually construct, per target
 #   - targets/*/codecs.rs   : hand-written serialization the native serde cannot
 #                             express (i64-as-string, base64 bytes, open enums,
 #                             internally-tagged unions)
 #   - targets/*/errors.rs   : per-target error surface lowering
 examine_globs = [
     "backend/src/codegen/ops.rs",
+    "backend/src/codegen/taxonomy.rs",
     "backend/src/codegen/targets/*/codecs.rs",
     "backend/src/codegen/targets/*/errors.rs",
 ]

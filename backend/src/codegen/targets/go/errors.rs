@@ -15,6 +15,7 @@ use crate::codegen::ops::{
 };
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::go::types::{type_expr_of, LANG};
+use crate::codegen::taxonomy::TaxonomyLiveness;
 use crate::codegen::tree::Decl;
 use crate::ir::{Module, Shape};
 
@@ -38,8 +39,14 @@ fn marker_method(sealed: bool, name: &str) -> Option<Decl> {
 
 /// The declarations for the types file: the taxonomy error values, the
 /// declared errors' methods, and the blocking client interface.
+///
+/// A loose (non-entry) operation gets only a blocking `interface` (no
+/// concrete client), so nothing in the generated SDK constructs any category
+/// either way; the full taxonomy is vocabulary the interface implementer may
+/// need, not dead code, hence [`TaxonomyLiveness::all_live`] rather than a
+/// derived liveness.
 pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
-    let mut decls = taxonomy_and_declared_decls(module);
+    let mut decls = taxonomy_and_declared_decls(module, &TaxonomyLiveness::all_live());
     // The error channel is the native (T, error) pair on every method.
     decls.push(ops::client_decl(
         module,
@@ -53,10 +60,11 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
 
 /// The taxonomy and the declared errors' methods without the loose-op client
 /// interface: what an entry-only module needs (its client surface is the
-/// entry's own struct and mock interface).
-pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
+/// entry's own struct and mock interface), gated to what `liveness` reports
+/// that module's entries can actually construct for this target.
+pub fn taxonomy_and_declared_decls(module: &Module, liveness: &TaxonomyLiveness) -> Vec<Decl> {
     let sealed = super::client::binds_bespoke(module);
-    let mut decls = taxonomy_decls(sealed);
+    let mut decls = taxonomy_decls(sealed, liveness);
     decls.extend(declared_error_decls(module, sealed));
     decls
 }
@@ -119,10 +127,13 @@ pub fn standalone_validation_decls(sealed: bool) -> Vec<Decl> {
     decls
 }
 
-/// The closed error taxonomy as error values. Go has no hierarchy to root, so
-/// the categories share nothing but the `error` interface; callers pick one
-/// with `errors.As`.
-fn taxonomy_decls(sealed: bool) -> Vec<Decl> {
+/// The closed error taxonomy as error values, gated to the categories
+/// `liveness` reports as reachable: a category nothing generated for this
+/// module can construct gets no struct, no `Error`/`Unwrap` methods, and no
+/// marker. Go has no hierarchy to root, so each category stands alone; unlike
+/// Rust's single self-referential enum, gating one out never requires
+/// touching another category's declarations.
+fn taxonomy_decls(sealed: bool, liveness: &TaxonomyLiveness) -> Vec<Decl> {
     let n = error_names();
     let error_method = |name: &str, message: &str| {
         Decl::raw(format!(
@@ -141,73 +152,86 @@ fn taxonomy_decls(sealed: bool) -> Vec<Decl> {
         decls.extend(items);
         decls.extend(marker_method(sealed, name));
     };
-    let mut decls = standalone_validation_decls(sealed);
-    category(
-        &mut decls,
-        &n.transport,
-        vec![
-            Decl::raw(format!("type {} struct {{\n\tCause error\n}}", n.transport)),
-            error_method(&n.transport, "\"transport failure\""),
-            unwrap_method(&n.transport),
-        ],
-    );
-    category(
-        &mut decls,
-        &n.decode,
-        vec![
-            Decl::raw(format!(
-                "type {} struct {{\n\tPath     string\n\tExpected string\n\tRaw      string\n}}",
-                n.decode
-            )),
-            error_method(
-                &n.decode,
-                "\"response body did not match the declared schema\"",
-            ),
-        ],
-    );
-    category(
-        &mut decls,
-        &n.contract,
-        vec![
-            Decl::raw(format!(
-                "type {} struct {{\n\tContractName string\n\tCause        error\n}}",
-                n.contract
-            )),
-            error_method(
-                &n.contract,
-                "\"contract hook '\" + e.ContractName + \"' failed\"",
-            ),
-            unwrap_method(&n.contract),
-        ],
-    );
-    category(
-        &mut decls,
-        &n.api,
-        vec![
-            Decl::raw(format!(
-                "type {} struct {{\n\tStatus int\n\tBody   string\n}}",
-                n.api
-            )),
-            Decl::raw_with(
-                format!(
-                    "func (e *{}) Error() string {{ return \"api error \" + strconv.Itoa(e.Status) }}",
-                    n.api
+    let mut decls = Vec::new();
+    if liveness.validation {
+        decls.extend(standalone_validation_decls(sealed));
+    }
+    if liveness.transport {
+        category(
+            &mut decls,
+            &n.transport,
+            vec![
+                Decl::raw(format!("type {} struct {{\n\tCause error\n}}", n.transport)),
+                error_method(&n.transport, "\"transport failure\""),
+                unwrap_method(&n.transport),
+            ],
+        );
+    }
+    if liveness.decode {
+        category(
+            &mut decls,
+            &n.decode,
+            vec![
+                Decl::raw(format!(
+                    "type {} struct {{\n\tPath     string\n\tExpected string\n\tRaw      string\n}}",
+                    n.decode
+                )),
+                error_method(
+                    &n.decode,
+                    "\"response body did not match the declared schema\"",
                 ),
-                vec![Symbol::imported("strconv", "strconv", "strconv")],
-            ),
-        ],
-    );
-    // Construction failures (a required source that resolved to nothing) ride
-    // their own category so a caller can tell a misconfigured client from a
-    // request or transport failure.
-    category(
-        &mut decls,
-        &n.config,
-        vec![
-            Decl::raw(format!("type {} struct {{\n\tMessage string\n}}", n.config)),
-            error_method(&n.config, "e.Message"),
-        ],
-    );
+            ],
+        );
+    }
+    if liveness.contract {
+        category(
+            &mut decls,
+            &n.contract,
+            vec![
+                Decl::raw(format!(
+                    "type {} struct {{\n\tContractName string\n\tCause        error\n}}",
+                    n.contract
+                )),
+                error_method(
+                    &n.contract,
+                    "\"contract hook '\" + e.ContractName + \"' failed\"",
+                ),
+                unwrap_method(&n.contract),
+            ],
+        );
+    }
+    if liveness.api {
+        category(
+            &mut decls,
+            &n.api,
+            vec![
+                Decl::raw(format!(
+                    "type {} struct {{\n\tStatus int\n\tBody   string\n}}",
+                    n.api
+                )),
+                Decl::raw_with(
+                    format!(
+                        "func (e *{}) Error() string {{ return \"api error \" + strconv.Itoa(e.Status) }}",
+                        n.api
+                    ),
+                    vec![Symbol::imported("strconv", "strconv", "strconv")],
+                ),
+            ],
+        );
+    }
+    if liveness.config {
+        // Construction failures (a required source that resolved to nothing)
+        // ride their own category so a caller can tell a misconfigured client
+        // from a request or transport failure.
+        category(
+            &mut decls,
+            &n.config,
+            vec![
+                Decl::raw(format!("type {} struct {{\n\tMessage string\n}}", n.config)),
+                error_method(&n.config, "e.Message"),
+            ],
+        );
+    }
     decls
 }
 

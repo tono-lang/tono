@@ -92,16 +92,6 @@ export class DecodeError extends TonoError {
   }
 }
 
-export class ContractError extends TonoError {
-  constructor(
-    readonly contractName: string,
-    readonly cause: unknown,
-  ) {
-    super("contract hook failed");
-    this.name = "ContractError";
-  }
-}
-
 export class APIError extends TonoError {
   constructor(
     readonly status: number,

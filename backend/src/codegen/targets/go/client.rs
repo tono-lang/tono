@@ -143,8 +143,9 @@ mod tests {
         // package could have matched it either.
         let bound = module_with(contract("sign_request", "ext/go/sign.go#SignRequest"));
         assert!(binds_bespoke(&bound));
+        let all_live = crate::codegen::taxonomy::TaxonomyLiveness::all_live();
         let taxonomy = rendered(
-            &super::super::errors::taxonomy_and_declared_decls(&bound),
+            &super::super::errors::taxonomy_and_declared_decls(&bound, &all_live),
             &GoRules::default(),
         );
         assert!(taxonomy.contains("func (e *ValidationError) sdkError() {}"));
@@ -154,7 +155,7 @@ mod tests {
         unbound.extensions[0].bindings.clear();
         assert!(!binds_bespoke(&unbound));
         let taxonomy = rendered(
-            &super::super::errors::taxonomy_and_declared_decls(&unbound),
+            &super::super::errors::taxonomy_and_declared_decls(&unbound, &all_live),
             &GoRules::default(),
         );
         assert!(!taxonomy.contains("sdkError()"));

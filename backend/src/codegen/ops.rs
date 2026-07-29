@@ -153,6 +153,84 @@ pub fn module_declared_errors(module: &Module) -> Vec<DeclaredError> {
     out
 }
 
+/// The shapes that are only ever a declared operation error and never a
+/// member type, an operation input, or an operation output anywhere in the
+/// module. A client only ever *decodes* an error response, never encodes one
+/// to send, so an `encode` function for such a shape is generated but never
+/// called: this is the set a target skips it for.
+pub fn error_only_shapes(module: &Module) -> std::collections::BTreeSet<String> {
+    let declared: std::collections::BTreeSet<String> = module_declared_errors(module)
+        .into_iter()
+        .map(|e| e.shape_id)
+        .collect();
+    if declared.is_empty() {
+        return declared;
+    }
+    let referenced = referenced_as_data(module);
+    declared
+        .into_iter()
+        .filter(|id| !referenced.contains(id))
+        .collect()
+}
+
+/// Every shape id a value would need to be *built* for: a struct/union
+/// member's type, an operation's input or output (loose or nested in an
+/// entry), an entry field's own type, or a config shape's field type. Doesn't
+/// include an operation's declared errors, since those are only ever received,
+/// never sent.
+fn referenced_as_data(module: &Module) -> std::collections::BTreeSet<String> {
+    let mut ids = std::collections::BTreeSet::new();
+    let walk = |t: &Tref, ids: &mut std::collections::BTreeSet<String>| {
+        fn go(t: &Tref, ids: &mut std::collections::BTreeSet<String>) {
+            match t {
+                Tref::Ref { id, args } => {
+                    ids.insert(id.clone());
+                    for arg in args {
+                        go(arg, ids);
+                    }
+                }
+                Tref::List(inner) => go(inner, ids),
+                Tref::Map(key, value) => {
+                    go(key, ids);
+                    go(value, ids);
+                }
+                Tref::Prim(_) | Tref::Param(_) => {}
+            }
+        }
+        go(t, ids);
+    };
+    let nested_ops = module.shapes.iter().flat_map(|s| match &s.kind {
+        ShapeKind::Entry { operations, .. } => operations.as_slice(),
+        _ => &[],
+    });
+    for op in module.operations.iter().chain(nested_ops) {
+        if let ShapeKind::Operation { input, output, .. } = &op.kind {
+            if let Some(t) = input {
+                walk(t, &mut ids);
+            }
+            if let Some(t) = output {
+                walk(t, &mut ids);
+            }
+        }
+    }
+    for shape in &module.shapes {
+        match &shape.kind {
+            ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => {
+                for m in members {
+                    walk(&m.target, &mut ids);
+                }
+            }
+            ShapeKind::Entry { fields, .. } | ShapeKind::Config { fields } => {
+                for f in fields {
+                    walk(&f.target, &mut ids);
+                }
+            }
+            _ => {}
+        }
+    }
+    ids
+}
+
 /// The declared errors of an operation ordered for discrimination: within one
 /// status, code-bearing entries are tried before the codeless catch-all, so a
 /// body code is always consulted when it can decide. Declaration order is kept
@@ -336,6 +414,142 @@ mod tests {
             operations,
             extensions: vec![],
         }
+    }
+
+    #[test]
+    fn a_declared_error_never_used_as_data_is_error_only() {
+        let m = module(
+            vec![error_shape("m#not_found", vec![])],
+            vec![op(vec![], vec!["m#not_found"])],
+        );
+        let error_only = error_only_shapes(&m);
+        assert!(error_only.contains("m#not_found"));
+    }
+
+    #[test]
+    fn a_declared_error_also_used_as_an_operation_input_is_not_error_only() {
+        let mut input_op = op(vec![], vec!["m#retry_hint"]);
+        input_op.kind = ShapeKind::Operation {
+            input: Some(Tref::Ref {
+                id: "m#retry_hint".into(),
+                args: vec![],
+            }),
+            output: None,
+            errors: vec![Tref::Ref {
+                id: "m#retry_hint".into(),
+                args: vec![],
+            }],
+        };
+        let m = module(vec![error_shape("m#retry_hint", vec![])], vec![input_op]);
+        assert!(error_only_shapes(&m).is_empty());
+    }
+
+    #[test]
+    fn a_declared_error_also_used_as_a_member_type_is_not_error_only() {
+        let holder = Shape {
+            id: "m#holder".into(),
+            kind: ShapeKind::Structure {
+                params: vec![],
+                members: vec![crate::codegen::test_support::member(
+                    "cause",
+                    Tref::Ref {
+                        id: "m#not_found".into(),
+                        args: vec![],
+                    },
+                    true,
+                )],
+            },
+            traits: vec![],
+        };
+        let m = module(
+            vec![error_shape("m#not_found", vec![]), holder],
+            vec![op(vec![], vec!["m#not_found"])],
+        );
+        assert!(error_only_shapes(&m).is_empty());
+    }
+
+    fn entry_field(name: &str, target_id: &str) -> crate::ir::EntryField {
+        crate::ir::EntryField {
+            name: name.into(),
+            target: Tref::Ref {
+                id: target_id.into(),
+                args: vec![],
+            },
+            sources: vec![],
+            format: None,
+            transforms: vec![],
+            select: None,
+            binds: vec![],
+            constraints: vec![],
+            traits: vec![],
+        }
+    }
+
+    #[test]
+    fn a_declared_error_also_used_as_a_nested_entry_ops_input_is_not_error_only() {
+        let mut nested_op = op(vec![], vec!["m#not_found"]);
+        nested_op.id = "m#client.do_thing".into();
+        nested_op.kind = ShapeKind::Operation {
+            input: Some(Tref::Ref {
+                id: "m#not_found".into(),
+                args: vec![],
+            }),
+            output: None,
+            errors: vec![Tref::Ref {
+                id: "m#not_found".into(),
+                args: vec![],
+            }],
+        };
+        let entry = Shape {
+            id: "m#client".into(),
+            kind: ShapeKind::Entry {
+                fields: vec![],
+                operations: vec![nested_op],
+            },
+            traits: vec![],
+        };
+        let m = module(vec![error_shape("m#not_found", vec![]), entry], vec![]);
+        assert!(error_only_shapes(&m).is_empty());
+    }
+
+    #[test]
+    fn a_declared_error_also_used_as_an_entry_or_config_fields_target_is_not_error_only() {
+        let wire_op = |errors: Vec<&str>| {
+            let mut o = op(vec![], errors);
+            o.id = "m#client.ping".into();
+            o
+        };
+        let entry = Shape {
+            id: "m#client".into(),
+            kind: ShapeKind::Entry {
+                fields: vec![entry_field("hint", "m#not_found")],
+                operations: vec![wire_op(vec!["m#not_found"])],
+            },
+            traits: vec![],
+        };
+        let m = module(vec![error_shape("m#not_found", vec![]), entry], vec![]);
+        assert!(error_only_shapes(&m).is_empty());
+
+        let cfg = Shape {
+            id: "m#conf".into(),
+            kind: ShapeKind::Config {
+                fields: vec![entry_field("hint", "m#slow_down")],
+            },
+            traits: vec![],
+        };
+        let entry2 = Shape {
+            id: "m#client2".into(),
+            kind: ShapeKind::Entry {
+                fields: vec![],
+                operations: vec![wire_op(vec!["m#slow_down"])],
+            },
+            traits: vec![],
+        };
+        let m2 = module(
+            vec![error_shape("m#slow_down", vec![]), cfg, entry2],
+            vec![],
+        );
+        assert!(error_only_shapes(&m2).is_empty());
     }
 
     #[test]

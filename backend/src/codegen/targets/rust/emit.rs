@@ -20,10 +20,19 @@ use crate::codegen::group::Group;
 use crate::codegen::targets::rust::codecs::{open_enum_macro, runtime_helpers, HelperSet};
 use crate::codegen::targets::rust::errors;
 use crate::codegen::targets::rust::types::{emit_serde, emit_type, emit_validators};
+use crate::codegen::taxonomy::{self, TaxonomyLiveness};
 use crate::codegen::tree::{Decl, ModuleFile, Raw};
 use crate::codegen::validation;
 use crate::codegen::visibility::Exposed;
 use crate::ir::Module;
+
+/// The binding-language key the Rust target reads, as [`taxonomy::derive`]
+/// and [`crate::codegen::extensions::bound_extensions`] take it.
+const BINDING_LANGS: [&str; 1] = ["rust"];
+
+fn entry_taxonomy_liveness(module: &Module) -> TaxonomyLiveness {
+    taxonomy::derive_rust_entry(module, &BINDING_LANGS)
+}
 
 /// Assemble a Rust module into separate output files: a types file (well-known
 /// newtypes and each shape's type declaration) and, when there is custom serde, a
@@ -101,7 +110,10 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         // (the wire error shapes reference it, and downstream consumers match
         // on it) plus the boundary wrappers any bound contract/constraint
         // needs (mirrors the loose-op branch above).
-        type_decls.extend(errors::taxonomy_and_declared_decls(module));
+        type_decls.extend(errors::taxonomy_and_declared_decls(
+            module,
+            &entry_taxonomy_liveness(module),
+        ));
         type_decls.extend(crate::codegen::targets::rust::client::wrapper_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the Validation category a
@@ -314,9 +326,9 @@ mod tests {
 
     #[test]
     fn a_module_whose_operations_live_in_an_entry_keeps_the_error_taxonomy() {
-        // An entry with no operations of its own still keeps the error
-        // taxonomy consumers match on; only the loose-op client trait, which
-        // has no operation here to interface, stays out.
+        // An entry always goes through a fallible construction, so `Config`
+        // stays live even with no operations; the loose-op client trait,
+        // which has no operation here to interface, stays out.
         let module = Module {
             name: "notes".into(),
             shapes: vec![crate::ir::Shape {
@@ -332,8 +344,55 @@ mod tests {
         };
         let types = rendered(&module, TYPES);
         assert!(types.contains("pub enum TonoError"));
-        assert!(types.contains("pub struct TransportError"));
+        assert!(types.contains("pub struct ConfigError"));
         assert!(!types.contains("pub trait Client"));
+        // Nothing in an entry with no operations ever calls the runtime, so
+        // there is no transport call site to fail, and no bespoke boundary
+        // exists to wrap a foreign error into a contract failure either.
+        assert!(!types.contains("pub struct TransportError"));
+        assert!(!types.contains("pub struct ContractError"));
+    }
+
+    #[test]
+    fn an_entry_with_a_wire_operation_keeps_transport_decode_and_api() {
+        let op = crate::ir::Shape {
+            id: "notes#client.ping".into(),
+            kind: crate::ir::ShapeKind::Operation {
+                input: None,
+                output: None,
+                errors: vec![],
+            },
+            traits: vec![crate::ir::Trait {
+                id: "wire_descriptor".into(),
+                value: serde_json::json!({}),
+            }],
+        };
+        let module = Module {
+            name: "notes".into(),
+            shapes: vec![crate::ir::Shape {
+                id: "notes#client".into(),
+                kind: crate::ir::ShapeKind::Entry {
+                    fields: vec![],
+                    operations: vec![op],
+                },
+                traits: vec![],
+            }],
+            operations: vec![],
+            extensions: vec![],
+        };
+        let types = rendered(&module, TYPES);
+        assert!(types.contains("pub struct TransportError"));
+        assert!(types.contains("pub struct DecodeError"));
+        assert!(types.contains("pub struct APIError"));
+        assert!(types.contains("pub enum APIFailure"));
+        // No hook is bound, but Rust's entry runtime call wraps any downcast
+        // failure into ContractError at that one call site regardless (see
+        // `entry_taxonomy_liveness`), since Rust does not wire the
+        // before_request/after_response hooks that would make it provably
+        // dead yet.
+        assert!(types.contains("pub struct ContractError"));
+        assert!(!types.contains("pub struct Violation"));
+        assert!(!types.contains("pub struct ValidationError"));
     }
 
     #[test]

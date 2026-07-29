@@ -163,6 +163,14 @@ fn entries_module() -> tono_backend::ir::Module {
 }
 
 #[test]
+fn rust_entries_codegen_snapshot() {
+    assert_snapshot!(
+        "rust_entries",
+        render_sdk(entries_module(), TargetKind::Rust, None)
+    );
+}
+
+#[test]
 fn go_entries_codegen_snapshot() {
     assert_snapshot!(
         "go_entries",
@@ -175,13 +183,5 @@ fn typescript_entries_codegen_snapshot() {
     assert_snapshot!(
         "typescript_entries",
         render_sdk(entries_module(), TargetKind::TypeScript, None)
-    );
-}
-
-#[test]
-fn rust_entries_codegen_snapshot() {
-    assert_snapshot!(
-        "rust_entries",
-        render_sdk(entries_module(), TargetKind::Rust, None)
     );
 }
