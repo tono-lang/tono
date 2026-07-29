@@ -31,7 +31,7 @@ esac
 
 target="${platform_arch}-${platform_os}"
 
-latest_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest")
+latest_url=$(curl --proto '=https' -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest")
 tag="${latest_url##*/}"
 version="${tag#v}"
 asset="tono-${version}-${target}.tar.gz"
@@ -41,8 +41,8 @@ workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
 echo "Downloading tono ${tag} for ${target}..."
-curl -fsSL -o "${workdir}/${asset}" "${base_url}/${asset}"
-curl -fsSL -o "${workdir}/SHA256SUMS" "${base_url}/SHA256SUMS"
+curl --proto '=https' -fsSL -o "${workdir}/${asset}" "${base_url}/${asset}"
+curl --proto '=https' -fsSL -o "${workdir}/SHA256SUMS" "${base_url}/SHA256SUMS"
 
 cd "$workdir"
 expected=$(grep " ${asset}\$" SHA256SUMS | cut -d' ' -f1)

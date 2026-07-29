@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -40,7 +40,7 @@ jobs:
             os: ubuntu-24.04-arm
             ocaml_rosetta: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Compute the release version
         id: version
@@ -55,16 +55,21 @@ jobs:
             rm -f "$f.bak"
           done
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: ${{ matrix.target }}
 
       - name: Build the tono binary
-        run: cargo build --release --target ${{ matrix.target }} -p tono-cli
+        # No Cargo.lock is committed, so the lockfile is generated once here
+        # and then --locked keeps this build from silently re-resolving to a
+        # newer dependency version mid-run.
+        run: |
+          cargo generate-lockfile
+          cargo build --release --locked --target ${{ matrix.target }} -p tono-cli
 
       - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
         if: ${{ !matrix.ocaml_rosetta }}
@@ -105,7 +110,7 @@ jobs:
           tar czf "${stage}.tar.gz" "$stage"
           shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -117,8 +122,10 @@ jobs:
     name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: dist
           merge-multiple: true
@@ -127,7 +134,7 @@ jobs:
         working-directory: dist
         run: cat ./*.sha256 > SHA256SUMS
 
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           generate_release_notes: true
           files: |
@@ -139,7 +146,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: dist
           merge-multiple: true
@@ -222,7 +229,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Assemble the Pages site
         run: |
@@ -235,11 +242,11 @@ jobs:
           <pre>curl -fsSL https://tono-lang.github.io/tono/install.sh | sh</pre>
           EOF
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: site
 
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
