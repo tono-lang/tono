@@ -269,6 +269,106 @@ let formatting_identity_is_no_edit () =
     "already-canonical input formats to no edits" true
     (Analysis.formatting ~text:canonical = Some [])
 
+(* ── The entry model ──────────────────────────────────────────────────── *)
+
+(* One entry exercising every new form the editor has to explain: stacked
+   sources, a catalog pipeline, a selection table, a composition binding, and
+   an operation with the protocol vocabulary. *)
+let entry_src =
+  "pub struct client {\n\
+  \  api_key: string @arg @str::trim\n\
+  \  version: string @env(\"V\") @default(\"v2\")\n\
+  \  endpoint: string = match .version {\n\
+  \    \"v1\" => .api_key\n\
+  \    _ => .api_key\n\
+  \  }\n\
+  \  conf: settings @bind(api_key, .api_key)\n\n\
+  \  op fetch(note): note\n\
+  \    @http(method: \"GET\", path: \"/n\", endpoint: .endpoint)\n\
+   }\n"
+
+let hover_value_source () =
+  (* `@arg` on line 1. *)
+  let v = hover_value entry_src (pos 1 20) in
+  Alcotest.(check bool)
+    "explains the positional argument" true (contains v "positional");
+  (* `@env` on line 2. *)
+  let v = hover_value entry_src (pos 2 20) in
+  Alcotest.(check bool)
+    "explains the fallback chain" true (contains v "fallback")
+
+let hover_str_catalog () =
+  (* `@str::trim` on line 1. *)
+  let v = hover_value entry_src (pos 1 27) in
+  Alcotest.(check bool) "names the transform" true (contains v "whitespace");
+  Alcotest.(check bool) "names the catalog" true (contains v "@str::")
+
+let hover_match_keyword () =
+  (* `match` on line 3. *)
+  let v = hover_value entry_src (pos 3 22) in
+  Alcotest.(check bool) "explains exhaustiveness" true (contains v "exhaustive");
+  Alcotest.(check bool)
+    "names the sources an arm can stack" true (contains v "@default")
+
+let hover_field_shows_its_selection_table () =
+  (* The `endpoint` field name on line 3. *)
+  let v = hover_value entry_src (pos 3 4) in
+  Alcotest.(check bool) "renders the match" true (contains v "match .version");
+  Alcotest.(check bool) "renders an arm" true (contains v "=>")
+
+let hover_entry_operation () =
+  (* The op name on line 9. *)
+  let v = hover_value entry_src (pos 9 6) in
+  Alcotest.(check bool) "prints the operation" true (contains v "op fetch");
+  (* Its @http trait on line 10: nested ops carry traits like any other. *)
+  let v = hover_value entry_src (pos 10 6) in
+  Alcotest.(check bool) "explains the transport" true (contains v "HTTP")
+
+let hover_raw_word () =
+  let src = "ext impl client.save raw {\n  go: \"ext/go/a.go#Save\"\n}\n" in
+  let v = hover_value src (pos 0 22) in
+  Alcotest.(check bool) "explains the outcome" true (contains v "outcome")
+
+let completion_after_at_offers_value_sources () =
+  let labels = completion_labels "struct client { x: string @" (pos 0 27) in
+  List.iter
+    (fun name ->
+      Alcotest.(check bool) ("offers @" ^ name) true (List.mem name labels))
+    [ "arg"; "with"; "env"; "default"; "format"; "bind" ]
+
+let completion_after_catalog_separator () =
+  let labels =
+    completion_labels "struct client { x: string @str::" (pos 0 32)
+  in
+  Alcotest.(check bool)
+    "offers a transform" true
+    (List.mem "upper_snake" labels);
+  Alcotest.(check bool)
+    "only the catalog" false
+    (List.mem "http" labels || List.mem "i64" labels)
+
+let completion_after_ext_offers_kinds () =
+  let labels = completion_labels "ext " (pos 0 4) in
+  Alcotest.(check int) "exactly the kinds" 4 (List.length labels);
+  Alcotest.(check bool) "impl among them" true (List.mem "impl" labels)
+
+let completion_after_ext_impl_offers_entry_ops () =
+  let src = entry_src ^ "\next impl " in
+  let line = List.length (String.split_on_char '\n' src) - 1 in
+  let labels = completion_labels src (pos line 10) in
+  Alcotest.(check bool) "the bare name" true (List.mem "fetch" labels);
+  Alcotest.(check bool)
+    "the qualified name" true
+    (List.mem "client.fetch" labels)
+
+let completion_after_dot_offers_sibling_fields () =
+  let src = "pub struct client {\n  api_key: string @arg\n  e: string @env(." in
+  let labels = completion_labels src (pos 2 18) in
+  Alcotest.(check bool) "a sibling field" true (List.mem "api_key" labels);
+  Alcotest.(check bool)
+    "not a type position" false
+    (List.mem "i64" labels || List.mem "client" labels)
+
 let () =
   Alcotest.run "analysis"
     [
@@ -317,6 +417,13 @@ let () =
           Alcotest.test_case "primitive" `Quick hover_primitive;
           Alcotest.test_case "nullable marker" `Quick hover_nullable_marker;
           Alcotest.test_case "trait contract" `Quick hover_trait_contract;
+          Alcotest.test_case "value source" `Quick hover_value_source;
+          Alcotest.test_case "str catalog" `Quick hover_str_catalog;
+          Alcotest.test_case "match keyword" `Quick hover_match_keyword;
+          Alcotest.test_case "field selection table" `Quick
+            hover_field_shows_its_selection_table;
+          Alcotest.test_case "entry operation" `Quick hover_entry_operation;
+          Alcotest.test_case "raw marker" `Quick hover_raw_word;
         ] );
       ( "completion context",
         [
@@ -325,5 +432,15 @@ let () =
           Alcotest.test_case "type position" `Quick completion_type_position;
           Alcotest.test_case "op input" `Quick
             completion_op_input_is_a_type_position;
+          Alcotest.test_case "value sources" `Quick
+            completion_after_at_offers_value_sources;
+          Alcotest.test_case "catalog separator" `Quick
+            completion_after_catalog_separator;
+          Alcotest.test_case "ext kinds" `Quick
+            completion_after_ext_offers_kinds;
+          Alcotest.test_case "ext impl operations" `Quick
+            completion_after_ext_impl_offers_entry_ops;
+          Alcotest.test_case "field reference" `Quick
+            completion_after_dot_offers_sibling_fields;
         ] );
     ]

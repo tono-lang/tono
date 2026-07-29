@@ -19,7 +19,7 @@ let find_decl = Analysis.find_decl
 let decl_symbol_kind = Analysis.decl_symbol_kind
 let lsp_of_fdiags = Analysis.lsp_of_fdiags
 let file_traits = Analysis.file_traits
-let trait_registry = Analysis.trait_registry
+let trait_registry = Hover_docs.trait_registry
 
 (* --- workspace projects --- *)
 
@@ -443,10 +443,12 @@ let signature_help ~(text : string) ~(file : Ast.file) (pos : Position.t) :
   | None -> None
   | Some t -> (
       match List.assoc_opt t.Ast.tname trait_registry with
-      | None | Some { Analysis.ti_keys = []; _ } -> None
+      | None | Some { Hover_docs.ti_keys = []; _ } -> None
       | Some info ->
           let params =
-            List.map (fun (k, shape) -> k ^ ": " ^ shape) info.Analysis.ti_keys
+            List.map
+              (fun (k, shape) -> k ^ ": " ^ shape)
+              info.Hover_docs.ti_keys
           in
           let label =
             "@" ^ t.Ast.tname ^ "(" ^ String.concat ", " params ^ ")"
