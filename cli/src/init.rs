@@ -283,13 +283,19 @@ fn target_block(target: InitTarget, package_default: &str) -> String {
         InitTarget::Generatable(kind) => {
             let comment = match kind {
                 TargetKind::Go => {
-                    "# The Go module path other projects import; update it to your real\n\
-                     # path (e.g. \"github.com/you/project\") before publishing.\n"
+                    "# The Go module path other projects import. \"example.com\" is a\n\
+                     # placeholder (reserved for documentation, RFC 2606, so it can never\n\
+                     # collide with a real one); replace it with your real path (e.g.\n\
+                     # \"github.com/you/project\") before publishing.\n"
                 }
                 _ => "",
             };
+            let package = match kind {
+                TargetKind::Go => go_module_path(package_default),
+                _ => package_default.to_string(),
+            };
             format!(
-                "\n[target.{name}]\n{comment}enabled = true\npackage = \"{package_default}\"\nout     = \"{dir}\"\n",
+                "\n[target.{name}]\n{comment}enabled = true\npackage = \"{package}\"\nout     = \"{dir}\"\n",
                 name = kind.dir(),
                 dir = kind.dir(),
             )
@@ -301,6 +307,15 @@ fn target_block(target: InitTarget, package_default: &str) -> String {
              enabled = false\n"
         ),
     }
+}
+
+/// The placeholder Go module path for a project named `base`: `example.com`
+/// is reserved for documentation (RFC 2606) and never resolves to a real
+/// module, so it reads unambiguously as "replace me" rather than as a value
+/// that might accidentally already work. Matches Go's own tutorial
+/// convention (`go mod init example.com/mymodule`).
+fn go_module_path(base: &str) -> String {
+    format!("example.com/{base}")
 }
 
 // --- native manifest scaffolding ------------------------------------------
@@ -332,13 +347,14 @@ fn scaffold_native_manifest(kind: TargetKind, dir: &Path, package: &str) -> Resu
         TargetKind::Go => (
             "go.mod",
             format!(
-                "module {package}\n\
+                "module {module}\n\
                  \n\
                  go 1.21\n\
                  \n\
                  // Entry/client code additionally depends on the tono HTTP runtime\n\
                  // module (github.com/tono-lang/tono/runtimes/http-go), not yet\n\
-                 // published; wire a require and replace once you generate entries.\n"
+                 // published; wire a require and replace once you generate entries.\n",
+                module = go_module_path(package),
             ),
         ),
         TargetKind::TypeScript => (
@@ -522,6 +538,15 @@ mod tests {
         assert!(block.starts_with('\n'));
         assert!(block.contains("[target.rust]"));
         assert!(block.contains("package = \"acme\""));
+    }
+
+    #[test]
+    fn target_block_for_go_uses_the_example_com_placeholder() {
+        let block = target_block(InitTarget::Generatable(TargetKind::Go), "acme");
+        assert!(
+            block.contains("package = \"example.com/acme\""),
+            "go's package should be an unambiguous placeholder module path: {block}"
+        );
     }
 
     #[test]

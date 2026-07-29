@@ -70,9 +70,24 @@ fn fresh_mode_writes_manifest_and_native_manifests() {
     assert!(std::fs::read_to_string(dir.join("rust/Cargo.toml"))
         .unwrap()
         .contains("[dependencies]"));
-    assert!(std::fs::read_to_string(dir.join("go/go.mod"))
-        .unwrap()
-        .contains("go 1.21"));
+    let go_mod = std::fs::read_to_string(dir.join("go/go.mod")).unwrap();
+    assert!(go_mod.contains("go 1.21"));
+    // The manifest's [target.go].package and go.mod's module directive must
+    // agree: main.rs threads the manifest's `package` through as the Go
+    // module path for cross-package imports (see `codegen_config_for`). Both
+    // must also be an unambiguous placeholder, not a bare name that happens
+    // to double as a valid (if wrong) module path.
+    let slug = dir.file_name().unwrap().to_string_lossy().to_lowercase();
+    let expected_module = format!("example.com/{slug}");
+    assert!(
+        manifest.contains(&format!("package = \"{expected_module}\"")),
+        "{manifest}"
+    );
+    assert!(
+        go_mod.contains(&format!("module {expected_module}")),
+        "{go_mod}"
+    );
+
     assert!(std::fs::read_to_string(dir.join("typescript/package.json"))
         .unwrap()
         .contains("\"type\": \"module\""));
