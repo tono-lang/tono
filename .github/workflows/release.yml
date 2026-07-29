@@ -1,0 +1,272 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # A dry run: builds and packages all four platforms but publishes nothing,
+  # so the matrix (in particular the Rosetta-built macOS x86_64 leg) can be
+  # validated without burning a public tag.
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runner for both toolchains.
+          - target: aarch64-apple-darwin
+            os: macos-14
+            ocaml_rosetta: false
+          # Rust cross-links to x86_64 from an arm64 host with no extra tooling.
+          # OCaml has no cross-compiler, so its half of this leg runs under
+          # Rosetta 2 (pre-installed on macos-14) via the x86_64 Homebrew that
+          # image also ships at /usr/local for exactly this case.
+          - target: x86_64-apple-darwin
+            os: macos-14
+            ocaml_rosetta: true
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            ocaml_rosetta: false
+          # Native GitHub-hosted arm64 runner: no QEMU/cross needed for either
+          # toolchain.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            ocaml_rosetta: false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Compute the release version
+        id: version
+        shell: bash
+        # A dry run has no tag to read a version from, so it builds as
+        # 0.0.0-dev; nothing downstream publishes it.
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stamp the crate version
+        shell: bash
+        run: |
+          for f in backend/Cargo.toml cli/Cargo.toml; do
+            sed -i.bak "s/^version = \"0.0.0\"/version = \"${{ steps.version.outputs.version }}\"/" "$f"
+            rm -f "$f.bak"
+          done
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build the tono binary
+        # No Cargo.lock is committed, so the lockfile is generated once here
+        # and then --locked keeps this build from silently re-resolving to a
+        # newer dependency version mid-run.
+        run: |
+          cargo generate-lockfile
+          cargo build --release --locked --target ${{ matrix.target }} -p tono-cli
+
+      - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
+        if: ${{ !matrix.ocaml_rosetta }}
+        with:
+          ocaml-compiler: "5.2"
+
+      # Both OCaml binaries ship: tono shells out to tono-frontend for
+      # parse/typecheck, and tono-lsp is the standalone stdio language server
+      # editors launch.
+      - name: Build the OCaml binaries (native)
+        if: ${{ !matrix.ocaml_rosetta }}
+        run: |
+          opam install yojson lsp jsonrpc --yes
+          opam exec -- dune build frontend/bin/tono_frontend.exe lsp/tono_lsp.exe
+
+      - name: Build the OCaml binaries (x86_64 via Rosetta)
+        if: matrix.ocaml_rosetta
+        # No OCaml cross-compiler exists (confirmed: cross-compiling OCaml is
+        # not officially supported). The x86_64 Homebrew at /usr/local, run
+        # through Rosetta, installs a real x86_64 opam/OCaml toolchain, which
+        # then emits genuine x86_64 code even though the host is arm64.
+        run: |
+          arch -x86_64 /usr/local/bin/brew install opam
+          arch -x86_64 opam init --bare --yes --disable-sandboxing
+          arch -x86_64 opam switch create release 5.2.0
+          eval "$(arch -x86_64 opam env --switch=release)"
+          arch -x86_64 opam install yojson lsp jsonrpc --yes
+          arch -x86_64 dune build frontend/bin/tono_frontend.exe lsp/tono_lsp.exe
+
+      - name: Package the release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          target="${{ matrix.target }}"
+          stage="tono-${version}-${target}"
+          mkdir -p "$stage"
+          cp "target/${target}/release/tono" "$stage/tono"
+          cp "_build/default/frontend/bin/tono_frontend.exe" "$stage/tono-frontend"
+          cp "_build/default/lsp/tono_lsp.exe" "$stage/tono-lsp"
+          cp README.md LICENSE "$stage/"
+          tar czf "${stage}.tar.gz" "$stage"
+          shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            tono-*.tar.gz
+            tono-*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    # Publishing only ever happens for a tag; a dry run stops after build.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Combine per-platform checksums into one file
+        working-directory: dist
+        run: cat ./*.sha256 > SHA256SUMS
+
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+
+  homebrew:
+    name: Update the Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A multi-platform formula needs 4 independent url/sha256 pairs (macOS
+      # arm64/x86_64, Linux x86_64/arm64), which is more than the standard
+      # bump-formula actions (built for a single download URL) model, so the
+      # formula is rendered here and pushed straight to the tap with a PAT
+      # (the default GITHUB_TOKEN cannot write to a different repo).
+      - name: Render and push the formula
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          # gh's credential helper keeps the token out of the clone URL and
+          # out of process listings/logs, unlike an embedded
+          # x-access-token@ URL.
+          gh auth setup-git
+          version="${GITHUB_REF_NAME#v}"
+          sha() { cut -d' ' -f1 "tono-${version}-$1.tar.gz.sha256"; }
+
+          cat > tono.rb <<EOF
+          class Tono < Formula
+            desc "Tono language compiler: generate idiomatic SDKs from a single source"
+            homepage "https://github.com/tono-lang/tono"
+            version "${version}"
+            license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/tono-lang/tono/releases/download/${GITHUB_REF_NAME}/tono-${version}-aarch64-apple-darwin.tar.gz"
+                sha256 "$(sha aarch64-apple-darwin)"
+              end
+              on_intel do
+                url "https://github.com/tono-lang/tono/releases/download/${GITHUB_REF_NAME}/tono-${version}-x86_64-apple-darwin.tar.gz"
+                sha256 "$(sha x86_64-apple-darwin)"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/tono-lang/tono/releases/download/${GITHUB_REF_NAME}/tono-${version}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "$(sha aarch64-unknown-linux-gnu)"
+              end
+              on_intel do
+                url "https://github.com/tono-lang/tono/releases/download/${GITHUB_REF_NAME}/tono-${version}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "$(sha x86_64-unknown-linux-gnu)"
+              end
+            end
+
+            def install
+              bin.install "tono"
+              bin.install "tono-frontend"
+              bin.install "tono-lsp"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/tono version")
+            end
+          end
+          EOF
+
+          git clone https://github.com/tono-lang/homebrew-tono.git tap
+          cp tono.rb tap/Formula/tono.rb
+          cd tap
+          git config user.name "tono-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Formula/tono.rb
+          git commit -m "tono ${GITHUB_REF_NAME}"
+          git push
+
+  pages:
+    name: Publish install script to GitHub Pages
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Assemble the Pages site
+        run: |
+          mkdir -p site
+          cp scripts/install.sh site/install.sh
+          cat > site/index.html <<'EOF'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>tono install</title>
+          <pre>curl -fsSL https://tono-lang.github.io/tono/install.sh | sh</pre>
+          EOF
+
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
