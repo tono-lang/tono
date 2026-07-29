@@ -15,3 +15,24 @@ multiple languages. Polyglot monorepo - OCaml frontend, Rust backend.
 
 - OCaml (`frontend/`, `lsp/`): `dune build`
 - Rust (`backend/`, `cli/`): `cargo build`
+
+## Install
+
+```sh
+curl -fsSL https://tono-lang.github.io/tono/install.sh | sh
+```
+
+Or via Homebrew:
+
+```sh
+brew install tono-lang/tono/tono
+```
+
+Prebuilt archives for macOS (arm64/x86_64) and Linux (x86_64/arm64) are also
+attached directly to each [release](https://github.com/tono-lang/tono/releases).
+
+## Update
+
+- Homebrew: `brew upgrade tono`
+- Install script: re-run the curl command above
+- Manual: download the latest release archive for your platform

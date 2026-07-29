@@ -1,0 +1,241 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runner for both toolchains.
+          - target: aarch64-apple-darwin
+            os: macos-14
+            ocaml_rosetta: false
+          # Rust cross-links to x86_64 from an arm64 host with no extra tooling.
+          # OCaml has no cross-compiler, so its half of this leg runs under
+          # Rosetta 2 (pre-installed on macos-14) via the x86_64 Homebrew that
+          # image also ships at /usr/local for exactly this case.
+          - target: x86_64-apple-darwin
+            os: macos-14
+            ocaml_rosetta: true
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            ocaml_rosetta: false
+          # Native GitHub-hosted arm64 runner: no QEMU/cross needed for either
+          # toolchain.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            ocaml_rosetta: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compute the release version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp the crate version
+        shell: bash
+        run: |
+          for f in backend/Cargo.toml cli/Cargo.toml; do
+            sed -i.bak "s/^version = \"0.0.0\"/version = \"${{ steps.version.outputs.version }}\"/" "$f"
+            rm -f "$f.bak"
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build the tono binary
+        run: cargo build --release --target ${{ matrix.target }} -p tono-cli
+
+      - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
+        if: ${{ !matrix.ocaml_rosetta }}
+        with:
+          ocaml-compiler: "5.2"
+
+      - name: Build the OCaml frontend (native)
+        if: ${{ !matrix.ocaml_rosetta }}
+        run: |
+          opam install yojson --yes
+          opam exec -- dune build frontend/bin/tono_frontend.exe
+
+      - name: Build the OCaml frontend (x86_64 via Rosetta)
+        if: matrix.ocaml_rosetta
+        # No OCaml cross-compiler exists (confirmed: cross-compiling OCaml is
+        # not officially supported). The x86_64 Homebrew at /usr/local, run
+        # through Rosetta, installs a real x86_64 opam/OCaml toolchain, which
+        # then emits genuine x86_64 code even though the host is arm64.
+        run: |
+          arch -x86_64 /usr/local/bin/brew install opam
+          arch -x86_64 opam init --bare --yes --disable-sandboxing
+          arch -x86_64 opam switch create release 5.2.0
+          eval "$(arch -x86_64 opam env --switch=release)"
+          arch -x86_64 opam install yojson --yes
+          arch -x86_64 dune build frontend/bin/tono_frontend.exe
+
+      - name: Package the release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          target="${{ matrix.target }}"
+          stage="tono-${version}-${target}"
+          mkdir -p "$stage"
+          cp "target/${target}/release/tono" "$stage/tono"
+          cp "_build/default/frontend/bin/tono_frontend.exe" "$stage/tono-frontend"
+          cp README.md LICENSE "$stage/"
+          tar czf "${stage}.tar.gz" "$stage"
+          shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            tono-*.tar.gz
+            tono-*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Combine per-platform checksums into one file
+        working-directory: dist
+        run: cat ./*.sha256 > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+
+  homebrew:
+    name: Update the Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A multi-platform formula needs 4 independent url/sha256 pairs (macOS
+      # arm64/x86_64, Linux x86_64/arm64), which is more than the standard
+      # bump-formula actions (built for a single download URL) model, so the
+      # formula is rendered here and pushed straight to the tap with a PAT
+      # (the default GITHUB_TOKEN cannot write to a different repo).
+      - name: Render and push the formula
+        working-directory: dist
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sha() { cut -d' ' -f1 "tono-${version}-$1.tar.gz.sha256"; }
+
+          cat > tono.rb <<EOF
+          class Tono < Formula
+            desc "Tono language compiler: generate idiomatic SDKs from a single source"
+            homepage "https://github.com/tono-lang/tono"
+            version "${version}"
+            license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/tono-lang/tono/releases/download/${GITHUB_REF_NAME}/tono-${version}-aarch64-apple-darwin.tar.gz"
+                sha256 "$(sha aarch64-apple-darwin)"
+              end
+              on_intel do
+                url "https://github.com/tono-lang/tono/releases/download/${GITHUB_REF_NAME}/tono-${version}-x86_64-apple-darwin.tar.gz"
+                sha256 "$(sha x86_64-apple-darwin)"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/tono-lang/tono/releases/download/${GITHUB_REF_NAME}/tono-${version}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "$(sha aarch64-unknown-linux-gnu)"
+              end
+              on_intel do
+                url "https://github.com/tono-lang/tono/releases/download/${GITHUB_REF_NAME}/tono-${version}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "$(sha x86_64-unknown-linux-gnu)"
+              end
+            end
+
+            def install
+              bin.install "tono"
+              bin.install "tono-frontend"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/tono version")
+            end
+          end
+          EOF
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/tono-lang/homebrew-tono.git" tap
+          cp tono.rb tap/Formula/tono.rb
+          cd tap
+          git config user.name "tono-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Formula/tono.rb
+          git commit -m "tono ${GITHUB_REF_NAME}"
+          git push
+
+  pages:
+    name: Publish install script to GitHub Pages
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assemble the Pages site
+        run: |
+          mkdir -p site
+          cp scripts/install.sh site/install.sh
+          cat > site/index.html <<'EOF'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>tono install</title>
+          <pre>curl -fsSL https://tono-lang.github.io/tono/install.sh | sh</pre>
+          EOF
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

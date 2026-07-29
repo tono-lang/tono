@@ -7,5 +7,5 @@ pub mod config;
 pub mod ir;
 
 pub fn version() -> &'static str {
-    "0.0.0"
+    env!("CARGO_PKG_VERSION")
 }
