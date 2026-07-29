@@ -209,6 +209,24 @@ fn update_mode_explains_a_declared_but_disabled_target() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `--root` writes `[project].root`, which update mode never rewrites, so a
+/// run that cannot honour the flag says so rather than appearing to take it.
+#[test]
+fn root_is_reported_as_ignored_when_the_manifest_already_exists() {
+    let dir = tmpdir("root-ignored");
+    let (ok, _, stderr) = init(&dir, &["--yes", "--target", "rust"]);
+    assert!(ok, "init failed: {stderr}");
+
+    let (ok, _, stderr) = init(&dir, &["--yes", "--target", "go", "--root", "src"]);
+    assert!(ok, "update init failed: {stderr}");
+    assert!(stderr.contains("--root is ignored"), "{stderr}");
+    // The flag really is inert: [project] keeps whatever it had.
+    let manifest = std::fs::read_to_string(dir.join("tono.toml")).unwrap();
+    assert!(!manifest.contains("root ="), "{manifest}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn unknown_target_is_a_hard_error() {
     let dir = tmpdir("unknown-target");

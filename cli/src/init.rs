@@ -65,7 +65,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     match crate::discover_manifest() {
-        Ok(manifest_path) => run_update(&manifest_path, &targets_csv, yes),
+        Ok(manifest_path) => {
+            // `--root` writes `[project].root`, and update mode never rewrites
+            // what the manifest already says. Silently dropping the flag would
+            // look like it took effect, so say where it did not apply.
+            if root_flag.is_some() {
+                eprintln!(
+                    "--root is ignored: {} already exists and its [project] is left as it is",
+                    manifest_path.display()
+                );
+            }
+            run_update(&manifest_path, &targets_csv, yes)
+        }
         Err(_) => run_fresh(&targets_csv, yes, root_flag.as_deref()),
     }
 }
@@ -253,6 +264,11 @@ fn run_fresh(
     let interactive = is_interactive(yes);
 
     let targets = resolve_targets(targets_csv, yes, &BTreeSet::new())?;
+    // A manifest with no target generates nothing, and `tono gen` would only
+    // fail on it later; stop here, where the reason is still in view.
+    if targets.is_empty() {
+        return Err("no targets selected; a manifest with no target generates nothing".to_string());
+    }
 
     let scanned_root = detect_root(&cwd);
     let root = if let Some(r) = root_flag {
@@ -534,40 +550,70 @@ fn slugify(name: &str) -> String {
 
 // --- interactive prompts ---------------------------------------------------
 
-fn prompt_yes_no(question: &str, default_yes: bool) -> bool {
-    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
-    print!("{question} {suffix} ");
-    let _ = io::stdout().flush();
-    let mut line = String::new();
-    if io::stdin().read_line(&mut line).is_err() {
-        return default_yes;
-    }
+/// Interpret an answer to a yes/no prompt. A blank line takes the default, and
+/// so does anything unrecognized: the offered answer is already on screen, and
+/// proceeding with it beats interrogating someone who typed a stray character.
+fn parse_yes_no(line: &str, default_yes: bool) -> bool {
     match line.trim().to_lowercase().as_str() {
-        "" => default_yes,
         "y" | "yes" => true,
         "n" | "no" => false,
         _ => default_yes,
     }
 }
 
-fn prompt_text(question: &str, default: &str) -> String {
-    print!("{question} [{default}]: ");
-    let _ = io::stdout().flush();
+/// Interpret an answer to a text prompt: a blank line takes the default.
+fn parse_text(line: &str, default: &str) -> String {
+    match line.trim() {
+        "" => default.to_string(),
+        answer => answer.to_string(),
+    }
+}
+
+/// Ask, on stderr so a redirected stdout never swallows the question, and read
+/// the answer. A stdin that cannot be read is not worth stalling over: the
+/// default stands, which is the same thing an empty line means.
+fn ask(question: &str) -> String {
+    eprint!("{question}");
+    let _ = io::stderr().flush();
     let mut line = String::new();
-    if io::stdin().read_line(&mut line).is_err() {
-        return default.to_string();
+    match io::stdin().read_line(&mut line) {
+        Ok(_) => line,
+        Err(_) => String::new(),
     }
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    }
+}
+
+fn prompt_yes_no(question: &str, default_yes: bool) -> bool {
+    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
+    parse_yes_no(&ask(&format!("{question} {suffix} ")), default_yes)
+}
+
+fn prompt_text(question: &str, default: &str) -> String {
+    parse_text(&ask(&format!("{question} [{default}]: ")), default)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_yes_no_falls_back_to_the_offered_answer() {
+        assert!(parse_yes_no("y", false));
+        assert!(parse_yes_no("YES\n", false));
+        assert!(!parse_yes_no(" No ", true));
+        assert!(!parse_yes_no("n", true));
+        // Blank and unrecognized both take the default rather than re-asking.
+        assert!(parse_yes_no("", true));
+        assert!(!parse_yes_no("", false));
+        assert!(parse_yes_no("maybe", true));
+        assert!(!parse_yes_no("maybe", false));
+    }
+
+    #[test]
+    fn parse_text_takes_the_default_only_when_blank() {
+        assert_eq!(parse_text("  api  \n", "fallback"), "api");
+        assert_eq!(parse_text("", "fallback"), "fallback");
+        assert_eq!(parse_text("   \n", "fallback"), "fallback");
+    }
 
     #[test]
     fn slugify_lowercases_and_collapses_separators() {
