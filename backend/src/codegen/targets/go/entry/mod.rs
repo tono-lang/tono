@@ -289,6 +289,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let mut helpers = Helpers::default();
     let mut shared = surface::config_structs(module, config);
     shared.extend(hook_wrapper_decls(&bound, &entries, multi));
+    shared.extend(output_decode_decls(&entries, module, &bound));
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
@@ -310,6 +311,39 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         per_entry.push((entry.name.to_string(), decls));
     }
     EntryEmission { shared, per_entry }
+}
+
+/// The per-type output-decode helpers every operation that decodes a body
+/// needs (a protocol response or a raw bespoke outcome), deduped by shape so
+/// operations sharing an output type share one `Decode<Type>` instead of each
+/// repeating its required-member probe.
+fn output_decode_decls(
+    entries: &[EntryModel<'_>],
+    module: &Module,
+    bound: &[BoundExtension<'_>],
+) -> Vec<Decl> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut decls = Vec::new();
+    for entry in entries {
+        for op in entry.operations {
+            let decodes_body =
+                wire_descriptor(op).is_some() || impl_binding(bound, &op.id).is_some_and(|b| b.raw);
+            if !decodes_body {
+                continue;
+            }
+            let (_, output) = crate::codegen::ops::op_io(op);
+            let Some(Tref::Ref { id, .. }) = output else {
+                continue;
+            };
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+                decls.extend(decode::output_decode_decl(shape));
+            }
+        }
+    }
+    decls
 }
 
 /// The SDK-root groups this target emits, each named for what it holds.

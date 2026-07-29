@@ -161,7 +161,10 @@ fn the_method_maps_the_raw_outcome_onto_the_taxonomy() {
     assert!(serde.contains("case tonohttp.OutcomeTransport:"));
     assert!(serde.contains("&TransportError{Cause: outcome.Cause}"));
     assert!(serde.contains("DecodeSaveNoteError(outcome.Status, []byte(outcome.Body))"));
-    assert!(serde.contains("&DecodeError{Path: \"$\", Expected: \"Note\", Raw: outcome.Body}"));
+    // The required-member probe lives once per type (DecodeNote); the call
+    // site only routes the returned path into its own DecodeError.
+    assert!(serde.contains("out, path, ok := DecodeNote([]byte(outcome.Body))"));
+    assert!(serde.contains("&DecodeError{Path: path, Expected: \"Note\", Raw: outcome.Body}"));
 }
 
 #[test]
@@ -519,19 +522,22 @@ fn a_constrained_op_input_is_validated_before_transport() {
 fn a_structured_output_decodes_strictly_on_required_members() {
     let module = with_descriptors(fixture_module());
     let serde = entry_text(&module);
-    // The 2xx output is probed for its required members (a zero value is not a
-    // present value) and a missing one surfaces a DecodeError, not a zeroed
-    // struct. The probe reads the wire key.
+    // The probe lives once per type, in DecodeNote: a required member (a
+    // zero value is not a present value) missing or null fails, naming its
+    // own path; a whole-body parse failure points at the root. Unknown
+    // fields are still tolerated (a plain Unmarshal into the struct).
+    assert!(serde.contains("var noteRequiredFields = []string{\"id\", \"body\"}"));
+    assert!(serde.contains("func DecodeNote(raw []byte) (Note, string, bool) {"));
     assert!(serde.contains("var probe map[string]json.RawMessage"));
-    assert!(serde.contains("if rv, ok := probe[\"id\"]; !ok || string(rv) == \"null\" {"));
-    assert!(serde.contains("if rv, ok := probe[\"body\"]; !ok || string(rv) == \"null\" {"));
-    // A missing required member points at that member, not the whole body.
-    assert!(serde.contains("&DecodeError{Path: \"$.id\", Expected: \"Note\", Raw: outcome.Body}"));
-    assert!(serde.contains("&DecodeError{Path: \"$.body\", Expected: \"Note\", Raw: outcome.Body}"));
-    // A whole-body parse failure still points at the root.
-    assert!(serde.contains("&DecodeError{Path: \"$\", Expected: \"Note\", Raw: outcome.Body}"));
-    // Unknown fields are still tolerated (a plain Unmarshal into the struct).
+    assert!(serde.contains("for _, field := range noteRequiredFields {"));
+    assert!(serde.contains("if rv, ok := probe[field]; !ok || string(rv) == \"null\" {"));
+    assert!(serde.contains("return Note{}, \"$.\" + field, false"));
+    assert!(serde.contains("return Note{}, \"$\", false"));
     assert!(serde.contains("var out Note"));
+    // The call site routes DecodeNote's returned path into its own error,
+    // never reemitting the probe.
+    assert!(serde.contains("out, path, ok := DecodeNote([]byte(outcome.Body))"));
+    assert!(serde.contains("&DecodeError{Path: path, Expected: \"Note\", Raw: outcome.Body}"));
 }
 
 #[test]

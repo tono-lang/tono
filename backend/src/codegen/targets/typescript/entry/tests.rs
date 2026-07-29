@@ -277,17 +277,22 @@ fn a_constrained_op_input_is_validated_before_transport() {
 fn a_structured_output_decodes_strictly_on_required_members() {
     let module = with_descriptors(fixture_module());
     let out = text(&module);
-    // The 2xx output checks its required members before decoding; a missing one
-    // surfaces a DecodeError instead of an undefined field. Unknown fields are
-    // tolerated (decodeNote maps only what it knows).
-    assert!(out.contains("if (!(\"id\" in raw) || raw[\"id\"] === null) {"));
-    assert!(out.contains("if (!(\"body\" in raw) || raw[\"body\"] === null) {"));
-    // A missing required member points at that member, not the whole body.
-    assert!(out.contains("throw new DecodeError(\"$.id\", \"Note\", outcome.body);"));
-    assert!(out.contains("throw new DecodeError(\"$.body\", \"Note\", outcome.body);"));
-    // A whole-body parse failure still points at the root.
-    assert!(out.contains("throw new DecodeError(\"$\", \"Note\", outcome.body);"));
-    assert!(out.contains("out = decodeNote(raw);"));
+    // The probe lives once per type, in parseNote: a required member (a
+    // missing key or a null value counts as absent) fails, naming its own
+    // path; a whole-body parse failure points at the root. Unknown fields
+    // are still tolerated (decodeNote maps only what it knows).
+    assert!(out.contains("const noteRequiredFields = [\"id\", \"body\"] as const;"));
+    assert!(out.contains("function parseNote(raw: string): Note {"));
+    assert!(out.contains("for (const field of noteRequiredFields) {"));
+    assert!(out.contains("if (!(field in obj) || obj[field] === null) {"));
+    assert!(out.contains("throw \"$.\" + field;"));
+    assert!(out.contains("throw \"$\";"));
+    assert!(out.contains("return decodeNote(obj);"));
+    // The call site routes parseNote's thrown path into its own error, never
+    // reemitting the probe.
+    assert!(out.contains("return parseNote(outcome.body);"));
+    assert!(out.contains("} catch (path) {"));
+    assert!(out.contains("throw new DecodeError(path as string, \"Note\", outcome.body);"));
 }
 
 #[test]
@@ -392,9 +397,11 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
     assert!(out.contains("throw decodeSaveNoteError(outcome.code, outcome.body);"));
     assert!(out.contains("code === \"overloaded\""));
     assert!(out.contains("return new APIError(0, body);"));
-    // The success payload decodes exactly as a protocol response does.
-    assert!(out.contains("raw = JSON.parse(outcome.body);"));
-    assert!(out.contains("new DecodeError(\"$.id\", \"Note\", outcome.body)"));
+    // The success payload decodes exactly as a protocol response does,
+    // through the same per-type parseNote a protocol operation returning
+    // Note shares.
+    assert!(out.contains("return parseNote(outcome.body);"));
+    assert!(out.contains("new DecodeError(path as string, \"Note\", outcome.body)"));
     assert!(
         out.contains("function saveNote(settings: Settings, payload: string): Promise<Outcome>")
     );

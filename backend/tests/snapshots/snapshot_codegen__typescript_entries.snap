@@ -155,8 +155,8 @@ import { strUpperSnake } from "../casing";
 import { durationToMs } from "../duration";
 import { readEnv } from "../env";
 import { CanonicalTransport, ClientOptions, WireDescriptor, assertExclusiveTransport, execute } from "@tono/http-runtime-ts";
-import { decodeCredentials, decodeNote, decodeOverloaded, encodeNote } from "./codec";
-import { APIError, ConfigError, Credentials, DecodeError, Duration, Note, OverloadedError, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./types";
+import { decodeCredentials, decodeOverloaded, encodeNote } from "./codec";
+import { APIError, ConfigError, Credentials, DecodeError, Duration, Note, OverloadedError, TonoError, TransportError, ValidationError, Violation, parseNote, validateCredentials } from "./types";
 
 // Settings are the resolved construction values of the client entry,
 // handed to the client_init hook before validation: bespoke code may
@@ -418,28 +418,11 @@ export class Client {
     if (outcome.outcome === "error") {
       throw decodeSaveNoteError(outcome.status, outcome.body);
     }
-    let raw: any;
     try {
-      raw = JSON.parse(outcome.body);
-    } catch {
-      throw new DecodeError("$", "Note", outcome.body);
+      return parseNote(outcome.body);
+    } catch (path) {
+      throw new DecodeError(path as string, "Note", outcome.body);
     }
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new DecodeError("$", "Note", outcome.body);
-    }
-      if (!("id" in raw) || raw["id"] === null) {
-        throw new DecodeError("$.id", "Note", outcome.body);
-      }
-      if (!("body" in raw) || raw["body"] === null) {
-        throw new DecodeError("$.body", "Note", outcome.body);
-      }
-    let out: Note;
-    try {
-      out = decodeNote(raw);
-    } catch {
-      throw new DecodeError("$", "Note", outcome.body);
-    }
-    return out;
   }
 }
 
@@ -503,6 +486,34 @@ export function decodeCredentials(raw: any): Credentials {
 interface Conf {
   apiKey: string;
   region: string;
+}
+
+/** The members Note's declared shape requires present. */
+const noteRequiredFields = ["id", "body"] as const;
+
+/**
+ * Parses a Note from its wire JSON: every required member must be
+ * present (a null value counts as absent) before the typed decode
+ * runs. Throws the failed path (`$` for the whole body, `$.field` for
+ * a missing member) as a plain string, for the caller to build its
+ * own DecodeError.
+ */
+function parseNote(raw: string): Note {
+  let obj: any;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    throw "$";
+  }
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+    throw "$";
+  }
+  for (const field of noteRequiredFields) {
+    if (!(field in obj) || obj[field] === null) {
+      throw "$." + field;
+    }
+  }
+  return decodeNote(obj);
 }
 
 // ==== typescript/notes/index.ts ====

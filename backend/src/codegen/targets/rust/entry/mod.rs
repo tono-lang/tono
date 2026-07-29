@@ -441,7 +441,19 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     }
     let multi = entries.len() > 1;
     let bound = bound_extensions(module, &BINDING_LANGS);
-    let shared = surface::config_structs(module, config);
+    let mut shared = surface::config_structs(module, config);
+    let decode_decls = output_decode_decls(&entries, module, &bound);
+    if !decode_decls.is_empty() {
+        // The decode helpers name TonoError/DecodeError as bare text, the
+        // same glob-import technique the per-entry groups use below.
+        shared.insert(
+            0,
+            crate::codegen::targets::rust::emit::types_glob_use(
+                &crate::codegen::group::Group::types(&module.name),
+            ),
+        );
+        shared.extend(decode_decls);
+    }
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
@@ -651,6 +663,38 @@ fn op_method(
         opname = op_local_name(&op.id),
         validate_block = indent(&validate_block, 2),
     )
+}
+
+/// The per-type output-decode helpers every protocol operation needs
+/// (`decode::success_block` is called only for the protocol path here — a
+/// bespoke impl, typed or raw, handles its own output without it), deduped
+/// by shape so operations sharing an output type share one `decode_<type>`
+/// instead of each repeating its required-member probe.
+fn output_decode_decls(
+    entries: &[EntryModel<'_>],
+    module: &Module,
+    _bound: &[BoundExtension<'_>],
+) -> Vec<Decl> {
+    let mut seen = BTreeSet::new();
+    let mut decls = Vec::new();
+    for entry in entries {
+        for op in entry.operations {
+            if wire_descriptor(op).is_none() {
+                continue;
+            }
+            let (_, output) = op_io(op);
+            let Some(Tref::Ref { id, .. }) = output else {
+                continue;
+            };
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+                decls.extend(decode::output_decode_decl(shape));
+            }
+        }
+    }
+    decls
 }
 
 mod checks;
