@@ -152,9 +152,13 @@ jobs:
       - name: Render and push the formula
         working-directory: dist
         env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
+          # gh's credential helper keeps the token out of the clone URL and
+          # out of process listings/logs, unlike an embedded
+          # x-access-token@ URL.
+          gh auth setup-git
           version="${GITHUB_REF_NAME#v}"
           sha() { cut -d' ' -f1 "tono-${version}-$1.tar.gz.sha256"; }
 
@@ -198,7 +202,7 @@ jobs:
           end
           EOF
 
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/tono-lang/homebrew-tono.git" tap
+          git clone https://github.com/tono-lang/homebrew-tono.git tap
           cp tono.rb tap/Formula/tono.rb
           cd tap
           git config user.name "tono-release-bot"
