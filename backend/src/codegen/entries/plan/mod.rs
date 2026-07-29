@@ -338,13 +338,27 @@ pub trait Emitter {
     fn assign_expr(&self, dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{dest} = {expr}{}", self.term()))
     }
-    /// Wrap the head's error as the reason this field is still deferred: the
-    /// edge being consumed wraps the cause, naming the head that failed; the
-    /// head's own resolver already named the concrete source. Message
+    /// The expression wrapping the head's already-open error as this field's
+    /// own deferred cause, naming the head that failed (`head_err` is
+    /// `self.err_ident(head)`, already computed by every caller). `wrap_from`
+    /// and `env_name_prereq` both build exactly this value (an assignment vs.
+    /// an inline guard body), so it is spelled once per target here. Message
     /// composition is not uniform across targets (Go/TS concatenate with
     /// `+`; Rust has no `&str + &str` and reads the head's error through an
     /// `Option`), so this stays per-target rather than a shared default.
-    fn wrap_from(&self, err_field: &str, head: &str) -> Leaf;
+    fn wrap_error_expr(&self, head: &str, head_err: &str) -> String;
+    /// Wrap the head's error as the reason this field is still deferred: the
+    /// edge being consumed wraps the cause, naming the head that failed; the
+    /// head's own resolver already named the concrete source.
+    fn wrap_from(&self, err_field: &str, head: &str) -> Leaf {
+        let head_err = self.err_ident(head);
+        Leaf(format!(
+            "{} = {}{}",
+            self.err_ident(err_field),
+            self.wrap_error_expr(head, &head_err),
+            self.term()
+        ))
+    }
     /// A `ConfigError` construction expression for a leaf failure (nothing
     /// upstream to wrap yet): a raw string literal in Go, a `new
     /// ConfigError(...)` call in TS, a struct literal in Rust. `cause` is the

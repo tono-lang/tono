@@ -253,14 +253,9 @@ impl Emitter for Resolver<'_, '_> {
         Cond(format!("{} === undefined", self.err_ident(field_name)))
     }
 
-    fn wrap_from(&self, err_field: &str, head: &str) -> Leaf {
-        let head_err = self.err_ident(head);
+    fn wrap_error_expr(&self, head: &str, head_err: &str) -> String {
         let message = format!("`{head} <- ${{{head_err}.message}}`");
-        Leaf(format!(
-            "{} = {};",
-            self.err_ident(err_field),
-            self.config_error_expr(&message, Some(&head_err)),
-        ))
+        self.config_error_expr(&message, Some(head_err))
     }
 
     fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
@@ -274,10 +269,9 @@ impl Emitter for Resolver<'_, '_> {
             return String::new();
         }
         let head_err = self.err_ident(head);
-        let message = format!("`{head} <- ${{{head_err}.message}}`");
         format!(
             "if ({head_err} !== undefined) {{\n  {err} = {};\n}} else ",
-            self.config_error_expr(&message, Some(&head_err)),
+            self.wrap_error_expr(head, &head_err),
         )
     }
 

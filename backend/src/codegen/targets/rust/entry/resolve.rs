@@ -350,16 +350,12 @@ impl Emitter for Resolver<'_, '_> {
         format!("ConfigError {{ message: {message_expr} }}")
     }
 
-    /// Wrap the head's error as this field's own, borrowing the head's
-    /// message rather than moving or cloning it (`ConfigError` has no
-    /// `PartialEq`/`Clone` — its would-be cause is a `Box<dyn Error>` — and
-    /// the head may still be read by another consumer later).
-    fn wrap_from(&self, err_field: &str, head: &str) -> Leaf {
-        let head_err = self.err_ident(head);
-        let err_field_ident = self.err_ident(err_field);
-        Leaf(format!(
-            "{err_field_ident} = {head_err}.as_ref().map(|e| ConfigError {{ message: format!(\"{head} <- {{}}\", e.message) }});"
-        ))
+    /// Borrows the head's message rather than moving or cloning it
+    /// (`ConfigError` has no `PartialEq`/`Clone` — its would-be cause is a
+    /// `Box<dyn Error>` — and the head may still be read by another consumer
+    /// later).
+    fn wrap_error_expr(&self, head: &str, head_err: &str) -> String {
+        format!("{head_err}.as_ref().map(|e| ConfigError {{ message: format!(\"{head} <- {{}}\", e.message) }})")
     }
 
     fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
@@ -374,7 +370,8 @@ impl Emitter for Resolver<'_, '_> {
         }
         let head_err = self.err_ident(head);
         format!(
-            "if {head_err}.is_some() {{\n    {err} = {head_err}.as_ref().map(|e| ConfigError {{ message: format!(\"{head} <- {{}}\", e.message) }});\n}} else ",
+            "if {head_err}.is_some() {{\n    {err} = {};\n}} else ",
+            self.wrap_error_expr(head, &head_err),
         )
     }
 
