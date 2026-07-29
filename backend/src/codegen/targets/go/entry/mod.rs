@@ -788,6 +788,6 @@ mod surface;
 #[cfg(test)]
 mod tests;
 
-use constructor::{new_decl, why_var};
+use constructor::{err_var, new_decl};
 use resolve::Resolver;
 use surface::method_signature;

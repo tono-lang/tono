@@ -79,7 +79,9 @@ fn the_resolution_mirrors_the_go_spelling() {
     assert!(out.contains("s.clientKey = strUpperSnake((s.clientName).trim());"));
     assert!(out.contains("switch (s.endpointVersion) {"));
     assert!(out.contains("case \"v1\": {"));
-    assert!(out.contains("endpointWhy = \"endpoint_v1 <- \" + endpointV1Why;"));
+    assert!(out.contains(
+        "endpointErr = new ConfigError(`endpoint_v1 <- ${endpointV1Err.message}`, endpointV1Err);"
+    ));
     assert!(out.contains("composed.apiKey = s.apiKey;"));
     // Values freeze under canonical dotted names; bigints narrow, the
     // duration flows in milliseconds.
@@ -166,7 +168,7 @@ fn a_structured_source_falls_back_across_multiple_envs() {
         .find("readEnv(\"SERVICE_CREDENTIALS_FALLBACK\")")
         .expect("fallback lookup");
     let guard = out[..fallback]
-        .rfind("if (credsWhy !== \"\") {")
+        .rfind("if (credsErr !== undefined) {")
         .expect("fallback guard");
     let primary = out
         .find("readEnv(\"SERVICE_CREDENTIALS\")")
@@ -195,12 +197,12 @@ fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
     );
     let out = text(&module);
     // The reason var is hoisted above the config block so the require can read it.
-    assert!(out.contains("let settingsMaxConnsWhy = \"no source\";"));
+    assert!(out.contains("let settingsMaxConnsErr: ConfigError | undefined;"));
     // The require reads the reason, never the (possibly legitimately zero) value.
-    assert!(out.contains("if (settingsMaxConnsWhy !== \"\") {"));
-    assert!(
-        out.contains("throw new ConfigError(\"settings.max_conns <- \" + settingsMaxConnsWhy);")
-    );
+    assert!(out.contains("if (settingsMaxConnsErr !== undefined) {"));
+    assert!(out.contains(
+        "throw new ConfigError(\"settings.max_conns <- \" + settingsMaxConnsErr.message, settingsMaxConnsErr);"
+    ));
     // It is not compared against the numeric zero (that would reject a real 0).
     assert!(!out.contains("s.settings.maxConns === 0"));
 }
@@ -446,9 +448,11 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     // An enum field is a branded string: cast at the boundary, frozen.
     assert!(out.contains("s.mode = v as Mode;"));
     assert!(out.contains("values[\"mode\"] = s.mode;"));
-    // Guaranteed and why-tracked dynamic env names.
+    // Guaranteed and error-tracked dynamic env names.
     assert!(out.contains("readEnv(s.sureName)"));
-    assert!(out.contains("dynamicWhy = \"naming <- \" + namingWhy;"));
+    assert!(
+        out.contains("dynamicErr = new ConfigError(`naming <- ${namingErr.message}`, namingErr);")
+    );
     // Transforms compose innermost-first; the input placeholder renders empty.
     assert!(out.contains("strUpperSnake(strPascal(strKebab(strSnake(("));
     // Both select flavors, the guaranteed one failing on an undeclared value.
@@ -585,8 +589,8 @@ fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
     // The member's switch only runs once the why-tracked subject resolved, an
     // arm reading an absent chain assigns only when that chain resolved, and
     // an inline source arm keeps the presence-only member spelling.
-    assert!(out.contains("if (endpointWhy === \"\") {"));
-    assert!(out.contains("if (endpointV1Why === \"\") {"));
+    assert!(out.contains("if (endpointErr === undefined) {"));
+    assert!(out.contains("if (endpointV1Err === undefined) {"));
     assert!(out.contains("readEnv(\"ZONE\")"));
 }
 
@@ -598,7 +602,7 @@ fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presen
     assert!(out.contains("if (s.secret.length === 0) {"));
     // The numeric constraint skips when the chain reported absent and the
     // bridge left the zero in place (same presence rule as the requires).
-    assert!(out.contains("(portWhy === \"\" || s.port !== 0) &&"));
+    assert!(out.contains("(portErr === undefined || s.port !== 0) &&"));
 }
 
 #[test]

@@ -80,8 +80,8 @@ pub(super) fn arg_snake(name: &str, traits: &[Trait], lang: &str) -> String {
     )
 }
 
-pub(super) fn why_var(field: &str) -> String {
-    snake(&format!("{field}_why"))
+pub(super) fn err_var(field: &str) -> String {
+    snake(&format!("{field}_err"))
 }
 
 pub(super) fn field_snake(name: &str, config: &CasingConfig) -> String {

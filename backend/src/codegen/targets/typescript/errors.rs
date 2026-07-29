@@ -166,8 +166,13 @@ fn taxonomy_decls(liveness: &TaxonomyLiveness) -> Vec<Decl> {
     if liveness.config {
         // Construction failures (a required source that resolved to nothing) ride
         // their own category so a caller can tell a misconfigured client from a
-        // request or transport failure.
-        decls.push(category(&n.config, "message: string", "message"));
+        // request or transport failure. `cause` carries the source's own failure
+        // the message wraps in (absent for a leaf failure with nothing to wrap).
+        decls.push(category(
+            &n.config,
+            "message: string, readonly cause?: unknown",
+            "message",
+        ));
     }
     decls
 }

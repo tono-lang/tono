@@ -31,8 +31,12 @@ impl Resolver<'_, '_> {
 
     /// The prereq guard when the env variable's own name comes from a sibling
     /// field that may itself be absent. Returns the opened guard text (the env
-    /// step closes it), or empty when the name is guaranteed.
-    fn env_name_prereq(&self, name: &EnvName, why: &str) -> String {
+    /// step closes it), or empty when the name is guaranteed. `err` is
+    /// already the derived identifier of the field being resolved (as every
+    /// caller of this helper holds it, not the bare field name `wrap_from`
+    /// takes), so the wrap is built directly here rather than through
+    /// `wrap_from`.
+    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
         let EnvName::Field(fr) = name else {
             return String::new();
         };
@@ -42,9 +46,11 @@ impl Resolver<'_, '_> {
         if self.guaranteed(head) {
             return String::new();
         }
+        let head_err = self.err_ident(head);
+        let message = format!("\"{head} <- \" + {head_err}.Error()");
         format!(
-            "if {head_why} != \"\" {{\n\t{why} = \"{head} <- \" + {head_why}\n}} else ",
-            head_why = why_var(head),
+            "if {head_err} != nil {{\n\t{err} = {}\n}} else ",
+            self.config_error_expr(&message, Some(&head_err)),
         )
     }
 
@@ -152,49 +158,49 @@ impl Resolver<'_, '_> {
         (concat, absent_deps)
     }
 
-    /// The `@arg`/why-var opening shared by the structured and whole-JSON
+    /// The `@arg`/error-var opening shared by the structured and whole-JSON
     /// decodes: an `@arg` value passes typed (returns `None`, having written the
-    /// assignment), otherwise the why-var opens and `(dest, why)` are returned so
-    /// the caller can lay out the `@with`/`@env`/`@default` fallback cascade.
+    /// assignment), otherwise the error var opens and `(dest, err)` are returned
+    /// so the caller can lay out the `@with`/`@env`/`@default` fallback cascade.
     fn decode_opening(&mut self, field: &EntryField, out: &mut String) -> Option<(String, String)> {
         let dest = self.ident(&field.name);
         if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
             out.push_str(&format!("{dest} = {}", self.arg_ident(field)));
             return None;
         }
-        let why = why_var(&field.name);
-        out.push_str(&format!("{why} := \"no source\"\n"));
-        Some((dest, why))
+        let err = err_var(&field.name);
+        out.push_str(&format!("var {err} error\n"));
+        Some((dest, err))
     }
 
-    /// Lay out a decode field's source cascade below the why-var opening: the
-    /// first source runs unconditionally, every later one only while the why-var
-    /// is still set (a first-present-wins fallback). Each `@env` step is built by
-    /// `env_block` from its own `(lookup, label, miss, prereq)`; `@with` and
-    /// `@default` are spelled inline.
+    /// Lay out a decode field's source cascade below the error-var opening: the
+    /// first source runs unconditionally, every later one only while the error
+    /// var is still set (a first-present-wins fallback). Each `@env` step is
+    /// built by `env_block` from its own `(lookup, label, miss, prereq)`; `@with`
+    /// and `@default` are spelled inline.
     fn decode_cascade(
         &mut self,
         field: &EntryField,
         dest: &str,
-        why: &str,
+        err: &str,
         mut env_block: impl FnMut(&mut Self, &str, &str, &str, &str) -> String,
     ) -> String {
         let mut steps: Vec<String> = Vec::new();
         for source in &field.sources {
             match source {
-                Source::With => steps.push(self.with_step_body(field, dest, why)),
+                Source::With => steps.push(self.with_step_body(field, dest, err)),
                 Source::Env(name) => {
                     self.import("os", "os");
                     self.import("json", "encoding/json");
                     self.import("fmt", "fmt");
                     let lookup = self.env_lookup(name);
                     let label = self.env_label(name);
-                    let miss = self.env_miss_reason(name);
-                    let pre = self.env_name_prereq(name, why);
+                    let miss = self.env_miss_error(name);
+                    let pre = self.env_name_prereq(name, err);
                     steps.push(env_block(self, &lookup, &label, &miss, &pre));
                 }
                 Source::Default(v) => steps.push(format!(
-                    "{dest} = {}\n{why} = \"\"",
+                    "{dest} = {}\n{err} = nil",
                     literal(&field.target, v)
                 )),
                 Source::Arg => {}
@@ -207,7 +213,7 @@ impl Resolver<'_, '_> {
                 if i == 0 {
                     step.clone()
                 } else {
-                    format!("if {why} != \"\" {{\n{}\n}}", nest(step, 1))
+                    format!("if {err} != nil {{\n{}\n}}", nest(step, 1))
                 }
             })
             .collect::<Vec<_>>()
@@ -291,8 +297,43 @@ impl Emitter for Resolver<'_, '_> {
         format!("os.LookupEnv({name_expr})")
     }
 
-    fn why_open(&self, field_name: &str, initial: &str) -> Leaf {
-        Leaf(format!("{} := {initial:?}", why_var(field_name)))
+    fn err_open(&self, field_name: &str) -> Leaf {
+        Leaf(format!("var {} error", err_var(field_name)))
+    }
+
+    fn absent_literal(&self) -> &'static str {
+        "nil"
+    }
+
+    fn cond_err_present(&self, field_name: &str) -> Cond {
+        Cond(format!("{} != nil", self.err_ident(field_name)))
+    }
+
+    fn cond_err_absent(&self, field_name: &str) -> Cond {
+        Cond(format!("{} == nil", self.err_ident(field_name)))
+    }
+
+    fn wrap_from(&self, err_field: &str, head: &str) -> Leaf {
+        let head_err = self.err_ident(head);
+        let message = format!("\"{head} <- \" + {head_err}.Error()");
+        Leaf(format!(
+            "{} = {}",
+            self.err_ident(err_field),
+            self.config_error_expr(&message, Some(&head_err)),
+        ))
+    }
+
+    fn config_error_expr(&self, message_expr: &str, cause: Option<&str>) -> String {
+        match cause {
+            Some(cause) => format!(
+                "&{config}{{Message: {message_expr}, Cause: {cause}}}",
+                config = error_names().config,
+            ),
+            None => format!(
+                "&{config}{{Message: {message_expr}}}",
+                config = error_names().config,
+            ),
+        }
     }
 
     fn config_open(&mut self, _field: &EntryField, shape: &Shape) -> Leaf {
@@ -301,10 +342,11 @@ impl Emitter for Resolver<'_, '_> {
 
     /// The `@with` presence step of a non-guaranteed chain, relative to column
     /// zero.
-    fn with_step_body(&self, field: &EntryField, dest: &str, why: &str) -> String {
+    fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String {
         format!(
-            "if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{why} = \"\"\n}} else {{\n\t{why} = \"not configured\"\n}}",
+            "if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
             carrier = camel(&field.name),
+            miss = self.config_error_expr("\"not configured\"", None),
         )
     }
 
@@ -316,15 +358,15 @@ impl Emitter for Resolver<'_, '_> {
         field: &EntryField,
         name: &EnvName,
         dest: &str,
-        why: &str,
+        err: &str,
     ) -> String {
         let lookup = self.env_lookup(name);
         let label = self.env_label(name);
-        let miss = self.env_miss_reason(name);
-        let pre = self.env_name_prereq(name, why);
+        let miss = self.env_miss_error(name);
+        let pre = self.env_name_prereq(name, err);
         let parse = self.env_parse(field, dest, &label);
         format!(
-            "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t{why} = \"\"\n}} else {{\n\t{why} = {miss}\n}}",
+            "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
             parse = nest(&parse, 1),
         )
     }
@@ -413,8 +455,9 @@ impl Emitter for Resolver<'_, '_> {
             )))
         } else {
             Leaf(format!(
-                "{} = \"match: unmatched value\"",
-                why_var(&field.name)
+                "{} = {}",
+                err_var(&field.name),
+                self.config_error_expr("\"match: unmatched value\"", None),
             ))
         }
     }
@@ -454,7 +497,7 @@ impl Emitter for Resolver<'_, '_> {
     /// value decodes strictly into the wire struct. Relative to column zero.
     fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String {
         let mut out = String::new();
-        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, err)) = self.decode_opening(field, &mut out) else {
             return out;
         };
         self.import("bytes", "bytes");
@@ -483,8 +526,8 @@ impl Emitter for Resolver<'_, '_> {
         };
         // The decode body varies only by the env label; the cascade fills each
         // source's own `(lookup, label, miss)` in around this shared shape.
-        let (dc, wc) = (dest.clone(), why.clone());
-        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+        let (dc, ec) = (dest.clone(), err.clone());
+        let body = self.decode_cascade(field, &dest, &err, move |_, lookup, label, miss, pre| {
             let required = required_checks.replace("{LABEL}", label);
             let fail = config_errorf(&format!("\"%s: %v\", {label}, err"));
             format!(
@@ -498,8 +541,8 @@ impl Emitter for Resolver<'_, '_> {
                  \tif err := dec.Decode(&decoded); err != nil {{\n\t\t{fail}\n\t}}\n\
                  {validate}\
                  \t{dc} = decoded\n\
-                 \t{wc} = \"\"\n\
-                 }} else {{\n\t{wc} = {miss}\n}}"
+                 \t{ec} = nil\n\
+                 }} else {{\n\t{ec} = {miss}\n}}"
             )
         });
         out.push_str(&body);
@@ -510,17 +553,17 @@ impl Emitter for Resolver<'_, '_> {
     /// decodes as JSON whole. Relative to column zero.
     fn json_body(&mut self, field: &EntryField) -> String {
         let mut out = String::new();
-        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, err)) = self.decode_opening(field, &mut out) else {
             return out;
         };
-        let (dc, wc) = (dest.clone(), why.clone());
-        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+        let (dc, ec) = (dest.clone(), err.clone());
+        let body = self.decode_cascade(field, &dest, &err, move |_, lookup, label, miss, pre| {
             let fail = config_errorf(&format!("\"%s: %v\", {label}, err"));
             format!(
                 "{pre}if raw, ok := {lookup}; ok && raw != \"\" {{\n\
                  \tif err := json.Unmarshal([]byte(raw), &{dc}); err != nil {{\n\t\t{fail}\n\t}}\n\
-                 \t{wc} = \"\"\n\
-                 }} else {{\n\t{wc} = {miss}\n}}"
+                 \t{ec} = nil\n\
+                 }} else {{\n\t{ec} = {miss}\n}}"
             )
         });
         out.push_str(&body);
@@ -537,20 +580,20 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    fn require_member_deferred(&mut self, name: &str, why: &str) -> String {
+    fn require_member_deferred(&mut self, name: &str, err: &str) -> String {
+        let ident = err_var(err);
         format!(
-            "if {why} != \"\" {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {why}}}\n}}",
-            why = why_var(why),
+            "if {ident} != nil {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {ident}.Error(), Cause: {ident}}}\n}}",
             config = error_names().config,
         )
     }
 
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         format!(
-            "if s.{ident} == {zero} {{\n\twhy := {why}\n\tif why == \"\" {{\n\t\twhy = \"no value\"\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + why}}\n}}",
+            "if s.{ident} == {zero} {{\n\tif {err} == nil {{\n\t\treturn nil, &{config}{{Message: \"{name}: no value\"}}\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             zero = cast_string(target, "\"\""),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )
@@ -558,9 +601,9 @@ impl Emitter for Resolver<'_, '_> {
 
     fn require_bytes(&mut self, head: &str) -> String {
         format!(
-            "if len(s.{ident}) == 0 {{\n\twhy := {why}\n\tif why == \"\" {{\n\t\twhy = \"no value\"\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + why}}\n}}",
+            "if len(s.{ident}) == 0 {{\n\tif {err} == nil {{\n\t\treturn nil, &{config}{{Message: \"{name}: no value\"}}\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )
@@ -568,9 +611,9 @@ impl Emitter for Resolver<'_, '_> {
 
     fn require_numeric(&mut self, head: &str, _target: &Tref) -> String {
         format!(
-            "if {why} != \"\" && s.{ident} == 0 {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {why}}}\n}}",
+            "if {err} != nil && s.{ident} == 0 {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )

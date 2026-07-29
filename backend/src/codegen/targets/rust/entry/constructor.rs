@@ -270,10 +270,10 @@ fn resolution_body(
                 ),
                 plan::Presence::Bytes => format!("!s.{ident}.is_empty() && {}", line.condition),
                 plan::Presence::Numeric => format!(
-                    "({why} == \"\" || s.{ident} != {}) && {}",
+                    "({err}.is_none() || s.{ident} != {}) && {}",
                     numeric_zero(&field.target),
                     line.condition,
-                    why = why_var(&field.name),
+                    err = err_var(&field.name),
                 ),
             };
             guards.push_str(&format!(
@@ -290,7 +290,7 @@ fn resolution_body(
         ));
     }
 
-    body.push_str(&discard_unread_whys(&body, entry));
+    body.push_str(&discard_unread_errs(&body, entry));
 
     body.push_str("let mut values = serde_json::Map::new();\n");
     for vp in entry.value_paths(module) {
@@ -390,21 +390,20 @@ fn hooks_expr(bound: &[BoundExtension<'_>]) -> String {
     }
 }
 
-/// Discard statements for the why-reasons nothing reads (mirrors Go's
-/// `discard_unread_whys`): every declared source chain records why it came
-/// up empty, but only a field something consumes gets a check reading that
-/// reason back. Rather than predicting consumption ahead of the shared
-/// plan's own choice, the reason is kept and explicitly discarded so a
-/// why-var with no consumer is never merely an unused-but-harmless local
-/// (idiomatic hygiene for the generated SDK, not a compile requirement of
-/// this crate).
-fn discard_unread_whys(body: &str, entry: &EntryModel<'_>) -> String {
+/// Discard statements for the error vars nothing reads (mirrors Go's
+/// `discard_unread_errs`): every declared source chain records its failure in
+/// an error var, but only a field something consumes gets a check reading it
+/// back. Rather than predicting consumption ahead of the shared plan's own
+/// choice, the error is kept and explicitly discarded so an error var with no
+/// consumer is never merely an unused-but-harmless local (idiomatic hygiene
+/// for the generated SDK, not a compile requirement of this crate).
+fn discard_unread_errs(body: &str, entry: &EntryModel<'_>) -> String {
     entry
         .fields
         .iter()
-        .map(|f| why_var(&f.name))
-        .filter(|why| is_written_never_read(body, why))
-        .map(|why| format!("let _ = &{why};\n"))
+        .map(|f| err_var(&f.name))
+        .filter(|err| is_written_never_read(body, err))
+        .map(|err| format!("let _ = &{err};\n"))
         .collect()
 }
 

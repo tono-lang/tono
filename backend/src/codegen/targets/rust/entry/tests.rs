@@ -320,11 +320,11 @@ fn declared_constraints_on_guaranteed_with_and_numeric_fields_all_guard_on_prese
     // String: guarded on the resolved value differing from its zero.
     assert!(out.contains("if s.region != String::new() && s.region.chars().count() < 1 {"));
     // Numeric: guarded on the chain having actually resolved.
-    assert!(out.contains("if (weight_why == \"\" || s.weight != 0) && s.weight < 0 {"));
+    assert!(out.contains("if (weight_err.is_none() || s.weight != 0) && s.weight < 0 {"));
     // Bytes: guarded on the resolved value being non-empty; length is byte count.
     assert!(out.contains("if !s.receipt.is_empty() && s.receipt.len() < 1 {"));
     // Wide numeric: same shape as the narrow case, no literal suffix in Rust.
-    assert!(out.contains("if (balance_why == \"\" || s.balance != 0) && s.balance < 0 {"));
+    assert!(out.contains("if (balance_err.is_none() || s.balance != 0) && s.balance < 0 {"));
     assert!(out.contains("if !violations.is_empty() {"));
     assert!(out.contains("return Err(TonoError::Validation(ValidationError { violations }));"));
 }
@@ -688,9 +688,11 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(out.contains(
         "values.insert(\"mode\".to_string(), serde_json::Value::from(s.mode.to_string()));"
     ));
-    // Guaranteed and why-tracked dynamic env names both spell one balanced run.
+    // Guaranteed and error-tracked dynamic env names both spell one balanced run.
     assert!(out.contains("read_env(&s.naming)"));
-    assert!(out.contains("dynamic_why = format!(\"naming <- {}\", naming_why);"));
+    assert!(out.contains(
+        "dynamic_err = naming_err.as_ref().map(|e| ConfigError { message: format!(\"naming <- {}\", e.message) });"
+    ));
     // Transforms compose innermost-first; the shared casing helpers chain
     // around the target-specific trim/lower/upper.
     assert!(out.contains(
@@ -729,9 +731,9 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     // that only fails when its chain reported absence.
     assert!(out.contains("if s.naming == String::new() {"));
     assert!(out.contains("if s.wait == Duration(String::new()) {"));
-    assert!(out.contains("if !tiny_why.is_empty() && s.tiny == 0 {"));
-    // An unread why (nothing downstream consumes it) is explicitly discarded.
-    assert!(out.contains("let _ = &small_why;"));
+    assert!(out.contains("if let Some(tiny_err) = &tiny_err {"));
+    // An unread error var (nothing downstream consumes it) is explicitly discarded.
+    assert!(out.contains("let _ = &small_err;"));
     // Duration freezes as milliseconds, not its wire string.
     assert!(out.contains("match parse_duration_ms(&s.wait.0) {"));
 

@@ -390,7 +390,7 @@ fn class_decl(
         for line in validation::guard_lines(&[member], &TsVal, "s.", config, LANG) {
             // The check reads the value bespoke left in place (client_init ran
             // already, bespoke wins), so presence is judged off the value
-            // itself, never the declared chain's why-reason. A numeric zero can
+            // itself, never the declared chain's error var. A numeric zero can
             // be a legitimately resolved value, so its guard only skips when the
             // chain reported absent AND the bridge left the zero in place.
             let guard = match plan::presence_kind(field, entry, module) {
@@ -421,9 +421,9 @@ fn class_decl(
                         "0"
                     };
                     format!(
-                        "({why} === \"\" || s.{ident} !== {zero}) && {}",
+                        "({err} === undefined || s.{ident} !== {zero}) && {}",
                         line.condition,
-                        why = why_var(&field.name),
+                        err = err_var(&field.name),
                         ident = field_camel_ren(
                             &field.name,
                             rename_of(&field.traits, LANG).as_deref(),
@@ -686,8 +686,8 @@ fn op_method(
     )
 }
 
-fn why_var(field: &str) -> String {
-    camel(&format!("{field}_why"))
+fn err_var(field: &str) -> String {
+    camel(&format!("{field}_err"))
 }
 
 mod checks;

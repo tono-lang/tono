@@ -85,7 +85,7 @@ pub(super) fn new_decl(
     // Consumed chains must hold a value once construction finishes; an absent
     // one reports the chain at this single point instead of failing the first
     // call obscurely. Every check reads the resolved value (client_init ran
-    // already, bespoke wins), so the why-reason only decorates the error. The
+    // already, bespoke wins), so the error var only decorates the error. The
     // selection of which fields need a check lives in the shared plan; this
     // target only spells each check (and pulls the errors import it needs).
     {
@@ -112,7 +112,7 @@ pub(super) fn new_decl(
         for line in validation::guard_lines(&[member], &GoVal, "s.", config, LANG) {
             // The check reads the value bespoke left in place (client_init ran
             // already, bespoke wins), so presence is judged off the value
-            // itself, never the declared chain's why-reason. A numeric zero can
+            // itself, never the declared chain's error var. A numeric zero can
             // be a legitimately resolved value, so its guard only skips when the
             // chain reported absent AND the bridge left the zero in place.
             let guard = match plan::presence_kind(field, entry, module) {
@@ -137,9 +137,9 @@ pub(super) fn new_decl(
                     line.condition
                 ),
                 plan::Presence::Numeric => format!(
-                    "({why} == \"\" || s.{ident} != 0) && {}",
+                    "({err} == nil || s.{ident} != 0) && {}",
                     line.condition,
-                    why = why_var(&field.name),
+                    err = err_var(&field.name),
                     ident = field_pascal_ren(
                         &field.name,
                         rename_of(&field.traits, LANG).as_deref(),
@@ -164,9 +164,9 @@ pub(super) fn new_decl(
         ));
     }
 
-    // Every why-reason has been written and every check that reads one has been
+    // Every error var has been written and every check that reads one has been
     // emitted, so this is the point where an unread one can be told apart.
-    body.push_str(&discard_unread_whys(&body, entry));
+    body.push_str(&discard_unread_errs(&body, entry));
 
     // Freeze the resolved values for the runtime's ref positions.
     body.push_str("\tvalues := map[string]any{}\n");
@@ -258,26 +258,26 @@ pub(super) fn indent(block: &str) -> String {
         .collect::<String>()
 }
 
-pub(super) fn why_var(field: &str) -> String {
-    camel(&format!("{field}_why"))
+pub(super) fn err_var(field: &str) -> String {
+    camel(&format!("{field}_err"))
 }
 
-/// Discard statements for the why-reasons nothing reads.
+/// Discard statements for the error vars nothing reads.
 ///
-/// Every declared source chain records why it came up empty, but only a field
-/// something consumes gets a check that reads that reason back. A field with a
+/// Every declared source chain records its failure in an error var, but only a
+/// field something consumes gets a check that reads it back. A field with a
 /// chain and no consumer therefore leaves a variable that is assigned and never
 /// read, which Go rejects outright. Rather than making the resolver predict
 /// consumption (the checks are chosen by the shared plan, further down), the
-/// reason is kept and explicitly discarded: the chain still records why it
+/// error is kept and explicitly discarded: the chain still records why it
 /// failed, and the emitted source compiles.
-fn discard_unread_whys(body: &str, entry: &EntryModel<'_>) -> String {
+fn discard_unread_errs(body: &str, entry: &EntryModel<'_>) -> String {
     entry
         .fields
         .iter()
-        .map(|f| why_var(&f.name))
-        .filter(|why| is_written_never_read(body, why))
-        .map(|why| format!("\t_ = {why}\n"))
+        .map(|f| err_var(&f.name))
+        .filter(|err| is_written_never_read(body, err))
+        .map(|err| format!("\t_ = {err}\n"))
         .collect()
 }
 
@@ -285,8 +285,10 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Whether `ident` occurs in `body` and every occurrence is the left side of an
-/// assignment (`x = ...` or `x := ...`). `==` is a read, not a write.
+/// Whether `ident` occurs in `body` and every occurrence is a write: the left
+/// side of an assignment (`x = ...` or `x := ...`, `==` is a read, not a
+/// write) or the error-var declaration itself (`var x error`, which zeroes it
+/// to `nil` without an `=`).
 fn is_written_never_read(body: &str, ident: &str) -> bool {
     let bytes = body.as_bytes();
     let mut found = false;
@@ -301,8 +303,10 @@ fn is_written_never_read(body: &str, ident: &str) -> bool {
             continue;
         }
         found = true;
+        let is_decl = body[..start].trim_end().ends_with("var");
         let rest = body[end..].trim_start_matches(' ');
-        let is_write = rest.starts_with(":=") || (rest.starts_with('=') && !rest.starts_with("=="));
+        let is_write =
+            is_decl || rest.starts_with(":=") || (rest.starts_with('=') && !rest.starts_with("=="));
         if !is_write {
             return false;
         }

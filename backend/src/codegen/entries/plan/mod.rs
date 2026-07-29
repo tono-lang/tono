@@ -51,9 +51,11 @@ pub(crate) fn arg_camel(name: &str, traits: &[crate::ir::Trait], lang: &str) -> 
     )
 }
 
-/// The reason ("why") variable tracking a field's deferred resolution.
-pub(crate) fn why_var(field: &str) -> String {
-    camel(&format!("{field}_why"))
+/// The error-value variable tracking a field's deferred resolution: `nil`
+/// (Go) / `undefined` (TS) while unresolved, a `ConfigError` once a source
+/// step fails, cleared back to nil/undefined once a later step resolves.
+pub(crate) fn err_var(field: &str) -> String {
+    camel(&format!("{field}_err"))
 }
 
 /// A casing `@str::*` transform applied over `out`: the shared helper key to
@@ -116,7 +118,7 @@ pub(crate) fn string_like(t: &Tref) -> bool {
 /// column zero (the walker adds the enclosing depth). No trailing newline.
 pub struct Leaf(pub String);
 
-/// An already-spelled target boolean expression (`why != ""` / `why !== ""`).
+/// An already-spelled target boolean expression (`err != nil` / `err !== undefined`).
 pub struct Cond(pub String);
 
 /// One node of the resolution plan. Straight-line code and every expression is
@@ -177,6 +179,9 @@ pub trait Emitter {
     /// The equality / inequality operators (`"=="`/`"!="` vs `"==="`/`"!=="`).
     fn eq(&self) -> &'static str;
     fn neq(&self) -> &'static str;
+    /// The literal an error-value var reads as "not yet resolved" (`"nil"` /
+    /// `"undefined"`).
+    fn absent_literal(&self) -> &'static str;
 
     // --- the per-target primitives the delegating atoms below build on: how a
     //     field name and a sibling path spell in the target's casing, and how a
@@ -197,9 +202,9 @@ pub trait Emitter {
     fn dest(&self, field_name: &str) -> String {
         self.ident(field_name)
     }
-    /// The why-var identifier for a field.
-    fn why_ident(&self, field_name: &str) -> String {
-        why_var(field_name)
+    /// The error-value identifier for a field.
+    fn err_ident(&self, field_name: &str) -> String {
+        err_var(field_name)
     }
     /// The constructor parameter name of an `@arg` field, honoring its
     /// `@rename(lang)` override.
@@ -244,8 +249,10 @@ pub trait Emitter {
             }
         }
     }
-    fn env_miss_reason(&mut self, name: &EnvName) -> String {
-        match name {
+    /// The `ConfigError` an env lookup miss constructs: a leaf failure (no
+    /// cause to wrap yet), naming the concrete variable that came up empty.
+    fn env_miss_error(&mut self, name: &EnvName) -> String {
+        let message = match name {
             EnvName::Name(n) => format!("{:?}", format!("env {n}: empty")),
             EnvName::Field(fr) => {
                 let t = self.path_type_of(&fr.field);
@@ -253,7 +260,8 @@ pub trait Emitter {
                 let s = self.to_string_expr(&read, &t);
                 format!("\"env \" + {s} + \": empty\"")
             }
-        }
+        };
+        self.config_error_expr(&message, None)
     }
 
     // --- composite statements built from the atoms (shared) ---
@@ -276,49 +284,52 @@ pub trait Emitter {
     fn assign_expr(&self, dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{dest} = {expr}{}", self.term()))
     }
-    /// Record that a field's value is still deferred to the head it reads
-    /// (`why = "head <- " + headWhy`).
-    fn assign_reason(&self, why_field: &str, head: &str) -> Leaf {
+    /// Wrap the head's error as the reason this field is still deferred: the
+    /// edge being consumed wraps the cause, naming the head that failed; the
+    /// head's own resolver already named the concrete source. Message
+    /// composition is not uniform across targets (Go/TS concatenate with
+    /// `+`; Rust has no `&str + &str` and reads the head's error through an
+    /// `Option`), so this stays per-target rather than a shared default.
+    fn wrap_from(&self, err_field: &str, head: &str) -> Leaf;
+    /// A `ConfigError` construction expression for a leaf failure (nothing
+    /// upstream to wrap yet): a raw string literal in Go, a `new
+    /// ConfigError(...)` call in TS, a struct literal in Rust. `cause` is the
+    /// already-spelled error value the failure wraps, when there is one.
+    fn config_error_expr(&self, message_expr: &str, cause: Option<&str>) -> String;
+    /// Open an error-value var (`var err error` vs `let err: ConfigError |
+    /// undefined;`); the declaration keyword and type differ, so this one
+    /// stays per-target. Its zero value (`nil`/`undefined`) already reads as
+    /// "not yet resolved" — no sentinel value needed.
+    fn err_open(&self, field_name: &str) -> Leaf;
+    /// Clear an error-value var back to "resolved" (`nil`/`undefined`) once a
+    /// later source in the chain succeeds.
+    fn err_clear(&self, field_name: &str) -> Leaf {
         Leaf(format!(
-            "{} = \"{head} <- \" + {}{}",
-            self.why_ident(why_field),
-            self.why_ident(head),
-            self.term()
-        ))
-    }
-    /// Open a why-var (`why := "x"` vs `let why = "x";`); the declaration
-    /// keyword differs, so this one stays per-target.
-    fn why_open(&self, field_name: &str, initial: &str) -> Leaf;
-    fn why_set(&self, why_field: &str, reason: &str) -> Leaf {
-        Leaf(format!(
-            "{} = {reason:?}{}",
-            self.why_ident(why_field),
+            "{} = {}{}",
+            self.err_ident(field_name),
+            self.absent_literal(),
             self.term()
         ))
     }
 
-    // --- conditions (shared, from the operator atoms) ---
-    fn cond_why_absent(&self, field_name: &str) -> Cond {
-        Cond(format!(
-            "{} {} \"\"",
-            self.why_ident(field_name),
-            self.neq()
-        ))
-    }
-    fn cond_why_resolved(&self, field_name: &str) -> Cond {
-        Cond(format!("{} {} \"\"", self.why_ident(field_name), self.eq()))
-    }
+    // --- conditions: whether a field's error var is set. Go/TS spell this
+    //     with the equality atoms (`!= nil` / `!== undefined`); Rust's
+    //     `Option<ConfigError>` has no `PartialEq` (its `cause` is a `Box<dyn
+    //     Error>`), so it spells `.is_some()`/`.is_none()` instead — hence
+    //     these stay per-target rather than a shared default. ---
+    fn cond_err_present(&self, field_name: &str) -> Cond;
+    fn cond_err_absent(&self, field_name: &str) -> Cond;
 
     // --- the source steps of a NON-guaranteed chain: each owns its guard
     //     idiom, so the sequential ordering is shared while the spelling stays
-    //     per-target. `why` is the already-spelled reason variable. ---
-    fn with_step_body(&self, field: &EntryField, dest: &str, why: &str) -> String;
+    //     per-target. `err` is the already-spelled error-value variable. ---
+    fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String;
     fn env_step_body(
         &mut self,
         field: &EntryField,
         name: &EnvName,
         dest: &str,
-        why: &str,
+        err: &str,
     ) -> String;
 
     // --- the whole-construct bodies that already differ per target (a
@@ -348,13 +359,13 @@ pub trait Emitter {
     //     check itself (comparison, error construction, import side effect) ---
     /// A consumed member of a composed/decoded field must hold a value.
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String;
-    /// A consumed numeric/bool config member fails when its hoisted reason var
+    /// A consumed numeric/bool config member fails when its hoisted error var
     /// reports absence (a resolved zero is not absence, so the value is not
-    /// consulted). `why` is the logical reason-var name (see [`build`]).
-    fn require_member_deferred(&mut self, name: &str, why: &str) -> String;
-    /// A consumed string-like scalar must be non-empty (why-decorated error).
+    /// consulted). `err` is the logical error-var name (see [`build`]).
+    fn require_member_deferred(&mut self, name: &str, err: &str) -> String;
+    /// A consumed string-like scalar must be non-empty (error-decorated).
     fn require_string(&mut self, head: &str, target: &Tref) -> String;
-    /// A consumed bytes scalar must be non-empty (why-decorated error).
+    /// A consumed bytes scalar must be non-empty (error-decorated).
     fn require_bytes(&mut self, head: &str) -> String;
     /// A consumed numeric scalar fails only when reported absent AND still zero.
     fn require_numeric(&mut self, head: &str, target: &Tref) -> String;

@@ -222,13 +222,18 @@ fn taxonomy_decls(sealed: bool, liveness: &TaxonomyLiveness) -> Vec<Decl> {
     if liveness.config {
         // Construction failures (a required source that resolved to nothing)
         // ride their own category so a caller can tell a misconfigured client
-        // from a request or transport failure.
+        // from a request or transport failure. Cause unwraps the source's own
+        // failure the message wraps in, the same way Transport and Contract do.
         category(
             &mut decls,
             &n.config,
             vec![
-                Decl::raw(format!("type {} struct {{\n\tMessage string\n}}", n.config)),
+                Decl::raw(format!(
+                    "type {} struct {{\n\tMessage string\n\tCause   error\n}}",
+                    n.config
+                )),
                 error_method(&n.config, "e.Message"),
+                unwrap_method(&n.config),
             ],
         );
     }

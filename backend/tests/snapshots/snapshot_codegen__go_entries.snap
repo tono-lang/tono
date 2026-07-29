@@ -145,9 +145,12 @@ func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status)
 
 type ConfigError struct {
 	Message string
+	Cause   error
 }
 
 func (e *ConfigError) Error() string { return e.Message }
+
+func (e *ConfigError) Unwrap() error { return e.Cause }
 
 func (e *Overloaded) Error() string { return "overloaded" }
 
@@ -262,33 +265,33 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	} else {
 		s.EndpointVersion = "v2"
 	}
-	endpointV1Why := "no source"
+	var endpointV1Err error
 	if v, ok := os.LookupEnv("ENDPOINT"); ok && v != "" {
 		s.EndpointV1 = v
-		endpointV1Why = ""
+		endpointV1Err = nil
 	} else {
-		endpointV1Why = "env ENDPOINT: empty"
+		endpointV1Err = &ConfigError{Message: "env ENDPOINT: empty"}
 	}
-	endpointV2Why := "no source"
+	var endpointV2Err error
 	if v, ok := os.LookupEnv(s.EndpointEnv); ok && v != "" {
 		s.EndpointV2 = v
-		endpointV2Why = ""
+		endpointV2Err = nil
 	} else {
-		endpointV2Why = "env " + s.EndpointEnv + ": empty"
+		endpointV2Err = &ConfigError{Message: "env " + s.EndpointEnv + ": empty"}
 	}
-	endpointWhy := ""
+	var endpointErr error
 	switch s.EndpointVersion {
 	case "v1":
-		if endpointV1Why != "" {
-			endpointWhy = "endpoint_v1 <- " + endpointV1Why
+		if endpointV1Err != nil {
+			endpointErr = &ConfigError{Message: "endpoint_v1 <- " + endpointV1Err.Error(), Cause: endpointV1Err}
 		} else {
 			s.Endpoint = s.EndpointV1
 		}
 	case "legacy":
 		s.Endpoint = "https://old.example.com"
 	default:
-		if endpointV2Why != "" {
-			endpointWhy = "endpoint_v2 <- " + endpointV2Why
+		if endpointV2Err != nil {
+			endpointErr = &ConfigError{Message: "endpoint_v2 <- " + endpointV2Err.Error(), Cause: endpointV2Err}
 		} else {
 			s.Endpoint = s.EndpointV2
 		}
@@ -313,7 +316,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		}
 		s.Settings = composed
 	}
-	credsWhy := "no source"
+	var credsErr error
 	if raw, ok := os.LookupEnv("SERVICE_CREDENTIALS"); ok && raw != "" {
 		var probe map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(raw), &probe); err != nil {
@@ -335,25 +338,24 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 			return nil, invalid
 		}
 		s.Creds = decoded
-		credsWhy = ""
+		credsErr = nil
 	} else {
-		credsWhy = "env SERVICE_CREDENTIALS: empty"
+		credsErr = &ConfigError{Message: "env SERVICE_CREDENTIALS: empty"}
 	}
-	labelsWhy := "no source"
+	var labelsErr error
 	if raw, ok := os.LookupEnv("SERVICE_LABELS"); ok && raw != "" {
 		if err := json.Unmarshal([]byte(raw), &s.Labels); err != nil {
 			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_LABELS", err)}
 		}
-		labelsWhy = ""
+		labelsErr = nil
 	} else {
-		labelsWhy = "env SERVICE_LABELS: empty"
+		labelsErr = &ConfigError{Message: "env SERVICE_LABELS: empty"}
 	}
 	if s.Endpoint == "" {
-		why := endpointWhy
-		if why == "" {
-			why = "no value"
+		if endpointErr == nil {
+			return nil, &ConfigError{Message: "endpoint: no value"}
 		}
-		return nil, &ConfigError{Message: "endpoint <- " + why}
+		return nil, &ConfigError{Message: "endpoint <- " + endpointErr.Error(), Cause: endpointErr}
 	}
 	violations := []Violation{}
 	if len([]rune(s.APIKey)) < 1 {
@@ -362,8 +364,8 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	if len(violations) > 0 {
 		return nil, &ValidationError{Violations: violations}
 	}
-	_ = credsWhy
-	_ = labelsWhy
+	_ = credsErr
+	_ = labelsErr
 	values := map[string]any{}
 	values["api_key"] = s.APIKey
 	values["client_name"] = s.ClientName
