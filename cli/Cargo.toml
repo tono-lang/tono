@@ -26,6 +26,9 @@ preview = [
 
 [dependencies]
 tono-backend = { path = "../backend" }
+# Merging the generated TypeScript package manifest into whatever is already on
+# disk, so generation owns `exports` without discarding the rest of the file.
+serde_json = "1"
 # The preview's terminal UI, behind the `preview` feature. crossterm is used
 # through ratatui's re-export (`ratatui::crossterm`) so the two never drift.
 ratatui = { version = "0.30", optional = true }

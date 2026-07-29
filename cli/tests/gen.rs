@@ -536,3 +536,92 @@ fn gen_leaves_stale_output_alone_without_clean() {
     assert!(stale.is_file(), "no sweep without --clean");
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// Run `tono gen --config <manifest>` in `dir`, IR on stdin.
+fn gen_with_manifest(dir: &Path) -> (bool, String) {
+    let mut child = tono()
+        .current_dir(dir)
+        .args(["gen", "--config", "tono.toml"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(IR.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Generation owns the `exports` map, not the whole package manifest: the name,
+/// version, `type` and dependencies a project keeps there survive a run.
+#[test]
+fn generated_package_json_merges_into_an_existing_manifest() {
+    let dir = tmpdir("pkg-merge");
+    std::fs::create_dir_all(dir.join("ts")).unwrap();
+    std::fs::write(
+        dir.join("tono.toml"),
+        "[target.typescript]\nenabled = true\nout = \"ts\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ts/package.json"),
+        "{\n  \"name\": \"mine\",\n  \"version\": \"2.0.0\",\n  \"type\": \"module\",\n  \"dependencies\": { \"left-pad\": \"^1\" }\n}\n",
+    )
+    .unwrap();
+
+    let (ok, stderr) = gen_with_manifest(&dir);
+    assert!(ok, "gen failed: {stderr}");
+
+    let text = std::fs::read_to_string(dir.join("ts/package.json")).unwrap();
+    for kept in ["\"mine\"", "\"2.0.0\"", "\"module\"", "left-pad"] {
+        assert!(text.contains(kept), "{kept} was lost:\n{text}");
+    }
+    assert!(text.contains("\"exports\""), "{text}");
+
+    // A second run with the same input changes nothing, so the manifest does
+    // not churn in review.
+    let (ok, stderr) = gen_with_manifest(&dir);
+    assert!(ok, "second gen failed: {stderr}");
+    assert_eq!(
+        text,
+        std::fs::read_to_string(dir.join("ts/package.json")).unwrap()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A manifest that cannot be parsed is left exactly as it is: overwriting it
+/// would destroy whatever it holds, so the run stops instead.
+#[test]
+fn an_unparsable_package_json_stops_generation_untouched() {
+    let dir = tmpdir("pkg-malformed");
+    std::fs::create_dir_all(dir.join("ts")).unwrap();
+    std::fs::write(
+        dir.join("tono.toml"),
+        "[target.typescript]\nenabled = true\nout = \"ts\"\n",
+    )
+    .unwrap();
+    const BROKEN: &str = "{ not json\n";
+    std::fs::write(dir.join("ts/package.json"), BROKEN).unwrap();
+
+    let (ok, stderr) = gen_with_manifest(&dir);
+    assert!(
+        !ok,
+        "generation must not succeed over an unreadable manifest"
+    );
+    assert!(stderr.contains("package.json"), "{stderr}");
+    assert_eq!(
+        BROKEN,
+        std::fs::read_to_string(dir.join("ts/package.json")).unwrap()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
