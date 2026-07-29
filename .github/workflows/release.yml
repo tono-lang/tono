@@ -169,21 +169,29 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The default GITHUB_TOKEN cannot write to another repository, so the tap
+      # push authenticates with a deploy key. A deploy key belongs to the tap
+      # repo itself rather than to a person: it cannot reach any other
+      # repository, and the automation does not break when someone rotates a
+      # token or leaves the org.
+      - name: Authenticate to the tap with its deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+
       # A multi-platform formula needs 4 independent url/sha256 pairs (macOS
       # arm64/x86_64, Linux x86_64/arm64), which is more than the standard
       # bump-formula actions (built for a single download URL) model, so the
-      # formula is rendered here and pushed straight to the tap with a PAT
-      # (the default GITHUB_TOKEN cannot write to a different repo).
+      # formula is rendered here and pushed straight to the tap.
       - name: Render and push the formula
         working-directory: dist
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
-          # gh's credential helper keeps the token out of the clone URL and
-          # out of process listings/logs, unlike an embedded
-          # x-access-token@ URL.
-          gh auth setup-git
           version="${GITHUB_REF_NAME#v}"
           sha() { cut -d' ' -f1 "tono-${version}-$1.tar.gz.sha256"; }
 
@@ -228,7 +236,7 @@ jobs:
           end
           EOF
 
-          git clone https://github.com/tono-lang/homebrew-tono.git tap
+          git clone git@github.com:tono-lang/homebrew-tono.git tap
           cp tono.rb tap/Formula/tono.rb
           cd tap
           git config user.name "tono-release-bot"
