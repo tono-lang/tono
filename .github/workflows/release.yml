@@ -5,8 +5,7 @@ on:
     tags:
       - "v*"
   # A dry run: builds and packages all four platforms but publishes nothing,
-  # so the matrix (in particular the Rosetta-built macOS x86_64 leg) can be
-  # validated without burning a public tag.
+  # so the matrix can be validated without burning a public tag.
   workflow_dispatch:
 
 concurrency:
@@ -22,26 +21,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Every leg runs on a runner whose own architecture matches the target.
+        # OCaml has no cross-compiler, so a native runner per architecture is
+        # the only way to produce tono-frontend and tono-lsp for all four.
         include:
-          # Native runner for both toolchains.
           - target: aarch64-apple-darwin
             os: macos-14
-            ocaml_rosetta: false
-          # Rust cross-links to x86_64 from an arm64 host with no extra tooling.
-          # OCaml has no cross-compiler, so its half of this leg runs under
-          # Rosetta 2 (pre-installed on macos-14) via the x86_64 Homebrew that
-          # image also ships at /usr/local for exactly this case.
           - target: x86_64-apple-darwin
-            os: macos-14
-            ocaml_rosetta: true
+            os: macos-15-intel
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
-            ocaml_rosetta: false
-          # Native GitHub-hosted arm64 runner: no QEMU/cross needed for either
-          # toolchain.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            ocaml_rosetta: false
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -82,32 +73,16 @@ jobs:
           cargo build --release --locked --target ${{ matrix.target }} -p tono-cli
 
       - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
-        if: ${{ !matrix.ocaml_rosetta }}
         with:
           ocaml-compiler: "5.2"
 
       # Both OCaml binaries ship: tono shells out to tono-frontend for
       # parse/typecheck, and tono-lsp is the standalone stdio language server
       # editors launch.
-      - name: Build the OCaml binaries (native)
-        if: ${{ !matrix.ocaml_rosetta }}
+      - name: Build the OCaml binaries
         run: |
           opam install yojson lsp jsonrpc --yes
           opam exec -- dune build frontend/bin/tono_frontend.exe lsp/tono_lsp.exe
-
-      - name: Build the OCaml binaries (x86_64 via Rosetta)
-        if: matrix.ocaml_rosetta
-        # No OCaml cross-compiler exists (confirmed: cross-compiling OCaml is
-        # not officially supported). The x86_64 Homebrew at /usr/local, run
-        # through Rosetta, installs a real x86_64 opam/OCaml toolchain, which
-        # then emits genuine x86_64 code even though the host is arm64.
-        run: |
-          arch -x86_64 /usr/local/bin/brew install opam
-          arch -x86_64 opam init --bare --yes --disable-sandboxing
-          arch -x86_64 opam switch create release 5.2.0
-          eval "$(arch -x86_64 opam env --switch=release)"
-          arch -x86_64 opam install yojson lsp jsonrpc --yes
-          arch -x86_64 dune build frontend/bin/tono_frontend.exe lsp/tono_lsp.exe
 
       - name: Package the release archive
         shell: bash
