@@ -552,8 +552,10 @@ fn a_raw_bespoke_impl_with_a_declared_output_decodes_the_success_body() {
     push_impl_extension(&mut module, "save", true, "ext/rust/save.rs#save");
     let out = text(&module);
     assert!(out.contains("pub fn save(&self) -> Result<Charge, TonoError> {"));
-    assert!(out.contains("let body = &raw_body;"));
-    assert!(out.contains("serde_json::from_str::<Charge>(body).map_err(|_| "));
+    // Charge has a required member, so the success body decodes through the
+    // per-type shared decoder (the same one `create_charge`'s protocol path
+    // calls) rather than an inline probe repeated at this call site.
+    assert!(out.contains("decode_charge(&raw_body)"));
 }
 
 #[test]

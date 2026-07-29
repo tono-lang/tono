@@ -230,12 +230,29 @@ impl std::error::Error for TonoError {
     }
 }
 
+use crate::notes::types::*;
+
 /// Conf is a construction-only composition of the entry surface; it
 /// never crosses the wire and is crate-local (the SDK builds it).
 #[derive(Clone, Debug)]
 pub(crate) struct Conf {
     pub api_key: String,
     pub region: String,
+}
+
+/// The members Note's declared shape requires present.
+const NOTE_REQUIRED_FIELDS: &[&str] = &["id", "body"];
+
+/// Parses a Note from its wire JSON: every required member must be present
+/// (a null value counts as absent) before the typed decode runs.
+fn decode_note(body: &str) -> Result<Note, TonoError> {
+    let probe: serde_json::Value = serde_json::from_str(body).map_err(|_| TonoError::Decode(DecodeError { path: "$".to_string(), expected: "Note".to_string(), raw: body.to_string() }))?;
+    for field in NOTE_REQUIRED_FIELDS {
+        if probe.get(field).map(|v| v.is_null()).unwrap_or(true) {
+            return Err(TonoError::Decode(DecodeError { path: format!("$.{field}"), expected: "Note".to_string(), raw: body.to_string() }));
+        }
+    }
+    serde_json::from_str::<Note>(body).map_err(|_| TonoError::Decode(DecodeError { path: "$".to_string(), expected: "Note".to_string(), raw: body.to_string() }))
 }
 
 // ==== rust/notes/client.rs ====
@@ -325,25 +342,25 @@ impl ClientBuilder {
             } else {
                 s.endpoint_version = "v2".to_string();
             }
-            let mut endpoint_v1_why = "no source".to_string();
+            let mut endpoint_v1_err: Option<ConfigError> = None;
             if let Some(v) = read_env(&"ENDPOINT") {
                 s.endpoint_v1 = v;
-                endpoint_v1_why = String::new();
+                endpoint_v1_err = None;
             } else {
-                endpoint_v1_why = "env ENDPOINT: empty".to_string();
+                endpoint_v1_err = Some(ConfigError { message: "env ENDPOINT: empty".to_string() });
             }
-            let mut endpoint_v2_why = "no source".to_string();
+            let mut endpoint_v2_err: Option<ConfigError> = None;
             if let Some(v) = read_env(&s.endpoint_env) {
                 s.endpoint_v2 = v;
-                endpoint_v2_why = String::new();
+                endpoint_v2_err = None;
             } else {
-                endpoint_v2_why = format!("env {}: empty", s.endpoint_env);
+                endpoint_v2_err = Some(ConfigError { message: format!("env {}: empty", s.endpoint_env) });
             }
-            let mut endpoint_why = "".to_string();
+            let mut endpoint_err: Option<ConfigError> = None;
             match (s.endpoint_version).to_string().as_str() {
             "v1" => {
-                if endpoint_v1_why != "" {
-                    endpoint_why = format!("endpoint_v1 <- {}", endpoint_v1_why);
+                if endpoint_v1_err.is_some() {
+                    endpoint_err = endpoint_v1_err.as_ref().map(|e| ConfigError { message: format!("endpoint_v1 <- {}", e.message) });
                 } else {
                     s.endpoint = (s.endpoint_v1).clone();
                 }
@@ -352,16 +369,10 @@ impl ClientBuilder {
                 s.endpoint = "https://old.example.com".to_string();
             }
             _ => {
-                endpoint_why = "no source".to_string();
-                if let Some(v) = read_env(&"ENDPOINT_V2") {
-                    s.endpoint = v;
-                    endpoint_why = String::new();
+                if endpoint_v2_err.is_some() {
+                    endpoint_err = endpoint_v2_err.as_ref().map(|e| ConfigError { message: format!("endpoint_v2 <- {}", e.message) });
                 } else {
-                    endpoint_why = "env ENDPOINT_V2: empty".to_string();
-                }
-                if endpoint_why != "" {
-                    s.endpoint = "https://example.com".to_string();
-                    endpoint_why = "".to_string();
+                    s.endpoint = (s.endpoint_v2).clone();
                 }
             }
             }
@@ -385,7 +396,7 @@ impl ClientBuilder {
                 }
                 s.settings = composed;
             }
-            let mut creds_why = "no source".to_string();
+            let mut creds_err: Option<ConfigError> = None;
             if let Some(raw) = read_env(&"SERVICE_CREDENTIALS") {
                 let label = "SERVICE_CREDENTIALS";
                 let probe: serde_json::Value = match serde_json::from_str(&raw) {
@@ -406,23 +417,23 @@ impl ClientBuilder {
                     return Err(TonoError::Validation(e));
                 }
                 s.creds = decoded;
-                creds_why = String::new();
+                creds_err = None;
             } else {
-                creds_why = "env SERVICE_CREDENTIALS: empty".to_string();
+                creds_err = Some(ConfigError { message: "env SERVICE_CREDENTIALS: empty".to_string() });
             }
-            let mut labels_why = "no source".to_string();
+            let mut labels_err: Option<ConfigError> = None;
             if let Some(raw) = read_env(&"SERVICE_LABELS") {
                 let label = "SERVICE_LABELS";
                 match serde_json::from_str(&raw) {
                     Ok(v) => { s.labels = v; }
                     Err(e) => { return Err(TonoError::Config(ConfigError { message: format!("{}: {}", label, e) })); }
                 }
-                labels_why = String::new();
+                labels_err = None;
             } else {
-                labels_why = "env SERVICE_LABELS: empty".to_string();
+                labels_err = Some(ConfigError { message: "env SERVICE_LABELS: empty".to_string() });
             }
         if s.endpoint == String::new() {
-            let reason = if endpoint_why.is_empty() { "no value".to_string() } else { endpoint_why.clone() };
+            let reason = endpoint_err.as_ref().map(|err| err.message.clone()).unwrap_or_else(|| "no value".to_string());
             return Err(TonoError::Config(ConfigError { message: format!("endpoint <- {}", reason) }));
         }
         let mut violations: Vec<Violation> = Vec::new();
@@ -432,9 +443,8 @@ impl ClientBuilder {
         if !violations.is_empty() {
             return Err(TonoError::Validation(ValidationError { violations }));
         }
-        let _ = &endpoint_v2_why;
-        let _ = &creds_why;
-        let _ = &labels_why;
+        let _ = &creds_err;
+        let _ = &labels_err;
         let mut values = serde_json::Map::new();
         values.insert("api_key".to_string(), serde_json::Value::from(s.api_key.clone()));
         values.insert("client_name".to_string(), serde_json::Value::from(s.client_name.clone()));
@@ -501,15 +511,7 @@ impl Client {
             tono_http_runtime::OutcomeKind::Transport => Err(TonoError::Transport(TransportError { cause: outcome.cause.unwrap() })),
             tono_http_runtime::OutcomeKind::Error => Err(decode_save_note_error(outcome.status, outcome.body.as_deref().unwrap_or(""))),
             tono_http_runtime::OutcomeKind::Success => {
-let body = outcome.body.as_deref().unwrap_or("");
-let probe: serde_json::Value = serde_json::from_str(body).map_err(|_| TonoError::Decode(DecodeError { path: "$".to_string(), expected: "Note".to_string(), raw: body.to_string() }))?;
-if probe.get("id").map(|v| v.is_null()).unwrap_or(true) {
-    return Err(TonoError::Decode(DecodeError { path: "$.id".to_string(), expected: "Note".to_string(), raw: body.to_string() }));
-}
-if probe.get("body").map(|v| v.is_null()).unwrap_or(true) {
-    return Err(TonoError::Decode(DecodeError { path: "$.body".to_string(), expected: "Note".to_string(), raw: body.to_string() }));
-}
-serde_json::from_str::<Note>(body).map_err(|_| TonoError::Decode(DecodeError { path: "$".to_string(), expected: "Note".to_string(), raw: body.to_string() }))
+decode_note(outcome.body.as_deref().unwrap_or(""))
             }
         }
     }
