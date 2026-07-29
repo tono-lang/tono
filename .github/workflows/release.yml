@@ -125,9 +125,24 @@ jobs:
         working-directory: dist
         run: cat ./*.sha256 > SHA256SUMS
 
+      # Trait names read as user mentions once a PR title lands in the notes:
+      # "@doc" and "@deprecated" credited two unrelated GitHub accounts as
+      # contributors on the first release, and notified them. Every trait in
+      # the language starts with @, so the generated notes are escaped here
+      # rather than relying on PR titles avoiding them. The generator's own
+      # "by @user" credits are real and stay untouched.
+      - name: Generate release notes with trait mentions escaped
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${GITHUB_REF_NAME}" --jq .body \
+            | perl -pe 's/(?<!by )\@([a-zA-Z][a-zA-Z0-9_-]*)/`\@$1`/g' > notes.md
+
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
-          generate_release_notes: true
+          body_path: notes.md
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
