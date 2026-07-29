@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+  # A dry run: builds and packages all four platforms but publishes nothing,
+  # so the matrix (in particular the Rosetta-built macOS x86_64 leg) can be
+  # validated without burning a public tag.
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -44,7 +48,14 @@ jobs:
       - name: Compute the release version
         id: version
         shell: bash
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        # A dry run has no tag to read a version from, so it builds as
+        # 0.0.0-dev; nothing downstream publishes it.
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Stamp the crate version
         shell: bash
@@ -75,13 +86,16 @@ jobs:
         with:
           ocaml-compiler: "5.2"
 
-      - name: Build the OCaml frontend (native)
+      # Both OCaml binaries ship: tono shells out to tono-frontend for
+      # parse/typecheck, and tono-lsp is the standalone stdio language server
+      # editors launch.
+      - name: Build the OCaml binaries (native)
         if: ${{ !matrix.ocaml_rosetta }}
         run: |
-          opam install yojson --yes
-          opam exec -- dune build frontend/bin/tono_frontend.exe
+          opam install yojson lsp jsonrpc --yes
+          opam exec -- dune build frontend/bin/tono_frontend.exe lsp/tono_lsp.exe
 
-      - name: Build the OCaml frontend (x86_64 via Rosetta)
+      - name: Build the OCaml binaries (x86_64 via Rosetta)
         if: matrix.ocaml_rosetta
         # No OCaml cross-compiler exists (confirmed: cross-compiling OCaml is
         # not officially supported). The x86_64 Homebrew at /usr/local, run
@@ -92,8 +106,8 @@ jobs:
           arch -x86_64 opam init --bare --yes --disable-sandboxing
           arch -x86_64 opam switch create release 5.2.0
           eval "$(arch -x86_64 opam env --switch=release)"
-          arch -x86_64 opam install yojson --yes
-          arch -x86_64 dune build frontend/bin/tono_frontend.exe
+          arch -x86_64 opam install yojson lsp jsonrpc --yes
+          arch -x86_64 dune build frontend/bin/tono_frontend.exe lsp/tono_lsp.exe
 
       - name: Package the release archive
         shell: bash
@@ -105,6 +119,7 @@ jobs:
           mkdir -p "$stage"
           cp "target/${target}/release/tono" "$stage/tono"
           cp "_build/default/frontend/bin/tono_frontend.exe" "$stage/tono-frontend"
+          cp "_build/default/lsp/tono_lsp.exe" "$stage/tono-lsp"
           cp README.md LICENSE "$stage/"
           tar czf "${stage}.tar.gz" "$stage"
           shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
@@ -120,6 +135,8 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
+    # Publishing only ever happens for a tag; a dry run stops after build.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -202,6 +219,7 @@ jobs:
             def install
               bin.install "tono"
               bin.install "tono-frontend"
+              bin.install "tono-lsp"
             end
 
             test do

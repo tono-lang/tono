@@ -68,8 +68,12 @@ tar xzf "$asset"
 extracted="tono-${version}-${target}"
 
 mkdir -p "$INSTALL_DIR"
-cp "${extracted}/tono" "${extracted}/tono-frontend" "$INSTALL_DIR/"
-chmod +x "${INSTALL_DIR}/tono" "${INSTALL_DIR}/tono-frontend"
+# tono shells out to tono-frontend, and tono-lsp is the language server
+# editors launch, so all three land side by side.
+for bin in tono tono-frontend tono-lsp; do
+  cp "${extracted}/${bin}" "${INSTALL_DIR}/${bin}"
+  chmod +x "${INSTALL_DIR}/${bin}"
+done
 
 echo "Installed tono ${tag} to ${INSTALL_DIR}"
 

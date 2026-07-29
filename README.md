@@ -28,6 +28,10 @@ Or via Homebrew:
 brew install tono-lang/tono/tono
 ```
 
+Either way you get three binaries: `tono` (the CLI), `tono-frontend` (the
+parser/typechecker it shells out to), and `tono-lsp` (the language server
+editors launch).
+
 Prebuilt archives for macOS (arm64/x86_64) and Linux (x86_64/arm64) are also
 attached directly to each [release](https://github.com/tono-lang/tono/releases).
 
