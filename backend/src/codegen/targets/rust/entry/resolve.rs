@@ -110,28 +110,6 @@ impl Resolver<'_, '_> {
         )
     }
 
-    /// The prereq guard when the env variable's own name comes from a
-    /// sibling field that may itself be absent; the env step chains onto its
-    /// `else`. `err` is already the derived identifier of the field being
-    /// resolved (as every caller of this helper holds it, not the bare field
-    /// name `wrap_from` takes), so the wrap is built directly here rather
-    /// than through `wrap_from`.
-    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        let head_err = self.err_ident(head);
-        format!(
-            "if {head_err}.is_some() {{\n    {err} = {head_err}.as_ref().map(|e| ConfigError {{ message: format!(\"{head} <- {{}}\", e.message) }});\n}} else ",
-        )
-    }
-
     /// The statements parsing a raw env string `v` into `dest`, by the
     /// field's declared type; a parse failure fails construction naming the
     /// variable (`label_expr`) and the type. Relative to column zero.
@@ -384,6 +362,22 @@ impl Emitter for Resolver<'_, '_> {
         ))
     }
 
+    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
+        let EnvName::Field(fr) = name else {
+            return String::new();
+        };
+        let Some(head) = fr.field.first() else {
+            return String::new();
+        };
+        if self.guaranteed(head) {
+            return String::new();
+        }
+        let head_err = self.err_ident(head);
+        format!(
+            "if {head_err}.is_some() {{\n    {err} = {head_err}.as_ref().map(|e| ConfigError {{ message: format!(\"{head} <- {{}}\", e.message) }});\n}} else ",
+        )
+    }
+
     fn config_open(&mut self, field: &EntryField, _shape: &Shape) -> Leaf {
         Leaf(format!(
             "let mut composed = {};",
@@ -417,10 +411,7 @@ impl Emitter for Resolver<'_, '_> {
         dest: &str,
         err: &str,
     ) -> String {
-        let lookup = self.env_lookup(name);
-        let label = self.env_label(name);
-        let miss = self.env_miss_error(name);
-        let pre = self.env_name_prereq(name, err);
+        let (lookup, label, miss, pre) = plan::env_parts(self, name, err);
         let parse = self.env_parse(field, dest, &label);
         format!(
             "{pre}if let Some(v) = {lookup} {{\n{parse}\n    {err} = None;\n}} else {{\n    {err} = {miss};\n}}",
@@ -602,10 +593,7 @@ impl Emitter for Resolver<'_, '_> {
         };
 
         let cascade = self.source_cascade(field, &dest, &err, |this, name| {
-            let lookup = this.env_lookup(name);
-            let label = this.env_label(name);
-            let miss = this.env_miss_error(name);
-            let pre = this.env_name_prereq(name, &err);
+            let (lookup, label, miss, pre) = plan::env_parts(this, name, &err);
             let fail_parse = checks::config_error("format!(\"{}: {}\", label, e)");
             format!(
                 "{pre}if let Some(raw) = {lookup} {{\n    let label = {label};\n    let probe: serde_json::Value = match serde_json::from_str(&raw) {{\n        Ok(v) => v,\n        Err(e) => {{ {fail_parse} }}\n    }};\n{required}    let decoded: {ty} = match serde_json::from_str(&raw) {{\n        Ok(v) => v,\n        Err(e) => {{ {fail_parse} }}\n    }};\n{validate}    {dest} = decoded;\n    {err} = None;\n}} else {{\n    {err} = {miss};\n}}",
@@ -625,10 +613,7 @@ impl Emitter for Resolver<'_, '_> {
             return out;
         };
         let cascade = self.source_cascade(field, &dest, &err, |this, name| {
-            let lookup = this.env_lookup(name);
-            let label = this.env_label(name);
-            let miss = this.env_miss_error(name);
-            let pre = this.env_name_prereq(name, &err);
+            let (lookup, label, miss, pre) = plan::env_parts(this, name, &err);
             let fail = checks::config_error("format!(\"{}: {}\", label, e)");
             format!(
                 "{pre}if let Some(raw) = {lookup} {{\n    let label = {label};\n    match serde_json::from_str(&raw) {{\n        Ok(v) => {{ {dest} = v; }}\n        Err(e) => {{ {fail} }}\n    }}\n    {err} = None;\n}} else {{\n    {err} = {miss};\n}}",

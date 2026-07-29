@@ -272,6 +272,13 @@ pub trait Emitter {
     /// The environment read call around a name expression (`os.LookupEnv(x)` /
     /// `readEnv(x)`); records the import/helper it needs.
     fn env_read_call(&mut self, name_expr: &str) -> String;
+    /// The prereq guard when an `@env` variable's own name comes from a
+    /// sibling field that may itself be absent: empty when the name is a
+    /// literal or the sibling is guaranteed, otherwise an opened guard the
+    /// caller's own env step closes (mirrors `wrap_from`, but `err` here is
+    /// already the derived identifier of the field being resolved, not a
+    /// field name to re-derive one from).
+    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String;
 
     // --- the env lookup / label / miss reason (shared: only the read call and
     //     the to-string spelling differ) ---
@@ -597,6 +604,21 @@ pub fn nest(unit: &str, s: &str, n: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The four pieces every `@env` presence step reads before spelling its own
+/// syntax around them: the read expression, the interpolatable label, the
+/// miss-error expression, and the sibling-name prereq guard.
+pub fn env_parts<E: Emitter>(
+    e: &mut E,
+    name: &EnvName,
+    err: &str,
+) -> (String, String, String, String) {
+    let lookup = e.env_lookup(name);
+    let label = e.env_label(name);
+    let miss = e.env_miss_error(name);
+    let pre = e.env_name_prereq(name, err);
+    (lookup, label, miss, pre)
 }
 
 /// The `@arg`/error-var opening shared by the structured and whole-JSON

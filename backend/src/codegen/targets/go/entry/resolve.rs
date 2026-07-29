@@ -29,31 +29,6 @@ impl Resolver<'_, '_> {
         self.entry.field_guaranteed(name)
     }
 
-    /// The prereq guard when the env variable's own name comes from a sibling
-    /// field that may itself be absent. Returns the opened guard text (the env
-    /// step closes it), or empty when the name is guaranteed. `err` is
-    /// already the derived identifier of the field being resolved (as every
-    /// caller of this helper holds it, not the bare field name `wrap_from`
-    /// takes), so the wrap is built directly here rather than through
-    /// `wrap_from`.
-    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        let head_err = self.err_ident(head);
-        let message = format!("\"{head} <- \" + {head_err}.Error()");
-        format!(
-            "if {head_err} != nil {{\n\t{err} = {}\n}} else ",
-            self.config_error_expr(&message, Some(&head_err)),
-        )
-    }
-
     /// [`as_string`] plus the fmt import its non-string spelling needs.
     fn as_string_expr(&mut self, expr: &str, t: &Tref) -> String {
         if as_string_needs_fmt(t) {
@@ -168,10 +143,7 @@ impl Resolver<'_, '_> {
                 s.import("os", "os");
                 s.import("json", "encoding/json");
                 s.import("fmt", "fmt");
-                let lookup = s.env_lookup(name);
-                let label = s.env_label(name);
-                let miss = s.env_miss_error(name);
-                let pre = s.env_name_prereq(name, err);
+                let (lookup, label, miss, pre) = plan::env_parts(s, name, err);
                 env_block(s, &lookup, &label, &miss, &pre)
             },
             literal,
@@ -281,6 +253,24 @@ impl Emitter for Resolver<'_, '_> {
         ))
     }
 
+    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
+        let EnvName::Field(fr) = name else {
+            return String::new();
+        };
+        let Some(head) = fr.field.first() else {
+            return String::new();
+        };
+        if self.guaranteed(head) {
+            return String::new();
+        }
+        let head_err = self.err_ident(head);
+        let message = format!("\"{head} <- \" + {head_err}.Error()");
+        format!(
+            "if {head_err} != nil {{\n\t{err} = {}\n}} else ",
+            self.config_error_expr(&message, Some(&head_err)),
+        )
+    }
+
     fn config_error_expr(&self, message_expr: &str, cause: Option<&str>) -> String {
         match cause {
             Some(cause) => format!(
@@ -318,10 +308,7 @@ impl Emitter for Resolver<'_, '_> {
         dest: &str,
         err: &str,
     ) -> String {
-        let lookup = self.env_lookup(name);
-        let label = self.env_label(name);
-        let miss = self.env_miss_error(name);
-        let pre = self.env_name_prereq(name, err);
+        let (lookup, label, miss, pre) = plan::env_parts(self, name, err);
         let parse = self.env_parse(field, dest, &label);
         format!(
             "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
