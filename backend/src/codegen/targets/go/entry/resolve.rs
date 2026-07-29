@@ -163,11 +163,10 @@ impl Resolver<'_, '_> {
         Some((dest, err))
     }
 
-    /// Lay out a decode field's source cascade below the error-var opening: the
-    /// first source runs unconditionally, every later one only while the error
-    /// var is still set (a first-present-wins fallback). Each `@env` step is
-    /// built by `env_block` from its own `(lookup, label, miss, prereq)`; `@with`
-    /// and `@default` are spelled inline.
+    /// Lay out a decode field's source cascade below the error-var opening.
+    /// Each `@env` step is built by `env_block` from its own `(lookup, label,
+    /// miss, prereq)`, computed here before delegating the shared ordering and
+    /// wrapping to `plan::decode_cascade`.
     fn decode_cascade(
         &mut self,
         field: &EntryField,
@@ -175,39 +174,24 @@ impl Resolver<'_, '_> {
         err: &str,
         mut env_block: impl FnMut(&mut Self, &str, &str, &str, &str) -> String,
     ) -> String {
-        let mut steps: Vec<String> = Vec::new();
-        for source in &field.sources {
-            match source {
-                Source::With => steps.push(self.with_step_body(field, dest, err)),
-                Source::Env(name) => {
-                    self.import("os", "os");
-                    self.import("json", "encoding/json");
-                    self.import("fmt", "fmt");
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    let miss = self.env_miss_error(name);
-                    let pre = self.env_name_prereq(name, err);
-                    steps.push(env_block(self, &lookup, &label, &miss, &pre));
-                }
-                Source::Default(v) => steps.push(format!(
-                    "{dest} = {}\n{err} = nil",
-                    literal(&field.target, v)
-                )),
-                Source::Arg => {}
-            }
-        }
-        steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                if i == 0 {
-                    step.clone()
-                } else {
-                    format!("if {err} != nil {{\n{}\n}}", nest(step, 1))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        plan::decode_cascade(
+            self,
+            field,
+            dest,
+            err,
+            |s| s.with_step_body(field, dest, err),
+            |s, name| {
+                s.import("os", "os");
+                s.import("json", "encoding/json");
+                s.import("fmt", "fmt");
+                let lookup = s.env_lookup(name);
+                let label = s.env_label(name);
+                let miss = s.env_miss_error(name);
+                let pre = s.env_name_prereq(name, err);
+                env_block(s, &lookup, &label, &miss, &pre)
+            },
+            literal,
+        )
     }
 }
 
@@ -357,7 +341,7 @@ impl Emitter for Resolver<'_, '_> {
         let parse = self.env_parse(field, dest, &label);
         format!(
             "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
-            parse = nest(&parse, 1),
+            parse = plan::nest("\t", &parse, 1),
         )
     }
 
@@ -383,7 +367,7 @@ impl Emitter for Resolver<'_, '_> {
                     out.push_str(&format!(
                         "{}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n}}",
                         if first { "" } else { " else " },
-                        parse = nest(&parse, 1),
+                        parse = plan::nest("\t", &parse, 1),
                     ));
                     first = false;
                 }
@@ -621,23 +605,6 @@ pub(super) fn config_errorf(sprintf_args: &str) -> String {
         "return nil, &{config}{{Message: fmt.Sprintf({sprintf_args})}}",
         config = error_names().config,
     )
-}
-
-/// Indent every non-empty line of `s` by `n` tabs, dropping any trailing
-/// newline so callers control the separator.
-fn nest(s: &str, n: usize) -> String {
-    let pad = "\t".repeat(n);
-    s.trim_end_matches('\n')
-        .split('\n')
-        .map(|l| {
-            if l.is_empty() {
-                String::new()
-            } else {
-                format!("{pad}{l}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn int_bits(p: &Prim) -> u32 {

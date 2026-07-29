@@ -172,11 +172,10 @@ impl Resolver<'_, '_> {
         Some((dest, err))
     }
 
-    /// Lay out a decode field's source cascade below the error-var opening: the
-    /// first source runs unconditionally, every later one only while the error
-    /// var is still set (a first-present-wins fallback). Each `@env` step is
-    /// built by `env_block` from its own `(lookup, label, miss, prereq)`;
-    /// `@with` and `@default` are spelled inline.
+    /// Lay out a decode field's source cascade below the error-var opening.
+    /// Each `@env` step is built by `env_block` from its own `(lookup, label,
+    /// miss, prereq)`, computed here before delegating the shared ordering and
+    /// wrapping to `plan::decode_cascade`.
     fn decode_cascade(
         &mut self,
         field: &EntryField,
@@ -184,36 +183,21 @@ impl Resolver<'_, '_> {
         err: &str,
         mut env_block: impl FnMut(&mut Self, &str, &str, &str, &str) -> String,
     ) -> String {
-        let mut steps: Vec<String> = Vec::new();
-        for source in &field.sources {
-            match source {
-                Source::With => steps.push(self.with_step_body(field, dest, err)),
-                Source::Env(name) => {
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    let miss = self.env_miss_error(name);
-                    let pre = self.env_name_prereq(name, err);
-                    steps.push(env_block(self, &lookup, &label, &miss, &pre));
-                }
-                Source::Default(v) => steps.push(format!(
-                    "{dest} = {};\n{err} = undefined;",
-                    literal(&field.target, v)
-                )),
-                Source::Arg => {}
-            }
-        }
-        steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                if i == 0 {
-                    step.clone()
-                } else {
-                    format!("if ({err} !== undefined) {{\n{}\n}}", nest(step, 1))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        plan::decode_cascade(
+            self,
+            field,
+            dest,
+            err,
+            |s| s.with_step_body(field, dest, err),
+            |s, name| {
+                let lookup = s.env_lookup(name);
+                let label = s.env_label(name);
+                let miss = s.env_miss_error(name);
+                let pre = s.env_name_prereq(name, err);
+                env_block(s, &lookup, &label, &miss, &pre)
+            },
+            literal,
+        )
     }
 }
 
@@ -363,7 +347,7 @@ impl Emitter for Resolver<'_, '_> {
         let parse = self.env_parse(field, dest, &label);
         format!(
             "{pre}{{\n  const v = {lookup};\n  if (v !== undefined) {{\n{parse}\n    {err} = undefined;\n  }} else {{\n    {err} = {miss};\n  }}\n}}",
-            parse = nest(&parse, 2),
+            parse = plan::nest("  ", &parse, 2),
         )
     }
 
@@ -390,7 +374,7 @@ impl Emitter for Resolver<'_, '_> {
                     let parse = self.env_parse(field, dest, &label);
                     out.push_str(&format!(
                         "\nif (!{flag}) {{\n  const v = {lookup};\n  if (v !== undefined) {{\n{parse}\n    {flag} = true;\n  }}\n}}",
-                        parse = nest(&parse, 2),
+                        parse = plan::nest("  ", &parse, 2),
                     ));
                 }
                 Source::Default(v) => {
@@ -670,29 +654,12 @@ impl Emitter for Resolver<'_, '_> {
     }
 }
 
-/// Indent every non-empty line of `s` by `n` two-space units, dropping any
-/// trailing newline so callers control the separator.
-fn nest(s: &str, n: usize) -> String {
-    let pad = "  ".repeat(n);
-    s.trim_end_matches('\n')
-        .split('\n')
-        .map(|l| {
-            if l.is_empty() {
-                String::new()
-            } else {
-                format!("{pad}{l}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// A structured-decode sub-block indented one level with a trailing newline, or
 /// empty when the block is empty (so an absent check adds no blank line).
 fn block1(s: &str) -> String {
     if s.is_empty() {
         String::new()
     } else {
-        format!("{}\n", nest(s, 1))
+        format!("{}\n", plan::nest("  ", s, 1))
     }
 }

@@ -402,38 +402,14 @@ fn discard_unread_errs(body: &str, entry: &EntryModel<'_>) -> String {
         .fields
         .iter()
         .map(|f| err_var(&f.name))
-        .filter(|err| is_written_never_read(body, err))
+        .filter(|err| {
+            plan::is_written_never_read(
+                body,
+                err,
+                |prefix| prefix.ends_with("let") || prefix.ends_with("mut"),
+                None,
+            )
+        })
         .map(|err| format!("let _ = &{err};\n"))
         .collect()
-}
-
-fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
-}
-
-/// Whether `ident` occurs in `body` and every occurrence is a write (a `let`
-/// declaration or a plain reassignment `ident = ..`, not `==`).
-fn is_written_never_read(body: &str, ident: &str) -> bool {
-    let bytes = body.as_bytes();
-    let mut found = false;
-    let mut from = 0;
-    while let Some(rel) = body[from..].find(ident) {
-        let start = from + rel;
-        let end = start + ident.len();
-        from = end;
-        let whole_word = (start == 0 || !is_ident_byte(bytes[start - 1]))
-            && (end == bytes.len() || !is_ident_byte(bytes[end]));
-        if !whole_word {
-            continue;
-        }
-        found = true;
-        let prefix = body[..start].trim_end();
-        let is_decl = prefix.ends_with("let") || prefix.ends_with("mut");
-        let rest = body[end..].trim_start_matches(' ');
-        let is_reassign = rest.starts_with('=') && !rest.starts_with("==");
-        if !(is_decl || is_reassign) {
-            return false;
-        }
-    }
-    found
 }
