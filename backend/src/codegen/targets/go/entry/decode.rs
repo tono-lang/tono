@@ -74,17 +74,18 @@ pub(super) fn success_block(
             )
         }
         Some(t) => {
-            refs.push(import("json", "encoding/json"));
             let ty = go_type_label(t);
             let out_shape = match t {
                 Tref::Ref { id, .. } => module.shapes.iter().find(|s| s.id == *id),
                 _ => None,
             };
             if out_shape.is_some_and(shape_has_required) {
-                // The probe lives once per type (see `output_decode_decl`); the
-                // call site only routes the failure through the operation's own
-                // error boundary, naming which member (or the whole body) came
-                // back wrong.
+                // The probe lives once per type (see `output_decode_decl`, in
+                // the codec file, which imports `encoding/json` itself); the
+                // call site here only routes the failure through the
+                // operation's own error boundary, naming which member (or
+                // the whole body) came back wrong, and never touches `json`
+                // directly.
                 let fail_decode = fail(format!(
                     "&{decode}{{Path: path, Expected: {ty:?}, Raw: {text}}}",
                     decode = en.decode,
@@ -96,6 +97,7 @@ pub(super) fn success_block(
                     decode_fn = output_decode_fn_name(&ty),
                 )
             } else {
+                refs.push(import("json", "encoding/json"));
                 let fail_decode = fail(format!(
                     "&{decode}{{Path: \"$\", Expected: {ty:?}, Raw: {text}}}",
                     decode = en.decode,
