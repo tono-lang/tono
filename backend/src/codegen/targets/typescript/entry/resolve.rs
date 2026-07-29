@@ -23,10 +23,6 @@ pub(super) struct Resolver<'a, 'b> {
 }
 
 impl Resolver<'_, '_> {
-    fn guaranteed(&self, name: &str) -> bool {
-        self.entry.field_guaranteed(name)
-    }
-
     fn with_access(&self, field: &EntryField) -> String {
         format!(
             "config.{}",
@@ -258,21 +254,8 @@ impl Emitter for Resolver<'_, '_> {
         self.config_error_expr(&message, Some(head_err))
     }
 
-    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        let head_err = self.err_ident(head);
-        format!(
-            "if ({head_err} !== undefined) {{\n  {err} = {};\n}} else ",
-            self.wrap_error_expr(head, &head_err),
-        )
+    fn field_guaranteed(&self, name: &str) -> bool {
+        self.entry.field_guaranteed(name)
     }
 
     fn config_error_expr(&self, message_expr: &str, cause: Option<&str>) -> String {

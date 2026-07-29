@@ -25,10 +25,6 @@ impl Resolver<'_, '_> {
         self.refs.push(import(name, module));
     }
 
-    fn guaranteed(&self, name: &str) -> bool {
-        self.entry.field_guaranteed(name)
-    }
-
     /// [`as_string`] plus the fmt import its non-string spelling needs.
     fn as_string_expr(&mut self, expr: &str, t: &Tref) -> String {
         if as_string_needs_fmt(t) {
@@ -248,21 +244,8 @@ impl Emitter for Resolver<'_, '_> {
         self.config_error_expr(&message, Some(head_err))
     }
 
-    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        let head_err = self.err_ident(head);
-        format!(
-            "if {head_err} != nil {{\n\t{err} = {}\n}} else ",
-            self.wrap_error_expr(head, &head_err),
-        )
+    fn field_guaranteed(&self, name: &str) -> bool {
+        self.entry.field_guaranteed(name)
     }
 
     fn config_error_expr(&self, message_expr: &str, cause: Option<&str>) -> String {

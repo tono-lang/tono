@@ -87,10 +87,6 @@ fn prim_label(p: &Prim) -> &'static str {
 }
 
 impl Resolver<'_, '_> {
-    fn guaranteed(&self, name: &str) -> bool {
-        self.entry.field_guaranteed(name)
-    }
-
     fn arg_read(&self, field: &EntryField) -> String {
         format!(
             "{}{}",
@@ -358,21 +354,8 @@ impl Emitter for Resolver<'_, '_> {
         format!("{head_err}.as_ref().map(|e| ConfigError {{ message: format!(\"{head} <- {{}}\", e.message) }})")
     }
 
-    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        let head_err = self.err_ident(head);
-        format!(
-            "if {head_err}.is_some() {{\n    {err} = {};\n}} else ",
-            self.wrap_error_expr(head, &head_err),
-        )
+    fn field_guaranteed(&self, name: &str) -> bool {
+        self.entry.field_guaranteed(name)
     }
 
     fn config_open(&mut self, field: &EntryField, _shape: &Shape) -> Leaf {
