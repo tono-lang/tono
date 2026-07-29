@@ -11,6 +11,7 @@
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::extensions::{bound_extensions, BoundExtension};
+use crate::codegen::ops::op_io;
 use crate::codegen::symbol::SymbolKind;
 use crate::codegen::tree::Decl;
 use crate::ir::{ArmValue, EntryField, EnvName, Module, Prim, Shape, Source, TemplatePart, Tref};
@@ -598,6 +599,27 @@ pub fn nest(unit: &str, s: &str, n: usize) -> String {
         .join("\n")
 }
 
+/// The `@arg`/error-var opening shared by the structured and whole-JSON
+/// decodes: an `@arg` value passes typed (written straight onto `out`,
+/// `None` returned), otherwise the error var opens and `(dest, err)` are
+/// returned so the caller can lay out the `@with`/`@env`/`@default` fallback
+/// cascade.
+pub fn decode_opening<E: Emitter>(
+    e: &mut E,
+    field: &EntryField,
+    out: &mut String,
+) -> Option<(String, String)> {
+    let dest = e.ident(&field.name);
+    if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
+        out.push_str(&format!("{dest} = {}{}", e.arg_ident(field), e.term()));
+        return None;
+    }
+    let err = e.err_ident(&field.name);
+    out.push_str(&e.err_open(&field.name).0);
+    out.push('\n');
+    Some((dest, err))
+}
+
 /// Lay out a decode field's source cascade below its error-var opening: the
 /// first source runs unconditionally, every later one only while the error
 /// var is still set (a first-present-wins fallback). `with_step` and
@@ -689,6 +711,41 @@ pub fn is_written_never_read(
         }
     }
     found
+}
+
+/// The per-type output-decode helpers every operation that decodes a body
+/// needs (a protocol response or a raw bespoke outcome), deduped by shape so
+/// operations sharing an output type share one decode helper instead of each
+/// repeating its required-member probe. `decodes_body` is the one predicate
+/// that differs per target (Go/TypeScript also route a raw bespoke impl
+/// through this path; Rust does not yet); `per_shape` is the per-target decode
+/// declarations for one shape.
+pub fn output_decode_decls(
+    entries: &[EntryModel<'_>],
+    module: &Module,
+    decodes_body: impl Fn(&Shape) -> bool,
+    mut per_shape: impl FnMut(&Shape) -> Option<Decl>,
+) -> Vec<Decl> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut decls = Vec::new();
+    for entry in entries {
+        for op in entry.operations {
+            if !decodes_body(op) {
+                continue;
+            }
+            let (_, output) = op_io(op);
+            let Some(Tref::Ref { id, .. }) = output else {
+                continue;
+            };
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+                decls.extend(per_shape(shape));
+            }
+        }
+    }
+    decls
 }
 
 /// The head field of an inline match-arm source path or a select subject.

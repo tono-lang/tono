@@ -577,12 +577,10 @@ impl Emitter for Resolver<'_, '_> {
     /// strictness for an env-sourced construction value was judged not worth
     /// the extra decoder plumbing for this pass). Relative to column zero.
     fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String {
-        let dest = self.ident(&field.name);
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            return format!("{dest} = {};", self.arg_read(field));
-        }
-        let err = err_var(&field.name);
-        let mut out = format!("let mut {err}: Option<ConfigError> = None;\n");
+        let mut out = String::new();
+        let Some((dest, err)) = plan::decode_opening(self, field, &mut out) else {
+            return out;
+        };
         let ty = type_ident_from_id(&shape.id);
         let mut required_checks = String::new();
         if let ShapeKind::Structure { members, .. } = &shape.kind {
@@ -622,12 +620,10 @@ impl Emitter for Resolver<'_, '_> {
     /// A map/list field: an `@arg`/`@with` value passes typed, an env value
     /// decodes as JSON whole. Relative to column zero.
     fn json_body(&mut self, field: &EntryField) -> String {
-        let dest = self.ident(&field.name);
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            return format!("{dest} = {};", self.arg_read(field));
-        }
-        let err = err_var(&field.name);
-        let mut out = format!("let mut {err}: Option<ConfigError> = None;\n");
+        let mut out = String::new();
+        let Some((dest, err)) = plan::decode_opening(self, field, &mut out) else {
+            return out;
+        };
         let cascade = self.source_cascade(field, &dest, &err, |this, name| {
             let lookup = this.env_lookup(name);
             let label = this.env_label(name);

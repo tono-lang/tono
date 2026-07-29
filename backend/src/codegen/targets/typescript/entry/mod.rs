@@ -249,7 +249,12 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         // combination upstream, so the bridge is only emitted here.
         decls.extend(client_init_wrapper(&bound, &entries, multi, module));
     }
-    decls.extend(output_decode_decls(&entries, module, &bound));
+    decls.extend(plan::output_decode_decls(
+        &entries,
+        module,
+        |op| wire_descriptor(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
+        |shape| decode::output_decode_decl(shape, module),
+    ));
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
@@ -675,42 +680,7 @@ fn op_method(
     )
 }
 
-fn err_var(field: &str) -> String {
-    camel(&format!("{field}_err"))
-}
-
-/// The per-type output-decode helpers every operation that decodes a body
-/// needs (a protocol response or a raw bespoke outcome), deduped by shape so
-/// operations sharing an output type share one `parse<Type>` instead of each
-/// repeating its required-member probe.
-fn output_decode_decls(
-    entries: &[EntryModel<'_>],
-    module: &Module,
-    bound: &[BoundExtension<'_>],
-) -> Vec<Decl> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut decls = Vec::new();
-    for entry in entries {
-        for op in entry.operations {
-            let decodes_body =
-                wire_descriptor(op).is_some() || impl_binding(bound, &op.id).is_some_and(|b| b.raw);
-            if !decodes_body {
-                continue;
-            }
-            let (_, output) = crate::codegen::ops::op_io(op);
-            let Some(Tref::Ref { id, .. }) = output else {
-                continue;
-            };
-            if !seen.insert(id.clone()) {
-                continue;
-            }
-            if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
-                decls.extend(decode::output_decode_decl(shape, module));
-            }
-        }
-    }
-    decls
-}
+use plan::err_var;
 
 mod checks;
 mod decode;

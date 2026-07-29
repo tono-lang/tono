@@ -147,22 +147,6 @@ impl Resolver<'_, '_> {
         })
     }
 
-    /// The `@arg`/error-var opening shared by the structured and whole-JSON
-    /// decodes: an `@arg` value passes typed (returns `None`, having written the
-    /// assignment), otherwise the error var opens and `(dest, err)` are returned
-    /// so the caller can lay out the `@with`/`@env`/`@default` fallback cascade.
-    fn decode_opening(&mut self, field: &EntryField, out: &mut String) -> Option<(String, String)> {
-        let dest = self.ident(&field.name);
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            out.push_str(&format!("{dest} = {}", self.arg_ident(field)));
-            return None;
-        }
-        let err = err_var(&field.name);
-        out.push_str(&self.err_open(&field.name).0);
-        out.push('\n');
-        Some((dest, err))
-    }
-
     /// Lay out a decode field's source cascade below the error-var opening.
     /// Each `@env` step is built by `env_block` from its own `(lookup, label,
     /// miss, prereq)`, computed here before delegating the shared ordering and
@@ -471,7 +455,7 @@ impl Emitter for Resolver<'_, '_> {
     /// value decodes strictly into the wire struct. Relative to column zero.
     fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String {
         let mut out = String::new();
-        let Some((dest, err)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, err)) = plan::decode_opening(self, field, &mut out) else {
             return out;
         };
         self.import("bytes", "bytes");
@@ -527,7 +511,7 @@ impl Emitter for Resolver<'_, '_> {
     /// decodes as JSON whole. Relative to column zero.
     fn json_body(&mut self, field: &EntryField) -> String {
         let mut out = String::new();
-        let Some((dest, err)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, err)) = plan::decode_opening(self, field, &mut out) else {
             return out;
         };
         let (dc, ec) = (dest.clone(), err.clone());

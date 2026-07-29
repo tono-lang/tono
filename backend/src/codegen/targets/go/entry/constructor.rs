@@ -258,9 +258,7 @@ pub(super) fn indent(block: &str) -> String {
         .collect::<String>()
 }
 
-pub(super) fn err_var(field: &str) -> String {
-    camel(&format!("{field}_err"))
-}
+pub(super) use plan::err_var;
 
 /// Discard statements for the error vars nothing reads.
 ///

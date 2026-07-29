@@ -417,7 +417,12 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         return EntryEmission::empty();
     };
     let mut shared = surface::config_structs(module, config);
-    let decode_decls = output_decode_decls(&entries, module, &bound);
+    let decode_decls = plan::output_decode_decls(
+        &entries,
+        module,
+        |op| wire_descriptor(op).is_some(),
+        decode::output_decode_decl,
+    );
     if !decode_decls.is_empty() {
         // `shared` rides the module's own types group ([`emit`]'s
         // `type_decls.extend(entries.shared)`), unlike a per-entry group
@@ -643,33 +648,6 @@ fn op_method(
 /// bespoke impl, typed or raw, handles its own output without it), deduped
 /// by shape so operations sharing an output type share one `decode_<type>`
 /// instead of each repeating its required-member probe.
-fn output_decode_decls(
-    entries: &[EntryModel<'_>],
-    module: &Module,
-    _bound: &[BoundExtension<'_>],
-) -> Vec<Decl> {
-    let mut seen = BTreeSet::new();
-    let mut decls = Vec::new();
-    for entry in entries {
-        for op in entry.operations {
-            if wire_descriptor(op).is_none() {
-                continue;
-            }
-            let (_, output) = op_io(op);
-            let Some(Tref::Ref { id, .. }) = output else {
-                continue;
-            };
-            if !seen.insert(id.clone()) {
-                continue;
-            }
-            if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
-                decls.extend(decode::output_decode_decl(shape));
-            }
-        }
-    }
-    decls
-}
-
 mod checks;
 mod constructor;
 mod decode;
