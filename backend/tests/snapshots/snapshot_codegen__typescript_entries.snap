@@ -260,19 +260,10 @@ export class Client {
     break;
   }
   default: {
-    endpointWhy = "no source";
-    {
-      const v = readEnv("ENDPOINT_V2");
-      if (v !== undefined) {
-        s.endpoint = v;
-        endpointWhy = "";
-      } else {
-        endpointWhy = "env ENDPOINT_V2: empty";
-      }
-    }
-    if (endpointWhy !== "") {
-      s.endpoint = "https://example.com";
-      endpointWhy = "";
+    if (endpointV2Why !== "") {
+      endpointWhy = "endpoint_v2 <- " + endpointV2Why;
+    } else {
+      s.endpoint = s.endpointV2;
     }
     break;
   }

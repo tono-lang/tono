@@ -287,16 +287,10 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	case "legacy":
 		s.Endpoint = "https://old.example.com"
 	default:
-		endpointWhy = "no source"
-		if v, ok := os.LookupEnv("ENDPOINT_V2"); ok && v != "" {
-			s.Endpoint = v
-			endpointWhy = ""
+		if endpointV2Why != "" {
+			endpointWhy = "endpoint_v2 <- " + endpointV2Why
 		} else {
-			endpointWhy = "env ENDPOINT_V2: empty"
-		}
-		if endpointWhy != "" {
-			s.Endpoint = "https://example.com"
-			endpointWhy = ""
+			s.Endpoint = s.EndpointV2
 		}
 	}
 	if w.timeout != nil {
@@ -368,7 +362,6 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	if len(violations) > 0 {
 		return nil, &ValidationError{Violations: violations}
 	}
-	_ = endpointV2Why
 	_ = credsWhy
 	_ = labelsWhy
 	values := map[string]any{}
