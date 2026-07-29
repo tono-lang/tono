@@ -59,6 +59,21 @@ fn push_impl_extension(module: &mut Module, name: &str, raw: bool, binding: &str
     });
 }
 
+/// Binds a lifecycle hook extension (`client_init`, `before_request`,
+/// `after_response`) for the Rust target only.
+fn push_hook_extension(module: &mut Module, slot: &str, binding: &str) {
+    module.extensions.push(Extension {
+        name: slot.into(),
+        kind: ExtKind::Hook,
+        signature: None,
+        raw: false,
+        bindings: [("rust".to_string(), binding.to_string())]
+            .into_iter()
+            .collect(),
+        conformance: None,
+    });
+}
+
 /// A single-entry module: `@arg api_key`, `@env`/`@default` `client_name`,
 /// one `@http` op declaring a retryable coded error.
 fn simple_entry_module() -> Module {
@@ -412,17 +427,55 @@ fn a_typed_bespoke_impl_with_an_input_passes_it_alongside_settings() {
 }
 
 #[test]
-fn a_raw_bespoke_impl_is_not_yet_supported_for_rust() {
+fn a_raw_bespoke_impl_with_no_input_and_no_declared_errors_falls_back_to_undeclared() {
     let mut module = simple_entry_module();
     push_client_op(&mut module, "save", None, None, vec![]);
     push_impl_extension(&mut module, "save", true, "ext/rust/save.rs#save");
     let out = text(&module);
     assert!(out.contains("pub fn save(&self) -> Result<(), TonoError> {"));
-    assert!(out.contains("raw bespoke operations are not yet supported for the Rust target"));
+    assert!(out.contains("let payload: Vec<u8> = Vec::new();"));
+    assert!(out.contains(
+        "let outcome = save(&self.settings, payload).map_err(|cause| match cause.downcast::<TonoError>() {"
+    ));
+    assert!(out.contains("Ok(declared) => *declared,"));
+    assert!(out.contains(
+        "TonoError::Contract(ContractError { contract_name: \"save\".to_string(), cause: other }),"
+    ));
+    assert!(out.contains("let raw_body = String::from_utf8_lossy(&outcome.body).into_owned();"));
+    assert!(out.contains("if !outcome.success {"));
+    assert!(out.contains(
+        "return Err(TonoError::Api(APIFailure::Undeclared(APIError { status: 0, body: raw_body })));"
+    ));
+    assert!(out.contains("Ok(())"));
+    assert!(out.contains(
+        "fn save(settings: &Settings, payload: Vec<u8>) -> Result<tono_ext::Outcome, Box<dyn std::error::Error + Send + Sync>>"
+    ));
 }
 
 #[test]
-fn a_raw_bespoke_impl_with_declared_errors_gets_the_code_only_discriminator() {
+fn a_raw_bespoke_impl_with_an_input_marshals_it_to_the_payload() {
+    let mut module = simple_entry_module();
+    push_client_op(
+        &mut module,
+        "archive",
+        Some(Tref::Ref {
+            id: "m#charge".into(),
+            args: vec![],
+        }),
+        None,
+        vec![],
+    );
+    push_impl_extension(&mut module, "archive", true, "ext/rust/archive.rs#archive");
+    let out = text(&module);
+    assert!(out.contains("pub fn archive(&self, input: Charge) -> Result<(), TonoError> {"));
+    assert!(out.contains(
+        "let payload = serde_json::to_vec(&input).map_err(|e| TonoError::Decode(DecodeError { path: \"$\".to_string(), expected: \"input\".to_string(), raw: e.to_string() }))?;"
+    ));
+    assert!(out.contains("let outcome = archive(&self.settings, payload)"));
+}
+
+#[test]
+fn a_raw_bespoke_impl_with_declared_errors_discriminates_by_code_alone() {
     let mut module = simple_entry_module();
     push_client_op(
         &mut module,
@@ -438,6 +491,28 @@ fn a_raw_bespoke_impl_with_declared_errors_gets_the_code_only_discriminator() {
     let out = text(&module);
     assert!(out.contains("pub fn decode_save_error(code: Option<&str>, body: &str) -> TonoError {"));
     assert!(out.contains("if code == Some(\"payment_declined\") {"));
+    // The raw op's own body calls the discriminator by code, not status.
+    assert!(out.contains("return Err(decode_save_error(Some(&outcome.code), &raw_body));"));
+}
+
+#[test]
+fn a_raw_bespoke_impl_with_a_declared_output_decodes_the_success_body() {
+    let mut module = simple_entry_module();
+    push_client_op(
+        &mut module,
+        "save",
+        None,
+        Some(Tref::Ref {
+            id: "m#charge".into(),
+            args: vec![],
+        }),
+        vec![],
+    );
+    push_impl_extension(&mut module, "save", true, "ext/rust/save.rs#save");
+    let out = text(&module);
+    assert!(out.contains("pub fn save(&self) -> Result<Charge, TonoError> {"));
+    assert!(out.contains("let body = &raw_body;"));
+    assert!(out.contains("serde_json::from_str::<Charge>(body).map_err(|_| "));
 }
 
 #[test]
@@ -459,6 +534,68 @@ fn a_client_init_hook_runs_after_source_resolution_and_its_error_is_guarded() {
     let out = text(&module);
     assert!(out.contains(
         "if let Err(e) = init_client(&mut s) {\n            return Err(match e.downcast::<TonoError>() {\n                Ok(declared) => *declared,\n                Err(other) => TonoError::Contract(ContractError { contract_name: \"client_init\".to_string(), cause: other }),\n            });\n        }"
+    ));
+}
+
+#[test]
+fn with_no_hooks_bound_the_client_carries_none() {
+    let module = simple_entry_module();
+    let out = text(&module);
+    assert!(out.contains("hooks: None }"));
+    assert!(!out.contains("__before_request_hook"));
+    assert!(!out.contains("__after_response_hook"));
+}
+
+#[test]
+fn a_before_request_hook_is_boxed_and_wired_leaving_after_response_unset() {
+    let mut module = simple_entry_module();
+    push_hook_extension(
+        &mut module,
+        "before_request",
+        "ext/rust/sign.rs#sign_request",
+    );
+    let out = text(&module);
+    assert!(out.contains(
+        "fn __before_request_hook(req: tono_http_runtime::CanonicalRequest) -> tono_http_runtime::BoxFuture<'static, Result<tono_http_runtime::CanonicalRequest, tono_http_runtime::ExecuteError>> {\n    Box::pin(sign_request(req))\n}"
+    ));
+    assert!(out.contains(
+        "hooks: Some(tono_http_runtime::Hooks { before_request: Some(std::sync::Arc::new(__before_request_hook)), after_response: None }) }"
+    ));
+}
+
+#[test]
+fn an_after_response_hook_is_boxed_and_wired_leaving_before_request_unset() {
+    let mut module = simple_entry_module();
+    push_hook_extension(
+        &mut module,
+        "after_response",
+        "ext/rust/log.rs#log_response",
+    );
+    let out = text(&module);
+    assert!(out.contains(
+        "fn __after_response_hook(res: tono_http_runtime::CanonicalResponse) -> tono_http_runtime::BoxFuture<'static, Result<tono_http_runtime::CanonicalResponse, tono_http_runtime::ExecuteError>> {\n    Box::pin(log_response(res))\n}"
+    ));
+    assert!(out.contains(
+        "hooks: Some(tono_http_runtime::Hooks { before_request: None, after_response: Some(std::sync::Arc::new(__after_response_hook)) }) }"
+    ));
+}
+
+#[test]
+fn both_lifecycle_request_hooks_bound_together_wire_both_slots() {
+    let mut module = simple_entry_module();
+    push_hook_extension(
+        &mut module,
+        "before_request",
+        "ext/rust/sign.rs#sign_request",
+    );
+    push_hook_extension(
+        &mut module,
+        "after_response",
+        "ext/rust/log.rs#log_response",
+    );
+    let out = text(&module);
+    assert!(out.contains(
+        "hooks: Some(tono_http_runtime::Hooks { before_request: Some(std::sync::Arc::new(__before_request_hook)), after_response: Some(std::sync::Arc::new(__after_response_hook)) }) }"
     ));
 }
 
