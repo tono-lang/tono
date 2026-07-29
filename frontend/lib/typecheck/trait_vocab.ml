@@ -74,7 +74,7 @@ let levenshtein (a : string) (b : string) : int =
 
 (* The nearest known trait, when one is near enough to be worth naming. The
    bound scales with the word: a third of its length (at least one edit) keeps
-   "@statu" pointing at @status without pairing every short unknown name with an
+   "@statusx" pointing at @status without pairing every short unknown name with an
    unrelated short known one. *)
 let nearest (name : string) : string option =
   let budget = max 1 (String.length name / 3) in

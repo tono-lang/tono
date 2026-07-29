@@ -574,7 +574,7 @@ let unknown_trait_suggests_the_nearest_name () =
   let messages =
     List.map
       (fun (d : Diagnostic.t) -> d.message)
-      (check {|@statu("x") struct s { a: i64 }|})
+      (check {|@statusx("x") struct s { a: i64 }|})
   in
   Alcotest.(check bool)
     "suggests @status" true

@@ -30,7 +30,7 @@ let diagnostics_error () =
    same path every diagnostic does and arrives as a warning (not an error, the
    spec still compiles) carrying its code, which is what a quick fix keys on. *)
 let diagnostics_unknown_trait () =
-  let ds = Analysis.lsp_diagnostics {|@statu("x") struct point { x: i64 }|} in
+  let ds = Analysis.lsp_diagnostics {|@statusx("x") struct point { x: i64 }|} in
   let d =
     List.find
       (fun (d : Diagnostic.t) -> d.Diagnostic.code = Some (`String "TC0054"))
