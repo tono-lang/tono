@@ -386,7 +386,11 @@ mod tests {
         // files), but the barrel exclusively names the surface a caller
         // reads: the declared error class, never the literal that seeded it.
         let module = crate::codegen::test_support::error_demo_module();
-        let decls = errors::type_decls(&module, &ts_casing());
+        let decls = errors::type_decls(
+            &module,
+            &ts_casing(),
+            &taxonomy::TaxonomyLiveness::all_live(),
+        );
         let exports = exports_of(&decls);
         assert!(exports.values.contains(&"PaymentDeclinedError".to_string()));
         assert!(!exports
