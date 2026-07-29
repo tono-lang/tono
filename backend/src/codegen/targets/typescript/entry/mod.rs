@@ -16,9 +16,9 @@ use std::collections::BTreeSet;
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
 use crate::codegen::entries::{
-    companion_name, module_entries, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
+    companion_name, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
 };
-use crate::codegen::extensions::{bound_extensions, hook_binding, impl_binding, BoundExtension};
+use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
@@ -210,31 +210,16 @@ struct Helpers {
     transforms: BTreeSet<&'static str>,
 }
 
-/// A module's entry emission, split the way the layout groups it: what every
-/// entry of the module shares (the construction-only config interfaces, the hook
-/// wrappers, the resolution helpers) and, per entry, everything named after that
-/// entry.
-pub struct EntryEmission {
-    /// Shared across the module's entries, so they ride its internal group.
-    pub shared: Vec<Decl>,
-    /// Each entry's own group: its name and its declarations.
-    pub per_entry: Vec<(String, Vec<Decl>)>,
-}
+pub use plan::EntryEmission;
 
 /// Emit a module's entries: the Settings and config interfaces, the descriptor
 /// constants, the class and its methods, grouped per entry so the construction
 /// surface reads together; the wrappers and helpers every entry shares stay in
 /// the module's internal group, emitted once.
 pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
-    let entries = module_entries(module);
-    if entries.is_empty() {
-        return EntryEmission {
-            shared: Vec::new(),
-            per_entry: Vec::new(),
-        };
-    }
-    let multi = entries.len() > 1;
-    let bound = bound_extensions(module, &BINDING_LANGS);
+    let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
+        return EntryEmission::empty();
+    };
     let mut helpers = Helpers::default();
     let mut decls = Vec::new();
     decls.extend(config_interfaces(module, config));

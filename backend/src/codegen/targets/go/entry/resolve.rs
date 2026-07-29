@@ -140,22 +140,11 @@ impl Resolver<'_, '_> {
     /// The template split: each part as a Go string expression, plus the
     /// non-guaranteed heads it reads (first-appearance order).
     fn format_pieces(&mut self, parts: &[TemplatePart]) -> (Vec<String>, Vec<String>) {
-        let absent_deps = plan::format_absent_deps(self.entry, parts);
-        let mut concat: Vec<String> = Vec::new();
-        for part in parts {
-            match part {
-                TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
-                TemplatePart::Field(p) => {
-                    let t = self.path_type(p);
-                    let expr = self.path_expr(p);
-                    concat.push(self.as_string_expr(&expr, &t));
-                }
-                // An op-input placeholder cannot appear in a field template;
-                // the frontend rejects it. Render empty defensively.
-                TemplatePart::Input(_) => concat.push("\"\"".to_string()),
-            }
-        }
-        (concat, absent_deps)
+        plan::format_pieces(self.entry, parts, |p| {
+            let t = self.path_type(p);
+            let expr = self.path_expr(p);
+            self.as_string_expr(&expr, &t)
+        })
     }
 
     /// The `@arg`/error-var opening shared by the structured and whole-JSON
@@ -169,7 +158,8 @@ impl Resolver<'_, '_> {
             return None;
         }
         let err = err_var(&field.name);
-        out.push_str(&format!("var {err} error\n"));
+        out.push_str(&self.err_open(&field.name).0);
+        out.push('\n');
         Some((dest, err))
     }
 

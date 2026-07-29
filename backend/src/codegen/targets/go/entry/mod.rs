@@ -16,10 +16,9 @@ use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{
     deprecated_of, doc_of, prim_spelling, rename_of, type_ident_from_id, wire_key,
 };
-use crate::codegen::entries::{
-    companion_name, module_entries, op_local_name, ref_is_enum, EntryModel,
-};
-use crate::codegen::extensions::{bound_extensions, hook_binding, impl_binding, BoundExtension};
+use crate::codegen::entries::plan;
+use crate::codegen::entries::{companion_name, op_local_name, ref_is_enum, EntryModel};
+use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
@@ -258,16 +257,7 @@ struct Helpers {
     transforms: BTreeSet<&'static str>,
 }
 
-/// A module's entry emission, split the way the layout groups it: the
-/// declarations every entry of the module shares (the construction-only config
-/// structs, the descriptor and record helpers, the bound-hook wrappers) and, per
-/// entry, everything named after that entry.
-pub struct EntryEmission {
-    /// Shared across the module's entries, so they ride its internal group.
-    pub shared: Vec<Decl>,
-    /// Each entry's own group: its name and its declarations.
-    pub per_entry: Vec<(String, Vec<Decl>)>,
-}
+pub use plan::EntryEmission;
 
 /// Emit a module's entries. The surface (Settings, options, the client struct)
 /// and the behavior (the constructor, the operation methods) of one entry are
@@ -277,15 +267,9 @@ pub struct EntryEmission {
 /// The on-demand helpers are gathered across every entry and emitted once, since
 /// Go would reject a second declaration of the same function in the package.
 pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
-    let entries = module_entries(module);
-    if entries.is_empty() {
-        return EntryEmission {
-            shared: Vec::new(),
-            per_entry: Vec::new(),
-        };
-    }
-    let multi = entries.len() > 1;
-    let bound = bound_extensions(module, &BINDING_LANGS);
+    let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
+        return EntryEmission::empty();
+    };
     let mut helpers = Helpers::default();
     let mut shared = surface::config_structs(module, config);
     shared.extend(hook_wrapper_decls(&bound, &entries, multi));

@@ -10,13 +10,52 @@
 //! builders that shape the tree live in [`build`].
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
+use crate::codegen::extensions::{bound_extensions, BoundExtension};
 use crate::codegen::symbol::SymbolKind;
+use crate::codegen::tree::Decl;
 use crate::ir::{ArmValue, EntryField, EnvName, Module, Prim, Shape, Source, TemplatePart, Tref};
 
-use super::{source_stub, EntryModel};
+use super::{module_entries, source_stub, EntryModel};
 
 mod build;
 pub use build::{build_field, build_requires, presence_kind, Presence};
+
+/// A module's entry emission, split the way the layout groups it: what every
+/// entry of the module shares and, per entry, everything named after that
+/// entry. Every target's own `emit` returns this same shape; only the
+/// declarations inside (each target's own leaf spelling) differ.
+pub struct EntryEmission {
+    pub shared: Vec<Decl>,
+    pub per_entry: Vec<(String, Vec<Decl>)>,
+}
+
+impl EntryEmission {
+    /// What a module with no entries emits: nothing.
+    pub fn empty() -> Self {
+        Self {
+            shared: Vec::new(),
+            per_entry: Vec::new(),
+        }
+    }
+}
+
+/// The common setup every target's `emit` starts from: the module's entries,
+/// whether it is multi-entry (so companion names need the entry's own
+/// prefix), and the extensions bound for `langs`. `None` for a module with no
+/// entries, so the caller returns [`EntryEmission::empty`] without building
+/// anything.
+pub fn entry_setup<'a>(
+    module: &'a Module,
+    langs: &[&str],
+) -> Option<(Vec<EntryModel<'a>>, bool, Vec<BoundExtension<'a>>)> {
+    let entries = module_entries(module);
+    if entries.is_empty() {
+        return None;
+    }
+    let multi = entries.len() > 1;
+    let bound = bound_extensions(module, langs);
+    Some((entries, multi, bound))
+}
 
 /// Render every entry field's resolution plan, in dependency order, into one
 /// block of target source, each field indented `depth` levels to match the
@@ -514,6 +553,31 @@ pub fn format_absent_deps(entry: &EntryModel, parts: &[TemplatePart]) -> Vec<Str
         }
     }
     deps
+}
+
+/// The `@format` template split shared by every target that supports it:
+/// each part as a target expression, plus the non-guaranteed heads it reads
+/// (first-appearance order). A literal spells identically everywhere (Rust's
+/// `Debug` escaping doubles as a valid Go/TypeScript string literal); only a
+/// field reference needs a target-specific expression, so `field_expr` is the
+/// one thing a caller supplies.
+pub fn format_pieces(
+    entry: &EntryModel,
+    parts: &[TemplatePart],
+    mut field_expr: impl FnMut(&[String]) -> String,
+) -> (Vec<String>, Vec<String>) {
+    let absent_deps = format_absent_deps(entry, parts);
+    let mut concat: Vec<String> = Vec::new();
+    for part in parts {
+        match part {
+            TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
+            TemplatePart::Field(p) => concat.push(field_expr(p)),
+            // An op-input placeholder cannot appear in a field template; the
+            // frontend rejects it. Render empty defensively.
+            TemplatePart::Input(_) => concat.push("\"\"".to_string()),
+        }
+    }
+    (concat, absent_deps)
 }
 
 /// The head field of an inline match-arm source path or a select subject.
