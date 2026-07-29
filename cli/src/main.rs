@@ -13,6 +13,7 @@
 //! this binary is the IO shell around it.
 
 mod frontend;
+mod init;
 mod preview;
 
 use std::fs;
@@ -33,6 +34,7 @@ use crate::preview::pipeline;
 use crate::preview::pipeline::Verdict;
 
 const USAGE: &str = "usage: tono (\n  \
+    init [--target <list>] [--yes] [--root <path>]\n  \
     gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [<ir.json>]\n  \
     check <file.tono>\n  \
     fmt <file.tono>\n  \
@@ -57,6 +59,7 @@ fn main() -> ExitCode {
 
 fn run(args: &[String]) -> Result<(), String> {
     match args.get(1).map(String::as_str) {
+        Some("init") => init::run(&args[2..]),
         Some("gen") => run_gen(&args[2..]),
         Some("check") => run_frontend("check", &args[2..]),
         Some("fmt") => run_frontend("fmt", &args[2..]),
