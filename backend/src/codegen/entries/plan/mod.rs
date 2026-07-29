@@ -19,11 +19,18 @@ mod build;
 pub use build::{build_field, build_requires, presence_kind, Presence};
 
 /// Render every entry field's resolution plan, in dependency order, into one
-/// block of target source (each field indented one level).
-pub fn emit_fields(entry: &EntryModel, module: &Module, e: &mut dyn Emitter) -> String {
+/// block of target source, each field indented `depth` levels to match the
+/// scaffold it lands in (a flat function body vs. a body nested inside a
+/// class's constructor).
+pub fn emit_fields(
+    entry: &EntryModel,
+    module: &Module,
+    e: &mut dyn Emitter,
+    depth: usize,
+) -> String {
     let mut out = String::new();
     for field in &entry.fields {
-        out.push_str(&render(&build_field(field, entry, module, e), 1, e));
+        out.push_str(&render(&build_field(field, entry, module, e), depth, e));
     }
     out
 }

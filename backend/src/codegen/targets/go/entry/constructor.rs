@@ -71,7 +71,7 @@ pub(super) fn new_decl(
         refs: &mut refs,
         body: &mut body,
     };
-    let fields = plan::emit_fields(entry, module, &mut r);
+    let fields = plan::emit_fields(entry, module, &mut r, 1);
     r.body.push_str(&fields);
 
     // client_init runs over the resolved Settings; bespoke wins.

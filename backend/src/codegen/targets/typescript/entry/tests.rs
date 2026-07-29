@@ -42,6 +42,32 @@ fn text(module: &Module) -> String {
 }
 
 #[test]
+fn the_constructor_body_indents_one_level_deeper_than_the_class() {
+    // The plan renders at the depth its scaffold actually nests it at: Go's
+    // constructor is a flat function (one level), TypeScript's is a method
+    // inside a class body (two). Checked without prettier on the output (it
+    // is not installed in this environment), since RFC-0019 requires the raw
+    // emitter text to already be structurally aligned.
+    let module = with_descriptors(fixture_module());
+    let out = text(&module);
+    let ctor_at = out.find("  constructor(").expect("constructor line");
+    let body_start = out[ctor_at..].find('\n').expect("constructor header ends") + ctor_at + 1;
+    let close_at = out[body_start..]
+        .find("\n  }\n")
+        .expect("constructor closes at class-body depth")
+        + body_start;
+    for line in out[body_start..close_at].lines() {
+        if line.is_empty() {
+            continue;
+        }
+        assert!(
+            line.starts_with("    "),
+            "constructor body line is not indented to the class-body-plus-one depth: {line:?}"
+        );
+    }
+}
+
+#[test]
 fn the_entry_class_replaces_the_generic_client_surface() {
     let module = with_descriptors(fixture_module());
     let out = text(&module);

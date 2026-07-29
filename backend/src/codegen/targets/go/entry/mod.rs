@@ -293,8 +293,10 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
+        // The constructor comes right after the type (ADR-0031); the
+        // descriptor vars are wiring the methods below consume, not part of
+        // that pair, so they ride after it in their own block.
         let mut decls = surface::entry_type_decls(entry, &n, module, config, multi);
-        decls.extend(descriptor_decls(entry, &n));
         decls.push(new_decl(
             entry,
             &n,
@@ -304,6 +306,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             &mut helpers,
             multi,
         ));
+        decls.extend(descriptor_decls(entry, &n));
         for op in entry.operations {
             decls.push(op_method_decl(&n, op, module, config, &bound));
         }
@@ -382,15 +385,6 @@ fn discriminator_name(n: &Names, op: &Shape) -> String {
         "Decode{}Error",
         pascal(&format!("{}{}", n.op_prefix, op_local_name(&op.id)))
     )
-}
-
-/// The descriptor text as a Go interpreted string literal. JSON string
-/// escaping is a subset of Go's escape sequences (\", \\, \uXXXX), so
-/// serializing the text as a JSON string yields a valid Go literal with every
-/// control character escaped, the same double-encoding the TypeScript embed
-/// uses.
-fn go_string_literal(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
 /// The discrimination functions for the entry's operations (same shape as the
@@ -663,10 +657,13 @@ mod constructor;
 mod decode;
 mod impl_op;
 mod resolve;
+mod shared;
 mod surface;
 #[cfg(test)]
 mod tests;
 
 use constructor::{err_var, new_decl};
 use resolve::Resolver;
+pub use shared::shared_groups;
+use shared::{apply_transforms, shared_slot, shared_symbol};
 use surface::method_signature;

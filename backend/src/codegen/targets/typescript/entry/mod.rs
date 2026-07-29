@@ -358,7 +358,10 @@ fn class_decl(
         helpers,
         body: &mut body,
     };
-    let fields = plan::emit_fields(entry, module, &mut r);
+    // The constructor is nested one level deeper here than in Go's flat
+    // function (a class body wraps it), so the plan renders one indent unit
+    // further in to land at the same column as this scaffold's own lines.
+    let fields = plan::emit_fields(entry, module, &mut r, 2);
     r.body.push_str(&fields);
 
     if hook_binding(bound, "client_init").is_some() && !multi {
@@ -377,7 +380,7 @@ fn class_decl(
             body: &mut body,
         };
         let requires = plan::build_requires(entry, module, &mut r);
-        let text = plan::render(&requires, 1, &r);
+        let text = plan::render(&requires, 2, &r);
         r.body.push_str(&text);
     }
 
