@@ -606,12 +606,18 @@ fn op_method(
         .unwrap_or_default();
 
     if wire_descriptor(op).is_none() {
+        let discriminator_name = surface::discriminator_fn_name(n, op);
+        let discriminator =
+            (!declared_errors(op, module).is_empty()).then_some(discriminator_name.as_str());
         return impl_op::method(impl_op::Method {
             op,
+            module,
             name: &name,
             param: &param,
             ret: &ret,
             input_ty: input_ty.as_deref(),
+            output,
+            discriminator,
             validate_block: &validate_block,
             binding: impl_binding(bound, &op.id),
             is_async,

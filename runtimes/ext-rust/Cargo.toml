@@ -1,0 +1,13 @@
+[package]
+name = "sdk-ext-runtime-rs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "tono_ext"
+path = "src/lib.rs"
+
+# Detach from the backend/cli workspace: this crate is a standalone runtime a
+# generated Rust SDK depends on, same as the http-rust crate.
+[workspace]

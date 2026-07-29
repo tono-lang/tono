@@ -177,3 +177,11 @@ fn typescript_entries_codegen_snapshot() {
         render_sdk(entries_module(), TargetKind::TypeScript, None)
     );
 }
+
+#[test]
+fn rust_entries_codegen_snapshot() {
+    assert_snapshot!(
+        "rust_entries",
+        render_sdk(entries_module(), TargetKind::Rust, None)
+    );
+}

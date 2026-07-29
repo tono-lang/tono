@@ -8,6 +8,13 @@
 //! not break the client. `rustfmt` (run as a normal step after codegen, like
 //! every other target's output) owns final indentation, so this only needs
 //! to be structurally valid, not perfectly laid out.
+//!
+//! `DecodeError.path` is produced by the top-level member probe below, not by
+//! a recursive path-tracking decoder: a missing required member is named
+//! (`$.field`), but a violation nested inside that member is not. This
+//! mirrors Go/TS, which build `path` by hand at the same top level; adding
+//! `serde_path_to_error` here would buy Rust alone a fidelity none of the
+//! other targets have, at the cost of a dependency in every generated SDK.
 
 use crate::codegen::conventions::{type_ident_from_id, wire_key};
 use crate::ir::{Module, Prim, ShapeKind, Tref};

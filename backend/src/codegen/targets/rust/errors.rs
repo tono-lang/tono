@@ -97,6 +97,14 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
             &n.transport,
             "    pub cause: Box<dyn std::error::Error + Send + Sync>,\n",
         ),
+        // `path` is a manual top-level required-member probe against
+        // `serde_json::Value` (see `entry/decode.rs::success_block`), the same
+        // hand-written shape Go/TS use; it does not descend into nested
+        // structures. `serde_path_to_error` was considered and rejected: it
+        // would add a dependency to every generated Rust SDK to solve a
+        // nested-path case none of the other targets solve today either, so
+        // the fidelity gap is deliberate and symmetric across targets, not a
+        // Rust-specific shortcut.
         data_struct(
             &n.decode,
             "    pub path: String,\n    pub expected: String,\n    pub raw: String,\n",

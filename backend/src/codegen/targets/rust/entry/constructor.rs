@@ -1,8 +1,10 @@
 //! The generated constructor (a builder's `build` or a plain `new`): source
 //! resolution in dependency order, the `client_init` bridge, the
-//! consumed-chain requires, declared validation, and the frozen runtime
-//! values. Split out of `mod.rs` to stay under this repo's per-file line
-//! ceiling; `construction_decls` is `mod.rs`'s only caller.
+//! consumed-chain requires, declared validation, the frozen runtime values,
+//! and any bound `before_request`/`after_response` lifecycle hook wired into
+//! the runtime's `Hooks` slot. Split out of `mod.rs` to stay under this
+//! repo's per-file line ceiling; `construction_decls` is `mod.rs`'s only
+//! caller.
 
 use super::*;
 
@@ -53,6 +55,7 @@ pub(super) fn construction_decls(
         client = n.client,
         settings = n.settings,
     )));
+    decls.extend(hook_wrapper_decls(bound));
 
     let body = resolution_body(
         entry, n, module, config, bound, helpers, multi, "self.", &mut refs,
@@ -320,11 +323,71 @@ fn resolution_body(
     }
 
     body.push_str(&format!(
-        "let runtime = tono_http_runtime::Runtime::new(tono_http_runtime::Options {{\n    base_url: String::new(),\n    client: s.client.clone(),\n    transport: s.transport.clone(),\n    headers: s.headers.clone(),\n    values,\n}})\n.map_err(|e| TonoError::Config(ConfigError {{ message: e.to_string() }}))?;\nOk({client} {{ settings: s, runtime: std::sync::Arc::new(runtime), hooks: None }})",
+        "let runtime = tono_http_runtime::Runtime::new(tono_http_runtime::Options {{\n    base_url: String::new(),\n    client: s.client.clone(),\n    transport: s.transport.clone(),\n    headers: s.headers.clone(),\n    values,\n}})\n.map_err(|e| TonoError::Config(ConfigError {{ message: e.to_string() }}))?;\nOk({client} {{ settings: s, runtime: std::sync::Arc::new(runtime), hooks: {hooks} }})",
         client = n.client,
+        hooks = hooks_expr(bound),
     ));
 
     body
+}
+
+/// The name of the boundary-adapter free function for a bound lifecycle hook
+/// slot (`__before_request_hook`, `__after_response_hook`).
+fn hook_wrapper_name(slot: &str) -> String {
+    format!("__{slot}_hook")
+}
+
+/// The wrapper fn decls for any bound `before_request`/`after_response`
+/// hook: the runtime hands each hook slot an `Arc<dyn Fn(..) -> BoxFuture<..>>`,
+/// so a bespoke `async fn` (the natural shape to write one in, since the
+/// runtime always awaits it) is boxed into that shape here. No error
+/// boundary is applied in the wrapper itself: a hook's error propagates raw
+/// through `tono_http_runtime::ExecuteError` (already `Box<dyn Error + Send
+/// + Sync>`, the same type a bespoke fn returns), and the classification
+/// into a declared `TonoError` vs. a `ContractError` happens once,
+/// centrally, at every op method's `Runtime::execute(...).map_err(...)`
+/// boundary. Each wrapper is a standalone free function tied to no entry's
+/// `Settings`, so unlike `client_init` it is wired regardless of `multi`.
+fn hook_wrapper_decls(bound: &[BoundExtension<'_>]) -> Vec<Decl> {
+    [
+        ("before_request", "req", "CanonicalRequest"),
+        ("after_response", "res", "CanonicalResponse"),
+    ]
+    .into_iter()
+    .filter_map(|(slot, var, shape)| {
+        let b = hook_binding(bound, slot)?;
+        let wrapper = hook_wrapper_name(slot);
+        Some(Decl::raw_with(
+            format!(
+                "fn {wrapper}({var}: tono_http_runtime::{shape}) -> tono_http_runtime::BoxFuture<'static, Result<tono_http_runtime::{shape}, tono_http_runtime::ExecuteError>> {{\n    Box::pin({sym}({var}))\n}}",
+                sym = b.symbol,
+            ),
+            vec![Symbol::imported(b.symbol, use_path(b.module), b.symbol)],
+        ))
+    })
+    .collect()
+}
+
+/// The `hooks:` field expression for the `Client` struct literal: `None`
+/// when neither slot is bound (the common, current case), otherwise a
+/// `Hooks` value with each bound slot wrapped and each unbound slot `None`.
+fn hooks_expr(bound: &[BoundExtension<'_>]) -> String {
+    let slot = |name: &str| -> String {
+        if hook_binding(bound, name).is_some() {
+            format!("Some(std::sync::Arc::new({}))", hook_wrapper_name(name))
+        } else {
+            "None".to_string()
+        }
+    };
+    let before = slot("before_request");
+    let after = slot("after_response");
+    if before == "None" && after == "None" {
+        "None".to_string()
+    } else {
+        format!(
+            "Some(tono_http_runtime::Hooks {{ before_request: {before}, after_response: {after} }})"
+        )
+    }
 }
 
 /// Discard statements for the why-reasons nothing reads (mirrors Go's

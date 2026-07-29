@@ -145,10 +145,10 @@ pub(super) fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
 }
 
 /// The discrimination functions for the entry's operations, named through
-/// the entry rule. An operation whose body is a raw bespoke implementation
-/// would get the code-only variant under the same name, but the Rust target
-/// does not implement the raw form this pass (see `impl_op`), so only a
-/// descriptor-bound operation ever reaches this.
+/// the entry rule. A descriptor-bound operation gets the status-and-body
+/// variant; an operation whose body is a raw bespoke implementation
+/// (`impl_op::method`'s raw branch) gets the code-only variant, since a
+/// bespoke outcome carries no protocol status.
 pub(super) fn discriminator_decls_for(
     entry: &EntryModel<'_>,
     n: &Names,

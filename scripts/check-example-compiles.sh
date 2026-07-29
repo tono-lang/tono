@@ -36,6 +36,7 @@ path = "verify/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tono_http_runtime = { package = "sdk-http-runtime-rs", path = "$root/runtimes/http-rust" }
+tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
 [workspace]
