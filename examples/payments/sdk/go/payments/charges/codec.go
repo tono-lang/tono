@@ -27,3 +27,28 @@ func (c *Charge) UnmarshalJSON(b []byte) error {
 	}
 	return nil
 }
+
+// chargeRequiredFields names the members Charge's declared shape requires present.
+var chargeRequiredFields = []string{"id", "amount", "fee", "receipt", "currency", "tags", "metadata", "created", "status", "method"}
+
+// DecodeCharge parses a Charge from its wire JSON: every required member must be
+// present (a null value counts as absent) before the typed decode runs. The
+// returned path names where the parse failed ("$" for the whole body,
+// "$.field" for a missing member), for the caller to build its own
+// DecodeError; ok is false on any failure.
+func DecodeCharge(raw []byte) (Charge, string, bool) {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return Charge{}, "$", false
+	}
+	for _, field := range chargeRequiredFields {
+		if rv, ok := probe[field]; !ok || string(rv) == "null" {
+			return Charge{}, "$." + field, false
+		}
+	}
+	var out Charge
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return Charge{}, "$", false
+	}
+	return out, "", true
+}

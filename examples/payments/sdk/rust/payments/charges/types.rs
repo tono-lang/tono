@@ -170,6 +170,39 @@ impl std::error::Error for TonoError {
         }
     }
 }
+
+/// The members Charge's declared shape requires present.
+const CHARGE_REQUIRED_FIELDS: &[&str] = &[
+    "id", "amount", "fee", "receipt", "currency", "tags", "metadata", "created", "status", "method",
+];
+
+/// Parses a Charge from its wire JSON: every required member must be present
+/// (a null value counts as absent) before the typed decode runs.
+pub(crate) fn decode_charge(body: &str) -> Result<Charge, TonoError> {
+    let probe: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+        TonoError::Decode(DecodeError {
+            path: "$".to_string(),
+            expected: "Charge".to_string(),
+            raw: body.to_string(),
+        })
+    })?;
+    for field in CHARGE_REQUIRED_FIELDS {
+        if probe.get(field).map(|v| v.is_null()).unwrap_or(true) {
+            return Err(TonoError::Decode(DecodeError {
+                path: format!("$.{field}"),
+                expected: "Charge".to_string(),
+                raw: body.to_string(),
+            }));
+        }
+    }
+    serde_json::from_str::<Charge>(body).map_err(|_| {
+        TonoError::Decode(DecodeError {
+            path: "$".to_string(),
+            expected: "Charge".to_string(),
+            raw: body.to_string(),
+        })
+    })
+}
 macro_rules! open_enum {
     ($name:ident : $wire:ty { $($variant:ident => $repr:expr),* $(,)? }) => {
         impl serde::Serialize for $name {

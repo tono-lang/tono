@@ -103,18 +103,25 @@ export class APIError extends TonoError {
 }
 
 export class ConfigError extends TonoError {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly cause?: unknown,
+  ) {
     super(message);
     this.name = "ConfigError";
   }
 }
+
+export const STATUS_CARD_DECLINED = 402;
+
+export const CODE_CARD_DECLINED = "card_declined";
 
 export class CardDeclinedError extends APIError {
   constructor(
     readonly data: CardDeclined,
     body: string,
   ) {
-    super(402, body);
+    super(STATUS_CARD_DECLINED, body);
     this.name = "CardDeclinedError";
   }
   retryable(): boolean {
@@ -122,12 +129,14 @@ export class CardDeclinedError extends APIError {
   }
 }
 
+export const STATUS_NOT_FOUND = 404;
+
 export class NotFoundError extends APIError {
   constructor(
     readonly data: NotFound,
     body: string,
   ) {
-    super(404, body);
+    super(STATUS_NOT_FOUND, body);
     this.name = "NotFoundError";
   }
 }

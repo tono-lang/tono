@@ -58,3 +58,42 @@ export function decodeNotFound(raw: any): NotFound {
     message: raw.message,
   };
 }
+
+/** The members Charge's declared shape requires present. */
+const chargeRequiredFields = [
+  "id",
+  "amount",
+  "fee",
+  "receipt",
+  "currency",
+  "tags",
+  "metadata",
+  "created",
+  "status",
+  "method",
+] as const;
+
+/**
+ * Parses a Charge from its wire JSON: every required member must be
+ * present (a null value counts as absent) before the typed decode
+ * runs. Throws the failed path (`$` for the whole body, `$.field` for
+ * a missing member) as a plain string, for the caller to build its
+ * own DecodeError.
+ */
+export function parseCharge(raw: string): Charge {
+  let obj: any;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    throw "$";
+  }
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+    throw "$";
+  }
+  for (const field of chargeRequiredFields) {
+    if (!(field in obj) || obj[field] === null) {
+      throw "$." + field;
+    }
+  }
+  return decodeCharge(obj);
+}
