@@ -117,7 +117,7 @@ pub(super) fn output_decode_decl(shape: &Shape) -> Option<Decl> {
          const {const_name}: &[&str] = &[{table}];\n\n\
          /// Parses a {ty} from its wire JSON: every required member must be present\n\
          /// (a null value counts as absent) before the typed decode runs.\n\
-         fn {fn_name}(body: &str) -> Result<{ty}, TonoError> {{\n\
+         pub(crate) fn {fn_name}(body: &str) -> Result<{ty}, TonoError> {{\n\
          \x20   let probe: serde_json::Value = serde_json::from_str(body).map_err(|_| {fail_root})?;\n\
          \x20   for field in {const_name} {{\n\
          \x20       if probe.get(field).map(|v| v.is_null()).unwrap_or(true) {{\n\

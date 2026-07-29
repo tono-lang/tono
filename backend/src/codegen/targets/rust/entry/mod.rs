@@ -444,14 +444,12 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let mut shared = surface::config_structs(module, config);
     let decode_decls = output_decode_decls(&entries, module, &bound);
     if !decode_decls.is_empty() {
-        // The decode helpers name TonoError/DecodeError as bare text, the
-        // same glob-import technique the per-entry groups use below.
-        shared.insert(
-            0,
-            crate::codegen::targets::rust::emit::types_glob_use(
-                &crate::codegen::group::Group::types(&module.name),
-            ),
-        );
+        // `shared` rides the module's own types group ([`emit`]'s
+        // `type_decls.extend(entries.shared)`), unlike a per-entry group
+        // below, so a glob-import of that same group here would be a
+        // self-import (`use crate::...::types::*;` inside types.rs itself,
+        // a hard compile error): the decode helpers already see
+        // TonoError/DecodeError/the output type without one.
         shared.extend(decode_decls);
     }
     let mut per_entry = Vec::new();

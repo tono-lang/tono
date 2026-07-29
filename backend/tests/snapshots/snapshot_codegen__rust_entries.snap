@@ -230,8 +230,6 @@ impl std::error::Error for TonoError {
     }
 }
 
-use crate::notes::types::*;
-
 /// Conf is a construction-only composition of the entry surface; it
 /// never crosses the wire and is crate-local (the SDK builds it).
 #[derive(Clone, Debug)]
@@ -245,7 +243,7 @@ const NOTE_REQUIRED_FIELDS: &[&str] = &["id", "body"];
 
 /// Parses a Note from its wire JSON: every required member must be present
 /// (a null value counts as absent) before the typed decode runs.
-fn decode_note(body: &str) -> Result<Note, TonoError> {
+pub(crate) fn decode_note(body: &str) -> Result<Note, TonoError> {
     let probe: serde_json::Value = serde_json::from_str(body).map_err(|_| TonoError::Decode(DecodeError { path: "$".to_string(), expected: "Note".to_string(), raw: body.to_string() }))?;
     for field in NOTE_REQUIRED_FIELDS {
         if probe.get(field).map(|v| v.is_null()).unwrap_or(true) {
