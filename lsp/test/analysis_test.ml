@@ -26,6 +26,28 @@ let diagnostics_error () =
     (d.Diagnostic.severity = Some DiagnosticSeverity.Error);
   Alcotest.(check int) "on the first line" 0 d.Diagnostic.range.start.line
 
+(* An unknown trait reaches the editor: the frontend reports it, so it rides the
+   same path every diagnostic does and arrives as a warning (not an error, the
+   spec still compiles) carrying its code, which is what a quick fix keys on. *)
+let diagnostics_unknown_trait () =
+  let ds = Analysis.lsp_diagnostics {|@statu("x") struct point { x: i64 }|} in
+  let d =
+    List.find
+      (fun (d : Diagnostic.t) -> d.Diagnostic.code = Some (`String "TC0054"))
+      ds
+  in
+  Alcotest.(check bool)
+    "severity is Warning" true
+    (d.Diagnostic.severity = Some DiagnosticSeverity.Warning);
+  let message =
+    match d.Diagnostic.message with
+    | `String m -> m
+    | `MarkupContent m -> m.value
+  in
+  Alcotest.(check bool)
+    "names the trait it was probably meant to be" true
+    (contains message "did you mean @status")
+
 let definition_resolves () =
   let uri = Lsp.Uri.of_string "file:///x.tono" in
   let file = Analysis.parse two_shapes in
@@ -401,6 +423,8 @@ let () =
         [
           Alcotest.test_case "clean" `Quick diagnostics_clean;
           Alcotest.test_case "error" `Quick diagnostics_error;
+          Alcotest.test_case "unknown trait warns" `Quick
+            diagnostics_unknown_trait;
         ] );
       ( "navigation",
         [
