@@ -135,7 +135,7 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
     let cfg = manifest::Config::load(manifest_path)?;
     let targets = resolve_targets(targets_csv, yes, &declared)?;
     if targets.is_empty() {
-        println!("{}: nothing to add", manifest_path.display());
+        eprintln!("{}: nothing to add", manifest_path.display());
         return Ok(());
     }
 
@@ -156,7 +156,7 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
         let is_new = !declared.contains(key);
         if is_new {
             additions.push_str(&target_block(target, &package_default));
-            println!("{key}: added to {}", manifest_path.display());
+            eprintln!("{key}: added to {}", manifest_path.display());
         } else {
             report_declared(&cfg, manifest_path, target);
         }
@@ -212,15 +212,15 @@ fn report_declared(cfg: &manifest::Config, manifest_path: &Path, target: InitTar
         // `Config` resolves only enabled, generatable targets, so presence in
         // the resolved list is what "on" means.
         InitTarget::Generatable(kind) if cfg.targets.iter().any(|t| t.kind == kind) => {
-            println!("{key}: already enabled in {path}")
+            eprintln!("{key}: already enabled in {path}")
         }
-        InitTarget::Generatable(_) => println!(
+        InitTarget::Generatable(_) => eprintln!(
             "{key}: declared in {path} but disabled; \
              set `enabled = true` under [target.{key}] to turn it on"
         ),
         // An enabled placeholder fails `Config::load` outright, so one that
         // reached here is necessarily still switched off.
-        InitTarget::Placeholder(_) => println!(
+        InitTarget::Placeholder(_) => eprintln!(
             "{key}: declared in {path} as a placeholder; not generatable yet, leaving it disabled"
         ),
     }
@@ -282,7 +282,7 @@ fn run_fresh(
         render_manifest(&name, root.as_deref(), &targets, &package_default),
     )
     .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    println!("wrote {}", manifest_path.display());
+    eprintln!("wrote {}", manifest_path.display());
 
     for target in targets {
         if let InitTarget::Generatable(kind) = target {
@@ -423,14 +423,14 @@ fn scaffold_native_manifest(kind: TargetKind, dir: &Path, package: &str) -> Resu
 
     let path = dir.join(file_name);
     if path.exists() {
-        println!("{}: already exists, skipping", path.display());
+        eprintln!("{}: already exists, skipping", path.display());
         return Ok(());
     }
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     fs::write(&path, contents).map_err(|e| format!("{}: {e}", path.display()))?;
-    println!("wrote {}", path.display());
+    eprintln!("wrote {}", path.display());
     if kind == TargetKind::TypeScript {
-        println!(
+        eprintln!(
             "note: {} will also need the tono HTTP runtime (@tono/http-runtime-ts) \
              once you generate entries; it is not published yet, wire it in manually.",
             path.display()

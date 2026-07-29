@@ -168,9 +168,10 @@ fn update_mode_scaffolds_a_declared_target_that_has_no_native_manifest() {
     .unwrap();
     let before = std::fs::read_to_string(dir.join("tono.toml")).unwrap();
 
-    let (ok, stdout, stderr) = init(&dir, &["--yes", "--target", "rust,go"]);
+    let (ok, _, stderr) = init(&dir, &["--yes", "--target", "rust,go"]);
     assert!(ok, "init failed: {stderr}");
-    assert!(stdout.contains("already enabled"), "{stdout}");
+    // Status goes to stderr; stdout stays free of it.
+    assert!(stderr.contains("already enabled"), "{stderr}");
 
     // The manifest itself is untouched: everything was already declared.
     assert_eq!(
@@ -198,10 +199,10 @@ fn update_mode_explains_a_declared_but_disabled_target() {
     )
     .unwrap();
 
-    let (ok, stdout, stderr) = init(&dir, &["--yes", "--target", "go"]);
+    let (ok, _, stderr) = init(&dir, &["--yes", "--target", "go"]);
     assert!(ok, "init failed: {stderr}");
-    assert!(stdout.contains("disabled"), "{stdout}");
-    assert!(stdout.contains("enabled = true"), "{stdout}");
+    assert!(stderr.contains("disabled"), "{stderr}");
+    assert!(stderr.contains("enabled = true"), "{stderr}");
     // Disabled by intent: no build setup is scaffolded for it.
     assert!(!dir.join("go").exists());
 

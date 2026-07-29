@@ -44,7 +44,7 @@ pub use group::{Audience, Group, Origin};
 pub use layout::check_layout;
 pub use modules::CodegenConfig;
 pub use output::{GeneratedFile, TargetKind};
-pub use pipeline::{casing_for, generate, generate_target, parse_targets};
+pub use pipeline::{casing_for, generate, generate_target, is_generated, parse_targets};
 pub use render::render_file;
 pub use symbol::{Import, Symbol, SymbolKind};
 pub use target::{Fragment, RenderRules, Target};

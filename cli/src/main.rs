@@ -30,8 +30,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use tono_backend::codegen::{
-    casing_for, check_layout, generate, generate_target, parse_targets, CasingConfig, CheckOptions,
-    CodegenConfig, Formatter, TargetKind,
+    casing_for, check_layout, generate, generate_target, is_generated, parse_targets, CasingConfig,
+    CheckOptions, CodegenConfig, Formatter, TargetKind,
 };
 use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::config as manifest;
@@ -43,8 +43,9 @@ use crate::preview::pipeline::Verdict;
 
 const USAGE: &str = "usage: tono (\n  \
     init [--target <list>] [--yes] [--root <path>]\n  \
-    gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [<ir.json>]\n    \
-    (with no <ir.json> and nothing piped in, the project's .tono sources are compiled)\n  \
+    gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [--clean] [<ir.json>]\n    \
+    (with no <ir.json> and nothing piped in, the project's .tono sources are compiled;\n    \
+     --clean also removes generated files this run did not produce)\n  \
     check <file.tono>\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
@@ -87,6 +88,7 @@ fn run_gen(args: &[String]) -> Result<(), String> {
     let mut out: Option<String> = None;
     let mut manifest_path: Option<String> = None;
     let mut ir_path: Option<String> = None;
+    let mut clean = false;
     let mut config = CodegenConfig::default();
 
     let mut i = 0;
@@ -107,6 +109,9 @@ fn run_gen(args: &[String]) -> Result<(), String> {
             // The generated Go SDK's module path, prefixed onto cross-package
             // imports (Go has no relative imports).
             "--go-module" => config.go_module = Some(flag_value(args, &mut i, "--go-module")?),
+            // Sweep each output directory of generated files this run did not
+            // produce, so a renamed or deleted module leaves nothing behind.
+            "--clean" => clean = true,
             path => ir_path = Some(path.to_string()),
         }
         i += 1;
@@ -115,9 +120,9 @@ fn run_gen(args: &[String]) -> Result<(), String> {
     // Explicit --target/--out selects the flag path (a single output root, module
     // hooks from flags); otherwise the project manifest drives generation.
     if targets_csv.is_some() || out.is_some() {
-        gen_from_flags(&targets_csv, &out, &config, &ir_path)
+        gen_from_flags(&targets_csv, &out, &config, &ir_path, clean)
     } else {
-        gen_from_manifest(manifest_path.as_deref(), &ir_path)
+        gen_from_manifest(manifest_path.as_deref(), &ir_path, clean)
     }
 }
 
@@ -128,6 +133,7 @@ fn gen_from_flags(
     out: &Option<String>,
     config: &CodegenConfig,
     ir_path: &Option<String>,
+    clean: bool,
 ) -> Result<(), String> {
     let targets = parse_targets(targets_csv.as_deref().ok_or("missing --target")?)?;
     let out_root = PathBuf::from(out.as_deref().ok_or("missing --out")?);
@@ -138,11 +144,18 @@ fn gen_from_flags(
     // module path, or two modules mapping to the same package) instead of writing
     // silently-broken source.
     check_layout(&model, &targets, config)?;
-    for file in generate(&model, &targets, config)? {
-        let formatted = Formatter::for_output(file.target, &file.path)
-            .run(&file.text)
-            .text;
-        write_file(&out_root.join(&file.path), &formatted)?;
+    for target in &targets {
+        let mut written = Vec::new();
+        for file in generate(&model, &[*target], config)? {
+            let formatted = Formatter::for_output(file.target, &file.path)
+                .run(&file.text)
+                .text;
+            let dest = out_root.join(&file.path);
+            write_file(&dest, &formatted)?;
+            written.push(dest);
+        }
+        // Each target owns `<out>/<target>/`; a sweep stays inside it.
+        report_target(*target, &out_root.join(target.dir()), &written, clean)?;
     }
     Ok(())
 }
@@ -150,7 +163,11 @@ fn gen_from_flags(
 /// Manifest path: resolve the project config, then generate every enabled target
 /// under its own `out` (relative to the manifest's directory), applying that
 /// target's module hooks (flatten/remap/package) and casing overrides.
-fn gen_from_manifest(config_path: Option<&str>, ir_path: &Option<String>) -> Result<(), String> {
+fn gen_from_manifest(
+    config_path: Option<&str>,
+    ir_path: &Option<String>,
+    clean: bool,
+) -> Result<(), String> {
     let manifest_file = match config_path {
         Some(path) => PathBuf::from(path),
         None => discover_manifest()?,
@@ -174,6 +191,8 @@ fn gen_from_manifest(config_path: Option<&str>, ir_path: &Option<String>) -> Res
         let codegen = codegen_config_for(target);
         let casing = resolved_casing(target);
         check_layout(&model, &[target.kind], &codegen)?;
+        let out_dir = base.join(&target.out);
+        let mut written = Vec::new();
         for file in generate_target(&model, target.kind, &codegen, &casing)? {
             let formatted = Formatter::for_output(file.target, &file.path)
                 .run(&file.text)
@@ -184,7 +203,91 @@ fn gen_from_manifest(config_path: Option<&str>, ir_path: &Option<String>) -> Res
                 .path
                 .strip_prefix(target.kind.dir())
                 .unwrap_or(&file.path);
-            write_file(&base.join(&target.out).join(rel), &formatted)?;
+            let dest = out_dir.join(rel);
+            write_file(&dest, &formatted)?;
+            written.push(dest);
+        }
+        report_target(target.kind, &out_dir, &written, clean)?;
+    }
+    Ok(())
+}
+
+/// Report what a target produced, and when asked, clear what it no longer
+/// produces. Status goes to stderr so it never mixes into a command's data
+/// (`tono fmt` writes source to stdout), which also keeps it visible when the
+/// output of a run is redirected.
+fn report_target(
+    target: TargetKind,
+    out_dir: &Path,
+    written: &[PathBuf],
+    clean: bool,
+) -> Result<(), String> {
+    let removed = if clean { sweep(out_dir, written)? } else { 0 };
+    eprintln!(
+        "{}: {} file(s) -> {}{}",
+        target.dir(),
+        written.len(),
+        out_dir.display(),
+        match removed {
+            0 => String::new(),
+            n => format!(" ({n} stale removed)"),
+        }
+    );
+    Ok(())
+}
+
+/// Delete the generated files under `out_dir` that this run did not write, then
+/// the directories that leaves empty, and answer how many files went.
+///
+/// Only files this generator produced are eligible, identified by the banner
+/// they carry ([`is_generated`]). Everything else in the output directory (a
+/// `Cargo.toml`, a hand-written test, a README, the generated `package.json`
+/// that carries no banner because JSON has no comments) is left untouched: the
+/// output directory belongs to the user, and only what tono wrote is tono's to
+/// remove.
+fn sweep(out_dir: &Path, written: &[PathBuf]) -> Result<usize, String> {
+    if !out_dir.is_dir() {
+        return Ok(0);
+    }
+    let kept: std::collections::HashSet<PathBuf> = written
+        .iter()
+        .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+        .collect();
+    let mut removed = 0;
+    sweep_dir(out_dir, &kept, &mut removed)?;
+    Ok(removed)
+}
+
+fn sweep_dir(
+    dir: &Path,
+    kept: &std::collections::HashSet<PathBuf>,
+    removed: &mut usize,
+) -> Result<(), String> {
+    let entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if file_type.is_dir() {
+            sweep_dir(&path, kept, removed)?;
+            // A directory emptied by the sweep was holding only stale output
+            // (a module that went away); one that still has anything stays.
+            if fs::read_dir(&path).is_ok_and(|mut d| d.next().is_none()) {
+                fs::remove_dir(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            }
+            continue;
+        }
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if kept.contains(&canonical) {
+            continue;
+        }
+        // Unreadable or non-UTF-8 means it is not something this generator
+        // wrote, so it is not this sweep's to delete.
+        if fs::read_to_string(&path).is_ok_and(|text| is_generated(&text)) {
+            fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            *removed += 1;
         }
     }
     Ok(())
@@ -261,6 +364,7 @@ fn read_ir(ir_path: &Option<String>, source_root: &Path) -> Result<Model, String
 /// frontend owns parsing and typechecking, so its diagnostics are surfaced
 /// as-is; a missing binary is an environment gap and says how to point at one.
 fn compile_sources(root: &Path) -> Result<String, String> {
+    eprintln!("compiling {}", root.display());
     Frontend::from_env().compile_dir(root).map_err(|e| match e {
         FrontendError::Unavailable { program } => {
             format!("could not run {program}; set TONO_FRONTEND to the frontend binary")
@@ -290,6 +394,12 @@ fn run_frontend(sub: &str, args: &[String]) -> Result<(), String> {
             format!("could not run {program} ({e}); set TONO_FRONTEND to the frontend binary")
         })?;
     if status.success() {
+        // A clean check prints nothing of its own, which reads the same as
+        // having done nothing; say so. Only for `check`: `fmt` writes the
+        // formatted source, and stdout is its result.
+        if sub == "check" {
+            eprintln!("ok: {}", args.join(" "));
+        }
         Ok(())
     } else {
         // Mirror the frontend's exit code (1 for diagnostics, 2 for usage).
