@@ -62,11 +62,19 @@ impl Frontend {
     /// Compile `path` to canonical IR JSON. The module name is left to the
     /// frontend, which derives it from the file stem.
     pub fn compile(&self, path: &Path) -> Result<String, FrontendError> {
-        let output = Command::new(&self.program)
-            .arg("compile")
-            .arg(path)
-            .output();
-        match output {
+        self.invoke("compile", path)
+    }
+
+    /// Compile every `.tono` under `root` into one multi-module IR model: a
+    /// whole project in a single pass, which is what generating an SDK from
+    /// sources needs. A root holding no sources is a diagnostic, not an empty
+    /// model, so the caller reports it rather than emitting nothing.
+    pub fn compile_dir(&self, root: &Path) -> Result<String, FrontendError> {
+        self.invoke("compile-dir", root)
+    }
+
+    fn invoke(&self, sub: &str, path: &Path) -> Result<String, FrontendError> {
+        match Command::new(&self.program).arg(sub).arg(path).output() {
             Ok(out) => interpret(
                 out.status.success(),
                 &String::from_utf8_lossy(&out.stdout),

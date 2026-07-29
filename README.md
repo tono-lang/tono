@@ -41,6 +41,19 @@ attached directly to each [release](https://github.com/tono-lang/tono/releases).
 - Install script: re-run the curl command above
 - Manual: download the latest release archive for your platform
 
+## Using it
+
+```
+tono init                # write tono.toml and a build manifest per target
+tono check src/api.tono  # parse and typecheck
+tono gen                 # generate every enabled target's SDK
+```
+
+`tono gen` compiles the project's `.tono` sources (everything under
+`project.root`) and writes each enabled target under its configured `out`. The
+IR is an internal artifact, so no separate compile step is needed; pass an IR
+file, or pipe one in, only when you already have one.
+
 ## Organizing generated SDKs
 
 `tono init` scaffolds a `tono.toml` with one `[target.<lang>]` block per

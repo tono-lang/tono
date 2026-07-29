@@ -1,23 +1,31 @@
-//! The `tono` command line: turn IR JSON into SDK source files.
+//! The `tono` command line: turn a project's `.tono` sources into SDK source
+//! files.
 //!
-//! `tono gen` reads the IR (from the file argument, or stdin when omitted),
-//! decodes it, generates the per-target source through the engine, formats each
-//! file with that language's formatter, and writes it out. It runs in one of two
-//! modes: with `--target <list> --out <dir>` it writes each target under
-//! `<dir>/<target>/` with module hooks from flags; otherwise the project manifest
-//! (`--config <tono.toml>`, or one auto-discovered up from the working directory)
-//! drives every enabled target under its own configured `out`, applying that
-//! target's module hooks and casing overrides. `tono breaking` gates changes
-//! against a baseline, taking its policy from the manifest's `[compat]` (flags
-//! override). The generation itself lives in the testable `tono_backend` library;
-//! this binary is the IO shell around it.
+//! `tono init` writes the project manifest (and a minimal native build manifest
+//! per target) so the rest of the commands have something to discover.
+//!
+//! `tono gen` takes the IR, generates the per-target source through the engine,
+//! formats each file with that language's formatter, and writes it out. The IR
+//! is an internal artifact: with no argument and nothing piped in, the project's
+//! own sources are compiled through the frontend (`project.root` from the
+//! manifest), so generating an SDK needs no separate compile step. A file
+//! argument or piped IR still wins, for callers that already hold one.
+//! Generation runs in one of two modes: with `--target <list> --out <dir>` it
+//! writes each target under `<dir>/<target>/` with module hooks from flags;
+//! otherwise the project manifest (`--config <tono.toml>`, or one auto-discovered
+//! up from the working directory) drives every enabled target under its own
+//! configured `out`, applying that target's module hooks and casing overrides.
+//!
+//! `tono breaking` gates changes against a baseline, taking its policy from the
+//! manifest's `[compat]` (flags override). The generation itself lives in the
+//! testable `tono_backend` library; this binary is the IO shell around it.
 
 mod frontend;
 mod init;
 mod preview;
 
 use std::fs;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -29,13 +37,14 @@ use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::config as manifest;
 use tono_backend::ir::{decode_model, Model};
 
-use crate::frontend::Frontend;
+use crate::frontend::{Frontend, FrontendError};
 use crate::preview::pipeline;
 use crate::preview::pipeline::Verdict;
 
 const USAGE: &str = "usage: tono (\n  \
     init [--target <list>] [--yes] [--root <path>]\n  \
-    gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [<ir.json>]\n  \
+    gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [<ir.json>]\n    \
+    (with no <ir.json> and nothing piped in, the project's .tono sources are compiled)\n  \
     check <file.tono>\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
@@ -122,7 +131,9 @@ fn gen_from_flags(
 ) -> Result<(), String> {
     let targets = parse_targets(targets_csv.as_deref().ok_or("missing --target")?)?;
     let out_root = PathBuf::from(out.as_deref().ok_or("missing --out")?);
-    let model = read_ir(ir_path)?;
+    // No manifest in this mode, so sources (when it comes to that) are the
+    // working directory.
+    let model = read_ir(ir_path, Path::new("."))?;
     // Fail loud on a Go layout that could not compile (a multi-module SDK with no
     // module path, or two modules mapping to the same package) instead of writing
     // silently-broken source.
@@ -156,7 +167,9 @@ fn gen_from_manifest(config_path: Option<&str>, ir_path: &Option<String>) -> Res
         ));
     }
 
-    let model = read_ir(ir_path)?;
+    // `project.root` is where the `.tono` sources live, relative to the
+    // manifest, which is exactly what compiling the project from source needs.
+    let model = read_ir(ir_path, &base.join(&cfg.project.root))?;
     for target in &cfg.targets {
         let codegen = codegen_config_for(target);
         let casing = resolved_casing(target);
@@ -219,13 +232,41 @@ fn discover_manifest() -> Result<PathBuf, String> {
     ))
 }
 
-/// Read the IR JSON from the path argument, or stdin when omitted, and decode it.
-fn read_ir(ir_path: &Option<String>) -> Result<Model, String> {
-    let json = match ir_path {
-        Some(path) => fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?,
-        None => read_stdin()?,
-    };
-    decode_model(&json)
+/// The IR to generate from, in precedence order: an explicit path argument,
+/// then piped input, then the project's own `.tono` sources compiled through
+/// the frontend. The IR is an internal artifact, so a plain `tono gen` inside a
+/// project generates straight from source; reading a path or a pipe stays
+/// supported for callers that already hold IR (a committed artifact, a CI step
+/// that compiled it once, `tono-frontend compile-dir | tono gen`).
+fn read_ir(ir_path: &Option<String>, source_root: &Path) -> Result<Model, String> {
+    if let Some(path) = ir_path {
+        let json = fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        return decode_model(&json);
+    }
+    // A terminal is never read: that would hang waiting for input the user has
+    // no intention of typing. Anything else may be a pipe, so it is consumed,
+    // but blank input is not IR (a script redirecting from /dev/null, a stage
+    // that produced nothing), and falling through to the sources beats failing
+    // to decode an empty document.
+    if !std::io::stdin().is_terminal() {
+        let piped = read_stdin()?;
+        if !piped.trim().is_empty() {
+            return decode_model(&piped);
+        }
+    }
+    decode_model(&compile_sources(source_root)?)
+}
+
+/// Compile a whole project to IR by running the frontend over its sources. The
+/// frontend owns parsing and typechecking, so its diagnostics are surfaced
+/// as-is; a missing binary is an environment gap and says how to point at one.
+fn compile_sources(root: &Path) -> Result<String, String> {
+    Frontend::from_env().compile_dir(root).map_err(|e| match e {
+        FrontendError::Unavailable { program } => {
+            format!("could not run {program}; set TONO_FRONTEND to the frontend binary")
+        }
+        FrontendError::Diagnostics(diagnostics) => diagnostics,
+    })
 }
 
 /// Parse a `--module-remap from=to` value into its `(from, to)` pair.
@@ -296,7 +337,6 @@ fn run_preview(args: &[String]) -> Result<(), String> {
     }
     // The split-pane needs a real terminal; piped output (CI, shell pipelines)
     // gets the plain printed pass so `tono preview | less` and tests just work.
-    use std::io::IsTerminal;
     if !once && std::io::stdout().is_terminal() {
         return launch_tui(PathBuf::from(path), targets, base, options);
     }
