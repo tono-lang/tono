@@ -126,7 +126,8 @@ fn kind_label(kind: TargetKind) -> &'static str {
 // --- update mode -------------------------------------------------------
 
 /// Add any requested targets not already declared to an existing manifest,
-/// leaving everything else in the file untouched.
+/// leaving everything else in the file untouched, and make sure every
+/// requested enabled target has its native build manifest on disk.
 fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> Result<(), String> {
     let text = fs::read_to_string(manifest_path)
         .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
@@ -152,14 +153,21 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
     let mut additions = String::new();
     for target in targets {
         let key = target.key();
-        if declared.contains(key) {
-            println!("{key}: already present in {}", manifest_path.display());
-            continue;
+        let is_new = !declared.contains(key);
+        if is_new {
+            additions.push_str(&target_block(target, &package_default));
+            println!("{key}: added to {}", manifest_path.display());
+        } else {
+            report_declared(&cfg, manifest_path, target);
         }
-        additions.push_str(&target_block(target, &package_default));
-        println!("{key}: added to {}", manifest_path.display());
+        // Scaffold either way: a target already in the manifest may still be
+        // missing its build setup (a hand-written config, or one whose `out`
+        // moved), and adopting `init` on such a project is exactly the case
+        // that needs it. Scaffolding is a no-op when the file is already there.
         if let InitTarget::Generatable(kind) = target {
-            scaffold_native_manifest(kind, &base.join(kind.dir()), &package_default)?;
+            if let Some((out, package)) = scaffold_site(&cfg, kind, is_new, &package_default) {
+                scaffold_native_manifest(kind, &base.join(out), &package)?;
+            }
         }
     }
     if !additions.is_empty() {
@@ -167,6 +175,55 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
             .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
     }
     Ok(())
+}
+
+/// Where a target's native manifest belongs and what package name it carries.
+/// A freshly added target takes the values the block just written declares; an
+/// already-declared one takes whatever the manifest resolves for it, so the
+/// generated `go.mod`/`Cargo.toml` can never contradict the config. `None` for
+/// a target that is declared but switched off: `init` does not build out
+/// something the project deliberately disabled.
+fn scaffold_site(
+    cfg: &manifest::Config,
+    kind: TargetKind,
+    is_new: bool,
+    package_default: &str,
+) -> Option<(PathBuf, String)> {
+    if is_new {
+        return Some((
+            PathBuf::from(kind.dir()),
+            default_package(kind, package_default),
+        ));
+    }
+    let resolved = cfg.targets.iter().find(|t| t.kind == kind)?;
+    let package = resolved
+        .package
+        .clone()
+        .unwrap_or_else(|| default_package(kind, package_default));
+    Some((resolved.out.clone(), package))
+}
+
+/// Explain what a requested target that is already in the manifest is doing
+/// there, so "nothing happened" is never the whole message.
+fn report_declared(cfg: &manifest::Config, manifest_path: &Path, target: InitTarget) {
+    let key = target.key();
+    let path = manifest_path.display();
+    match target {
+        // `Config` resolves only enabled, generatable targets, so presence in
+        // the resolved list is what "on" means.
+        InitTarget::Generatable(kind) if cfg.targets.iter().any(|t| t.kind == kind) => {
+            println!("{key}: already enabled in {path}")
+        }
+        InitTarget::Generatable(_) => println!(
+            "{key}: declared in {path} but disabled; \
+             set `enabled = true` under [target.{key}] to turn it on"
+        ),
+        // An enabled placeholder fails `Config::load` outright, so one that
+        // reached here is necessarily still switched off.
+        InitTarget::Placeholder(_) => println!(
+            "{key}: declared in {path} as a placeholder; not generatable yet, leaving it disabled"
+        ),
+    }
 }
 
 /// Append `additions` (one or more `target_block`s, each already leading
@@ -229,7 +286,10 @@ fn run_fresh(
 
     for target in targets {
         if let InitTarget::Generatable(kind) = target {
-            scaffold_native_manifest(kind, &cwd.join(kind.dir()), &package_default)?;
+            // The same values the block just rendered declares, so the native
+            // manifest and the config agree from the start.
+            let package = default_package(kind, &package_default);
+            scaffold_native_manifest(kind, &cwd.join(kind.dir()), &package)?;
         }
     }
     Ok(())
@@ -290,10 +350,7 @@ fn target_block(target: InitTarget, package_default: &str) -> String {
                 }
                 _ => "",
             };
-            let package = match kind {
-                TargetKind::Go => go_module_path(package_default),
-                _ => package_default.to_string(),
-            };
+            let package = default_package(kind, package_default);
             format!(
                 "\n[target.{name}]\n{comment}enabled = true\npackage = \"{package}\"\nout     = \"{dir}\"\n",
                 name = kind.dir(),
@@ -309,13 +366,15 @@ fn target_block(target: InitTarget, package_default: &str) -> String {
     }
 }
 
-/// The placeholder Go module path for a project named `base`: `example.com`
-/// is reserved for documentation (RFC 2606) and never resolves to a real
-/// module, so it reads unambiguously as "replace me" rather than as a value
-/// that might accidentally already work. Matches Go's own tutorial
-/// convention (`go mod init example.com/mymodule`).
-fn go_module_path(base: &str) -> String {
-    format!("example.com/{base}")
+/// The `package` a target gets when the manifest does not name one. Go spells
+/// it as a module path, the others take the project slug as-is. Applied once,
+/// here: callers pass the result around verbatim so a path the manifest
+/// already spells out in full is never prefixed a second time.
+fn default_package(kind: TargetKind, base: &str) -> String {
+    match kind {
+        TargetKind::Go => format!("example.com/{base}"),
+        _ => base.to_string(),
+    }
 }
 
 // --- native manifest scaffolding ------------------------------------------
@@ -347,14 +406,13 @@ fn scaffold_native_manifest(kind: TargetKind, dir: &Path, package: &str) -> Resu
         TargetKind::Go => (
             "go.mod",
             format!(
-                "module {module}\n\
+                "module {package}\n\
                  \n\
                  go 1.21\n\
                  \n\
                  // Entry/client code additionally depends on the tono HTTP runtime\n\
                  // module (github.com/tono-lang/tono/runtimes/http-go), not yet\n\
-                 // published; wire a require and replace once you generate entries.\n",
-                module = go_module_path(package),
+                 // published; wire a require and replace once you generate entries.\n"
             ),
         ),
         TargetKind::TypeScript => (
@@ -546,6 +604,48 @@ mod tests {
         assert!(
             block.contains("package = \"example.com/acme\""),
             "go's package should be an unambiguous placeholder module path: {block}"
+        );
+    }
+
+    /// A target the manifest already configures keeps its own `out` and
+    /// `package`, so a scaffolded `go.mod`/`Cargo.toml` can never contradict
+    /// the config it was generated from.
+    #[test]
+    fn scaffold_site_follows_the_manifest_for_a_declared_target() {
+        let cfg = manifest::Config::from_toml_str(
+            "[target.go]\nenabled = true\npackage = \"github.com/acme/pay\"\nout = \"sdk/go\"\n",
+        )
+        .unwrap();
+        let (out, package) = scaffold_site(&cfg, TargetKind::Go, false, "fallback").unwrap();
+        assert_eq!(out, PathBuf::from("sdk/go"));
+        // Verbatim: an already-complete module path must not be prefixed again.
+        assert_eq!(package, "github.com/acme/pay");
+    }
+
+    #[test]
+    fn scaffold_site_defaults_a_declared_target_that_names_no_package() {
+        let cfg = manifest::Config::from_toml_str("[target.go]\nenabled = true\n").unwrap();
+        let (out, package) = scaffold_site(&cfg, TargetKind::Go, false, "acme").unwrap();
+        assert_eq!(out, PathBuf::from("go"));
+        assert_eq!(package, "example.com/acme");
+    }
+
+    /// A disabled target is left alone: `init` does not build out something
+    /// the project deliberately switched off.
+    #[test]
+    fn scaffold_site_skips_a_disabled_target() {
+        let cfg = manifest::Config::from_toml_str("[target.go]\nenabled = false\n").unwrap();
+        assert!(scaffold_site(&cfg, TargetKind::Go, false, "acme").is_none());
+    }
+
+    #[test]
+    fn scaffold_site_for_a_new_target_matches_the_block_it_writes() {
+        let cfg = manifest::Config::from_toml_str("").unwrap();
+        let (out, package) = scaffold_site(&cfg, TargetKind::Go, true, "acme").unwrap();
+        assert_eq!(out, PathBuf::from("go"));
+        assert!(
+            target_block(InitTarget::Generatable(TargetKind::Go), "acme")
+                .contains(&format!("package = \"{package}\""))
         );
     }
 

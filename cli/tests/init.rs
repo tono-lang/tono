@@ -152,6 +152,62 @@ fn update_mode_appends_a_new_target_without_disturbing_existing_content() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Adopting `init` on a project whose manifest was written by hand: the
+/// targets are already declared, so nothing is appended, but the build setup
+/// they are missing still gets created, at the `out` and under the `package`
+/// that manifest configures.
+#[test]
+fn update_mode_scaffolds_a_declared_target_that_has_no_native_manifest() {
+    let dir = tmpdir("update-existing-manifest");
+    std::fs::write(
+        dir.join("tono.toml"),
+        "[project]\nname = \"acme\"\n\n\
+         [target.rust]\nenabled = true\npackage = \"acme-sdk\"\nout = \"sdk/rust\"\n\n\
+         [target.go]\nenabled = true\npackage = \"github.com/acme/pay\"\nout = \"sdk/go\"\n",
+    )
+    .unwrap();
+    let before = std::fs::read_to_string(dir.join("tono.toml")).unwrap();
+
+    let (ok, stdout, stderr) = init(&dir, &["--yes", "--target", "rust,go"]);
+    assert!(ok, "init failed: {stderr}");
+    assert!(stdout.contains("already enabled"), "{stdout}");
+
+    // The manifest itself is untouched: everything was already declared.
+    assert_eq!(
+        before,
+        std::fs::read_to_string(dir.join("tono.toml")).unwrap()
+    );
+
+    let cargo = std::fs::read_to_string(dir.join("sdk/rust/Cargo.toml")).unwrap();
+    assert!(cargo.contains("name = \"acme-sdk\""), "{cargo}");
+    let go_mod = std::fs::read_to_string(dir.join("sdk/go/go.mod")).unwrap();
+    // Verbatim from the manifest: a complete module path is never re-prefixed.
+    assert!(go_mod.contains("module github.com/acme/pay"), "{go_mod}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A target that is declared but switched off is reported as such (with the
+/// line to change) and left alone, rather than silently doing nothing.
+#[test]
+fn update_mode_explains_a_declared_but_disabled_target() {
+    let dir = tmpdir("update-disabled");
+    std::fs::write(
+        dir.join("tono.toml"),
+        "[project]\nname = \"acme\"\n\n[target.go]\nenabled = false\n",
+    )
+    .unwrap();
+
+    let (ok, stdout, stderr) = init(&dir, &["--yes", "--target", "go"]);
+    assert!(ok, "init failed: {stderr}");
+    assert!(stdout.contains("disabled"), "{stdout}");
+    assert!(stdout.contains("enabled = true"), "{stdout}");
+    // Disabled by intent: no build setup is scaffolded for it.
+    assert!(!dir.join("go").exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn unknown_target_is_a_hard_error() {
     let dir = tmpdir("unknown-target");

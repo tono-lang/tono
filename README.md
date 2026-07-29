@@ -49,12 +49,13 @@ path, so how you version and publish what lands there is up to you. Three
 patterns cover most cases:
 
 - **Single repo, multi-target (the `init` default).** Each target's `out`
-  (e.g. `out/ts`, `out/rust`, `out/go`) lives in the same repo as the `.tono`
-  spec. No extra infrastructure: each target publishes straight to its own
-  registry (`npm publish`, `cargo publish`) from a tag-triggered CI job. Go
-  supports this natively: a module in a subdirectory is published with a
-  prefixed tag (`out/go/v1.2.3`), per the [Go modules
-  reference](https://go.dev/ref/mod), no separate repo required.
+  (`typescript/`, `rust/`, `go/`, as `init` writes them) lives in the same repo
+  as the `.tono` spec. No extra infrastructure: each target publishes straight
+  to its own registry (`npm publish`, `cargo publish`) from a tag-triggered CI
+  job. Go supports this natively: a module in a subdirectory is published with
+  a tag prefixed by that subdirectory (`go/v1.2.3` for the default layout), per
+  the [Go modules reference](https://go.dev/ref/mod), no separate repo
+  required.
 - **One repo per language (opt-in, more mature).** Most SDK generators
   default here instead (a monorepo is treated as the advanced setup): each
   language gets its own idiomatic repo (`org/api-sdk-python`,
