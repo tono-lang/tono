@@ -220,7 +220,7 @@ fn resolution_body(
             body: &mut body,
             refs,
         };
-        let fields = plan::emit_fields(entry, module, &mut r);
+        let fields = plan::emit_fields(entry, module, &mut r, 1);
         r.body.push_str(&fields);
     }
 
@@ -270,10 +270,10 @@ fn resolution_body(
                 ),
                 plan::Presence::Bytes => format!("!s.{ident}.is_empty() && {}", line.condition),
                 plan::Presence::Numeric => format!(
-                    "({why} == \"\" || s.{ident} != {}) && {}",
+                    "({err}.is_none() || s.{ident} != {}) && {}",
                     numeric_zero(&field.target),
                     line.condition,
-                    why = why_var(&field.name),
+                    err = err_var(&field.name),
                 ),
             };
             guards.push_str(&format!(
@@ -290,7 +290,7 @@ fn resolution_body(
         ));
     }
 
-    body.push_str(&discard_unread_whys(&body, entry));
+    body.push_str(&discard_unread_errs(&body, entry));
 
     body.push_str("let mut values = serde_json::Map::new();\n");
     for vp in entry.value_paths(module) {
@@ -390,51 +390,26 @@ fn hooks_expr(bound: &[BoundExtension<'_>]) -> String {
     }
 }
 
-/// Discard statements for the why-reasons nothing reads (mirrors Go's
-/// `discard_unread_whys`): every declared source chain records why it came
-/// up empty, but only a field something consumes gets a check reading that
-/// reason back. Rather than predicting consumption ahead of the shared
-/// plan's own choice, the reason is kept and explicitly discarded so a
-/// why-var with no consumer is never merely an unused-but-harmless local
-/// (idiomatic hygiene for the generated SDK, not a compile requirement of
-/// this crate).
-fn discard_unread_whys(body: &str, entry: &EntryModel<'_>) -> String {
+/// Discard statements for the error vars nothing reads (mirrors Go's
+/// `discard_unread_errs`): every declared source chain records its failure in
+/// an error var, but only a field something consumes gets a check reading it
+/// back. Rather than predicting consumption ahead of the shared plan's own
+/// choice, the error is kept and explicitly discarded so an error var with no
+/// consumer is never merely an unused-but-harmless local (idiomatic hygiene
+/// for the generated SDK, not a compile requirement of this crate).
+fn discard_unread_errs(body: &str, entry: &EntryModel<'_>) -> String {
     entry
         .fields
         .iter()
-        .map(|f| why_var(&f.name))
-        .filter(|why| is_written_never_read(body, why))
-        .map(|why| format!("let _ = &{why};\n"))
+        .map(|f| err_var(&f.name))
+        .filter(|err| {
+            plan::is_written_never_read(
+                body,
+                err,
+                |prefix| prefix.ends_with("let") || prefix.ends_with("mut"),
+                None,
+            )
+        })
+        .map(|err| format!("let _ = &{err};\n"))
         .collect()
-}
-
-fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
-}
-
-/// Whether `ident` occurs in `body` and every occurrence is a write (a `let`
-/// declaration or a plain reassignment `ident = ..`, not `==`).
-fn is_written_never_read(body: &str, ident: &str) -> bool {
-    let bytes = body.as_bytes();
-    let mut found = false;
-    let mut from = 0;
-    while let Some(rel) = body[from..].find(ident) {
-        let start = from + rel;
-        let end = start + ident.len();
-        from = end;
-        let whole_word = (start == 0 || !is_ident_byte(bytes[start - 1]))
-            && (end == bytes.len() || !is_ident_byte(bytes[end]));
-        if !whole_word {
-            continue;
-        }
-        found = true;
-        let prefix = body[..start].trim_end();
-        let is_decl = prefix.ends_with("let") || prefix.ends_with("mut");
-        let rest = body[end..].trim_start_matches(' ');
-        let is_reassign = rest.starts_with('=') && !rest.starts_with("==");
-        if !(is_decl || is_reassign) {
-            return false;
-        }
-    }
-    found
 }

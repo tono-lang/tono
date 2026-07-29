@@ -10,20 +10,72 @@
 //! builders that shape the tree live in [`build`].
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
+use crate::codegen::extensions::{bound_extensions, BoundExtension};
 use crate::codegen::symbol::SymbolKind;
-use crate::ir::{ArmValue, EntryField, EnvName, Module, Prim, Shape, Source, TemplatePart, Tref};
+use crate::codegen::tree::Decl;
+use crate::ir::{EntryField, EnvName, Module, Prim, Shape, Source, TemplatePart, Tref};
 
-use super::{source_stub, EntryModel};
+use super::{module_entries, source_stub, EntryModel};
 
 mod build;
 pub use build::{build_field, build_requires, presence_kind, Presence};
 
+mod dedup;
+pub use dedup::{
+    arm_value_head, decode_cascade, decode_opening, env_parts, is_written_never_read, nest,
+    output_decode_decls,
+};
+
+/// A module's entry emission, split the way the layout groups it: what every
+/// entry of the module shares and, per entry, everything named after that
+/// entry. Every target's own `emit` returns this same shape; only the
+/// declarations inside (each target's own leaf spelling) differ.
+pub struct EntryEmission {
+    pub shared: Vec<Decl>,
+    pub per_entry: Vec<(String, Vec<Decl>)>,
+}
+
+impl EntryEmission {
+    /// What a module with no entries emits: nothing.
+    pub fn empty() -> Self {
+        Self {
+            shared: Vec::new(),
+            per_entry: Vec::new(),
+        }
+    }
+}
+
+/// The common setup every target's `emit` starts from: the module's entries,
+/// whether it is multi-entry (so companion names need the entry's own
+/// prefix), and the extensions bound for `langs`. `None` for a module with no
+/// entries, so the caller returns [`EntryEmission::empty`] without building
+/// anything.
+pub fn entry_setup<'a>(
+    module: &'a Module,
+    langs: &[&str],
+) -> Option<(Vec<EntryModel<'a>>, bool, Vec<BoundExtension<'a>>)> {
+    let entries = module_entries(module);
+    if entries.is_empty() {
+        return None;
+    }
+    let multi = entries.len() > 1;
+    let bound = bound_extensions(module, langs);
+    Some((entries, multi, bound))
+}
+
 /// Render every entry field's resolution plan, in dependency order, into one
-/// block of target source (each field indented one level).
-pub fn emit_fields(entry: &EntryModel, module: &Module, e: &mut dyn Emitter) -> String {
+/// block of target source, each field indented `depth` levels to match the
+/// scaffold it lands in (a flat function body vs. a body nested inside a
+/// class's constructor).
+pub fn emit_fields(
+    entry: &EntryModel,
+    module: &Module,
+    e: &mut dyn Emitter,
+    depth: usize,
+) -> String {
     let mut out = String::new();
     for field in &entry.fields {
-        out.push_str(&render(&build_field(field, entry, module, e), 1, e));
+        out.push_str(&render(&build_field(field, entry, module, e), depth, e));
     }
     out
 }
@@ -51,9 +103,11 @@ pub(crate) fn arg_camel(name: &str, traits: &[crate::ir::Trait], lang: &str) -> 
     )
 }
 
-/// The reason ("why") variable tracking a field's deferred resolution.
-pub(crate) fn why_var(field: &str) -> String {
-    camel(&format!("{field}_why"))
+/// The error-value variable tracking a field's deferred resolution: `nil`
+/// (Go) / `undefined` (TS) while unresolved, a `ConfigError` once a source
+/// step fails, cleared back to nil/undefined once a later step resolves.
+pub(crate) fn err_var(field: &str) -> String {
+    camel(&format!("{field}_err"))
 }
 
 /// A casing `@str::*` transform applied over `out`: the shared helper key to
@@ -116,7 +170,7 @@ pub(crate) fn string_like(t: &Tref) -> bool {
 /// column zero (the walker adds the enclosing depth). No trailing newline.
 pub struct Leaf(pub String);
 
-/// An already-spelled target boolean expression (`why != ""` / `why !== ""`).
+/// An already-spelled target boolean expression (`err != nil` / `err !== undefined`).
 pub struct Cond(pub String);
 
 /// One node of the resolution plan. Straight-line code and every expression is
@@ -177,6 +231,9 @@ pub trait Emitter {
     /// The equality / inequality operators (`"=="`/`"!="` vs `"==="`/`"!=="`).
     fn eq(&self) -> &'static str;
     fn neq(&self) -> &'static str;
+    /// The literal an error-value var reads as "not yet resolved" (`"nil"` /
+    /// `"undefined"`).
+    fn absent_literal(&self) -> &'static str;
 
     // --- the per-target primitives the delegating atoms below build on: how a
     //     field name and a sibling path spell in the target's casing, and how a
@@ -190,6 +247,9 @@ pub trait Emitter {
     /// A `@default`/match-arm literal in the field's type.
     fn literal_of(&self, target: &Tref, value: &serde_json::Value) -> String;
     fn member_dest(&self, member_name: &str) -> String;
+    /// Whether a field's declared chain always resolves to a value (no
+    /// non-guaranteed step, so nothing downstream needs an error-var prereq).
+    fn field_guaranteed(&self, name: &str) -> bool;
 
     // --- delegating atoms shared across targets (the spelling lives in the
     //     primitives above and the shared naming helpers) ---
@@ -197,9 +257,9 @@ pub trait Emitter {
     fn dest(&self, field_name: &str) -> String {
         self.ident(field_name)
     }
-    /// The why-var identifier for a field.
-    fn why_ident(&self, field_name: &str) -> String {
-        why_var(field_name)
+    /// The error-value identifier for a field.
+    fn err_ident(&self, field_name: &str) -> String {
+        err_var(field_name)
     }
     /// The constructor parameter name of an `@arg` field, honoring its
     /// `@rename(lang)` override.
@@ -220,6 +280,34 @@ pub trait Emitter {
     /// The environment read call around a name expression (`os.LookupEnv(x)` /
     /// `readEnv(x)`); records the import/helper it needs.
     fn env_read_call(&mut self, name_expr: &str) -> String;
+    /// The prereq guard when an `@env` variable's own name comes from a
+    /// sibling field that may itself be absent: empty when the name is a
+    /// literal or the sibling is guaranteed, otherwise an opened guard the
+    /// caller's own env step closes (mirrors `wrap_from`, but `err` here is
+    /// already the derived identifier of the field being resolved, not a
+    /// field name to re-derive one from).
+    fn env_name_prereq(&self, name: &EnvName, err: &str) -> String {
+        let EnvName::Field(fr) = name else {
+            return String::new();
+        };
+        let Some(head) = fr.field.first() else {
+            return String::new();
+        };
+        if self.field_guaranteed(head) {
+            return String::new();
+        }
+        let head_err = self.err_ident(head);
+        let assign = format!(
+            "{err} = {}{}",
+            self.wrap_error_expr(head, &head_err),
+            self.term()
+        );
+        format!(
+            "{} {{\n{}\n}} else ",
+            self.if_header(&self.cond_err_present(head)),
+            nest(self.indent_unit(), &assign, 1),
+        )
+    }
 
     // --- the env lookup / label / miss reason (shared: only the read call and
     //     the to-string spelling differ) ---
@@ -244,8 +332,10 @@ pub trait Emitter {
             }
         }
     }
-    fn env_miss_reason(&mut self, name: &EnvName) -> String {
-        match name {
+    /// The `ConfigError` an env lookup miss constructs: a leaf failure (no
+    /// cause to wrap yet), naming the concrete variable that came up empty.
+    fn env_miss_error(&mut self, name: &EnvName) -> String {
+        let message = match name {
             EnvName::Name(n) => format!("{:?}", format!("env {n}: empty")),
             EnvName::Field(fr) => {
                 let t = self.path_type_of(&fr.field);
@@ -253,7 +343,8 @@ pub trait Emitter {
                 let s = self.to_string_expr(&read, &t);
                 format!("\"env \" + {s} + \": empty\"")
             }
-        }
+        };
+        self.config_error_expr(&message, None)
     }
 
     // --- composite statements built from the atoms (shared) ---
@@ -276,49 +367,66 @@ pub trait Emitter {
     fn assign_expr(&self, dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{dest} = {expr}{}", self.term()))
     }
-    /// Record that a field's value is still deferred to the head it reads
-    /// (`why = "head <- " + headWhy`).
-    fn assign_reason(&self, why_field: &str, head: &str) -> Leaf {
+    /// The expression wrapping the head's already-open error as this field's
+    /// own deferred cause, naming the head that failed (`head_err` is
+    /// `self.err_ident(head)`, already computed by every caller). `wrap_from`
+    /// and `env_name_prereq` both build exactly this value (an assignment vs.
+    /// an inline guard body), so it is spelled once per target here. Message
+    /// composition is not uniform across targets (Go/TS concatenate with
+    /// `+`; Rust has no `&str + &str` and reads the head's error through an
+    /// `Option`), so this stays per-target rather than a shared default.
+    fn wrap_error_expr(&self, head: &str, head_err: &str) -> String;
+    /// Wrap the head's error as the reason this field is still deferred: the
+    /// edge being consumed wraps the cause, naming the head that failed; the
+    /// head's own resolver already named the concrete source.
+    fn wrap_from(&self, err_field: &str, head: &str) -> Leaf {
+        let head_err = self.err_ident(head);
         Leaf(format!(
-            "{} = \"{head} <- \" + {}{}",
-            self.why_ident(why_field),
-            self.why_ident(head),
+            "{} = {}{}",
+            self.err_ident(err_field),
+            self.wrap_error_expr(head, &head_err),
             self.term()
         ))
     }
-    /// Open a why-var (`why := "x"` vs `let why = "x";`); the declaration
-    /// keyword differs, so this one stays per-target.
-    fn why_open(&self, field_name: &str, initial: &str) -> Leaf;
-    fn why_set(&self, why_field: &str, reason: &str) -> Leaf {
+    /// A `ConfigError` construction expression for a leaf failure (nothing
+    /// upstream to wrap yet): a raw string literal in Go, a `new
+    /// ConfigError(...)` call in TS, a struct literal in Rust. `cause` is the
+    /// already-spelled error value the failure wraps, when there is one.
+    fn config_error_expr(&self, message_expr: &str, cause: Option<&str>) -> String;
+    /// Open an error-value var (`var err error` vs `let err: ConfigError |
+    /// undefined;`); the declaration keyword and type differ, so this one
+    /// stays per-target. Its zero value (`nil`/`undefined`) already reads as
+    /// "not yet resolved" — no sentinel value needed.
+    fn err_open(&self, field_name: &str) -> Leaf;
+    /// Clear an error-value var back to "resolved" (`nil`/`undefined`) once a
+    /// later source in the chain succeeds.
+    fn err_clear(&self, field_name: &str) -> Leaf {
         Leaf(format!(
-            "{} = {reason:?}{}",
-            self.why_ident(why_field),
+            "{} = {}{}",
+            self.err_ident(field_name),
+            self.absent_literal(),
             self.term()
         ))
     }
 
-    // --- conditions (shared, from the operator atoms) ---
-    fn cond_why_absent(&self, field_name: &str) -> Cond {
-        Cond(format!(
-            "{} {} \"\"",
-            self.why_ident(field_name),
-            self.neq()
-        ))
-    }
-    fn cond_why_resolved(&self, field_name: &str) -> Cond {
-        Cond(format!("{} {} \"\"", self.why_ident(field_name), self.eq()))
-    }
+    // --- conditions: whether a field's error var is set. Go/TS spell this
+    //     with the equality atoms (`!= nil` / `!== undefined`); Rust's
+    //     `Option<ConfigError>` has no `PartialEq` (its `cause` is a `Box<dyn
+    //     Error>`), so it spells `.is_some()`/`.is_none()` instead — hence
+    //     these stay per-target rather than a shared default. ---
+    fn cond_err_present(&self, field_name: &str) -> Cond;
+    fn cond_err_absent(&self, field_name: &str) -> Cond;
 
     // --- the source steps of a NON-guaranteed chain: each owns its guard
     //     idiom, so the sequential ordering is shared while the spelling stays
-    //     per-target. `why` is the already-spelled reason variable. ---
-    fn with_step_body(&self, field: &EntryField, dest: &str, why: &str) -> String;
+    //     per-target. `err` is the already-spelled error-value variable. ---
+    fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String;
     fn env_step_body(
         &mut self,
         field: &EntryField,
         name: &EnvName,
         dest: &str,
-        why: &str,
+        err: &str,
     ) -> String;
 
     // --- the whole-construct bodies that already differ per target (a
@@ -348,13 +456,13 @@ pub trait Emitter {
     //     check itself (comparison, error construction, import side effect) ---
     /// A consumed member of a composed/decoded field must hold a value.
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String;
-    /// A consumed numeric/bool config member fails when its hoisted reason var
+    /// A consumed numeric/bool config member fails when its hoisted error var
     /// reports absence (a resolved zero is not absence, so the value is not
-    /// consulted). `why` is the logical reason-var name (see [`build`]).
-    fn require_member_deferred(&mut self, name: &str, why: &str) -> String;
-    /// A consumed string-like scalar must be non-empty (why-decorated error).
+    /// consulted). `err` is the logical error-var name (see [`build`]).
+    fn require_member_deferred(&mut self, name: &str, err: &str) -> String;
+    /// A consumed string-like scalar must be non-empty (error-decorated).
     fn require_string(&mut self, head: &str, target: &Tref) -> String;
-    /// A consumed bytes scalar must be non-empty (why-decorated error).
+    /// A consumed bytes scalar must be non-empty (error-decorated).
     fn require_bytes(&mut self, head: &str) -> String;
     /// A consumed numeric scalar fails only when reported absent AND still zero.
     fn require_numeric(&mut self, head: &str, target: &Tref) -> String;
@@ -498,10 +606,27 @@ pub fn format_absent_deps(entry: &EntryModel, parts: &[TemplatePart]) -> Vec<Str
     deps
 }
 
-/// The head field of an inline match-arm source path or a select subject.
-pub fn arm_value_head(value: &ArmValue) -> Option<String> {
-    match value {
-        ArmValue::Field(p) => p.first().cloned(),
-        _ => None,
+/// The `@format` template split shared by every target that supports it:
+/// each part as a target expression, plus the non-guaranteed heads it reads
+/// (first-appearance order). A literal spells identically everywhere (Rust's
+/// `Debug` escaping doubles as a valid Go/TypeScript string literal); only a
+/// field reference needs a target-specific expression, so `field_expr` is the
+/// one thing a caller supplies.
+pub fn format_pieces(
+    entry: &EntryModel,
+    parts: &[TemplatePart],
+    mut field_expr: impl FnMut(&[String]) -> String,
+) -> (Vec<String>, Vec<String>) {
+    let absent_deps = format_absent_deps(entry, parts);
+    let mut concat: Vec<String> = Vec::new();
+    for part in parts {
+        match part {
+            TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
+            TemplatePart::Field(p) => concat.push(field_expr(p)),
+            // An op-input placeholder cannot appear in a field template; the
+            // frontend rejects it. Render empty defensively.
+            TemplatePart::Input(_) => concat.push("\"\"".to_string()),
+        }
     }
+    (concat, absent_deps)
 }

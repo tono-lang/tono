@@ -23,10 +23,6 @@ pub(super) struct Resolver<'a, 'b> {
 }
 
 impl Resolver<'_, '_> {
-    fn guaranteed(&self, name: &str) -> bool {
-        self.entry.field_guaranteed(name)
-    }
-
     fn with_access(&self, field: &EntryField) -> String {
         format!(
             "config.{}",
@@ -35,24 +31,6 @@ impl Resolver<'_, '_> {
                 rename_of(&field.traits, LANG).as_deref(),
                 self.config
             )
-        )
-    }
-
-    /// The prereq guard when the env variable's own name comes from a sibling
-    /// field that may itself be absent; the env step chains onto its `else`.
-    fn env_name_prereq(&self, name: &EnvName, why: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        format!(
-            "if ({head_why} !== \"\") {{\n  {why} = \"{head} <- \" + {head_why};\n}} else ",
-            head_why = why_var(head),
         )
     }
 
@@ -143,81 +121,36 @@ impl Resolver<'_, '_> {
     /// The template split: each part as a TS string expression, plus the
     /// non-guaranteed heads it reads (first-appearance order).
     fn format_pieces(&mut self, parts: &[TemplatePart]) -> (Vec<String>, Vec<String>) {
-        let absent_deps = plan::format_absent_deps(self.entry, parts);
-        let mut concat: Vec<String> = Vec::new();
-        for part in parts {
-            match part {
-                TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
-                TemplatePart::Field(p) => {
-                    let t = self.path_type(p);
-                    let expr = self.path_expr(p);
-                    concat.push(as_template_string(&expr, &t));
-                }
-                // An op-input placeholder cannot appear in a field template;
-                // the frontend rejects it. Render empty defensively.
-                TemplatePart::Input(_) => concat.push("\"\"".to_string()),
-            }
-        }
-        (concat, absent_deps)
+        plan::format_pieces(self.entry, parts, |p| {
+            let t = self.path_type(p);
+            let expr = self.path_expr(p);
+            as_template_string(&expr, &t)
+        })
     }
 
-    /// The `@arg`/`@with` opening shared by the structured and whole-JSON
-    /// decodes: an `@arg` value passes typed (returns `None`, having pushed the
-    /// assignment onto `out`), otherwise the why-var opens and an optional
-    /// `@with` layer wins, and the env source's parts are returned.
-    fn decode_opening(&mut self, field: &EntryField, out: &mut String) -> Option<(String, String)> {
-        let dest = self.ident(&field.name);
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            out.push_str(&format!("{dest} = {};", self.arg_ident(field)));
-            return None;
-        }
-        let why = why_var(&field.name);
-        out.push_str(&format!("let {why} = \"no source\";\n"));
-        Some((dest, why))
-    }
-
-    /// Lay out a decode field's source cascade below the why-var opening: the
-    /// first source runs unconditionally, every later one only while the why-var
-    /// is still set (a first-present-wins fallback). Each `@env` step is built by
-    /// `env_block` from its own `(lookup, label, miss, prereq)`; `@with` and
-    /// `@default` are spelled inline.
+    /// Lay out a decode field's source cascade below the error-var opening.
+    /// Each `@env` step is built by `env_block` from its own `(lookup, label,
+    /// miss, prereq)`, computed here before delegating the shared ordering and
+    /// wrapping to `plan::decode_cascade`.
     fn decode_cascade(
         &mut self,
         field: &EntryField,
         dest: &str,
-        why: &str,
+        err: &str,
         mut env_block: impl FnMut(&mut Self, &str, &str, &str, &str) -> String,
     ) -> String {
-        let mut steps: Vec<String> = Vec::new();
-        for source in &field.sources {
-            match source {
-                Source::With => steps.push(self.with_step_body(field, dest, why)),
-                Source::Env(name) => {
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    let miss = self.env_miss_reason(name);
-                    let pre = self.env_name_prereq(name, why);
-                    steps.push(env_block(self, &lookup, &label, &miss, &pre));
-                }
-                Source::Default(v) => steps.push(format!(
-                    "{dest} = {};\n{why} = \"\";",
-                    literal(&field.target, v)
-                )),
-                Source::Arg => {}
-            }
-        }
-        steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                if i == 0 {
-                    step.clone()
-                } else {
-                    format!("if ({why} !== \"\") {{\n{}\n}}", nest(step, 1))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        plan::decode_cascade(
+            self,
+            field,
+            dest,
+            err,
+            |s| s.with_step_body(field, dest, err),
+            |s, name| {
+                let (lookup, label, miss, pre) = plan::env_parts(s, name, err);
+                env_block(s, &lookup, &label, &miss, &pre)
+            },
+            literal,
+        )
     }
 }
 
@@ -297,8 +230,39 @@ impl Emitter for Resolver<'_, '_> {
         format!("readEnv({name_expr})")
     }
 
-    fn why_open(&self, field_name: &str, initial: &str) -> Leaf {
-        Leaf(format!("let {} = {initial:?};", why_var(field_name)))
+    fn err_open(&self, field_name: &str) -> Leaf {
+        Leaf(format!(
+            "let {}: ConfigError | undefined;",
+            err_var(field_name)
+        ))
+    }
+
+    fn absent_literal(&self) -> &'static str {
+        "undefined"
+    }
+
+    fn cond_err_present(&self, field_name: &str) -> Cond {
+        Cond(format!("{} !== undefined", self.err_ident(field_name)))
+    }
+
+    fn cond_err_absent(&self, field_name: &str) -> Cond {
+        Cond(format!("{} === undefined", self.err_ident(field_name)))
+    }
+
+    fn wrap_error_expr(&self, head: &str, head_err: &str) -> String {
+        let message = format!("`{head} <- ${{{head_err}.message}}`");
+        self.config_error_expr(&message, Some(head_err))
+    }
+
+    fn field_guaranteed(&self, name: &str) -> bool {
+        self.entry.field_guaranteed(name)
+    }
+
+    fn config_error_expr(&self, message_expr: &str, cause: Option<&str>) -> String {
+        match cause {
+            Some(cause) => format!("new {}({message_expr}, {cause})", error_names().config),
+            None => format!("new {}({message_expr})", error_names().config),
+        }
     }
 
     fn config_open(&mut self, _field: &EntryField, shape: &Shape) -> Leaf {
@@ -310,10 +274,11 @@ impl Emitter for Resolver<'_, '_> {
 
     /// The `@with` presence step of a non-guaranteed chain, relative to column
     /// zero.
-    fn with_step_body(&self, field: &EntryField, dest: &str, why: &str) -> String {
+    fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String {
         let acc = self.with_access(field);
         format!(
-            "if ({acc} !== undefined) {{\n  {dest} = {acc};\n  {why} = \"\";\n}} else {{\n  {why} = \"not configured\";\n}}"
+            "if ({acc} !== undefined) {{\n  {dest} = {acc};\n  {err} = undefined;\n}} else {{\n  {err} = {miss};\n}}",
+            miss = self.config_error_expr("\"not configured\"", None),
         )
     }
 
@@ -325,16 +290,13 @@ impl Emitter for Resolver<'_, '_> {
         field: &EntryField,
         name: &EnvName,
         dest: &str,
-        why: &str,
+        err: &str,
     ) -> String {
-        let lookup = self.env_lookup(name);
-        let label = self.env_label(name);
-        let miss = self.env_miss_reason(name);
-        let pre = self.env_name_prereq(name, why);
+        let (lookup, label, miss, pre) = plan::env_parts(self, name, err);
         let parse = self.env_parse(field, dest, &label);
         format!(
-            "{pre}{{\n  const v = {lookup};\n  if (v !== undefined) {{\n{parse}\n    {why} = \"\";\n  }} else {{\n    {why} = {miss};\n  }}\n}}",
-            parse = nest(&parse, 2),
+            "{pre}{{\n  const v = {lookup};\n  if (v !== undefined) {{\n{parse}\n    {err} = undefined;\n  }} else {{\n    {err} = {miss};\n  }}\n}}",
+            parse = plan::nest("  ", &parse, 2),
         )
     }
 
@@ -361,7 +323,7 @@ impl Emitter for Resolver<'_, '_> {
                     let parse = self.env_parse(field, dest, &label);
                     out.push_str(&format!(
                         "\nif (!{flag}) {{\n  const v = {lookup};\n  if (v !== undefined) {{\n{parse}\n    {flag} = true;\n  }}\n}}",
-                        parse = nest(&parse, 2),
+                        parse = plan::nest("  ", &parse, 2),
                     ));
                 }
                 Source::Default(v) => {
@@ -419,8 +381,9 @@ impl Emitter for Resolver<'_, '_> {
             )))
         } else {
             Leaf(format!(
-                "{} = \"match: unmatched value\";",
-                why_var(&field.name)
+                "{} = {};",
+                err_var(&field.name),
+                self.config_error_expr("\"match: unmatched value\"", None),
             ))
         }
     }
@@ -452,7 +415,7 @@ impl Emitter for Resolver<'_, '_> {
     /// order), plus declared validation. Relative to column zero.
     fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String {
         let mut out = String::new();
-        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, err)) = plan::decode_opening(self, field, &mut out) else {
             return out;
         };
         let ty = type_ident_from_id(&shape.id);
@@ -531,8 +494,8 @@ impl Emitter for Resolver<'_, '_> {
         let required_tpl = block1(&required_checks);
         let types_tpl = block1(&type_checks);
         let validate = block1(&validate);
-        let (dc, wc) = (dest.clone(), why.clone());
-        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+        let (dc, ec) = (dest.clone(), err.clone());
+        let body = self.decode_cascade(field, &dest, &err, move |_, lookup, label, miss, pre| {
             // The required/type guards carry a `__LABEL__` slot so each source in
             // the cascade renders them against its own env label.
             let required = required_tpl.replace("__LABEL__", label);
@@ -552,8 +515,8 @@ impl Emitter for Resolver<'_, '_> {
                  \x20 const decoded = decode{ty}(parsed);\n\
                  {validate}\
                  \x20 {dc} = decoded;\n\
-                 \x20 {wc} = \"\";\n\
-                 }} else {{\n  {wc} = {miss};\n}}"
+                 \x20 {ec} = undefined;\n\
+                 }} else {{\n  {ec} = {miss};\n}}"
             )
         });
         out.push_str(&body);
@@ -564,21 +527,21 @@ impl Emitter for Resolver<'_, '_> {
     /// i64 map or union field lands typed. Relative to column zero.
     fn json_body(&mut self, field: &EntryField) -> String {
         let mut out = String::new();
-        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, err)) = plan::decode_opening(self, field, &mut out) else {
             return out;
         };
         let ty = ts_type(&field.target);
         let decode =
             crate::codegen::targets::typescript::codecs::decode_expr("parsed", &field.target);
         let target = field.target.clone();
-        let (dc, wc) = (dest.clone(), why.clone());
-        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+        let (dc, ec) = (dest.clone(), err.clone());
+        let body = self.decode_cascade(field, &dest, &err, move |_, lookup, label, miss, pre| {
             // Container and element checks keep the boundary as strict as Go's
             // typed unmarshal: the same env value must construct in both targets.
             let checks = block1(&json_shape_checks(&target, label));
             let fail_parse = config_error(&format!("`${{{label}}}: ${{String(e)}}`"));
             format!(
-                "{pre}const raw = {lookup};\nif (raw !== undefined) {{\n  let parsed: any;\n  try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    {fail_parse}\n  }}\n{checks}  {dc} = {decode} as {ty};\n  {wc} = \"\";\n}} else {{\n  {wc} = {miss};\n}}"
+                "{pre}const raw = {lookup};\nif (raw !== undefined) {{\n  let parsed: any;\n  try {{\n    parsed = JSON.parse(raw);\n  }} catch (e) {{\n    {fail_parse}\n  }}\n{checks}  {dc} = {decode} as {ty};\n  {ec} = undefined;\n}} else {{\n  {ec} = {miss};\n}}"
             )
         });
         out.push_str(&body);
@@ -595,20 +558,20 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    fn require_member_deferred(&mut self, name: &str, why: &str) -> String {
+    fn require_member_deferred(&mut self, name: &str, err: &str) -> String {
+        let ident = err_var(err);
         format!(
-            "if ({why} !== \"\") {{\n  throw new {config}(\"{name} <- \" + {why});\n}}",
-            why = why_var(why),
+            "if ({ident} !== undefined) {{\n  throw new {config}(\"{name} <- \" + {ident}.message, {ident});\n}}",
             config = error_names().config,
         )
     }
 
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         format!(
-            "if (s.{ident} === {zero}) {{\n  throw new {config}(\"{name} <- \" + ({why} || \"no value\"));\n}}",
+            "if (s.{ident} === {zero}) {{\n  throw new {config}(\"{name} <- \" + ({err} ? {err}.message : \"no value\"), {err});\n}}",
             ident = field_camel_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             zero = cast_string(target, "\"\""),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )
@@ -616,9 +579,9 @@ impl Emitter for Resolver<'_, '_> {
 
     fn require_bytes(&mut self, head: &str) -> String {
         format!(
-            "if (s.{ident}.length === 0) {{\n  throw new {config}(\"{name} <- \" + ({why} || \"no value\"));\n}}",
+            "if (s.{ident}.length === 0) {{\n  throw new {config}(\"{name} <- \" + ({err} ? {err}.message : \"no value\"), {err});\n}}",
             ident = field_camel_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )
@@ -631,30 +594,13 @@ impl Emitter for Resolver<'_, '_> {
             "0"
         };
         format!(
-            "if ({why} !== \"\" && s.{ident} === {zero}) {{\n  throw new {config}(\"{name} <- \" + {why});\n}}",
+            "if ({err} !== undefined && s.{ident} === {zero}) {{\n  throw new {config}(\"{name} <- \" + {err}.message, {err});\n}}",
             ident = field_camel_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )
     }
-}
-
-/// Indent every non-empty line of `s` by `n` two-space units, dropping any
-/// trailing newline so callers control the separator.
-fn nest(s: &str, n: usize) -> String {
-    let pad = "  ".repeat(n);
-    s.trim_end_matches('\n')
-        .split('\n')
-        .map(|l| {
-            if l.is_empty() {
-                String::new()
-            } else {
-                format!("{pad}{l}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// A structured-decode sub-block indented one level with a trailing newline, or
@@ -663,6 +609,6 @@ fn block1(s: &str) -> String {
     if s.is_empty() {
         String::new()
     } else {
-        format!("{}\n", nest(s, 1))
+        format!("{}\n", plan::nest("  ", s, 1))
     }
 }

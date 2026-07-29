@@ -145,9 +145,15 @@ func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status)
 
 type ConfigError struct {
 	Message string
+	Cause   error
 }
 
 func (e *ConfigError) Error() string { return e.Message }
+
+func (e *ConfigError) Unwrap() error { return e.Cause }
+
+const statusOverloaded = 529
+const codeOverloaded = "overloaded"
 
 func (e *Overloaded) Error() string { return "overloaded" }
 
@@ -238,8 +244,6 @@ type ClientAPI interface {
 
 var _ ClientAPI = (*Client)(nil)
 
-var saveNoteDescriptor = descriptor.MustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"label\"}],[\"body\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[529,\"notes#overloaded\",\"overloaded\",true]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-Client-Name\"}],{\"field\":[\"client_name\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,null]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/notes/{id}\"}")
-
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, client_init on top (bespoke wins),
 // then the declared validation.
@@ -262,41 +266,35 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	} else {
 		s.EndpointVersion = "v2"
 	}
-	endpointV1Why := "no source"
+	var endpointV1Err error
 	if v, ok := os.LookupEnv("ENDPOINT"); ok && v != "" {
 		s.EndpointV1 = v
-		endpointV1Why = ""
+		endpointV1Err = nil
 	} else {
-		endpointV1Why = "env ENDPOINT: empty"
+		endpointV1Err = &ConfigError{Message: "env ENDPOINT: empty"}
 	}
-	endpointV2Why := "no source"
+	var endpointV2Err error
 	if v, ok := os.LookupEnv(s.EndpointEnv); ok && v != "" {
 		s.EndpointV2 = v
-		endpointV2Why = ""
+		endpointV2Err = nil
 	} else {
-		endpointV2Why = "env " + s.EndpointEnv + ": empty"
+		endpointV2Err = &ConfigError{Message: "env " + s.EndpointEnv + ": empty"}
 	}
-	endpointWhy := ""
+	var endpointErr error
 	switch s.EndpointVersion {
 	case "v1":
-		if endpointV1Why != "" {
-			endpointWhy = "endpoint_v1 <- " + endpointV1Why
+		if endpointV1Err != nil {
+			endpointErr = &ConfigError{Message: "endpoint_v1 <- " + endpointV1Err.Error(), Cause: endpointV1Err}
 		} else {
 			s.Endpoint = s.EndpointV1
 		}
 	case "legacy":
 		s.Endpoint = "https://old.example.com"
 	default:
-		endpointWhy = "no source"
-		if v, ok := os.LookupEnv("ENDPOINT_V2"); ok && v != "" {
-			s.Endpoint = v
-			endpointWhy = ""
+		if endpointV2Err != nil {
+			endpointErr = &ConfigError{Message: "endpoint_v2 <- " + endpointV2Err.Error(), Cause: endpointV2Err}
 		} else {
-			endpointWhy = "env ENDPOINT_V2: empty"
-		}
-		if endpointWhy != "" {
-			s.Endpoint = "https://example.com"
-			endpointWhy = ""
+			s.Endpoint = s.EndpointV2
 		}
 	}
 	if w.timeout != nil {
@@ -319,7 +317,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		}
 		s.Settings = composed
 	}
-	credsWhy := "no source"
+	var credsErr error
 	if raw, ok := os.LookupEnv("SERVICE_CREDENTIALS"); ok && raw != "" {
 		var probe map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(raw), &probe); err != nil {
@@ -341,25 +339,24 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 			return nil, invalid
 		}
 		s.Creds = decoded
-		credsWhy = ""
+		credsErr = nil
 	} else {
-		credsWhy = "env SERVICE_CREDENTIALS: empty"
+		credsErr = &ConfigError{Message: "env SERVICE_CREDENTIALS: empty"}
 	}
-	labelsWhy := "no source"
+	var labelsErr error
 	if raw, ok := os.LookupEnv("SERVICE_LABELS"); ok && raw != "" {
 		if err := json.Unmarshal([]byte(raw), &s.Labels); err != nil {
 			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_LABELS", err)}
 		}
-		labelsWhy = ""
+		labelsErr = nil
 	} else {
-		labelsWhy = "env SERVICE_LABELS: empty"
+		labelsErr = &ConfigError{Message: "env SERVICE_LABELS: empty"}
 	}
 	if s.Endpoint == "" {
-		why := endpointWhy
-		if why == "" {
-			why = "no value"
+		if endpointErr == nil {
+			return nil, &ConfigError{Message: "endpoint: no value"}
 		}
-		return nil, &ConfigError{Message: "endpoint <- " + why}
+		return nil, &ConfigError{Message: "endpoint <- " + endpointErr.Error(), Cause: endpointErr}
 	}
 	violations := []Violation{}
 	if len([]rune(s.APIKey)) < 1 {
@@ -368,9 +365,8 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	if len(violations) > 0 {
 		return nil, &ValidationError{Violations: violations}
 	}
-	_ = endpointV2Why
-	_ = credsWhy
-	_ = labelsWhy
+	_ = credsErr
+	_ = labelsErr
 	values := map[string]any{}
 	values["api_key"] = s.APIKey
 	values["client_name"] = s.ClientName
@@ -413,6 +409,65 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	return &Client{settings: s, runtime: runtime, hooks: nil}, nil
 }
 
+var saveNoteDescriptor = descriptor.MustDescriptor(`{
+  "bindings": [
+    [
+      "id",
+      {
+        "kind": "label"
+      }
+    ],
+    [
+      "body",
+      {
+        "kind": "body"
+      }
+    ]
+  ],
+  "endpoint": [
+    "endpoint"
+  ],
+  "errors": [
+    [
+      529,
+      "notes#overloaded",
+      "overloaded",
+      true
+    ]
+  ],
+  "http_method": "POST",
+  "request_headers": [
+    [
+      [
+        {
+          "lit": "X-Client-Name"
+        }
+      ],
+      {
+        "field": [
+          "client_name"
+        ]
+      }
+    ]
+  ],
+  "response_bindings": [],
+  "retry": {
+    "max": {
+      "ref": "max_retries"
+    }
+  },
+  "success": [
+    [
+      200,
+      null
+    ]
+  ],
+  "timeout": {
+    "ref": "timeout"
+  },
+  "uri": "/notes/{id}"
+}`)
+
 func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	var zero Note
 	record, err := record.EncodeRecord(input)
@@ -429,19 +484,9 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	case tonohttp.OutcomeError:
 		return zero, DecodeSaveNoteError(outcome.Status, []byte(outcome.Body))
 	}
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(outcome.Body), &probe); err != nil {
-		return zero, &DecodeError{Path: "$", Expected: "Note", Raw: outcome.Body}
-	}
-	if rv, ok := probe["id"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.id", Expected: "Note", Raw: outcome.Body}
-	}
-	if rv, ok := probe["body"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.body", Expected: "Note", Raw: outcome.Body}
-	}
-	var out Note
-	if err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {
-		return zero, &DecodeError{Path: "$", Expected: "Note", Raw: outcome.Body}
+	out, path, ok := DecodeNote([]byte(outcome.Body))
+	if !ok {
+		return zero, &DecodeError{Path: path, Expected: "Note", Raw: outcome.Body}
 	}
 	return out, nil
 }
@@ -451,7 +496,7 @@ func DecodeSaveNoteError(status int, body []byte) error {
 		Code string `json:"code"`
 	}
 	_ = json.Unmarshal(body, &probe)
-	if status == 529 && probe.Code == "overloaded" {
+	if status == statusOverloaded && probe.Code == codeOverloaded {
 		var data Overloaded
 		if json.Unmarshal(body, &data) == nil {
 			return &data
@@ -464,9 +509,36 @@ func DecodeSaveNoteError(status int, body []byte) error {
 // Code generated by tono. DO NOT EDIT.
 
 package notes
+import "encoding/json"
+
 // conf is a construction-only composition of the entry surface; it
 // never crosses the wire and is unexported (the SDK builds it).
 type conf struct {
 	APIKey string
 	Region string
+}
+
+// noteRequiredFields names the members Note's declared shape requires present.
+var noteRequiredFields = []string{"id", "body"}
+
+// DecodeNote parses a Note from its wire JSON: every required member must be
+// present (a null value counts as absent) before the typed decode runs. The
+// returned path names where the parse failed ("$" for the whole body,
+// "$.field" for a missing member), for the caller to build its own
+// DecodeError; ok is false on any failure.
+func DecodeNote(raw []byte) (Note, string, bool) {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return Note{}, "$", false
+	}
+	for _, field := range noteRequiredFields {
+		if rv, ok := probe[field]; !ok || string(rv) == "null" {
+			return Note{}, "$." + field, false
+		}
+	}
+	var out Note
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return Note{}, "$", false
+	}
+	return out, "", true
 }

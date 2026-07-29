@@ -88,13 +88,21 @@ func (e *APIError) Error() string { return "api error " + strconv.Itoa(e.Status)
 
 type ConfigError struct {
 	Message string
+	Cause   error
 }
 
 func (e *ConfigError) Error() string { return e.Message }
 
+func (e *ConfigError) Unwrap() error { return e.Cause }
+
+const statusCardDeclined = 402
+const codeCardDeclined = "card_declined"
+
 func (e *CardDeclined) Error() string { return "card_declined" }
 
 func (e *CardDeclined) Retryable() bool { return true }
+
+const statusNotFound = 404
 
 func (e *NotFound) Error() string { return "not_found" }
 

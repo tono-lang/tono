@@ -12,17 +12,20 @@ import {
 } from "@tono/http-runtime-ts";
 import {
   decodeCardDeclined,
-  decodeCharge,
   decodeNotFound,
   encodeCharge,
+  parseCharge,
 } from "./codec";
 import {
   APIError,
+  CODE_CARD_DECLINED,
   CardDeclinedError,
   Charge,
   ConfigError,
   DecodeError,
   NotFoundError,
+  STATUS_CARD_DECLINED,
+  STATUS_NOT_FOUND,
   TonoError,
   TransportError,
   ValidationError,
@@ -52,9 +55,126 @@ export interface ClientConfig {
   maxRetries?: number;
 }
 
-const createChargeDescriptor: WireDescriptor = JSON.parse(
-  '{"bindings":[["id",{"kind":"body"}],["amount",{"kind":"body"}],["fee",{"kind":"body"}],["receipt",{"kind":"body"}],["currency",{"kind":"body"}],["note",{"kind":"body"}],["tags",{"kind":"body"}],["metadata",{"kind":"body"}],["created",{"kind":"body"}],["status",{"kind":"body"}],["method",{"kind":"body"}]],"endpoint":["endpoint"],"errors":[[402,"payments.charges#card_declined","card_declined",true],[404,"payments.charges#not_found",null]],"http_method":"POST","request_headers":[[[{"lit":"X-API-Key"}],{"field":["api_key"]}]],"response_bindings":[],"retry":{"max":{"ref":"max_retries"}},"success":[[200,{"args":[],"ref":"payments.charges#charge"}]],"timeout":{"ref":"timeout"},"uri":"/charges"}',
-);
+const createChargeDescriptor: WireDescriptor = JSON.parse(`{
+  "bindings": [
+    [
+      "id",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "amount",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "fee",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "receipt",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "currency",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "note",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "tags",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "metadata",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "created",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "status",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "method",
+      {
+        "kind": "body"
+      }
+    ]
+  ],
+  "endpoint": [
+    "endpoint"
+  ],
+  "errors": [
+    [
+      402,
+      "payments.charges#card_declined",
+      "card_declined",
+      true
+    ],
+    [
+      404,
+      "payments.charges#not_found",
+      null
+    ]
+  ],
+  "http_method": "POST",
+  "request_headers": [
+    [
+      [
+        {
+          "lit": "X-API-Key"
+        }
+      ],
+      {
+        "field": [
+          "api_key"
+        ]
+      }
+    ]
+  ],
+  "response_bindings": [],
+  "retry": {
+    "max": {
+      "ref": "max_retries"
+    }
+  },
+  "success": [
+    [
+      200,
+      {
+        "args": [],
+        "ref": "payments.charges#charge"
+      }
+    ]
+  ],
+  "timeout": {
+    "ref": "timeout"
+  },
+  "uri": "/charges"
+}`);
 
 // The payments SDK entry: the construction surface and its operations.
 // Client is the generated SDK client the client entry declares. The
@@ -149,52 +269,11 @@ export class Client {
     if (outcome.outcome === "error") {
       throw decodeCreateChargeError(outcome.status, outcome.body);
     }
-    let raw: any;
     try {
-      raw = JSON.parse(outcome.body);
-    } catch {
-      throw new DecodeError("$", "Charge", outcome.body);
+      return parseCharge(outcome.body);
+    } catch (path) {
+      throw new DecodeError(path as string, "Charge", outcome.body);
     }
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new DecodeError("$", "Charge", outcome.body);
-    }
-    if (!("id" in raw) || raw["id"] === null) {
-      throw new DecodeError("$.id", "Charge", outcome.body);
-    }
-    if (!("amount" in raw) || raw["amount"] === null) {
-      throw new DecodeError("$.amount", "Charge", outcome.body);
-    }
-    if (!("fee" in raw) || raw["fee"] === null) {
-      throw new DecodeError("$.fee", "Charge", outcome.body);
-    }
-    if (!("receipt" in raw) || raw["receipt"] === null) {
-      throw new DecodeError("$.receipt", "Charge", outcome.body);
-    }
-    if (!("currency" in raw) || raw["currency"] === null) {
-      throw new DecodeError("$.currency", "Charge", outcome.body);
-    }
-    if (!("tags" in raw) || raw["tags"] === null) {
-      throw new DecodeError("$.tags", "Charge", outcome.body);
-    }
-    if (!("metadata" in raw) || raw["metadata"] === null) {
-      throw new DecodeError("$.metadata", "Charge", outcome.body);
-    }
-    if (!("created" in raw) || raw["created"] === null) {
-      throw new DecodeError("$.created", "Charge", outcome.body);
-    }
-    if (!("status" in raw) || raw["status"] === null) {
-      throw new DecodeError("$.status", "Charge", outcome.body);
-    }
-    if (!("method" in raw) || raw["method"] === null) {
-      throw new DecodeError("$.method", "Charge", outcome.body);
-    }
-    let out: Charge;
-    try {
-      out = decodeCharge(raw);
-    } catch {
-      throw new DecodeError("$", "Charge", outcome.body);
-    }
-    return out;
   }
 }
 
@@ -211,10 +290,10 @@ export function decodeCreateChargeError(
   const code =
     typeof parsed === "object" && parsed !== null ? parsed["code"] : undefined;
   try {
-    if (status === 402 && code === "card_declined") {
+    if (status === STATUS_CARD_DECLINED && code === CODE_CARD_DECLINED) {
       return new CardDeclinedError(decodeCardDeclined(parsed), body);
     }
-    if (status === 404) {
+    if (status === STATUS_NOT_FOUND) {
       return new NotFoundError(decodeNotFound(parsed), body);
     }
   } catch {}

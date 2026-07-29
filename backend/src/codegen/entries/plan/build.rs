@@ -14,20 +14,20 @@ fn has_arg(field: &EntryField) -> bool {
     field.sources.iter().any(|s| matches!(s, Source::Arg))
 }
 
-/// The logical why-var name tracking a composed member's resolution, distinct
-/// from any entry field's own reason variable.
-fn member_why_name(field: &EntryField, member: &EntryField) -> String {
+/// The logical error-var name tracking a composed member's resolution,
+/// distinct from any entry field's own error variable.
+fn member_err_name(field: &EntryField, member: &EntryField) -> String {
     format!("{}_{}", field.name, member.name)
 }
 
-/// Whether a composed config member needs a hoisted reason variable so a
+/// Whether a composed config member needs a hoisted error variable so a
 /// consumed non-string member can be required at construction instead of being
 /// frozen at its silent zero (a legitimately resolved `0`/`false` is
 /// indistinguishable from absence by value alone). Scoped to the plain
 /// non-guaranteed numeric/bool chain that a descriptor consumes: bound members
 /// and derivations keep their zero, out of this first cut. Returns the logical
-/// why name when tracking is needed.
-fn member_needs_why(field: &EntryField, member: &EntryField, entry: &EntryModel) -> Option<String> {
+/// error-var name when tracking is needed.
+fn member_needs_err(field: &EntryField, member: &EntryField, entry: &EntryModel) -> Option<String> {
     if member.select.is_some() || member.format.is_some() {
         return None;
     }
@@ -49,7 +49,7 @@ fn member_needs_why(field: &EntryField, member: &EntryField, entry: &EntryModel)
         .consumed_field_paths()
         .iter()
         .any(|p| p.len() == 2 && p[0] == field.name && p[1] == member.name);
-    consumed.then(|| member_why_name(field, member))
+    consumed.then(|| member_err_name(field, member))
 }
 
 /// Build the resolution plan for one entry field, dispatching on its shape.
@@ -117,7 +117,7 @@ pub fn presence_kind(field: &EntryField, entry: &EntryModel, module: &Module) ->
 /// post-construction presence check is needed and of which kind. The selection
 /// (skip guaranteed scalars, bools, and non-string decoded members) is shared;
 /// each target spells the comparison and the error. Runs after `client_init`, so
-/// every check reads the resolved value and the why-reason only decorates it.
+/// every check reads the resolved value and the error-value only decorates it.
 pub fn build_requires(entry: &EntryModel, module: &Module, e: &mut dyn Emitter) -> Stmt {
     let mut out: Vec<Stmt> = Vec::new();
     for path in entry.consumed_field_paths() {
@@ -139,15 +139,15 @@ pub fn build_requires(entry: &EntryModel, module: &Module, e: &mut dyn Emitter) 
                 ))));
                 continue;
             }
-            // A consumed numeric/bool config member carries a hoisted reason var
-            // (a resolved zero is not absence), so its require reads the reason,
+            // A consumed numeric/bool config member carries a hoisted error var
+            // (a resolved zero is not absence), so its require reads that var,
             // not the value. Members without one keep their zero, as before.
             if let FieldShape::Config(cfg) = shape {
                 if let ShapeKind::Config { fields } = &cfg.kind {
                     if let Some(member) = fields.iter().find(|m| m.name == path[1]) {
-                        if let Some(why) = member_needs_why(field, member, entry) {
+                        if let Some(err) = member_needs_err(field, member, entry) {
                             out.push(Stmt::Leaf(Leaf(
-                                e.require_member_deferred(&path.join("."), &why),
+                                e.require_member_deferred(&path.join("."), &err),
                             )));
                         }
                     }
@@ -212,13 +212,13 @@ fn build_format(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, des
         .iter()
         .map(|dep| {
             (
-                e.cond_why_absent(dep),
-                Stmt::Leaf(e.assign_reason(&field.name, dep)),
+                e.cond_err_present(dep),
+                Stmt::Leaf(e.wrap_from(&field.name, dep)),
             )
         })
         .collect();
     seq(vec![
-        Stmt::Leaf(e.why_open(&field.name, "")),
+        Stmt::Leaf(e.err_open(&field.name)),
         Stmt::If {
             arms,
             otherwise: Some(Box::new(assign)),
@@ -228,39 +228,40 @@ fn build_format(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, des
 
 /// The plain source chain of one field. A guaranteed chain is a per-target
 /// leaf (Go and TypeScript spell it with different algorithms). A
-/// non-guaranteed one opens a why-var and tries each source in turn, sharing
-/// the sequential-fallback shape.
+/// non-guaranteed one opens an error-value var and tries each source in turn,
+/// sharing the sequential-fallback shape.
 fn build_chain(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, dest: &str) -> Stmt {
     if entry.is_guaranteed(field) {
         Stmt::Leaf(Leaf(e.chain_guaranteed(field, dest)))
     } else {
-        let why = field.name.clone();
+        let err = field.name.clone();
         seq(vec![
-            Stmt::Leaf(e.why_open(&why, "no source")),
-            chain_sequential(field, e, dest, &why),
+            Stmt::Leaf(e.err_open(&err)),
+            chain_sequential(field, e, dest, &err),
         ])
     }
 }
 
 /// A non-guaranteed chain: each source is a "still absent?" step. The first
-/// runs unconditionally; every later one is guarded by the why-var still being
-/// set, so the run reads as sequential fallbacks carrying the last reason.
-fn chain_sequential(field: &EntryField, e: &mut dyn Emitter, dest: &str, why: &str) -> Stmt {
+/// runs unconditionally; every later one is guarded by the error-value var
+/// still being set, so the run reads as sequential fallbacks carrying the
+/// last failure.
+fn chain_sequential(field: &EntryField, e: &mut dyn Emitter, dest: &str, err: &str) -> Stmt {
     let mut out: Vec<Stmt> = Vec::new();
     let mut first = true;
     for source in &field.sources {
         let step = match source {
             Source::With => {
-                let w = e.why_ident(why);
+                let w = e.err_ident(err);
                 Stmt::Leaf(Leaf(e.with_step_body(field, dest, &w)))
             }
             Source::Env(name) => {
-                let w = e.why_ident(why);
+                let w = e.err_ident(err);
                 Stmt::Leaf(Leaf(e.env_step_body(field, name, dest, &w)))
             }
             Source::Default(v) => seq(vec![
                 Stmt::Leaf(e.assign_default(field, v, dest)),
-                Stmt::Leaf(e.why_set(why, "")),
+                Stmt::Leaf(e.err_clear(err)),
             ]),
             Source::Arg => continue,
         };
@@ -272,7 +273,7 @@ fn chain_sequential(field: &EntryField, e: &mut dyn Emitter, dest: &str, why: &s
             first = false;
         } else {
             out.push(Stmt::If {
-                arms: vec![(e.cond_why_absent(why), step)],
+                arms: vec![(e.cond_err_present(err), step)],
                 otherwise: None,
             });
         }
@@ -292,20 +293,20 @@ fn build_config(
     let ShapeKind::Config { fields } = &shape.kind else {
         return Stmt::Nop;
     };
-    // A consumed non-string member's reason variable must outlive the config
+    // A consumed non-string member's error variable must outlive the config
     // brace scope so the post-construction require can read it; hoist it above
     // the block that resolves the member.
     let mut hoisted: Vec<Stmt> = Vec::new();
     for member in fields {
-        if let Some(why) = member_needs_why(field, member, entry) {
-            hoisted.push(Stmt::Leaf(e.why_open(&why, "no source")));
+        if let Some(err) = member_needs_err(field, member, entry) {
+            hoisted.push(Stmt::Leaf(e.err_open(&err)));
         }
     }
     let open = e.config_open(field, shape);
     let mut members: Vec<Stmt> = Vec::new();
     for member in fields {
         let member_dest = e.member_dest(&member.name);
-        let why = member_needs_why(field, member, entry);
+        let err = member_needs_err(field, member, entry);
         let bind = field.binds.iter().find(|b| b.field == member.name);
         members.push(match bind {
             Some(bind) => {
@@ -318,7 +319,7 @@ fn build_config(
                     // falls back to its own sources.
                     Stmt::If {
                         arms: vec![(
-                            e.cond_why_resolved(&head),
+                            e.cond_err_absent(&head),
                             Stmt::Leaf(e.member_bind_assign(&member_dest, &expr)),
                         )],
                         otherwise: Some(Box::new(build_member(
@@ -326,12 +327,12 @@ fn build_config(
                             entry,
                             e,
                             &member_dest,
-                            why.as_deref(),
+                            err.as_deref(),
                         ))),
                     }
                 }
             }
-            None => build_member(member, entry, e, &member_dest, why.as_deref()),
+            None => build_member(member, entry, e, &member_dest, err.as_deref()),
         });
     }
     let block = Stmt::Block {
@@ -348,30 +349,30 @@ fn build_config(
 }
 
 /// A config member's own resolution: a match, a `@format` derivation, or its
-/// source chain, plus its `@str::*` pipeline (`@format` folds it in). `why` is
-/// the hoisted reason variable a consumed non-string member tracks (see
-/// [`member_needs_why`]); its absence keeps the reason-less cascade.
+/// source chain, plus its `@str::*` pipeline (`@format` folds it in). `err` is
+/// the hoisted error variable a consumed non-string member tracks (see
+/// [`member_needs_err`]); its absence keeps the error-less cascade.
 fn build_member(
     member: &EntryField,
     entry: &EntryModel,
     e: &mut dyn Emitter,
     dest: &str,
-    why: Option<&str>,
+    err: Option<&str>,
 ) -> Stmt {
     let head = if member.select.is_some() {
         build_member_select(member, entry, e, dest)
     } else if member.format.is_some() {
         build_format(member, entry, e, dest)
-    } else if let Some(why) = why {
-        // A consumed non-string member tracks a reason so its absence can be
+    } else if let Some(err) = err {
+        // A consumed non-string member tracks an error so its absence can be
         // required at construction (a resolved `0`/`false` is not absence). The
-        // why-var is opened by the caller above the config block; here each
+        // error var is opened by the caller above the config block; here each
         // source is a still-absent fallback step, as in a scalar chain.
-        chain_sequential(&arm_sources(member, &member.sources), e, dest, why)
+        chain_sequential(&arm_sources(member, &member.sources), e, dest, err)
     } else {
         // A member resolves through the same ordered cascade as a field chain
         // (first present source wins, an optional @default closes it); it carries
-        // no reason var, so an unresolved optional member keeps its zero value.
+        // no error var, so an unresolved optional member keeps its zero value.
         Stmt::Leaf(Leaf(
             e.chain_guaranteed(&arm_sources(member, &member.sources), dest),
         ))
@@ -388,14 +389,15 @@ fn build_member(
 
 /// A scalar `match` lowered to a switch: a deferred subject defers the whole
 /// field (it records the reason and skips the switch); a resolved subject picks
-/// an arm. A non-guaranteed field opens its reason first and every unmatched
-/// value is a failure (a guaranteed field) or a recorded miss (a deferred one).
+/// an arm. A non-guaranteed field opens its error var first and every
+/// unmatched value is a failure (a guaranteed field) or a recorded miss (a
+/// deferred one).
 fn build_select(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, dest: &str) -> Stmt {
     let Some(select) = field.select.clone() else {
         return Stmt::Nop;
     };
     let guaranteed = entry.is_guaranteed(field);
-    let why = field.name.clone();
+    let err = field.name.clone();
     let subject_head = select.subject.first().cloned().unwrap_or_default();
     let subject_expr = e.path_read(&select.subject);
     let switch = build_switch(
@@ -413,8 +415,8 @@ fn build_select(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, des
     } else {
         Stmt::If {
             arms: vec![(
-                e.cond_why_absent(&subject_head),
-                Stmt::Leaf(e.assign_reason(&why, &subject_head)),
+                e.cond_err_present(&subject_head),
+                Stmt::Leaf(e.wrap_from(&err, &subject_head)),
             )],
             otherwise: Some(Box::new(switch)),
         }
@@ -422,7 +424,7 @@ fn build_select(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, des
     if guaranteed {
         guarded
     } else {
-        seq(vec![Stmt::Leaf(e.why_open(&why, "")), guarded])
+        seq(vec![Stmt::Leaf(e.err_open(&err)), guarded])
     }
 }
 
@@ -444,7 +446,7 @@ fn build_member_select(
         switch
     } else {
         Stmt::If {
-            arms: vec![(e.cond_why_resolved(&subject_head), switch)],
+            arms: vec![(e.cond_err_absent(&subject_head), switch)],
             otherwise: None,
         }
     }
@@ -512,8 +514,8 @@ fn build_arm(
             } else {
                 Stmt::If {
                     arms: vec![(
-                        e.cond_why_absent(&head),
-                        Stmt::Leaf(e.assign_reason(&field.name, &head)),
+                        e.cond_err_present(&head),
+                        Stmt::Leaf(e.wrap_from(&field.name, &head)),
                     )],
                     otherwise: Some(Box::new(Stmt::Leaf(e.assign_expr(dest, &expr)))),
                 }
@@ -524,10 +526,10 @@ fn build_arm(
             if guaranteed {
                 Stmt::Leaf(Leaf(e.chain_guaranteed(&stub, dest)))
             } else {
-                seq(vec![
-                    Stmt::Leaf(e.why_set(&field.name, "no source")),
-                    chain_sequential(&stub, e, dest, &field.name),
-                ])
+                // No reset needed before the cascade: this arm's case body runs
+                // once per dispatch, and the field's error var (opened once above
+                // the whole switch) is still nil/undefined on entry here.
+                chain_sequential(&stub, e, dest, &field.name)
             }
         }
     }
@@ -552,7 +554,7 @@ fn build_member_arm(
             } else {
                 Stmt::If {
                     arms: vec![(
-                        e.cond_why_resolved(&head),
+                        e.cond_err_absent(&head),
                         Stmt::Leaf(e.assign_expr(dest, &expr)),
                     )],
                     otherwise: None,

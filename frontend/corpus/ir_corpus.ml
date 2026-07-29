@@ -478,12 +478,7 @@ let entries_client : Ir.model =
                           };
                           {
                             arm_pattern = None;
-                            arm_value =
-                              Ir.Arm_sources
-                                [
-                                  Ir.Env (Ir.Env_name "ENDPOINT_V2");
-                                  Ir.Default (`String "https://example.com");
-                                ];
+                            arm_value = Ir.Arm_field [ "endpoint_v2" ];
                           };
                         ];
                     };

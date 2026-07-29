@@ -65,6 +65,13 @@ pub fn exports_of(decls: &[Decl]) -> Exports {
         }
     }
     for (name, is_type) in exported_in_text_kinds(decls) {
+        // A declared error's STATUS_*/CODE_* constants cross files within the
+        // module (the serde file imports them) but stay out of the module's
+        // public barrel: they are plumbing for the discriminator, not surface
+        // a caller reads.
+        if errors::is_declared_error_const(&name) {
+            continue;
+        }
         if is_type {
             exports.types.push(name);
         } else {
@@ -371,6 +378,25 @@ mod tests {
             .contains("export function validateCharge(value: Charge): ValidationError | null {"));
         // Only the category the validator needs, not the rest of the taxonomy.
         assert!(!types.contains("export class TransportError"));
+    }
+
+    #[test]
+    fn a_declared_errors_status_and_code_constants_stay_out_of_the_barrel() {
+        // The constants are exported (the serde file imports them across
+        // files), but the barrel exclusively names the surface a caller
+        // reads: the declared error class, never the literal that seeded it.
+        let module = crate::codegen::test_support::error_demo_module();
+        let decls = errors::type_decls(
+            &module,
+            &ts_casing(),
+            &taxonomy::TaxonomyLiveness::all_live(),
+        );
+        let exports = exports_of(&decls);
+        assert!(exports.values.contains(&"PaymentDeclinedError".to_string()));
+        assert!(!exports
+            .values
+            .iter()
+            .any(|name| name.starts_with("STATUS_") || name.starts_with("CODE_")));
     }
 
     #[test]

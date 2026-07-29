@@ -132,15 +132,19 @@ export class APIError extends TonoError {
 }
 
 export class ConfigError extends TonoError {
-  constructor(message: string) {
+  constructor(message: string, readonly cause?: unknown) {
     super(message);
     this.name = "ConfigError";
   }
 }
 
+export const STATUS_OVERLOADED = 529;
+
+export const CODE_OVERLOADED = "overloaded";
+
 export class OverloadedError extends APIError {
   constructor(readonly data: Overloaded, body: string) {
-    super(529, body);
+    super(STATUS_OVERLOADED, body);
     this.name = "OverloadedError";
   }
   retryable(): boolean {
@@ -155,8 +159,8 @@ import { strUpperSnake } from "../casing";
 import { durationToMs } from "../duration";
 import { readEnv } from "../env";
 import { CanonicalTransport, ClientOptions, WireDescriptor, assertExclusiveTransport, execute } from "@tono/http-runtime-ts";
-import { decodeCredentials, decodeNote, decodeOverloaded, encodeNote } from "./codec";
-import { APIError, ConfigError, Credentials, DecodeError, Duration, Note, OverloadedError, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./types";
+import { decodeCredentials, decodeOverloaded, encodeNote, parseNote } from "./codec";
+import { APIError, CODE_OVERLOADED, ConfigError, Credentials, DecodeError, Duration, Note, OverloadedError, STATUS_OVERLOADED, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./types";
 
 // Settings are the resolved construction values of the client entry,
 // handed to the client_init hook before validation: bespoke code may
@@ -192,7 +196,64 @@ export interface ClientConfig {
   maxRetries?: number;
 }
 
-const saveNoteDescriptor: WireDescriptor = JSON.parse("{\"bindings\":[[\"id\",{\"kind\":\"label\"}],[\"body\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[529,\"notes#overloaded\",\"overloaded\",true]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-Client-Name\"}],{\"field\":[\"client_name\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,null]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/notes/{id}\"}");
+const saveNoteDescriptor: WireDescriptor = JSON.parse(`{
+  "bindings": [
+    [
+      "id",
+      {
+        "kind": "label"
+      }
+    ],
+    [
+      "body",
+      {
+        "kind": "body"
+      }
+    ]
+  ],
+  "endpoint": [
+    "endpoint"
+  ],
+  "errors": [
+    [
+      529,
+      "notes#overloaded",
+      "overloaded",
+      true
+    ]
+  ],
+  "http_method": "POST",
+  "request_headers": [
+    [
+      [
+        {
+          "lit": "X-Client-Name"
+        }
+      ],
+      {
+        "field": [
+          "client_name"
+        ]
+      }
+    ]
+  ],
+  "response_bindings": [],
+  "retry": {
+    "max": {
+      "ref": "max_retries"
+    }
+  },
+  "success": [
+    [
+      200,
+      null
+    ]
+  ],
+  "timeout": {
+    "ref": "timeout"
+  },
+  "uri": "/notes/{id}"
+}`);
 
 // Client is the generated SDK client the client entry declares. The
 // constructor takes the @arg values positionally and the @with values as a
@@ -203,177 +264,168 @@ export class Client {
   private readonly options: ClientOptions;
   constructor(apiKey: string, config: ClientConfig = {}) {
     const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, headers: {} };
-  s.apiKey = apiKey;
-  let clientNameSet = false;
-  if (!clientNameSet && config.clientName !== undefined) {
-    s.clientName = config.clientName;
-    clientNameSet = true;
-  }
-  if (!clientNameSet) {
-    s.clientName = "demo";
-  }
-  s.clientKey = strUpperSnake((s.clientName).trim());
-  s.endpointEnv = "ENDPOINT_" + s.clientKey + "_V2";
-  let endpointVersionSet = false;
-  if (!endpointVersionSet) {
-    const v = readEnv("ENDPOINT_VERSION");
-    if (v !== undefined) {
-      s.endpointVersion = v;
-      endpointVersionSet = true;
+    s.apiKey = apiKey;
+    let clientNameSet = false;
+    if (!clientNameSet && config.clientName !== undefined) {
+      s.clientName = config.clientName;
+      clientNameSet = true;
     }
-  }
-  if (!endpointVersionSet) {
-    s.endpointVersion = "v2";
-  }
-  let endpointV1Why = "no source";
-  {
-    const v = readEnv("ENDPOINT");
-    if (v !== undefined) {
-      s.endpointV1 = v;
-      endpointV1Why = "";
-    } else {
-      endpointV1Why = "env ENDPOINT: empty";
+    if (!clientNameSet) {
+      s.clientName = "demo";
     }
-  }
-  let endpointV2Why = "no source";
-  {
-    const v = readEnv(s.endpointEnv);
-    if (v !== undefined) {
-      s.endpointV2 = v;
-      endpointV2Why = "";
-    } else {
-      endpointV2Why = "env " + s.endpointEnv + ": empty";
+    s.clientKey = strUpperSnake((s.clientName).trim());
+    s.endpointEnv = "ENDPOINT_" + s.clientKey + "_V2";
+    let endpointVersionSet = false;
+    if (!endpointVersionSet) {
+      const v = readEnv("ENDPOINT_VERSION");
+      if (v !== undefined) {
+        s.endpointVersion = v;
+        endpointVersionSet = true;
+      }
     }
-  }
-  let endpointWhy = "";
-  switch (s.endpointVersion) {
-  case "v1": {
-    if (endpointV1Why !== "") {
-      endpointWhy = "endpoint_v1 <- " + endpointV1Why;
-    } else {
-      s.endpoint = s.endpointV1;
+    if (!endpointVersionSet) {
+      s.endpointVersion = "v2";
     }
-    break;
-  }
-  case "legacy": {
-    s.endpoint = "https://old.example.com";
-    break;
-  }
-  default: {
-    endpointWhy = "no source";
+    let endpointV1Err: ConfigError | undefined;
     {
-      const v = readEnv("ENDPOINT_V2");
+      const v = readEnv("ENDPOINT");
       if (v !== undefined) {
-        s.endpoint = v;
-        endpointWhy = "";
+        s.endpointV1 = v;
+        endpointV1Err = undefined;
       } else {
-        endpointWhy = "env ENDPOINT_V2: empty";
+        endpointV1Err = new ConfigError("env ENDPOINT: empty");
       }
     }
-    if (endpointWhy !== "") {
-      s.endpoint = "https://example.com";
-      endpointWhy = "";
-    }
-    break;
-  }
-  }
-  let timeoutSet = false;
-  if (!timeoutSet && config.timeout !== undefined) {
-    s.timeout = config.timeout;
-    timeoutSet = true;
-  }
-  if (!timeoutSet) {
-    s.timeout = "10s" as Duration;
-  }
-  let maxRetriesSet = false;
-  if (!maxRetriesSet && config.maxRetries !== undefined) {
-    s.maxRetries = config.maxRetries;
-    maxRetriesSet = true;
-  }
-  if (!maxRetriesSet) {
-    s.maxRetries = 3;
-  }
-  {
-    const composed = {} as Conf;
-    composed.apiKey = s.apiKey;
-    let regionSet = false;
-    if (!regionSet) {
-      const v = readEnv("REGION");
+    let endpointV2Err: ConfigError | undefined;
+    {
+      const v = readEnv(s.endpointEnv);
       if (v !== undefined) {
-        composed.region = v;
-        regionSet = true;
+        s.endpointV2 = v;
+        endpointV2Err = undefined;
+      } else {
+        endpointV2Err = new ConfigError("env " + s.endpointEnv + ": empty");
       }
     }
-    if (!regionSet) {
-      composed.region = "us";
-    }
-    s.settings = composed;
-  }
-  let credsWhy = "no source";
-  const raw = readEnv("SERVICE_CREDENTIALS");
-  if (raw !== undefined) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: expected an object`);
-    }
-    const record = parsed as Record<string, unknown>;
-    if (!("token" in parsed) || record["token"] === null) {
-      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: missing field token`);
-    }
-    if (!("account_id" in parsed) || record["account_id"] === null) {
-      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
-    }
-    for (const key of Object.keys(parsed)) {
-      if (!["token", "account_id"].includes(key)) {
-        throw new ConfigError(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
+    let endpointErr: ConfigError | undefined;
+    switch (s.endpointVersion) {
+    case "v1": {
+      if (endpointV1Err !== undefined) {
+        endpointErr = new ConfigError(`endpoint_v1 <- ${endpointV1Err.message}`, endpointV1Err);
+      } else {
+        s.endpoint = s.endpointV1;
       }
+      break;
     }
-    if ("token" in parsed && typeof record["token"] !== "string") {
-      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
+    case "legacy": {
+      s.endpoint = "https://old.example.com";
+      break;
     }
-    if ("account_id" in parsed && typeof record["account_id"] !== "string") {
-      throw new ConfigError(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
-    }
-    const decoded = decodeCredentials(parsed);
-    const invalid = validateCredentials(decoded);
-    if (invalid) {
-      throw invalid;
-    }
-    s.creds = decoded;
-    credsWhy = "";
-  } else {
-    credsWhy = "env SERVICE_CREDENTIALS: empty";
-  }
-  let labelsWhy = "no source";
-  const raw = readEnv("SERVICE_LABELS");
-  if (raw !== undefined) {
-    let parsed: any;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      throw new ConfigError(`${"SERVICE_LABELS"}: ${String(e)}`);
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new ConfigError(`${"SERVICE_LABELS"}: expected an object`);
-    }
-    for (const [key, val] of Object.entries(parsed)) {
-      if (typeof val !== "string") {
-        throw new ConfigError(`${"SERVICE_LABELS"}: field ${key} must be a string`);
+    default: {
+      if (endpointV2Err !== undefined) {
+        endpointErr = new ConfigError(`endpoint_v2 <- ${endpointV2Err.message}`, endpointV2Err);
+      } else {
+        s.endpoint = s.endpointV2;
       }
+      break;
     }
-    s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
-    labelsWhy = "";
-  } else {
-    labelsWhy = "env SERVICE_LABELS: empty";
-  }
-  if (s.endpoint === "") {
-    throw new ConfigError("endpoint <- " + (endpointWhy || "no value"));
-  }
+    }
+    let timeoutSet = false;
+    if (!timeoutSet && config.timeout !== undefined) {
+      s.timeout = config.timeout;
+      timeoutSet = true;
+    }
+    if (!timeoutSet) {
+      s.timeout = "10s" as Duration;
+    }
+    let maxRetriesSet = false;
+    if (!maxRetriesSet && config.maxRetries !== undefined) {
+      s.maxRetries = config.maxRetries;
+      maxRetriesSet = true;
+    }
+    if (!maxRetriesSet) {
+      s.maxRetries = 3;
+    }
+    {
+      const composed = {} as Conf;
+      composed.apiKey = s.apiKey;
+      let regionSet = false;
+      if (!regionSet) {
+        const v = readEnv("REGION");
+        if (v !== undefined) {
+          composed.region = v;
+          regionSet = true;
+        }
+      }
+      if (!regionSet) {
+        composed.region = "us";
+      }
+      s.settings = composed;
+    }
+    let credsErr: ConfigError | undefined;
+    const raw = readEnv("SERVICE_CREDENTIALS");
+    if (raw !== undefined) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        throw new ConfigError(`${"SERVICE_CREDENTIALS"}: ${String(e)}`);
+      }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new ConfigError(`${"SERVICE_CREDENTIALS"}: expected an object`);
+      }
+      const record = parsed as Record<string, unknown>;
+      if (!("token" in parsed) || record["token"] === null) {
+        throw new ConfigError(`${"SERVICE_CREDENTIALS"}: missing field token`);
+      }
+      if (!("account_id" in parsed) || record["account_id"] === null) {
+        throw new ConfigError(`${"SERVICE_CREDENTIALS"}: missing field account_id`);
+      }
+      for (const key of Object.keys(parsed)) {
+        if (!["token", "account_id"].includes(key)) {
+          throw new ConfigError(`${"SERVICE_CREDENTIALS"}: unknown field ${key}`);
+        }
+      }
+      if ("token" in parsed && typeof record["token"] !== "string") {
+        throw new ConfigError(`${"SERVICE_CREDENTIALS"}: field token must be a string`);
+      }
+      if ("account_id" in parsed && typeof record["account_id"] !== "string") {
+        throw new ConfigError(`${"SERVICE_CREDENTIALS"}: field account_id must be a string`);
+      }
+      const decoded = decodeCredentials(parsed);
+      const invalid = validateCredentials(decoded);
+      if (invalid) {
+        throw invalid;
+      }
+      s.creds = decoded;
+      credsErr = undefined;
+    } else {
+      credsErr = new ConfigError("env SERVICE_CREDENTIALS: empty");
+    }
+    let labelsErr: ConfigError | undefined;
+    const raw = readEnv("SERVICE_LABELS");
+    if (raw !== undefined) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        throw new ConfigError(`${"SERVICE_LABELS"}: ${String(e)}`);
+      }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new ConfigError(`${"SERVICE_LABELS"}: expected an object`);
+      }
+      for (const [key, val] of Object.entries(parsed)) {
+        if (typeof val !== "string") {
+          throw new ConfigError(`${"SERVICE_LABELS"}: field ${key} must be a string`);
+        }
+      }
+      s.labels = Object.fromEntries(Object.entries(parsed).map(([k, v]: [string, any]) => [k, v])) as Record<string, string>;
+      labelsErr = undefined;
+    } else {
+      labelsErr = new ConfigError("env SERVICE_LABELS: empty");
+    }
+    if (s.endpoint === "") {
+      throw new ConfigError("endpoint <- " + (endpointErr ? endpointErr.message : "no value"), endpointErr);
+    }
     const violations: Violation[] = [];
     if ([...s.apiKey].length < 1) {
       violations.push({ field: "api_key", constraint: "length", message: "api_key length must be >= 1" });
@@ -427,28 +479,11 @@ export class Client {
     if (outcome.outcome === "error") {
       throw decodeSaveNoteError(outcome.status, outcome.body);
     }
-    let raw: any;
     try {
-      raw = JSON.parse(outcome.body);
-    } catch {
-      throw new DecodeError("$", "Note", outcome.body);
+      return parseNote(outcome.body);
+    } catch (path) {
+      throw new DecodeError(path as string, "Note", outcome.body);
     }
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new DecodeError("$", "Note", outcome.body);
-    }
-      if (!("id" in raw) || raw["id"] === null) {
-        throw new DecodeError("$.id", "Note", outcome.body);
-      }
-      if (!("body" in raw) || raw["body"] === null) {
-        throw new DecodeError("$.body", "Note", outcome.body);
-      }
-    let out: Note;
-    try {
-      out = decodeNote(raw);
-    } catch {
-      throw new DecodeError("$", "Note", outcome.body);
-    }
-    return out;
   }
 }
 
@@ -461,7 +496,7 @@ export function decodeSaveNoteError(status: number, body: string): TonoError {
   }
   const code = typeof parsed === "object" && parsed !== null ? parsed["code"] : undefined;
   try {
-    if (status === 529 && code === "overloaded") {
+    if (status === STATUS_OVERLOADED && code === CODE_OVERLOADED) {
       return new OverloadedError(decodeOverloaded(parsed), body);
     }
   } catch {}
@@ -512,6 +547,34 @@ export function decodeCredentials(raw: any): Credentials {
 interface Conf {
   apiKey: string;
   region: string;
+}
+
+/** The members Note's declared shape requires present. */
+const noteRequiredFields = ["id", "body"] as const;
+
+/**
+ * Parses a Note from its wire JSON: every required member must be
+ * present (a null value counts as absent) before the typed decode
+ * runs. Throws the failed path (`$` for the whole body, `$.field` for
+ * a missing member) as a plain string, for the caller to build its
+ * own DecodeError.
+ */
+export function parseNote(raw: string): Note {
+  let obj: any;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    throw "$";
+  }
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+    throw "$";
+  }
+  for (const field of noteRequiredFields) {
+    if (!(field in obj) || obj[field] === null) {
+      throw "$." + field;
+    }
+  }
+  return decodeNote(obj);
 }
 
 // ==== typescript/notes/index.ts ====

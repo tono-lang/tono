@@ -77,6 +77,52 @@ fn declared_class_name(err: &DeclaredError) -> String {
     format!("{}Error", error_type_name(err))
 }
 
+/// The snake-case tail of a declared error's shape id, the seed for its
+/// screaming-snake constant names.
+fn declared_snake_name(err: &DeclaredError) -> &str {
+    err.shape_id.rsplit('#').next().unwrap_or(&err.shape_id)
+}
+
+/// The name of the exported constant a declared error's own status becomes.
+fn status_const_name(err: &DeclaredError) -> String {
+    format!("STATUS_{}", declared_snake_name(err).to_uppercase())
+}
+
+/// The name of the exported constant a declared error's `@errorCode` becomes.
+fn code_const_name(err: &DeclaredError) -> String {
+    format!("CODE_{}", declared_snake_name(err).to_uppercase())
+}
+
+/// Whether `name` is one of the `STATUS_*`/`CODE_*` constants a declared
+/// error emits beside its class. They are exported so the serde file (a
+/// different module file) can import them, but they are not part of the
+/// module's public barrel: a caller reads a response's status off the error
+/// instance (`err.status`), never off the constant that seeded it.
+pub(crate) fn is_declared_error_const(name: &str) -> bool {
+    name.starts_with("STATUS_") || name.starts_with("CODE_")
+}
+
+/// The named constants a declared error's own status and `@errorCode` become,
+/// declared beside the class they describe (exported so the serde file's
+/// discrimination function can import them). Empty for the
+/// (frontend-rejected in practice) case of an error with no status.
+fn declared_error_const_decls(err: &DeclaredError) -> Vec<Decl> {
+    let Some(status) = err.status else {
+        return Vec::new();
+    };
+    let mut decls = vec![Decl::raw(format!(
+        "export const {} = {status};",
+        status_const_name(err)
+    ))];
+    if let Some(code) = &err.code {
+        decls.push(Decl::raw(format!(
+            "export const {} = {code:?};",
+            code_const_name(err)
+        )));
+    }
+    decls
+}
+
 /// The abstract taxonomy root on its own, so it can anchor the standalone
 /// Validation category as well as the full taxonomy.
 fn root_decl() -> Decl {
@@ -166,32 +212,46 @@ fn taxonomy_decls(liveness: &TaxonomyLiveness) -> Vec<Decl> {
     if liveness.config {
         // Construction failures (a required source that resolved to nothing) ride
         // their own category so a caller can tell a misconfigured client from a
-        // request or transport failure.
-        decls.push(category(&n.config, "message: string", "message"));
+        // request or transport failure. `cause` carries the source's own failure
+        // the message wraps in (absent for a leaf failure with nothing to wrap).
+        decls.push(category(
+            &n.config,
+            "message: string, readonly cause?: unknown",
+            "message",
+        ));
     }
     decls
 }
 
 /// One class per declared operation error, under the `Api` category. The
 /// decoded body rides a `data` field (never spread into the class) so a shape
-/// field can never collide with the inherited `status`/`body`/`message`.
+/// field can never collide with the inherited `status`/`body`/`message`. The
+/// status and `@errorCode` a spec declares are constants beside the class
+/// they describe (see [`declared_error_const_decls`]), not literals in the
+/// decoder that happens to consult them.
 fn declared_error_decls(module: &Module) -> Vec<Decl> {
     let n = error_names();
     module_declared_errors(module)
         .iter()
-        .map(|err| {
+        .flat_map(|err| {
             let class = declared_class_name(err);
             let data = error_type_name(err);
-            let status = err.status.unwrap_or(0);
+            let status_expr = if err.status.is_some() {
+                status_const_name(err)
+            } else {
+                "0".to_string()
+            };
             let retryable = if err.retryable {
                 "\n  retryable(): boolean {\n    return true;\n  }"
             } else {
                 ""
             };
-            Decl::raw(format!(
-                "export class {class} extends {} {{\n  constructor(readonly data: {data}, body: string) {{\n    super({status}, body);\n    this.name = \"{class}\";\n  }}{retryable}\n}}",
+            let mut decls = declared_error_const_decls(err);
+            decls.push(Decl::raw(format!(
+                "export class {class} extends {} {{\n  constructor(readonly data: {data}, body: string) {{\n    super({status_expr}, body);\n    this.name = \"{class}\";\n  }}{retryable}\n}}",
                 n.api
-            ))
+            )));
+            decls
         })
         .collect()
 }
@@ -247,11 +307,12 @@ pub fn outcome_discriminator_fn_named(
     for err in ordered.iter().filter(|e| e.code.is_some()) {
         let class = declared_class_name(err);
         let data = error_type_name(err);
-        let code = err.code.as_deref().unwrap_or_default();
+        let code_name = code_const_name(err);
         body.push_str(&format!(
-            "    if (code === \"{code}\") {{\n      return new {class}(decode{data}(parsed), body);\n    }}\n"
+            "    if (code === {code_name}) {{\n      return new {class}(decode{data}(parsed), body);\n    }}\n"
         ));
         refs.push(module_symbol(&class, module));
+        refs.push(module_symbol(&code_name, module));
     }
     // The declared-error decode can itself throw; an undecodable declared match
     // falls back to the generic type so a new field or a changed shape never
@@ -302,10 +363,23 @@ fn discriminator_fn_body(
     for err in ordered {
         let class = declared_class_name(err);
         let data = error_type_name(err);
-        let status = err.status.unwrap_or(0);
+        // A declared error always has a status in practice (the frontend
+        // rejects one without); the literal fallback only guards the type
+        // against that theoretical gap.
+        let status_expr = if err.status.is_some() {
+            let name = status_const_name(err);
+            refs.push(module_symbol(&name, module));
+            name
+        } else {
+            "0".to_string()
+        };
         let guard = match &err.code {
-            Some(code) => format!("status === {status} && code === \"{code}\""),
-            None => format!("status === {status}"),
+            Some(_) => {
+                let code_name = code_const_name(err);
+                refs.push(module_symbol(&code_name, module));
+                format!("status === {status_expr} && code === {code_name}")
+            }
+            None => format!("status === {status_expr}"),
         };
         body.push_str(&format!(
             "    if ({guard}) {{\n      return new {class}(decode{data}(parsed), body);\n    }}\n"
@@ -481,11 +555,20 @@ mod tests {
         let out = types_text(&error_demo_module());
         assert!(out.contains("export class PaymentDeclinedError extends APIError {"));
         assert!(out.contains("constructor(readonly data: PaymentDeclined, body: string) {"));
-        assert!(out.contains("super(402, body);"));
+        assert!(out.contains("super(STATUS_PAYMENT_DECLINED, body);"));
         // @retryable overrides the root predicate; its absence inherits false.
         assert!(out.contains("retryable(): boolean {\n    return true;"));
         assert!(out.contains("export class RateLimitedError extends APIError {"));
-        assert!(out.contains("super(429, body);"));
+        assert!(out.contains("super(STATUS_RATE_LIMITED, body);"));
+    }
+
+    #[test]
+    fn declared_errors_gain_named_constants_beside_their_class() {
+        let out = types_text(&error_demo_module());
+        assert!(out.contains("export const STATUS_PAYMENT_DECLINED = 402;"));
+        assert!(out.contains("export const CODE_PAYMENT_DECLINED = \"payment_declined\";"));
+        assert!(out.contains("export const STATUS_RATE_LIMITED = 429;"));
+        assert!(!out.contains("CODE_RATE_LIMITED"));
     }
 
     #[test]
@@ -513,11 +596,13 @@ mod tests {
         ));
         // The coded entry consults the body's code field; the codeless one
         // matches on status alone; anything else is the concrete fallback.
-        assert!(out.contains("if (status === 402 && code === \"payment_declined\") {"));
+        assert!(out.contains(
+            "if (status === STATUS_PAYMENT_DECLINED && code === CODE_PAYMENT_DECLINED) {"
+        ));
         assert!(
             out.contains("return new PaymentDeclinedError(decodePaymentDeclined(parsed), body);")
         );
-        assert!(out.contains("if (status === 429) {"));
+        assert!(out.contains("if (status === STATUS_RATE_LIMITED) {"));
         assert!(out.contains("return new RateLimitedError(decodeRateLimited(parsed), body);"));
         assert!(out.contains("return new APIError(status, body);"));
     }
@@ -541,8 +626,10 @@ mod tests {
             vec!["m#generic_bad", "m#coded_bad"],
         )];
         let out = rendered(&serde_decls(&module), &TsRules);
-        let coded_at = out.find("code === \"specific\"").expect("coded guard");
-        let catch_all_at = out.find("if (status === 400) {").expect("catch-all guard");
+        let coded_at = out.find("code === CODE_CODED_BAD").expect("coded guard");
+        let catch_all_at = out
+            .find("if (status === STATUS_GENERIC_BAD) {")
+            .expect("catch-all guard");
         assert!(coded_at < catch_all_at, "the coded guard must run first");
     }
 }

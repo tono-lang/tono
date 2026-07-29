@@ -5,11 +5,17 @@
 //! Both carry the same thing (the JSON encoding of the declared output), so both
 //! decode it the same way; only the Go expression naming the payload differs,
 //! which is what [`Payload`] parameterizes.
+//!
+//! The required-member probe is a function of the output *type*, not of the
+//! operation: two operations returning the same shape share one
+//! `Decode<Type>` (see [`output_decode_decl`]), so the probe is declared once
+//! per type instead of once per call site.
 
-use crate::codegen::conventions::wire_key;
+use crate::codegen::conventions::{type_ident_from_id, wire_key};
 use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
-use crate::ir::{Module, Prim, ShapeKind, Tref};
+use crate::codegen::tree::Decl;
+use crate::ir::{Module, Prim, Shape, ShapeKind, Tref};
 
 use super::{go_type_label, import};
 
@@ -68,48 +74,36 @@ pub(super) fn success_block(
             )
         }
         Some(t) => {
-            refs.push(import("json", "encoding/json"));
             let ty = go_type_label(t);
-            let fail_decode = fail(format!(
-                "&{decode}{{Path: \"$\", Expected: {ty:?}, Raw: {text}}}",
-                decode = en.decode,
-            ));
             let out_shape = match t {
                 Tref::Ref { id, .. } => module.shapes.iter().find(|s| s.id == *id),
                 _ => None,
             };
-            let mut probe = String::new();
-            if let Some(shape) = out_shape {
-                if let ShapeKind::Structure { members, .. } = &shape.kind {
-                    for m in members.iter().filter(|m| m.required) {
-                        let name = wire_key(m);
-                        // A missing required member points at that member (`$.tags`),
-                        // not the whole body, so the caller sees which field the
-                        // implementation omitted.
-                        let fail_member = fail(format!(
-                            "&{decode}{{Path: \"$.{name}\", Expected: {ty:?}, Raw: {text}}}",
-                            decode = en.decode,
-                        ));
-                        probe.push_str(&format!(
-                            "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\treturn zero, {fail_member}\n\t}}\n",
-                        ));
-                    }
-                }
-            }
-            if probe.is_empty() {
+            if out_shape.is_some_and(shape_has_required) {
+                // The probe lives once per type (see `output_decode_decl`, in
+                // the codec file, which imports `encoding/json` itself); the
+                // call site here only routes the failure through the
+                // operation's own error boundary, naming which member (or
+                // the whole body) came back wrong, and never touches `json`
+                // directly.
+                let fail_decode = fail(format!(
+                    "&{decode}{{Path: path, Expected: {ty:?}, Raw: {text}}}",
+                    decode = en.decode,
+                ));
                 format!(
-                    "\tvar out {ty}\n\
-                     \tif err := json.Unmarshal({bytes}, &out); err != nil {{\n\
-                     \t\treturn zero, {fail_decode}\n\t}}\n\
+                    "\tout, path, ok := {decode_fn}({bytes})\n\
+                     \tif !ok {{\n\t\treturn zero, {fail_decode}\n\t}}\n\
                      \treturn out, nil",
+                    decode_fn = output_decode_fn_name(&ty),
                 )
             } else {
+                refs.push(import("json", "encoding/json"));
+                let fail_decode = fail(format!(
+                    "&{decode}{{Path: \"$\", Expected: {ty:?}, Raw: {text}}}",
+                    decode = en.decode,
+                ));
                 format!(
-                    "\tvar probe map[string]json.RawMessage\n\
-                     \tif err := json.Unmarshal({bytes}, &probe); err != nil {{\n\
-                     \t\treturn zero, {fail_decode}\n\t}}\n\
-                     {probe}\
-                     \tvar out {ty}\n\
+                    "\tvar out {ty}\n\
                      \tif err := json.Unmarshal({bytes}, &out); err != nil {{\n\
                      \t\treturn zero, {fail_decode}\n\t}}\n\
                      \treturn out, nil",
@@ -118,4 +112,69 @@ pub(super) fn success_block(
         }
         None => "\treturn nil".to_string(),
     }
+}
+
+fn shape_has_required(shape: &Shape) -> bool {
+    matches!(&shape.kind, ShapeKind::Structure { members, .. } if members.iter().any(|m| m.required))
+}
+
+fn output_decode_fn_name(ty: &str) -> String {
+    format!("Decode{ty}")
+}
+
+fn output_required_fields_var(ty: &str) -> String {
+    let mut chars = ty.chars();
+    let lower_first: String = match chars.next() {
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    };
+    format!("{lower_first}RequiredFields")
+}
+
+/// The per-type boundary parse a structured output with required members
+/// shares across every operation that returns it: unmarshal into a probe map,
+/// walk the required-member table, then the typed unmarshal. `None` for a
+/// shape with no required member (nothing to probe, nothing to extract).
+pub(super) fn output_decode_decl(shape: &Shape) -> Option<Decl> {
+    let ShapeKind::Structure { members, .. } = &shape.kind else {
+        return None;
+    };
+    let required: Vec<String> = members
+        .iter()
+        .filter(|m| m.required)
+        .map(wire_key)
+        .collect();
+    if required.is_empty() {
+        return None;
+    }
+    let ty = type_ident_from_id(&shape.id);
+    let fields_var = output_required_fields_var(&ty);
+    let fn_name = output_decode_fn_name(&ty);
+    let table = required
+        .iter()
+        .map(|f| format!("{f:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let text = format!(
+        "// {fields_var} names the members {ty}'s declared shape requires present.\n\
+         var {fields_var} = []string{{{table}}}\n\n\
+         // {fn_name} parses a {ty} from its wire JSON: every required member must be\n\
+         // present (a null value counts as absent) before the typed decode runs. The\n\
+         // returned path names where the parse failed (\"$\" for the whole body,\n\
+         // \"$.field\" for a missing member), for the caller to build its own\n\
+         // DecodeError; ok is false on any failure.\n\
+         func {fn_name}(raw []byte) ({ty}, string, bool) {{\n\
+         \tvar probe map[string]json.RawMessage\n\
+         \tif err := json.Unmarshal(raw, &probe); err != nil {{\n\
+         \t\treturn {ty}{{}}, \"$\", false\n\t}}\n\
+         \tfor _, field := range {fields_var} {{\n\
+         \t\tif rv, ok := probe[field]; !ok || string(rv) == \"null\" {{\n\
+         \t\t\treturn {ty}{{}}, \"$.\" + field, false\n\t\t}}\n\t}}\n\
+         \tvar out {ty}\n\
+         \tif err := json.Unmarshal(raw, &out); err != nil {{\n\
+         \t\treturn {ty}{{}}, \"$\", false\n\t}}\n\
+         \treturn out, \"\", true\n\
+         }}",
+    );
+    Some(Decl::raw_with(text, vec![import("json", "encoding/json")]))
 }

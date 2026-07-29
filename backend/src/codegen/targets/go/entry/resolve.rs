@@ -25,29 +25,6 @@ impl Resolver<'_, '_> {
         self.refs.push(import(name, module));
     }
 
-    fn guaranteed(&self, name: &str) -> bool {
-        self.entry.field_guaranteed(name)
-    }
-
-    /// The prereq guard when the env variable's own name comes from a sibling
-    /// field that may itself be absent. Returns the opened guard text (the env
-    /// step closes it), or empty when the name is guaranteed.
-    fn env_name_prereq(&self, name: &EnvName, why: &str) -> String {
-        let EnvName::Field(fr) = name else {
-            return String::new();
-        };
-        let Some(head) = fr.field.first() else {
-            return String::new();
-        };
-        if self.guaranteed(head) {
-            return String::new();
-        }
-        format!(
-            "if {head_why} != \"\" {{\n\t{why} = \"{head} <- \" + {head_why}\n}} else ",
-            head_why = why_var(head),
-        )
-    }
-
     /// [`as_string`] plus the fmt import its non-string spelling needs.
     fn as_string_expr(&mut self, expr: &str, t: &Tref) -> String {
         if as_string_needs_fmt(t) {
@@ -134,84 +111,39 @@ impl Resolver<'_, '_> {
     /// The template split: each part as a Go string expression, plus the
     /// non-guaranteed heads it reads (first-appearance order).
     fn format_pieces(&mut self, parts: &[TemplatePart]) -> (Vec<String>, Vec<String>) {
-        let absent_deps = plan::format_absent_deps(self.entry, parts);
-        let mut concat: Vec<String> = Vec::new();
-        for part in parts {
-            match part {
-                TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
-                TemplatePart::Field(p) => {
-                    let t = self.path_type(p);
-                    let expr = self.path_expr(p);
-                    concat.push(self.as_string_expr(&expr, &t));
-                }
-                // An op-input placeholder cannot appear in a field template;
-                // the frontend rejects it. Render empty defensively.
-                TemplatePart::Input(_) => concat.push("\"\"".to_string()),
-            }
-        }
-        (concat, absent_deps)
+        plan::format_pieces(self.entry, parts, |p| {
+            let t = self.path_type(p);
+            let expr = self.path_expr(p);
+            self.as_string_expr(&expr, &t)
+        })
     }
 
-    /// The `@arg`/why-var opening shared by the structured and whole-JSON
-    /// decodes: an `@arg` value passes typed (returns `None`, having written the
-    /// assignment), otherwise the why-var opens and `(dest, why)` are returned so
-    /// the caller can lay out the `@with`/`@env`/`@default` fallback cascade.
-    fn decode_opening(&mut self, field: &EntryField, out: &mut String) -> Option<(String, String)> {
-        let dest = self.ident(&field.name);
-        if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-            out.push_str(&format!("{dest} = {}", self.arg_ident(field)));
-            return None;
-        }
-        let why = why_var(&field.name);
-        out.push_str(&format!("{why} := \"no source\"\n"));
-        Some((dest, why))
-    }
-
-    /// Lay out a decode field's source cascade below the why-var opening: the
-    /// first source runs unconditionally, every later one only while the why-var
-    /// is still set (a first-present-wins fallback). Each `@env` step is built by
-    /// `env_block` from its own `(lookup, label, miss, prereq)`; `@with` and
-    /// `@default` are spelled inline.
+    /// Lay out a decode field's source cascade below the error-var opening.
+    /// Each `@env` step is built by `env_block` from its own `(lookup, label,
+    /// miss, prereq)`, computed here before delegating the shared ordering and
+    /// wrapping to `plan::decode_cascade`.
     fn decode_cascade(
         &mut self,
         field: &EntryField,
         dest: &str,
-        why: &str,
+        err: &str,
         mut env_block: impl FnMut(&mut Self, &str, &str, &str, &str) -> String,
     ) -> String {
-        let mut steps: Vec<String> = Vec::new();
-        for source in &field.sources {
-            match source {
-                Source::With => steps.push(self.with_step_body(field, dest, why)),
-                Source::Env(name) => {
-                    self.import("os", "os");
-                    self.import("json", "encoding/json");
-                    self.import("fmt", "fmt");
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    let miss = self.env_miss_reason(name);
-                    let pre = self.env_name_prereq(name, why);
-                    steps.push(env_block(self, &lookup, &label, &miss, &pre));
-                }
-                Source::Default(v) => steps.push(format!(
-                    "{dest} = {}\n{why} = \"\"",
-                    literal(&field.target, v)
-                )),
-                Source::Arg => {}
-            }
-        }
-        steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                if i == 0 {
-                    step.clone()
-                } else {
-                    format!("if {why} != \"\" {{\n{}\n}}", nest(step, 1))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        plan::decode_cascade(
+            self,
+            field,
+            dest,
+            err,
+            |s| s.with_step_body(field, dest, err),
+            |s, name| {
+                s.import("os", "os");
+                s.import("json", "encoding/json");
+                s.import("fmt", "fmt");
+                let (lookup, label, miss, pre) = plan::env_parts(s, name, err);
+                env_block(s, &lookup, &label, &miss, &pre)
+            },
+            literal,
+        )
     }
 }
 
@@ -291,8 +223,42 @@ impl Emitter for Resolver<'_, '_> {
         format!("os.LookupEnv({name_expr})")
     }
 
-    fn why_open(&self, field_name: &str, initial: &str) -> Leaf {
-        Leaf(format!("{} := {initial:?}", why_var(field_name)))
+    fn err_open(&self, field_name: &str) -> Leaf {
+        Leaf(format!("var {} error", err_var(field_name)))
+    }
+
+    fn absent_literal(&self) -> &'static str {
+        "nil"
+    }
+
+    fn cond_err_present(&self, field_name: &str) -> Cond {
+        Cond(format!("{} != nil", self.err_ident(field_name)))
+    }
+
+    fn cond_err_absent(&self, field_name: &str) -> Cond {
+        Cond(format!("{} == nil", self.err_ident(field_name)))
+    }
+
+    fn wrap_error_expr(&self, head: &str, head_err: &str) -> String {
+        let message = format!("\"{head} <- \" + {head_err}.Error()");
+        self.config_error_expr(&message, Some(head_err))
+    }
+
+    fn field_guaranteed(&self, name: &str) -> bool {
+        self.entry.field_guaranteed(name)
+    }
+
+    fn config_error_expr(&self, message_expr: &str, cause: Option<&str>) -> String {
+        match cause {
+            Some(cause) => format!(
+                "&{config}{{Message: {message_expr}, Cause: {cause}}}",
+                config = error_names().config,
+            ),
+            None => format!(
+                "&{config}{{Message: {message_expr}}}",
+                config = error_names().config,
+            ),
+        }
     }
 
     fn config_open(&mut self, _field: &EntryField, shape: &Shape) -> Leaf {
@@ -301,10 +267,11 @@ impl Emitter for Resolver<'_, '_> {
 
     /// The `@with` presence step of a non-guaranteed chain, relative to column
     /// zero.
-    fn with_step_body(&self, field: &EntryField, dest: &str, why: &str) -> String {
+    fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String {
         format!(
-            "if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{why} = \"\"\n}} else {{\n\t{why} = \"not configured\"\n}}",
+            "if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
             carrier = camel(&field.name),
+            miss = self.config_error_expr("\"not configured\"", None),
         )
     }
 
@@ -316,16 +283,13 @@ impl Emitter for Resolver<'_, '_> {
         field: &EntryField,
         name: &EnvName,
         dest: &str,
-        why: &str,
+        err: &str,
     ) -> String {
-        let lookup = self.env_lookup(name);
-        let label = self.env_label(name);
-        let miss = self.env_miss_reason(name);
-        let pre = self.env_name_prereq(name, why);
+        let (lookup, label, miss, pre) = plan::env_parts(self, name, err);
         let parse = self.env_parse(field, dest, &label);
         format!(
-            "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t{why} = \"\"\n}} else {{\n\t{why} = {miss}\n}}",
-            parse = nest(&parse, 1),
+            "{pre}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
+            parse = plan::nest("\t", &parse, 1),
         )
     }
 
@@ -351,7 +315,7 @@ impl Emitter for Resolver<'_, '_> {
                     out.push_str(&format!(
                         "{}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n}}",
                         if first { "" } else { " else " },
-                        parse = nest(&parse, 1),
+                        parse = plan::nest("\t", &parse, 1),
                     ));
                     first = false;
                 }
@@ -413,8 +377,9 @@ impl Emitter for Resolver<'_, '_> {
             )))
         } else {
             Leaf(format!(
-                "{} = \"match: unmatched value\"",
-                why_var(&field.name)
+                "{} = {}",
+                err_var(&field.name),
+                self.config_error_expr("\"match: unmatched value\"", None),
             ))
         }
     }
@@ -454,7 +419,7 @@ impl Emitter for Resolver<'_, '_> {
     /// value decodes strictly into the wire struct. Relative to column zero.
     fn structured_body(&mut self, field: &EntryField, shape: &Shape) -> String {
         let mut out = String::new();
-        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, err)) = plan::decode_opening(self, field, &mut out) else {
             return out;
         };
         self.import("bytes", "bytes");
@@ -483,8 +448,8 @@ impl Emitter for Resolver<'_, '_> {
         };
         // The decode body varies only by the env label; the cascade fills each
         // source's own `(lookup, label, miss)` in around this shared shape.
-        let (dc, wc) = (dest.clone(), why.clone());
-        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+        let (dc, ec) = (dest.clone(), err.clone());
+        let body = self.decode_cascade(field, &dest, &err, move |_, lookup, label, miss, pre| {
             let required = required_checks.replace("{LABEL}", label);
             let fail = config_errorf(&format!("\"%s: %v\", {label}, err"));
             format!(
@@ -498,8 +463,8 @@ impl Emitter for Resolver<'_, '_> {
                  \tif err := dec.Decode(&decoded); err != nil {{\n\t\t{fail}\n\t}}\n\
                  {validate}\
                  \t{dc} = decoded\n\
-                 \t{wc} = \"\"\n\
-                 }} else {{\n\t{wc} = {miss}\n}}"
+                 \t{ec} = nil\n\
+                 }} else {{\n\t{ec} = {miss}\n}}"
             )
         });
         out.push_str(&body);
@@ -510,17 +475,17 @@ impl Emitter for Resolver<'_, '_> {
     /// decodes as JSON whole. Relative to column zero.
     fn json_body(&mut self, field: &EntryField) -> String {
         let mut out = String::new();
-        let Some((dest, why)) = self.decode_opening(field, &mut out) else {
+        let Some((dest, err)) = plan::decode_opening(self, field, &mut out) else {
             return out;
         };
-        let (dc, wc) = (dest.clone(), why.clone());
-        let body = self.decode_cascade(field, &dest, &why, move |_, lookup, label, miss, pre| {
+        let (dc, ec) = (dest.clone(), err.clone());
+        let body = self.decode_cascade(field, &dest, &err, move |_, lookup, label, miss, pre| {
             let fail = config_errorf(&format!("\"%s: %v\", {label}, err"));
             format!(
                 "{pre}if raw, ok := {lookup}; ok && raw != \"\" {{\n\
                  \tif err := json.Unmarshal([]byte(raw), &{dc}); err != nil {{\n\t\t{fail}\n\t}}\n\
-                 \t{wc} = \"\"\n\
-                 }} else {{\n\t{wc} = {miss}\n}}"
+                 \t{ec} = nil\n\
+                 }} else {{\n\t{ec} = {miss}\n}}"
             )
         });
         out.push_str(&body);
@@ -537,20 +502,20 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    fn require_member_deferred(&mut self, name: &str, why: &str) -> String {
+    fn require_member_deferred(&mut self, name: &str, err: &str) -> String {
+        let ident = err_var(err);
         format!(
-            "if {why} != \"\" {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {why}}}\n}}",
-            why = why_var(why),
+            "if {ident} != nil {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {ident}.Error(), Cause: {ident}}}\n}}",
             config = error_names().config,
         )
     }
 
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         format!(
-            "if s.{ident} == {zero} {{\n\twhy := {why}\n\tif why == \"\" {{\n\t\twhy = \"no value\"\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + why}}\n}}",
+            "if s.{ident} == {zero} {{\n\tif {err} == nil {{\n\t\treturn nil, &{config}{{Message: \"{name}: no value\"}}\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             zero = cast_string(target, "\"\""),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )
@@ -558,9 +523,9 @@ impl Emitter for Resolver<'_, '_> {
 
     fn require_bytes(&mut self, head: &str) -> String {
         format!(
-            "if len(s.{ident}) == 0 {{\n\twhy := {why}\n\tif why == \"\" {{\n\t\twhy = \"no value\"\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + why}}\n}}",
+            "if len(s.{ident}) == 0 {{\n\tif {err} == nil {{\n\t\treturn nil, &{config}{{Message: \"{name}: no value\"}}\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )
@@ -568,9 +533,9 @@ impl Emitter for Resolver<'_, '_> {
 
     fn require_numeric(&mut self, head: &str, _target: &Tref) -> String {
         format!(
-            "if {why} != \"\" && s.{ident} == 0 {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {why}}}\n}}",
+            "if {err} != nil && s.{ident} == 0 {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
-            why = why_var(head),
+            err = err_var(head),
             name = head,
             config = error_names().config,
         )
@@ -588,23 +553,6 @@ pub(super) fn config_errorf(sprintf_args: &str) -> String {
         "return nil, &{config}{{Message: fmt.Sprintf({sprintf_args})}}",
         config = error_names().config,
     )
-}
-
-/// Indent every non-empty line of `s` by `n` tabs, dropping any trailing
-/// newline so callers control the separator.
-fn nest(s: &str, n: usize) -> String {
-    let pad = "\t".repeat(n);
-    s.trim_end_matches('\n')
-        .split('\n')
-        .map(|l| {
-            if l.is_empty() {
-                String::new()
-            } else {
-                format!("{pad}{l}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn int_bits(p: &Prim) -> u32 {

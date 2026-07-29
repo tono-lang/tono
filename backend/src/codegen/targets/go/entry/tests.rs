@@ -75,7 +75,9 @@ fn the_resolution_follows_the_declared_chains() {
     assert!(serde.contains("case \"legacy\":"));
     assert!(serde.contains("s.Endpoint = \"https://old.example.com\""));
     // An arm that reads an absent chain reports it at the point of use.
-    assert!(serde.contains("endpointWhy = \"endpoint_v1 <- \" + endpointV1Why"));
+    assert!(serde.contains(
+        "endpointErr = &ConfigError{Message: \"endpoint_v1 <- \" + endpointV1Err.Error(), Cause: endpointV1Err}"
+    ));
     // @bind: the entry value feeds the composed member; the unbound member
     // keeps its own chain.
     assert!(serde.contains("composed.APIKey = s.APIKey"));
@@ -159,7 +161,10 @@ fn the_method_maps_the_raw_outcome_onto_the_taxonomy() {
     assert!(serde.contains("case tonohttp.OutcomeTransport:"));
     assert!(serde.contains("&TransportError{Cause: outcome.Cause}"));
     assert!(serde.contains("DecodeSaveNoteError(outcome.Status, []byte(outcome.Body))"));
-    assert!(serde.contains("&DecodeError{Path: \"$\", Expected: \"Note\", Raw: outcome.Body}"));
+    // The required-member probe lives once per type (DecodeNote); the call
+    // site only routes the returned path into its own DecodeError.
+    assert!(serde.contains("out, path, ok := DecodeNote([]byte(outcome.Body))"));
+    assert!(serde.contains("&DecodeError{Path: path, Expected: \"Note\", Raw: outcome.Body}"));
 }
 
 #[test]
@@ -188,7 +193,9 @@ fn a_dynamic_env_name_off_an_absent_chain_emits_balanced_braces() {
         ),
     );
     let serde = entry_text(&module);
-    assert!(serde.contains("readerWhy = \"naming <- \" + namingWhy"));
+    assert!(serde.contains(
+        "readerErr = &ConfigError{Message: \"naming <- \" + namingErr.Error(), Cause: namingErr}"
+    ));
     let new_fn = serde
         .split("func New(")
         .nth(1)
@@ -225,7 +232,7 @@ fn structured_sources_decode_strictly_and_honor_explicit_values() {
     assert!(serde.contains("ValidateCredentials(decoded)"));
     // The explicit @with value wins: the decode runs only while unset.
     assert!(serde.contains("if w.creds != nil {"));
-    assert!(serde.contains("if credsWhy != \"\" {"));
+    assert!(serde.contains("if credsErr != nil {"));
     // The whole-JSON map field decodes with its env name as context.
     assert!(serde.contains("json.Unmarshal([]byte(raw), &s.Labels)"));
     let types = entry_text(&module);
@@ -253,7 +260,7 @@ fn a_structured_source_falls_back_across_multiple_envs() {
         .find("os.LookupEnv(\"SERVICE_CREDENTIALS_FALLBACK\")")
         .expect("fallback lookup");
     let guard = serde[..fallback]
-        .rfind("if credsWhy != \"\" {")
+        .rfind("if credsErr != nil {")
         .expect("fallback guard");
     let primary = serde
         .find("os.LookupEnv(\"SERVICE_CREDENTIALS\")")
@@ -361,19 +368,19 @@ fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
 }
 
 #[test]
-fn a_why_reason_nothing_reads_is_discarded_rather_than_left_unused() {
-    // A chain no other field, trait, or bind consumes still records why it came
-    // up empty, but nothing reads it back, and Go rejects a variable that is
-    // assigned and never read.
+fn an_error_var_nothing_reads_is_discarded_rather_than_left_unused() {
+    // A chain no other field, trait, or bind consumes still records its
+    // failure in an error var, but nothing reads it back, and Go rejects a
+    // variable that is assigned and never read.
     let mut module = fixture_module();
     let env = crate::ir::Source::Env(crate::ir::EnvName::Name("SPARE_TOKEN".into()));
     let field = bare_entry_field("spare_token", Tref::Prim(Prim::String), vec![env]);
     push_entry_field(&mut module, field);
     let serde = entry_text(&module);
-    assert!(serde.contains("spareTokenWhy := \"no source\""));
-    assert!(serde.contains("\t_ = spareTokenWhy\n"));
+    assert!(serde.contains("var spareTokenErr error"));
+    assert!(serde.contains("\t_ = spareTokenErr\n"));
     // A consumed chain is read by its own check, so it is left alone.
-    assert!(!serde.contains("_ = endpointVersionWhy"));
+    assert!(!serde.contains("_ = endpointVersionErr"));
 }
 
 #[test]
@@ -472,12 +479,12 @@ fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
     let serde = entry_text(&module);
     // The reason var is hoisted above the config block (so the post-construction
     // require can read it) and the member resolves through the tracked chain.
-    assert!(serde.contains("settingsMaxConnsWhy := \"no source\""));
+    assert!(serde.contains("var settingsMaxConnsErr error"));
     // The require reads the reason, never the (possibly legitimately zero) value.
-    assert!(serde.contains("if settingsMaxConnsWhy != \"\" {"));
-    assert!(
-        serde.contains("&ConfigError{Message: \"settings.max_conns <- \" + settingsMaxConnsWhy}")
-    );
+    assert!(serde.contains("if settingsMaxConnsErr != nil {"));
+    assert!(serde.contains(
+        "&ConfigError{Message: \"settings.max_conns <- \" + settingsMaxConnsErr.Error(), Cause: settingsMaxConnsErr}"
+    ));
     // It is not compared against the numeric zero (that would reject a real 0).
     assert!(!serde.contains("s.Settings.MaxConns == 0"));
 }
@@ -515,19 +522,22 @@ fn a_constrained_op_input_is_validated_before_transport() {
 fn a_structured_output_decodes_strictly_on_required_members() {
     let module = with_descriptors(fixture_module());
     let serde = entry_text(&module);
-    // The 2xx output is probed for its required members (a zero value is not a
-    // present value) and a missing one surfaces a DecodeError, not a zeroed
-    // struct. The probe reads the wire key.
+    // The probe lives once per type, in DecodeNote: a required member (a
+    // zero value is not a present value) missing or null fails, naming its
+    // own path; a whole-body parse failure points at the root. Unknown
+    // fields are still tolerated (a plain Unmarshal into the struct).
+    assert!(serde.contains("var noteRequiredFields = []string{\"id\", \"body\"}"));
+    assert!(serde.contains("func DecodeNote(raw []byte) (Note, string, bool) {"));
     assert!(serde.contains("var probe map[string]json.RawMessage"));
-    assert!(serde.contains("if rv, ok := probe[\"id\"]; !ok || string(rv) == \"null\" {"));
-    assert!(serde.contains("if rv, ok := probe[\"body\"]; !ok || string(rv) == \"null\" {"));
-    // A missing required member points at that member, not the whole body.
-    assert!(serde.contains("&DecodeError{Path: \"$.id\", Expected: \"Note\", Raw: outcome.Body}"));
-    assert!(serde.contains("&DecodeError{Path: \"$.body\", Expected: \"Note\", Raw: outcome.Body}"));
-    // A whole-body parse failure still points at the root.
-    assert!(serde.contains("&DecodeError{Path: \"$\", Expected: \"Note\", Raw: outcome.Body}"));
-    // Unknown fields are still tolerated (a plain Unmarshal into the struct).
+    assert!(serde.contains("for _, field := range noteRequiredFields {"));
+    assert!(serde.contains("if rv, ok := probe[field]; !ok || string(rv) == \"null\" {"));
+    assert!(serde.contains("return Note{}, \"$.\" + field, false"));
+    assert!(serde.contains("return Note{}, \"$\", false"));
     assert!(serde.contains("var out Note"));
+    // The call site routes DecodeNote's returned path into its own error,
+    // never reemitting the probe.
+    assert!(serde.contains("out, path, ok := DecodeNote([]byte(outcome.Body))"));
+    assert!(serde.contains("&DecodeError{Path: path, Expected: \"Note\", Raw: outcome.Body}"));
 }
 
 #[test]
@@ -548,15 +558,19 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     // the values.
     assert!(serde.contains("s.Mode = Mode(v)"));
     assert!(serde.contains("values[\"mode\"] = string(s.Mode)"));
-    // Guaranteed and why-tracked dynamic env names both spell one balanced run.
+    // Guaranteed and error-tracked dynamic env names both spell one balanced run.
     assert!(serde.contains("os.LookupEnv(s.SureName)"));
-    assert!(serde.contains("dynamicWhy = \"naming <- \" + namingWhy"));
+    assert!(serde.contains(
+        "dynamicErr = &ConfigError{Message: \"naming <- \" + namingErr.Error(), Cause: namingErr}"
+    ));
     // Transforms compose innermost-first; the input placeholder renders empty.
     assert!(serde.contains("casing.StrUpperSnake(casing.StrPascal(casing.StrKebab(casing.StrSnake(strings.ToUpper(strings.ToLower(strings.TrimSpace("));
-    // Both select flavors: why-tracked with an inline source arm, and a
-    // guaranteed one that fails construction on an undeclared value.
+    // Both select flavors: error-tracked with an inline source arm (no reset
+    // needed entering the case — the error var is still nil from the switch's
+    // own opening), and a guaranteed one that fails construction on an
+    // undeclared value.
     assert!(serde.contains("case 1:"));
-    assert!(serde.contains("pickedWhy = \"no source\""));
+    assert!(serde.contains("pickedErr = &ConfigError{Message: \"not configured\"}"));
     assert!(serde.contains(
         "return nil, &ConfigError{Message: fmt.Sprintf(\"sure_pick: match on sure_name: unmatched value %v\", s.SureName)}"
     ));
@@ -600,8 +614,8 @@ fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
     // The member's switch only runs once the why-tracked subject resolved, an
     // arm reading an absent chain assigns only when that chain resolved, and
     // an inline source arm keeps the presence-only member spelling.
-    assert!(serde.contains("if endpointWhy == \"\" {"));
-    assert!(serde.contains("if endpointV1Why == \"\" {"));
+    assert!(serde.contains("if endpointErr == nil {"));
+    assert!(serde.contains("if endpointV1Err == nil {"));
     assert!(serde.contains("os.LookupEnv(\"ZONE\")"));
 }
 
@@ -613,7 +627,7 @@ fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presen
     assert!(serde.contains("if len(s.Secret) == 0 {"));
     // The numeric constraint skips when the chain reported absent and the
     // bridge left the zero in place (same presence rule as the requires).
-    assert!(serde.contains("(portWhy == \"\" || s.Port != 0) &&"));
+    assert!(serde.contains("(portErr == nil || s.Port != 0) &&"));
 }
 
 #[test]

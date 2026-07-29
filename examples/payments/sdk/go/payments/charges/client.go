@@ -65,8 +65,6 @@ type ClientAPI interface {
 
 var _ ClientAPI = (*Client)(nil)
 
-var createChargeDescriptor = descriptor.MustDescriptor("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[402,\"payments.charges#card_declined\",\"card_declined\",true],[404,\"payments.charges#not_found\",null]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}")
-
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, client_init on top (bespoke wins),
 // then the declared validation.
@@ -117,6 +115,127 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	return &Client{settings: s, runtime: runtime, hooks: nil}, nil
 }
 
+var createChargeDescriptor = descriptor.MustDescriptor(`{
+  "bindings": [
+    [
+      "id",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "amount",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "fee",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "receipt",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "currency",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "note",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "tags",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "metadata",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "created",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "status",
+      {
+        "kind": "body"
+      }
+    ],
+    [
+      "method",
+      {
+        "kind": "body"
+      }
+    ]
+  ],
+  "endpoint": [
+    "endpoint"
+  ],
+  "errors": [
+    [
+      402,
+      "payments.charges#card_declined",
+      "card_declined",
+      true
+    ],
+    [
+      404,
+      "payments.charges#not_found",
+      null
+    ]
+  ],
+  "http_method": "POST",
+  "request_headers": [
+    [
+      [
+        {
+          "lit": "X-API-Key"
+        }
+      ],
+      {
+        "field": [
+          "api_key"
+        ]
+      }
+    ]
+  ],
+  "response_bindings": [],
+  "retry": {
+    "max": {
+      "ref": "max_retries"
+    }
+  },
+  "success": [
+    [
+      200,
+      {
+        "args": [],
+        "ref": "payments.charges#charge"
+      }
+    ]
+  ],
+  "timeout": {
+    "ref": "timeout"
+  },
+  "uri": "/charges"
+}`)
+
 func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error) {
 	var zero Charge
 	if invalid := ValidateCharge(input); invalid != nil {
@@ -136,43 +255,9 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	case tonohttp.OutcomeError:
 		return zero, DecodeCreateChargeError(outcome.Status, []byte(outcome.Body))
 	}
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(outcome.Body), &probe); err != nil {
-		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["id"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.id", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["amount"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.amount", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["fee"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.fee", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["receipt"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.receipt", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["currency"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.currency", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["tags"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.tags", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["metadata"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.metadata", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["created"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.created", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["status"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.status", Expected: "Charge", Raw: outcome.Body}
-	}
-	if rv, ok := probe["method"]; !ok || string(rv) == "null" {
-		return zero, &DecodeError{Path: "$.method", Expected: "Charge", Raw: outcome.Body}
-	}
-	var out Charge
-	if err := json.Unmarshal([]byte(outcome.Body), &out); err != nil {
-		return zero, &DecodeError{Path: "$", Expected: "Charge", Raw: outcome.Body}
+	out, path, ok := DecodeCharge([]byte(outcome.Body))
+	if !ok {
+		return zero, &DecodeError{Path: path, Expected: "Charge", Raw: outcome.Body}
 	}
 	return out, nil
 }
@@ -182,13 +267,13 @@ func DecodeCreateChargeError(status int, body []byte) error {
 		Code string `json:"code"`
 	}
 	_ = json.Unmarshal(body, &probe)
-	if status == 402 && probe.Code == "card_declined" {
+	if status == statusCardDeclined && probe.Code == codeCardDeclined {
 		var data CardDeclined
 		if json.Unmarshal(body, &data) == nil {
 			return &data
 		}
 	}
-	if status == 404 {
+	if status == statusNotFound {
 		var data NotFound
 		if json.Unmarshal(body, &data) == nil {
 			return &data

@@ -16,9 +16,9 @@ use std::collections::BTreeSet;
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
 use crate::codegen::entries::{
-    companion_name, module_entries, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
+    companion_name, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
 };
-use crate::codegen::extensions::{bound_extensions, hook_binding, impl_binding, BoundExtension};
+use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
@@ -210,31 +210,16 @@ struct Helpers {
     transforms: BTreeSet<&'static str>,
 }
 
-/// A module's entry emission, split the way the layout groups it: what every
-/// entry of the module shares (the construction-only config interfaces, the hook
-/// wrappers, the resolution helpers) and, per entry, everything named after that
-/// entry.
-pub struct EntryEmission {
-    /// Shared across the module's entries, so they ride its internal group.
-    pub shared: Vec<Decl>,
-    /// Each entry's own group: its name and its declarations.
-    pub per_entry: Vec<(String, Vec<Decl>)>,
-}
+pub use plan::EntryEmission;
 
 /// Emit a module's entries: the Settings and config interfaces, the descriptor
 /// constants, the class and its methods, grouped per entry so the construction
 /// surface reads together; the wrappers and helpers every entry shares stay in
 /// the module's internal group, emitted once.
 pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
-    let entries = module_entries(module);
-    if entries.is_empty() {
-        return EntryEmission {
-            shared: Vec::new(),
-            per_entry: Vec::new(),
-        };
-    }
-    let multi = entries.len() > 1;
-    let bound = bound_extensions(module, &BINDING_LANGS);
+    let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
+        return EntryEmission::empty();
+    };
     let mut helpers = Helpers::default();
     let mut decls = Vec::new();
     decls.extend(config_interfaces(module, config));
@@ -264,6 +249,12 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         // combination upstream, so the bridge is only emitted here.
         decls.extend(client_init_wrapper(&bound, &entries, multi, module));
     }
+    decls.extend(plan::output_decode_decls(
+        &entries,
+        module,
+        |op| wire_descriptor(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
+        |shape| decode::output_decode_decl(shape, module),
+    ));
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
@@ -357,7 +348,10 @@ fn class_decl(
         helpers,
         body: &mut body,
     };
-    let fields = plan::emit_fields(entry, module, &mut r);
+    // The constructor is nested one level deeper here than in Go's flat
+    // function (a class body wraps it), so the plan renders one indent unit
+    // further in to land at the same column as this scaffold's own lines.
+    let fields = plan::emit_fields(entry, module, &mut r, 2);
     r.body.push_str(&fields);
 
     if hook_binding(bound, "client_init").is_some() && !multi {
@@ -376,7 +370,7 @@ fn class_decl(
             body: &mut body,
         };
         let requires = plan::build_requires(entry, module, &mut r);
-        let text = plan::render(&requires, 1, &r);
+        let text = plan::render(&requires, 2, &r);
         r.body.push_str(&text);
     }
 
@@ -390,7 +384,7 @@ fn class_decl(
         for line in validation::guard_lines(&[member], &TsVal, "s.", config, LANG) {
             // The check reads the value bespoke left in place (client_init ran
             // already, bespoke wins), so presence is judged off the value
-            // itself, never the declared chain's why-reason. A numeric zero can
+            // itself, never the declared chain's error var. A numeric zero can
             // be a legitimately resolved value, so its guard only skips when the
             // chain reported absent AND the bridge left the zero in place.
             let guard = match plan::presence_kind(field, entry, module) {
@@ -421,9 +415,9 @@ fn class_decl(
                         "0"
                     };
                     format!(
-                        "({why} === \"\" || s.{ident} !== {zero}) && {}",
+                        "({err} === undefined || s.{ident} !== {zero}) && {}",
                         line.condition,
-                        why = why_var(&field.name),
+                        err = err_var(&field.name),
                         ident = field_camel_ren(
                             &field.name,
                             rename_of(&field.traits, LANG).as_deref(),
@@ -686,9 +680,7 @@ fn op_method(
     )
 }
 
-fn why_var(field: &str) -> String {
-    camel(&format!("{field}_why"))
-}
+use plan::err_var;
 
 mod checks;
 mod decode;

@@ -42,6 +42,32 @@ fn text(module: &Module) -> String {
 }
 
 #[test]
+fn the_constructor_body_indents_one_level_deeper_than_the_class() {
+    // The plan renders at the depth its scaffold actually nests it at: Go's
+    // constructor is a flat function (one level), TypeScript's is a method
+    // inside a class body (two). Checked without prettier on the output (it
+    // is not installed in this environment), since RFC-0019 requires the raw
+    // emitter text to already be structurally aligned.
+    let module = with_descriptors(fixture_module());
+    let out = text(&module);
+    let ctor_at = out.find("  constructor(").expect("constructor line");
+    let body_start = out[ctor_at..].find('\n').expect("constructor header ends") + ctor_at + 1;
+    let close_at = out[body_start..]
+        .find("\n  }\n")
+        .expect("constructor closes at class-body depth")
+        + body_start;
+    for line in out[body_start..close_at].lines() {
+        if line.is_empty() {
+            continue;
+        }
+        assert!(
+            line.starts_with("    "),
+            "constructor body line is not indented to the class-body-plus-one depth: {line:?}"
+        );
+    }
+}
+
+#[test]
 fn the_entry_class_replaces_the_generic_client_surface() {
     let module = with_descriptors(fixture_module());
     let out = text(&module);
@@ -79,7 +105,9 @@ fn the_resolution_mirrors_the_go_spelling() {
     assert!(out.contains("s.clientKey = strUpperSnake((s.clientName).trim());"));
     assert!(out.contains("switch (s.endpointVersion) {"));
     assert!(out.contains("case \"v1\": {"));
-    assert!(out.contains("endpointWhy = \"endpoint_v1 <- \" + endpointV1Why;"));
+    assert!(out.contains(
+        "endpointErr = new ConfigError(`endpoint_v1 <- ${endpointV1Err.message}`, endpointV1Err);"
+    ));
     assert!(out.contains("composed.apiKey = s.apiKey;"));
     // Values freeze under canonical dotted names; bigints narrow, the
     // duration flows in milliseconds.
@@ -166,7 +194,7 @@ fn a_structured_source_falls_back_across_multiple_envs() {
         .find("readEnv(\"SERVICE_CREDENTIALS_FALLBACK\")")
         .expect("fallback lookup");
     let guard = out[..fallback]
-        .rfind("if (credsWhy !== \"\") {")
+        .rfind("if (credsErr !== undefined) {")
         .expect("fallback guard");
     let primary = out
         .find("readEnv(\"SERVICE_CREDENTIALS\")")
@@ -195,12 +223,12 @@ fn a_consumed_numeric_config_member_requires_its_resolution_not_its_zero() {
     );
     let out = text(&module);
     // The reason var is hoisted above the config block so the require can read it.
-    assert!(out.contains("let settingsMaxConnsWhy = \"no source\";"));
+    assert!(out.contains("let settingsMaxConnsErr: ConfigError | undefined;"));
     // The require reads the reason, never the (possibly legitimately zero) value.
-    assert!(out.contains("if (settingsMaxConnsWhy !== \"\") {"));
-    assert!(
-        out.contains("throw new ConfigError(\"settings.max_conns <- \" + settingsMaxConnsWhy);")
-    );
+    assert!(out.contains("if (settingsMaxConnsErr !== undefined) {"));
+    assert!(out.contains(
+        "throw new ConfigError(\"settings.max_conns <- \" + settingsMaxConnsErr.message, settingsMaxConnsErr);"
+    ));
     // It is not compared against the numeric zero (that would reject a real 0).
     assert!(!out.contains("s.settings.maxConns === 0"));
 }
@@ -275,17 +303,22 @@ fn a_constrained_op_input_is_validated_before_transport() {
 fn a_structured_output_decodes_strictly_on_required_members() {
     let module = with_descriptors(fixture_module());
     let out = text(&module);
-    // The 2xx output checks its required members before decoding; a missing one
-    // surfaces a DecodeError instead of an undefined field. Unknown fields are
-    // tolerated (decodeNote maps only what it knows).
-    assert!(out.contains("if (!(\"id\" in raw) || raw[\"id\"] === null) {"));
-    assert!(out.contains("if (!(\"body\" in raw) || raw[\"body\"] === null) {"));
-    // A missing required member points at that member, not the whole body.
-    assert!(out.contains("throw new DecodeError(\"$.id\", \"Note\", outcome.body);"));
-    assert!(out.contains("throw new DecodeError(\"$.body\", \"Note\", outcome.body);"));
-    // A whole-body parse failure still points at the root.
-    assert!(out.contains("throw new DecodeError(\"$\", \"Note\", outcome.body);"));
-    assert!(out.contains("out = decodeNote(raw);"));
+    // The probe lives once per type, in parseNote: a required member (a
+    // missing key or a null value counts as absent) fails, naming its own
+    // path; a whole-body parse failure points at the root. Unknown fields
+    // are still tolerated (decodeNote maps only what it knows).
+    assert!(out.contains("const noteRequiredFields = [\"id\", \"body\"] as const;"));
+    assert!(out.contains("function parseNote(raw: string): Note {"));
+    assert!(out.contains("for (const field of noteRequiredFields) {"));
+    assert!(out.contains("if (!(field in obj) || obj[field] === null) {"));
+    assert!(out.contains("throw \"$.\" + field;"));
+    assert!(out.contains("throw \"$\";"));
+    assert!(out.contains("return decodeNote(obj);"));
+    // The call site routes parseNote's thrown path into its own error, never
+    // reemitting the probe.
+    assert!(out.contains("return parseNote(outcome.body);"));
+    assert!(out.contains("} catch (path) {"));
+    assert!(out.contains("throw new DecodeError(path as string, \"Note\", outcome.body);"));
 }
 
 #[test]
@@ -388,11 +421,13 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
     // implementation carries no protocol status.
     assert!(out.contains("if (!outcome.success) {"));
     assert!(out.contains("throw decodeSaveNoteError(outcome.code, outcome.body);"));
-    assert!(out.contains("code === \"overloaded\""));
+    assert!(out.contains("code === CODE_OVERLOADED"));
     assert!(out.contains("return new APIError(0, body);"));
-    // The success payload decodes exactly as a protocol response does.
-    assert!(out.contains("raw = JSON.parse(outcome.body);"));
-    assert!(out.contains("new DecodeError(\"$.id\", \"Note\", outcome.body)"));
+    // The success payload decodes exactly as a protocol response does,
+    // through the same per-type parseNote a protocol operation returning
+    // Note shares.
+    assert!(out.contains("return parseNote(outcome.body);"));
+    assert!(out.contains("new DecodeError(path as string, \"Note\", outcome.body)"));
     assert!(
         out.contains("function saveNote(settings: Settings, payload: string): Promise<Outcome>")
     );
@@ -446,9 +481,11 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     // An enum field is a branded string: cast at the boundary, frozen.
     assert!(out.contains("s.mode = v as Mode;"));
     assert!(out.contains("values[\"mode\"] = s.mode;"));
-    // Guaranteed and why-tracked dynamic env names.
+    // Guaranteed and error-tracked dynamic env names.
     assert!(out.contains("readEnv(s.sureName)"));
-    assert!(out.contains("dynamicWhy = \"naming <- \" + namingWhy;"));
+    assert!(
+        out.contains("dynamicErr = new ConfigError(`naming <- ${namingErr.message}`, namingErr);")
+    );
     // Transforms compose innermost-first; the input placeholder renders empty.
     assert!(out.contains("strUpperSnake(strPascal(strKebab(strSnake(("));
     // Both select flavors, the guaranteed one failing on an undeclared value.
@@ -585,8 +622,8 @@ fn a_config_member_match_tracks_absent_subjects_and_inline_sources() {
     // The member's switch only runs once the why-tracked subject resolved, an
     // arm reading an absent chain assigns only when that chain resolved, and
     // an inline source arm keeps the presence-only member spelling.
-    assert!(out.contains("if (endpointWhy === \"\") {"));
-    assert!(out.contains("if (endpointV1Why === \"\") {"));
+    assert!(out.contains("if (endpointErr === undefined) {"));
+    assert!(out.contains("if (endpointV1Err === undefined) {"));
     assert!(out.contains("readEnv(\"ZONE\")"));
 }
 
@@ -598,7 +635,7 @@ fn a_consumed_bytes_head_requires_a_value_and_numeric_constraints_gate_on_presen
     assert!(out.contains("if (s.secret.length === 0) {"));
     // The numeric constraint skips when the chain reported absent and the
     // bridge left the zero in place (same presence rule as the requires).
-    assert!(out.contains("(portWhy === \"\" || s.port !== 0) &&"));
+    assert!(out.contains("(portErr === undefined || s.port !== 0) &&"));
 }
 
 #[test]

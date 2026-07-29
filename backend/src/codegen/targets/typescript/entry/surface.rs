@@ -132,11 +132,23 @@ pub(super) fn method_name(op: &Shape, config: &CasingConfig) -> String {
     )
 }
 
-/// The JSON descriptor embedded as a JavaScript string literal the runtime
-/// parses at load (encode twice: an opaque blob, no field ever read).
+/// The JSON descriptor embedded as a template literal the runtime parses at
+/// load (an opaque blob, no field ever read): pretty-printed for a reader,
+/// escaped only where a template literal would otherwise misread the text.
+///
+/// A backtick would end the literal early and a bare `${` would be read as
+/// interpolation, so both are escaped; JSON's own backslash escapes (`\n`,
+/// `\"`, ...) are escaped too, since a template literal cooks them the same
+/// way a plain string would and would otherwise hand `JSON.parse` an
+/// already-decoded (and no longer valid) payload. Plain content, the common
+/// case, needs none of this and comes out untouched.
 pub(super) fn embed(descriptor: &serde_json::Value) -> String {
-    let json = serde_json::to_string(descriptor).unwrap_or_else(|_| "null".into());
-    serde_json::to_string(&json).unwrap_or_else(|_| "\"null\"".into())
+    let json = serde_json::to_string_pretty(descriptor).unwrap_or_else(|_| "null".into());
+    let escaped = json
+        .replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace('$', "\\$");
+    format!("`{escaped}`")
 }
 
 pub(super) fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
@@ -423,4 +435,55 @@ pub fn resolution_helpers() -> Vec<Decl> {
     decls.extend(duration_helpers());
     decls.extend(casing_helpers());
     decls
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a JS template literal cooks an escaped string down to: `\\`,
+    /// `` \` ``, and `\$` each collapse to the single character they guard.
+    /// Mirroring that here is what proves `embed`'s escaping round-trips
+    /// instead of merely trusting it does.
+    fn cook(escaped: &str) -> String {
+        let mut out = String::new();
+        let mut chars = escaped.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                if let Some(&next) = chars.peek() {
+                    out.push(next);
+                    chars.next();
+                    continue;
+                }
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    #[test]
+    fn plain_content_needs_no_escaping() {
+        let descriptor = serde_json::json!({"method": "POST", "path": "/notes/{id}"});
+        let literal = embed(&descriptor);
+        assert!(literal.starts_with('`') && literal.ends_with('`'));
+        assert!(!literal.contains('\\'));
+    }
+
+    #[test]
+    fn a_backtick_dollar_brace_and_backslash_survive_the_round_trip() {
+        // A spec-authored literal (a header value, say) could contain any of
+        // these; the wire descriptor must still decode to the same value.
+        let descriptor = serde_json::json!({
+            "header": "a`b${c}\\d\ne\"f",
+        });
+        let literal = embed(&descriptor);
+        let inner = literal
+            .strip_prefix('`')
+            .and_then(|s| s.strip_suffix('`'))
+            .expect("embed wraps in backticks");
+        let cooked = cook(inner);
+        let round_tripped: serde_json::Value =
+            serde_json::from_str(&cooked).expect("cooked text is valid JSON");
+        assert_eq!(round_tripped, descriptor);
+    }
 }

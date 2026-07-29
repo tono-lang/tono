@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 55
 expression: "render_sdk(matrix_module(), TargetKind::TypeScript, None)"
 ---
 // ==== typescript/number.ts ====
@@ -152,9 +151,13 @@ export class APIError extends TonoError {
   }
 }
 
+export const STATUS_PAYMENT_DECLINED = 402;
+
+export const CODE_PAYMENT_DECLINED = "payment_declined";
+
 export class PaymentDeclinedError extends APIError {
   constructor(readonly data: PaymentDeclined, body: string) {
-    super(402, body);
+    super(STATUS_PAYMENT_DECLINED, body);
     this.name = "PaymentDeclinedError";
   }
   retryable(): boolean {
@@ -162,9 +165,11 @@ export class PaymentDeclinedError extends APIError {
   }
 }
 
+export const STATUS_RATE_LIMITED = 429;
+
 export class RateLimitedError extends APIError {
   constructor(readonly data: RateLimited, body: string) {
-    super(429, body);
+    super(STATUS_RATE_LIMITED, body);
     this.name = "RateLimitedError";
   }
 }
@@ -178,7 +183,7 @@ export interface Client {
 
 import { decodeBytes, encodeBytes } from "../bytes";
 import { decodeI64, encodeI64 } from "../number";
-import { APIError, Account, BankData, CardData, HTTPCode, Method, PaymentDeclined, PaymentDeclinedError, RateLimited, RateLimitedError, Status, Timestamp, TonoError } from "./types";
+import { APIError, Account, BankData, CODE_PAYMENT_DECLINED, CardData, HTTPCode, Method, PaymentDeclined, PaymentDeclinedError, RateLimited, RateLimitedError, STATUS_PAYMENT_DECLINED, STATUS_RATE_LIMITED, Status, Timestamp, TonoError } from "./types";
 
 export function encodeAccount(value: Account): unknown {
   return {
@@ -282,10 +287,10 @@ export function decodeCreateChargeError(status: number, body: string): TonoError
   }
   const code = typeof parsed === "object" && parsed !== null ? parsed["code"] : undefined;
   try {
-    if (status === 402 && code === "payment_declined") {
+    if (status === STATUS_PAYMENT_DECLINED && code === CODE_PAYMENT_DECLINED) {
       return new PaymentDeclinedError(decodePaymentDeclined(parsed), body);
     }
-    if (status === 429) {
+    if (status === STATUS_RATE_LIMITED) {
       return new RateLimitedError(decodeRateLimited(parsed), body);
     }
   } catch {}

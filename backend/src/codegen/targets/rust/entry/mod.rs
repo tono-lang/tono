@@ -28,10 +28,8 @@ use std::collections::BTreeSet;
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
-use crate::codegen::entries::{
-    companion_name, module_entries, op_local_name, plan, ref_is_enum, EntryModel,
-};
-use crate::codegen::extensions::{bound_extensions, hook_binding, impl_binding, BoundExtension};
+use crate::codegen::entries::{companion_name, op_local_name, plan, ref_is_enum, EntryModel};
+use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
 use crate::codegen::ops::{
     declared_errors, effect_of, error_names, op_io, wire_descriptor, Effect,
 };
@@ -80,8 +78,8 @@ pub(super) fn arg_snake(name: &str, traits: &[Trait], lang: &str) -> String {
     )
 }
 
-pub(super) fn why_var(field: &str) -> String {
-    snake(&format!("{field}_why"))
+pub(super) fn err_var(field: &str) -> String {
+    snake(&format!("{field}_err"))
 }
 
 pub(super) fn field_snake(name: &str, config: &CasingConfig) -> String {
@@ -408,40 +406,32 @@ fn shared_group(name: &str) -> String {
         .unwrap_or_default()
 }
 
-/// A module's entry emission, split the way the layout groups it: the
-/// declarations every entry of the module shares (the construction-only
-/// config structs `@bind` composes into, which more than one entry's
-/// `Settings` may reference) and, per entry, everything named after that
-/// entry — its descriptor functions, its `Settings` struct, its builder (or
-/// plain constructor), its `Client` struct and methods, and its operation
-/// discriminators (mirrors Go's `targets/go/entry::EntryEmission`).
-pub struct EntryEmission {
-    /// Shared across the module's entries, so they ride its public group
-    /// (config structs are construction-only and never cross the wire, but
-    /// need no group of their own: `pub(crate)` already keeps them off the
-    /// SDK's surface wherever they sit).
-    pub shared: Vec<Decl>,
-    /// Each entry's own group: its name and its declarations, plus (at the
-    /// front) the `use` imports for whichever SDK-root resolution helpers
-    /// that entry's own construction logic called.
-    pub per_entry: Vec<(String, Vec<Decl>)>,
-}
+pub use plan::EntryEmission;
 
 /// Emit a module's entries. The surface (Settings, options, the client
 /// struct) and the behavior (the constructor, the operation methods) of one
 /// entry are emitted together, so an entry's group holds the whole thing
 /// rather than splitting it across a types and a codec file.
 pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
-    let entries = module_entries(module);
-    if entries.is_empty() {
-        return EntryEmission {
-            shared: Vec::new(),
-            per_entry: Vec::new(),
-        };
+    let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
+        return EntryEmission::empty();
+    };
+    let mut shared = surface::config_structs(module, config);
+    let decode_decls = plan::output_decode_decls(
+        &entries,
+        module,
+        |op| wire_descriptor(op).is_some(),
+        decode::output_decode_decl,
+    );
+    if !decode_decls.is_empty() {
+        // `shared` rides the module's own types group ([`emit`]'s
+        // `type_decls.extend(entries.shared)`), unlike a per-entry group
+        // below, so a glob-import of that same group here would be a
+        // self-import (`use crate::...::types::*;` inside types.rs itself,
+        // a hard compile error): the decode helpers already see
+        // TonoError/DecodeError/the output type without one.
+        shared.extend(decode_decls);
     }
-    let multi = entries.len() > 1;
-    let bound = bound_extensions(module, &BINDING_LANGS);
-    let shared = surface::config_structs(module, config);
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
@@ -653,6 +643,11 @@ fn op_method(
     )
 }
 
+/// The per-type output-decode helpers every protocol operation needs
+/// (`decode::success_block` is called only for the protocol path here — a
+/// bespoke impl, typed or raw, handles its own output without it), deduped
+/// by shape so operations sharing an output type share one `decode_<type>`
+/// instead of each repeating its required-member probe.
 mod checks;
 mod constructor;
 mod decode;
