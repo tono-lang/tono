@@ -220,10 +220,19 @@ fn ops_model() -> Model {
                 args: vec![],
             }],
         },
-        traits: vec![crate::ir::Trait {
-            id: "http".into(),
-            value: serde_json::json!({"method": "GET", "path": "/charges/{id}"}),
-        }],
+        traits: vec![
+            crate::ir::Trait {
+                id: "http".into(),
+                value: serde_json::json!({"method": "GET", "path": "/charges/{id}"}),
+            },
+            // The Protocol resolver always attaches this to a real wire
+            // operation; without it a target's taxonomy-liveness pass would
+            // wrongly read this as a purely local operation.
+            crate::ir::Trait {
+                id: "wire_descriptor".into(),
+                value: serde_json::json!({}),
+            },
+        ],
     }];
     model
 }
@@ -271,7 +280,7 @@ fn a_module_with_operations_generates_the_error_surface_in_every_target() {
         "export function decodeGetChargeError(status: number, body: string): TonoError {"
     ));
     assert!(ts_serde.contains(
-        "import { APIError, Charge, NotFound, NotFoundError, TonoError } from \"./types\";"
+        "import { APIError, Charge, Client, DecodeError, NotFound, NotFoundError, TonoError, TransportError } from \"./types\";"
     ));
 }
 

@@ -26,6 +26,7 @@ use crate::codegen::targets::go::codecs::{
 };
 use crate::codegen::targets::go::errors;
 use crate::codegen::targets::go::types::{emit_type, emit_validators};
+use crate::codegen::taxonomy;
 use crate::codegen::tree::{Alias, Decl, ModuleFile};
 use crate::codegen::validation;
 use crate::codegen::visibility::Exposed;
@@ -166,7 +167,10 @@ pub fn emit_module(
     } else if module_has_entries {
         // An entry's client maps outcomes onto the same taxonomy; its client
         // surface is the entry struct, so the loose-op interface stays out.
-        type_decls.extend(errors::taxonomy_and_declared_decls(module));
+        type_decls.extend(errors::taxonomy_and_declared_decls(
+            module,
+            &taxonomy::derive(module, &["go"]),
+        ));
         type_decls.extend(crate::codegen::targets::go::client::wrapper_decls(module));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the Validation category a
@@ -258,6 +262,67 @@ mod tests {
         assert!(types.contains("func ValidateCharge(value Charge) error {"));
         // Only the category the validator needs, not the rest of the taxonomy.
         assert!(!types.contains("type TransportError struct"));
+    }
+
+    #[test]
+    fn an_entry_with_no_operations_only_carries_config() {
+        let module = Module {
+            name: "notes".into(),
+            shapes: vec![crate::ir::Shape {
+                id: "notes#client".into(),
+                kind: ShapeKind::Entry {
+                    fields: vec![],
+                    operations: vec![],
+                },
+                traits: vec![],
+            }],
+            operations: vec![],
+            extensions: vec![],
+        };
+        let types = rendered(&groups(&module), TYPES);
+        assert!(types.contains("type ConfigError struct {"));
+        // Nothing calls the runtime and no bespoke boundary exists to wrap a
+        // foreign error, so neither category is reachable.
+        assert!(!types.contains("type TransportError struct"));
+        assert!(!types.contains("type ContractError struct"));
+    }
+
+    #[test]
+    fn an_entry_with_an_unbound_wire_operation_has_no_live_contract() {
+        // Unlike Rust, Go's HTTP-op glue only routes through ContractError when
+        // an `on_error` hook is bound (`fail()` in `entry/mod.rs` passes the raw
+        // error straight through otherwise), so this genuinely never constructs
+        // one.
+        let op = crate::ir::Shape {
+            id: "notes#client.ping".into(),
+            kind: ShapeKind::Operation {
+                input: None,
+                output: None,
+                errors: vec![],
+            },
+            traits: vec![crate::ir::Trait {
+                id: "wire_descriptor".into(),
+                value: serde_json::json!({}),
+            }],
+        };
+        let module = Module {
+            name: "notes".into(),
+            shapes: vec![crate::ir::Shape {
+                id: "notes#client".into(),
+                kind: ShapeKind::Entry {
+                    fields: vec![],
+                    operations: vec![op],
+                },
+                traits: vec![],
+            }],
+            operations: vec![],
+            extensions: vec![],
+        };
+        let types = rendered(&groups(&module), TYPES);
+        assert!(types.contains("type TransportError struct"));
+        assert!(types.contains("type DecodeError struct"));
+        assert!(types.contains("type APIError struct"));
+        assert!(!types.contains("type ContractError struct"));
     }
 
     #[test]

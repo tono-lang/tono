@@ -5,7 +5,6 @@ export {
   APIError,
   CardDeclinedError,
   ConfigError,
-  ContractError,
   DecodeError,
   NotFoundError,
   TonoError,

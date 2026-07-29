@@ -47,21 +47,9 @@ export function decodeCharge(raw: any): Charge {
   };
 }
 
-export function encodeCardDeclined(value: CardDeclined): unknown {
-  return {
-    message: value.message,
-  };
-}
-
 export function decodeCardDeclined(raw: any): CardDeclined {
   return {
     message: raw.message,
-  };
-}
-
-export function encodeNotFound(value: NotFound): unknown {
-  return {
-    message: value.message,
   };
 }
 

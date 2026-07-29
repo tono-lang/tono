@@ -79,15 +79,6 @@ type DecodeError struct {
 
 func (e *DecodeError) Error() string { return "response body did not match the declared schema" }
 
-type ContractError struct {
-	ContractName string
-	Cause        error
-}
-
-func (e *ContractError) Error() string { return "contract hook '" + e.ContractName + "' failed" }
-
-func (e *ContractError) Unwrap() error { return e.Cause }
-
 type APIError struct {
 	Status int
 	Body   string

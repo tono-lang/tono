@@ -199,3 +199,53 @@ fn a_mistyped_flag_is_rejected_not_swallowed_as_the_ir_path() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("unknown flag"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An entry with one wire operation, and `extensions` holding a `before_request`
+/// hook bound for TypeScript when `bound` is set.
+fn entry_model_json(bound: bool) -> String {
+    let extensions = if bound {
+        r#"[{"name":"before_request","kind":"hook","bindings":{"typescript":"ext/ts/a.ts#hook"}}]"#
+    } else {
+        "[]"
+    };
+    format!(
+        r#"{{"tono_ir_version":6,"modules":[{{"name":"notes","shapes":[{{"id":"notes#client","kind":"entry","fields":[{{"name":"endpoint","target":{{"prim":"string"}}}}],"operations":[{{"id":"notes#client.ping","kind":"operation","input":null,"output":null,"errors":[],"traits":[{{"id":"wire_descriptor","value":{{}}}}]}}]}}],"operations":[],"extensions":{extensions}}}]}}"#
+    )
+}
+
+#[test]
+fn dropping_a_bound_hook_reports_a_pruned_declaration_as_source_breaking() {
+    let dir = std::env::temp_dir().join(format!("tono-breaking-{}-taxonomy", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["config", "user.email", "t@example.com"]);
+    git(&dir, &["config", "user.name", "t"]);
+    std::fs::write(dir.join("ir.json"), entry_model_json(true)).unwrap();
+    git(&dir, &["add", "ir.json"]);
+    git(&dir, &["commit", "-q", "-m", "baseline"]);
+
+    std::fs::write(dir.join("current.json"), entry_model_json(false)).unwrap();
+    let out = tono()
+        .current_dir(&dir)
+        .args([
+            "breaking",
+            "current.json",
+            "--baseline",
+            "HEAD",
+            "--baseline-path",
+            "ir.json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "a pruned declaration is source-breaking by default"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("prune-declaration notes@typescript#ContractError"),
+        "{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

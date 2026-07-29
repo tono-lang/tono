@@ -17,13 +17,23 @@ use crate::codegen::ops::{
 };
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::types::{type_expr_of, LANG};
+use crate::codegen::taxonomy::TaxonomyLiveness;
 use crate::codegen::tree::{Decl, Field, FnBody, Function, TypeExpr};
 use crate::ir::{Module, Shape};
 
 /// The declarations for the types file: the taxonomy, the declared-error
 /// classes, and the client interface.
-pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
-    let mut decls = taxonomy_and_declared_decls(module);
+///
+/// Unlike Rust/Go, a loose (non-entry) operation still gets a concrete
+/// `HttpClient` in TypeScript, so `liveness` here is real, derived liveness
+/// (not [`TaxonomyLiveness::all_live`]): the caller passes what
+/// [`crate::codegen::taxonomy::derive`] reports for this module.
+pub fn type_decls(
+    module: &Module,
+    config: &CasingConfig,
+    liveness: &TaxonomyLiveness,
+) -> Vec<Decl> {
+    let mut decls = taxonomy_and_declared_decls(module, liveness);
     // Errors are thrown in TypeScript, so the client's error channel stays out
     // of the signatures (`None`).
     decls.push(ops::client_decl(module, config, LANG, &type_expr_of, None));
@@ -32,9 +42,10 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
 
 /// The taxonomy and the declared-error classes without the loose-op client
 /// interface: what an entry-only module needs (its client surface is the
-/// entry's own exported class).
-pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
-    let mut decls = taxonomy_decls();
+/// entry's own exported class), gated to what `liveness` reports that
+/// module's operations can actually construct for this target.
+pub fn taxonomy_and_declared_decls(module: &Module, liveness: &TaxonomyLiveness) -> Vec<Decl> {
+    let mut decls = taxonomy_decls(liveness);
     decls.extend(declared_error_decls(module));
     decls
 }
@@ -102,39 +113,63 @@ pub fn standalone_validation_decls() -> Vec<Decl> {
 }
 
 /// The closed error taxonomy: the abstract root, the `Violation` record, and
-/// the five category classes.
-fn taxonomy_decls() -> Vec<Decl> {
+/// the category classes `liveness` reports as reachable. Unlike Rust's single
+/// self-referential enum, each category here is its own class, so gating one
+/// out never requires touching another's declaration; only the root is
+/// shared, and it is emitted whenever at least one category is live (nothing
+/// would extend it otherwise).
+fn taxonomy_decls(liveness: &TaxonomyLiveness) -> Vec<Decl> {
     let n = error_names();
     let category = category_decl;
-    vec![
-        root_decl(),
-        violation_decl(),
-        validation_category_decl(),
-        category(
+    let any_live = liveness.validation
+        || liveness.transport
+        || liveness.decode
+        || liveness.contract
+        || liveness.api
+        || liveness.config;
+    let mut decls = Vec::new();
+    if any_live {
+        decls.push(root_decl());
+    }
+    if liveness.validation {
+        decls.push(violation_decl());
+        decls.push(validation_category_decl());
+    }
+    if liveness.transport {
+        decls.push(category(
             &n.transport,
             "readonly cause: unknown",
             "\"transport failure\"",
-        ),
-        category(
+        ));
+    }
+    if liveness.decode {
+        decls.push(category(
             &n.decode,
             "readonly path: string, readonly expected: string, readonly raw: string",
             "\"response body did not match the declared schema\"",
-        ),
-        category(
+        ));
+    }
+    if liveness.contract {
+        decls.push(category(
             &n.contract,
             "readonly contractName: string, readonly cause: unknown",
             "\"contract hook failed\"",
-        ),
-        category(
+        ));
+    }
+    if liveness.api {
+        decls.push(category(
             &n.api,
             "readonly status: number, readonly body: string",
             "`api error ${status}`",
-        ),
+        ));
+    }
+    if liveness.config {
         // Construction failures (a required source that resolved to nothing) ride
         // their own category so a caller can tell a misconfigured client from a
         // request or transport failure.
-        category(&n.config, "message: string", "message"),
-    ]
+        decls.push(category(&n.config, "message: string", "message"));
+    }
+    decls
 }
 
 /// One class per declared operation error, under the `Api` category. The
@@ -306,16 +341,125 @@ mod tests {
     use super::*;
     use crate::codegen::targets::typescript::types::ts_casing;
     use crate::codegen::targets::typescript::TsRules;
+    use crate::codegen::taxonomy::{self, TaxonomyLiveness};
     use crate::codegen::test_support::{error_demo_module, error_shape, operation, rendered};
 
+    /// `error_demo_module`'s own liveness (real, derived, the way a loose TS
+    /// operation's `HttpClient` is emitted): a wire operation with declared
+    /// errors but no constraints, no entries, and no bound extension, so only
+    /// `Transport`/`Decode`/`Api` are reachable.
+    fn demo_liveness() -> TaxonomyLiveness {
+        taxonomy::derive(&error_demo_module(), &["ts", "typescript"])
+    }
+
     fn types_text(module: &Module) -> String {
-        rendered(&type_decls(module, &ts_casing()), &TsRules)
+        types_text_with(module, &demo_liveness())
+    }
+
+    fn types_text_with(module: &Module, liveness: &TaxonomyLiveness) -> String {
+        rendered(&type_decls(module, &ts_casing(), liveness), &TsRules)
     }
 
     #[test]
-    fn the_taxonomy_is_six_categories_rooted_at_tono_error() {
+    fn only_the_categories_the_module_can_construct_extend_the_root() {
         let out = types_text(&error_demo_module());
         assert!(out.contains("export abstract class TonoError extends Error {"));
+        for category in ["TransportError", "DecodeError", "APIError"] {
+            assert!(
+                out.contains(&format!("export class {category} extends TonoError {{")),
+                "{category} must extend the root"
+            );
+        }
+        // The root's default predicate reports non-retryable.
+        assert!(out.contains("retryable(): boolean {\n    return false;"));
+        // No constraints, no entry, no bound extension: Validation, Contract,
+        // and Config are all unreachable for this module.
+        assert_eq!(out.matches("extends TonoError {").count(), 3);
+        assert!(!out.contains("ValidationError"));
+        assert!(!out.contains("ContractError"));
+        assert!(!out.contains("ConfigError"));
+    }
+
+    #[test]
+    fn a_module_where_nothing_is_live_gets_no_taxonomy_at_all() {
+        let out = types_text_with(
+            &error_demo_module(),
+            &TaxonomyLiveness {
+                validation: false,
+                transport: false,
+                decode: false,
+                api: false,
+                config: false,
+                contract: false,
+            },
+        );
+        assert!(!out.contains("TonoError"));
+    }
+
+    #[test]
+    fn the_root_is_emitted_when_exactly_one_category_is_live() {
+        // Each case isolates a single true category with every other one
+        // false, so the root's presence pins down every operand of the
+        // any-live check individually: none of the six can be dropped from it
+        // without a module that lights up only that one losing its root.
+        let none = TaxonomyLiveness {
+            validation: false,
+            transport: false,
+            decode: false,
+            api: false,
+            config: false,
+            contract: false,
+        };
+        let cases: [(&str, TaxonomyLiveness); 6] = [
+            (
+                "validation",
+                TaxonomyLiveness {
+                    validation: true,
+                    ..none
+                },
+            ),
+            (
+                "transport",
+                TaxonomyLiveness {
+                    transport: true,
+                    ..none
+                },
+            ),
+            (
+                "decode",
+                TaxonomyLiveness {
+                    decode: true,
+                    ..none
+                },
+            ),
+            (
+                "contract",
+                TaxonomyLiveness {
+                    contract: true,
+                    ..none
+                },
+            ),
+            ("api", TaxonomyLiveness { api: true, ..none }),
+            (
+                "config",
+                TaxonomyLiveness {
+                    config: true,
+                    ..none
+                },
+            ),
+        ];
+        for (label, liveness) in cases {
+            let out = types_text_with(&error_demo_module(), &liveness);
+            assert!(
+                out.contains("export abstract class TonoError extends Error {"),
+                "root must be emitted when only {label} is live"
+            );
+        }
+    }
+
+    #[test]
+    fn every_category_extends_the_root_when_everything_is_live() {
+        let out = types_text_with(&error_demo_module(), &TaxonomyLiveness::all_live());
         for category in [
             "ValidationError",
             "TransportError",
@@ -329,9 +473,6 @@ mod tests {
                 "{category} must extend the root"
             );
         }
-        // The root's default predicate reports non-retryable.
-        assert!(out.contains("retryable(): boolean {\n    return false;"));
-        // Exactly the six categories: no seventh class extends the root.
         assert_eq!(out.matches("extends TonoError {").count(), 6);
     }
 

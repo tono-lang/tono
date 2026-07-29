@@ -14,6 +14,7 @@ use crate::codegen::targets::typescript::client;
 use crate::codegen::targets::typescript::codecs::emit_codecs;
 use crate::codegen::targets::typescript::errors;
 use crate::codegen::targets::typescript::types::{emit_type, emit_validators};
+use crate::codegen::taxonomy;
 use crate::codegen::tree::{Alias, Decl, FnBody, ModuleFile};
 use crate::codegen::validation;
 use crate::codegen::visibility::Exposed;
@@ -232,11 +233,19 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     // A shape a public type reaches is public; the rest are the module's own
     // business and move to its internal group, taking their codecs with them.
     let mut internal_decls = Vec::new();
+    // A client only ever decodes an error response, never encodes one to send,
+    // so a shape reachable only as a declared error skips its encoder.
+    let error_only_shapes = crate::codegen::ops::error_only_shapes(module);
     for shape in &module.shapes {
         let mut types = emit_type(shape, config);
         // Validators live with the type they check.
         types.extend(emit_validators(shape, config));
-        let codecs = emit_codecs(shape, config, &module.name);
+        let codecs = emit_codecs(
+            shape,
+            config,
+            &module.name,
+            error_only_shapes.contains(&shape.id),
+        );
         if exposed.shape(shape) {
             type_decls.extend(types);
             codec_decls.extend(codecs);
@@ -249,7 +258,8 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     // Operations bring the error classes and the client interface into the
     // types file and the discriminators in with the codecs they call.
     if !module.operations.is_empty() {
-        type_decls.extend(errors::type_decls(module, config));
+        let liveness = taxonomy::derive(module, &["ts", "typescript"]);
+        type_decls.extend(errors::type_decls(module, config, &liveness));
         codec_decls.extend(errors::serde_decls(module));
         // The transport client lives with the codecs it calls (encode input,
         // decode output, the error discriminator) and embeds each operation's
@@ -259,7 +269,8 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         // An entry's client maps outcomes onto the same taxonomy; its client
         // surface is its own exported class, so the loose-op interface (and
         // the generic HttpClient) stays out.
-        type_decls.extend(errors::taxonomy_and_declared_decls(module));
+        let liveness = taxonomy::derive(module, &["ts", "typescript"]);
+        type_decls.extend(errors::taxonomy_and_declared_decls(module, &liveness));
     } else if module.shapes.iter().any(validation::shape_has_checks) {
         // Constraints without operations still need the Validation category a
         // validator returns (root, `Violation`, `ValidationError`), which the

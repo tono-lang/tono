@@ -28,6 +28,7 @@ pub mod symbol;
 pub mod syntax;
 pub mod target;
 pub mod targets;
+pub mod taxonomy;
 #[cfg(test)]
 pub mod test_support;
 mod traits;

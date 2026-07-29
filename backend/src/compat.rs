@@ -13,9 +13,12 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use crate::codegen::taxonomy::{self, TaxonomyLiveness};
 use crate::compat_entry;
 use crate::compat_shape::*;
-use crate::ir::{Constraint, EnumBacking, EnumValue, Member, Model, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{
+    Constraint, EnumBacking, EnumValue, Member, Model, Module, Shape, ShapeKind, Trait, Tref,
+};
 
 /// The break level a change falls into. The order is severity-ascending only for
 /// tie-breaking display; the effective severity comes from [`Config`], not from
@@ -186,7 +189,88 @@ pub fn diff(baseline: &Model, current: &Model) -> Report {
             (None, None) => unreachable!("id came from one of the two maps"),
         }
     }
+    diff_taxonomy(baseline, current, &mut out);
     Report { changes: out }
+}
+
+/// A taxonomy category's label paired with the predicate that reads its
+/// liveness off a [`TaxonomyLiveness`].
+type TaxonomyCategory = (&'static str, fn(&TaxonomyLiveness) -> bool);
+
+/// The generated error-taxonomy categories a module carries, per target,
+/// keyed by the label a change's detail names it with. Kept in one place so
+/// this pass and its test stay in sync with what [`TaxonomyLiveness`] actually
+/// tracks.
+const TAXONOMY_CATEGORIES: [TaxonomyCategory; 6] = [
+    ("Violation/ValidationError", |l| l.validation),
+    ("TransportError", |l| l.transport),
+    ("DecodeError", |l| l.decode),
+    ("ContractError", |l| l.contract),
+    ("APIError/APIFailure", |l| l.api),
+    ("ConfigError", |l| l.config),
+];
+
+/// A target's binding-language key (as [`taxonomy::derive`] takes it) plus
+/// whether it ever prunes a *loose* (non-entry) operation's taxonomy: Rust and
+/// Go emit only a trait/interface for a loose operation (nothing constructs
+/// any category either way, so nothing there is ever prunable), TypeScript
+/// emits a concrete `HttpClient` (real, derived liveness).
+const TAXONOMY_TARGETS: [(&str, &[&str], bool); 3] = [
+    ("rust", &["rust"], false),
+    ("go", &["go"], false),
+    ("typescript", &["ts", "typescript"], true),
+];
+
+/// Detect a taxonomy category that a module could construct in the baseline
+/// but can no longer construct in the current model, for a given target: a
+/// consumer that referenced the removed type (e.g. caught `ContractError`
+/// specifically) stops compiling, which is exactly a source break. Reuses
+/// [`taxonomy::derive`] (pure over the IR, no codegen run) so this stays
+/// consistent with what each target's emitter actually gates on, without
+/// running codegen inside the compat tool.
+///
+/// A module the current model no longer has is already reported once by
+/// [`removed_shape`] for its declared errors and its own removal; re-flagging
+/// its taxonomy here would be a duplicate, so this only compares modules
+/// present on both sides.
+fn diff_taxonomy(baseline: &Model, current: &Model, out: &mut Vec<Change>) {
+    let curr_modules: BTreeMap<&str, &Module> = current
+        .modules
+        .iter()
+        .map(|m| (m.name.as_str(), m))
+        .collect();
+    for module in &baseline.modules {
+        let Some(curr_module) = curr_modules.get(module.name.as_str()) else {
+            continue;
+        };
+        for (target, langs, prunes_loose_ops) in TAXONOMY_TARGETS {
+            let has_loose_ops = |m: &Module| !m.operations.is_empty();
+            let liveness_of = |m: &Module| {
+                if has_loose_ops(m) && !prunes_loose_ops {
+                    return TaxonomyLiveness::all_live();
+                }
+                if target == "rust" {
+                    taxonomy::derive_rust_entry(m, langs)
+                } else {
+                    taxonomy::derive(m, langs)
+                }
+            };
+            let before = liveness_of(module);
+            let after = liveness_of(curr_module);
+            for (name, is_live) in TAXONOMY_CATEGORIES {
+                if is_live(&before) && !is_live(&after) {
+                    out.push(Change {
+                        key: format!("prune-declaration {}@{target}#{name}", module.name),
+                        category: Category::SourceBreaking,
+                        detail: format!(
+                            "{name} is no longer emitted for {target}: nothing in module {} can construct it anymore",
+                            module.name
+                        ),
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Fold a model's shapes and operations into one id-keyed index. Operations live

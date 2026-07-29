@@ -15,14 +15,21 @@ use crate::codegen::ops::{
     self, error_names, error_type_name, module_declared_errors, DeclaredError, ErrorNames,
 };
 use crate::codegen::targets::rust::types::{type_expr_of, LANG};
+use crate::codegen::taxonomy::TaxonomyLiveness;
 use crate::codegen::tree::Decl;
 use crate::ir::{Module, Shape};
 
 /// The declarations for the types file: the taxonomy with the module's `Api`
 /// payload enum, and the client trait.
+///
+/// A loose (non-entry) operation gets only a client *trait* (no concrete
+/// client), so nothing in the generated SDK constructs any category either
+/// way; the full taxonomy is vocabulary the trait implementer may need, not
+/// dead code, hence [`TaxonomyLiveness::all_live`] rather than a derived
+/// liveness.
 pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
     let n = error_names();
-    let mut decls = taxonomy_decls(module, &n);
+    let mut decls = taxonomy_decls(module, &n, &TaxonomyLiveness::all_live());
     // The error channel is the Result idiom, so every client method returns
     // `Result<_, TonoError>`.
     decls.push(ops::client_decl(
@@ -39,9 +46,10 @@ pub fn type_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
 /// client trait: what a module whose operations live in an entry needs. The
 /// entry's own construction surface (its builder, its op methods) lives in
 /// its own group (`rust/entry`); this only carries the error types its
-/// methods and its consumers match on.
-pub fn taxonomy_and_declared_decls(module: &Module) -> Vec<Decl> {
-    taxonomy_decls(module, &error_names())
+/// methods and its consumers match on, gated to what `liveness` reports that
+/// module's entries can actually construct for this target.
+pub fn taxonomy_and_declared_decls(module: &Module, liveness: &TaxonomyLiveness) -> Vec<Decl> {
+    taxonomy_decls(module, &error_names(), liveness)
 }
 
 /// The declarations for the serde file: one discrimination function per
@@ -79,24 +87,33 @@ pub fn standalone_validation_decls() -> Vec<Decl> {
     vec![violation_decl(), validation_category_decl()]
 }
 
-/// The closed error taxonomy plus the module's `Api` payload enum. The
-/// category structs are plain data; the `TonoError` enum carries exactly one
-/// variant per category and implements `Display`/`Error` (with the transport
-/// and contract causes as sources) and the retryable predicate.
-fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
+/// The closed error taxonomy plus the module's `Api` payload enum, gated to
+/// the categories `liveness` reports as reachable: a category nothing
+/// generated for this module can construct does not get a struct, a
+/// `TonoError` variant, or a `Display`/`Error` arm. The taxonomy is
+/// self-referential (its own `Display`/`Error` impls name every category), so
+/// this has to be built conditionally rather than pruned after the fact.
+fn taxonomy_decls(module: &Module, n: &ErrorNames, liveness: &TaxonomyLiveness) -> Vec<Decl> {
     let declared = module_declared_errors(module);
     let data_struct = |name: &str, fields: &str| {
-        Decl::raw(format!(
-            "#[derive(Debug)]\npub struct {name} {{\n{fields}}}"
-        ))
+        Decl::raw_providing(
+            name,
+            format!("#[derive(Debug)]\npub struct {name} {{\n{fields}}}"),
+            vec![],
+        )
     };
-    let mut decls = vec![
-        violation_decl(),
-        validation_category_decl(),
-        data_struct(
+    let mut decls = Vec::new();
+    if liveness.validation {
+        decls.push(violation_decl());
+        decls.push(validation_category_decl());
+    }
+    if liveness.transport {
+        decls.push(data_struct(
             &n.transport,
             "    pub cause: Box<dyn std::error::Error + Send + Sync>,\n",
-        ),
+        ));
+    }
+    if liveness.decode {
         // `path` is a manual top-level required-member probe against
         // `serde_json::Value` (see `entry/decode.rs::success_block`), the same
         // hand-written shape Go/TS use; it does not descend into nested
@@ -105,76 +122,165 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames) -> Vec<Decl> {
         // nested-path case none of the other targets solve today either, so
         // the fidelity gap is deliberate and symmetric across targets, not a
         // Rust-specific shortcut.
-        data_struct(
+        decls.push(data_struct(
             &n.decode,
             "    pub path: String,\n    pub expected: String,\n    pub raw: String,\n",
-        ),
-        data_struct(
+        ));
+    }
+    if liveness.contract {
+        decls.push(data_struct(
             &n.contract,
             "    pub contract_name: String,\n    pub cause: Box<dyn std::error::Error + Send + Sync>,\n",
-        ),
-        data_struct(&n.api, "    pub status: u16,\n    pub body: String,\n"),
+        ));
+    }
+    if liveness.api {
+        decls.push(data_struct(
+            &n.api,
+            "    pub status: u16,\n    pub body: String,\n",
+        ));
+    }
+    if liveness.config {
         // Construction failures (a required source that resolved to nothing)
         // ride their own category so a caller can tell a misconfigured client
         // from a request or transport failure.
-        data_struct(&n.config, "    pub message: String,\n"),
-    ];
+        decls.push(data_struct(&n.config, "    pub message: String,\n"));
+    }
 
-    let mut failure_variants: Vec<String> = declared
-        .iter()
-        .map(|err| format!("    {name}({name}),\n", name = error_type_name(err)))
-        .collect();
-    failure_variants.push(format!("    Undeclared({}),\n", n.api));
-    decls.push(Decl::raw(format!(
-        "#[derive(Debug)]\npub enum {} {{\n{}}}",
-        n.api_failure,
-        failure_variants.concat()
-    )));
-
-    let retryable_arms: String = declared
-        .iter()
-        .filter(|err| err.retryable)
-        .map(|err| {
+    if liveness.api {
+        let mut failure_variants: Vec<String> = declared
+            .iter()
+            .map(|err| format!("    {name}({name}),\n", name = error_type_name(err)))
+            .collect();
+        failure_variants.push(format!("    Undeclared({}),\n", n.api));
+        decls.push(Decl::raw_providing(
+            &n.api_failure,
             format!(
-                "            {}::{}(_) => true,\n",
+                "#[derive(Debug)]\npub enum {} {{\n{}}}",
                 n.api_failure,
-                error_type_name(err)
-            )
-        })
-        .collect();
-    let failure_retryable_body = if retryable_arms.is_empty() {
-        "        false".to_string()
+                failure_variants.concat()
+            ),
+            vec![],
+        ));
+
+        let retryable_arms: String = declared
+            .iter()
+            .filter(|err| err.retryable)
+            .map(|err| {
+                format!(
+                    "            {}::{}(_) => true,\n",
+                    n.api_failure,
+                    error_type_name(err)
+                )
+            })
+            .collect();
+        let failure_retryable_body = if retryable_arms.is_empty() {
+            "        false".to_string()
+        } else {
+            format!("        match self {{\n{retryable_arms}            _ => false,\n        }}")
+        };
+        decls.push(Decl::raw(format!(
+            "impl {} {{\n    pub fn retryable(&self) -> bool {{\n{failure_retryable_body}\n    }}\n}}",
+            n.api_failure
+        )));
+    }
+
+    let mut root_variants = Vec::new();
+    let mut display_arms = Vec::new();
+    if liveness.validation {
+        root_variants.push(format!("    Validation({}),\n", n.validation));
+        display_arms.push(format!(
+            "            {root}::Validation(_) => write!(f, \"validation failed\"),\n",
+            root = n.root
+        ));
+    }
+    if liveness.transport {
+        root_variants.push(format!("    Transport({}),\n", n.transport));
+        display_arms.push(format!(
+            "            {root}::Transport(_) => write!(f, \"transport failure\"),\n",
+            root = n.root
+        ));
+    }
+    if liveness.api {
+        root_variants.push(format!("    Api({}),\n", n.api_failure));
+        display_arms.push(format!(
+            "            {root}::Api(_) => write!(f, \"api error\"),\n",
+            root = n.root
+        ));
+    }
+    if liveness.decode {
+        root_variants.push(format!("    Decode({}),\n", n.decode));
+        display_arms.push(format!(
+            "            {root}::Decode(_) => write!(f, \"response body did not match the declared schema\"),\n",
+            root = n.root
+        ));
+    }
+    if liveness.contract {
+        root_variants.push(format!("    Contract({}),\n", n.contract));
+        display_arms.push(format!(
+            "            {root}::Contract(e) => write!(f, \"contract hook '{{}}' failed\", e.contract_name),\n",
+            root = n.root
+        ));
+    }
+    if liveness.config {
+        root_variants.push(format!("    Config({}),\n", n.config));
+        display_arms.push(format!(
+            "            {root}::Config(e) => write!(f, \"{{}}\", e.message),\n",
+            root = n.root
+        ));
+    }
+
+    decls.push(Decl::raw_providing(
+        &n.root,
+        format!(
+            "#[derive(Debug)]\npub enum {root} {{\n{variants}}}",
+            root = n.root,
+            variants = root_variants.concat()
+        ),
+        vec![],
+    ));
+
+    let retryable_body = if liveness.api {
+        format!(
+            "        match self {{\n            {root}::Api(failure) => failure.retryable(),\n            _ => false,\n        }}",
+            root = n.root
+        )
     } else {
-        format!("        match self {{\n{retryable_arms}            _ => false,\n        }}")
+        "        false".to_string()
     };
     decls.push(Decl::raw(format!(
-        "impl {} {{\n    pub fn retryable(&self) -> bool {{\n{failure_retryable_body}\n    }}\n}}",
-        n.api_failure
+        "impl {root} {{\n    pub fn retryable(&self) -> bool {{\n{retryable_body}\n    }}\n}}",
+        root = n.root
     )));
 
     decls.push(Decl::raw(format!(
-        "#[derive(Debug)]\npub enum {root} {{\n    Validation({validation}),\n    Transport({transport}),\n    Api({api_failure}),\n    Decode({decode}),\n    Contract({contract}),\n    Config({config}),\n}}",
+        "impl std::fmt::Display for {root} {{\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{\n        match self {{\n{arms}        }}\n    }}\n}}",
         root = n.root,
-        validation = n.validation,
-        transport = n.transport,
-        api_failure = n.api_failure,
-        decode = n.decode,
-        contract = n.contract,
-        config = n.config,
+        arms = display_arms.concat()
     )));
 
+    let mut source_arms = Vec::new();
+    if liveness.transport {
+        source_arms.push(format!(
+            "            {root}::Transport(e) => Some(e.cause.as_ref()),\n",
+            root = n.root
+        ));
+    }
+    if liveness.contract {
+        source_arms.push(format!(
+            "            {root}::Contract(e) => Some(e.cause.as_ref()),\n",
+            root = n.root
+        ));
+    }
+    let source_body = if source_arms.is_empty() {
+        "        None".to_string()
+    } else {
+        format!(
+            "        match self {{\n{arms}            _ => None,\n        }}",
+            arms = source_arms.concat()
+        )
+    };
     decls.push(Decl::raw(format!(
-        "impl {root} {{\n    pub fn retryable(&self) -> bool {{\n        match self {{\n            {root}::Api(failure) => failure.retryable(),\n            _ => false,\n        }}\n    }}\n}}",
-        root = n.root
-    )));
-
-    decls.push(Decl::raw(format!(
-        "impl std::fmt::Display for {root} {{\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{\n        match self {{\n            {root}::Validation(_) => write!(f, \"validation failed\"),\n            {root}::Transport(_) => write!(f, \"transport failure\"),\n            {root}::Api(_) => write!(f, \"api error\"),\n            {root}::Decode(_) => write!(f, \"response body did not match the declared schema\"),\n            {root}::Contract(e) => write!(f, \"contract hook '{{}}' failed\", e.contract_name),\n            {root}::Config(e) => write!(f, \"{{}}\", e.message),\n        }}\n    }}\n}}",
-        root = n.root
-    )));
-
-    decls.push(Decl::raw(format!(
-        "impl std::error::Error for {root} {{\n    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {{\n        match self {{\n            {root}::Transport(e) => Some(e.cause.as_ref()),\n            {root}::Contract(e) => Some(e.cause.as_ref()),\n            _ => None,\n        }}\n    }}\n}}",
+        "impl std::error::Error for {root} {{\n    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {{\n{source_body}\n    }}\n}}",
         root = n.root
     )));
 
