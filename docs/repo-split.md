@@ -46,14 +46,39 @@ anything naming a protocol, host, or path is passed to git verbatim.
 ## The command
 
 ```
-tono split [--config <tono.toml>] [--ref <committish>] [--tag <name>]
+tono split --branch <name> [--config <tono.toml>] [--ref <committish>]
 ```
 
 For each target with `split_repo`, it runs `git subtree split` over the
-target's `out` prefix at `--ref` (default `HEAD`) and force-pushes the
-projected head to the mirror's `main`. With `--tag`, the same head is also
-pushed as that tag, so registries that resolve versions from tags (Go modules
-in particular) see the release on the mirror.
+target's `out` prefix at `--ref` and force-pushes the projected head to the
+mirror branch named by `--branch`.
+
+`--branch` is required: the command never invents a destination, the caller
+always says where the changes land. `--ref` defaults to the repository's
+default branch, resolved the way git itself defines it (the `origin` remote's
+`HEAD`): the locally recorded `origin/HEAD` symref when the checkout came
+from a plain clone, otherwise the remote is asked directly, so it also works
+in CI checkouts that were built by fetch. The remote-tracking ref is used,
+not a possibly stale local branch. With no usable `origin`, the command asks
+for an explicit `--ref`.
+
+The release flow stays yours, and so does versioning: `tono split` moves a
+projection to a branch, nothing more. It never tags the mirror; if your
+release resolves versions from mirror tags (Go modules in particular), tag it
+as a step of your own process, for example with the projected head the
+command prints:
+
+```
+git push https://github.com/acme/payments-go.git <sha>:refs/tags/v1.2.0
+```
+
+Nothing requires release ceremony either: to cut a one-off prerelease for a
+single client from any monorepo branch, aim it at its own mirror branch and
+the mirror's `main` stays untouched:
+
+```
+tono split --ref feat/acme-pilot --branch alpha-acme
+```
 
 Targets are split independently, best effort: a mirror that cannot be pushed
 (missing repository, revoked credential) is reported and the remaining targets
@@ -100,5 +125,5 @@ jobs:
         run: curl -fsSL https://tono-lang.github.io/tono/install.sh | sh
 
       - name: Mirror the tagged SDKs
-        run: tono split --ref "$GITHUB_REF_NAME" --tag "$GITHUB_REF_NAME"
+        run: tono split --ref "$GITHUB_REF_NAME" --branch main
 ```

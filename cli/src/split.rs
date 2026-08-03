@@ -8,32 +8,46 @@
 //! the key makes this command a no-op. Each target is split independently so
 //! one broken mirror (a missing repository, a revoked credential) cannot hold
 //! the others back; failures are reported together at the end.
+//!
+//! The release flow stays the user's: the command moves a projection to a
+//! named mirror branch, nothing more. It never invents a destination (the
+//! mirror branch is a required argument) and it never tags; versioning the
+//! mirror belongs to whatever release process invokes it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tono_backend::config as manifest;
 
-/// Run `tono split [--config <tono.toml>] [--ref <committish>] [--tag <name>]`.
+/// Run `tono split --branch <name> [--config <tono.toml>] [--ref <committish>]`.
 pub fn run(args: &[String]) -> Result<(), String> {
     let mut config_path: Option<String> = None;
-    let mut split_ref = "HEAD".to_string();
-    let mut tag: Option<String> = None;
+    let mut split_ref: Option<String> = None;
+    let mut branch: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--config" => config_path = Some(crate::flag_value(args, &mut i, "--config")?),
-            // The monorepo commit to project (a release tag in CI, HEAD locally).
-            "--ref" => split_ref = crate::flag_value(args, &mut i, "--ref")?,
-            // Also stamp the split head with this tag on every mirror, so a
-            // mirror release is addressable the way registries expect (Go
-            // modules resolve versions straight from the mirror's tags).
-            "--tag" => tag = Some(crate::flag_value(args, &mut i, "--tag")?),
+            // The monorepo commit to project. Defaults to the repository's
+            // default branch (the remote's HEAD), not the current checkout,
+            // so a split from a stray working branch has to be asked for.
+            "--ref" => split_ref = Some(crate::flag_value(args, &mut i, "--ref")?),
+            // The mirror branch the projection lands on. Required: a one-off
+            // cut (an alpha for one client, from any monorepo branch) can
+            // land on its own mirror branch and leave main alone, so the
+            // caller always says where the changes go.
+            "--branch" => branch = Some(crate::flag_value(args, &mut i, "--branch")?),
             other => return Err(format!("unexpected argument: {other}\n{}", crate::USAGE)),
         }
         i += 1;
     }
+    let branch = branch.ok_or_else(|| {
+        format!(
+            "split needs --branch <name>: the mirror branch the projection lands on\n{}",
+            crate::USAGE
+        )
+    })?;
 
     let manifest_file = match config_path {
         Some(path) => PathBuf::from(path),
@@ -56,17 +70,29 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     let root = PathBuf::from(git(&base, &["rev-parse", "--show-toplevel"])?);
+    // One bad branch name would fail every push with git's least helpful
+    // error; reject it once, up front.
+    git(&root, &["check-ref-format", "--branch", &branch])
+        .map_err(|_| format!("invalid --branch name: '{branch}'"))?;
     // A shallow clone would make the subtree rebuild from a truncated history
     // and the force-push would overwrite the mirror with it; refuse up front
     // rather than quietly rewriting every mirror.
     if git(&root, &["rev-parse", "--is-shallow-repository"])? == "true" {
         return Err("split needs the full history: the clone is shallow (fetch with --unshallow, or checkout with fetch-depth: 0 in CI)".into());
     }
+    let split_ref = match split_ref {
+        Some(r) => r,
+        None => {
+            let default = default_split_ref(&root)?;
+            println!("splitting {default} (the default branch; pass --ref to override)");
+            default
+        }
+    };
 
     let mut failed: Vec<&str> = Vec::new();
     for (target, repo) in &targets {
         let lang = target.kind.dir();
-        match split_one(&root, &base, target, repo, &split_ref, tag.as_deref()) {
+        match split_one(&root, &base, target, repo, &split_ref, &branch) {
             Ok(sha) => println!("{lang}: mirrored to {} ({sha})", remote_url(repo)),
             Err(e) => {
                 eprintln!("{lang}: split failed: {e}");
@@ -87,15 +113,55 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// The default `--ref`: the repository's default branch, the pure-git notion
+/// every host serves as the remote's `HEAD`. A plain clone records it as the
+/// `origin/HEAD` symref; a fetch-built checkout (CI) does not, so the remote
+/// is asked directly. The remote-tracking ref is preferred over a local branch
+/// of the same name: the mirror should project what the server holds, not a
+/// possibly stale local checkout.
+fn default_split_ref(root: &Path) -> Result<String, String> {
+    let name = match git(root, &["symbolic-ref", "refs/remotes/origin/HEAD"]) {
+        Ok(symref) => symref
+            .strip_prefix("refs/remotes/origin/")
+            .map(str::to_string)
+            .ok_or_else(|| format!("unexpected origin/HEAD symref: {symref}"))?,
+        Err(_) => remote_head_name(root)?,
+    };
+    for candidate in [
+        format!("refs/remotes/origin/{name}"),
+        format!("refs/heads/{name}"),
+    ] {
+        if git(root, &["rev-parse", "--verify", "--quiet", &candidate]).is_ok() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "the default branch '{name}' is not available locally; fetch it or pass --ref"
+    ))
+}
+
+/// Ask the `origin` remote which branch its `HEAD` points at.
+fn remote_head_name(root: &Path) -> Result<String, String> {
+    let out = git(root, &["ls-remote", "--symref", "origin", "HEAD"])
+        .map_err(|e| format!("cannot resolve the default branch ({e}); pass --ref"))?;
+    out.lines()
+        .find_map(|line| {
+            line.strip_prefix("ref: refs/heads/")
+                .and_then(|rest| rest.strip_suffix("\tHEAD"))
+        })
+        .map(str::to_string)
+        .ok_or_else(|| "origin did not report a default branch; pass --ref".to_string())
+}
+
 /// Split one target's subtree at `split_ref` and force-push it to its mirror:
-/// the projected head becomes the mirror's `main`, plus `tag` when given.
+/// the projected head becomes the mirror's `branch`.
 fn split_one(
     root: &Path,
     base: &Path,
     target: &manifest::ResolvedTarget,
     repo: &str,
     split_ref: &str,
-    tag: Option<&str>,
+    branch: &str,
 ) -> Result<String, String> {
     let prefix = subtree_prefix(root, base, &target.out)?;
     // The projected head is the last stdout line; earlier lines are progress.
@@ -107,13 +173,8 @@ fn split_one(
     let url = remote_url(repo);
     // Force: the mirror is a projection, never a place history accumulates on
     // its own, so the split result is authoritative on every push.
-    let mut refspecs = vec![format!("{sha}:refs/heads/main")];
-    if let Some(tag) = tag {
-        refspecs.push(format!("{sha}:refs/tags/{tag}"));
-    }
-    let mut args = vec!["push", "--force", &url];
-    args.extend(refspecs.iter().map(String::as_str));
-    git(root, &args)?;
+    let refspec = format!("{sha}:refs/heads/{branch}");
+    git(root, &["push", "--force", &url, &refspec])?;
     Ok(sha)
 }
 
