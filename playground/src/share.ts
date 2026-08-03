@@ -13,6 +13,8 @@ export interface SharedState {
      source so a shared experiment carries its snippet and mocks. */
   run?: string;
   mocks?: string;
+  /* Module name, when not the default. */
+  name?: string;
 }
 
 async function pipeThrough(
@@ -57,6 +59,7 @@ async function inflateParam(value: string): Promise<string> {
 export async function encodeShareHash(state: SharedState): Promise<string> {
   const parts = [`code=${await deflateParam(state.source)}`, `target=${state.target}`];
   if (state.file) parts.push(`file=${encodeURIComponent(state.file)}`);
+  if (state.name) parts.push(`name=${encodeURIComponent(state.name)}`);
   if (state.run !== undefined) parts.push(`run=${await deflateParam(state.run)}`);
   if (state.mocks !== undefined) parts.push(`mocks=${await deflateParam(state.mocks)}`);
   return `#${parts.join("&")}`;
@@ -72,10 +75,12 @@ export async function decodeShareHash(hash: string): Promise<SharedState | null>
     const file = params.get("file");
     const run = params.get("run");
     const mocks = params.get("mocks");
+    const name = params.get("name");
     return {
       source,
       target: target === "rust" || target === "go" ? target : "ts",
       ...(file ? { file } : {}),
+      ...(name ? { name } : {}),
       ...(run !== null ? { run: await inflateParam(run) } : {}),
       ...(mocks !== null ? { mocks: await inflateParam(mocks) } : {}),
     };

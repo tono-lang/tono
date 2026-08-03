@@ -79,6 +79,12 @@ fn raw(status: u16, content_type: &str, bytes: Vec<u8>) -> Response {
             tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
                 .expect("static header"),
         )
+        // A local dev tool rebuilt in place: the browser must revalidate, or a
+        // stale bundle shadows every fix.
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-cache"[..])
+                .expect("static header"),
+        )
 }
 
 fn content_type(path: &str) -> &'static str {

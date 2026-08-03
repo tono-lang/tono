@@ -60,6 +60,22 @@ body,
   gap: 0.5rem;
 }
 
+#module-name {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  width: 10rem;
+}
+
+#module-name:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 button,
 select {
   background: var(--bg);

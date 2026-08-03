@@ -105,7 +105,35 @@ struct RunRequest {
     target: String,
     snippet: String,
     #[serde(default)]
+    module: Option<String>,
+    #[serde(default)]
     mocks: Mocks,
+}
+
+/// The module name becomes the scratch filename the frontend derives the
+/// module from, so it is folded to a bare snake_case identifier here; anything
+/// else (separators, dots) could escape the scratch directory.
+fn sanitize_module(raw: Option<&str>) -> String {
+    let folded: String = raw
+        .unwrap_or("")
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = folded
+        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '_')
+        .trim_end_matches('_');
+    if trimmed.is_empty() {
+        "playground".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -165,7 +193,10 @@ fn execute_in(
     request: &RunRequest,
     kind: TargetKind,
 ) -> Result<Vec<Line>, String> {
-    let source_path = scratch.join("playground.tono");
+    let source_path = scratch.join(format!(
+        "{}.tono",
+        sanitize_module(request.module.as_deref())
+    ));
     std::fs::write(&source_path, &request.source).map_err(|e| e.to_string())?;
     let frontend = Frontend::from_env();
     let ir = match frontend.compile(&source_path) {

@@ -215,6 +215,7 @@ export function createMiniEditor(options: {
   doc: string;
   lang: "ts" | "json" | "rust" | "go";
   onChange?: () => void;
+  extra?: Extension[];
 }): EditorView {
   return new EditorView({
     parent: options.parent,
@@ -238,6 +239,7 @@ export function createMiniEditor(options: {
           if (update.docChanged) options.onChange?.();
         }),
         EditorView.lineWrapping,
+        ...(options.extra ?? []),
       ],
     }),
   });

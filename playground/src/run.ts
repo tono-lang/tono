@@ -225,6 +225,7 @@ export async function runOnServer(payload: {
   target: string;
   snippet: string;
   mocks: RunConfig;
+  module: string;
 }): Promise<RunLine[]> {
   try {
     const response = await fetch("api/run", {

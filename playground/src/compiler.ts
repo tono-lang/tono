@@ -47,7 +47,7 @@ export interface HoverInfo {
 }
 
 interface RawFrontend {
-  compile(src: string): { ir: string | null; diagnostics: Diagnostic[] };
+  compile(src: string, moduleName: string): { ir: string | null; diagnostics: Diagnostic[] };
   formatSource(src: string): { formatted: string | null; error: string | null };
   tokens(src: string): TokenSpan[];
   decls(src: string): DeclInfo[];
@@ -64,7 +64,7 @@ declare global {
 }
 
 export interface Compiler {
-  compile(source: string): CompileResult;
+  compile(source: string, moduleName: string): CompileResult;
   formatSource(source: string): { formatted: string | null; error: string | null };
   tokens(source: string): TokenSpan[];
   decls(source: string): DeclInfo[];
@@ -88,8 +88,8 @@ export async function loadCompiler(): Promise<Compiler> {
     );
   }
   return {
-    compile: (source) => {
-      const raw = frontend.compile(source);
+    compile: (source, moduleName) => {
+      const raw = frontend.compile(source, moduleName);
       return { ir: raw.ir, diagnostics: Array.from(raw.diagnostics) };
     },
     formatSource: (source) => frontend.formatSource(source),

@@ -30,9 +30,12 @@ let diag_to_js (d : F.Diagnostic.t) =
 
 (* Mirror of [compile_to_json], but returning the diagnostics structured
    instead of joined into one string, so the editor can place them inline. *)
-let compile_js src_js =
+let compile_js src_js name_js =
   let src = Js.to_string src_js in
-  let m, diags = F.compile ~module_name:"playground" src in
+  let module_name =
+    match Js.to_string name_js with "" -> "playground" | name -> name
+  in
+  let m, diags = F.compile ~module_name src in
   let has_error =
     List.exists
       (fun (d : F.Diagnostic.t) -> d.F.Diagnostic.severity = F.Diagnostic.Error)
@@ -210,7 +213,9 @@ let decls_js src_js =
 let () =
   Js.export "tonoFrontend"
     (object%js
-       method compile (s : Js.js_string Js.t) = compile_js s
+       method compile (s : Js.js_string Js.t) (name : Js.js_string Js.t) =
+         compile_js s name
+
        method formatSource (s : Js.js_string Js.t) = format_js s
        method tokens (s : Js.js_string Js.t) = tokens_js s
        method decls (s : Js.js_string Js.t) = decls_js s

@@ -42,7 +42,7 @@ const targets = ["ts", "rust", "go"];
 const fullMatrix = ["Payment methods", "HTTP client"];
 
 for (const example of EXAMPLES) {
-  const result = frontend.compile(example.source);
+  const result = frontend.compile(example.source, "playground");
   const errors = result.diagnostics.filter((d) => d.severity === "error");
   assert.equal(errors.length, 0, `${example.name}: ${JSON.stringify(errors)}`);
   assert.ok(result.ir, `${example.name}: expected IR`);
@@ -66,7 +66,7 @@ for (const example of EXAMPLES) {
   console.log(`ok: ${example.name}`);
 }
 
-const broken = frontend.compile("struct x { name: strin }");
+const broken = frontend.compile("struct x { name: strin }", "playground");
 assert.equal(broken.ir, null);
 assert.ok(broken.diagnostics.some((d) => d.code === "TC0001"));
 console.log("ok: diagnostics carry codes and spans");
@@ -80,7 +80,7 @@ console.log("ok: format");
   const src = EXAMPLES[0].source;
   const decls = frontend.decls(src);
   assert.ok(decls.some((d) => d.name === "payment_method" && d.kind === "union"));
-  const ir = String(frontend.compile(src).ir);
+  const ir = String(frontend.compile(src, "playground").ir);
   for (const target of targets) {
     const syms = JSON.parse(backend.symbols(ir, target));
     const pm = syms.find((s) => s.id === "playground#payment_method");

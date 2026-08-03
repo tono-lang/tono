@@ -8,6 +8,7 @@ import {
   createOutputView,
   selectSpan,
 } from "./editor";
+import { loadTsLang, type TsLang } from "./tslang";
 import {
   bundleRun,
   fetchCapabilities,
@@ -19,6 +20,7 @@ import {
 import { DEFAULT_EXAMPLE, EXAMPLES } from "./examples";
 import { buildTree, stripTargetDir, type TreeDir } from "./filetree";
 import { byteToCharMapper } from "./offsets";
+import { DEFAULT_MODULE, sanitizeModuleName } from "./modname";
 import { enclosingDecl, findOccurrences } from "./xref";
 import { decodeShareHash, encodeShareHash } from "./share";
 import { TARGETS, type Diagnostic, type GeneratedFile, type Target } from "./types";
@@ -39,6 +41,7 @@ function debounce(fn: () => void, ms: number): () => void {
 
 interface State {
   target: Target;
+  moduleName: string;
   files: GeneratedFile[];
   activeFile: number;
   /* File path from a shared link, applied once files exist for its target. */
@@ -64,6 +67,7 @@ async function start(): Promise<void> {
   const shared = await decodeShareHash(location.hash);
   const state: State = {
     target: shared?.target ?? "ts",
+    moduleName: sanitizeModuleName(shared?.name ?? DEFAULT_MODULE),
     files: [],
     activeFile: 0,
     pendingFile: shared?.file ?? null,
@@ -170,7 +174,7 @@ async function start(): Promise<void> {
   function refresh(): void {
     scheduleHashUpdate();
     const src = source();
-    const result = compiler.compile(src);
+    const result = compiler.compile(src, state.moduleName);
     applyDiagnostics(editor, src, result.diagnostics);
     renderDiagnosticsPanel(result.diagnostics);
 
@@ -203,6 +207,7 @@ async function start(): Promise<void> {
       showNote(String(err));
       statusEl.textContent = "Generation rejected";
     }
+    if (!runPanel.hidden) refreshTsLang();
   }
 
   const scheduleRefresh = debounce(refresh, 200);
@@ -222,7 +227,7 @@ async function start(): Promise<void> {
     let ident: string | null = null;
     if (decl && decl.kind !== "ext") {
       const symbols = compiler.symbols(state.ir, state.target);
-      ident = symbols.find((s) => s.id === `playground#${decl.name}`)?.ident ?? null;
+      ident = symbols.find((s) => s.id === `${state.moduleName}#${decl.name}`)?.ident ?? null;
     }
     const active = state.files[state.activeFile];
     output.highlight(active && ident ? findOccurrences(active.text, ident) : []);
@@ -241,6 +246,7 @@ async function start(): Promise<void> {
       source: source(),
       target: state.target,
       file: state.files[state.activeFile]?.path,
+      ...(state.moduleName !== DEFAULT_MODULE ? { name: state.moduleName } : {}),
       ...(runEditors && !runPanel.hidden
         ? {
             run: runEditors.main.state.doc.toString(),
@@ -272,6 +278,16 @@ async function start(): Promise<void> {
     });
     targetTabs.append(tab);
   }
+
+  /* Module name: folds to canonical snake_case and recompiles, since it
+     shapes every generated package and path. */
+  const moduleInput = $<HTMLInputElement>("#module-name");
+  moduleInput.value = state.moduleName === DEFAULT_MODULE ? "" : state.moduleName;
+  moduleInput.addEventListener("change", () => {
+    state.moduleName = sanitizeModuleName(moduleInput.value);
+    moduleInput.value = state.moduleName === DEFAULT_MODULE ? "" : state.moduleName;
+    refresh();
+  });
 
   /* Example picker */
   const picker = $<HTMLSelectElement>("#example-picker");
@@ -346,6 +362,39 @@ async function start(): Promise<void> {
   let runEditors: { main: ReturnType<typeof createMiniEditor>; mocks: ReturnType<typeof createMiniEditor> } | null =
     null;
   let activeRun: { stop: () => void } | null = null;
+  let tsLang: TsLang | null = null;
+
+  /* Feed the language service the SDK as generated right now, so completions
+     in the snippet match the code on the right. */
+  function refreshTsLang(): void {
+    if (!tsLang || !state.ir) return;
+    try {
+      tsLang.update(compiler.generate(state.ir, "ts"), runtimeSources, state.moduleName);
+    } catch {
+      /* An SDK that does not generate leaves the last good types in place. */
+    }
+  }
+
+  /* Recreate the snippet editor with TypeScript intelligence once the
+     (megabytes of) language service arrive; the doc is carried over. */
+  function ensureTsLang(): void {
+    if (tsLang) return;
+    void loadTsLang().then((lang) => {
+      tsLang = lang;
+      refreshTsLang();
+      if (runEditors && runLang(runTarget) === "ts") {
+        const doc = runEditors.main.state.doc.toString();
+        runEditors.main.destroy();
+        runEditors.main = createMiniEditor({
+          parent: $("#run-editor"),
+          doc,
+          lang: "ts",
+          onChange: () => scheduleHashUpdate(),
+          extra: lang.extensions,
+        });
+      }
+    });
+  }
 
   const runtimeSources: Record<string, string> = Object.fromEntries(
     Object.entries(
@@ -357,10 +406,10 @@ async function start(): Promise<void> {
     ).map(([path, text]) => [path.split("/").pop()!, text as string]),
   );
 
-  const RUN_TEMPLATES: Record<string, { lang: "ts" | "rust" | "go"; doc: string }> = {
+  const RUN_TEMPLATES: Record<string, { lang: "ts" | "rust" | "go"; doc: (m: string) => string }> = {
     ts: {
       lang: "ts",
-      doc: `import * as sdk from "sdk";
+      doc: () => `import * as sdk from "sdk";
 
 console.log("SDK exports:", Object.keys(sdk).join(", "));
 
@@ -371,10 +420,10 @@ console.log("SDK exports:", Object.keys(sdk).join(", "));
     },
     rust: {
       lang: "rust",
-      doc: `// The generated SDK is the crate tono_run; the first run compiles its
+      doc: (m) => `// The generated SDK is the crate tono_run; the first run compiles its
 // dependency tree, so give it a minute.
 // With the "HTTP client" example loaded, try:
-// use tono_run::playground::Client;
+// use tono_run::${m}::Client;
 
 #[tokio::main]
 async fn main() {
@@ -384,12 +433,12 @@ async fn main() {
     },
     go: {
       lang: "go",
-      doc: `package main
+      doc: (m) => `package main
 
 import "fmt"
 
 // The generated SDK is the module tono_preview; import its packages like
-// playground "tono_preview/playground".
+// ${m} "tono_preview/${m}".
 func main() {
 	fmt.Println("edit main.go to call the generated SDK")
 }
@@ -443,13 +492,16 @@ func main() {
 
   function openRunPanel(runDoc: string, mocksDoc: string): void {
     runPanel.hidden = false;
+    const lang = RUN_TEMPLATES[runLang(runTarget)]?.lang ?? "ts";
+    if (lang === "ts") ensureTsLang();
     if (!runEditors) {
       runEditors = {
         main: createMiniEditor({
           parent: $("#run-editor"),
           doc: runDoc,
-          lang: RUN_TEMPLATES[runLang(runTarget)]?.lang ?? "ts",
+          lang,
           onChange: () => scheduleHashUpdate(),
+          extra: lang === "ts" && tsLang ? tsLang.extensions : [],
         }),
         mocks: createMiniEditor({
           parent: $("#mocks-editor"),
@@ -476,15 +528,17 @@ func main() {
       runEditors.main.destroy();
       runEditors.main = createMiniEditor({
         parent: $("#run-editor"),
-        doc: template.doc,
+        doc: template.doc(state.moduleName),
         lang: template.lang,
         onChange: () => scheduleHashUpdate(),
+        extra: template.lang === "ts" && tsLang ? tsLang.extensions : [],
       });
     }
+    if (template.lang === "ts") ensureTsLang();
   });
 
   $("#run-toggle").addEventListener("click", () => {
-    if (runPanel.hidden) openRunPanel(RUN_TEMPLATES[runLang(runTarget)].doc, DEFAULT_MOCKS);
+    if (runPanel.hidden) openRunPanel(RUN_TEMPLATES[runLang(runTarget)].doc(state.moduleName), DEFAULT_MOCKS);
     else runPanel.hidden = true;
     scheduleHashUpdate();
   });
@@ -506,7 +560,7 @@ func main() {
 
   /* A shared link that carried Run content reopens the panel as it was. */
   if (CAPABILITIES.run && (shared?.run !== undefined || shared?.mocks !== undefined)) {
-    openRunPanel(shared.run ?? RUN_TEMPLATES[runLang(runTarget)].doc, shared.mocks ?? DEFAULT_MOCKS);
+    openRunPanel(shared.run ?? RUN_TEMPLATES[runLang(runTarget)].doc(state.moduleName), shared.mocks ?? DEFAULT_MOCKS);
   }
 
   $("#run-exec").addEventListener("click", () => {
@@ -528,6 +582,7 @@ func main() {
       void runOnServer({
         source: source(),
         target: lang,
+        module: state.moduleName,
         snippet: runEditors.main.state.doc.toString(),
         mocks: config,
       }).then((lines) => {
