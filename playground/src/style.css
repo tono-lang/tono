@@ -467,6 +467,138 @@ select:hover {
   border: none !important;
 }
 
+/* VSCode-like completion list */
+.cm-tooltip-autocomplete {
+  background: #1f2229 !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.cm-tooltip-autocomplete > ul {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace !important;
+  font-size: 0.8rem !important;
+  max-height: 16rem !important;
+}
+
+.cm-tooltip-autocomplete > ul > li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.6rem 0.2rem 0.4rem !important;
+  color: var(--text);
+}
+
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: rgba(122, 162, 247, 0.22) !important;
+  color: var(--text) !important;
+}
+
+.cm-completionIcon {
+  width: 1.1rem;
+  flex-shrink: 0;
+  text-align: center;
+  font-style: normal;
+  opacity: 1 !important;
+  padding-right: 0 !important;
+}
+
+/* Per-kind glyphs and the VSCode dark palette for them */
+.cm-completionIcon-method::after,
+.cm-completionIcon-function::after {
+  content: "\0192";
+  color: #b180d7;
+}
+
+.cm-completionIcon-class::after {
+  content: "\25c8";
+  color: #ee9d28;
+}
+
+.cm-completionIcon-interface::after {
+  content: "\25c9";
+  color: #75beff;
+}
+
+.cm-completionIcon-variable::after {
+  content: "\25a2";
+  color: #75beff;
+}
+
+.cm-completionIcon-constant::after {
+  content: "\25a0";
+  color: #75beff;
+}
+
+.cm-completionIcon-property::after {
+  content: "\25aa";
+  color: #75beff;
+}
+
+.cm-completionIcon-enum::after {
+  content: "\2630";
+  color: #ee9d28;
+}
+
+.cm-completionIcon-type::after {
+  content: "\25c7";
+  color: #ee9d28;
+}
+
+.cm-completionIcon-namespace::after {
+  content: "{}";
+  color: #8b91a3;
+}
+
+.cm-completionIcon-keyword::after {
+  content: "\25cf";
+  color: #cc7ac5;
+}
+
+.cm-completionIcon-text::after {
+  content: "abc";
+  font-size: 0.65rem;
+  color: #8b91a3;
+}
+
+.cm-completionMatchedText {
+  text-decoration: none !important;
+  color: #7aa2f7;
+  font-weight: 600;
+}
+
+/* The details panel beside the list: signature then prose, like VSCode */
+.cm-tooltip.cm-completionInfo {
+  background: #1f2229 !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  padding: 0 !important;
+  max-width: 26rem;
+  margin-left: 4px;
+}
+
+.ts-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.ts-info-sig {
+  padding: 0.5rem 0.65rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+  color: #9ece6a;
+}
+
+.ts-info-doc {
+  padding: 0.45rem 0.65rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
 @media (max-width: 800px) {
   .panes {
     flex-direction: column;
