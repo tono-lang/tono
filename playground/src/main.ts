@@ -397,15 +397,24 @@ func main() {
     },
   };
 
+  /* "ts" runs in the browser; "local:<lang>" runs on the serving CLI with the
+     machine's toolchain. Everything after the prefix is the language, which
+     picks the template and the editor grammar. */
   let runTarget = "ts";
+  const runLang = (target: string): string => target.replace(/^local:/, "");
   const runTargetSelect = $<HTMLSelectElement>("#run-target");
 
   function populateRunTargets(serverTargets: string[]): void {
     runTargetSelect.replaceChildren();
-    for (const id of ["ts", ...serverTargets]) {
+    const browser = document.createElement("option");
+    browser.value = "ts";
+    browser.textContent = "TypeScript (browser)";
+    runTargetSelect.append(browser);
+    for (const id of serverTargets) {
       const option = document.createElement("option");
-      option.value = id;
-      option.textContent = id === "ts" ? "TypeScript (browser)" : `${id} (local toolchain)`;
+      option.value = `local:${id}`;
+      option.textContent =
+        id === "ts" ? "TypeScript (local toolchain)" : `${id} (local toolchain)`;
       runTargetSelect.append(option);
     }
     runTargetSelect.hidden = serverTargets.length === 0;
@@ -439,7 +448,7 @@ func main() {
         main: createMiniEditor({
           parent: $("#run-editor"),
           doc: runDoc,
-          lang: RUN_TEMPLATES[runTarget]?.lang ?? "ts",
+          lang: RUN_TEMPLATES[runLang(runTarget)]?.lang ?? "ts",
           onChange: () => scheduleHashUpdate(),
         }),
         mocks: createMiniEditor({
@@ -460,8 +469,9 @@ func main() {
 
   runTargetSelect.addEventListener("change", () => {
     runTarget = runTargetSelect.value;
-    $("#run-filename").textContent = RUN_FILENAMES[runTarget] ?? "main.ts";
-    const template = RUN_TEMPLATES[runTarget] ?? RUN_TEMPLATES.ts;
+    const lang = runLang(runTarget);
+    $("#run-filename").textContent = RUN_FILENAMES[lang] ?? "main.ts";
+    const template = RUN_TEMPLATES[lang] ?? RUN_TEMPLATES.ts;
     if (runEditors) {
       runEditors.main.destroy();
       runEditors.main = createMiniEditor({
@@ -474,7 +484,7 @@ func main() {
   });
 
   $("#run-toggle").addEventListener("click", () => {
-    if (runPanel.hidden) openRunPanel(RUN_TEMPLATES[runTarget].doc, DEFAULT_MOCKS);
+    if (runPanel.hidden) openRunPanel(RUN_TEMPLATES[runLang(runTarget)].doc, DEFAULT_MOCKS);
     else runPanel.hidden = true;
     scheduleHashUpdate();
   });
@@ -496,7 +506,7 @@ func main() {
 
   /* A shared link that carried Run content reopens the panel as it was. */
   if (CAPABILITIES.run && (shared?.run !== undefined || shared?.mocks !== undefined)) {
-    openRunPanel(shared.run ?? RUN_TEMPLATES[runTarget].doc, shared.mocks ?? DEFAULT_MOCKS);
+    openRunPanel(shared.run ?? RUN_TEMPLATES[runLang(runTarget)].doc, shared.mocks ?? DEFAULT_MOCKS);
   }
 
   $("#run-exec").addEventListener("click", () => {
@@ -512,11 +522,12 @@ func main() {
       appendRunLine({ kind: "error", text: "fix the .tono errors first" });
       return;
     }
-    if (runTarget !== "ts") {
-      appendRunLine({ kind: "log", text: `running ${runTarget} with the local toolchain...` });
+    if (runTarget.startsWith("local:")) {
+      const lang = runLang(runTarget);
+      appendRunLine({ kind: "log", text: `running ${lang} with the local toolchain...` });
       void runOnServer({
         source: source(),
-        target: runTarget,
+        target: lang,
         snippet: runEditors.main.state.doc.toString(),
         mocks: config,
       }).then((lines) => {

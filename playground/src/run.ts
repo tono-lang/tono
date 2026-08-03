@@ -9,6 +9,9 @@ export interface RunConfig {
   /* "METHOD /path" -> canned response. */
   routes: Record<string, { status?: number; body?: unknown; headers?: Record<string, string> }>;
   env: Record<string, string>;
+  /* When true, a request no route matches goes out over the real network
+     instead of answering 404. */
+  passthrough?: boolean;
 }
 
 export interface RunLine {
@@ -22,6 +25,7 @@ export function parseRunConfig(json: string): RunConfig | string {
     return {
       routes: raw.routes ?? {},
       env: raw.env ?? {},
+      passthrough: raw.passthrough ?? false,
     };
   } catch (err) {
     return `mocks.json: ${String(err)}`;
@@ -61,11 +65,16 @@ for (const level of ["log", "info", "warn", "error"]) {
   console[level] = (...args) => post(kind, args.map(show).join(" "));
 }
 globalThis.process = { env: config.env };
+const realFetch = globalThis.fetch.bind(globalThis);
 globalThis.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input.url;
   const method = (init && init.method) || (typeof input === "object" && input.method) || "GET";
   const pathname = new URL(url, "http://mock.local").pathname;
   const hit = config.routes[method.toUpperCase() + " " + pathname];
+  if (!hit && config.passthrough) {
+    post("request", method.toUpperCase() + " " + url + " (live)");
+    return realFetch(input, init);
+  }
   post("request", method.toUpperCase() + " " + url + (hit ? "" : " (no mock, 404)"));
   const status = hit ? (hit.status ?? 200) : 404;
   const body = hit ? (hit.body ?? {}) : { error: "no mock for " + method + " " + pathname };

@@ -3,12 +3,24 @@ import { harnessSource, matchRoute, parseRunConfig } from "../src/run";
 
 describe("parseRunConfig", () => {
   it("fills missing sections with empty defaults", () => {
-    expect(parseRunConfig("{}")).toEqual({ routes: {}, env: {} });
+    expect(parseRunConfig("{}")).toEqual({ routes: {}, env: {}, passthrough: false });
+  });
+
+  it("keeps a passthrough opt-in", () => {
+    expect(parseRunConfig('{"passthrough":true}')).toEqual({
+      routes: {},
+      env: {},
+      passthrough: true,
+    });
   });
 
   it("keeps declared routes and env", () => {
     const config = parseRunConfig('{"env":{"A":"1"},"routes":{"GET /x":{"status":204}}}');
-    expect(config).toEqual({ env: { A: "1" }, routes: { "GET /x": { status: 204 } } });
+    expect(config).toEqual({
+      env: { A: "1" },
+      routes: { "GET /x": { status: 204 } },
+      passthrough: false,
+    });
   });
 
   it("returns the parse error as a string", () => {
@@ -40,6 +52,7 @@ describe("matchRoute", () => {
 describe("harnessSource", () => {
   it("embeds the config and patches fetch, console, and process.env", () => {
     const source = harnessSource({ env: { API_TOKEN: "t" }, routes: { "GET /a": { body: 1 } } });
+    expect(source).toContain("realFetch");
     expect(source).toContain('"API_TOKEN":"t"');
     expect(source).toContain('"GET /a"');
     expect(source).toContain("globalThis.fetch");

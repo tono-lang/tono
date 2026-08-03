@@ -39,8 +39,16 @@ struct GoRuntime;
 #[include = "Cargo.toml"]
 struct RustRuntime;
 
+#[derive(rust_embed::Embed)]
+#[folder = "../runtimes/http-ts"]
+#[include = "src/*.ts"]
+#[include = "package.json"]
+#[exclude = "src/*test*"]
+struct TsRuntime;
+
 /// Which targets this machine can execute, probed by the tool each scaffold
-/// invokes. TypeScript is excluded: the browser half runs it locally.
+/// invokes. TypeScript needs a runner that resolves bare specifiers and runs
+/// TS sources directly (bun, or tsx); without one, the browser still runs it.
 pub fn available_targets() -> Vec<&'static str> {
     let mut targets = Vec::new();
     if probe("cargo") {
@@ -48,6 +56,9 @@ pub fn available_targets() -> Vec<&'static str> {
     }
     if probe("go") {
         targets.push("go");
+    }
+    if ts_runner().is_some() {
+        targets.push("ts");
     }
     targets
 }
@@ -60,6 +71,22 @@ fn probe(tool: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// The TypeScript runner installed here, if any. Both resolve node_modules
+/// packages whose entry is TypeScript source and honor tsconfig paths, which
+/// is exactly what the scaffold relies on.
+fn ts_runner() -> Option<&'static str> {
+    // Unlike go and cargo, both runners only answer --version.
+    ["bun", "tsx"].into_iter().find(|runner| {
+        std::process::Command::new(runner)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
 }
 
 pub fn handle(body: &str) -> Response {
@@ -116,6 +143,7 @@ fn execute(request: &RunRequest) -> Result<Vec<Line>, String> {
     let kind = match request.target.as_str() {
         "rust" => TargetKind::Rust,
         "go" => TargetKind::Go,
+        "ts" | "typescript" => TargetKind::TypeScript,
         other => return Err(format!("run does not handle target {other} on the server")),
     };
 
@@ -159,7 +187,7 @@ fn execute_in(
     match kind {
         TargetKind::Rust => scaffold_rust(&files, &project, &request.snippet),
         TargetKind::Go => scaffold_go(&files, &project, &request.snippet),
-        TargetKind::TypeScript => unreachable!("rejected above"),
+        TargetKind::TypeScript => scaffold_typescript(&files, &project, &request.snippet),
     }
     .map_err(|e| format!("scaffold: {e}"))?;
 
@@ -179,7 +207,10 @@ fn execute_in(
     let (program, args): (&str, Vec<&str>) = match kind {
         TargetKind::Rust => ("cargo", vec!["run", "--quiet"]),
         TargetKind::Go => ("go", vec!["run", "."]),
-        TargetKind::TypeScript => unreachable!(),
+        TargetKind::TypeScript => {
+            let runner = ts_runner().ok_or("no TypeScript runner (bun or tsx) on PATH")?;
+            (runner, vec!["main.ts"])
+        }
     };
     let mut lines = run_child(program, &args, &project, &env)?;
     let requests = mock.stop();
@@ -265,6 +296,32 @@ fn scaffold_go(
             "module {GO_SCAFFOLD_MODULE}\n\ngo 1.21\n\n\
              require github.com/tono-lang/tono/runtimes/http-go v0.0.0\n\n\
              replace github.com/tono-lang/tono/runtimes/http-go => ./_runtime/http-go\n"
+        ),
+    )
+}
+
+/// The generated TS sources plus the snippet, with the embedded runtime as a
+/// real node_modules package and a tsconfig mapping "sdk" to the module
+/// barrel, so the same snippet works here and in the browser bundler.
+fn scaffold_typescript(
+    files: &[GeneratedFile],
+    root: &std::path::Path,
+    snippet: &str,
+) -> std::io::Result<()> {
+    write_sources(files, TargetKind::TypeScript, root)?;
+    std::fs::write(root.join("main.ts"), snippet)?;
+    unpack::<TsRuntime>(&root.join("node_modules/@tono/http-runtime-ts"))?;
+    let barrel = files
+        .iter()
+        .filter(|f| f.target == TargetKind::TypeScript)
+        .filter_map(|f| f.path.strip_prefix(TargetKind::TypeScript.dir()).ok())
+        .find(|p| p.ends_with("index.ts"))
+        .map(|p| format!("./{}", p.display()))
+        .unwrap_or_else(|| "./index.ts".to_string());
+    std::fs::write(
+        root.join("tsconfig.json"),
+        format!(
+            "{{\n  \"compilerOptions\": {{\n    \"baseUrl\": \".\",\n    \"paths\": {{ \"sdk\": [\"{barrel}\"] }}\n  }}\n}}\n"
         ),
     )
 }
