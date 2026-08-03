@@ -78,12 +78,10 @@
               </div>
               <div class="mocks-section">
                 <div class="mocks-section-head">
-                  <span>routes</span>
-                  <span class="mocks-section-actions">
-                    <button id="routes-suggest" class="mini-btn" title="Add one mock per @http operation">from ops</button>
-                    <button id="route-add" class="mini-btn" title="Add a route">+</button>
-                  </span>
+                  <span>operations</span>
+                  <button id="route-add" class="mini-btn" title="Add a custom route (outside the declared operations)">+ custom</button>
                 </div>
+                <div id="op-rows"></div>
                 <div id="route-rows"></div>
               </div>
               <label class="mocks-passthrough" title="Requests no route matches go to the real network">

@@ -485,6 +485,44 @@ select:hover {
   flex: 1;
 }
 
+.op-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem;
+  margin-bottom: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.op-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.op-name {
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: 600;
+}
+
+.op-route {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  flex: 1;
+}
+
+.op-status-line {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
 .route-card {
   border: 1px solid var(--border);
   border-radius: 6px;

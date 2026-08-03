@@ -66,11 +66,27 @@ for (const level of ["log", "info", "warn", "error"]) {
 }
 globalThis.process = { env: config.env };
 const realFetch = globalThis.fetch.bind(globalThis);
+const segMatch = (template, pathname) => {
+  const t = template.split("/");
+  const p = pathname.split("/");
+  return t.length === p.length && t.every((seg, i) => (/^\{[^}]+\}$/.test(seg) ? p[i] !== "" : seg === p[i]));
+};
+const findRoute = (method, pathname) => {
+  const exact = config.routes[method + " " + pathname];
+  if (exact) return exact;
+  for (const key of Object.keys(config.routes)) {
+    const space = key.indexOf(" ");
+    if (key.slice(0, space) === method && segMatch(key.slice(space + 1), pathname)) {
+      return config.routes[key];
+    }
+  }
+  return undefined;
+};
 globalThis.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input.url;
   const method = (init && init.method) || (typeof input === "object" && input.method) || "GET";
   const pathname = new URL(url, "http://mock.local").pathname;
-  const hit = config.routes[method.toUpperCase() + " " + pathname];
+  const hit = findRoute(method.toUpperCase(), pathname);
   if (!hit && config.passthrough) {
     post("request", method.toUpperCase() + " " + url + " (live)");
     return realFetch(input, init);

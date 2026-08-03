@@ -429,6 +429,22 @@ fn read_all(mut reader: impl Read) -> String {
     buffer
 }
 
+/// Whether a declared path template matches a concrete request path: same
+/// segment count, and a {label} segment matches any non-empty segment. This is
+/// what lets a mock be declared per operation, in the operation's own terms.
+fn template_matches(template: &str, path: &str) -> bool {
+    let t: Vec<&str> = template.split('/').collect();
+    let p: Vec<&str> = path.split('/').collect();
+    t.len() == p.len()
+        && t.iter().zip(&p).all(|(seg, part)| {
+            if seg.starts_with('{') && seg.ends_with('}') {
+                !part.is_empty()
+            } else {
+                seg == part
+            }
+        })
+}
+
 /// A loopback HTTP server answering from the posted route table, so the SDK's
 /// real transport has something to talk to. Every request is recorded.
 struct MockServer {
@@ -458,7 +474,16 @@ impl MockServer {
                     };
                     let method = request.method().to_string().to_uppercase();
                     let path = request.url().split('?').next().unwrap_or("/").to_string();
-                    let hit = routes.get(&format!("{method} {path}")).cloned();
+                    let hit = routes
+                        .get(&format!("{method} {path}"))
+                        .cloned()
+                        .or_else(|| {
+                            routes.iter().find_map(|(key, route)| {
+                                let (m, template) = key.split_once(' ')?;
+                                (m == method && template_matches(template, &path))
+                                    .then(|| route.clone())
+                            })
+                        });
                     seen.lock().expect("mock log").push(line(
                         "request",
                         format!(

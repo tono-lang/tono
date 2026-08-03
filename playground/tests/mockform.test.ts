@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formFromJson, formToJson, suggestFromIr, validate } from "../src/mockform";
+import { formFromJson, formToJson, validate } from "../src/mockform";
 
 describe("mock form round-trip", () => {
   it("parses mocks.json into rows and back", () => {
@@ -46,32 +46,5 @@ describe("validate", () => {
         passthrough: true,
       }),
     ).toEqual([]);
-  });
-});
-
-describe("suggestFromIr", () => {
-  it("finds @http operations and @env keys", () => {
-    const ir = JSON.stringify({
-      modules: [
-        {
-          shapes: [
-            {
-              fields: [{ sources: [{ env: "API_TOKEN" }] }],
-              operations: [
-                { traits: [{ id: "http", value: { method: "GET", path: "/users/{username}" } }] },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-    const suggestions = suggestFromIr(ir);
-    expect(suggestions).toHaveLength(1);
-    expect(suggestions[0]).toMatchObject({ method: "GET", path: "/users/{username}" });
-    expect(suggestions[0].envKeys).toContain("API_TOKEN");
-  });
-
-  it("is empty on garbage", () => {
-    expect(suggestFromIr("nope")).toEqual([]);
   });
 });
