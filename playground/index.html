@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tono Playground</title>
+    <meta
+      name="description"
+      content="Edit .tono in the browser and preview the generated SDK for TypeScript, Rust, and Go."
+    />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-name">tono</span>
+          <span class="brand-sub">playground</span>
+        </div>
+        <div class="controls">
+          <select id="example-picker" title="Load an example"></select>
+          <button id="format-btn" title="Reprint the source in canonical layout">Format</button>
+          <button id="run-toggle" title="Run TypeScript against the generated SDK">Run</button>
+          <button id="share-btn" title="Copy a link to this snippet">Share</button>
+        </div>
+      </header>
+      <main class="panes">
+        <section class="pane pane-editor">
+          <div id="editor"></div>
+          <div id="diagnostics" class="diagnostics" hidden></div>
+        </section>
+        <div id="split-handle" class="split-handle" role="separator" aria-orientation="vertical"></div>
+        <section class="pane pane-output">
+          <div class="output-bar">
+            <nav id="target-tabs" class="tabs" aria-label="Target language"></nav>
+            <div class="output-actions">
+              <span id="active-file" class="active-file"></span>
+              <button id="copy-btn" title="Copy the open file">Copy</button>
+            </div>
+          </div>
+          <div class="output-body">
+            <aside id="file-tree" class="file-tree" aria-label="Generated files"></aside>
+            <div id="output"></div>
+          </div>
+          <div id="output-note" class="output-note" hidden></div>
+        </section>
+      </main>
+      <section id="run-panel" class="run-panel" hidden>
+        <div class="run-toolbar">
+          <span class="run-title">Run against the TypeScript SDK (import from "sdk"; HTTP is mocked)</span>
+          <button id="run-exec">Run</button>
+        </div>
+        <div class="run-body">
+          <div class="run-col">
+            <span class="run-label">main.ts</span>
+            <div id="run-editor"></div>
+          </div>
+          <div class="run-col run-col-mocks">
+            <span class="run-label">mocks.json (routes + env)</span>
+            <div id="mocks-editor"></div>
+          </div>
+          <div class="run-col run-col-console">
+            <span class="run-label">console</span>
+            <pre id="run-console"></pre>
+          </div>
+        </div>
+      </section>
+      <footer class="statusbar">
+        <span id="status"></span>
+        <span id="meta" class="meta"></span>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

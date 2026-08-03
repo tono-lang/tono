@@ -1,0 +1,34 @@
+{
+  "name": "tono-playground",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build:compiler": "scripts/build-compiler.sh",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6",
+    "@codemirror/lang-go": "^6",
+    "@codemirror/lang-javascript": "^6",
+    "@codemirror/lang-rust": "^6",
+    "@codemirror/language": "^6",
+    "@codemirror/lint": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/theme-one-dark": "^6",
+    "@codemirror/view": "^6",
+    "@lezer/highlight": "^1",
+    "esbuild-wasm": "^0.28.1"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "vite": "^6",
+    "vitest": "^3",
+    "wasm-pack": "^0.13"
+  }
+}

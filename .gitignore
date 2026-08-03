@@ -13,3 +13,8 @@ mutants.out/
 mutants.out.old/
 # OS
 .DS_Store
+# Playground web app
+playground/node_modules/
+playground/dist/
+playground/src/generated/
+playground/backend-wasm/target/

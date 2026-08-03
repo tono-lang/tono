@@ -1,0 +1,6 @@
+(executable
+ (name shim)
+ (modes js)
+ (libraries js_of_ocaml tono_frontend tono_lsp_lib lsp)
+ (preprocess
+  (pps js_of_ocaml-ppx)))
