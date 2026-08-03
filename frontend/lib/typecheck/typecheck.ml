@@ -19,8 +19,9 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
   let impl_diags = Check_impl.check_decls decls in
   let entry_diags = Check_entries.check_decls decls in
   let repeat_diags = Check_trait_repeats.check_decls decls in
+  let trait_name_diags = Check_trait_names.check_decls decls in
   ( m,
     Diagnostic.sort
       (dup_diags @ ref_diags @ member_diags @ enum_diags @ constraint_diags
      @ op_diags @ http_diags @ ext_diags @ impl_diags @ entry_diags
-     @ repeat_diags) )
+     @ repeat_diags @ trait_name_diags) )

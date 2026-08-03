@@ -14,7 +14,7 @@
 //! can declare them, but their effect belongs to the module-mapping (RFC-0011)
 //! and compat-check (RFC-0012) work and is applied there, not here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -96,6 +96,17 @@ impl Config {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         Self::from_toml_str(&text)
     }
+}
+
+/// The raw `[target.*]` keys a manifest text declares, regardless of their
+/// enabled/disabled/generatable status. Lets tooling (`tono init`) ask "is
+/// there already a table for this name" without resolving the whole config,
+/// while still going through the same parser `Config` does (so an unusual
+/// but legal TOML spelling, e.g. `[target."python"]`, is not missed the way
+/// an ad hoc text scan would miss it).
+pub fn declared_target_keys(text: &str) -> Result<BTreeSet<String>, String> {
+    let raw: RawManifest = toml::from_str(text).map_err(|e| format!("invalid tono.toml: {e}"))?;
+    Ok(raw.target.keys().cloned().collect())
 }
 
 // --- raw TOML surface -------------------------------------------------------
@@ -470,6 +481,25 @@ enabled = false
         assert_eq!(cfg.compat.wire_breaking, Severity::Off);
         assert_eq!(cfg.compat.source_breaking, Severity::Warn);
         assert_eq!(cfg.compat.behavioral, Severity::Error);
+    }
+
+    #[test]
+    fn declared_target_keys_lists_plain_and_quoted_headers() {
+        let keys = declared_target_keys("[target.rust]\n[target.\"python\"]\n").unwrap();
+        assert!(keys.contains("rust"));
+        assert!(keys.contains("python"));
+    }
+
+    #[test]
+    fn declared_target_keys_is_empty_for_a_manifest_with_no_targets() {
+        let keys = declared_target_keys("[project]\nname = \"demo\"\n").unwrap();
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn declared_target_keys_reports_a_malformed_manifest() {
+        let err = declared_target_keys("this is not = = toml").unwrap_err();
+        assert!(err.contains("invalid tono.toml"), "{err}");
     }
 
     #[test]

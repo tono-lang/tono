@@ -4,7 +4,7 @@
 //! when it is absent so a backend-only checkout still passes.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// The dune-built frontend binary. `TONO_FRONTEND` overrides it; otherwise we
 /// look in the default build tree next to the workspace.
@@ -93,6 +93,127 @@ fn check_clean_source_succeeds() {
     let out = cmd.args(["check"]).arg(&file).output().unwrap();
     assert!(out.status.success(), "a clean file checks green");
     assert!(out.stdout.is_empty(), "check emits no IR");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The whole point of the source path: a project with a manifest generates its
+/// SDKs from its own `.tono` files, with no separate compile step and no IR
+/// argument. Every module under `project.root` lands in the output.
+#[test]
+fn gen_compiles_the_project_sources_when_no_ir_is_given() {
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("gen-from-source");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    write_tono(
+        &dir.join("src"),
+        "payments.tono",
+        "struct charge { amount: i64 }\n",
+    );
+    write_tono(
+        &dir.join("src"),
+        "billing.tono",
+        "struct invoice { total: i64 }\n",
+    );
+
+    let init = Command::new(env!("CARGO_BIN_EXE_tono"))
+        .current_dir(&dir)
+        .args(["init", "--yes", "--target", "rust"])
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+
+    // Stdin closed, as in a script: nothing is piped, so the sources are used.
+    let out = cmd
+        .current_dir(&dir)
+        .arg("gen")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "gen from sources failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for module in ["payments", "billing"] {
+        assert!(
+            dir.join("rust").join(module).join("types.rs").is_file(),
+            "module {module} was not generated"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Piped IR still wins over the sources on disk, so an existing pipeline that
+/// feeds `tono gen` keeps generating exactly what it fed in.
+#[test]
+fn gen_prefers_piped_ir_over_the_project_sources() {
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("gen-pipe-wins");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    write_tono(
+        &dir.join("src"),
+        "ondisk.tono",
+        "struct charge { amount: i64 }\n",
+    );
+
+    let init = Command::new(env!("CARGO_BIN_EXE_tono"))
+        .current_dir(&dir)
+        .args(["init", "--yes", "--target", "rust"])
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+
+    const PIPED: &str =
+        r#"{"tono_ir_version":6,"modules":[{"name":"piped","shapes":[],"operations":[]}]}"#;
+    let mut child = cmd
+        .current_dir(&dir)
+        .arg("gen")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(PIPED.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+
+    assert!(
+        !dir.join("rust/ondisk").exists(),
+        "the source module must not be generated"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A root with nothing to compile is reported, not silently generated as an
+/// empty SDK.
+#[test]
+fn gen_reports_a_source_root_with_no_files() {
+    let mut cmd = skip_without_frontend!();
+    let dir = tmp("gen-no-sources");
+    let init = Command::new(env!("CARGO_BIN_EXE_tono"))
+        .current_dir(&dir)
+        .args(["init", "--yes", "--target", "rust"])
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+
+    let out = cmd
+        .current_dir(&dir)
+        .arg("gen")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no .tono files"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

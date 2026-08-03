@@ -92,3 +92,10 @@ let ext_raw_rule = "TC0052"
    generic fallback instead. Reported as a warning, not an error: the operation
    still works, and adding the code is the fix. *)
 let raw_error_unreachable = "TC0053"
+
+(* A trait the compiler does not read. Bare trait names are matched by the
+   checkers that act on them and ignored everywhere else, so a misspelling used
+   to reach the IR and the generated SDK doing nothing. Reported as a warning,
+   not an error: the IR's trait vocabulary is open, so an unread trait is inert
+   rather than malformed. *)
+let unknown_trait = "TC0054"

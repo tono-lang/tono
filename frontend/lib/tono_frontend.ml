@@ -21,6 +21,7 @@ module Entry_scope = Entry_scope
 module Protocol_http = Protocol_http
 module Modules = Modules
 module Error_codes = Error_codes
+module Trait_vocab = Trait_vocab
 
 (* The pure calculus: a self-contained, total expression sub-language. Its
    modules carry a [Calc_] prefix because the library namespace is flat. *)

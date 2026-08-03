@@ -26,6 +26,28 @@ let diagnostics_error () =
     (d.Diagnostic.severity = Some DiagnosticSeverity.Error);
   Alcotest.(check int) "on the first line" 0 d.Diagnostic.range.start.line
 
+(* An unknown trait reaches the editor: the frontend reports it, so it rides the
+   same path every diagnostic does and arrives as a warning (not an error, the
+   spec still compiles) carrying its code, which is what a quick fix keys on. *)
+let diagnostics_unknown_trait () =
+  let ds = Analysis.lsp_diagnostics {|@statusx("x") struct point { x: i64 }|} in
+  let d =
+    List.find
+      (fun (d : Diagnostic.t) -> d.Diagnostic.code = Some (`String "TC0054"))
+      ds
+  in
+  Alcotest.(check bool)
+    "severity is Warning" true
+    (d.Diagnostic.severity = Some DiagnosticSeverity.Warning);
+  let message =
+    match d.Diagnostic.message with
+    | `String m -> m
+    | `MarkupContent m -> m.value
+  in
+  Alcotest.(check bool)
+    "names the trait it was probably meant to be" true
+    (contains message "did you mean @status")
+
 let definition_resolves () =
   let uri = Lsp.Uri.of_string "file:///x.tono" in
   let file = Analysis.parse two_shapes in
@@ -369,13 +391,40 @@ let completion_after_dot_offers_sibling_fields () =
     "not a type position" false
     (List.mem "i64" labels || List.mem "client" labels)
 
+(* The editor's trait vocabulary is the compiler's. The registry carries prose
+   the compiler has no use for, so it cannot be derived outright, but it must
+   never fall behind: a trait the checkers read with nothing to say about it
+   would hover blank and never be offered, and one documented here that the
+   compiler does not read would be advertised and then warned about. *)
+let trait_docs_cover_the_compiler_vocabulary () =
+  let documented = List.map fst Tono_lsp_lib.Hover_docs.trait_registry in
+  let missing =
+    List.filter
+      (fun name -> not (List.mem name documented))
+      Tono_frontend.Trait_vocab.known
+  in
+  let extra =
+    List.filter
+      (fun name -> not (Tono_frontend.Trait_vocab.is_known name))
+      documented
+  in
+  Alcotest.(check (list string)) "every known trait is documented" [] missing;
+  Alcotest.(check (list string)) "nothing documented is unknown" [] extra
+
 let () =
   Alcotest.run "analysis"
     [
+      ( "vocabulary",
+        [
+          Alcotest.test_case "trait docs cover the compiler" `Quick
+            trait_docs_cover_the_compiler_vocabulary;
+        ] );
       ( "diagnostics",
         [
           Alcotest.test_case "clean" `Quick diagnostics_clean;
           Alcotest.test_case "error" `Quick diagnostics_error;
+          Alcotest.test_case "unknown trait warns" `Quick
+            diagnostics_unknown_trait;
         ] );
       ( "navigation",
         [

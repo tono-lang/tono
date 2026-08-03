@@ -1,39 +1,49 @@
-//! The `tono` command line: turn IR JSON into SDK source files.
+//! The `tono` command line: turn a project's `.tono` sources into SDK source
+//! files.
 //!
-//! `tono gen` reads the IR (from the file argument, or stdin when omitted),
-//! decodes it, generates the per-target source through the engine, formats each
-//! file with that language's formatter, and writes it out. It runs in one of two
-//! modes: with `--target <list> --out <dir>` it writes each target under
-//! `<dir>/<target>/` with module hooks from flags; otherwise the project manifest
-//! (`--config <tono.toml>`, or one auto-discovered up from the working directory)
-//! drives every enabled target under its own configured `out`, applying that
-//! target's module hooks and casing overrides. `tono breaking` gates changes
-//! against a baseline, taking its policy from the manifest's `[compat]` (flags
-//! override). The generation itself lives in the testable `tono_backend` library;
-//! this binary is the IO shell around it.
+//! `tono init` writes the project manifest (and a minimal native build manifest
+//! per target) so the rest of the commands have something to discover.
+//!
+//! `tono gen` takes the IR, generates the per-target source through the engine,
+//! formats each file with that language's formatter, and writes it out. The IR
+//! is an internal artifact: with no argument and nothing piped in, the project's
+//! own sources are compiled through the frontend (`project.root` from the
+//! manifest), so generating an SDK needs no separate compile step. A file
+//! argument or piped IR still wins, for callers that already hold one.
+//! Generation runs in one of two modes: with `--target <list> --out <dir>` it
+//! writes each target under `<dir>/<target>/` with module hooks from flags;
+//! otherwise the project manifest (`--config <tono.toml>`, or one auto-discovered
+//! up from the working directory) drives every enabled target under its own
+//! configured `out`, applying that target's module hooks and casing overrides.
+//!
+//! `tono breaking` gates changes against a baseline, taking its policy from the
+//! manifest's `[compat]` (flags override). The generation itself lives in the
+//! testable `tono_backend` library; this binary is the IO shell around it.
 
 mod frontend;
+mod gen;
+mod init;
 mod preview;
 
 use std::fs;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use tono_backend::codegen::{
-    casing_for, check_layout, generate, generate_target, parse_targets, CasingConfig, CheckOptions,
-    CodegenConfig, Formatter, TargetKind,
-};
+use tono_backend::codegen::{parse_targets, CheckOptions, TargetKind};
 use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::config as manifest;
-use tono_backend::ir::{decode_model, Model};
+use tono_backend::ir::decode_model;
 
 use crate::frontend::Frontend;
 use crate::preview::pipeline;
 use crate::preview::pipeline::Verdict;
 
 const USAGE: &str = "usage: tono (\n  \
-    gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [<ir.json>]\n  \
+    init [--target <list>] [--yes] [--root <path>]\n  \
+    gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [--clean] [<ir.json>]\n    \
+    (with no <ir.json> and nothing piped in, the project's .tono sources are compiled;\n    \
+     --clean also removes generated files this run did not produce)\n  \
     check <file.tono>\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
@@ -57,7 +67,8 @@ fn main() -> ExitCode {
 
 fn run(args: &[String]) -> Result<(), String> {
     match args.get(1).map(String::as_str) {
-        Some("gen") => run_gen(&args[2..]),
+        Some("init") => init::run(&args[2..]),
+        Some("gen") => gen::run(&args[2..]),
         Some("check") => run_frontend("check", &args[2..]),
         Some("fmt") => run_frontend("fmt", &args[2..]),
         Some("preview") => run_preview(&args[2..]),
@@ -70,139 +81,8 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn run_gen(args: &[String]) -> Result<(), String> {
-    let mut targets_csv: Option<String> = None;
-    let mut out: Option<String> = None;
-    let mut manifest_path: Option<String> = None;
-    let mut ir_path: Option<String> = None;
-    let mut config = CodegenConfig::default();
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--target" => targets_csv = Some(flag_value(args, &mut i, "--target")?),
-            "--out" => out = Some(flag_value(args, &mut i, "--out")?),
-            // The project manifest, when not driving generation from flags.
-            "--config" => manifest_path = Some(flag_value(args, &mut i, "--config")?),
-            // Collapse the module hierarchy into flat single-segment packages.
-            "--flatten" => config.flatten = true,
-            // Rewrite a module prefix, e.g. --module-remap payments=billing.
-            "--module-remap" => {
-                config
-                    .remap
-                    .push(parse_remap(&flag_value(args, &mut i, "--module-remap")?)?)
-            }
-            // The generated Go SDK's module path, prefixed onto cross-package
-            // imports (Go has no relative imports).
-            "--go-module" => config.go_module = Some(flag_value(args, &mut i, "--go-module")?),
-            path => ir_path = Some(path.to_string()),
-        }
-        i += 1;
-    }
-
-    // Explicit --target/--out selects the flag path (a single output root, module
-    // hooks from flags); otherwise the project manifest drives generation.
-    if targets_csv.is_some() || out.is_some() {
-        gen_from_flags(&targets_csv, &out, &config, &ir_path)
-    } else {
-        gen_from_manifest(manifest_path.as_deref(), &ir_path)
-    }
-}
-
-/// Flag path: an explicit target list and one output root, with the module hooks
-/// taken from flags. Each file lands under `<out>/<target>/`.
-fn gen_from_flags(
-    targets_csv: &Option<String>,
-    out: &Option<String>,
-    config: &CodegenConfig,
-    ir_path: &Option<String>,
-) -> Result<(), String> {
-    let targets = parse_targets(targets_csv.as_deref().ok_or("missing --target")?)?;
-    let out_root = PathBuf::from(out.as_deref().ok_or("missing --out")?);
-    let model = read_ir(ir_path)?;
-    // Fail loud on a Go layout that could not compile (a multi-module SDK with no
-    // module path, or two modules mapping to the same package) instead of writing
-    // silently-broken source.
-    check_layout(&model, &targets, config)?;
-    for file in generate(&model, &targets, config)? {
-        let formatted = Formatter::for_output(file.target, &file.path)
-            .run(&file.text)
-            .text;
-        write_file(&out_root.join(&file.path), &formatted)?;
-    }
-    Ok(())
-}
-
-/// Manifest path: resolve the project config, then generate every enabled target
-/// under its own `out` (relative to the manifest's directory), applying that
-/// target's module hooks (flatten/remap/package) and casing overrides.
-fn gen_from_manifest(config_path: Option<&str>, ir_path: &Option<String>) -> Result<(), String> {
-    let manifest_file = match config_path {
-        Some(path) => PathBuf::from(path),
-        None => discover_manifest()?,
-    };
-    let base = manifest_file
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let cfg = manifest::Config::load(&manifest_file)?;
-    if cfg.targets.is_empty() {
-        return Err(format!(
-            "{}: no enabled targets (supported: go, rust, typescript)",
-            manifest_file.display()
-        ));
-    }
-
-    let model = read_ir(ir_path)?;
-    for target in &cfg.targets {
-        let codegen = codegen_config_for(target);
-        let casing = resolved_casing(target);
-        check_layout(&model, &[target.kind], &codegen)?;
-        for file in generate_target(&model, target.kind, &codegen, &casing)? {
-            let formatted = Formatter::for_output(file.target, &file.path)
-                .run(&file.text)
-                .text;
-            // Paths carry the `<target-dir>/` prefix; strip it so the files land
-            // directly under the target's configured `out`.
-            let rel = file
-                .path
-                .strip_prefix(target.kind.dir())
-                .unwrap_or(&file.path);
-            write_file(&base.join(&target.out).join(rel), &formatted)?;
-        }
-    }
-    Ok(())
-}
-
-/// Build a target's module-mapping config from its manifest entry. RFC-0016 says
-/// the most specific remap wins, so the table is ordered longest-prefix-first
-/// before the engine's first-match rule sees it. `package` becomes the Go module
-/// path; other targets ignore it.
-fn codegen_config_for(target: &manifest::ResolvedTarget) -> CodegenConfig {
-    let mut remap: Vec<(String, String)> = target
-        .module_remap
-        .iter()
-        .map(|(from, to)| (from.clone(), to.clone()))
-        .collect();
-    remap.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-    CodegenConfig {
-        flatten: matches!(target.module_mapping, manifest::ModuleMapping::Flat),
-        remap,
-        go_module: target.package.clone(),
-    }
-}
-
-/// Layer a target's manifest casing overrides on the language's idiomatic default.
-fn resolved_casing(target: &manifest::ResolvedTarget) -> CasingConfig {
-    let mut casing = casing_for(target.kind);
-    for &(kind, style) in &target.casing {
-        casing = casing.with(kind, style);
-    }
-    casing
-}
-
 /// Walk up from the working directory looking for `tono.toml`.
-fn discover_manifest() -> Result<PathBuf, String> {
+pub(crate) fn discover_manifest() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     for dir in cwd.ancestors() {
         let candidate = dir.join(MANIFEST_NAME);
@@ -214,23 +94,6 @@ fn discover_manifest() -> Result<PathBuf, String> {
         "no {MANIFEST_NAME} found (searched up from {}); pass --config, or --target/--out\n{USAGE}",
         cwd.display()
     ))
-}
-
-/// Read the IR JSON from the path argument, or stdin when omitted, and decode it.
-fn read_ir(ir_path: &Option<String>) -> Result<Model, String> {
-    let json = match ir_path {
-        Some(path) => fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?,
-        None => read_stdin()?,
-    };
-    decode_model(&json)
-}
-
-/// Parse a `--module-remap from=to` value into its `(from, to)` pair.
-fn parse_remap(value: &str) -> Result<(String, String), String> {
-    value
-        .split_once('=')
-        .map(|(from, to)| (from.to_string(), to.to_string()))
-        .ok_or_else(|| format!("--module-remap expects <from>=<to>, got: {value}"))
 }
 
 /// Relay a source-level subcommand (`check`, `fmt`) to the frontend, inheriting
@@ -246,6 +109,12 @@ fn run_frontend(sub: &str, args: &[String]) -> Result<(), String> {
             format!("could not run {program} ({e}); set TONO_FRONTEND to the frontend binary")
         })?;
     if status.success() {
+        // A clean check prints nothing of its own, which reads the same as
+        // having done nothing; say so. Only for `check`: `fmt` writes the
+        // formatted source, and stdout is its result.
+        if sub == "check" {
+            eprintln!("ok: {}", args.join(" "));
+        }
         Ok(())
     } else {
         // Mirror the frontend's exit code (1 for diagnostics, 2 for usage).
@@ -293,7 +162,6 @@ fn run_preview(args: &[String]) -> Result<(), String> {
     }
     // The split-pane needs a real terminal; piped output (CI, shell pipelines)
     // gets the plain printed pass so `tono preview | less` and tests just work.
-    use std::io::IsTerminal;
     if !once && std::io::stdout().is_terminal() {
         return launch_tui(PathBuf::from(path), targets, base, options);
     }
@@ -392,7 +260,7 @@ fn run_preview_watch(
 }
 
 /// Consume the value that follows a flag, advancing the cursor past it.
-fn flag_value(args: &[String], i: &mut usize, flag: &str) -> Result<String, String> {
+pub(crate) fn flag_value(args: &[String], i: &mut usize, flag: &str) -> Result<String, String> {
     *i += 1;
     args.get(*i)
         .cloned()
@@ -625,17 +493,10 @@ fn print_report(report: &compat::Report, config: &Config, git_ref: &str) {
     );
 }
 
-fn read_stdin() -> Result<String, String> {
+pub(crate) fn read_stdin() -> Result<String, String> {
     let mut buf = String::new();
     std::io::stdin()
         .read_to_string(&mut buf)
         .map_err(|e| e.to_string())?;
     Ok(buf)
-}
-
-fn write_file(dest: &Path, text: &str) -> Result<(), String> {
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    fs::write(dest, text).map_err(|e| format!("{}: {e}", dest.display()))
 }
