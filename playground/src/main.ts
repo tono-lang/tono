@@ -210,7 +210,6 @@ async function start(): Promise<void> {
       statusEl.textContent = "Generation rejected";
     }
     if (!runPanel.hidden) refreshTsLang();
-    mockUi?.setIr(state.ir);
   }
 
   const scheduleRefresh = debounce(refresh, 200);
@@ -518,13 +517,7 @@ func main() {
   populateRunTargets([]);
 
   const DEFAULT_MOCKS = `{
-  "env": { "API_TOKEN": "demo-token" },
-  "routes": {
-    "GET /account": {
-      "status": 200,
-      "body": { "id": "0b8f8f2e-1e64-4c1c-9b6b-2f8d3a6a1c11", "email": "dev@example.com" }
-    }
-  }
+  "env": {}
 }
 `;
 
@@ -570,7 +563,6 @@ func main() {
         onChange: () => scheduleHashUpdate(),
       });
       mockUi.setJson(mocksDoc);
-      mockUi.setIr(state.ir);
     }
     scheduleHashUpdate();
   }

@@ -445,11 +445,6 @@ select:hover {
   margin-bottom: 0.35rem;
 }
 
-.mocks-section-actions {
-  display: flex;
-  gap: 0.3rem;
-}
-
 .env-row {
   display: flex;
   gap: 0.35rem;
@@ -457,10 +452,7 @@ select:hover {
   align-items: center;
 }
 
-.env-row input,
-.route-card input,
-.route-card select,
-.route-card textarea {
+.env-row input {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -470,9 +462,7 @@ select:hover {
   padding: 0.25rem 0.4rem;
 }
 
-.env-row input:focus,
-.route-card input:focus,
-.route-card textarea:focus {
+.env-row input:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -483,89 +473,6 @@ select:hover {
 
 .env-value {
   flex: 1;
-}
-
-.op-card {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.45rem;
-  margin-bottom: 0.45rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.op-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-}
-
-.op-name {
-  color: var(--text);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-weight: 600;
-}
-
-.op-route {
-  color: var(--text-dim);
-  font-size: 0.68rem;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  flex: 1;
-}
-
-.op-status-line {
-  display: flex;
-  gap: 0.35rem;
-  align-items: center;
-  color: var(--text-dim);
-  font-size: 0.72rem;
-}
-
-.route-card {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.45rem;
-  margin-bottom: 0.45rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.route-line {
-  display: flex;
-  gap: 0.35rem;
-  align-items: center;
-}
-
-.route-method {
-  width: 5.2rem;
-}
-
-.route-path {
-  flex: 1;
-}
-
-.route-status {
-  width: 3.6rem;
-}
-
-.route-body {
-  resize: vertical;
-  min-height: 3.2rem;
-  white-space: pre;
-}
-
-.field-error {
-  border-color: var(--error) !important;
-}
-
-.route-issue {
-  color: var(--error);
-  font-size: 0.7rem;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 .row-remove {
@@ -579,15 +486,6 @@ select:hover {
 
 .row-remove:hover {
   color: var(--error);
-}
-
-.mocks-passthrough {
-  display: flex;
-  gap: 0.4rem;
-  align-items: center;
-  color: var(--text-dim);
-  font-size: 0.74rem;
-  user-select: none;
 }
 
 .statusbar {

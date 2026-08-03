@@ -9,8 +9,8 @@ export interface RunConfig {
   /* "METHOD /path" -> canned response. */
   routes: Record<string, { status?: number; body?: unknown; headers?: Record<string, string> }>;
   env: Record<string, string>;
-  /* When true, a request no route matches goes out over the real network
-     instead of answering 404. */
+  /* A request no route matches goes out over the real network unless this
+     is set to false (the mock-everything mode old links relied on). */
   passthrough?: boolean;
 }
 
@@ -25,7 +25,7 @@ export function parseRunConfig(json: string): RunConfig | string {
     return {
       routes: raw.routes ?? {},
       env: raw.env ?? {},
-      passthrough: raw.passthrough ?? false,
+      passthrough: raw.passthrough ?? true,
     };
   } catch (err) {
     return `mocks.json: ${String(err)}`;

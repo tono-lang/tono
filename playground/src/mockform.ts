@@ -23,8 +23,6 @@ export interface MockForm {
   passthrough: boolean;
 }
 
-export const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
-
 export function emptyForm(): MockForm {
   return { env: [], routes: [], passthrough: false };
 }
@@ -55,31 +53,6 @@ export function formFromJson(text: string): MockForm | null {
   } catch {
     return null;
   }
-}
-
-export interface RouteIssue {
-  index: number;
-  field: "path" | "status" | "body";
-  message: string;
-}
-
-export function validate(form: MockForm): RouteIssue[] {
-  const issues: RouteIssue[] = [];
-  form.routes.forEach((route, index) => {
-    if (!route.path.startsWith("/")) {
-      issues.push({ index, field: "path", message: "path starts with /" });
-    }
-    const status = Number(route.status);
-    if (!Number.isInteger(status) || status < 100 || status > 599) {
-      issues.push({ index, field: "status", message: "status is 100-599" });
-    }
-    try {
-      JSON.parse(route.body);
-    } catch (err) {
-      issues.push({ index, field: "body", message: `body is not JSON: ${String(err).replace(/^SyntaxError: /, "")}` });
-    }
-  });
-  return issues;
 }
 
 /* form -> mocks.json text. Callers validate first; an invalid row falls back

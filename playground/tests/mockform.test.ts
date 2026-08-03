@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formFromJson, formToJson, validate } from "../src/mockform";
+import { formFromJson, formToJson } from "../src/mockform";
 
 describe("mock form round-trip", () => {
   it("parses mocks.json into rows and back", () => {
@@ -24,27 +24,5 @@ describe("mock form round-trip", () => {
       passthrough: false,
     });
     expect(JSON.parse(json)).toEqual({ env: {}, routes: {} });
-  });
-});
-
-describe("validate", () => {
-  it("points at the exact field", () => {
-    const issues = validate({
-      env: [],
-      routes: [{ method: "GET", path: "a", status: "9000", body: "{oops" }],
-      passthrough: false,
-    });
-    expect(issues.map((i) => i.field).sort()).toEqual(["body", "path", "status"]);
-    expect(issues.every((i) => i.index === 0)).toBe(true);
-  });
-
-  it("accepts a well-formed row", () => {
-    expect(
-      validate({
-        env: [],
-        routes: [{ method: "POST", path: "/x", status: "404", body: '{"a":1}' }],
-        passthrough: true,
-      }),
-    ).toEqual([]);
   });
 });

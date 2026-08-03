@@ -52,7 +52,7 @@
       </main>
       <section id="run-panel" class="run-panel" hidden>
         <div class="run-toolbar">
-          <span class="run-title">Run against the generated SDK (HTTP is mocked)</span>
+          <span class="run-title">Run against the generated SDK (calls reach the real network; env below)</span>
           <div class="run-actions">
             <select id="run-target" title="Language to run"></select>
             <button id="run-exec">Run</button>
@@ -65,8 +65,8 @@
           </div>
           <div class="run-col run-col-mocks">
             <span class="run-label">
-              HTTP mocks
-              <button id="mocks-mode" class="link-btn" title="Switch between the form and raw mocks.json">edit as JSON</button>
+              env
+              <button id="mocks-mode" class="link-btn" title="Advanced: canned HTTP responses as raw mocks.json">advanced</button>
             </span>
             <div id="mocks-form" class="mocks-form">
               <div class="mocks-section">
@@ -76,18 +76,6 @@
                 </div>
                 <div id="env-rows"></div>
               </div>
-              <div class="mocks-section">
-                <div class="mocks-section-head">
-                  <span>operations</span>
-                  <button id="route-add" class="mini-btn" title="Add a custom route (outside the declared operations)">+ custom</button>
-                </div>
-                <div id="op-rows"></div>
-                <div id="route-rows"></div>
-              </div>
-              <label class="mocks-passthrough" title="Requests no route matches go to the real network">
-                <input type="checkbox" id="mocks-passthrough" />
-                unmatched requests go live
-              </label>
             </div>
             <div id="mocks-editor" hidden></div>
           </div>
