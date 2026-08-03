@@ -456,8 +456,11 @@ func main() {
   /* Switching the run language replaces the snippet with that language's
      template: each target's main lives in a different language, so carrying
      text across would only produce syntax errors. */
+  const RUN_FILENAMES: Record<string, string> = { ts: "main.ts", rust: "main.rs", go: "main.go" };
+
   runTargetSelect.addEventListener("change", () => {
     runTarget = runTargetSelect.value;
+    $("#run-filename").textContent = RUN_FILENAMES[runTarget] ?? "main.ts";
     const template = RUN_TEMPLATES[runTarget] ?? RUN_TEMPLATES.ts;
     if (runEditors) {
       runEditors.main.destroy();
