@@ -185,6 +185,7 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
         fs::write(manifest_path, append_blocks(&text, &additions))
             .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
     }
+    scaffold_gitignore(&base)?;
     Ok(())
 }
 
@@ -202,7 +203,7 @@ fn scaffold_site(
 ) -> Option<(PathBuf, String)> {
     if is_new {
         return Some((
-            PathBuf::from(kind.dir()),
+            PathBuf::from("dist").join(kind.dir()),
             default_package(kind, package_default),
         ));
     }
@@ -305,9 +306,35 @@ fn run_fresh(
             // The same values the block just rendered declares, so the native
             // manifest and the config agree from the start.
             let package = default_package(kind, &package_default);
-            scaffold_native_manifest(kind, &cwd.join(kind.dir()), &package)?;
+            scaffold_native_manifest(kind, &cwd.join("dist").join(kind.dir()), &package)?;
         }
     }
+    scaffold_gitignore(&cwd)?;
+    Ok(())
+}
+
+/// Write a starter `.gitignore` next to the manifest, once: an existing file
+/// is never touched, here or anywhere else in tono. Whether `dist/` itself is
+/// ignored stays the user's call (committed for subtree mirrors, ignored when
+/// every mirror is a snapshot), so the entry ships as a comment.
+fn scaffold_gitignore(dir: &Path) -> Result<(), String> {
+    let path = dir.join(".gitignore");
+    if path.exists() {
+        return Ok(());
+    }
+    fs::write(
+        &path,
+        "# Native toolchain output.\n\
+         node_modules/\n\
+         target/\n\
+         \n\
+         # Generated SDKs land under dist/. Keep it committed when a mirror\n\
+         # uses split_mode = \"subtree\"; uncomment to ignore it when mirrors\n\
+         # use snapshot mode (the default) or there are no mirrors at all.\n\
+         # /dist\n",
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    eprintln!("wrote {}", path.display());
     Ok(())
 }
 
@@ -368,7 +395,7 @@ fn target_block(target: InitTarget, package_default: &str) -> String {
             };
             let package = default_package(kind, package_default);
             format!(
-                "\n[target.{name}]\n{comment}enabled = true\npackage = \"{package}\"\nout     = \"{dir}\"\n",
+                "\n[target.{name}]\n{comment}enabled = true\npackage = \"{package}\"\nout     = \"dist/{dir}\"\n",
                 name = kind.dir(),
                 dir = kind.dir(),
             )
@@ -672,7 +699,7 @@ mod tests {
     fn scaffold_site_defaults_a_declared_target_that_names_no_package() {
         let cfg = manifest::Config::from_toml_str("[target.go]\nenabled = true\n").unwrap();
         let (out, package) = scaffold_site(&cfg, TargetKind::Go, false, "acme").unwrap();
-        assert_eq!(out, PathBuf::from("go"));
+        assert_eq!(out, PathBuf::from("dist/go"));
         assert_eq!(package, "example.com/acme");
     }
 
@@ -688,7 +715,7 @@ mod tests {
     fn scaffold_site_for_a_new_target_matches_the_block_it_writes() {
         let cfg = manifest::Config::from_toml_str("").unwrap();
         let (out, package) = scaffold_site(&cfg, TargetKind::Go, true, "acme").unwrap();
-        assert_eq!(out, PathBuf::from("go"));
+        assert_eq!(out, PathBuf::from("dist/go"));
         assert!(
             target_block(InitTarget::Generatable(TargetKind::Go), "acme")
                 .contains(&format!("package = \"{package}\""))

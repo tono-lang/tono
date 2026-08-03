@@ -125,28 +125,44 @@ fn gen_from_manifest(
     // manifest, which is exactly what compiling the project from source needs.
     let model = read_ir(ir_path, &base.join(&cfg.project.root))?;
     for target in &cfg.targets {
-        let codegen = codegen_config_for(target);
-        let casing = resolved_casing(target);
-        check_layout(&model, &[target.kind], &codegen)?;
         let out_dir = base.join(&target.out);
         let mut written = Vec::new();
-        for file in generate_target(&model, target.kind, &codegen, &casing)? {
-            let formatted = Formatter::for_output(file.target, &file.path)
-                .run(&file.text)
-                .text;
-            // Paths carry the `<target-dir>/` prefix; strip it so the files land
-            // directly under the target's configured `out`.
-            let rel = file
-                .path
-                .strip_prefix(target.kind.dir())
-                .unwrap_or(&file.path);
+        for (rel, formatted) in target_outputs(&model, target)? {
             let dest = out_dir.join(rel);
-            write_generated(&dest, file.target, &formatted)?;
+            write_generated(&dest, target.kind, &formatted)?;
             written.push(dest);
         }
         report_target(target.kind, &out_dir, &written, clean)?;
     }
     Ok(())
+}
+
+/// The formatted files a manifest target generates: each entry is the path
+/// relative to the target's `out` directory and the file's final text. This is
+/// the shared generation step behind `tono gen` (which writes them under `out`)
+/// and `tono split` (which projects them into a mirror).
+pub(crate) fn target_outputs(
+    model: &Model,
+    target: &manifest::ResolvedTarget,
+) -> Result<Vec<(PathBuf, String)>, String> {
+    let codegen = codegen_config_for(target);
+    let casing = resolved_casing(target);
+    check_layout(model, &[target.kind], &codegen)?;
+    let mut files = Vec::new();
+    for file in generate_target(model, target.kind, &codegen, &casing)? {
+        let formatted = Formatter::for_output(file.target, &file.path)
+            .run(&file.text)
+            .text;
+        // Paths carry the `<target-dir>/` prefix; strip it so the files land
+        // directly under the target's configured `out`.
+        let rel = file
+            .path
+            .strip_prefix(target.kind.dir())
+            .unwrap_or(&file.path)
+            .to_path_buf();
+        files.push((rel, formatted));
+    }
+    Ok(files)
 }
 
 /// Report what a target produced, and when asked, clear what it no longer
@@ -262,8 +278,9 @@ fn resolved_casing(target: &manifest::ResolvedTarget) -> CasingConfig {
 /// the frontend. The IR is an internal artifact, so a plain `tono gen` inside a
 /// project generates straight from source; reading a path or a pipe stays
 /// supported for callers that already hold IR (a committed artifact, a CI step
-/// that compiled it once, `tono-frontend compile-dir | tono gen`).
-fn read_ir(ir_path: &Option<String>, source_root: &Path) -> Result<Model, String> {
+/// that compiled it once, `tono-frontend compile-dir | tono gen`). `tono split`
+/// reads its IR through the same contract.
+pub(crate) fn read_ir(ir_path: &Option<String>, source_root: &Path) -> Result<Model, String> {
     if let Some(path) = ir_path {
         let json = fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         return decode_model(&json);
@@ -285,7 +302,7 @@ fn read_ir(ir_path: &Option<String>, source_root: &Path) -> Result<Model, String
 /// Compile a whole project to IR by running the frontend over its sources. The
 /// frontend owns parsing and typechecking, so its diagnostics are surfaced
 /// as-is; a missing binary is an environment gap and says how to point at one.
-fn compile_sources(root: &Path) -> Result<String, String> {
+pub(crate) fn compile_sources(root: &Path) -> Result<String, String> {
     eprintln!("compiling {}", root.display());
     Frontend::from_env().compile_dir(root).map_err(|e| match e {
         FrontendError::Unavailable { program } => {
@@ -318,7 +335,7 @@ fn write_file(dest: &Path, text: &str) -> Result<(), String> {
 /// of a package manifest, the name, version, `type`, dependencies and scripts,
 /// belongs to the project. Replacing it wholesale would discard the manifest
 /// `tono init` scaffolds, along with every edit made to it since.
-fn write_generated(dest: &Path, target: TargetKind, text: &str) -> Result<(), String> {
+pub(crate) fn write_generated(dest: &Path, target: TargetKind, text: &str) -> Result<(), String> {
     let is_package_manifest = target == TargetKind::TypeScript
         && dest.file_name().is_some_and(|name| name == "package.json");
     if !is_package_manifest || !dest.is_file() {

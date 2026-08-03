@@ -24,6 +24,7 @@ mod frontend;
 mod gen;
 mod init;
 mod preview;
+mod split;
 
 use std::fs;
 use std::io::{IsTerminal, Read};
@@ -48,6 +49,7 @@ const USAGE: &str = "usage: tono (\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
     breaking [<ir.json>] [--baseline <ref>] [--baseline-path <path>] [--config <cfg.json>] [--level <cat>=<sev>]... [--allow <key>]...\n  \
+    split --branch <name> [--config <tono.toml>] [--ref <committish>] [<ir.json>]\n  \
     version)";
 
 /// The project manifest's conventional filename, auto-discovered by walking up
@@ -73,6 +75,7 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("fmt") => run_frontend("fmt", &args[2..]),
         Some("preview") => run_preview(&args[2..]),
         Some("breaking") => run_breaking(&args[2..]),
+        Some("split") => split::run(&args[2..]),
         Some("version") | None => {
             println!("tono {}", tono_backend::version());
             Ok(())
