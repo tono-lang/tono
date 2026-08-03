@@ -44,7 +44,9 @@ export function createMockUi(options: {
   let catalog: OpInfo[] = [];
 
   const rowOf = (op: OpInfo): RouteRow | undefined =>
-    form.routes.find((r) => r.method === op.method && r.path === op.path);
+    op.route
+      ? form.routes.find((r) => r.method === op.route!.method && r.path === op.route!.path)
+      : undefined;
 
   function issueNotes(card: HTMLElement, rowIndex: number): void {
     for (const issue of validate(form).filter((x) => x.index === rowIndex)) {
@@ -134,8 +136,17 @@ export function createMockUi(options: {
       name.textContent = op.name;
       const route = document.createElement("span");
       route.className = "op-route";
-      route.textContent = `${op.method} ${op.path}`;
+      route.textContent = op.route
+        ? `${op.route.method} ${op.route.path}`
+        : `ext impl${op.implLangs.length > 0 ? `: ${op.implLangs.join(", ")}` : ""}`;
       head.append(name, route);
+      if (!op.route) {
+        /* A bespoke operation runs its own code; there is no transport to
+           answer for it, so the card is informational. */
+        card.append(head);
+        opRows.append(card);
+        continue;
+      }
       const row = rowOf(op);
       if (!row) {
         const mock = document.createElement("button");
@@ -143,7 +154,12 @@ export function createMockUi(options: {
         mock.textContent = "mock";
         mock.title = "Answer this operation with a canned response";
         mock.addEventListener("click", () => {
-          form.routes.push({ method: op.method, path: op.path, status: "200", body: op.sampleBody });
+          form.routes.push({
+            method: op.route!.method,
+            path: op.route!.path,
+            status: "200",
+            body: op.sampleBody,
+          });
           for (const key of op.envKeys) {
             if (!form.env.some((e) => e.key === key)) {
               form.env.push({ key, value: key.includes("ENDPOINT") ? "$MOCK" : "demo" });
@@ -175,7 +191,8 @@ export function createMockUi(options: {
     /* Custom routes: whatever the declared operations do not cover. */
     routeRows.replaceChildren();
     form.routes.forEach((row, i) => {
-      if (catalog.some((op) => op.method === row.method && op.path === row.path)) return;
+      if (catalog.some((op) => op.route && op.route.method === row.method && op.route.path === row.path))
+        return;
       const card = document.createElement("div");
       card.className = "route-card";
       const line = document.createElement("div");

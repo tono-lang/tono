@@ -31,19 +31,32 @@ const IR = JSON.stringify({
               output: { ref: "playground#account" },
               traits: [{ id: "http", value: { method: "GET", path: "/users/{username}" } }],
             },
+            {
+              id: "playground#client.local_note",
+              output: { ref: "playground#account" },
+              traits: [],
+            },
           ],
         },
+      ],
+      extensions: [
+        { kind: "impl", name: "client.local_note", bindings: { ts: "x#f", go: "y#F" } },
       ],
     },
   ],
 });
 
 describe("opCatalog", () => {
-  it("lists ops with a sample body from the output type", () => {
+  it("lists every op: http ones with a route, bespoke ones with impl langs", () => {
     const ops = opCatalog(IR);
-    expect(ops).toHaveLength(1);
-    expect(ops[0]).toMatchObject({ name: "get_user", method: "GET", path: "/users/{username}" });
+    expect(ops).toHaveLength(2);
+    expect(ops[0]).toMatchObject({
+      name: "get_user",
+      route: { method: "GET", path: "/users/{username}" },
+    });
     expect(ops[0].envKeys).toContain("API_ENDPOINT");
+    expect(ops[1]).toMatchObject({ name: "local_note", route: null });
+    expect(ops[1].implLangs.sort()).toEqual(["go", "ts"]);
     const body = JSON.parse(ops[0].sampleBody);
     // Wire conventions hold: i64 as string, enum as its first value, optional absent.
     expect(body.balance).toBe("0");

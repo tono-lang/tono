@@ -21,6 +21,7 @@ import { DEFAULT_EXAMPLE, EXAMPLES } from "./examples";
 import { buildTree, stripTargetDir, type TreeDir } from "./filetree";
 import { byteToCharMapper } from "./offsets";
 import { DEFAULT_MODULE, sanitizeModuleName } from "./modname";
+import { localLangCompletion } from "./locallang";
 import { createMockUi, type MockUi } from "./mockui";
 import { enclosingDecl, findOccurrences } from "./xref";
 import { decodeShareHash, encodeShareHash } from "./share";
@@ -378,6 +379,29 @@ async function start(): Promise<void> {
     }
   }
 
+  /* SDK-aware completions for the local-toolchain languages: the symbol
+     index is re-read on every completion, so it tracks the current source. */
+  function langExtras(lang: "ts" | "rust" | "go" | "json") {
+    if (lang === "ts") return tsLang ? tsLang.extensions : [];
+    if (lang === "rust" || lang === "go") {
+      return [
+        localLangCompletion(
+          lang,
+          () => {
+            if (!state.ir) return [];
+            try {
+              return compiler.symbols(state.ir, lang === "go" ? "go" : "rust");
+            } catch {
+              return [];
+            }
+          },
+          () => state.moduleName,
+        ),
+      ];
+    }
+    return [];
+  }
+
   /* Recreate the snippet editor with TypeScript intelligence once the
      (megabytes of) language service arrive; the doc is carried over. */
   function ensureTsLang(): void {
@@ -524,7 +548,7 @@ func main() {
           doc: runDoc,
           lang,
           onChange: () => scheduleHashUpdate(),
-          extra: lang === "ts" && tsLang ? tsLang.extensions : [],
+          extra: langExtras(lang),
         }),
         mocks: createMiniEditor({
           parent: $("#mocks-editor"),
@@ -568,7 +592,7 @@ func main() {
         doc: template.doc(state.moduleName),
         lang: template.lang,
         onChange: () => scheduleHashUpdate(),
-        extra: template.lang === "ts" && tsLang ? tsLang.extensions : [],
+        extra: langExtras(template.lang),
       });
     }
     if (template.lang === "ts") ensureTsLang();

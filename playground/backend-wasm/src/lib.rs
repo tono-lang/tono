@@ -92,9 +92,18 @@ fn symbol_index(ir_json: &str, target: &str) -> Result<Vec<SymbolOut>, String> {
             });
             if let ShapeKind::Entry { operations, .. } = &shape.kind {
                 for op in operations {
+                    // An entry op's local is dotted (client.get_account); the
+                    // emitted method name cases only the op's own segment, so
+                    // naming runs on a copy whose id keeps just that.
+                    let mut named = op.clone();
+                    if let Some((module, local)) = op.id.split_once('#') {
+                        if let Some((_, last)) = local.rsplit_once('.') {
+                            named.id = format!("{module}#{last}");
+                        }
+                    }
                     out.push(SymbolOut {
                         id: op.id.clone(),
-                        ident: ops::method_ident(op, &casing, lang),
+                        ident: ops::method_ident(&named, &casing, lang),
                         kind: "op",
                     });
                 }

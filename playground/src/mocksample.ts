@@ -30,7 +30,11 @@ interface Shape {
 }
 
 interface Ir {
-  modules?: { shapes?: Shape[]; operations?: Shape[] }[];
+  modules?: {
+    shapes?: Shape[];
+    operations?: Shape[];
+    extensions?: { kind?: string; name?: string; bindings?: Record<string, string> }[];
+  }[];
 }
 
 const PRIM_SAMPLES: Record<string, unknown> = {
@@ -86,9 +90,10 @@ function sampleOfShape(shape: Shape, byId: Map<string, Shape>, depth: number): u
 export interface OpInfo {
   /* Local op name (get_user), the user-facing identity of the mock. */
   name: string;
-  method: string;
-  /* Path template as declared, labels kept: /users/{username}. */
-  path: string;
+  /* The HTTP route, absent for an operation implemented by bespoke code. */
+  route: { method: string; path: string } | null;
+  /* Languages an ext impl binds, for the bespoke badge. */
+  implLangs: string[];
   /* A valid response body for the declared output, pretty-printed. */
   sampleBody: string;
   envKeys: string[];
@@ -114,10 +119,17 @@ export function opCatalog(irJson: string): OpInfo[] {
       }
       for (const op of module.operations ?? []) ops.push(op);
     }
+    const impls = new Map<string, string[]>();
+    for (const module of ir.modules ?? []) {
+      for (const ext of module.extensions ?? []) {
+        if (ext.kind === "impl" && ext.name) {
+          impls.set(ext.name, Object.keys(ext.bindings ?? {}));
+        }
+      }
+    }
     const out: OpInfo[] = [];
     for (const op of ops) {
       const http = (op.traits ?? []).find((t) => t.id === "http");
-      if (!http?.value?.method || !http.value.path) continue;
       let body: unknown = {};
       if (op.output?.ref) {
         const shape = byId.get(op.output.ref);
@@ -125,10 +137,14 @@ export function opCatalog(irJson: string): OpInfo[] {
       } else if (op.output?.prim) {
         body = sampleOfTref({ prim: op.output.prim }, byId, 0);
       }
+      const dotted = op.id.split("#")[1] ?? op.id;
       out.push({
-        name: op.id.split("#")[1]?.split(".").pop() ?? op.id,
-        method: http.value.method,
-        path: http.value.path,
+        name: dotted.split(".").pop() ?? dotted,
+        route:
+          http?.value?.method && http.value.path
+            ? { method: http.value.method, path: http.value.path }
+            : null,
+        implLangs: impls.get(dotted) ?? [],
         sampleBody: JSON.stringify(body, null, 2),
         envKeys,
       });
