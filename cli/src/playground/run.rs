@@ -188,16 +188,17 @@ fn execute(request: &RunRequest) -> Result<Vec<Line>, String> {
     result
 }
 
-fn execute_in(
+/// Compile the posted source with the native frontend and generate one
+/// target's SDK, exactly as a run does. Shared with the LSP workspaces, which
+/// need the same files on disk for gopls and rust-analyzer to read.
+pub(crate) fn generate_for(
     scratch: &std::path::Path,
-    request: &RunRequest,
+    source: &str,
+    module: Option<&str>,
     kind: TargetKind,
-) -> Result<Vec<Line>, String> {
-    let source_path = scratch.join(format!(
-        "{}.tono",
-        sanitize_module(request.module.as_deref())
-    ));
-    std::fs::write(&source_path, &request.source).map_err(|e| e.to_string())?;
+) -> Result<Vec<GeneratedFile>, String> {
+    let source_path = scratch.join(format!("{}.tono", sanitize_module(module)));
+    std::fs::write(&source_path, source).map_err(|e| e.to_string())?;
     let frontend = Frontend::from_env();
     let ir = match frontend.compile(&source_path) {
         Ok(ir) => ir,
@@ -212,7 +213,15 @@ fn execute_in(
         ..CodegenConfig::default()
     };
     check_layout(&model, &[kind], &config)?;
-    let files = generate_target(&model, kind, &config, &casing_for(kind))?;
+    generate_target(&model, kind, &config, &casing_for(kind))
+}
+
+fn execute_in(
+    scratch: &std::path::Path,
+    request: &RunRequest,
+    kind: TargetKind,
+) -> Result<Vec<Line>, String> {
+    let files = generate_for(scratch, &request.source, request.module.as_deref(), kind)?;
 
     let project = scratch.join(kind.dir());
     match kind {
@@ -285,7 +294,7 @@ fn unpack<E: rust_embed::Embed>(root: &std::path::Path) -> std::io::Result<()> {
 /// carries the module tree and re-exports), the snippet becomes `src/main.rs`,
 /// and the embedded HTTP runtime is a path dependency. The first run downloads
 /// the runtime's own dependencies from crates.io like any cargo project.
-fn scaffold_rust(
+pub(crate) fn scaffold_rust(
     files: &[GeneratedFile],
     root: &std::path::Path,
     snippet: &str,
@@ -313,7 +322,7 @@ fn scaffold_rust(
 
 /// A Go module over the generated packages: `main.go` is the snippet and the
 /// embedded HTTP runtime satisfies the SDK's import through a local replace.
-fn scaffold_go(
+pub(crate) fn scaffold_go(
     files: &[GeneratedFile],
     root: &std::path::Path,
     snippet: &str,

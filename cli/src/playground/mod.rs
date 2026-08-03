@@ -6,6 +6,7 @@
 //! the user's own toolchains, no sandbox.
 
 mod assets;
+mod lspproxy;
 mod run;
 
 use std::sync::Arc;
@@ -85,6 +86,13 @@ fn handle(mut request: tiny_http::Request, assets: &assets::Assets) {
                 Err(e) => json_error(400, &format!("unreadable body: {e}")),
             }
         }
+        (tiny_http::Method::Post, "/api/complete") => {
+            let mut body = String::new();
+            match request.as_reader().read_to_string(&mut body) {
+                Ok(_) => lspproxy::handle(&body),
+                Err(e) => json_error(400, &format!("unreadable body: {e}")),
+            }
+        }
         (tiny_http::Method::Get, _) => assets.serve(&path),
         _ => json_error(405, "method not allowed"),
     };
@@ -116,6 +124,7 @@ fn capabilities_response() -> Response {
         serde_json::json!({
             "version": tono_backend::version(),
             "runTargets": run::available_targets(),
+            "lspTargets": lspproxy::available(),
         }),
     )
 }

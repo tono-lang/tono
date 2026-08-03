@@ -1,9 +1,10 @@
-/* Completions for the Go and Rust run editors. Full language servers would
-   need gopls and rust-analyzer proxied through the CLI; until then this offers
-   what the playground authoritatively knows: the generated SDK's identifiers
-   for the target (from the backend's own naming, so casing and @rename are
-   exact) plus the language's keywords and the snippet-relevant idioms. */
-import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+/* Completions for the Go and Rust run editors. Served by the CLI, the real
+   language server answers through /api/complete (gopls, rust-analyzer) with
+   the generated SDK on disk, so builtin packages and type members all work.
+   Without one (not installed, or a plain static build), the fallback offers
+   what the playground authoritatively knows: the SDK's identifiers for the
+   target, from the backend's own naming, plus language keywords. */
+import { autocompletion, type Completion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import type { Extension } from "@codemirror/state";
 import type { SymbolInfo } from "./compiler";
 
@@ -32,28 +33,120 @@ const KIND_TYPE: Record<string, string> = {
   service: "interface",
 };
 
+/* LSP CompletionItemKind numbers onto CodeMirror completion types. */
+const LSP_KIND: Record<number, string> = {
+  2: "method",
+  3: "function",
+  4: "method",
+  5: "property",
+  6: "variable",
+  7: "class",
+  8: "interface",
+  9: "namespace",
+  10: "property",
+  13: "enum",
+  14: "keyword",
+  20: "constant",
+  21: "constant",
+  22: "class",
+  25: "type",
+};
+
+interface ServerItem {
+  label: string;
+  kind: number;
+  detail: string;
+  documentation: string;
+  insertText: string;
+}
+
 export function localLangCompletion(
   lang: "go" | "rust",
-  getSymbols: () => SymbolInfo[],
-  getModule: () => string,
+  getters: {
+    symbols: () => SymbolInfo[];
+    module: () => string;
+    tonoSource: () => string;
+  },
 ): Extension {
   const words = lang === "go" ? GO_WORDS : RUST_WORDS;
-  const source = (ctx: CompletionContext): CompletionResult | null => {
-    const word = ctx.matchBefore(/[A-Za-z_][A-Za-z0-9_!.:()\[\]]*$/);
-    if (!word && !ctx.explicit) return null;
-    const moduleName = getModule();
-    const options = [
-      ...words.map((w) => ({ label: w, type: "keyword" as const })),
+  /* One failed probe silences the server path for the session; the static
+     fallback keeps answering. */
+  let serverDown = false;
+
+  const fallback = (from: number): CompletionResult => {
+    const moduleName = getters.module();
+    const options: Completion[] = [
+      ...words.map((w) => ({ label: w, type: "keyword" })),
       ...(lang === "go"
         ? [{ label: `${moduleName} "tono_preview/${moduleName}"`, type: "namespace", detail: "import" }]
         : [{ label: `tono_run::${moduleName}`, type: "namespace", detail: "crate path" }]),
-      ...getSymbols().map((s) => ({
+      ...getters.symbols().map((s) => ({
         label: s.ident,
         type: KIND_TYPE[s.kind] ?? "variable",
         detail: `sdk ${s.kind}`,
       })),
     ];
-    return { from: word ? word.from : ctx.pos, options, validFor: /^[\w!.:]*$/ };
+    return { from, options, validFor: /^[\w!.:]*$/ };
   };
-  return autocompletion({ override: [source] });
+
+  const source = async (ctx: CompletionContext): Promise<CompletionResult | null> => {
+    const word = ctx.matchBefore(/[A-Za-z_][A-Za-z0-9_]*$/);
+    const prev = ctx.state.sliceDoc(Math.max(0, ctx.pos - 1), ctx.pos);
+    if (!word && !ctx.explicit && prev !== "." && prev !== ":") return null;
+    const from = word ? word.from : ctx.pos;
+    if (!serverDown) {
+      try {
+        const line = ctx.state.doc.lineAt(ctx.pos);
+        const response = await fetch("api/complete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            target: lang,
+            source: getters.tonoSource(),
+            module: getters.module(),
+            snippet: ctx.state.doc.toString(),
+            line: line.number - 1,
+            character: ctx.pos - line.from,
+          }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (response.ok) {
+          const data = (await response.json()) as { items: ServerItem[] };
+          if (data.items.length > 0) {
+            return {
+              from,
+              options: data.items.map((item) => ({
+                label: item.label,
+                type: LSP_KIND[item.kind] ?? "text",
+                detail: item.detail || undefined,
+                apply: item.insertText || item.label,
+                ...(item.documentation
+                  ? {
+                      info: () => {
+                        const dom = document.createElement("div");
+                        dom.className = "ts-info";
+                        const prose = document.createElement("div");
+                        prose.className = "ts-info-doc";
+                        prose.textContent = item.documentation;
+                        dom.append(prose);
+                        return { dom };
+                      },
+                    }
+                  : {}),
+              })),
+              validFor: /^[\w]*$/,
+            };
+          }
+          return fallback(from);
+        }
+        /* 422: no language server on this machine; anything else is a
+           transient failure worth retrying later. */
+        if (response.status === 422) serverDown = true;
+      } catch {
+        serverDown = true;
+      }
+    }
+    return fallback(from);
+  };
+  return autocompletion({ override: [source], maxRenderedOptions: 40 });
 }

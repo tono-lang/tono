@@ -385,9 +385,8 @@ async function start(): Promise<void> {
     if (lang === "ts") return tsLang ? tsLang.extensions : [];
     if (lang === "rust" || lang === "go") {
       return [
-        localLangCompletion(
-          lang,
-          () => {
+        localLangCompletion(lang, {
+          symbols: () => {
             if (!state.ir) return [];
             try {
               return compiler.symbols(state.ir, lang === "go" ? "go" : "rust");
@@ -395,8 +394,9 @@ async function start(): Promise<void> {
               return [];
             }
           },
-          () => state.moduleName,
-        ),
+          module: () => state.moduleName,
+          tonoSource: () => source(),
+        }),
       ];
     }
     return [];
