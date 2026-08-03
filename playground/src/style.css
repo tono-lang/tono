@@ -396,6 +396,162 @@ select:hover {
   color: var(--text-dim);
 }
 
+.link-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.7rem;
+  padding: 0 0.25rem;
+  cursor: pointer;
+}
+
+.mini-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.45rem;
+  cursor: pointer;
+}
+
+.mini-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.mocks-form {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  font-size: 0.78rem;
+}
+
+.mocks-form[hidden] {
+  display: none;
+}
+
+.mocks-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--text-dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  margin-bottom: 0.35rem;
+}
+
+.mocks-section-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.env-row {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.3rem;
+  align-items: center;
+}
+
+.env-row input,
+.route-card input,
+.route-card select,
+.route-card textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.env-row input:focus,
+.route-card input:focus,
+.route-card textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.env-key {
+  width: 38%;
+}
+
+.env-value {
+  flex: 1;
+}
+
+.route-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem;
+  margin-bottom: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.route-line {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.route-method {
+  width: 5.2rem;
+}
+
+.route-path {
+  flex: 1;
+}
+
+.route-status {
+  width: 3.6rem;
+}
+
+.route-body {
+  resize: vertical;
+  min-height: 3.2rem;
+  white-space: pre;
+}
+
+.field-error {
+  border-color: var(--error) !important;
+}
+
+.route-issue {
+  color: var(--error);
+  font-size: 0.7rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.row-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0 0.2rem;
+}
+
+.row-remove:hover {
+  color: var(--error);
+}
+
+.mocks-passthrough {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--text-dim);
+  font-size: 0.74rem;
+  user-select: none;
+}
+
 .statusbar {
   display: flex;
   justify-content: space-between;

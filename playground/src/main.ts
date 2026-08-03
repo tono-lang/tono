@@ -21,6 +21,7 @@ import { DEFAULT_EXAMPLE, EXAMPLES } from "./examples";
 import { buildTree, stripTargetDir, type TreeDir } from "./filetree";
 import { byteToCharMapper } from "./offsets";
 import { DEFAULT_MODULE, sanitizeModuleName } from "./modname";
+import { createMockUi, type MockUi } from "./mockui";
 import { enclosingDecl, findOccurrences } from "./xref";
 import { decodeShareHash, encodeShareHash } from "./share";
 import { TARGETS, type Diagnostic, type GeneratedFile, type Target } from "./types";
@@ -208,6 +209,7 @@ async function start(): Promise<void> {
       statusEl.textContent = "Generation rejected";
     }
     if (!runPanel.hidden) refreshTsLang();
+    mockUi?.setIr(state.ir);
   }
 
   const scheduleRefresh = debounce(refresh, 200);
@@ -250,7 +252,7 @@ async function start(): Promise<void> {
       ...(runEditors && !runPanel.hidden
         ? {
             run: runEditors.main.state.doc.toString(),
-            mocks: runEditors.mocks.state.doc.toString(),
+            mocks: mockUi?.json(),
           }
         : {}),
     };
@@ -363,6 +365,7 @@ async function start(): Promise<void> {
     null;
   let activeRun: { stop: () => void } | null = null;
   let tsLang: TsLang | null = null;
+  let mockUi: MockUi | null = null;
 
   /* Feed the language service the SDK as generated right now, so completions
      in the snippet match the code on the right. */
@@ -530,6 +533,20 @@ func main() {
           onChange: () => scheduleHashUpdate(),
         }),
       };
+      mockUi = createMockUi({
+        root: document.body,
+        rawEditor: {
+          get: () => runEditors!.mocks.state.doc.toString(),
+          set: (text) =>
+            runEditors!.mocks.dispatch({
+              changes: { from: 0, to: runEditors!.mocks.state.doc.length, insert: text },
+            }),
+          container: $("#mocks-editor"),
+        },
+        onChange: () => scheduleHashUpdate(),
+      });
+      mockUi.setJson(mocksDoc);
+      mockUi.setIr(state.ir);
     }
     scheduleHashUpdate();
   }
@@ -587,7 +604,7 @@ func main() {
     if (!runEditors) return;
     activeRun?.stop();
     runConsole.replaceChildren();
-    const config = parseRunConfig(runEditors.mocks.state.doc.toString());
+    const config = parseRunConfig(mockUi ? mockUi.json() : runEditors.mocks.state.doc.toString());
     if (typeof config === "string") {
       appendRunLine({ kind: "error", text: config });
       return;
