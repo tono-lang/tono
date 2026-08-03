@@ -46,8 +46,11 @@
       </main>
       <section id="run-panel" class="run-panel" hidden>
         <div class="run-toolbar">
-          <span class="run-title">Run against the TypeScript SDK (import from "sdk"; HTTP is mocked)</span>
-          <button id="run-exec">Run</button>
+          <span class="run-title">Run against the generated SDK (HTTP is mocked)</span>
+          <div class="run-actions">
+            <select id="run-target" title="Language to run"></select>
+            <button id="run-exec">Run</button>
+          </div>
         </div>
         <div class="run-body">
           <div class="run-col">

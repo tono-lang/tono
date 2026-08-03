@@ -314,6 +314,12 @@ select:hover {
   font-size: 0.78rem;
 }
 
+.run-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
 .run-body {
   display: flex;
   flex: 1;

@@ -8,7 +8,14 @@ import {
   createOutputView,
   selectSpan,
 } from "./editor";
-import { bundleRun, parseRunConfig, runInWorker, type RunLine } from "./run";
+import {
+  bundleRun,
+  fetchCapabilities,
+  parseRunConfig,
+  runInWorker,
+  runOnServer,
+  type RunLine,
+} from "./run";
 import { DEFAULT_EXAMPLE, EXAMPLES } from "./examples";
 import { buildTree, stripTargetDir, type TreeDir } from "./filetree";
 import { byteToCharMapper } from "./offsets";
@@ -350,14 +357,60 @@ async function start(): Promise<void> {
     ).map(([path, text]) => [path.split("/").pop()!, text as string]),
   );
 
-  const DEFAULT_RUN = `import * as sdk from "sdk";
+  const RUN_TEMPLATES: Record<string, { lang: "ts" | "rust" | "go"; doc: string }> = {
+    ts: {
+      lang: "ts",
+      doc: `import * as sdk from "sdk";
 
 console.log("SDK exports:", Object.keys(sdk).join(", "));
 
 // With the "HTTP client" example loaded, try:
 // const client = new sdk.Client();
 // console.log(await client.getAccount());
-`;
+`,
+    },
+    rust: {
+      lang: "rust",
+      doc: `// The generated SDK is the crate tono_run; the first run compiles its
+// dependency tree, so give it a minute.
+// With the "HTTP client" example loaded, try:
+// use tono_run::playground::Client;
+
+#[tokio::main]
+async fn main() {
+    println!("edit main.rs to call the generated SDK");
+}
+`,
+    },
+    go: {
+      lang: "go",
+      doc: `package main
+
+import "fmt"
+
+// The generated SDK is the module tono_preview; import its packages like
+// playground "tono_preview/playground".
+func main() {
+	fmt.Println("edit main.go to call the generated SDK")
+}
+`,
+    },
+  };
+
+  let runTarget = "ts";
+  const runTargetSelect = $<HTMLSelectElement>("#run-target");
+
+  function populateRunTargets(serverTargets: string[]): void {
+    runTargetSelect.replaceChildren();
+    for (const id of ["ts", ...serverTargets]) {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = id === "ts" ? "TypeScript (browser)" : `${id} (local toolchain)`;
+      runTargetSelect.append(option);
+    }
+    runTargetSelect.hidden = serverTargets.length === 0;
+  }
+  populateRunTargets([]);
 
   const DEFAULT_MOCKS = `{
   "env": { "API_TOKEN": "demo-token" },
@@ -386,7 +439,7 @@ console.log("SDK exports:", Object.keys(sdk).join(", "));
         main: createMiniEditor({
           parent: $("#run-editor"),
           doc: runDoc,
-          lang: "ts",
+          lang: RUN_TEMPLATES[runTarget]?.lang ?? "ts",
           onChange: () => scheduleHashUpdate(),
         }),
         mocks: createMiniEditor({
@@ -400,11 +453,36 @@ console.log("SDK exports:", Object.keys(sdk).join(", "));
     scheduleHashUpdate();
   }
 
+  /* Switching the run language replaces the snippet with that language's
+     template: each target's main lives in a different language, so carrying
+     text across would only produce syntax errors. */
+  runTargetSelect.addEventListener("change", () => {
+    runTarget = runTargetSelect.value;
+    const template = RUN_TEMPLATES[runTarget] ?? RUN_TEMPLATES.ts;
+    if (runEditors) {
+      runEditors.main.destroy();
+      runEditors.main = createMiniEditor({
+        parent: $("#run-editor"),
+        doc: template.doc,
+        lang: template.lang,
+        onChange: () => scheduleHashUpdate(),
+      });
+    }
+  });
+
   $("#run-toggle").addEventListener("click", () => {
-    if (runPanel.hidden) openRunPanel(DEFAULT_RUN, DEFAULT_MOCKS);
+    if (runPanel.hidden) openRunPanel(RUN_TEMPLATES[runTarget].doc, DEFAULT_MOCKS);
     else runPanel.hidden = true;
     scheduleHashUpdate();
   });
+
+  /* Served by `tono playground`? Then the machine's toolchains extend the
+     run targets beyond the browser's TypeScript. */
+  if (CAPABILITIES.run) {
+    void fetchCapabilities().then((caps) => {
+      if (caps) populateRunTargets(caps.runTargets);
+    });
+  }
 
   if (!CAPABILITIES.run) {
     /* The capped (hosted) build previews and shares only; execution belongs
@@ -415,7 +493,7 @@ console.log("SDK exports:", Object.keys(sdk).join(", "));
 
   /* A shared link that carried Run content reopens the panel as it was. */
   if (CAPABILITIES.run && (shared?.run !== undefined || shared?.mocks !== undefined)) {
-    openRunPanel(shared.run ?? DEFAULT_RUN, shared.mocks ?? DEFAULT_MOCKS);
+    openRunPanel(shared.run ?? RUN_TEMPLATES[runTarget].doc, shared.mocks ?? DEFAULT_MOCKS);
   }
 
   $("#run-exec").addEventListener("click", () => {
@@ -429,6 +507,19 @@ console.log("SDK exports:", Object.keys(sdk).join(", "));
     }
     if (!state.ir) {
       appendRunLine({ kind: "error", text: "fix the .tono errors first" });
+      return;
+    }
+    if (runTarget !== "ts") {
+      appendRunLine({ kind: "log", text: `running ${runTarget} with the local toolchain...` });
+      void runOnServer({
+        source: source(),
+        target: runTarget,
+        snippet: runEditors.main.state.doc.toString(),
+        mocks: config,
+      }).then((lines) => {
+        runConsole.replaceChildren();
+        lines.forEach(appendRunLine);
+      });
       return;
     }
     let sdkFiles: GeneratedFile[];

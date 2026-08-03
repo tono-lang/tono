@@ -194,6 +194,51 @@ export async function bundleRun(options: {
   return result.outputFiles[0].text;
 }
 
+export interface ServerCapabilities {
+  version: string;
+  runTargets: string[];
+}
+
+/* Present when the page is served by `tono playground`; a static host has no
+   /api and the fetch fails fast. */
+export async function fetchCapabilities(): Promise<ServerCapabilities | null> {
+  try {
+    const response = await fetch("api/capabilities");
+    if (!response.ok) return null;
+    return (await response.json()) as ServerCapabilities;
+  } catch {
+    return null;
+  }
+}
+
+export async function runOnServer(payload: {
+  source: string;
+  target: string;
+  snippet: string;
+  mocks: RunConfig;
+}): Promise<RunLine[]> {
+  try {
+    const response = await fetch("api/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = (await response.json()) as { lines?: RunLine[]; error?: string };
+    if (!response.ok) {
+      return [
+        { kind: "error", text: data.error ?? response.statusText },
+        { kind: "done", text: "" },
+      ];
+    }
+    return [...(data.lines ?? []), { kind: "done", text: "" }];
+  } catch (err) {
+    return [
+      { kind: "error", text: String(err) },
+      { kind: "done", text: "" },
+    ];
+  }
+}
+
 export function runInWorker(bundle: string, onLine: (line: RunLine) => void): { stop: () => void } {
   const blob = new Blob([bundle], { type: "text/javascript" });
   const url = URL.createObjectURL(blob);

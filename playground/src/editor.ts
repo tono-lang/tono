@@ -213,7 +213,7 @@ function languageFor(path: string, target: Target): Extension {
 export function createMiniEditor(options: {
   parent: HTMLElement;
   doc: string;
-  lang: "ts" | "json";
+  lang: "ts" | "json" | "rust" | "go";
   onChange?: () => void;
 }): EditorView {
   return new EditorView({
@@ -226,7 +226,13 @@ export function createMiniEditor(options: {
         bracketMatching(),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         oneDark,
-        options.lang === "ts" ? javascript({ typescript: true }) : [],
+        options.lang === "ts"
+          ? javascript({ typescript: true })
+          : options.lang === "rust"
+            ? rust()
+            : options.lang === "go"
+              ? go()
+              : [],
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) options.onChange?.();
