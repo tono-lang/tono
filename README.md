@@ -10,6 +10,7 @@ multiple languages. Polyglot monorepo - OCaml frontend, Rust backend.
 - `backend/`  - Rust: codegen engine
 - `cli/`      - Rust: `tono` binary
 - `ir-schema/`- serialized IR contract
+- `docs/`     - user guides (per-language mirror repositories, ...)
 
 ## Build
 

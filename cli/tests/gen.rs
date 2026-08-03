@@ -315,6 +315,20 @@ fn manifest_drives_enabled_targets_and_out_dirs() {
 }
 
 #[test]
+fn manifest_split_repo_does_not_affect_generation() {
+    let base = tmpdir("m-split-repo");
+    // split_repo only feeds `tono split`; generation reads past it untouched.
+    let manifest = write_manifest(
+        &base,
+        "[target.rust]\nout = \"gen/rust\"\nsplit_repo = \"acme/sdk-rust\"\n",
+    );
+    let out = gen_stdin_in(&base, &["--config", manifest.to_str().unwrap()], IR);
+    ok_or_stderr(&out);
+    assert!(base.join("gen/rust/demo/types.rs").is_file());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn manifest_is_auto_discovered_from_a_subdirectory() {
     let base = tmpdir("m-discover");
     write_manifest(&base, "[target.go]\nout = \"out/go\"\n");

@@ -81,6 +81,10 @@ pub struct ResolvedTarget {
     pub module_remap: BTreeMap<String, String>,
     /// Idiomatic-casing overrides, ordered by symbol kind for determinism.
     pub casing: Vec<(SymbolKind, CaseStyle)>,
+    /// Read-only mirror repository for this target's `out` subtree
+    /// (`owner/name` shorthand or a full git URL). Opt-in: `None` means the
+    /// target lives in the monorepo only and `tono split` skips it.
+    pub split_repo: Option<String>,
 }
 
 impl Config {
@@ -150,6 +154,7 @@ struct RawTarget {
     module_remap: BTreeMap<String, String>,
     #[serde(default)]
     casing: BTreeMap<String, String>,
+    split_repo: Option<String>,
 }
 
 // --- resolution -------------------------------------------------------------
@@ -242,6 +247,14 @@ fn resolve_target(name: &str, kind: TargetKind, rt: RawTarget) -> Result<Resolve
         let style = case_style(name, key, value)?;
         casing.push((sym, style));
     }
+    let split_repo = match rt.split_repo {
+        Some(repo) if repo.trim().is_empty() => {
+            return Err(format!(
+                "target '{name}': split_repo must be an 'owner/name' pair or a git URL"
+            ))
+        }
+        other => other,
+    };
     Ok(ResolvedTarget {
         kind,
         out,
@@ -250,6 +263,7 @@ fn resolve_target(name: &str, kind: TargetKind, rt: RawTarget) -> Result<Resolve
         module_mapping,
         module_remap: rt.module_remap,
         casing,
+        split_repo,
     })
 }
 
@@ -500,6 +514,28 @@ enabled = false
     fn declared_target_keys_reports_a_malformed_manifest() {
         let err = declared_target_keys("this is not = = toml").unwrap_err();
         assert!(err.contains("invalid tono.toml"), "{err}");
+    }
+
+    #[test]
+    fn split_repo_is_carried_through() {
+        let src = "[target.rust]\nsplit_repo = \"acme/payments-rust\"\n";
+        let cfg = Config::from_toml_str(src).unwrap();
+        assert_eq!(
+            cfg.targets[0].split_repo.as_deref(),
+            Some("acme/payments-rust")
+        );
+    }
+
+    #[test]
+    fn split_repo_defaults_to_none() {
+        let cfg = Config::from_toml_str("[target.rust]\n").unwrap();
+        assert_eq!(cfg.targets[0].split_repo, None);
+    }
+
+    #[test]
+    fn blank_split_repo_is_an_error() {
+        let err = Config::from_toml_str("[target.rust]\nsplit_repo = \"  \"\n").unwrap_err();
+        assert!(err.contains("split_repo"), "{err}");
     }
 
     #[test]
