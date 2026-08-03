@@ -1,34 +1,26 @@
 //! End-to-end checks of `tono split`: mirroring a target's generated SDK into
 //! its own repository, in both snapshot (default) and subtree modes.
 //!
-//! Each test builds a throwaway monorepo holding a real `.tono` spec and bare
-//! local repositories as mirrors, then runs the command and inspects the
-//! mirrors with plain git. Local paths stand in for the GitHub remotes; the
-//! push plumbing is identical. The split compiles the spec through the
-//! frontend, so these tests skip cleanly when the frontend binary is absent
-//! (a backend-only checkout still passes).
+//! Each test builds a throwaway monorepo and bare local repositories as
+//! mirrors, then runs the command and inspects the mirrors with plain git.
+//! Local paths stand in for the GitHub remotes; the push plumbing is
+//! identical. The build feeding the split comes from a committed IR file
+//! (the same reading contract `tono gen` has), so the suite runs without the
+//! frontend binary; the one source-compiling test skips cleanly when the
+//! frontend is absent. Mirror branches are named explicitly everywhere so the
+//! suite is independent of the environment's init.defaultBranch.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The dune-built frontend binary. `TONO_FRONTEND` overrides it; otherwise we
-/// look in the default build tree next to the workspace.
-fn frontend() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("TONO_FRONTEND") {
-        let p = PathBuf::from(p);
-        return p.exists().then_some(p);
-    }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let p = root.join("_build/default/frontend/bin/tono_frontend.exe");
-    p.exists().then_some(p)
-}
+/// The IR the monorepo commits: one module `spec` with a single structure.
+const IR_V1: &str = r#"{"tono_ir_version":6,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
-/// A `tono` invocation with the frontend wired in. Returns `None` (skip) when
-/// the frontend binary is not built.
-fn tono() -> Option<Command> {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tono"));
-    cmd.env("TONO_FRONTEND", frontend()?);
-    Some(cmd)
+/// The evolved IR: the same structure grows a `currency` member.
+const IR_V2: &str = r#"{"tono_ir_version":6,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]},{"name":"currency","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+
+fn tono() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_tono"))
 }
 
 fn git(dir: &Path, args: &[&str]) {
@@ -71,11 +63,13 @@ fn init_repo(dir: &Path) {
     git(dir, &["config", "user.name", "t"]);
 }
 
-/// Create a bare repository to act as a mirror remote and return its path.
+/// Create a bare repository to act as a mirror remote. Its HEAD names `main`
+/// (where every test pushes), so cloning it checks `main` out regardless of
+/// the environment's init.defaultBranch.
 fn bare_mirror(base: &Path, name: &str) -> PathBuf {
     let dir = base.join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    git(&dir, &["init", "-q", "--bare"]);
+    git(&dir, &["init", "-q", "--bare", "-b", "main"]);
     dir
 }
 
@@ -90,15 +84,12 @@ fn commit_all(dir: &Path, msg: &str) {
     git(dir, &["commit", "-q", "-m", msg]);
 }
 
-const SPEC_V1: &str = "pub struct charge {\n  amount: string\n}\n";
-const SPEC_V2: &str = "pub struct charge {\n  amount: string\n  currency: string\n}\n";
-
-/// Build the standard monorepo: a manifest and a committed spec.
+/// Build the standard monorepo: a manifest and the committed IR.
 fn monorepo(base: &Path, manifest: &str) -> PathBuf {
     let repo = base.join("mono");
     init_repo(&repo);
     write(&repo, "tono.toml", manifest);
-    write(&repo, "spec.tono", SPEC_V1);
+    write(&repo, "ir.json", IR_V1);
     commit_all(&repo, "first spec");
     repo
 }
@@ -110,16 +101,15 @@ fn go_manifest(mirror: &Path, mode: &str) -> String {
     )
 }
 
-/// Run `tono split` in `repo`; `None` means the frontend is absent (skip).
-fn split(repo: &Path, args: &[&str]) -> Option<std::process::Output> {
-    Some(
-        tono()?
-            .current_dir(repo)
-            .arg("split")
-            .args(args)
-            .output()
-            .unwrap(),
-    )
+/// Run `tono split <args> ir.json` in `repo`.
+fn split(repo: &Path, args: &[&str]) -> std::process::Output {
+    tono()
+        .current_dir(repo)
+        .arg("split")
+        .args(args)
+        .arg("ir.json")
+        .output()
+        .unwrap()
 }
 
 fn ok_or_stderr(out: &std::process::Output) {
@@ -138,9 +128,7 @@ fn snapshot_appends_one_build_commit_per_spec_change() {
     let mirror = bare_mirror(&base, "mirror-go");
     let repo = monorepo(&base, &go_manifest(&mirror, ""));
 
-    let Some(out) = split(&repo, &["--branch", "main"]) else {
-        return;
-    };
+    let out = split(&repo, &["--branch", "main"]);
     ok_or_stderr(&out);
     // The mirror holds the freshly generated SDK at its root, with the
     // monorepo commit stamped in the message.
@@ -152,9 +140,9 @@ fn snapshot_appends_one_build_commit_per_spec_change() {
 
     // A spec change appends a second commit; the first stays its parent.
     let before = git_out(&mirror, &["rev-parse", "main"]);
-    write(&repo, "spec.tono", SPEC_V2);
+    write(&repo, "ir.json", IR_V2);
     commit_all(&repo, "second spec");
-    let out = split(&repo, &["--branch", "main"]).unwrap();
+    let out = split(&repo, &["--branch", "main"]);
     ok_or_stderr(&out);
     assert_eq!(git_out(&mirror, &["rev-parse", "main~1"]), before);
     let types = git_out(&mirror, &["show", "main:spec/types.go"]);
@@ -168,11 +156,9 @@ fn snapshot_is_a_no_op_when_the_mirror_is_current() {
     let mirror = bare_mirror(&base, "mirror-go");
     let repo = monorepo(&base, &go_manifest(&mirror, ""));
 
-    let Some(out) = split(&repo, &["--branch", "main"]) else {
-        return;
-    };
+    let out = split(&repo, &["--branch", "main"]);
     ok_or_stderr(&out);
-    let out = split(&repo, &["--branch", "main"]).unwrap();
+    let out = split(&repo, &["--branch", "main"]);
     ok_or_stderr(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("up to date"), "{stdout}");
@@ -190,25 +176,37 @@ fn snapshot_keeps_user_files_and_prunes_stale_generated_ones() {
     let mirror = bare_mirror(&base, "mirror-go");
     let repo = monorepo(&base, &go_manifest(&mirror, ""));
 
-    let Some(out) = split(&repo, &["--branch", "main"]) else {
-        return;
-    };
+    let out = split(&repo, &["--branch", "main"]);
     ok_or_stderr(&out);
 
-    // The user seeds the mirror with files tono does not generate.
+    // The user seeds the mirror with files tono does not generate. The branch
+    // is named: the clone must not depend on the environment's default.
     let seed = base.join("seed");
-    git(&base, &["clone", "-q", mirror.to_str().unwrap(), "seed"]);
+    git(
+        &base,
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "main",
+            mirror.to_str().unwrap(),
+            "seed",
+        ],
+    );
     git(&seed, &["config", "user.email", "t@example.com"]);
     git(&seed, &["config", "user.name", "t"]);
     write(&seed, "go.mod", "module example.com/demo\n");
     commit_all(&seed, "seed module manifest");
-    git(&seed, &["push", "-q"]);
+    git(&seed, &["push", "-q", "origin", "main"]);
 
-    // Renaming the spec file moves the generated module: the old path must be
+    // Renaming the module moves the generated path: the old one must be
     // pruned from the mirror, the seeded go.mod must survive.
-    git(&repo, &["mv", "spec.tono", "billing.tono"]);
+    let renamed = IR_V2
+        .replace("\"spec\"", "\"billing\"")
+        .replace("spec#", "billing#");
+    write(&repo, "ir.json", &renamed);
     commit_all(&repo, "rename module");
-    let out = split(&repo, &["--branch", "main"]).unwrap();
+    let out = split(&repo, &["--branch", "main"]);
     ok_or_stderr(&out);
     let files = git_out(&mirror, &["ls-tree", "-r", "--name-only", "main"]);
     assert!(files.contains("billing/types.go"), "{files}");
@@ -230,9 +228,7 @@ fn a_failing_mirror_does_not_block_the_others() {
     );
     let repo = monorepo(&base, &manifest);
 
-    let Some(out) = split(&repo, &["--branch", "main"]) else {
-        return;
-    };
+    let out = split(&repo, &["--branch", "main"]);
     // The run fails overall (CI must notice) but only after every target ran.
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -246,14 +242,59 @@ fn a_failing_mirror_does_not_block_the_others() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The frontend path: with no IR argument, the project's own `.tono` sources
+/// are compiled and mirrored. Skips when the frontend binary is not built.
+#[test]
+fn snapshot_compiles_the_project_sources_when_no_ir_is_given() {
+    let frontend = match std::env::var_os("TONO_FRONTEND") {
+        Some(p) => {
+            let p = PathBuf::from(p);
+            if !p.exists() {
+                return;
+            }
+            p
+        }
+        None => {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+            let p = root.join("_build/default/frontend/bin/tono_frontend.exe");
+            if !p.exists() {
+                eprintln!("skipping: frontend binary not built (set TONO_FRONTEND)");
+                return;
+            }
+            p
+        }
+    };
+    let base = scratch("snap-sources");
+    let mirror = bare_mirror(&base, "mirror-go");
+    let repo = base.join("mono");
+    init_repo(&repo);
+    write(&repo, "tono.toml", &go_manifest(&mirror, ""));
+    write(
+        &repo,
+        "spec.tono",
+        "pub struct charge {\n  amount: string\n}\n",
+    );
+    commit_all(&repo, "first spec");
+
+    let out = tono()
+        .env("TONO_FRONTEND", frontend)
+        .current_dir(&repo)
+        .args(["split", "--branch", "main"])
+        .output()
+        .unwrap();
+    ok_or_stderr(&out);
+    let files = git_out(&mirror, &["ls-tree", "-r", "--name-only", "main"]);
+    assert!(files.contains("spec/types.go"), "{files}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 // --- subtree mode (the opt-in) ----------------------------------------------
 
 /// Commit a fresh `tono gen` run, the state subtree mode projects.
 fn gen_and_commit(repo: &Path, msg: &str) {
     let out = tono()
-        .unwrap()
         .current_dir(repo)
-        .arg("gen")
+        .args(["gen", "ir.json"])
         .output()
         .unwrap();
     assert!(
@@ -269,16 +310,13 @@ fn subtree_projects_the_committed_history_with_only_its_own_commits() {
     let base = scratch("sub-mirror");
     let mirror = bare_mirror(&base, "mirror-go");
     let repo = monorepo(&base, &go_manifest(&mirror, "split_mode = \"subtree\"\n"));
-    if tono().is_none() {
-        return;
-    }
     gen_and_commit(&repo, "first sdk drop");
     write(&repo, "README.md", "root only\n");
     commit_all(&repo, "root readme");
-    write(&repo, "spec.tono", SPEC_V2);
+    write(&repo, "ir.json", IR_V2);
     gen_and_commit(&repo, "second sdk drop");
 
-    let out = split(&repo, &["--branch", "main", "--ref", "HEAD"]).unwrap();
+    let out = split(&repo, &["--branch", "main", "--ref", "HEAD"]);
     ok_or_stderr(&out);
     // The mirror's history is the subtree's own: both sdk drops, not the
     // root-only commit, with the dist/go contents at the root.
@@ -297,15 +335,12 @@ fn subtree_refuses_to_project_a_stale_committed_sdk() {
     let base = scratch("sub-drift");
     let mirror = bare_mirror(&base, "mirror-go");
     let repo = monorepo(&base, &go_manifest(&mirror, "split_mode = \"subtree\"\n"));
-    if tono().is_none() {
-        return;
-    }
     gen_and_commit(&repo, "first sdk drop");
     // The spec moves on but nobody regenerates: the gate must catch it.
-    write(&repo, "spec.tono", SPEC_V2);
+    write(&repo, "ir.json", IR_V2);
     commit_all(&repo, "spec change without regen");
 
-    let out = split(&repo, &["--branch", "main", "--ref", "HEAD"]).unwrap();
+    let out = split(&repo, &["--branch", "main", "--ref", "HEAD"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("stale"), "{stderr}");
@@ -321,9 +356,6 @@ fn subtree_default_ref_is_asked_from_the_remote_when_the_symref_is_absent() {
     let base = scratch("sub-default");
     let mirror = bare_mirror(&base, "mirror-go");
     let server = monorepo(&base, &go_manifest(&mirror, "split_mode = \"subtree\"\n"));
-    if tono().is_none() {
-        return;
-    }
     gen_and_commit(&server, "sdk drop");
     // A default branch that is neither main nor master proves the name is
     // resolved, not guessed.
@@ -339,7 +371,7 @@ fn subtree_default_ref_is_asked_from_the_remote_when_the_symref_is_absent() {
     git(&work, &["fetch", "-q", "origin"]);
     git(&work, &["checkout", "-q", "--detach", "origin/trunk"]);
 
-    let out = split(&work, &["--branch", "main"]).unwrap();
+    let out = split(&work, &["--branch", "main"]);
     ok_or_stderr(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("origin/trunk"), "{stdout}");
@@ -355,9 +387,7 @@ fn a_manifest_without_split_repo_is_a_no_op() {
     let base = scratch("noop");
     let repo = monorepo(&base, "[target.go]\nout = \"dist/go\"\n");
 
-    let Some(out) = split(&repo, &["--branch", "main"]) else {
-        return;
-    };
+    let out = split(&repo, &["--branch", "main"]);
     ok_or_stderr(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("nothing to split"), "{stdout}");
@@ -369,9 +399,7 @@ fn a_missing_branch_flag_is_a_clear_error() {
     let base = scratch("nobranch");
     let repo = monorepo(&base, "[target.go]\nout = \"dist/go\"\n");
 
-    let Some(out) = split(&repo, &[]) else {
-        return;
-    };
+    let out = split(&repo, &[]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("needs --branch"), "{stderr}");
@@ -384,9 +412,7 @@ fn an_invalid_branch_name_is_rejected_before_any_push() {
     let mirror = bare_mirror(&base, "mirror-go");
     let repo = monorepo(&base, &go_manifest(&mirror, ""));
 
-    let Some(out) = split(&repo, &["--branch", "..bad"]) else {
-        return;
-    };
+    let out = split(&repo, &["--branch", "..bad"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("invalid --branch"), "{stderr}");

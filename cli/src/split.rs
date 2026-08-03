@@ -2,9 +2,11 @@
 //! repository.
 //!
 //! The monorepo stays the single source of truth and the split always starts
-//! from a fresh build: the project's sources are compiled and generated first,
-//! so a mirror can never receive an SDK older than the spec it stands for.
-//! How the result reaches the mirror is the target's `split_mode`:
+//! from a fresh build: the SDK is generated first, from the IR read the same
+//! way `gen` reads it (an argument, a pipe, or the project's own sources
+//! compiled through the frontend), so a mirror can never receive an SDK older
+//! than the spec it stands for. How the result reaches the mirror is the
+//! target's `split_mode`:
 //!
 //! - `snapshot` (default): the freshly generated files become one commit
 //!   appended to the mirror branch. Nothing needs to be committed in the
@@ -27,15 +29,16 @@ use std::process::Command;
 
 use tono_backend::codegen::{is_generated, TargetKind};
 use tono_backend::config::{self as manifest, SplitMode};
-use tono_backend::ir::decode_model;
 
 use crate::gen;
 
-/// Run `tono split --branch <name> [--config <tono.toml>] [--ref <committish>]`.
+/// Run `tono split --branch <name> [--config <tono.toml>] [--ref <committish>]
+/// [<ir.json>]`.
 pub fn run(args: &[String]) -> Result<(), String> {
     let mut config_path: Option<String> = None;
     let mut split_ref: Option<String> = None;
     let mut branch: Option<String> = None;
+    let mut ir_path: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -51,6 +54,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
             // on its own mirror branch and leave main alone, so the caller
             // always says where the changes go.
             "--branch" => branch = Some(crate::flag_value(args, &mut i, "--branch")?),
+            flag if flag.starts_with("--") => {
+                return Err(format!("unknown flag: {flag}\n{}", crate::USAGE))
+            }
+            path if ir_path.is_none() => ir_path = Some(path.to_string()),
             other => return Err(format!("unexpected argument: {other}\n{}", crate::USAGE)),
         }
         i += 1;
@@ -112,9 +119,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
 
     // One build feeds every target: snapshot pushes it, subtree gates on it.
-    // A spec that does not compile stops the whole run; that is not a
-    // per-mirror failure, there is nothing correct to mirror.
-    let model = decode_model(&gen::compile_sources(&base.join(&cfg.project.root))?)?;
+    // The IR comes in exactly as `gen` reads it (an argument, a pipe, or the
+    // project's own sources compiled through the frontend). A spec that does
+    // not compile stops the whole run; that is not a per-mirror failure,
+    // there is nothing correct to mirror.
+    let model = gen::read_ir(&ir_path, &base.join(&cfg.project.root))?;
     let run = SplitRun {
         root: &root,
         base: &base,

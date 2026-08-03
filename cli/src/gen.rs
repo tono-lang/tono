@@ -278,8 +278,9 @@ fn resolved_casing(target: &manifest::ResolvedTarget) -> CasingConfig {
 /// the frontend. The IR is an internal artifact, so a plain `tono gen` inside a
 /// project generates straight from source; reading a path or a pipe stays
 /// supported for callers that already hold IR (a committed artifact, a CI step
-/// that compiled it once, `tono-frontend compile-dir | tono gen`).
-fn read_ir(ir_path: &Option<String>, source_root: &Path) -> Result<Model, String> {
+/// that compiled it once, `tono-frontend compile-dir | tono gen`). `tono split`
+/// reads its IR through the same contract.
+pub(crate) fn read_ir(ir_path: &Option<String>, source_root: &Path) -> Result<Model, String> {
     if let Some(path) = ir_path {
         let json = fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         return decode_model(&json);

@@ -49,7 +49,7 @@ const USAGE: &str = "usage: tono (\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
     breaking [<ir.json>] [--baseline <ref>] [--baseline-path <path>] [--config <cfg.json>] [--level <cat>=<sev>]... [--allow <key>]...\n  \
-    split --branch <name> [--config <tono.toml>] [--ref <committish>]\n  \
+    split --branch <name> [--config <tono.toml>] [--ref <committish>] [<ir.json>]\n  \
     version)";
 
 /// The project manifest's conventional filename, auto-discovered by walking up
