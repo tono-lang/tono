@@ -126,6 +126,12 @@ let completions_js src_js line character =
   let text = Js.to_string src_js in
   let file = A.parse text in
   let items = A.completions ~text ~file (position ~line ~character) in
+  let doc_string (ci : CompletionItem.t) =
+    match ci.documentation with
+    | Some (`String s) -> Some s
+    | Some (`MarkupContent (m : MarkupContent.t)) -> Some m.value
+    | None -> None
+  in
   Js.array
     (Array.of_list
        (List.map
@@ -134,6 +140,7 @@ let completions_js src_js line character =
               val label = Js.string ci.label
               val detail = js_opt_string ci.detail
               val insertText = js_opt_string ci.insertText
+              val documentation = js_opt_string (doc_string ci)
             end)
           items))
 

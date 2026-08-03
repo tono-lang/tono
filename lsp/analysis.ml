@@ -394,6 +394,19 @@ let prim_items : CompletionItem.t list =
         ~detail:"primitive" ())
     primitives
 
+(* Declaration-starter keywords, offered where a declaration can begin. The
+   prose is the hover's construct text, so the two never drift. *)
+let keyword_item (word : string) : CompletionItem.t =
+  match Hover_docs.construct_doc word with
+  | Some doc ->
+      CompletionItem.create ~label:word ~kind:CompletionItemKind.Keyword
+        ~detail:"keyword"
+        ~documentation:(`String doc)
+        ()
+  | None ->
+      CompletionItem.create ~label:word ~kind:CompletionItemKind.Keyword
+        ~detail:"keyword" ()
+
 let trait_items : CompletionItem.t list =
   List.map
     (fun (name, detail) ->
@@ -560,8 +573,18 @@ let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
   else if ext_kind_context then ext_kind_items
   else if impl_context then entry_op_items file
   else if ref_context then field_items file off
-  else if type_context then prim_items @ decl_items file
-  else decl_items file @ prim_items
+  else if type_context then (keyword_item "map" :: prim_items) @ decl_items file
+  else
+    (* Keywords only where a declaration can begin: a blank prefix offers the
+       starters, a lone `pub` offers what may follow it. Anywhere else they
+       would be noise next to the declared shapes. *)
+    let starters =
+      match words with
+      | [] -> [ "pub"; "struct"; "enum"; "union"; "op"; "import"; "ext" ]
+      | [ "pub" ] -> [ "struct"; "enum"; "union"; "op"; "ext" ]
+      | _ -> []
+    in
+    List.map keyword_item starters @ decl_items file @ prim_items
 
 (* --- symbols, references, rename, formatting --- *)
 

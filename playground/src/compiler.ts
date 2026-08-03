@@ -28,6 +28,7 @@ export interface CompletionInfo {
   label: string;
   detail: string | null;
   insertText: string | null;
+  documentation: string | null;
 }
 
 /* LSP convention: 0-based line, UTF-16 character column. */

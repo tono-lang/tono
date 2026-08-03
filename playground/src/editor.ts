@@ -94,6 +94,20 @@ function ideCompletionSource(ide: IdeBackend) {
         label: item.label,
         detail: item.detail ?? undefined,
         apply: item.insertText ?? item.label,
+        type: item.detail === "keyword" || item.detail === "primitive" ? "keyword" : "type",
+        ...(item.documentation
+          ? {
+              info: () => {
+                const dom = document.createElement("div");
+                dom.className = "ts-info";
+                const prose = document.createElement("div");
+                prose.className = "ts-info-doc";
+                prose.textContent = item.documentation ?? "";
+                dom.append(prose);
+                return { dom };
+              },
+            }
+          : {}),
       })),
     };
   };
