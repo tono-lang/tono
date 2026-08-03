@@ -139,6 +139,7 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
                 target: TargetKind::Rust,
                 path: dir.join(name),
                 text: format!("{BANNER}{body}"),
+                decl_spans: Vec::new(),
             }
         })
         .collect()
@@ -179,6 +180,7 @@ pub fn typescript_barrels(groups: &[(Group, Exports)]) -> Vec<GeneratedFile> {
             target: TargetKind::TypeScript,
             path: dir.join("index.ts"),
             text: format!("{BANNER}{body}"),
+            decl_spans: Vec::new(),
         });
         let sub = layout::module_dir(module)
             .to_string_lossy()
@@ -194,6 +196,7 @@ pub fn typescript_barrels(groups: &[(Group, Exports)]) -> Vec<GeneratedFile> {
         path: PathBuf::from(TargetKind::TypeScript.dir()).join("package.json"),
         // JSON carries no comment, so this one file has no banner.
         text: format!("{{\n  \"exports\": {{\n{}\n  }}\n}}\n", entries.join(",\n")),
+        decl_spans: Vec::new(),
     });
     files
 }

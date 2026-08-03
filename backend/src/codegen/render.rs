@@ -8,6 +8,7 @@
 
 use crate::codegen::format::{Formatted, Formatter};
 use crate::codegen::imports;
+use crate::codegen::output::DeclSpan;
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::File;
 
@@ -27,6 +28,19 @@ pub fn render_file_with(
     rules: &dyn RenderRules,
     formatter: &Formatter,
 ) -> Formatted {
+    render_file_with_spans(file, resolver, rules, formatter).0
+}
+
+/// Like [`render_file_with`], also reporting each declaration's byte range in
+/// the rough text, keyed by the symbols it declares. The spans index the text
+/// the passthrough formatter returns verbatim; a real formatter rewrites the
+/// layout and leaves them stale, so span-consuming callers use the passthrough.
+pub fn render_file_with_spans(
+    file: &File,
+    resolver: &dyn imports::Resolver,
+    rules: &dyn RenderRules,
+    formatter: &Formatter,
+) -> (Formatted, Vec<DeclSpan>) {
     let imports = imports::collect_with(file, resolver);
     let mut rough = String::new();
     // The imports arrive ordered by (module, imported), so names of the same
@@ -51,10 +65,12 @@ pub fn render_file_with(
         rough.push_str(&rules.render_imports(statements));
         rough.push_str("\n\n");
     }
+    let mut spans = Vec::with_capacity(file.decls.len());
     for (index, decl) in file.decls.iter().enumerate() {
         if index > 0 {
             rough.push('\n');
         }
+        let start = rough.len();
         // Opaque text carries a slot where a reference could not be spelled at
         // emission; the target spells it now, when the file it lands in is known.
         let rendered = rules.render_decl(decl);
@@ -63,9 +79,14 @@ pub fn render_file_with(
             crate::codegen::tree::item_refs(decl),
             &|symbol| rules.render_symbol(symbol),
         ));
+        spans.push(DeclSpan {
+            symbols: imports::declared_symbols(std::slice::from_ref(decl)),
+            start,
+            end: rough.len(),
+        });
         rough.push('\n');
     }
-    formatter.run(&rough)
+    (formatter.run(&rough), spans)
 }
 
 #[cfg(test)]

@@ -55,13 +55,27 @@ impl TargetKind {
     }
 }
 
+/// A declaration's byte range in a file's rough text, keyed by the symbols the
+/// declaration declares. Offsets index the text exactly as [`super::pipeline::generate`]
+/// returns it (the engine's own layout); running a real formatter over the text
+/// invalidates them, which is why the CLI writer does not carry them along.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclSpan {
+    pub symbols: Vec<String>,
+    pub start: usize,
+    pub end: usize,
+}
+
 /// A generated source file: which target produced it (so a caller knows which
-/// formatter to run), its path relative to the output root, and its text.
+/// formatter to run), its path relative to the output root, its text, and where
+/// each declaration landed in that text (for tooling that maps IR declarations
+/// to emitted code; empty for layout-only files like module trees and barrels).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneratedFile {
     pub target: TargetKind,
     pub path: PathBuf,
     pub text: String,
+    pub decl_spans: Vec<DeclSpan>,
 }
 
 #[cfg(test)]
