@@ -455,18 +455,38 @@ func main() {
 
   function populateRunTargets(serverTargets: string[]): void {
     runTargetSelect.replaceChildren();
-    const browser = document.createElement("option");
-    browser.value = "ts";
-    browser.textContent = "TypeScript (browser)";
-    runTargetSelect.append(browser);
-    for (const id of serverTargets) {
+    const localTs = serverTargets.includes("ts");
+    const choices: { value: string; label: string }[] = [];
+    /* The browser runner is the fallback, not a parallel mode: it only shows
+       when no local TypeScript runner exists, and only says so when it sits
+       next to local targets. */
+    if (!localTs) {
+      choices.push({
+        value: "ts",
+        label: serverTargets.length > 0 ? "TypeScript (browser)" : "TypeScript",
+      });
+    }
+    const ordered = [...serverTargets].sort((a, b) =>
+      a === "ts" ? -1 : b === "ts" ? 1 : a.localeCompare(b),
+    );
+    for (const id of ordered) {
+      const name = id === "ts" ? "TypeScript" : id;
+      choices.push({
+        value: `local:${id}`,
+        label: localTs ? name : `${name} (local toolchain)`,
+      });
+    }
+    for (const choice of choices) {
       const option = document.createElement("option");
-      option.value = `local:${id}`;
-      option.textContent =
-        id === "ts" ? "TypeScript (local toolchain)" : `${id} (local toolchain)`;
+      option.value = choice.value;
+      option.textContent = choice.label;
       runTargetSelect.append(option);
     }
-    runTargetSelect.hidden = serverTargets.length === 0;
+    if (!choices.some((c) => c.value === runTarget)) {
+      runTarget = choices[0]?.value ?? "ts";
+    }
+    runTargetSelect.value = runTarget;
+    runTargetSelect.hidden = choices.length <= 1;
   }
   populateRunTargets([]);
 
