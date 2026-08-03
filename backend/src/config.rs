@@ -81,10 +81,25 @@ pub struct ResolvedTarget {
     pub module_remap: BTreeMap<String, String>,
     /// Idiomatic-casing overrides, ordered by symbol kind for determinism.
     pub casing: Vec<(SymbolKind, CaseStyle)>,
-    /// Read-only mirror repository for this target's `out` subtree
+    /// Read-only mirror repository for this target's generated SDK
     /// (`owner/name` shorthand or a full git URL). Opt-in: `None` means the
     /// target lives in the monorepo only and `tono split` skips it.
     pub split_repo: Option<String>,
+    /// How `tono split` moves the SDK into the mirror.
+    pub split_mode: SplitMode,
+}
+
+/// How a target's mirror is produced. `Snapshot` is the default: it needs no
+/// committed generated code and appends plain commits, so it works in any
+/// repository. `Subtree` is the opt-in for projects that commit the generated
+/// SDK and want the mirror to carry the monorepo's own history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SplitMode {
+    /// Generate at split time and append the result as one commit.
+    #[default]
+    Snapshot,
+    /// Project the committed history of the `out` subtree, force-pushed.
+    Subtree,
 }
 
 impl Config {
@@ -155,6 +170,7 @@ struct RawTarget {
     #[serde(default)]
     casing: BTreeMap<String, String>,
     split_repo: Option<String>,
+    split_mode: Option<String>,
 }
 
 // --- resolution -------------------------------------------------------------
@@ -228,10 +244,12 @@ fn kind_order(kind: TargetKind) -> u8 {
 }
 
 fn resolve_target(name: &str, kind: TargetKind, rt: RawTarget) -> Result<ResolvedTarget, String> {
+    // Generated output defaults under dist/ to mark it as a build artifact,
+    // separate from the sources it is derived from.
     let out = rt
         .out
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(kind.dir()));
+        .unwrap_or_else(|| PathBuf::from("dist").join(kind.dir()));
     let module_mapping = match rt.module_mapping.as_deref() {
         None | Some("nested") => ModuleMapping::Nested,
         Some("flat") => ModuleMapping::Flat,
@@ -255,6 +273,21 @@ fn resolve_target(name: &str, kind: TargetKind, rt: RawTarget) -> Result<Resolve
         }
         other => other,
     };
+    let split_mode = match rt.split_mode.as_deref() {
+        None => SplitMode::Snapshot,
+        Some(_) if split_repo.is_none() => {
+            return Err(format!(
+                "target '{name}': split_mode has no effect without split_repo"
+            ))
+        }
+        Some("snapshot") => SplitMode::Snapshot,
+        Some("subtree") => SplitMode::Subtree,
+        Some(other) => {
+            return Err(format!(
+                "target '{name}': invalid split_mode '{other}' (expected: snapshot, subtree)"
+            ))
+        }
+    };
     Ok(ResolvedTarget {
         kind,
         out,
@@ -264,6 +297,7 @@ fn resolve_target(name: &str, kind: TargetKind, rt: RawTarget) -> Result<Resolve
         module_remap: rt.module_remap,
         casing,
         split_repo,
+        split_mode,
     })
 }
 
@@ -397,10 +431,10 @@ enabled = false
         assert_eq!(cfg.compat.wire_breaking, Severity::Error);
         assert_eq!(cfg.compat.source_breaking, Severity::Error);
         assert_eq!(cfg.compat.behavioral, Severity::Warn);
-        // A target table with no fields defaults to enabled, out=<lang dir>, nested.
+        // A target table with no fields defaults to enabled, out=dist/<lang>, nested.
         let rust = &cfg.targets[0];
         assert_eq!(rust.kind, TargetKind::Rust);
-        assert_eq!(rust.out, PathBuf::from("rust"));
+        assert_eq!(rust.out, PathBuf::from("dist/rust"));
         assert_eq!(rust.module_mapping, ModuleMapping::Nested);
         assert!(rust.casing.is_empty());
         assert_eq!(rust.package, None);
@@ -535,6 +569,35 @@ enabled = false
     #[test]
     fn blank_split_repo_is_an_error() {
         let err = Config::from_toml_str("[target.rust]\nsplit_repo = \"  \"\n").unwrap_err();
+        assert!(err.contains("split_repo"), "{err}");
+    }
+
+    #[test]
+    fn split_mode_defaults_to_snapshot() {
+        let src = "[target.rust]\nsplit_repo = \"acme/sdk\"\n";
+        let cfg = Config::from_toml_str(src).unwrap();
+        assert_eq!(cfg.targets[0].split_mode, SplitMode::Snapshot);
+    }
+
+    #[test]
+    fn split_mode_subtree_is_the_opt_in() {
+        let src = "[target.rust]\nsplit_repo = \"acme/sdk\"\nsplit_mode = \"subtree\"\n";
+        let cfg = Config::from_toml_str(src).unwrap();
+        assert_eq!(cfg.targets[0].split_mode, SplitMode::Subtree);
+    }
+
+    #[test]
+    fn invalid_split_mode_is_an_error() {
+        let src = "[target.rust]\nsplit_repo = \"acme/sdk\"\nsplit_mode = \"rsync\"\n";
+        let err = Config::from_toml_str(src).unwrap_err();
+        assert!(err.contains("rsync"), "{err}");
+        assert!(err.contains("split_mode"), "{err}");
+    }
+
+    #[test]
+    fn split_mode_without_split_repo_is_an_error() {
+        let err = Config::from_toml_str("[target.rust]\nsplit_mode = \"snapshot\"\n").unwrap_err();
+        assert!(err.contains("split_mode"), "{err}");
         assert!(err.contains("split_repo"), "{err}");
     }
 

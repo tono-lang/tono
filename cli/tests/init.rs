@@ -67,10 +67,10 @@ fn fresh_mode_writes_manifest_and_native_manifests() {
     assert!(manifest.contains("[target.typescript]"));
     assert!(manifest.contains("baseline = \"git:last-tag\""));
 
-    assert!(std::fs::read_to_string(dir.join("rust/Cargo.toml"))
+    assert!(std::fs::read_to_string(dir.join("dist/rust/Cargo.toml"))
         .unwrap()
         .contains("[dependencies]"));
-    let go_mod = std::fs::read_to_string(dir.join("go/go.mod")).unwrap();
+    let go_mod = std::fs::read_to_string(dir.join("dist/go/go.mod")).unwrap();
     assert!(go_mod.contains("go 1.21"));
     // The manifest's [target.go].package and go.mod's module directive must
     // agree: main.rs threads the manifest's `package` through as the Go
@@ -88,10 +88,30 @@ fn fresh_mode_writes_manifest_and_native_manifests() {
         "{go_mod}"
     );
 
-    assert!(std::fs::read_to_string(dir.join("typescript/package.json"))
-        .unwrap()
-        .contains("\"type\": \"module\""));
+    assert!(
+        std::fs::read_to_string(dir.join("dist/typescript/package.json"))
+            .unwrap()
+            .contains("\"type\": \"module\"")
+    );
 
+    // A starter .gitignore, with the dist entry left as the user's call.
+    let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+    assert!(gitignore.contains("node_modules/"), "{gitignore}");
+    assert!(gitignore.contains("# /dist"), "{gitignore}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_existing_gitignore_is_never_touched() {
+    let dir = tmpdir("gitignore-kept");
+    std::fs::write(dir.join(".gitignore"), "mine\n").unwrap();
+    let (ok, _, stderr) = init(&dir, &["--yes", "--target", "rust"]);
+    assert!(ok, "init failed: {stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+        "mine\n"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -103,7 +123,11 @@ fn gen_works_immediately_after_init_with_no_extra_flags() {
 
     assert!(gen_via_stdin(&dir), "gen should auto-discover tono.toml");
     for (sub, ext) in [("rust", "rs"), ("go", "go"), ("typescript", "ts")] {
-        let path = dir.join(sub).join("demo").join(format!("types.{ext}"));
+        let path = dir
+            .join("dist")
+            .join(sub)
+            .join("demo")
+            .join(format!("types.{ext}"));
         assert!(path.is_file(), "{} was not generated", path.display());
     }
 
@@ -204,7 +228,7 @@ fn update_mode_explains_a_declared_but_disabled_target() {
     assert!(stderr.contains("disabled"), "{stderr}");
     assert!(stderr.contains("enabled = true"), "{stderr}");
     // Disabled by intent: no build setup is scaffolded for it.
-    assert!(!dir.join("go").exists());
+    assert!(!dir.join("dist/go").exists());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
