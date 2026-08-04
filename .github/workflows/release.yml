@@ -53,8 +53,13 @@ jobs:
         run: opam exec -- playground/scripts/build-compiler.sh
 
       - name: Build the web app
+        # full mode: the CLI-embedded UI runs locally against the user's own
+        # toolchains, so it gets the Run panel; the capped hosted mode (no
+        # execution) is only for the static GitHub Pages demo.
         run: npm run build
         working-directory: playground
+        env:
+          VITE_PLAYGROUND_MODE: full
 
       # Built once here rather than per matrix leg: the bundle is the same
       # static JS/wasm regardless of the target platform the CLI ships for.
