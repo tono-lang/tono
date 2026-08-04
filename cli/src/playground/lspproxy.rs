@@ -445,6 +445,18 @@ mod tests {
     }
 
     #[test]
+    fn server_binaries_honor_their_environment_overrides() {
+        let _env = crate::playground::playground_env_guard();
+        assert_eq!(server_program("gopls", "TONO_TEST_UNSET_XYZ"), "gopls");
+        std::env::set_var("TONO_TEST_LS_OVERRIDE", "/opt/custom/gopls");
+        assert_eq!(
+            server_program("gopls", "TONO_TEST_LS_OVERRIDE"),
+            "/opt/custom/gopls"
+        );
+        std::env::remove_var("TONO_TEST_LS_OVERRIDE");
+    }
+
+    #[test]
     fn workspace_hashes_track_source_and_module() {
         assert_eq!(hash_of("a", "m"), hash_of("a", "m"));
         assert_ne!(hash_of("a", "m"), hash_of("b", "m"));

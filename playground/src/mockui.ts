@@ -35,6 +35,7 @@ export function createMockUi(options: {
       const key = document.createElement("input");
       key.className = "env-key";
       key.placeholder = "NAME";
+      key.setAttribute("aria-label", "Environment variable name");
       key.value = row.key;
       key.addEventListener("input", () => {
         row.key = key.value;
@@ -43,6 +44,7 @@ export function createMockUi(options: {
       const value = document.createElement("input");
       value.className = "env-value";
       value.placeholder = "value";
+      value.setAttribute("aria-label", "Environment variable value");
       value.value = row.value;
       value.addEventListener("input", () => {
         row.value = value.value;

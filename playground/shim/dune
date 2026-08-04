@@ -1,10 +1,12 @@
-;; optional: the OCaml CI job builds @default without js_of_ocaml installed;
-;; the playground build asks for shim.bc.js explicitly and does install it.
+;; Release-profile only: the shim needs the js_of_ocaml compiler, which the
+;; plain OCaml jobs do not install; the playground build (script and CI job)
+;; builds shim.bc.js explicitly under --profile release with it present.
 
 (executable
  (name shim)
  (modes js)
- (optional)
+ (enabled_if
+  (= %{profile} release))
  (libraries js_of_ocaml tono_frontend tono_lsp_lib lsp)
  (preprocess
   (pps js_of_ocaml-ppx)))

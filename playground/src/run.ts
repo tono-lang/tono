@@ -41,7 +41,7 @@ export function matchRoute(
 ): { status: number; body: unknown; headers: Record<string, string> } | null {
   let pathname: string;
   try {
-    pathname = new URL(url, "http://mock.local").pathname;
+    pathname = new URL(url, "https://mock.local").pathname;
   } catch {
     pathname = url;
   }
@@ -85,7 +85,7 @@ const findRoute = (method, pathname) => {
 globalThis.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input.url;
   const method = (init && init.method) || (typeof input === "object" && input.method) || "GET";
-  const pathname = new URL(url, "http://mock.local").pathname;
+  const pathname = new URL(url, "https://mock.local").pathname;
   const hit = findRoute(method.toUpperCase(), pathname);
   if (!hit && config.passthrough) {
     post("request", method.toUpperCase() + " " + url + " (live)");

@@ -18,3 +18,4 @@ playground/node_modules/
 playground/dist/
 playground/src/generated/
 playground/backend-wasm/target/
+playground/coverage/

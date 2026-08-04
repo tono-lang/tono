@@ -313,7 +313,7 @@ jobs:
         with:
           ocaml-compiler: "5.2"
       - name: Install the frontend's OCaml dependencies
-        run: opam install yojson js_of_ocaml js_of_ocaml-ppx lsp jsonrpc --yes
+        run: opam install yojson.3.0.0 js_of_ocaml.6.2.0 js_of_ocaml-ppx.6.2.0 lsp.1.25.0 jsonrpc.1.25.0 --yes
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: wasm32-unknown-unknown
@@ -322,18 +322,24 @@ jobs:
         with:
           node-version: "22"
       - name: Install node dependencies
-        run: npm ci
+        # --ignore-scripts blocks dependency lifecycle scripts; vite's esbuild
+        # resolves its platform binary via optional deps, and wasm-pack comes
+        # from install-action below instead of its npm postinstall download.
+        run: npm ci --ignore-scripts
         working-directory: playground
+      - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
+        with:
+          tool: wasm-pack
       - name: Build the embedded compiler halves
         run: opam exec -- playground/scripts/build-compiler.sh
       - name: Unit tests
-        run: npx vitest run
+        run: npm test
         working-directory: playground
       - name: Smoke over the built artifacts
         run: node scripts/smoke.mjs
         working-directory: playground
       - name: Type-check and build the app
-        run: npx tsc --noEmit && npx vite build
+        run: npm run build
         working-directory: playground
       - name: Build the CLI with the playground server
         run: cargo build -p tono-cli --features embed-ui

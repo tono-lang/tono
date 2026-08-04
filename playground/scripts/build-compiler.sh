@@ -26,8 +26,15 @@ mkdir -p "$pg/src/generated/runtime-ts"
 cp "$root"/runtimes/http-ts/src/*.ts "$pg/src/generated/runtime-ts/"
 
 echo "build: wasm backend"
+# CI installs wasm-pack as a prebuilt tool (npm ci runs with --ignore-scripts,
+# which skips the npm package's binary download); locally the npm dep works.
+if command -v wasm-pack >/dev/null 2>&1; then
+  wasm_pack=wasm-pack
+else
+  wasm_pack="$pg/node_modules/.bin/wasm-pack"
+fi
 (cd "$pg/backend-wasm" &&
-  "$pg/node_modules/.bin/wasm-pack" build --target web --release \
+  "$wasm_pack" build --target web --release \
     --out-dir "$pg/src/generated/backend" --no-pack)
 
 echo "build: done"
