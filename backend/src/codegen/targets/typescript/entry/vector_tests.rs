@@ -613,3 +613,7 @@ fn env_const_decl() -> Decl {
 #[cfg(test)]
 #[path = "vector_tests_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "vector_expects_tests.rs"]
+mod expects_tests;

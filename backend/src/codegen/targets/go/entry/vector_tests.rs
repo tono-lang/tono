@@ -622,3 +622,7 @@ fn live_test_decl(ctx: &TestCtx<'_>) -> Decl {
         refs,
     )
 }
+
+#[cfg(test)]
+#[path = "vector_expects_tests.rs"]
+mod expects_tests;
