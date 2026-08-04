@@ -13,8 +13,60 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  build-ui:
+    name: Build the playground UI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
+        with:
+          ocaml-compiler: "5.2"
+
+      - name: Install the frontend's OCaml dependencies
+        run: opam install yojson.3.0.0 js_of_ocaml.6.2.0 js_of_ocaml-ppx.6.2.0 lsp.1.25.0 jsonrpc.1.25.0 --yes
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Install node dependencies
+        # --ignore-scripts blocks dependency lifecycle scripts; vite's esbuild
+        # resolves its platform binary via optional deps, and wasm-pack comes
+        # from install-action below instead of its npm postinstall download.
+        run: npm ci --ignore-scripts
+        working-directory: playground
+
+      - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
+        with:
+          tool: wasm-pack@0.13.1
+
+      - name: Build the embedded compiler halves
+        run: opam exec -- playground/scripts/build-compiler.sh
+
+      - name: Build the web app
+        run: npm run build
+        working-directory: playground
+
+      # Built once here rather than per matrix leg: the bundle is the same
+      # static JS/wasm regardless of the target platform the CLI ships for.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playground-dist
+          path: playground/dist
+          if-no-files-found: error
+
   build:
     name: Build (${{ matrix.target }})
+    needs: build-ui
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -64,13 +116,19 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: playground-dist
+          path: playground/dist
+
       - name: Build the tono binary
         # No Cargo.lock is committed, so the lockfile is generated once here
         # and then --locked keeps this build from silently re-resolving to a
-        # newer dependency version mid-run.
+        # newer dependency version mid-run. embed-ui bakes in the playground
+        # UI built above, so the shipped binary needs no separate asset.
         run: |
           cargo generate-lockfile
-          cargo build --release --locked --target ${{ matrix.target }} -p tono-cli
+          cargo build --release --locked --target ${{ matrix.target }} -p tono-cli --features embed-ui
 
       - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
         with:

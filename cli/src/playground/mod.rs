@@ -11,18 +11,16 @@ mod run;
 
 use std::sync::Arc;
 
-const USAGE: &str = "usage: tono playground [--port <n>] [--ui-dir <path>] [--no-open]";
+const USAGE: &str = "usage: tono playground [--port <n>] [--no-open]";
 
 struct Options {
     port: u16,
-    ui_dir: Option<std::path::PathBuf>,
     open: bool,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
     let mut options = Options {
         port: 7690,
-        ui_dir: None,
         open: true,
     };
     let mut it = args.iter();
@@ -31,9 +29,6 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--port" => {
                 let value = it.next().ok_or(USAGE)?;
                 options.port = value.parse().map_err(|_| format!("bad port: {value}"))?;
-            }
-            "--ui-dir" => {
-                options.ui_dir = Some(std::path::PathBuf::from(it.next().ok_or(USAGE)?));
             }
             "--no-open" => options.open = false,
             _ => return Err(USAGE.to_string()),
@@ -44,7 +39,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let options = parse(args)?;
-    let assets = Arc::new(assets::Assets::new(options.ui_dir.clone())?);
+    let assets = Arc::new(assets::Assets::new()?);
     let addr = format!("127.0.0.1:{}", options.port);
     let server = tiny_http::Server::http(&addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
     let url = format!("http://{addr}/");
@@ -159,20 +154,9 @@ mod tests {
     }
 
     #[test]
-    fn options_parse_port_ui_dir_and_no_open() {
-        let options = parse(&args(&[
-            "--port",
-            "8080",
-            "--ui-dir",
-            "/tmp/x",
-            "--no-open",
-        ]))
-        .expect("parses");
+    fn options_parse_port_and_no_open() {
+        let options = parse(&args(&["--port", "8080", "--no-open"])).expect("parses");
         assert_eq!(options.port, 8080);
-        assert_eq!(
-            options.ui_dir.as_deref(),
-            Some(std::path::Path::new("/tmp/x"))
-        );
         assert!(!options.open);
         let defaults = parse(&[]).expect("parses");
         assert_eq!(defaults.port, 7690);
@@ -200,7 +184,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(dir.join("index.html"), "<title>x</title>").expect("index");
-        let assets = assets::Assets::new(Some(dir.clone())).expect("assets");
+        let assets = assets::Assets::for_test(dir.clone());
         let get = tiny_http::Method::Get;
         let post = tiny_http::Method::Post;
         let ok_body = || Ok(String::from("{oops"));
@@ -239,7 +223,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(dir.join("index.html"), "<title>x</title>").expect("index");
-        let assets = assets::Assets::new(Some(dir.clone())).expect("assets");
+        let assets = assets::Assets::for_test(dir.clone());
         let server = tiny_http::Server::http("127.0.0.1:0").expect("binds");
         let addr = server.server_addr().to_string();
         let client = std::thread::spawn(move || {
