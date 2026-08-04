@@ -149,6 +149,9 @@ jobs:
       - name: Install the TypeScript toolchain (prettier, tsc)
         run: npm ci --ignore-scripts
         working-directory: backend/codegen-tests/typescript
+      - name: Install the HTTP runtime's toolchain (vitest, for the generated tests)
+        run: npm ci --ignore-scripts
+        working-directory: runtimes/http-ts
       - name: Regenerate the example end to end
         run: scripts/regen-example.sh
       - name: Verify the committed example is up to date
@@ -160,9 +163,9 @@ jobs:
           fi
       - name: Verify the generated SDKs compile
         run: scripts/check-example-compiles.sh
-      # The strong bespoke gate for `ext impl`: the same vectors run through the
-      # generated Go and TypeScript clients, and both must agree with each other
-      # and with the outcome each vector declares.
+      # The strong bespoke gate for `ext impl`: the tests declared in the spec
+      # run as generated native suites through the Go and TypeScript clients,
+      # hermetic against their stubs and live against the in-repo stores.
       - name: Verify the bespoke implementations conform
         run: scripts/check-impl-conformance.sh
 

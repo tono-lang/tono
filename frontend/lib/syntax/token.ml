@@ -12,6 +12,7 @@ type kind =
   | KwImport
   | KwAs
   | KwExt
+  | KwTest
   | Ident of string (* identifiers and shape/type names, incl. PascalCase *)
   | Prim of string (* a recognized primitive keyword, e.g. "i64" *)
   | Str of string (* decoded string-literal content *)
@@ -48,6 +49,7 @@ let describe (k : kind) : string =
   | KwImport -> "'import'"
   | KwAs -> "'as'"
   | KwExt -> "'ext'"
+  | KwTest -> "'test'"
   | Ident s -> Printf.sprintf "identifier '%s'" s
   | Prim s -> Printf.sprintf "type '%s'" s
   | Str _ -> "string literal"

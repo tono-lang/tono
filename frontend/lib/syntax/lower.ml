@@ -541,8 +541,10 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
       lower_op_shape
         ~id:(qualify module_name d.dname)
         ~resolve ~diags d ~input ~output ~pub_trait
-  | Ast.DExt _ ->
-      (* Extensions have no shape; [lower_file] routes them to [lower_ext]. *)
+  | Ast.DExt _ | Ast.DTest _ ->
+      (* Extensions and tests have no shape; [lower_file] routes extensions to
+         [lower_ext] and leaves tests to the typechecker, which lowers them
+         with full type information. *)
       assert false
 
 let default_resolver ~module_name : ref_resolver =
@@ -608,6 +610,9 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
     (fun (d : Ast.decl) ->
       match d.dkind with
       | Ast.DExt _ -> exts_rev := lower_ext ~resolve ~diags d :: !exts_rev
+      (* Tests lower during typecheck (their wire encoding is type-driven);
+         they carry no shape and their names are free strings. *)
+      | Ast.DTest _ -> ()
       | _ -> (
           let role = Roles.role_of roles d.dname in
           let shape = lower_decl ~role ~module_name ~resolve ~diags d in
@@ -620,6 +625,7 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
     shapes = List.rev !shapes_rev;
     operations = List.rev !ops_rev;
     extensions = List.rev !exts_rev;
+    tests = [];
   }
 
 (* Exposed for testing the primitive-keyword mapping in isolation, including its

@@ -44,6 +44,7 @@ pub fn member_constrained(name: &str, target: Tref, constraints: Vec<Constraint>
 /// the taxonomy the operation surface would have brought.
 pub fn constrained_module() -> Module {
     Module {
+        tests: vec![],
         name: "billing".into(),
         shapes: vec![structure(
             "billing#charge",
@@ -201,6 +202,7 @@ pub fn operation(id: &str, traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
 /// tests exercise the same taxonomy, client, and discrimination inputs.
 pub fn error_demo_module() -> Module {
     Module {
+        tests: vec![],
         name: "m".into(),
         shapes: vec![
             structure(

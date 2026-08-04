@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # The bespoke gate for `ext impl`: an operation implemented in two languages is
-# only trustworthy if something proves the implementations agree. This generates
-# the hybrid example's SDK for Go and TypeScript, drops each language's bespoke
-# sources in, and runs the same conformance vectors through both generated
-# clients. The two outputs must match each other (differential) and the
-# expectations the vectors declare (golden).
+# only trustworthy if something proves the implementations agree. The hybrid
+# example declares that proof as `test` blocks in the spec itself, and the
+# generator emits them as native tests beside each client. This script
+# generates the example's SDK for Go and TypeScript, drops each language's
+# bespoke sources in, and runs the generated tests in both: the hermetic suite
+# against its declared stubs, and the live suite against the real
+# implementations, which for this example are the deterministic in-repo
+# stores. One body of declared cases, executed in every language, is the
+# differential check.
+#
+# The bearer example's generated Vitest suite runs here too: it asserts the
+# Authorization header the TypeScript client_init hook writes.
 #
 # Everything happens in a throwaway directory, so nothing leaks into the repo.
 set -euo pipefail
@@ -12,7 +19,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
 example="$root/examples/hybrid-notes"
-vectors=("$example/vectors/save_note.json" "$example/vectors/archive_note.json")
 go_module="example.com/notes"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -30,19 +36,23 @@ if [ ! -x "$tsc" ]; then
     echo "the TypeScript toolchain is not installed; run 'npm ci' in backend/codegen-tests/typescript" >&2
     exit 1
 fi
+vitest="$root/runtimes/http-ts/node_modules/.bin/vitest"
+if [ ! -x "$vitest" ]; then
+    echo "vitest is not installed; run 'npm ci' in runtimes/http-ts" >&2
+    exit 1
+fi
 
 echo "generating..."
 "$frontend" compile "$example/notes.tono" --module notes >"$work/ir.json"
 "$tono" gen --target go,typescript --out "$work/sdk" --go-module "$go_module" "$work/ir.json"
 
 echo "go..."
-mkdir -p "$work/go/conformance"
+mkdir -p "$work/go"
 cp -R "$work"/sdk/go/. "$work/go/"
 # The bound symbol is called unqualified from inside the generated package, so
 # the bespoke file is dropped into the module's package directory rather than
 # imported.
 cp "$example/ext/go/notes.go" "$work/go/notes/bespoke.go"
-cp "$example/conformance/go/main.go" "$work/go/conformance/main.go"
 (cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 \
     && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
     && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
@@ -50,7 +60,10 @@ cp "$example/conformance/go/main.go" "$work/go/conformance/main.go"
     && go mod edit -replace=github.com/tono-lang/tono/runtimes/ext-go="$root/runtimes/ext-go" \
     && go mod tidy >/dev/null \
     && go build ./...)
-(cd "$work/go" && NOTES_TOKEN=t0 go run ./conformance "${vectors[@]}") >"$work/go.json"
+echo "go test (hermetic)..."
+(cd "$work/go" && go test ./...)
+echo "go test (live)..."
+(cd "$work/go" && NOTES_TOKEN=t0 go test -tags live ./...)
 
 echo "typescript..."
 # The runtimes are TypeScript sources, so they are compiled into the throwaway
@@ -63,65 +76,24 @@ compile_runtime() {
         --target ES2020 --lib ES2020,DOM --declaration --skipLibCheck --strict
     printf '{"name":"@tono/%s","main":"index.js","types":"index.d.ts"}\n' "$name" >"$dest/package.json"
 }
-mkdir -p "$work/ts/conformance/ts"
+mkdir -p "$work/ts"
 cp -R "$work"/sdk/typescript/. "$work/ts/"
 cp -R "$example/ext" "$work/ts/ext"
-cp "$example/conformance/ts/main.ts" "$example/conformance/ts/node.d.ts" "$work/ts/conformance/ts/"
 compile_runtime http-runtime-ts "$root/runtimes/http-ts/src"
 compile_runtime ext-runtime-ts "$root/runtimes/ext-ts/src"
-cat >"$work/ts/tsconfig.json" <<'EOF'
-{
-  "compilerOptions": {
-    "strict": true,
-    "target": "ES2020",
-    "module": "CommonJS",
-    "lib": ["ES2020", "DOM"],
-    "skipLibCheck": true,
-    "types": [],
-    "outDir": "js",
-    "rootDir": "."
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules", "js"]
-}
-EOF
-(cd "$work/ts" && "$tsc" -p tsconfig.json)
-# node resolves the runtime packages out of the same node_modules tsc used.
-(cd "$work/ts" && NOTES_TOKEN=t0 node js/conformance/ts/main.js "${vectors[@]}") >"$work/ts.json"
+echo "vitest (hermetic + live)..."
+(cd "$work/ts" && TONO_LIVE_TESTS=1 NOTES_TOKEN=t0 "$vitest" run --root .)
 
-echo "comparing..."
-python3 - "$work/go.json" "$work/ts.json" "${vectors[@]}" <<'PY'
-import json, sys
+echo "auth-bearer vitest..."
+# The bearer example's generated test asserts the Authorization header the
+# TypeScript client_init hook writes; running it here reuses the runtimes this
+# script already compiled into node_modules.
+"$frontend" compile "$root/examples/auth-bearer/auth.tono" --module auth >"$work/auth-ir.json"
+"$tono" gen --target typescript --out "$work/auth-sdk" "$work/auth-ir.json"
+mkdir -p "$work/auth-ts/node_modules"
+cp -R "$work/auth-sdk/typescript/." "$work/auth-ts/"
+cp -R "$root/examples/auth-bearer/ext" "$work/auth-ts/ext"
+cp -R "$work/ts/node_modules/@tono" "$work/auth-ts/node_modules/@tono"
+(cd "$work/auth-ts" && "$vitest" run --root .)
 
-go_path, ts_path, *vector_paths = sys.argv[1:]
-read = lambda p: json.load(open(p))
-go, ts = read(go_path), read(ts_path)
-
-expected = []
-for path in vector_paths:
-    for case in read(path)["cases"]:
-        expected.append({**case["expect"], "name": case["name"]})
-
-def canon(x):
-    return json.dumps(x, sort_keys=True)
-
-failures = []
-if len(go) != len(ts) or len(go) != len(expected):
-    failures.append(f"case counts differ: go={len(go)} ts={len(ts)} vectors={len(expected)}")
-else:
-    for g, t, e in zip(go, ts, expected):
-        if canon(g) != canon(t):
-            failures.append(
-                f"{g['name']}: the implementations disagree\n  go: {canon(g)}\n  ts: {canon(t)}"
-            )
-        elif canon(g) != canon(e):
-            failures.append(
-                f"{g['name']}: both agree but the vector expects otherwise\n"
-                f"  got:      {canon(g)}\n  expected: {canon(e)}"
-            )
-
-if failures:
-    print("\n".join(failures), file=sys.stderr)
-    sys.exit(1)
-print(f"{len(expected)} conformance cases agree across go and typescript")
-PY
+echo "generated tests pass in go and typescript"

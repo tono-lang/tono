@@ -270,6 +270,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
         return EntryEmission::empty();
     };
+    let tested: BTreeSet<String> = crate::codegen::declared_tests::entries_with_tests(module);
     let mut helpers = Helpers::default();
     let mut shared = surface::config_structs(module, config);
     shared.extend(hook_wrapper_decls(&bound, &entries, multi));
@@ -294,6 +295,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             &bound,
             &mut helpers,
             multi,
+            tested.contains(entry.name),
         ));
         decls.extend(descriptor_decls(entry, &n));
         for op in entry.operations {
@@ -617,6 +619,7 @@ mod shared;
 mod surface;
 #[cfg(test)]
 mod tests;
+pub(crate) mod vector_tests;
 
 use constructor::{err_var, new_decl};
 use resolve::Resolver;

@@ -21,5 +21,6 @@
   protocol_http_test
   entries_test
   entries_edge_test
-  entries_position_test)
+  entries_position_test
+  declared_tests_test)
  (libraries tono_frontend alcotest qcheck-core qcheck-core.runner yojson))

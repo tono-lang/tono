@@ -81,6 +81,7 @@ mod tests {
 
     fn module_with(ext: Extension) -> Module {
         Module {
+            tests: vec![],
             name: "m".into(),
             shapes: vec![],
             operations: vec![],

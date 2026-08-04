@@ -115,6 +115,9 @@ let rec resolve_decl ~(qualified : qualified) (tbl : Symtab.t) (d : Ast.decl) :
      user shape in a signature is not flagged either; binding-vs-signature
      validation (which would catch it) is deferred. *)
   | Ast.DExt _ -> []
+  (* Test blocks resolve their own names (bindings, entries, ops) in
+     [Check_tests], which owns the richer diagnostics. *)
+  | Ast.DTest _ -> []
 
 let resolve_decls ?(qualified = no_imports) (tbl : Symtab.t)
     (decls : Ast.decl list) : Diagnostic.t list =

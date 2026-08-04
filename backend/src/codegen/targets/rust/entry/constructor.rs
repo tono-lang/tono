@@ -25,6 +25,14 @@ impl validation::ValSyntax for RustVal {
 
 /// The `Client` struct, its builder (or plain constructor) and their bodies,
 /// and the `impl Client` block carrying one method per operation.
+///
+/// With `test_seam`, the whole construction body moves into a `pub(crate)`
+/// variant taking an `Option<Transport>`, and the public entry point
+/// delegates with `None`: a generated test runs the real construction path
+/// (resolution, client_init, validation) and only the transport is swapped,
+/// after bespoke code ran, so the test sees exactly the request the SDK
+/// would send. `pub(crate)` suffices because the generated test file is a
+/// `#[cfg(test)]` module of the same crate.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn construction_decls(
     entry: &EntryModel<'_>,
@@ -34,6 +42,7 @@ pub(super) fn construction_decls(
     bound: &[BoundExtension<'_>],
     helpers: &mut Helpers,
     multi: bool,
+    test_seam: bool,
 ) -> Vec<Decl> {
     let mut decls = Vec::new();
     let mut refs = vec![];
@@ -58,10 +67,10 @@ pub(super) fn construction_decls(
     decls.extend(hook_wrapper_decls(bound));
 
     let body = resolution_body(
-        entry, n, module, config, bound, helpers, multi, "self.", &mut refs,
+        entry, n, module, config, bound, helpers, multi, "self.", test_seam, &mut refs,
     );
     let plain_body = resolution_body(
-        entry, n, module, config, bound, helpers, multi, "", &mut refs,
+        entry, n, module, config, bound, helpers, multi, "", test_seam, &mut refs,
     );
 
     if with_fields.is_empty() {
@@ -77,12 +86,33 @@ pub(super) fn construction_decls(
                 )
             })
             .collect();
-        decls.push(Decl::raw_with(
+        let doc = format!(
+            "    /// Constructs {client}: the declared sources resolve top-down,\n    /// client_init runs on top (bespoke wins), then the declared validation.\n",
+            client = n.client,
+        );
+        let constructors = if test_seam {
+            let pass: Vec<String> = args
+                .iter()
+                .map(|f| arg_snake(&f.name, &f.traits, LANG))
+                .collect();
+            let comma = if params.is_empty() { "" } else { ", " };
             format!(
-                "impl {client} {{\n    /// Constructs {client}: the declared sources resolve top-down,\n    /// client_init runs on top (bespoke wins), then the declared validation.\n    pub fn new({params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n{methods}}}",
-                client = n.client,
+                "{doc}    pub fn new({params}) -> Result<Self, TonoError> {{\n        Self::new_with_transport(None{comma}{pass})\n    }}\n\n    /// `new` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) fn new_with_transport(transport: Option<tono_http_runtime::Transport>{comma}{params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
+                params = params.join(", "),
+                pass = pass.join(", "),
+                body = indent(&plain_body, 2),
+            )
+        } else {
+            format!(
+                "{doc}    pub fn new({params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
                 params = params.join(", "),
                 body = indent(&plain_body, 2),
+            )
+        };
+        decls.push(Decl::raw_with(
+            format!(
+                "impl {client} {{\n{constructors}{methods}}}",
+                client = n.client,
                 methods = op_methods(entry, n, module, config, bound, &mut refs),
             ),
             refs,
@@ -128,12 +158,24 @@ pub(super) fn construction_decls(
             })
             .collect();
 
-        decls.push(Decl::raw_with(
+        let build_doc = "    /// Resolves the declared sources top-down, runs client_init on top\n    /// (bespoke wins), then the declared validation.\n";
+        let build_fns = if test_seam {
             format!(
-                "impl {builder} {{\n{with_methods}\n    /// Resolves the declared sources top-down, runs client_init on top\n    /// (bespoke wins), then the declared validation.\n    pub fn build(self) -> Result<{client}, TonoError> {{\n{body}\n    }}\n}}",
-                builder = n.builder,
+                "{build_doc}    pub fn build(self) -> Result<{client}, TonoError> {{\n        self.build_with_transport(None)\n    }}\n\n    /// `build` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) fn build_with_transport(self, transport: Option<tono_http_runtime::Transport>) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
                 client = n.client,
                 body = indent(&body, 2),
+            )
+        } else {
+            format!(
+                "{build_doc}    pub fn build(self) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
+                client = n.client,
+                body = indent(&body, 2),
+            )
+        };
+        decls.push(Decl::raw_with(
+            format!(
+                "impl {builder} {{\n{with_methods}\n{build_fns}}}",
+                builder = n.builder,
             ),
             refs.clone(),
         ));
@@ -180,6 +222,8 @@ pub(super) fn construction_decls(
 /// is `"self."` when reading an `@arg` value off a builder (`build(self)`
 /// consumes it) or empty when reading it off a bare function parameter
 /// (`new`'s own arguments) — the only place the two entry points differ.
+/// With `test_seam`, a `transport` parameter override lands right before the
+/// runtime freezes, so the test transport wins over anything bespoke set.
 #[allow(clippy::too_many_arguments)]
 fn resolution_body(
     entry: &EntryModel<'_>,
@@ -190,6 +234,7 @@ fn resolution_body(
     helpers: &mut Helpers,
     multi: bool,
     arg_prefix: &'static str,
+    test_seam: bool,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let mut body = String::new();
@@ -322,6 +367,11 @@ fn resolution_body(
         }
     }
 
+    if test_seam {
+        body.push_str(
+            "if let Some(t) = transport {\n    s.transport = Some(t);\n    s.client = None;\n}\n",
+        );
+    }
     body.push_str(&format!(
         "let runtime = tono_http_runtime::Runtime::new(tono_http_runtime::Options {{\n    base_url: String::new(),\n    client: s.client.clone(),\n    transport: s.transport.clone(),\n    headers: s.headers.clone(),\n    values,\n}})\n.map_err(|e| TonoError::Config(ConfigError {{ message: e.to_string() }}))?;\nOk({client} {{ settings: s, runtime: std::sync::Arc::new(runtime), hooks: {hooks} }})",
         client = n.client,

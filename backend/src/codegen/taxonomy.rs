@@ -148,6 +148,7 @@ mod tests {
 
     fn module(shapes: Vec<Shape>, operations: Vec<Shape>, extensions: Vec<Extension>) -> Module {
         Module {
+            tests: vec![],
             name: "m".into(),
             shapes,
             operations,

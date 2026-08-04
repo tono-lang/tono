@@ -175,11 +175,112 @@ type extension = {
   ext_conformance : string option; (* mandatory for a contract at emit time *)
 }
 
+(* ── Declared tests ────────────────────────────────────────────────────── *)
+
+(* The declared dependency a stub replaces: the protocol seam of an @http
+   operation, or the bound symbol of an "ext impl" operation. *)
+type test_dep = Dep_http | Dep_impl
+
+(* One construction binding: [c: client { field: value }]. Values are in wire
+   form (i64/u64 as strings, wire keys); an omitted field runs its declared
+   chain. Entry and operation names are bare (module-local), like the surface. *)
+type test_construction = {
+  tc_binding : string;
+  tc_entry : string;
+  tc_values : (string * json) list;
+}
+
+(* One canned answer of a stub. The http form carries the response triple; the
+   impl forms carry the operation's own language: a typed output value, a
+   declared error by shape name, or the undeclared-failure contract wrap. *)
+type stub_answer =
+  | Answer_http of {
+      ans_status : int;
+      ans_headers : (string * string) list;
+      ans_body : string;
+    }
+  | Answer_value of json
+  | Answer_error of { ans_shape : string; ans_data : json }
+  | Answer_contract
+
+(* One stub binding. [ts_binding] is [None] for the anonymous form (which no
+   expect can reference). A multi-answer list is a sequence: each call consumes
+   the next answer and the last repeats. *)
+type test_stub = {
+  ts_binding : string option;
+  ts_client : string;
+  ts_op : string;
+  ts_dep : test_dep;
+  ts_answers : stub_answer list;
+}
+
+(* One call binding: [got: c.get_user(input)]. The input is wire-form JSON in
+   which a dataflow leaf is spelled {"$ref":{"binding":...,"path":[...]}}. *)
+type test_call = {
+  call_binding : string;
+  call_client : string;
+  call_op : string;
+  call_input : json option;
+}
+
+(* A field position inside a pattern: a nested pattern, asserted absence
+   ([None]), or asserted presence with a free value ([any]). *)
+type field_pattern = Fp_pat of test_pattern | Fp_absent | Fp_present
+
+(* An expect pattern. [P_eq] compares wire JSON; the structural forms carry the
+   shape (or taxonomy category), whether uncited fields are free ([..]), and
+   the cited fields. *)
+and test_pattern =
+  | P_eq of json
+  | P_struct of {
+      ps_shape : string;
+      ps_open : bool;
+      ps_fields : (string * field_pattern) list;
+    }
+  | P_error of {
+      pe_shape : string;
+      pe_open : bool;
+      pe_fields : (string * field_pattern) list;
+    }
+  | P_taxonomy of {
+      pt_category : string;
+          (* api|validation|decode|contract|config|transport *)
+      pt_open : bool;
+      pt_fields : (string * field_pattern) list;
+    }
+  | P_ok
+
+(* A pattern over one recorded request of an http stub. Headers match as a
+   subset by name (case handling is the backend's concern). *)
+type request_pattern = {
+  rp_open : bool;
+  rp_fields : (string * field_pattern) list;
+  rp_headers : (string * field_pattern) list option;
+}
+
+type test_expect =
+  | Expect_outcome of { ex_subject : string; ex_pattern : test_pattern }
+  | Expect_requests of {
+      ex_subject : string;
+      ex_requests : request_pattern list;
+    }
+
+(* One declared test, grouped by construct kind; each group keeps declaration
+   order, and every reference points backwards. *)
+type test_decl = {
+  t_name : string;
+  t_constructions : test_construction list;
+  t_stubs : test_stub list;
+  t_calls : test_call list;
+  t_expects : test_expect list;
+}
+
 type module_ = {
   mod_name : string;
   shapes : shape list;
   operations : shape list;
   extensions : extension list;
+  tests : test_decl list;
 }
 
 type model = {

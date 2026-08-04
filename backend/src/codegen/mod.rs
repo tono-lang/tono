@@ -11,6 +11,7 @@ pub mod assemble;
 pub mod casing;
 pub mod check;
 pub mod conventions;
+pub mod declared_tests;
 pub mod doc;
 pub mod entries;
 pub mod extensions;

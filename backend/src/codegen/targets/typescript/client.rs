@@ -505,6 +505,7 @@ mod tests {
 
     fn http_module(descriptor: serde_json::Value) -> Module {
         Module {
+            tests: vec![],
             name: "m".into(),
             shapes: vec![
                 structure(
@@ -638,6 +639,7 @@ mod tests {
     fn a_module_with_no_http_operation_emits_no_client() {
         // An operation without a wire descriptor is local: no transport client.
         let module = Module {
+            tests: vec![],
             name: "m".into(),
             shapes: vec![],
             operations: vec![operation("m#local", vec![], vec![])],

@@ -158,7 +158,7 @@ let check_decl (tbl : Symtab.t) (decls : Ast.decl list) (d : Ast.decl) :
   | Ast.DOp _ -> check_op tbl decls d
   (* Ops nested in an entry body obey the same error/async rules. *)
   | Ast.DStruct { ops; _ } -> List.concat_map (check_op tbl decls) ops
-  | Ast.DEnum _ | Ast.DUnion _ | Ast.DExt _ -> []
+  | Ast.DEnum _ | Ast.DUnion _ | Ast.DExt _ | Ast.DTest _ -> []
 
 let check_decls (tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
   List.concat_map (check_decl tbl decls) decls

@@ -99,3 +99,21 @@ let raw_error_unreachable = "TC0053"
    not an error: the IR's trait vocabulary is open, so an unread trait is inert
    rather than malformed. *)
 let unknown_trait = "TC0054"
+
+(* Declared tests. Every name in a test resolves backwards to a binding the
+   test declared; the stub, call, value, and pattern rules below are the closed
+   grammar of RFC-declared tests. The tono.* language modules (tono.http,
+   tono.errors) provide the http/errors shapes and must be imported before use;
+   the tono.* module root is reserved for the language. *)
+let test_binding_unknown = "TC0055"
+let test_op_unknown = "TC0056"
+let test_dep_invalid = "TC0057"
+let test_stub_value_invalid = "TC0058"
+let test_value_invalid = "TC0059"
+let test_pattern_invalid = "TC0060"
+let test_expect_missing = "TC0061"
+let test_requests_subject_invalid = "TC0062"
+let test_shape_ambiguous = "TC0063"
+let test_import_missing = "TC0064"
+let tono_root_reserved = "TC0065"
+let test_binding_duplicate = "TC0066"

@@ -139,9 +139,45 @@ let qualifier_collisions (index : index) : (string * Diagnostic.t) list =
         acc imports)
     index.imports []
 
+(* The tono.* root is reserved for the language: [tono.http] and [tono.errors]
+   are virtual modules the test grammar imports (they never become IR modules),
+   any other tono.* import is unknown, and a user module under that root would
+   shadow the language surface. *)
+let virtual_module (target : string) : bool =
+  String.equal target "tono.http" || String.equal target "tono.errors"
+
+let under_tono_root (name : string) : bool =
+  String.equal name "tono"
+  || (String.length name > 5 && String.equal (String.sub name 0 5) "tono.")
+
+(* A user module has no span of its own; anchor the reserved-root diagnostic on
+   its first declaration or import. *)
+let file_anchor (file : Ast.file) : Span.span =
+  match (file.Ast.decls, file.Ast.imports) with
+  | d :: _, _ -> d.Ast.dname_span
+  | [], i :: _ -> i.Ast.ispan
+  | [], [] ->
+      let p : Span.pos = { line = 1; col = 1; offset = 0 } in
+      { Span.start = p; finish = p }
+
+let reserved_root_diags (files : (string * Ast.file) list) :
+    (string * Diagnostic.t) list =
+  List.filter_map
+    (fun (name, file) ->
+      if under_tono_root name then
+        Some
+          ( name,
+            err Error_codes.tono_root_reserved (file_anchor file)
+              "module root 'tono.*' is reserved for the language; rename \
+               the                '%s' module"
+              name )
+      else None)
+    files
+
 (* Build the index from every module's parsed file, flagging imports whose target
-   module does not exist (TC0023), colliding import qualifiers (TC0026), and import
-   cycles (TC0025). Duplicate-shape names are not reported here: the typechecker
+   module does not exist (TC0023), colliding import qualifiers (TC0026), import
+   cycles (TC0025), and user modules under the reserved tono.* root (TC0065).
+   Duplicate-shape names are not reported here: the typechecker
    re-runs [Symtab.build] per module, so reporting them here too would surface each
    one twice. *)
 let build_attributed (files : (string * Ast.file) list) :
@@ -160,7 +196,14 @@ let build_attributed (files : (string * Ast.file) list) :
         List.fold_left
           (fun acc (i : Ast.import) ->
             let target = target_of i in
-            if SMap.mem target index.symbols then acc
+            if SMap.mem target index.symbols || virtual_module target then acc
+            else if under_tono_root target then
+              ( name,
+                err Error_codes.unknown_import i.Ast.ispan
+                  "unknown language module '%s'; the language \
+                   provides                    tono.http and tono.errors"
+                  target )
+              :: acc
             else
               ( name,
                 err Error_codes.unknown_import i.Ast.ispan
@@ -169,7 +212,9 @@ let build_attributed (files : (string * Ast.file) list) :
           acc imports)
       index.imports []
   in
-  (index, qualifier_collisions index @ import_diags @ detect_cycles index)
+  ( index,
+    reserved_root_diags files @ qualifier_collisions index @ import_diags
+    @ detect_cycles index )
 
 let build (files : (string * Ast.file) list) : index * Diagnostic.t list =
   let index, attributed = build_attributed files in
@@ -221,6 +266,12 @@ let qualified (index : index) ~(this_module : string) : Resolve.qualified =
           err Error_codes.unknown_import span
             "unknown module qualifier '%s'; import the module to reference it"
             qualifier;
+        ]
+    | Some target when virtual_module target ->
+        [
+          err Error_codes.test_import_missing span
+            "shapes from '%s' are only available inside test declarations"
+            target;
         ]
     | Some target -> (
         match SMap.find_opt target index.symbols with

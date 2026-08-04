@@ -120,6 +120,7 @@ let decl_word (d : Ast.decl) : string =
   | Ast.DExt { ekind = Ast.EContract; _ } -> "contract"
   | Ast.DExt { ekind = Ast.EConstraint; _ } -> "constraint"
   | Ast.DExt { ekind = Ast.EImpl; _ } -> "impl"
+  | Ast.DTest _ -> "test"
 
 (* A sub-span of [base] starting [skip] bytes in, [len] bytes long. Names are
    single-line tokens, so only the column and offset shift. *)
@@ -167,7 +168,7 @@ let rec decl_tys (d : Ast.decl) : Ast.ty list =
   | Ast.DOp { input; output } -> List.filter_map Fun.id [ input; output ]
   | Ast.DExt { esig; _ } -> (
       match esig with Some s -> [ s.Ast.esig_in; s.esig_out ] | None -> [])
-  | Ast.DEnum _ -> []
+  | Ast.DEnum _ | Ast.DTest _ -> []
 
 let file_ty_refs (file : Ast.file) : (string * Span.span) list =
   List.concat_map
@@ -258,7 +259,7 @@ let file_traits (file : Ast.file) : Ast.trait list =
           List.concat_map
             (fun (v : Ast.union_variant) -> v.Ast.vtraits)
             variants
-      | Ast.DOp _ | Ast.DExt _ -> [])
+      | Ast.DOp _ | Ast.DExt _ | Ast.DTest _ -> [])
     (all_decls file)
 
 let trait_hover ~markdown ~text (t : Ast.trait) : Hover.t option =
@@ -653,7 +654,7 @@ let member_symbols ~(text : string) (d : Ast.decl) : DocumentSymbol.t list =
           leaf ~text ~kind:SymbolKind.EnumMember ~name:v.Ast.vname
             ~span:v.vname_span)
         variants
-  | Ast.DOp _ | Ast.DExt _ -> []
+  | Ast.DOp _ | Ast.DExt _ | Ast.DTest _ -> []
 
 let decl_symbol_kind (d : Ast.decl) : SymbolKind.t =
   match d.dkind with
@@ -662,6 +663,7 @@ let decl_symbol_kind (d : Ast.decl) : SymbolKind.t =
   | Ast.DUnion _ -> SymbolKind.Enum
   | Ast.DOp _ -> SymbolKind.Function
   | Ast.DExt _ -> SymbolKind.Interface
+  | Ast.DTest _ -> SymbolKind.Function
 
 (* The document outline: one symbol per top-level shape, its members nested as
    children. Ranges use the name span (the surface AST carries no full-body

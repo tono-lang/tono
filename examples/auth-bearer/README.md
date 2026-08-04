@@ -9,7 +9,8 @@ declared sources already did.
 ```
 auth.tono ──frontend──▶ ir.json ──tono gen──▶ SDK
    │
-   └── ext/ts/auth.ts   (the bespoke hook the SDK binds to)
+   ├── ext/go/auth.go            (the bespoke hook, in Go)
+   └── ext/ts/auth.ts            (the bespoke hook, in TypeScript)
 ```
 
 This recipe is source only (the `.tono` plus the bespoke hook); regenerate the
@@ -22,6 +23,7 @@ SDK yourself with the commands below.
 
   ```
   ext hook client_init {
+    go: "ext/go/auth.go#ApplyBearer"
     ts: "ext/ts/auth.ts#applyBearer"
   }
   ```
@@ -40,6 +42,16 @@ SDK yourself with the commands below.
 - The generated SDK exports a `Client` class per entry; `new Client()` performs
   the whole flow (sources, bridge, validation) so every call carries the header
   with no per-call plumbing.
+
+## The generated tests
+
+Bespoke request work is exactly what generated round-trip checks cannot verify;
+the oracle has to sit outside the generator. The `test` blocks in `auth.tono`
+declare it: with the transport stubbed, calling `get_account` must put
+`authorization: Bearer <token>` on the wire, and constructing with an empty
+token must fail as a `client_init` contract error. The generator emits them as
+native tests beside the client; if the hook stops writing the header, the test
+fails.
 
 ## Adapting it
 

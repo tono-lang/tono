@@ -123,7 +123,8 @@ fn gen_from_manifest(
 
     // `project.root` is where the `.tono` sources live, relative to the
     // manifest, which is exactly what compiling the project from source needs.
-    let model = read_ir(ir_path, &base.join(&cfg.project.root))?;
+    let source_root = base.join(&cfg.project.root);
+    let model = read_ir(ir_path, &source_root)?;
     for target in &cfg.targets {
         let out_dir = base.join(&target.out);
         let mut written = Vec::new();

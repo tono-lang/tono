@@ -41,32 +41,42 @@ fn named_exports(group: &str, exports: &Exports) -> String {
     )
 }
 
+/// How a file is declared in the Rust module tree.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RustDecl {
+    Public,
+    Fenced,
+    /// A generated test module: compiled only under `cargo test`, so the
+    /// shipped SDK carries the file without building it.
+    Test,
+}
+
 /// A directory's children in the Rust module tree.
 #[derive(Default)]
 struct RustDir {
     /// Child directories, each declared as a module of this one.
     dirs: BTreeSet<String>,
-    /// Child files, as `(module name, public)`. Several groups can share one
-    /// file (Rust fences a module's internal group with visibility rather than
-    /// with a file of its own), and the file is declared for the widest audience
+    /// Child files by module name. Several groups can share one file (Rust
+    /// fences a module's internal group with visibility rather than with a
+    /// file of its own), and the file is declared for the widest audience
     /// among them.
-    files: BTreeMap<String, bool>,
+    files: BTreeMap<String, RustDecl>,
 }
 
-/// How a child module is declared: `pub mod`, or a private `mod` for an internal
-/// group.
+/// How a child module is declared: `pub mod`, a private `mod` for an internal
+/// group, or a `#[cfg(test)] mod` for a generated test module.
 ///
 /// Rust fences where the module sits, so an internal group needs no relocation:
 /// a `mod` without `pub` is unreachable from outside the crate and reachable
 /// from inside it, which is exactly what internal means here.
-fn declare(name: &str, fenced: bool) -> String {
-    if fenced {
+fn declare(name: &str, decl: RustDecl) -> String {
+    match decl {
+        RustDecl::Public => format!("pub mod {name};\n"),
         // The declarations inside exist for the SDK's own use, so the lint that
         // wants every item reached is not the right judge of them. The allowance
         // covers the whole subtree below the fence.
-        format!("#[allow(dead_code)]\nmod {name};\n")
-    } else {
-        format!("pub mod {name};\n")
+        RustDecl::Fenced => format!("#[allow(dead_code)]\nmod {name};\n"),
+        RustDecl::Test => format!("#[cfg(test)]\nmod {name};\n"),
     }
 }
 
@@ -85,13 +95,26 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
             .file_stem()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let public = !group.is_internal();
+        let decl = if group.tests_of().is_some() {
+            RustDecl::Test
+        } else if group.is_internal() {
+            RustDecl::Fenced
+        } else {
+            RustDecl::Public
+        };
         dirs.entry(parent.clone())
             .or_default()
             .files
             .entry(stem)
-            .and_modify(|seen| *seen |= public)
-            .or_insert(public);
+            // A test module never shares a file with a group of another kind
+            // (its path is its own), so widening only arbitrates public vs
+            // fenced sharing one file.
+            .and_modify(|seen| {
+                if decl == RustDecl::Public {
+                    *seen = RustDecl::Public;
+                }
+            })
+            .or_insert(decl);
         // Register each directory as a child of the one above it, up to the
         // crate root, so an intermediate namespace directory is declared too.
         let mut child = parent;
@@ -113,10 +136,10 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
             for name in &node.dirs {
                 // A directory is a module's namespace, never a group, so nothing
                 // internal is expressed here.
-                body.push_str(&declare(name, false));
+                body.push_str(&declare(name, RustDecl::Public));
             }
-            for (name, public) in &node.files {
-                body.push_str(&declare(name, !public));
+            for (name, decl) in &node.files {
+                body.push_str(&declare(name, *decl));
             }
             // The crate root declares its children and stops there: flattening
             // them into one namespace is the root barrel this layout refuses,
@@ -126,7 +149,7 @@ pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
             } else {
                 node.files
                     .iter()
-                    .filter(|(_, public)| **public)
+                    .filter(|(_, decl)| **decl == RustDecl::Public)
                     .map(|(name, _)| format!("pub use {name}::*;\n"))
                     .collect()
             };
@@ -172,7 +195,10 @@ pub fn typescript_barrels(groups: &[(Group, Exports)]) -> Vec<GeneratedFile> {
         // carry it out with the rest.
         let body: String = groups
             .iter()
-            .filter(|(group, _)| !group.is_internal())
+            // A test group is public in audience (it sits beside the client it
+            // exercises) but is tooling surface, not SDK surface: the barrel
+            // does not name it, so nothing can import it as part of the API.
+            .filter(|(group, _)| !group.is_internal() && group.tests_of().is_none())
             .map(|(group, exports)| named_exports(&group.name, exports))
             .collect();
         files.push(GeneratedFile {
@@ -306,6 +332,26 @@ mod tests {
         assert!(!manifest.contains("internal"));
         assert!(!manifest.contains("\".\":"));
         assert!(serde_json::from_str::<serde_json::Value>(manifest).is_ok());
+    }
+
+    #[test]
+    fn a_test_group_is_a_cfg_test_module_and_stays_out_of_the_barrel() {
+        let mut groups = payments();
+        groups.push(Group::tests("payments.charges", "client", false));
+        groups.push(Group::tests("payments.charges", "client", true));
+        let rust = rust_module_tree(&groups);
+        let charges = text_at(&rust, "rust/payments/charges/mod.rs");
+        // Compiled only under `cargo test`, never re-exported: the shipped SDK
+        // carries the file without building it.
+        assert!(charges.contains("#[cfg(test)]\nmod client_test;"));
+        assert!(charges.contains("#[cfg(test)]\nmod client_live_test;"));
+        assert!(!charges.contains("pub use client_test"));
+        assert!(!charges.contains("pub use client_live_test"));
+        let ts = typescript_barrels(&exporting(groups));
+        let barrel = text_at(&ts, "typescript/payments/charges/index.ts");
+        // The barrel names the SDK surface; a test file is tooling surface.
+        assert!(!barrel.contains("test"));
+        assert!(!text_at(&ts, "typescript/package.json").contains("test"));
     }
 
     #[test]

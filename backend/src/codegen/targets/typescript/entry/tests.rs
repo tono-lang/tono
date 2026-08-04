@@ -9,7 +9,7 @@ use crate::codegen::test_support::{
 };
 use crate::ir::decode_model;
 
-fn fixture_module() -> Module {
+pub(super) fn fixture_module() -> Module {
     let text = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../ir-schema/fixtures/entries_client.json"
@@ -397,7 +397,10 @@ fn a_typed_impl_calls_the_bound_symbol_and_guards_the_error_boundary() {
     let mut module = fixture_module();
     module.extensions = vec![impl_ext(false)];
     let out = text(&module);
-    assert!(out.contains("return await saveNote(this.settings, input);"));
+    // The call goes through the module-local seam binding, so a generated test
+    // can swap the implementation (an ESM import is a read-only binding).
+    assert!(out.contains("let saveNoteImpl = saveNote;"));
+    assert!(out.contains("return await saveNoteImpl(this.settings, input);"));
     // A declared SDK error crosses typed; anything else is named.
     assert!(out.contains("} catch (e) {"));
     assert!(out.contains("if (e instanceof TonoError) throw e;"));
@@ -413,10 +416,12 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
     let mut module = fixture_module();
     module.extensions = vec![impl_ext(true)];
     let out = text(&module);
-    // The input travels as its wire text; the outcome comes back raw.
-    assert!(
-        out.contains("outcome = await saveNote(this.settings, JSON.stringify(encodeNote(input)));")
-    );
+    // The input travels as its wire text; the outcome comes back raw, through
+    // the same swappable seam the typed form goes through.
+    assert!(out.contains("let saveNoteImpl = saveNote;"));
+    assert!(out.contains(
+        "outcome = await saveNoteImpl(this.settings, JSON.stringify(encodeNote(input)));"
+    ));
     // A failing outcome discriminates on the code alone: a bespoke
     // implementation carries no protocol status.
     assert!(out.contains("if (!outcome.success) {"));
@@ -456,6 +461,7 @@ fn a_guaranteed_chain_reads_each_env_variable_once() {
 #[test]
 fn a_module_without_entries_emits_nothing() {
     let module = Module {
+        tests: vec![],
         name: "m".into(),
         shapes: vec![],
         operations: vec![],

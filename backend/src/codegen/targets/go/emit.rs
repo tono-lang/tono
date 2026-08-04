@@ -206,6 +206,7 @@ pub fn emit_module(
                 .providing(internal_provides),
         );
     }
+    files.extend(crate::codegen::targets::go::entry::vector_tests::test_files(module, config));
     files
 }
 
@@ -267,6 +268,7 @@ mod tests {
     #[test]
     fn an_entry_with_no_operations_only_carries_config() {
         let module = Module {
+            tests: vec![],
             name: "notes".into(),
             shapes: vec![crate::ir::Shape {
                 id: "notes#client".into(),
@@ -306,6 +308,7 @@ mod tests {
             }],
         };
         let module = Module {
+            tests: vec![],
             name: "notes".into(),
             shapes: vec![crate::ir::Shape {
                 id: "notes#client".into(),
@@ -332,6 +335,7 @@ mod tests {
         // them, a reference would fall back to the module's public group, and
         // land on a file that does not declare them.
         let module = Module {
+            tests: vec![],
             name: "models".into(),
             shapes: vec![union_shape(
                 "models#hidden",
@@ -368,6 +372,7 @@ mod tests {
     #[test]
     fn a_module_of_plain_structs_emits_only_a_types_file_with_no_imports() {
         let module = Module {
+            tests: vec![],
             name: "models".into(),
             shapes: vec![structure(
                 "models#Charge",
@@ -402,6 +407,7 @@ mod tests {
     #[test]
     fn a_module_with_a_union_splits_types_from_serde() {
         let module = Module {
+            tests: vec![],
             name: "models".into(),
             shapes: vec![
                 structure(
@@ -484,6 +490,7 @@ mod tests {
             value: serde_json::json!(true),
         }];
         let module = Module {
+            tests: vec![],
             name: "models".into(),
             shapes: vec![structure("models#Doc", vec![counts])],
             operations: vec![],

@@ -208,6 +208,7 @@ mod tests {
         Model {
             tono_ir_version: 6,
             modules: vec![Module {
+                tests: vec![],
                 name: "m".into(),
                 shapes,
                 operations: vec![],
@@ -293,12 +294,14 @@ mod tests {
             tono_ir_version: 6,
             modules: vec![
                 Module {
+                    tests: vec![],
                     name: "a".into(),
                     shapes: vec![public(refers("a#outer", "b#middle"))],
                     operations: vec![],
                     extensions: vec![],
                 },
                 Module {
+                    tests: vec![],
                     name: "b".into(),
                     shapes: vec![
                         refers("b#middle", "b#inner"),
@@ -386,12 +389,14 @@ mod tests {
             tono_ir_version: 6,
             modules: vec![
                 Module {
+                    tests: vec![],
                     name: "a".into(),
                     shapes: vec![refers("a#local", "b#shared")],
                     operations: vec![],
                     extensions: vec![],
                 },
                 Module {
+                    tests: vec![],
                     name: "b".into(),
                     shapes: vec![
                         public(structure(

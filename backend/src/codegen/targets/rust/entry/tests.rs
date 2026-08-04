@@ -16,6 +16,17 @@ fn charge_shape() -> Shape {
     )
 }
 
+/// A module named `m` holding only the given shapes.
+fn module_of(shapes: Vec<Shape>) -> Module {
+    Module {
+        name: "m".into(),
+        shapes,
+        operations: vec![],
+        extensions: vec![],
+        tests: vec![],
+    }
+}
+
 /// Pushes an operation onto `m#client` with no protocol binding, so it only
 /// resolves through a bound `ext impl` (the bespoke-impl test fixtures share
 /// this shape; only the local name/input/output/errors vary between them).
@@ -75,8 +86,9 @@ fn push_hook_extension(module: &mut Module, slot: &str, binding: &str) {
 }
 
 /// A single-entry module: `@arg api_key`, `@env`/`@default` `client_name`,
-/// one `@http` op declaring a retryable coded error.
-fn simple_entry_module() -> Module {
+/// one `@http` op declaring a retryable coded error. Shared with the
+/// conformance-vector tests (`conformance_tests`), which layer vectors on it.
+pub(super) fn simple_entry_module() -> Module {
     let api_key = bare_entry_field("api_key", Tref::Prim(Prim::String), vec![Source::Arg]);
     let client_name = bare_entry_field(
         "client_name",
@@ -113,42 +125,32 @@ fn simple_entry_module() -> Module {
             },
         ],
     };
-    Module {
-        name: "m".into(),
-        shapes: vec![
-            charge_shape(),
-            error_shape(
-                "m#payment_declined",
-                vec![],
-                402,
-                Some("payment_declined"),
-                true,
-            ),
-            Shape {
-                id: "m#client".into(),
-                kind: ShapeKind::Entry {
-                    fields: vec![api_key, client_name],
-                    operations: vec![op],
-                },
-                traits: vec![],
+    module_of(vec![
+        charge_shape(),
+        error_shape(
+            "m#payment_declined",
+            vec![],
+            402,
+            Some("payment_declined"),
+            true,
+        ),
+        Shape {
+            id: "m#client".into(),
+            kind: ShapeKind::Entry {
+                fields: vec![api_key, client_name],
+                operations: vec![op],
             },
-        ],
-        operations: vec![],
-        extensions: vec![],
-    }
+            traits: vec![],
+        },
+    ])
 }
 
 #[test]
 fn success_block_with_no_required_members_skips_the_presence_probe() {
-    let module = Module {
-        name: "m".into(),
-        shapes: vec![structure(
-            "m#note",
-            vec![member("text", Tref::Prim(Prim::String), false)],
-        )],
-        operations: vec![],
-        extensions: vec![],
-    };
+    let module = module_of(vec![structure(
+        "m#note",
+        vec![member("text", Tref::Prim(Prim::String), false)],
+    )]);
     let out = decode::success_block(
         Some(&Tref::Ref {
             id: "m#note".into(),
@@ -170,12 +172,7 @@ fn success_block_with_required_members_calls_the_shared_per_type_decode() {
             id: "m#charge".into(),
             args: vec![],
         }),
-        &Module {
-            name: "m".into(),
-            shapes: vec![charge_shape()],
-            operations: vec![],
-            extensions: vec![],
-        },
+        &module_of(vec![charge_shape()]),
         "body",
     );
     assert_eq!(out, "decode_charge(body)");
@@ -204,12 +201,7 @@ fn output_decode_decl_skips_a_shape_with_no_required_member() {
 
 #[test]
 fn success_block_of_a_bare_i64_output_parses_the_wire_string() {
-    let module = Module {
-        name: "m".into(),
-        shapes: vec![],
-        operations: vec![],
-        extensions: vec![],
-    };
+    let module = module_of(vec![]);
     let out = decode::success_block(Some(&Tref::Prim(Prim::I64)), &module, "body");
     assert!(out.contains("let wire: String = serde_json::from_str(body)"));
     assert!(out.contains("wire.parse::<i64>()"));
@@ -217,12 +209,7 @@ fn success_block_of_a_bare_i64_output_parses_the_wire_string() {
 
 #[test]
 fn success_block_of_a_bare_u64_output_parses_the_wire_string() {
-    let module = Module {
-        name: "m".into(),
-        shapes: vec![],
-        operations: vec![],
-        extensions: vec![],
-    };
+    let module = module_of(vec![]);
     let out = decode::success_block(Some(&Tref::Prim(Prim::U64)), &module, "body");
     assert!(out.contains("let wire: String = serde_json::from_str(body)"));
     assert!(out.contains("wire.parse::<u64>()"));
@@ -230,12 +217,7 @@ fn success_block_of_a_bare_u64_output_parses_the_wire_string() {
 
 #[test]
 fn a_module_without_entries_emits_nothing() {
-    let module = Module {
-        name: "m".into(),
-        shapes: vec![],
-        operations: vec![],
-        extensions: vec![],
-    };
+    let module = module_of(vec![]);
     let emission = emit(&module, &rust_casing());
     assert!(emission.shared.is_empty());
     assert!(emission.per_entry.is_empty());

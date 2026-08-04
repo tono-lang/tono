@@ -253,6 +253,24 @@ export class Client {
     assertExclusiveTransport(this.options);
   }
 
+  // forTest is the constructor plus the transport seam the generated
+  // tests construct through: the real construction path runs first, then
+  // the canonical transport wins over anything bespoke.
+  static forTest(
+    seam: { transport: CanonicalTransport },
+    apiKey: string,
+    config: ClientConfig = {},
+  ): Client {
+    const client = new Client(apiKey, config);
+    const options = client.options as {
+      transport?: CanonicalTransport;
+      fetch?: typeof fetch;
+    };
+    options.transport = seam.transport;
+    options.fetch = undefined;
+    return client;
+  }
+
   async createCharge(input: Charge): Promise<Charge> {
     const invalid = validateCharge(input);
     if (invalid) {

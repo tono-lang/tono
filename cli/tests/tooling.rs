@@ -167,7 +167,7 @@ fn gen_prefers_piped_ir_over_the_project_sources() {
     assert!(init.status.success());
 
     const PIPED: &str =
-        r#"{"tono_ir_version":6,"modules":[{"name":"piped","shapes":[],"operations":[]}]}"#;
+        r#"{"tono_ir_version":7,"modules":[{"name":"piped","shapes":[],"operations":[]}]}"#;
     let mut child = cmd
         .current_dir(&dir)
         .arg("gen")

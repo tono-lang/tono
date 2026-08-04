@@ -69,6 +69,13 @@ var _ ClientAPI = (*Client)(nil)
 // declared sources resolved top-down, client_init on top (bespoke wins),
 // then the declared validation.
 func New(apiKey string, opts ...ClientOption) (*Client, error) {
+	return newWithTransport(nil, apiKey, opts...)
+}
+
+// newWithTransport is New plus the transport seam the generated tests use: a
+// non-nil transport replaces whatever construction resolved, after
+// client_init ran, so a test answers canonically without a server.
+func newWithTransport(transport tonohttp.Transport, apiKey string, opts ...ClientOption) (*Client, error) {
 	w := clientOptions{}
 	for _, opt := range opts {
 		opt(&w)
@@ -108,6 +115,10 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		values["timeout"] = ms
 	}
 	values["max_retries"] = int64(s.MaxRetries)
+	if transport != nil {
+		s.Transport = transport
+		s.HTTPClient = nil
+	}
 	runtime, err := tonohttp.New(tonohttp.Options{Client: s.HTTPClient, Transport: s.Transport, Headers: s.Headers, Values: values})
 	if err != nil {
 		return nil, err

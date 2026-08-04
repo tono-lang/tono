@@ -72,6 +72,7 @@ let list_charges : Ir.model =
           shapes = [ page; charge ];
           operations = [ list_charges_op ];
           extensions = [];
+          tests = [];
         };
       ];
   }
@@ -106,6 +107,7 @@ let nullable_charge : Ir.model =
           shapes = [ charge ];
           operations = [];
           extensions = [];
+          tests = [];
         };
       ];
   }
@@ -154,6 +156,7 @@ let open_enum_union : Ir.model =
           shapes = [ status; source ];
           operations = [];
           extensions = [];
+          tests = [];
         };
       ];
   }
@@ -245,6 +248,7 @@ let primitives : Ir.model =
           shapes = [ kitchen_sink; priority ];
           operations = [];
           extensions = [];
+          tests = [];
         };
       ];
   }
@@ -299,6 +303,7 @@ let service_api : Ir.model =
           shapes = [ request; not_found; service ];
           operations = [ list_charges_op ];
           extensions = [];
+          tests = [];
         };
       ];
   }
@@ -354,6 +359,7 @@ let extension_model : Ir.model =
           shapes = [];
           operations = [];
           extensions = [ before_request; sign_request; luhn ];
+          tests = [];
         };
       ];
   }
@@ -536,6 +542,7 @@ let entries_client : Ir.model =
           shapes = [ conf; client; note; overloaded ];
           operations = [];
           extensions = [];
+          tests = [];
         };
       ];
   }
@@ -677,11 +684,13 @@ let bespoke_impl : Ir.model =
               impl "client.search_notes" ~raw:true
                 ~conformance:(Some "vectors/search_notes.json");
             ];
+          tests = [];
         };
       ];
   }
 
 (* The full corpus, keyed by fixture file name. *)
+
 let examples : (string * Ir.model) list =
   [
     ("list_charges", list_charges);
@@ -692,4 +701,5 @@ let examples : (string * Ir.model) list =
     ("extension_model", extension_model);
     ("entries_client", entries_client);
     ("bespoke_impl", bespoke_impl);
+    ("declared_tests", Ir_corpus_tests.declared_tests);
   ]

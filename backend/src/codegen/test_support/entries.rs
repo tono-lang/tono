@@ -255,6 +255,7 @@ pub fn entries_matrix_module() -> Module {
     };
 
     Module {
+        tests: vec![],
         name: "m".into(),
         shapes: vec![
             Shape {

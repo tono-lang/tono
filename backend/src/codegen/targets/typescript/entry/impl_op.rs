@@ -10,20 +10,89 @@
 //! strictly into the declared output, or discriminate the failure by its code
 //! against the operation's declared error codes.
 
-use crate::codegen::entries::op_local_name;
-use crate::codegen::extensions::BoundExtension;
-use crate::codegen::ops::{declared_errors, error_names};
+use crate::codegen::entries::{op_local_name, EntryModel};
+use crate::codegen::extensions::{impl_binding, BoundExtension};
+use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
 use crate::codegen::symbol::Symbol;
+use crate::codegen::tree::Decl;
 use crate::ir::{Module, Shape, Tref};
 
 use super::decode::success_block;
-use super::module_symbol;
+use super::{module_symbol, Names};
 use crate::codegen::targets::typescript::client::import_specifier;
+
+/// The module-local binding the generated method calls instead of the bespoke
+/// symbol directly. An ESM import is a read-only binding, so a test that wants
+/// to swap the implementation needs this mutable indirection.
+pub(super) fn impl_seam_var(n: &Names, op: &Shape) -> String {
+    super::camel(&format!("{}{}_impl", n.op_prefix, op_local_name(&op.id)))
+}
+
+/// The exported swapper a generated test simulates an outcome through.
+pub(super) fn swap_fn_name(n: &Names, op: &Shape) -> String {
+    format!(
+        "swap{}ImplForTest",
+        super::pascal(&format!("{}{}", n.op_prefix, op_local_name(&op.id)))
+    )
+}
+
+/// The per-operation seam bindings of an entry: one mutable `let` per
+/// impl-bound operation, plus (only when the entry declares tests, so the
+/// shipped surface stays clean without opt-in) the exported swapper the
+/// generated tests go through.
+pub(super) fn seam_decls(
+    entry: &EntryModel<'_>,
+    n: &Names,
+    module: &Module,
+    bound: &[BoundExtension<'_>],
+    has_tests: bool,
+) -> Vec<Decl> {
+    let mut decls = Vec::new();
+    for op in entry.operations {
+        if wire_descriptor(op).is_some() {
+            continue;
+        }
+        let Some(binding) = impl_binding(bound, &op.id) else {
+            continue;
+        };
+        let seam = impl_seam_var(n, op);
+        let refs = vec![Symbol::imported(
+            binding.symbol,
+            import_specifier(binding.module, &module.name),
+            binding.symbol,
+        )];
+        let mut text = format!(
+            "// {seam} is the call the generated method goes through to reach the\n\
+             // bespoke {sym} (an ESM import is a read-only binding, so a test that\n\
+             // simulates an outcome swaps this module-local one instead).\n\
+             let {seam} = {sym};",
+            sym = binding.symbol,
+        );
+        if has_tests {
+            text.push_str(&format!(
+                "\n\n// {swap} swaps the implementation {local} goes through and returns the\n\
+                 // previous one; a test generated from the declared tests simulates an\n\
+                 // outcome with it and restores the real implementation afterwards.\n\
+                 export function {swap}(next: typeof {sym}): typeof {sym} {{\n\
+                 \x20 const prev = {seam};\n\
+                 \x20 {seam} = next;\n\
+                 \x20 return prev;\n\
+                 }}",
+                swap = swap_fn_name(n, op),
+                local = op_local_name(&op.id),
+                sym = binding.symbol,
+            ));
+        }
+        decls.push(Decl::raw_with(text, refs));
+    }
+    decls
+}
 
 /// Everything the glue needs that the caller already computed: the method
 /// surface, the encoded input expression, the boundary error router, and the
 /// impl binding this target provides.
 pub(super) struct Method<'a> {
+    pub n: &'a Names,
     pub op: &'a Shape,
     pub module: &'a Module,
     pub name: &'a str,
@@ -40,6 +109,7 @@ pub(super) struct Method<'a> {
 
 pub(super) fn method(m: Method<'_>) -> String {
     let Method {
+        n,
         op,
         module,
         name,
@@ -87,6 +157,7 @@ pub(super) fn method(m: Method<'_>) -> String {
         root = en.root,
     );
 
+    let seam = impl_seam_var(n, op);
     let body = if binding.raw {
         let failure = if declared_errors(op, module).is_empty() {
             // Status 0: a bespoke outcome carries no protocol status, and the
@@ -100,11 +171,10 @@ pub(super) fn method(m: Method<'_>) -> String {
         format!(
             "    let outcome;\n\
              \x20   try {{\n\
-             \x20     outcome = await {sym}(this.settings, JSON.stringify({input_expr}));\n\
+             \x20     outcome = await {seam}(this.settings, JSON.stringify({input_expr}));\n\
              {guard}\
              \x20   if (!outcome.success) {{\n      {failure}\n    }}\n\
              {success}",
-            sym = binding.symbol,
         )
     } else {
         let call_args = if param.is_empty() {
@@ -113,15 +183,9 @@ pub(super) fn method(m: Method<'_>) -> String {
             "this.settings, input".to_string()
         };
         let tail = if output.is_some() {
-            format!(
-                "      return await {sym}({call_args});\n",
-                sym = binding.symbol
-            )
+            format!("      return await {seam}({call_args});\n")
         } else {
-            format!(
-                "      await {sym}({call_args});\n      return;\n",
-                sym = binding.symbol
-            )
+            format!("      await {seam}({call_args});\n      return;\n")
         };
         format!("    try {{\n{tail}{guard}")
     };

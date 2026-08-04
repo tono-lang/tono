@@ -112,6 +112,9 @@ let rec erase_kind = function
               ebindings;
           econformance;
         }
+  (* Test blocks are exercised by their own fmt tests; the generator does not
+     produce them. *)
+  | Ast.DTest _ as k -> k
 
 and erase_decl (d : Ast.decl) =
   {

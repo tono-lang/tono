@@ -307,6 +307,24 @@ let construct_doc (word : string) : string option =
         "The bound symbol returns an outcome (success flag, code, body) and \
          the generated glue decodes it into the declared output or \
          discriminates the failure by its code."
+  | "test" ->
+      Some
+        "A declared test, generated as a native test file per target (go test, \
+         Vitest, cargo test): named bindings construct the entry, stub its \
+         declared dependencies, call operations, and expect outcomes. A test \
+         with every dependency stubbed is hermetic; one touching a real \
+         dependency lands in the opt-in live suite."
+  | "stub" ->
+      Some
+        "Substitutes a declared dependency of one operation on one client \
+         binding: `.http` (from @http) answers with http.response, `.impl` \
+         (from ext impl) answers with the operation's own types. The binding \
+         records what crossed the dependency (`s.requests`)."
+  | "expect" ->
+      Some
+        "Asserts a binding's outcome against a pattern: the output shape, a \
+         declared error, or a tono.errors shape. `..` frees unnamed fields, \
+         `any` asserts presence, `None` asserts absence."
   | "match" ->
       Some
         (Printf.sprintf

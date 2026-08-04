@@ -190,7 +190,7 @@ let gen_module : Ir.module_ G.t =
   and+ shapes = G.list_size (G.int_range 0 3) gen_shape
   and+ operations = G.list_size (G.int_range 0 2) gen_shape
   and+ extensions = G.list_size (G.int_range 0 2) gen_extension in
-  ({ mod_name; shapes; operations; extensions } : Ir.module_)
+  ({ mod_name; shapes; operations; extensions; tests = [] } : Ir.module_)
 
 let gen_model : Ir.model G.t =
   let+ modules = G.list_size (G.int_range 0 2) gen_module in

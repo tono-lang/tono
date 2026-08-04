@@ -17,6 +17,7 @@ fn model(names: &[&str]) -> Model {
         modules: names
             .iter()
             .map(|name| Module {
+                tests: vec![],
                 name: (*name).into(),
                 shapes: vec![],
                 operations: vec![],
@@ -60,6 +61,38 @@ fn go_maps_a_module_to_a_package_directory_and_each_group_to_a_file() {
     assert_eq!(
         path_of(TargetKind::Go, &Group::root("casing")),
         "go/internal/casing/casing.go"
+    );
+}
+
+#[test]
+fn a_test_group_takes_the_name_its_runner_discovers() {
+    // `go test` compiles `_test.go` beside the package, Vitest picks up
+    // `.test.ts`, and cargo compiles a `#[cfg(test)] mod` from `_test.rs`.
+    let hermetic = Group::tests("payments.charges", "client", false);
+    let live = Group::tests("payments.charges", "client", true);
+    assert_eq!(
+        path_of(TargetKind::Go, &hermetic),
+        "go/payments/charges/client_test.go"
+    );
+    assert_eq!(
+        path_of(TargetKind::Go, &live),
+        "go/payments/charges/client_live_test.go"
+    );
+    assert_eq!(
+        path_of(TargetKind::TypeScript, &hermetic),
+        "typescript/payments/charges/client.test.ts"
+    );
+    assert_eq!(
+        path_of(TargetKind::TypeScript, &live),
+        "typescript/payments/charges/client.live.test.ts"
+    );
+    assert_eq!(
+        path_of(TargetKind::Rust, &hermetic),
+        "rust/payments/charges/client_test.rs"
+    );
+    assert_eq!(
+        path_of(TargetKind::Rust, &live),
+        "rust/payments/charges/client_live_test.rs"
     );
 }
 
@@ -362,6 +395,7 @@ fn two_entry_model() -> Model {
     Model {
         tono_ir_version: 6,
         modules: vec![Module {
+            tests: vec![],
             name: "notes".into(),
             shapes: vec![entry("admin"), entry("reader")],
             operations: vec![],

@@ -432,6 +432,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         // TonoError/DecodeError/the output type without one.
         shared.extend(decode_decls);
     }
+    let tested = crate::codegen::declared_tests::entries_with_tests(module);
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
@@ -449,6 +450,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             &bound,
             &mut helpers,
             multi,
+            tested.contains(entry.name),
         ));
         decls.extend(surface::discriminator_decls_for(entry, &n, module, &bound));
         // The whole surface freely names the module's error taxonomy and any
@@ -649,6 +651,8 @@ fn op_method(
 /// by shape so operations sharing an output type share one `decode_<type>`
 /// instead of each repeating its required-member probe.
 mod checks;
+#[cfg(test)]
+mod conformance_tests;
 mod constructor;
 mod decode;
 mod impl_op;
@@ -657,5 +661,6 @@ mod shared;
 mod surface;
 #[cfg(test)]
 mod tests;
+pub(crate) mod vector_tests;
 
 pub use shared::shared_groups;

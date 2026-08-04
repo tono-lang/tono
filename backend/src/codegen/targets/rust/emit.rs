@@ -174,6 +174,7 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     for (name, decls) in entries.per_entry {
         files.push(ModuleFile::new(Group::entry(&module.name, &name), decls));
     }
+    files.extend(crate::codegen::targets::rust::entry::vector_tests::test_files(module, config));
     files
 }
 
@@ -326,6 +327,7 @@ mod tests {
         // stays live even with no operations; the loose-op client trait,
         // which has no operation here to interface, stays out.
         let module = Module {
+            tests: vec![],
             name: "notes".into(),
             shapes: vec![crate::ir::Shape {
                 id: "notes#client".into(),
@@ -364,6 +366,7 @@ mod tests {
             }],
         };
         let module = Module {
+            tests: vec![],
             name: "notes".into(),
             shapes: vec![crate::ir::Shape {
                 id: "notes#client".into(),
@@ -394,6 +397,7 @@ mod tests {
     #[test]
     fn a_module_with_a_wide_integer_field_splits_helpers_into_the_serde_file() {
         let module = Module {
+            tests: vec![],
             name: "billing".into(),
             shapes: vec![structure(
                 "billing#Charge",
@@ -453,6 +457,7 @@ mod tests {
     #[test]
     fn a_plain_struct_module_emits_only_a_types_file() {
         let module = Module {
+            tests: vec![],
             name: "billing".into(),
             shapes: vec![structure(
                 "billing#Note",
@@ -473,6 +478,7 @@ mod tests {
     #[test]
     fn an_open_enum_splits_its_definition_from_its_impls() {
         let module = Module {
+            tests: vec![],
             name: "billing".into(),
             shapes: vec![
                 structure(

@@ -13,6 +13,7 @@ fn model(shapes: Vec<Shape>, extensions: Vec<Extension>) -> tono_backend::ir::Mo
     tono_backend::ir::Model {
         tono_ir_version: 6,
         modules: vec![tono_backend::ir::Module {
+            tests: vec![],
             name: "notes".into(),
             shapes,
             operations: vec![],

@@ -14,6 +14,12 @@ let create (toks : Token.t list) : t =
 
 let peek st = st.toks.(st.pos)
 
+(* The token [n] positions past the cursor, clamped to the trailing [Eof]. *)
+let peek_ahead st n =
+  let i = st.pos + n in
+  if i < Array.length st.toks then st.toks.(i)
+  else st.toks.(Array.length st.toks - 1)
+
 let advance st =
   let t = st.toks.(st.pos) in
   if t.Token.kind <> Token.Eof then st.pos <- st.pos + 1;

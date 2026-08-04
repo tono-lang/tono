@@ -1,10 +1,13 @@
+import tono.http
+import tono.errors
+
 @doc("A stored note.")
 pub struct note {
   id: string
   body: string @length(min: 1)
   // The canonical name is what travels; each language spells it its own way,
   // and @rename overrides that spelling without touching the wire. The bespoke
-  // implementations see the language spelling, the vectors see the wire one.
+  // implementations see the language spelling, the tests see the wire one.
   updated_at: string @rename(go: "Modified", typescript: "modified")
 }
 
@@ -49,7 +52,6 @@ pub struct client {
 ext impl save_note {
   go: "ext/go/notes.go#StoreSave"
   ts: "ext/ts/notes.ts#storeSave"
-  conformance: "vectors/save_note.json"
 }
 
 // The raw form: the bound symbol returns an outcome and the generated glue
@@ -58,5 +60,124 @@ ext impl save_note {
 ext impl archive_note raw {
   go: "ext/go/notes.go#StoreArchive"
   ts: "ext/ts/notes.ts#storeArchive"
-  conformance: "vectors/archive_note.json"
+}
+
+// ── fetch_note: the protocol op, hermetic against pinned fixtures ─────────
+
+test "the request carries the declared header and path" {
+  c: client { api_token: "t0" }
+  s: stub c.fetch_note.http: http.response {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: "{\"id\":\"n1\",\"body\":\"hello\",\"updated_at\":\"synced\"}"
+  }
+  got: c.fetch_note(note_ref { id: "n1" })
+  expect got: note { id: "n1", body: "hello", updated_at: "synced" }
+  expect s.requests: [http.request { method: "GET", path: "/notes/n1", headers: { "x-api-token": "t0", .. }, .. }]
+}
+
+test "a declared status discriminates into the typed error" {
+  c: client { api_token: "t0" }
+  stub c.fetch_note.http: http.response {
+    status: 529,
+    body: "{\"code\":\"overloaded\",\"message\":\"the service is shedding load\"}"
+  }
+  got: c.fetch_note(note_ref { id: "n1" })
+  expect got: overloaded { message: "the service is shedding load" }
+}
+
+test "an undeclared status falls back to the generic api error" {
+  c: client { api_token: "t0" }
+  stub c.fetch_note.http: http.response { status: 418, body: "short and stout" }
+  got: c.fetch_note(note_ref { id: "n1" })
+  expect got: errors.api { status: 418, body: "short and stout", .. }
+}
+
+test "a success payload missing a required member names that member" {
+  c: client { api_token: "t0" }
+  stub c.fetch_note.http: http.response { status: 200, body: "{\"id\":\"n1\"}" }
+  got: c.fetch_note(note_ref { id: "n1" })
+  expect got: errors.decode { path: "$.body" }
+}
+
+// ── save_note: the typed bespoke op ───────────────────────────────────────
+
+test "a stubbed store answers without the real one running" {
+  c: client { api_token: "t0" }
+  stub c.save_note.impl: note { id: "m1", body: "mocked", updated_at: "mocked" }
+  saved: c.save_note(note { id: "m1", body: "hello", updated_at: "" })
+  expect saved: note { id: "m1", body: "mocked", updated_at: "mocked" }
+}
+
+test "a stubbed declared failure crosses the boundary typed" {
+  c: client { api_token: "t0" }
+  stub c.save_note.impl: overloaded { message: "simulated shedding" }
+  saved: c.save_note(note { id: "m1", body: "hello", updated_at: "" })
+  expect saved: overloaded { message: "simulated shedding" }
+}
+
+// Validation fires before the dependency, so the stub only keeps the test
+// hermetic; its answer is never consumed.
+test "a constraint violation is caught before the store is reached" {
+  c: client { api_token: "t0" }
+  stub c.save_note.impl: note { id: "n2", body: "unreachable", updated_at: "" }
+  saved: c.save_note(note { id: "n2", body: "", updated_at: "" })
+  expect saved: errors.validation { fields: ["body"] }
+}
+
+test "stores the note and reports what the store recorded" {
+  c: client {}
+  saved: c.save_note(note { id: "n1", body: "hello", updated_at: "" })
+  expect saved: note { id: "n1", body: "hello", updated_at: "saved-by-t0" }
+}
+
+test "a declared failure crosses the boundary typed and retryable" {
+  c: client {}
+  saved: c.save_note(note { id: "overload", body: "hello", updated_at: "" })
+  expect saved: overloaded { message: "the store is shedding load" }
+}
+
+test "a thrown failure becomes a contract error naming the operation" {
+  c: client {}
+  saved: c.save_note(note { id: "boom", body: "hello", updated_at: "" })
+  expect saved: errors.contract { name: "save_note" }
+}
+
+// ── archive_note: the raw bespoke op ──────────────────────────────────────
+
+test "a stubbed raw outcome integrates without the real store" {
+  c: client { api_token: "t0" }
+  stub c.archive_note.impl: note { id: "m1", body: "mocked", updated_at: "mocked" }
+  got: c.archive_note(note_ref { id: "m1" })
+  expect got: note { id: "m1", body: "mocked", updated_at: "mocked" }
+}
+
+test "a matching outcome decodes with no mapping code" {
+  c: client {}
+  got: c.archive_note(note_ref { id: "n1" })
+  expect got: note { id: "n1", body: "archived", updated_at: "archived-by-t0" }
+}
+
+test "a declared code discriminates into the typed error" {
+  c: client {}
+  got: c.archive_note(note_ref { id: "overload" })
+  expect got: overloaded { message: "the store is shedding load" }
+}
+
+test "an undeclared code falls back to the generic api error" {
+  c: client {}
+  got: c.archive_note(note_ref { id: "unknown-failure" })
+  expect got: errors.api { status: 0, body: "{\"message\":\"out of quota\"}", .. }
+}
+
+test "a corrupt success payload names the missing member" {
+  c: client {}
+  got: c.archive_note(note_ref { id: "corrupt" })
+  expect got: errors.decode { path: "$.body" }
+}
+
+test "a thrown raw failure becomes a contract error naming the operation" {
+  c: client {}
+  got: c.archive_note(note_ref { id: "boom" })
+  expect got: errors.contract { name: "archive_note" }
 }

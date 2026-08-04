@@ -85,6 +85,21 @@ pub fn go_needs_module_path(model: &Model) -> bool {
 pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
     let root = PathBuf::from(target.dir());
     let ext = target.extension();
+    // A test group's file name is what each target's test runner discovers:
+    // `_test.go` for `go test`, `.test.ts` for Vitest, and a `_test.rs` module
+    // compiled under `#[cfg(test)]` for `cargo test`. The pure `{name}.{ext}`
+    // rule cannot spell those, so the test groups escape it here.
+    if let (Some(module), Some((entry, live))) = (&grp.module, grp.tests_of()) {
+        let file = match (target, live) {
+            (TargetKind::Go, false) => format!("{entry}_test.{ext}"),
+            (TargetKind::Go, true) => format!("{entry}_live_test.{ext}"),
+            (TargetKind::TypeScript, false) => format!("{entry}.test.{ext}"),
+            (TargetKind::TypeScript, true) => format!("{entry}.live.test.{ext}"),
+            (TargetKind::Rust, false) => format!("{entry}_test.{ext}"),
+            (TargetKind::Rust, true) => format!("{entry}_live_test.{ext}"),
+        };
+        return root.join(module_dir(module)).join(file);
+    }
     match (&grp.module, target) {
         // Each target fences an internal group with what its own ecosystem
         // reaches for, which is not the same shape in all three.

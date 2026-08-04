@@ -1,4 +1,5 @@
 import payments.common
+import tono.errors
 
 @doc("A small payments API that exercises the hard wire cases end to end.")
 pub struct charge {
@@ -50,4 +51,12 @@ pub struct client {
     @timeout(.timeout)
     @retry(.max_retries)
     @errors(card_declined, not_found)
+}
+
+// Only the construction surface is declared-testable here: a create_charge
+// call would construct a `charge`, and test values cannot spell its
+// cross-module members (common.status, common.payment_method) yet.
+test "construction rejects an empty api key" {
+  c: client { api_key: "" }
+  expect c: errors.validation { fields: ["api_key"] }
 }
