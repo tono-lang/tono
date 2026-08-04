@@ -697,11 +697,42 @@ mod tests {
             .any(|l| l.text.contains("/nope") && l.text.contains("no mock")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_runs_or_reports_the_missing_toolchain() {
-        // The whole path: frontend compile, codegen, scaffold, mock server,
-        // child run. With go installed the empty main runs; without it the
-        // verdict is the missing toolchain, never a panic.
+        use std::os::unix::fs::PermissionsExt;
+        // A stand-in frontend answers `compile` with a fixed valid model, so
+        // the whole path runs even where the OCaml build is absent: codegen,
+        // scaffold, mock server, child run. With go installed the empty main
+        // runs; without it the verdict is the missing toolchain, never a
+        // panic.
+        let _env = crate::playground::playground_env_guard();
+        let fake = std::env::temp_dir().join(format!("tono-fake-frontend-{}", std::process::id()));
+        let ir = serde_json::json!({
+            "tono_ir_version": tono_backend::ir::TONO_IR_VERSION,
+            "modules": [{
+                "name": "playground",
+                "shapes": [{
+                    "id": "playground#note",
+                    "kind": "structure",
+                    "params": [],
+                    "members": [{
+                        "constraints": [],
+                        "name": "id",
+                        "required": true,
+                        "target": { "prim": "string" },
+                        "traits": []
+                    }],
+                    "traits": [{ "id": "pub", "value": null }]
+                }],
+                "operations": [],
+                "extensions": []
+            }]
+        });
+        std::fs::write(&fake, format!("#!/bin/sh\ncat <<'EOF'\n{ir}\nEOF\n")).expect("fake");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        std::env::set_var("TONO_FRONTEND", &fake);
+
         let request: RunRequest = serde_json::from_value(serde_json::json!({
             "source": "pub struct note { id: string }",
             "target": "go",
@@ -710,12 +741,12 @@ mod tests {
             "mocks": { "env": { "UNUSED": "$MOCK" } }
         }))
         .expect("request");
-        match execute(&request) {
+        let outcome = execute(&request);
+        std::env::remove_var("TONO_FRONTEND");
+        let _ = std::fs::remove_file(&fake);
+        match outcome {
             Ok(lines) => assert!(!lines.iter().any(|l| l.kind == "error"), "{lines:?}"),
-            Err(message) => assert!(
-                message.contains("toolchain missing") || message.contains("frontend unavailable"),
-                "{message}"
-            ),
+            Err(message) => assert!(message.contains("toolchain missing"), "{message}"),
         }
     }
 

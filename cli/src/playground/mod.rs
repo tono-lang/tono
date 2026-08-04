@@ -142,6 +142,14 @@ fn capabilities_response() -> Response {
     )
 }
 
+/// Serializes tests that set process-wide environment variables; parallel
+/// test threads otherwise race on them.
+#[cfg(test)]
+pub(crate) fn playground_env_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +229,47 @@ mod tests {
             tiny_http::StatusCode(405)
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn handle_answers_over_a_real_socket() {
+        // One live round trip covers the transport shim around route():
+        // request read, dispatch, and respond.
+        let dir = std::env::temp_dir().join(format!("tono-handle-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("index.html"), "<title>x</title>").expect("index");
+        let assets = assets::Assets::new(Some(dir.clone())).expect("assets");
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("binds");
+        let addr = server.server_addr().to_string();
+        let client = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+            write!(
+                stream,
+                "GET /api/capabilities HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+            )
+            .expect("write");
+            let mut out = String::new();
+            stream.read_to_string(&mut out).expect("read");
+            out
+        });
+        let request = server.recv().expect("request");
+        handle(request, &assets);
+        let answer = client.join().expect("client");
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert!(answer.contains("runTargets"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_browser_never_fails_even_without_one() {
+        // Spawning the launcher is fire-and-forget; on a headless runner the
+        // binary is missing and that must stay silent. Gated to CI so local
+        // test runs do not pop a browser tab.
+        if std::env::var_os("CI").is_some() {
+            open_browser("http://127.0.0.1:1/");
+        }
     }
 
     #[test]

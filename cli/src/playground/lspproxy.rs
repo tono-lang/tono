@@ -200,13 +200,30 @@ pub fn handle(body: &str) -> Response {
     }
 }
 
+/// The language server for a target: the well-known binary, overridable with
+/// an environment variable for custom installs (a gopls outside PATH, a
+/// wrapper script).
+fn server_program(default: &str, env_key: &str) -> String {
+    std::env::var(env_key).unwrap_or_else(|_| default.to_string())
+}
+
 fn complete(request: &CompleteRequest) -> Result<Vec<serde_json::Value>, String> {
     let (kind, server, main_rel, lang_id) = match request.target.as_str() {
-        "go" => (TargetKind::Go, "gopls", "main.go", "go"),
-        "rust" => (TargetKind::Rust, "rust-analyzer", "src/main.rs", "rust"),
+        "go" => (
+            TargetKind::Go,
+            server_program("gopls", "TONO_GOPLS"),
+            "main.go",
+            "go",
+        ),
+        "rust" => (
+            TargetKind::Rust,
+            server_program("rust-analyzer", "TONO_RUST_ANALYZER"),
+            "src/main.rs",
+            "rust",
+        ),
         other => return Err(format!("no language server for {other}")),
     };
-    if !probe(server) {
+    if !probe(&server) {
         return Err(format!("{server} is not installed"));
     }
     let module = request.module.clone().unwrap_or_default();
@@ -216,7 +233,7 @@ fn complete(request: &CompleteRequest) -> Result<Vec<serde_json::Value>, String>
     };
     query(
         &request.target,
-        server,
+        &server,
         kind,
         main_rel,
         lang_id,
@@ -377,6 +394,49 @@ fn completion_items(result: &serde_json::Value) -> Vec<serde_json::Value> {
 mod tests {
     use super::*;
 
+    /// A python stand-in speaking just enough LSP: it answers every request
+    /// (initialize, completion) and ignores notifications.
+    #[cfg(unix)]
+    fn write_fake_server(name: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = std::env::temp_dir().join(name);
+        // concat! keeps the python indentation exact; a \ continuation would
+        // strip it and break the script.
+        let script = concat!(
+            "#!/usr/bin/env python3\n",
+            "import sys, json\n",
+            "if len(sys.argv) > 1:\n",
+            "    print('fake 0.0')\n",
+            "    sys.exit(0)\n",
+            "def read():\n",
+            "    n = 0\n",
+            "    while True:\n",
+            "        line = sys.stdin.buffer.readline().decode()\n",
+            "        if not line or line.strip() == '':\n",
+            "            break\n",
+            "        if line.lower().startswith('content-length:'):\n",
+            "            n = int(line.split(':')[1])\n",
+            "    return json.loads(sys.stdin.buffer.read(n)) if n else None\n",
+            "def send(m):\n",
+            "    b = json.dumps(m).encode()\n",
+            "    h = ('Content-Length: %d' % len(b)).encode()\n",
+            "    sys.stdout.buffer.write(h + b'\\r\\n\\r\\n' + b)\n",
+            "    sys.stdout.buffer.flush()\n",
+            "while True:\n",
+            "    m = read()\n",
+            "    if m is None:\n",
+            "        break\n",
+            "    if 'id' in m:\n",
+            "        r = {'capabilities': {}}\n",
+            "        if m.get('method') == 'textDocument/completion':\n",
+            "            r = {'items': [{'label': 'FakeDone', 'kind': 3}]}\n",
+            "        send({'jsonrpc': '2.0', 'id': m['id'], 'result': r})\n",
+        );
+        std::fs::write(&fake, script).expect("fake server");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        fake
+    }
+
     #[test]
     fn probing_a_missing_binary_is_false_not_an_error() {
         assert!(!probe("definitely-not-a-language-server-xyz"));
@@ -431,43 +491,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_whole_workspace_flow_runs_against_a_scripted_server() {
-        use std::os::unix::fs::PermissionsExt;
         // A python stand-in speaking just enough LSP: it answers every request
         // (initialize, completion) and ignores notifications, so one test
         // walks scaffold, spawn, handshake, didOpen, didChange, completion,
         // the cached-workspace path, and the stale-hash rebuild.
-        let fake = std::env::temp_dir().join(format!("tono-fake-ls-{}.py", std::process::id()));
-        // concat! keeps the python indentation exact; a \ continuation would
-        // strip it and break the script.
-        let script = concat!(
-            "#!/usr/bin/env python3\n",
-            "import sys, json\n",
-            "def read():\n",
-            "    n = 0\n",
-            "    while True:\n",
-            "        line = sys.stdin.buffer.readline().decode()\n",
-            "        if not line or line.strip() == '':\n",
-            "            break\n",
-            "        if line.lower().startswith('content-length:'):\n",
-            "            n = int(line.split(':')[1])\n",
-            "    return json.loads(sys.stdin.buffer.read(n)) if n else None\n",
-            "def send(m):\n",
-            "    b = json.dumps(m).encode()\n",
-            "    h = ('Content-Length: %d' % len(b)).encode()\n",
-            "    sys.stdout.buffer.write(h + b'\\r\\n\\r\\n' + b)\n",
-            "    sys.stdout.buffer.flush()\n",
-            "while True:\n",
-            "    m = read()\n",
-            "    if m is None:\n",
-            "        break\n",
-            "    if 'id' in m:\n",
-            "        r = {'capabilities': {}}\n",
-            "        if m.get('method') == 'textDocument/completion':\n",
-            "            r = {'items': [{'label': 'FakeDone', 'kind': 3}]}\n",
-            "        send({'jsonrpc': '2.0', 'id': m['id'], 'result': r})\n",
-        );
-        std::fs::write(&fake, script).expect("fake server");
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let fake = write_fake_server(&format!("tono-fake-ls-{}.py", std::process::id()));
         let program = fake.to_string_lossy().into_owned();
 
         let ask = |hash: u64| {
@@ -490,6 +518,62 @@ mod tests {
         assert_eq!(ask(1).expect("warm workspace answers").len(), 1);
         assert_eq!(ask(2).expect("rebuilt workspace answers").len(), 1);
         let _ = std::fs::remove_file(&fake);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn complete_answers_end_to_end_with_overridden_binaries() {
+        use std::os::unix::fs::PermissionsExt;
+        let _env = crate::playground::playground_env_guard();
+        // A stand-in frontend and a scripted language server, both wired
+        // through their environment overrides, drive complete() end to end
+        // without any real toolchain installed.
+        let pid = std::process::id();
+        let frontend = std::env::temp_dir().join(format!("tono-fake-frontend-c-{pid}"));
+        let ir = serde_json::json!({
+            "tono_ir_version": tono_backend::ir::TONO_IR_VERSION,
+            "modules": [{
+                "name": "playground",
+                "shapes": [{
+                    "id": "playground#note",
+                    "kind": "structure",
+                    "params": [],
+                    "members": [{
+                        "constraints": [],
+                        "name": "id",
+                        "required": true,
+                        "target": { "prim": "string" },
+                        "traits": []
+                    }],
+                    "traits": [{ "id": "pub", "value": null }]
+                }],
+                "operations": [],
+                "extensions": []
+            }]
+        });
+        std::fs::write(&frontend, format!("#!/bin/sh\ncat <<'EOF'\n{ir}\nEOF\n"))
+            .expect("frontend");
+        std::fs::set_permissions(&frontend, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let server = write_fake_server(&format!("tono-fake-ls-c-{pid}.py"));
+        std::env::set_var("TONO_FRONTEND", &frontend);
+        std::env::set_var("TONO_GOPLS", &server);
+
+        let request: CompleteRequest = serde_json::from_value(serde_json::json!({
+            "target": "go",
+            "source": "pub struct note { id: string }",
+            "module": "playground",
+            "snippet": "package main\nfunc main() {}\n",
+            "line": 0,
+            "character": 0
+        }))
+        .expect("request");
+        let items = complete(&request);
+        std::env::remove_var("TONO_FRONTEND");
+        std::env::remove_var("TONO_GOPLS");
+        let _ = std::fs::remove_file(&frontend);
+        let _ = std::fs::remove_file(&server);
+        let items = items.expect("completes");
+        assert_eq!(items[0]["label"], "FakeDone");
     }
 
     #[cfg(unix)]
