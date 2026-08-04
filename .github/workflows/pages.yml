@@ -1,0 +1,94 @@
+name: Pages
+
+# One Pages site serves two things: the install script at the root, and the
+# hosted (capped, no Run panel) playground demo under /playground/. Kept in
+# one workflow because GitHub Pages has a single deployment target per repo;
+# two independent publishers would each overwrite the other's content.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
+        with:
+          ocaml-compiler: "5.2"
+
+      - name: Install the frontend's OCaml dependencies
+        run: opam install yojson.3.0.0 js_of_ocaml.6.2.0 js_of_ocaml-ppx.6.2.0 lsp.1.25.0 jsonrpc.1.25.0 --yes
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Install node dependencies
+        # --ignore-scripts blocks dependency lifecycle scripts; vite's esbuild
+        # resolves its platform binary via optional deps, and wasm-pack comes
+        # from install-action below instead of its npm postinstall download.
+        run: npm ci --ignore-scripts
+        working-directory: playground
+
+      - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
+        with:
+          tool: wasm-pack@0.13.1
+
+      - name: Build the embedded compiler halves
+        run: opam exec -- playground/scripts/build-compiler.sh
+
+      - name: Unit tests
+        run: npm test
+        working-directory: playground
+
+      - name: Smoke test over the built artifacts
+        run: node scripts/smoke.mjs
+        working-directory: playground
+
+      - name: Build the hosted playground (capped demo, no Run panel)
+        run: npm run build
+        working-directory: playground
+        env:
+          VITE_PLAYGROUND_MODE: hosted
+
+      - name: Assemble the Pages site
+        run: |
+          mkdir -p site
+          cp scripts/install.sh site/install.sh
+          cp -r playground/dist site/playground
+          cat > site/index.html <<'EOF'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>tono</title>
+          <p><a href="playground/">Playground</a></p>
+          <pre>curl -fsSL https://tono-lang.github.io/tono/install.sh | sh</pre>
+          EOF
+
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
