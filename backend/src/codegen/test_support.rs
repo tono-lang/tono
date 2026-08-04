@@ -319,6 +319,11 @@ pub fn assert_emits_no_op_stub(target: &impl Target) {
 mod entries;
 pub use entries::*;
 
+// The declared-test builders likewise: one bed the per-target native test
+// emitters parametrize, so each target's tests carry only their assertions.
+mod declared;
+pub use declared::*;
+
 /// Resolve a module's emitted groups the way the pipeline does: record which
 /// group declares each symbol, then re-point every reference at it. A unit test
 /// that renders a group in isolation would otherwise see references still

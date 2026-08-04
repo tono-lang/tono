@@ -8,10 +8,12 @@ use std::collections::BTreeMap;
 use super::tests::{entry_text, fixture_module};
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
-use crate::codegen::test_support::{push_entry_op_trait, rendered};
+use crate::codegen::test_support::{
+    eq, impl_extension, notes_bed, push_entry_op_trait, rendered, request_pattern, wired,
+    with_tests,
+};
 use crate::ir::{
-    FieldPattern, HttpAnswer, RequestPattern, ShapePattern, StubAnswer, StubDep, TestCall,
-    TestConstruction, TestDecl, TestExpect, TestPattern, TestStub,
+    HttpAnswer, StubAnswer, StubDep, TestConstruction, TestDecl, TestExpect, TestPattern, TestStub,
 };
 
 #[test]
@@ -62,16 +64,7 @@ fn bound_hooks_wire_the_settings_bridge_and_the_transport_slots() {
 
 /// An `ext impl` binding for the fixture's `save_note`, typed or raw.
 fn impl_ext(raw: bool) -> crate::ir::Extension {
-    crate::ir::Extension {
-        name: "save_note".into(),
-        kind: crate::ir::ExtKind::Impl,
-        signature: None,
-        raw,
-        bindings: [("go".to_string(), "ext/go/save.go#SaveNote".to_string())]
-            .into_iter()
-            .collect(),
-        conformance: None,
-    }
+    impl_extension("go", "save_note", "ext/go/save.go#SaveNote", raw)
 }
 
 #[test]
@@ -135,65 +128,10 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
     ));
 }
 
-/// A construction of the fixture entry pinning its `@arg`.
-fn construction() -> TestConstruction {
-    TestConstruction {
-        binding: "c".into(),
-        entry: "client".into(),
-        values: BTreeMap::from([("api_key".to_string(), serde_json::json!("k"))]),
-    }
-}
-
-fn call() -> TestCall {
-    TestCall {
-        binding: "saved".into(),
-        client: "c".into(),
-        op: "save_note".into(),
-        input: Some(serde_json::json!({"id": "n1"})),
-    }
-}
-
-fn eq_expect(value: serde_json::Value) -> TestExpect {
-    TestExpect::Outcome {
-        subject: "saved".into(),
-        pattern: TestPattern::Eq(value),
-    }
-}
-
-/// One hermetic (impl-stubbed) test and one live test for the fixture's
-/// `save_note`.
-fn save_note_tests() -> Vec<TestDecl> {
-    vec![
-        TestDecl {
-            name: "stores it".into(),
-            constructions: vec![construction()],
-            stubs: vec![TestStub {
-                binding: None,
-                client: "c".into(),
-                op: "save_note".into(),
-                dep: StubDep::Impl,
-                answers: vec![StubAnswer::Value {
-                    value: serde_json::json!({"id": "n1"}),
-                }],
-            }],
-            calls: vec![call()],
-            expects: vec![eq_expect(serde_json::json!({"id": "n1"}))],
-        },
-        TestDecl {
-            name: "hits the real store".into(),
-            constructions: vec![construction()],
-            stubs: vec![],
-            calls: vec![call()],
-            expects: vec![eq_expect(serde_json::json!({"id": "n1"}))],
-        },
-    ]
-}
-
 #[test]
 fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
-    let mut module = fixture_module();
+    let mut module = with_tests(fixture_module(), notes_bed().impl_echo_tests());
     module.extensions = vec![impl_ext(false)];
-    module.tests = save_note_tests();
     let emission = super::emit(&module, &go_casing());
     let mut decls = emission.shared;
     decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
@@ -219,9 +157,8 @@ fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
 
 #[test]
 fn declared_tests_generate_a_hermetic_and_a_live_go_test_file() {
-    let mut module = fixture_module();
+    let mut module = with_tests(fixture_module(), notes_bed().impl_echo_tests());
     module.extensions = vec![impl_ext(false)];
-    module.tests = save_note_tests();
     let files = super::vector_tests::test_files(&module, &go_casing());
     assert_eq!(files.len(), 2);
     let hermetic = rendered(&files[0].file.decls, &GoRules::default());
@@ -263,64 +200,18 @@ fn declared_tests_generate_a_hermetic_and_a_live_go_test_file() {
     assert!(!live.contains("func vector"));
 }
 
-fn eq(value: serde_json::Value) -> FieldPattern {
-    FieldPattern::Pat(TestPattern::Eq(value))
-}
-
 #[test]
 fn an_http_stub_generates_a_request_matching_test() {
-    let mut module = fixture_module();
-    push_entry_op_trait(
-        &mut module,
-        "wire_descriptor",
-        serde_json::json!({"http_method": "POST", "uri": "/notes", "bindings": {}}),
+    let bed = notes_bed();
+    let module = wired(
+        fixture_module(),
+        vec![bed.retry_request_test(
+            "/notes",
+            TestPattern::Struct(
+                bed.struct_pattern(true, vec![("id", eq(serde_json::json!("n1")))]),
+            ),
+        )],
     );
-    let answer = |status: i64| {
-        StubAnswer::Http(HttpAnswer {
-            status,
-            headers: BTreeMap::new(),
-            body: "{\"id\":\"n1\"}".into(),
-        })
-    };
-    let request = RequestPattern {
-        open: true,
-        fields: BTreeMap::from([
-            ("method".to_string(), eq(serde_json::json!("POST"))),
-            ("path".to_string(), eq(serde_json::json!("/notes"))),
-        ]),
-        headers: Some(BTreeMap::from([(
-            "authorization".to_string(),
-            eq(serde_json::json!("Bearer k")),
-        )])),
-    };
-    module.tests = vec![TestDecl {
-        name: "sends the token twice".into(),
-        constructions: vec![construction()],
-        stubs: vec![TestStub {
-            binding: Some("s".into()),
-            client: "c".into(),
-            op: "save_note".into(),
-            dep: StubDep::Http,
-            // A sequence: the second call consumes the second response, and
-            // any further call repeats the last.
-            answers: vec![answer(500), answer(200)],
-        }],
-        calls: vec![call()],
-        expects: vec![
-            TestExpect::Outcome {
-                subject: "saved".into(),
-                pattern: TestPattern::Struct(ShapePattern {
-                    shape: "note".into(),
-                    open: true,
-                    fields: BTreeMap::from([("id".to_string(), eq(serde_json::json!("n1")))]),
-                }),
-            },
-            TestExpect::Requests {
-                subject: "s".into(),
-                requests: vec![request.clone(), request],
-            },
-        ],
-    }];
     let files = super::vector_tests::test_files(&module, &go_casing());
     assert_eq!(files.len(), 1);
     let text = rendered(&files[0].file.decls, &GoRules::default());
@@ -396,19 +287,15 @@ fn two_entries_with_tests_share_the_package_without_redefining_symbols() {
                 body: "{\"id\":\"n1\"}".into(),
             })],
         }],
-        calls: vec![call()],
+        calls: vec![notes_bed().call()],
         expects: vec![
-            eq_expect(serde_json::json!({"id": "n1"})),
+            notes_bed().echo_expect(),
             TestExpect::Requests {
                 subject: "s".into(),
-                requests: vec![RequestPattern {
-                    open: true,
-                    fields: BTreeMap::from([("path".to_string(), eq(serde_json::json!("/notes")))]),
-                    headers: Some(BTreeMap::from([(
-                        "authorization".to_string(),
-                        eq(serde_json::json!("Bearer k")),
-                    )])),
-                }],
+                requests: vec![request_pattern(
+                    vec![("path", "/notes")],
+                    vec![("authorization", eq(serde_json::json!("Bearer k")))],
+                )],
             },
         ],
     };

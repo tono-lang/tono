@@ -1,7 +1,9 @@
 //! Emitter tests for the expectation half of the generated Vitest tests:
 //! every outcome-pattern arm (equality, open/closed struct and error
 //! patterns, the taxonomy categories), the request marker headers, and the
-//! defensive arms validation refuses to let through the pipeline.
+//! defensive arms validation refuses to let through the pipeline. The
+//! declared tests come from the shared bed; only the assertions over the
+//! generated TypeScript live here.
 
 use std::collections::BTreeMap;
 
@@ -11,103 +13,12 @@ use crate::codegen::declared_tests;
 use crate::codegen::entries::plan;
 use crate::codegen::targets::typescript::types::ts_casing;
 use crate::codegen::targets::typescript::TsRules;
-use crate::codegen::test_support::{push_entry_op_trait, rendered, set_entry_op_outputs};
-use crate::ir::{
-    Empty, FieldPattern, HttpAnswer, Module, Prim, RequestPattern, ShapePattern, StubAnswer,
-    StubDep, TaxonomyPattern, TestCall, TestConstruction, TestDecl, TestExpect, TestPattern,
-    TestStub, Tref,
+use crate::codegen::test_support::{
+    absent, eq, notes_bed, present, rendered, set_entry_op_outputs, wired,
 };
-
-fn eq(value: serde_json::Value) -> FieldPattern {
-    FieldPattern::Pat(TestPattern::Eq(value))
-}
-
-fn present() -> FieldPattern {
-    FieldPattern::Present { present: Empty {} }
-}
-
-fn absent() -> FieldPattern {
-    FieldPattern::Absent { absent: Empty {} }
-}
-
-fn construction() -> TestConstruction {
-    TestConstruction {
-        binding: "c".into(),
-        entry: "client".into(),
-        values: BTreeMap::from([("api_key".to_string(), serde_json::json!("k"))]),
-    }
-}
-
-fn call() -> TestCall {
-    TestCall {
-        binding: "saved".into(),
-        client: "c".into(),
-        op: "save_note".into(),
-        input: Some(serde_json::json!({"id": "n1"})),
-    }
-}
-
-fn http_stub() -> TestStub {
-    TestStub {
-        binding: None,
-        client: "c".into(),
-        op: "save_note".into(),
-        dep: StubDep::Http,
-        answers: vec![StubAnswer::Http(HttpAnswer {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: "{\"id\":\"n1\"}".into(),
-        })],
-    }
-}
-
-fn outcome_test(name: &str, pattern: TestPattern) -> TestDecl {
-    TestDecl {
-        name: name.into(),
-        constructions: vec![construction()],
-        stubs: vec![http_stub()],
-        calls: vec![call()],
-        expects: vec![TestExpect::Outcome {
-            subject: "saved".into(),
-            pattern,
-        }],
-    }
-}
-
-fn struct_pattern(open: bool, fields: Vec<(&str, FieldPattern)>) -> ShapePattern {
-    ShapePattern {
-        shape: "note".into(),
-        open,
-        fields: fields
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect(),
-    }
-}
-
-fn error_pattern(open: bool, fields: Vec<(&str, FieldPattern)>) -> ShapePattern {
-    ShapePattern {
-        shape: "overloaded".into(),
-        open,
-        fields: fields
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect(),
-    }
-}
-
-/// The schema fixture with a wire descriptor pushed onto its operation so an
-/// http stub validates, carrying the given declared tests.
-fn wired_module(tests: Vec<TestDecl>) -> Module {
-    let mut module = fixture_module();
-    push_entry_op_trait(
-        &mut module,
-        "wire_descriptor",
-        serde_json::json!({"http_method": "POST", "uri": "/notes", "bindings": {}}),
-    );
-    module.tests = tests;
-    module
-}
+use crate::ir::{
+    Empty, FieldPattern, Module, Prim, ShapePattern, TaxonomyPattern, TestPattern, Tref,
+};
 
 fn hermetic_text(module: &Module) -> String {
     let files = super::test_files(module, &ts_casing());
@@ -117,8 +28,7 @@ fn hermetic_text(module: &Module) -> String {
 
 #[test]
 fn an_ok_pattern_asserts_nothing_beyond_the_successful_call() {
-    let module = wired_module(vec![outcome_test("just works", TestPattern::Ok(Empty {}))]);
-    let text = hermetic_text(&module);
+    let text = hermetic_text(&wired(fixture_module(), vec![notes_bed().ok_test()]));
     assert!(text.contains("await c.saveNote(input);"));
     assert!(!text.contains("const out"));
     assert!(!text.contains("expect(out"));
@@ -126,71 +36,55 @@ fn an_ok_pattern_asserts_nothing_beyond_the_successful_call() {
 
 #[test]
 fn an_open_struct_pattern_checks_fields_and_markers_over_the_wire_form() {
-    let module = wired_module(vec![outcome_test(
-        "matches loosely",
-        TestPattern::Struct(struct_pattern(
-            true,
-            vec![
-                ("id", eq(serde_json::json!("n1"))),
-                ("body", present()),
-                ("extra", absent()),
-            ],
-        )),
-    )]);
-    let text = hermetic_text(&module);
+    let text = hermetic_text(&wired(
+        fixture_module(),
+        vec![notes_bed().open_struct_test()],
+    ));
     // The wire form is what the per-field checks read.
     assert!(text.contains("const got = encodeNote(out) as Record<string, unknown>;"));
     assert!(text.contains("expect(got[\"id\"]).toEqual(\"n1\");"));
-    assert!(text.contains("expect(got[\"body\"]).not.toBeUndefined();"));
-    assert!(text.contains("expect(got[\"extra\"]).toBeUndefined();"));
+    assert!(text.contains("expect(got[\"extra\"]).not.toBeUndefined();"));
+    assert!(text.contains("expect(got[\"missing\"]).toBeUndefined();"));
     // Open: unmentioned keys pass.
     assert!(!text.contains("Object.entries(got)"));
 }
 
 #[test]
 fn a_closed_all_eq_struct_pattern_collapses_into_one_total_comparison() {
-    let module = wired_module(vec![outcome_test(
-        "pins the wire object",
-        TestPattern::Struct(struct_pattern(
-            false,
-            vec![
-                ("id", eq(serde_json::json!("n1"))),
-                ("body", eq(serde_json::json!("b"))),
-            ],
-        )),
-    )]);
-    let text = hermetic_text(&module);
-    assert!(text.contains("expect(encodeNote(out)).toEqual({\"body\":\"b\",\"id\":\"n1\"});"));
+    let text = hermetic_text(&wired(
+        fixture_module(),
+        vec![notes_bed().closed_eq_struct_test()],
+    ));
+    assert!(text.contains("expect(encodeNote(out)).toEqual({\"id\":\"n1\",\"tag\":\"t\"});"));
     assert!(!text.contains("const got"));
 }
 
 #[test]
 fn a_closed_struct_pattern_with_a_marker_rejects_unmentioned_keys() {
-    let module = wired_module(vec![outcome_test(
-        "pins the keys",
-        TestPattern::Struct(struct_pattern(
-            false,
-            vec![("id", eq(serde_json::json!("n1"))), ("body", present())],
-        )),
-    )]);
-    let text = hermetic_text(&module);
+    let text = hermetic_text(&wired(
+        fixture_module(),
+        vec![notes_bed().closed_marker_struct_test()],
+    ));
     assert!(text.contains("Object.entries(got)"));
-    assert!(text.contains("![\"body\", \"id\"].includes(k)"));
+    assert!(text.contains("![\"id\", \"tag\"].includes(k)"));
     assert!(text.contains(").toEqual([]);"));
 }
 
 #[test]
 fn a_primitive_output_compares_the_value_itself_without_a_codec() {
-    let mut module = wired_module(vec![
-        outcome_test("eq prim", TestPattern::Eq(serde_json::json!("x"))),
-        outcome_test(
-            "struct prim",
-            TestPattern::Struct(struct_pattern(
-                true,
-                vec![("id", eq(serde_json::json!("n1")))],
-            )),
-        ),
-    ]);
+    let bed = notes_bed();
+    let mut module = wired(
+        fixture_module(),
+        vec![
+            bed.outcome_test("eq prim", TestPattern::Eq(serde_json::json!("x"))),
+            bed.outcome_test(
+                "struct prim",
+                TestPattern::Struct(
+                    bed.struct_pattern(true, vec![("id", eq(bed.input["id"].clone()))]),
+                ),
+            ),
+        ],
+    );
     set_entry_op_outputs(&mut module, Tref::Prim(Prim::String));
     let text = hermetic_text(&module);
     assert!(text.contains("expect(out).toEqual(\"x\");"));
@@ -200,42 +94,7 @@ fn a_primitive_output_compares_the_value_itself_without_a_codec() {
 
 #[test]
 fn error_patterns_check_the_declared_error_and_its_data() {
-    let module = wired_module(vec![
-        outcome_test(
-            "open error fields",
-            TestPattern::Error(error_pattern(
-                true,
-                vec![
-                    ("message", eq(serde_json::json!("busy"))),
-                    ("bogus", eq(serde_json::json!("x"))),
-                ],
-            )),
-        ),
-        outcome_test(
-            "open error present",
-            TestPattern::Error(error_pattern(true, vec![("message", present())])),
-        ),
-        outcome_test(
-            "open error absent",
-            TestPattern::Error(error_pattern(true, vec![("message", absent())])),
-        ),
-        outcome_test(
-            "closed error marker",
-            TestPattern::Error(error_pattern(false, vec![("message", present())])),
-        ),
-        outcome_test(
-            "closed error total",
-            TestPattern::Error(error_pattern(
-                false,
-                vec![("message", eq(serde_json::json!("busy")))],
-            )),
-        ),
-        outcome_test(
-            "bare error",
-            TestPattern::Error(error_pattern(true, vec![])),
-        ),
-    ]);
-    let text = hermetic_text(&module);
+    let text = hermetic_text(&wired(fixture_module(), notes_bed().error_suite()));
     // The failure lands as the declared typed error, caught off the call.
     assert!(text.contains("let caught: unknown;"));
     assert!(text.contains("expect(caught).toBeInstanceOf(OverloadedError);"));
@@ -258,52 +117,7 @@ fn error_patterns_check_the_declared_error_and_its_data() {
 
 #[test]
 fn taxonomy_patterns_cover_every_category() {
-    let tax = |category: &str, fields: Vec<(&str, FieldPattern)>| {
-        TestPattern::Taxonomy(TaxonomyPattern {
-            category: category.into(),
-            open: true,
-            fields: fields
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect(),
-        })
-    };
-    let module = wired_module(vec![
-        outcome_test(
-            "api tax",
-            tax(
-                "api",
-                vec![
-                    ("status", eq(serde_json::json!(500))),
-                    ("body", eq(serde_json::json!("boom"))),
-                ],
-            ),
-        ),
-        outcome_test(
-            "validation tax",
-            tax(
-                "validation",
-                vec![("fields", eq(serde_json::json!(["id"])))],
-            ),
-        ),
-        outcome_test(
-            "decode tax",
-            tax("decode", vec![("path", eq(serde_json::json!("$.id")))]),
-        ),
-        outcome_test(
-            "contract tax",
-            tax(
-                "contract",
-                vec![("name", eq(serde_json::json!("save_note")))],
-            ),
-        ),
-        outcome_test(
-            "config tax",
-            tax("config", vec![("field", eq(serde_json::json!("api_key")))]),
-        ),
-        outcome_test("transport tax", tax("transport", vec![])),
-    ]);
-    let text = hermetic_text(&module);
+    let text = hermetic_text(&wired(fixture_module(), notes_bed().taxonomy_suite()));
     assert!(text.contains("expect(caught).toBeInstanceOf(APIError);"));
     assert!(text.contains("const api = caught as APIError;"));
     assert!(text.contains("expect(api.status).toBe(500);"));
@@ -318,26 +132,10 @@ fn taxonomy_patterns_cover_every_category() {
 
 #[test]
 fn request_header_markers_check_presence_and_absence() {
-    let mut stub = http_stub();
-    stub.binding = Some("s".into());
-    let module = wired_module(vec![TestDecl {
-        name: "traces the request".into(),
-        constructions: vec![construction()],
-        stubs: vec![stub],
-        calls: vec![call()],
-        expects: vec![TestExpect::Requests {
-            subject: "s".into(),
-            requests: vec![RequestPattern {
-                open: true,
-                fields: BTreeMap::new(),
-                headers: Some(BTreeMap::from([
-                    ("X-Trace".to_string(), present()),
-                    ("X-Debug".to_string(), absent()),
-                ])),
-            }],
-        }],
-    }]);
-    let text = hermetic_text(&module);
+    let text = hermetic_text(&wired(
+        fixture_module(),
+        vec![notes_bed().request_marker_test()],
+    ));
     assert!(text.contains("expect(seen.length).toBe(1);"));
     assert!(text.contains("const lower0 = Object.fromEntries("));
     assert!(text.contains("expect(lower0[\"x-trace\"]).not.toBeUndefined();"));
@@ -358,13 +156,9 @@ fn the_field_leaf_readers_accept_equality_only() {
 
 #[test]
 fn map_field_asserts_skips_a_nested_structural_pattern() {
-    let pattern = struct_pattern(
-        true,
-        vec![(
-            "nested",
-            FieldPattern::Pat(TestPattern::Struct(struct_pattern(true, vec![]))),
-        )],
-    );
+    let bed = notes_bed();
+    let nested = FieldPattern::Pat(TestPattern::Struct(bed.struct_pattern(true, vec![])));
+    let pattern = bed.struct_pattern(true, vec![("nested", nested)]);
     assert_eq!(expects::map_field_asserts("got", &pattern), "");
 }
 
@@ -390,7 +184,8 @@ fn with_ctx(module: &Module, f: impl FnOnce(&super::TestCtx<'_>)) {
 
 #[test]
 fn the_defensive_arms_fail_loudly_in_the_generated_test() {
-    let module = wired_module(vec![outcome_test("base", TestPattern::Ok(Empty {}))]);
+    let bed = notes_bed();
+    let module = wired(fixture_module(), vec![bed.ok_test()]);
     with_ctx(&module, |ctx| {
         let mut refs = Vec::new();
         // A success pattern never reaches the failure asserts.
@@ -415,11 +210,11 @@ fn the_defensive_arms_fail_loudly_in_the_generated_test() {
         let text = expects::taxonomy_asserts(ctx, &tax, &mut refs);
         assert!(text.contains("throw new Error(\"unknown error category bogus\");"));
         // A nested structural pattern in error data is skipped.
-        let nested = error_pattern(
+        let nested = bed.error_pattern(
             true,
             vec![(
                 "message",
-                FieldPattern::Pat(TestPattern::Struct(struct_pattern(true, vec![]))),
+                FieldPattern::Pat(TestPattern::Struct(bed.struct_pattern(true, vec![]))),
             )],
         );
         assert_eq!(
@@ -432,7 +227,7 @@ fn the_defensive_arms_fail_loudly_in_the_generated_test() {
             expects::error_data_asserts(
                 ctx,
                 "notes#conf",
-                &error_pattern(true, vec![("message", present())]),
+                &bed.error_pattern(true, vec![("message", present())]),
                 &mut refs,
             ),
             ""

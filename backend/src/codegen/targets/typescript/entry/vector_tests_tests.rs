@@ -1,82 +1,16 @@
 //! The generated-Vitest tests, split from the emitter so each file stays
-//! within the repo size gate.
-
-use std::collections::BTreeMap;
+//! within the repo size gate. The declared tests come from the shared bed;
+//! only the assertions over the generated TypeScript live here.
 
 use super::super::tests::fixture_module;
 use crate::codegen::targets::typescript::types::ts_casing;
 use crate::codegen::targets::typescript::TsRules;
-use crate::codegen::test_support::{push_entry_op_trait, rendered};
-use crate::ir::{
-    FieldPattern, HttpAnswer, RequestPattern, StubAnswer, StubDep, TestCall, TestConstruction,
-    TestDecl, TestExpect, TestPattern, TestStub,
-};
+use crate::codegen::test_support::{impl_extension, notes_bed, rendered, wired, with_tests};
+use crate::ir::TestPattern;
 
 /// An `ext impl` binding for the fixture's `save_note`.
 fn impl_ext() -> crate::ir::Extension {
-    crate::ir::Extension {
-        name: "save_note".into(),
-        kind: crate::ir::ExtKind::Impl,
-        signature: None,
-        raw: false,
-        bindings: [("ts".to_string(), "ext/ts/save.ts#saveNote".to_string())]
-            .into_iter()
-            .collect(),
-        conformance: None,
-    }
-}
-
-fn construction() -> TestConstruction {
-    TestConstruction {
-        binding: "c".into(),
-        entry: "client".into(),
-        values: BTreeMap::from([("api_key".to_string(), serde_json::json!("k"))]),
-    }
-}
-
-fn call() -> TestCall {
-    TestCall {
-        binding: "saved".into(),
-        client: "c".into(),
-        op: "save_note".into(),
-        input: Some(serde_json::json!({"id": "n1"})),
-    }
-}
-
-fn eq_expect(value: serde_json::Value) -> TestExpect {
-    TestExpect::Outcome {
-        subject: "saved".into(),
-        pattern: TestPattern::Eq(value),
-    }
-}
-
-/// One hermetic (impl-stubbed) test and one live test for the fixture's
-/// `save_note`.
-fn save_note_tests() -> Vec<TestDecl> {
-    vec![
-        TestDecl {
-            name: "stores it".into(),
-            constructions: vec![construction()],
-            stubs: vec![TestStub {
-                binding: None,
-                client: "c".into(),
-                op: "save_note".into(),
-                dep: StubDep::Impl,
-                answers: vec![StubAnswer::Value {
-                    value: serde_json::json!({"id": "n1"}),
-                }],
-            }],
-            calls: vec![call()],
-            expects: vec![eq_expect(serde_json::json!({"id": "n1"}))],
-        },
-        TestDecl {
-            name: "hits the real store".into(),
-            constructions: vec![construction()],
-            stubs: vec![],
-            calls: vec![call()],
-            expects: vec![eq_expect(serde_json::json!({"id": "n1"}))],
-        },
-    ]
+    impl_extension("ts", "save_note", "ext/ts/save.ts#saveNote", false)
 }
 
 fn full_text(module: &crate::ir::Module) -> String {
@@ -88,9 +22,8 @@ fn full_text(module: &crate::ir::Module) -> String {
 
 #[test]
 fn declared_tests_swap_the_construction_and_impl_seams() {
-    let mut module = fixture_module();
+    let mut module = with_tests(fixture_module(), notes_bed().impl_echo_tests());
     module.extensions = vec![impl_ext()];
-    module.tests = save_note_tests();
     let out = full_text(&module);
     // The method reaches the bespoke symbol through the module-local seam
     // (an ESM import is read-only), and the swapper is exported only
@@ -118,9 +51,8 @@ fn declared_tests_swap_the_construction_and_impl_seams() {
 
 #[test]
 fn declared_tests_generate_a_hermetic_and_a_live_vitest_file() {
-    let mut module = fixture_module();
+    let mut module = with_tests(fixture_module(), notes_bed().impl_echo_tests());
     module.extensions = vec![impl_ext()];
-    module.tests = save_note_tests();
     let files = super::test_files(&module, &ts_casing());
     assert_eq!(files.len(), 2);
     assert_eq!(files[0].group.tests_of(), Some(("client", false)));
@@ -159,57 +91,13 @@ fn declared_tests_generate_a_hermetic_and_a_live_vitest_file() {
     assert!(!live.contains("function "));
 }
 
-fn eq(value: serde_json::Value) -> FieldPattern {
-    FieldPattern::Pat(TestPattern::Eq(value))
-}
-
 #[test]
 fn an_http_stub_generates_a_request_matching_test() {
-    let mut module = fixture_module();
-    push_entry_op_trait(
-        &mut module,
-        "wire_descriptor",
-        serde_json::json!({"http_method": "POST", "uri": "/notes", "bindings": {}}),
+    let bed = notes_bed();
+    let module = wired(
+        fixture_module(),
+        vec![bed.retry_request_test("/notes", TestPattern::Eq(bed.input.clone()))],
     );
-    let answer = |status: i64| {
-        StubAnswer::Http(HttpAnswer {
-            status,
-            headers: BTreeMap::new(),
-            body: "{\"id\":\"n1\"}".into(),
-        })
-    };
-    let request = RequestPattern {
-        open: true,
-        fields: BTreeMap::from([
-            ("method".to_string(), eq(serde_json::json!("POST"))),
-            ("path".to_string(), eq(serde_json::json!("/notes"))),
-        ]),
-        headers: Some(BTreeMap::from([(
-            "authorization".to_string(),
-            eq(serde_json::json!("Bearer k")),
-        )])),
-    };
-    module.tests = vec![TestDecl {
-        name: "sends the token twice".into(),
-        constructions: vec![construction()],
-        stubs: vec![TestStub {
-            binding: Some("s".into()),
-            client: "c".into(),
-            op: "save_note".into(),
-            dep: StubDep::Http,
-            // A sequence: the second call consumes the second response, and
-            // any further call repeats the last.
-            answers: vec![answer(500), answer(200)],
-        }],
-        calls: vec![call()],
-        expects: vec![
-            eq_expect(serde_json::json!({"id": "n1"})),
-            TestExpect::Requests {
-                subject: "s".into(),
-                requests: vec![request.clone(), request],
-            },
-        ],
-    }];
     let files = super::test_files(&module, &ts_casing());
     assert_eq!(files.len(), 1);
     let text = rendered(&files[0].file.decls, &TsRules);
@@ -238,29 +126,11 @@ fn an_http_stub_generates_a_request_matching_test() {
 
 #[test]
 fn a_single_http_answer_returns_directly_without_sequence_machinery() {
-    let mut module = fixture_module();
-    push_entry_op_trait(
-        &mut module,
-        "wire_descriptor",
-        serde_json::json!({"http_method": "POST", "uri": "/notes", "bindings": {}}),
+    let bed = notes_bed();
+    let module = wired(
+        fixture_module(),
+        vec![bed.outcome_test("answers once", TestPattern::Eq(bed.input.clone()))],
     );
-    module.tests = vec![TestDecl {
-        name: "answers once".into(),
-        constructions: vec![construction()],
-        stubs: vec![TestStub {
-            binding: None,
-            client: "c".into(),
-            op: "save_note".into(),
-            dep: StubDep::Http,
-            answers: vec![StubAnswer::Http(HttpAnswer {
-                status: 200,
-                headers: BTreeMap::new(),
-                body: "{\"id\":\"n1\"}".into(),
-            })],
-        }],
-        calls: vec![call()],
-        expects: vec![eq_expect(serde_json::json!({"id": "n1"}))],
-    }];
     let files = super::test_files(&module, &ts_casing());
     assert_eq!(files.len(), 1);
     let text = rendered(&files[0].file.decls, &TsRules);
