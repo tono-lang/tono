@@ -300,6 +300,9 @@ pub(crate) fn scaffold_rust(
     snippet: &str,
 ) -> std::io::Result<()> {
     let src = root.join("src");
+    // An SDK with no files for this target still scaffolds: the directories
+    // exist regardless of what write_sources created.
+    std::fs::create_dir_all(&src)?;
     write_sources(files, TargetKind::Rust, &src)?;
     std::fs::write(src.join("main.rs"), snippet)?;
     unpack::<RustRuntime>(&root.join("_runtime/http-rust"))?;
@@ -327,6 +330,7 @@ pub(crate) fn scaffold_go(
     root: &std::path::Path,
     snippet: &str,
 ) -> std::io::Result<()> {
+    std::fs::create_dir_all(root)?;
     write_sources(files, TargetKind::Go, root)?;
     std::fs::write(root.join("main.go"), snippet)?;
     unpack::<GoRuntime>(&root.join("_runtime/http-go"))?;

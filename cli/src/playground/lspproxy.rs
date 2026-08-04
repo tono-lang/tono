@@ -211,33 +211,65 @@ fn complete(request: &CompleteRequest) -> Result<Vec<serde_json::Value>, String>
     }
     let module = request.module.clone().unwrap_or_default();
     let sdk_hash = hash_of(&request.source, &module);
+    let generate = |scratch: &Path| {
+        super::run::generate_for(scratch, &request.source, request.module.as_deref(), kind)
+    };
+    query(
+        &request.target,
+        server,
+        kind,
+        main_rel,
+        lang_id,
+        generate,
+        &request.snippet,
+        request.line,
+        request.character,
+        sdk_hash,
+    )
+}
+
+/// The workspace machinery behind [`complete`], parameterized over the server
+/// program and the SDK generation so it is testable without a real language
+/// server or the OCaml frontend on PATH.
+#[allow(clippy::too_many_arguments)]
+fn query(
+    target_key: &str,
+    server: &str,
+    kind: TargetKind,
+    main_rel: &str,
+    lang_id: &str,
+    generate: impl FnOnce(&Path) -> Result<Vec<tono_backend::codegen::GeneratedFile>, String>,
+    snippet: &str,
+    line: u32,
+    character: u32,
+    sdk_hash: u64,
+) -> Result<Vec<serde_json::Value>, String> {
     let map = WORKSPACES.get_or_init(Mutex::default);
     let mut map = map.lock().map_err(|_| "workspace lock poisoned")?;
 
-    if let Some(ws) = map.get(&request.target) {
+    if let Some(ws) = map.get(target_key) {
         // A dead or stale server is dropped and respawned below.
         if ws.sdk_hash != sdk_hash {
-            map.remove(&request.target);
+            map.remove(target_key);
         }
     }
 
-    if !map.contains_key(&request.target) {
+    if !map.contains_key(target_key) {
         let root = std::env::temp_dir().join(format!(
             "tono-playground-lsp-{}-{}",
             std::process::id(),
-            request.target
+            target_key
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let scratch = root.join("_src");
         std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
-        let files =
-            super::run::generate_for(&scratch, &request.source, request.module.as_deref(), kind)?;
+        let files = generate(&scratch)?;
         let project = root.join("project");
         match kind {
-            TargetKind::Go => super::run::scaffold_go(&files, &project, &request.snippet),
-            TargetKind::Rust => super::run::scaffold_rust(&files, &project, &request.snippet),
-            TargetKind::TypeScript => unreachable!("rejected above"),
+            TargetKind::Go => super::run::scaffold_go(&files, &project, snippet),
+            TargetKind::Rust => super::run::scaffold_rust(&files, &project, snippet),
+            TargetKind::TypeScript => return Err("no language server for typescript".into()),
         }
         .map_err(|e| format!("scaffold: {e}"))?;
 
@@ -266,12 +298,12 @@ fn complete(request: &CompleteRequest) -> Result<Vec<serde_json::Value>, String>
                     "uri": main_uri,
                     "languageId": lang_id,
                     "version": 1,
-                    "text": request.snippet,
+                    "text": snippet,
                 }
             }),
         )?;
         map.insert(
-            request.target.clone(),
+            target_key.to_string(),
             Workspace {
                 lsp,
                 main_uri,
@@ -281,21 +313,21 @@ fn complete(request: &CompleteRequest) -> Result<Vec<serde_json::Value>, String>
         );
     }
 
-    let ws = map.get_mut(&request.target).expect("inserted above");
+    let ws = map.get_mut(target_key).expect("inserted above");
     ws.version += 1;
     let result = (|| {
         ws.lsp.notify(
             "textDocument/didChange",
             serde_json::json!({
                 "textDocument": { "uri": ws.main_uri, "version": ws.version },
-                "contentChanges": [{ "text": request.snippet }],
+                "contentChanges": [{ "text": snippet }],
             }),
         )?;
         ws.lsp.request(
             "textDocument/completion",
             serde_json::json!({
                 "textDocument": { "uri": ws.main_uri },
-                "position": { "line": request.line, "character": request.character },
+                "position": { "line": line, "character": character },
             }),
         )
     })();
@@ -304,7 +336,7 @@ fn complete(request: &CompleteRequest) -> Result<Vec<serde_json::Value>, String>
         Err(e) => {
             // The server died mid-conversation; a fresh one gets built on the
             // next request.
-            map.remove(&request.target);
+            map.remove(target_key);
             return Err(e);
         }
     };
@@ -394,6 +426,70 @@ mod tests {
         let list = serde_json::json!({ "isIncomplete": false, "items": [{ "label": "y" }] });
         assert_eq!(completion_items(&list).len(), 1);
         assert_eq!(completion_items(&serde_json::Value::Null).len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_whole_workspace_flow_runs_against_a_scripted_server() {
+        use std::os::unix::fs::PermissionsExt;
+        // A python stand-in speaking just enough LSP: it answers every request
+        // (initialize, completion) and ignores notifications, so one test
+        // walks scaffold, spawn, handshake, didOpen, didChange, completion,
+        // the cached-workspace path, and the stale-hash rebuild.
+        let fake = std::env::temp_dir().join(format!("tono-fake-ls-{}.py", std::process::id()));
+        // concat! keeps the python indentation exact; a \ continuation would
+        // strip it and break the script.
+        let script = concat!(
+            "#!/usr/bin/env python3\n",
+            "import sys, json\n",
+            "def read():\n",
+            "    n = 0\n",
+            "    while True:\n",
+            "        line = sys.stdin.buffer.readline().decode()\n",
+            "        if not line or line.strip() == '':\n",
+            "            break\n",
+            "        if line.lower().startswith('content-length:'):\n",
+            "            n = int(line.split(':')[1])\n",
+            "    return json.loads(sys.stdin.buffer.read(n)) if n else None\n",
+            "def send(m):\n",
+            "    b = json.dumps(m).encode()\n",
+            "    h = ('Content-Length: %d' % len(b)).encode()\n",
+            "    sys.stdout.buffer.write(h + b'\\r\\n\\r\\n' + b)\n",
+            "    sys.stdout.buffer.flush()\n",
+            "while True:\n",
+            "    m = read()\n",
+            "    if m is None:\n",
+            "        break\n",
+            "    if 'id' in m:\n",
+            "        r = {'capabilities': {}}\n",
+            "        if m.get('method') == 'textDocument/completion':\n",
+            "            r = {'items': [{'label': 'FakeDone', 'kind': 3}]}\n",
+            "        send({'jsonrpc': '2.0', 'id': m['id'], 'result': r})\n",
+        );
+        std::fs::write(&fake, script).expect("fake server");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let program = fake.to_string_lossy().into_owned();
+
+        let ask = |hash: u64| {
+            query(
+                "fake-go",
+                &program,
+                TargetKind::Go,
+                "main.go",
+                "go",
+                |_| Ok(Vec::new()),
+                "package main\nfunc main() {}\n",
+                0,
+                0,
+                hash,
+            )
+        };
+        let first = ask(1).expect("cold workspace answers");
+        assert_eq!(first[0]["label"], "FakeDone");
+        // Same hash reuses the running server; a new hash rebuilds it.
+        assert_eq!(ask(1).expect("warm workspace answers").len(), 1);
+        assert_eq!(ask(2).expect("rebuilt workspace answers").len(), 1);
+        let _ = std::fs::remove_file(&fake);
     }
 
     #[cfg(unix)]

@@ -161,10 +161,10 @@ let hover_js src_js line character =
               (List.map (fun (m : MarkedString.t) -> m.value) ms)
       in
       Js.Opt.return
-        (object%js
-           val contents = Js.string value
-           val range = Js.Opt.option (Option.map range_to_js h.range)
-        end)
+        object%js
+          val contents = Js.string value
+          val range = Js.Opt.option (Option.map range_to_js h.range)
+        end
 
 let definition_js src_js line character =
   let text = Js.to_string src_js in
@@ -219,25 +219,25 @@ let decls_js src_js =
 
 let () =
   Js.export "tonoFrontend"
-    (object%js
-       method compile (s : Js.js_string Js.t) (name : Js.js_string Js.t) =
-         compile_js s name
+    object%js
+      method compile (s : Js.js_string Js.t) (name : Js.js_string Js.t) =
+        compile_js s name
 
-       method formatSource (s : Js.js_string Js.t) = format_js s
-       method tokens (s : Js.js_string Js.t) = tokens_js s
-       method decls (s : Js.js_string Js.t) = decls_js s
+      method formatSource (s : Js.js_string Js.t) = format_js s
+      method tokens (s : Js.js_string Js.t) = tokens_js s
+      method decls (s : Js.js_string Js.t) = decls_js s
 
-       method completionsAt (s : Js.js_string Js.t) (line : int)
-           (character : int) =
-         completions_js s line character
+      method completionsAt (s : Js.js_string Js.t) (line : int)
+          (character : int) =
+        completions_js s line character
 
-       method hoverAt (s : Js.js_string Js.t) (line : int) (character : int) =
-         hover_js s line character
+      method hoverAt (s : Js.js_string Js.t) (line : int) (character : int) =
+        hover_js s line character
 
-       method definitionAt (s : Js.js_string Js.t) (line : int)
-           (character : int) =
-         definition_js s line character
+      method definitionAt (s : Js.js_string Js.t) (line : int) (character : int)
+          =
+        definition_js s line character
 
-       method irVersion = F.Ir_json.current_ir_version
-       method version = Js.string F.version
-    end)
+      method irVersion = F.Ir_json.current_ir_version
+      method version = Js.string F.version
+    end
