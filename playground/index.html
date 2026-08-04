@@ -8,6 +8,12 @@
       name="description"
       content="Edit .tono in the browser and preview the generated SDK for TypeScript, Rust, and Go."
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@400;600&family=Saira:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="app">
@@ -52,7 +58,7 @@
       </main>
       <section id="run-panel" class="run-panel" hidden>
         <div class="run-toolbar">
-          <span class="run-title">Run against the generated SDK (calls reach the real network; env below)</span>
+          <span class="run-title"><span class="zone-no">03</span> run<span class="run-hint">against the generated SDK, real network</span></span>
           <div class="run-actions">
             <select id="run-target" title="Language to run"></select>
             <button id="run-exec">Run</button>
