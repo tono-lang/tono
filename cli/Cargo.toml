@@ -12,7 +12,12 @@ path = "src/main.rs"
 # The interactive preview UI. On by default so `tono preview` just works; opt out
 # (`--no-default-features`) for a lean binary that keeps `tono preview --once` (the
 # render-and-check pass) but drops the terminal UI and its dependency stack.
-default = ["preview"]
+default = ["preview", "playground"]
+# The local web playground server. embed-ui additionally compiles the built web
+# assets into the binary (requires playground/dist to exist); without it the
+# command serves from --ui-dir, so cargo builds never depend on node.
+playground = ["dep:tiny_http", "dep:rust-embed"]
+embed-ui = ["playground", "dep:rust-embed"]
 preview = [
     "dep:ratatui",
     "dep:tree-sitter",
@@ -26,8 +31,13 @@ preview = [
 
 [dependencies]
 tono-backend = { path = "../backend" }
+# The playground's local HTTP server: synchronous and dependency-light, matching
+# the CLI's thread-per-task style.
+tiny_http = { version = "0.12", optional = true }
+rust-embed = { version = "8", optional = true, features = ["include-exclude"] }
 # Merging the generated TypeScript package manifest into whatever is already on
 # disk, so generation owns `exports` without discarding the rest of the file.
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The preview's terminal UI, behind the `preview` feature. crossterm is used
 # through ratatui's re-export (`ratatui::crossterm`) so the two never drift.

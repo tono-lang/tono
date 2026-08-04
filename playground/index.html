@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tono Playground</title>
+    <meta
+      name="description"
+      content="Edit .tono in the browser and preview the generated SDK for TypeScript, Rust, and Go."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@400;600&family=Saira:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-name">tono</span>
+          <span class="brand-sub">playground</span>
+        </div>
+        <div class="controls">
+          <input
+            id="module-name"
+            aria-label="Module name"
+            title="Module name (becomes the package and path names in the generated SDK)"
+            placeholder="playground"
+            spellcheck="false"
+          />
+          <select id="example-picker" aria-label="Load an example" title="Load an example"></select>
+          <button id="format-btn" title="Reprint the source in canonical layout">Format</button>
+          <button id="run-toggle" title="Run TypeScript against the generated SDK">Run</button>
+          <button id="share-btn" title="Copy a link to this snippet">Share</button>
+        </div>
+      </header>
+      <main class="panes">
+        <section class="pane pane-editor">
+          <div id="editor"></div>
+          <div id="diagnostics" class="diagnostics" hidden></div>
+        </section>
+        <div id="split-handle" class="split-handle" role="separator" aria-orientation="vertical"></div>
+        <section class="pane pane-output">
+          <div class="output-bar">
+            <nav id="target-tabs" class="tabs" aria-label="Target language"></nav>
+            <div class="output-actions">
+              <span id="active-file" class="active-file"></span>
+              <button id="copy-btn" title="Copy the open file">Copy</button>
+            </div>
+          </div>
+          <div class="output-body">
+            <aside id="file-tree" class="file-tree" aria-label="Generated files"></aside>
+            <div id="output"></div>
+          </div>
+          <div id="output-note" class="output-note" hidden></div>
+        </section>
+      </main>
+      <section id="run-panel" class="run-panel" hidden>
+        <div class="run-toolbar">
+          <span class="run-title"><span class="zone-no">03</span> run<span class="run-hint">against the generated SDK, real network</span></span>
+          <div class="run-actions">
+            <select id="run-target" aria-label="Language to run" title="Language to run"></select>
+            <button id="run-exec">Run</button>
+          </div>
+        </div>
+        <div class="run-body">
+          <div class="run-col">
+            <span class="run-label" id="run-filename">main.ts</span>
+            <div id="run-editor"></div>
+          </div>
+          <div class="run-col run-col-mocks">
+            <span class="run-label">
+              env
+              <button id="mocks-mode" class="link-btn" title="Advanced: canned HTTP responses as raw mocks.json">advanced</button>
+            </span>
+            <div id="mocks-form" class="mocks-form">
+              <div class="mocks-section">
+                <div class="mocks-section-head">
+                  <span>env</span>
+                  <button id="env-add" class="mini-btn" title="Add an env var">+</button>
+                </div>
+                <div id="env-rows"></div>
+              </div>
+            </div>
+            <div id="mocks-editor" hidden></div>
+          </div>
+          <div class="run-col run-col-console">
+            <span class="run-label">console</span>
+            <pre id="run-console"></pre>
+          </div>
+        </div>
+      </section>
+      <footer class="statusbar">
+        <span id="status"></span>
+        <span id="meta" class="meta"></span>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

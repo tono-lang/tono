@@ -23,6 +23,8 @@
 mod frontend;
 mod gen;
 mod init;
+#[cfg(feature = "playground")]
+mod playground;
 mod preview;
 mod split;
 
@@ -48,6 +50,7 @@ const USAGE: &str = "usage: tono (\n  \
     check <file.tono>\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
+    playground [--port <n>] [--ui-dir <path>] [--no-open]\n  \
     breaking [<ir.json>] [--baseline <ref>] [--baseline-path <path>] [--config <cfg.json>] [--level <cat>=<sev>]... [--allow <key>]...\n  \
     split --branch <name> [--config <tono.toml>] [--ref <committish>] [<ir.json>]\n  \
     version)";
@@ -74,6 +77,10 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("check") => run_frontend("check", &args[2..]),
         Some("fmt") => run_frontend("fmt", &args[2..]),
         Some("preview") => run_preview(&args[2..]),
+        #[cfg(feature = "playground")]
+        Some("playground") => playground::run(&args[2..]),
+        #[cfg(not(feature = "playground"))]
+        Some("playground") => Err("this build has no playground (feature disabled)".to_string()),
         Some("breaking") => run_breaking(&args[2..]),
         Some("split") => split::run(&args[2..]),
         Some("version") | None => {

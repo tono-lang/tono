@@ -1,0 +1,4 @@
+; Only the jsoo shim is dune territory; the rest of this directory is
+; the web app (node) and the wasm crate (cargo).
+
+(dirs shim)

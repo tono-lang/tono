@@ -99,6 +99,22 @@ let completions_list () =
   Alcotest.(check bool) "declared shape edge" true (List.mem "edge" labels);
   Alcotest.(check bool) "primitive i64" true (List.mem "i64" labels)
 
+let completions_offer_declaration_keywords () =
+  (* A blank document can only start a declaration, so the starters lead; a
+     lone `pub` narrows to what may follow it; past the starter, keywords get
+     out of the way of declared names. *)
+  let blank = completion_labels "" (pos 0 0) in
+  Alcotest.(check bool) "struct at start" true (List.mem "struct" blank);
+  Alcotest.(check bool) "pub at start" true (List.mem "pub" blank);
+  let after_pub = completion_labels "pub " (pos 0 4) in
+  Alcotest.(check bool) "struct after pub" true (List.mem "struct" after_pub);
+  Alcotest.(check bool) "no pub after pub" false (List.mem "pub" after_pub);
+  let mid = completion_labels "struct point { x: i64 }" (pos 0 10) in
+  Alcotest.(check bool)
+    "no starter mid-declaration" false (List.mem "struct" mid);
+  let ty = completion_labels "struct point { x: " (pos 0 18) in
+  Alcotest.(check bool) "map in type position" true (List.mem "map" ty)
+
 let offset_roundtrip () =
   (* Line 1 char 7 in [two_shapes] is the `e` of the second `edge`. *)
   let off = Analysis.offset_of_position two_shapes (pos 1 7) in
@@ -432,6 +448,8 @@ let () =
           Alcotest.test_case "definition miss" `Quick definition_miss;
           Alcotest.test_case "hover decl" `Quick hover_decl;
           Alcotest.test_case "completions" `Quick completions_list;
+          Alcotest.test_case "completion keywords" `Quick
+            completions_offer_declaration_keywords;
           Alcotest.test_case "offset roundtrip" `Quick offset_roundtrip;
         ] );
       ( "workspace",

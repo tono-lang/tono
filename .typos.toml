@@ -4,3 +4,6 @@ extend-exclude = ["LICENSE", "LICENSE-*", "NOTICE"]
 [default.extend-words]
 # The terminal UI crate, not a misspelling of ratatouille.
 ratatui = "ratatui"
+# A deliberately misspelled type in playground fixtures, used to prove the
+# frontend reports unknown-type diagnostics.
+strin = "strin"
