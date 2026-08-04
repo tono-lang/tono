@@ -285,11 +285,95 @@ fn a_module_with_operations_generates_the_error_surface_in_every_target() {
 }
 
 #[test]
+fn decl_spans_index_the_rough_text_and_name_what_each_range_declares() {
+    // Spans are the contract tooling maps IR declarations through, so they must
+    // hold against the exact text generate returns: in bounds, ascending, and
+    // each range really containing the symbols it claims to declare.
+    let model = union_model();
+    let config = CodegenConfig::default();
+    for target in [TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript] {
+        let files = generate(&model, &[target], &config).expect("generates");
+        let mut total = 0;
+        for file in &files {
+            let mut last_end = 0;
+            for span in &file.decl_spans {
+                assert!(span.start < span.end, "{}: empty span", file.path.display());
+                assert!(
+                    span.end <= file.text.len(),
+                    "{}: span past the text",
+                    file.path.display()
+                );
+                assert!(
+                    span.start >= last_end,
+                    "{}: spans overlap or regress",
+                    file.path.display()
+                );
+                last_end = span.end;
+                let slice = &file.text[span.start..span.end];
+                for symbol in &span.symbols {
+                    assert!(
+                        slice.contains(symbol.as_str()),
+                        "{}: range does not contain {symbol}",
+                        file.path.display()
+                    );
+                }
+                total += span.symbols.len();
+            }
+        }
+        assert!(total > 0, "{target:?}: no declaration was mapped");
+    }
+}
+
+#[test]
+fn every_shape_lands_in_some_decl_span_for_every_target() {
+    // The point of the spans is finding where a shape went; a shape whose
+    // ident appears in no span would make the map silently partial.
+    let model = union_model();
+    let config = CodegenConfig::default();
+    for target in [TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript] {
+        let files = generate(&model, &[target], &config).expect("generates");
+        for shape in &model.modules[0].shapes {
+            let lang = target.binding_langs()[0];
+            let ident = crate::codegen::conventions::type_ident(shape, lang);
+            let found = files.iter().any(|file| {
+                file.decl_spans
+                    .iter()
+                    .any(|span| span.symbols.iter().any(|s| s == &ident))
+            });
+            assert!(found, "{target:?}: {ident} appears in no span");
+        }
+    }
+}
+
+#[test]
+fn a_folded_internal_group_keeps_its_spans_aligned_after_the_shift() {
+    // Rust folds a module's internal group into the public file, appending the
+    // text minus its banner; the spans must shift by the same amount or every
+    // one of them would point at the wrong bytes.
+    let model = union_model();
+    let config = CodegenConfig::default();
+    let files = generate(&model, &[TargetKind::Rust], &config).expect("generates");
+    for file in &files {
+        for span in &file.decl_spans {
+            let slice = &file.text[span.start..span.end];
+            for symbol in &span.symbols {
+                assert!(
+                    slice.contains(symbol.as_str()),
+                    "{}: folded span drifted off {symbol}",
+                    file.path.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn two_groups_mapping_to_one_path_is_a_defect_not_a_silent_overwrite() {
     let file = |path: &str| GeneratedFile {
         target: TargetKind::Go,
         path: PathBuf::from(path),
         text: String::new(),
+        decl_spans: Vec::new(),
     };
     assert!(reject_duplicate_paths(&[file("a.go"), file("b.go")]).is_ok());
     let err = reject_duplicate_paths(&[file("a.go"), file("a.go")]).unwrap_err();
@@ -302,6 +386,7 @@ fn a_slot_with_no_reference_behind_it_is_a_defect() {
         target: TargetKind::Go,
         path: PathBuf::from("a.go"),
         text: text.into(),
+        decl_spans: Vec::new(),
     };
     assert!(reject_unfilled_slots(&[file("func F() {}")]).is_ok());
     let err = reject_unfilled_slots(&[file(&crate::codegen::tree::symbol_slot("F"))]).unwrap_err();

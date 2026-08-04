@@ -92,11 +92,10 @@ pub(crate) fn enum_item(
     }
     text.push_str(unknown);
 
-    Decl::Raw(Raw {
-        text,
-        refs: Vec::new(),
-        ..Raw::default()
-    })
+    // Naming what the opaque text declares keeps the symbol index (and any
+    // reader of declaration provenance) as complete for a raw enum as for a
+    // structural decl.
+    Decl::raw_providing(name, text, Vec::new())
 }
 
 /// Build the open-enum *serde item*: a single `open_enum!` invocation that expands
@@ -239,11 +238,9 @@ pub(crate) fn union_item(
     text.push('}');
 
     let refs: Vec<Symbol> = members.iter().map(|m| symbol_of(&m.target)).collect();
-    Decl::Raw(Raw {
-        text,
-        refs,
-        ..Raw::default()
-    })
+    // Same as the raw enum: the union names itself so the index and provenance
+    // stay complete.
+    Decl::raw_providing(name, text, refs)
 }
 
 /// The wire tag for a union member: its `@wire` override, else its name.

@@ -205,6 +205,7 @@ mod tests {
             target: TargetKind::Rust,
             path: PathBuf::from(path),
             text: text.to_string(),
+            decl_spans: Vec::new(),
         }
     }
 

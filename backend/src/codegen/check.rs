@@ -292,6 +292,7 @@ mod tests {
             target,
             path: PathBuf::from(path),
             text: text.to_string(),
+            decl_spans: Vec::new(),
         }
     }
 

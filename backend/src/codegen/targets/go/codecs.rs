@@ -306,9 +306,16 @@ pub fn union_type_decls(
         ));
     }
     // The wrapper structs reference their payload types; the interface itself pulls
-    // no import.
+    // no import. The item names the interface and every wrapper it declares so
+    // the symbol index and declaration provenance stay complete for raw text.
     let refs = members.iter().map(|m| symbol_of(&m.target)).collect();
-    vec![raw(iface, refs)]
+    let mut provides = vec![ty.clone()];
+    provides.extend(members.iter().map(|m| format!("{ty}{}", variant_ident(m))));
+    vec![Decl::Raw(Raw {
+        text: iface,
+        refs,
+        provides,
+    })]
 }
 
 /// Emit a union's serde declarations: one `MarshalJSON` per variant wrapper (each

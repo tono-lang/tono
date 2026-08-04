@@ -10,8 +10,9 @@ use crate::codegen::assemble::{emit_module_files, shared_files};
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::layout::{go_selector, output_path, SameUnit};
 use crate::codegen::modules::{self, CodegenConfig};
+use crate::codegen::output::DeclSpan;
 pub use crate::codegen::output::{GeneratedFile, TargetKind};
-use crate::codegen::render::render_file_with;
+use crate::codegen::render::render_file_with_spans;
 use crate::codegen::targets::{go, rust, typescript};
 use crate::codegen::tree::ModuleFile;
 use crate::codegen::visibility::{self, Exposed};
@@ -56,17 +57,18 @@ pub fn casing_for(target: TargetKind) -> CasingConfig {
 
 /// Render one of a module's output files into rough source text: the banner, then
 /// the rendered declarations (with the package clause prepended for Go). The `cat`
-/// passthrough keeps the engine's layout without depending on a real formatter.
+/// passthrough keeps the engine's layout without depending on a real formatter;
+/// it is also what keeps the returned declaration spans exact.
 fn render_module(
     module_file: &ModuleFile,
     target: TargetKind,
     config: &CodegenConfig,
     shares_a_public_unit: bool,
-) -> String {
+) -> (String, Vec<DeclSpan>) {
     let passthrough = Formatter::new("cat", vec![]);
     let resolver = SameUnit { target };
     let file = &module_file.file;
-    let rendered = match target {
+    let (rendered, spans, prefix) = match target {
         TargetKind::Rust => {
             // Only a group sharing a file with a public one has to restate its
             // visibility; one that got a fenced file of its own is already out of
@@ -74,24 +76,38 @@ fn render_module(
             let rules = rust::RustRules {
                 crate_visible: shares_a_public_unit,
             };
-            render_file_with(file, &resolver, &rules, &passthrough).text
+            let (out, spans) = render_file_with_spans(file, &resolver, &rules, &passthrough);
+            (out.text, spans, 0)
         }
         TargetKind::Go => {
             let go_rules = go::GoRules {
                 go_module: config.go_module.clone(),
                 current: module_file.group.path(),
             };
-            let rough = render_file_with(file, &resolver, &go_rules, &passthrough).text;
+            let (out, spans) = render_file_with_spans(file, &resolver, &go_rules, &passthrough);
             // A module's groups are files of one package, named for the module's
             // last segment; the SDK-root group has its own package name.
             let package = go_selector(&module_file.group.path()).unwrap_or_default();
-            format!("{}{}", go::emit::package_clause(&package), rough)
+            let clause = go::emit::package_clause(&package);
+            let prefix = clause.len();
+            (format!("{}{}", clause, out.text), spans, prefix)
         }
         TargetKind::TypeScript => {
-            render_file_with(file, &resolver, &typescript::TsRules, &passthrough).text
+            let (out, spans) =
+                render_file_with_spans(file, &resolver, &typescript::TsRules, &passthrough);
+            (out.text, spans, 0)
         }
     };
-    format!("{BANNER}{rendered}")
+    let offset = BANNER.len() + prefix;
+    let spans = spans
+        .into_iter()
+        .map(|s| DeclSpan {
+            symbols: s.symbols,
+            start: s.start + offset,
+            end: s.end + offset,
+        })
+        .collect();
+    (format!("{BANNER}{rendered}"), spans)
 }
 
 /// Parse a comma-separated target list (e.g. `"rust,go,ts"`) into kinds,
@@ -165,15 +181,32 @@ fn emit_target(
     for module_file in module_files {
         let path = output_path(target, &module_file.group);
         let shared = module_file.group.is_internal() && public_units.contains(&path);
-        let text = render_module(&module_file, target, config, shared);
+        let (text, decl_spans) = render_module(&module_file, target, config, shared);
         // A target may express several of a module's groups in one unit: Rust
         // fences with visibility, so a module's internal group rides its public
         // file rather than moving to one named for its audience. The groups keep
         // their identity (they are still what the symbol index and the re-export
         // tree read); only the file they land in is shared, in emission order.
         match files.iter_mut().find(|f| f.path == path) {
-            Some(existing) => existing.text.push_str(text.trim_start_matches(BANNER)),
-            None => files.push(GeneratedFile { target, path, text }),
+            Some(existing) => {
+                // The folded group's text loses its banner, so its spans shift
+                // by the length already in the file minus that banner.
+                let base = existing.text.len();
+                existing.text.push_str(text.trim_start_matches(BANNER));
+                existing
+                    .decl_spans
+                    .extend(decl_spans.into_iter().map(|s| DeclSpan {
+                        symbols: s.symbols,
+                        start: s.start - BANNER.len() + base,
+                        end: s.end - BANNER.len() + base,
+                    }));
+            }
+            None => files.push(GeneratedFile {
+                target,
+                path,
+                text,
+                decl_spans,
+            }),
         }
         let exports = match target {
             TargetKind::TypeScript => typescript::emit::exports_of(&module_file.file.decls),
