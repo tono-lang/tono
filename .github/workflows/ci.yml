@@ -329,7 +329,7 @@ jobs:
         working-directory: playground
       - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
         with:
-          tool: wasm-pack
+          tool: wasm-pack@0.13.1
       - name: Build the embedded compiler halves
         run: opam exec -- playground/scripts/build-compiler.sh
       - name: Unit tests
