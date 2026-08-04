@@ -152,7 +152,7 @@ struct MockRoute {
     body: Option<serde_json::Value>,
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, Clone, Debug)]
 pub(crate) struct Line {
     kind: &'static str,
     text: String,
@@ -535,5 +535,196 @@ impl MockServer {
         self.stop.store(true, Ordering::Relaxed);
         let _ = self.thread.join();
         self.seen.lock().expect("mock log").clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(path: &str, text: &str) -> GeneratedFile {
+        GeneratedFile {
+            target: TargetKind::Go,
+            path: std::path::PathBuf::from(path),
+            text: text.to_string(),
+        }
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("tono-run-test-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[test]
+    fn available_targets_only_probe_never_panic() {
+        // Contents depend on the machine's toolchains; the call must simply
+        // answer without touching anything else.
+        let _ = available_targets();
+    }
+
+    #[test]
+    fn module_names_fold_to_bare_snake_case_identifiers() {
+        // The name becomes a scratch filename, so separators and dots must
+        // never survive: anything else could escape the directory.
+        assert_eq!(sanitize_module(Some("github_api")), "github_api");
+        assert_eq!(sanitize_module(Some("My SDK!")), "my_sdk");
+        assert_eq!(sanitize_module(Some("../../etc/passwd")), "etc_passwd");
+        assert_eq!(sanitize_module(Some("123")), "playground");
+        assert_eq!(sanitize_module(None), "playground");
+    }
+
+    #[test]
+    fn path_templates_match_per_segment() {
+        assert!(template_matches("/users/{username}", "/users/gandarfh"));
+        assert!(!template_matches("/users/{username}", "/users/"));
+        assert!(!template_matches("/users/{username}", "/users/a/b"));
+        assert!(template_matches("/account", "/account"));
+        assert!(!template_matches("/account", "/other"));
+    }
+
+    #[test]
+    fn go_scaffold_lays_out_module_main_and_runtime() {
+        let root = scratch("go-scaffold");
+        let files = vec![file("go/playground/types.go", "package playground\n")];
+        scaffold_go(&files, &root, "package main\nfunc main() {}\n").expect("scaffold");
+        let go_mod = std::fs::read_to_string(root.join("go.mod")).expect("go.mod");
+        assert!(go_mod.contains(GO_SCAFFOLD_MODULE));
+        assert!(go_mod.contains("replace github.com/tono-lang/tono/runtimes/http-go"));
+        assert!(root.join("main.go").is_file());
+        assert!(root.join("playground/types.go").is_file());
+        assert!(root.join("_runtime/http-go/go.mod").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rust_scaffold_excludes_the_embedded_runtime_from_its_workspace() {
+        let root = scratch("rust-scaffold");
+        let files = vec![GeneratedFile {
+            target: TargetKind::Rust,
+            path: std::path::PathBuf::from("rust/lib.rs"),
+            text: "pub mod nothing {}\n".into(),
+        }];
+        scaffold_rust(&files, &root, "fn main() {}\n").expect("scaffold");
+        let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml");
+        // The embedded runtime declares its own [workspace]; without the
+        // exclude, cargo sees two roots and refuses to build.
+        assert!(manifest.contains("exclude = [\"_runtime/http-rust\"]"));
+        assert!(root.join("src/main.rs").is_file());
+        assert!(root.join("_runtime/http-rust/Cargo.toml").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn run_child_reports_stdout_stderr_and_exit() {
+        let dir = scratch("run-child");
+        let lines = run_child("sh", &["-c", "echo out; echo err 1>&2"], &dir, &[]).expect("runs");
+        assert!(lines.iter().any(|l| l.kind == "log" && l.text == "out"));
+        // A successful run reports stderr as chatter, not as errors.
+        assert!(lines.iter().any(|l| l.kind == "log" && l.text == "err"));
+        let lines = run_child("sh", &["-c", "echo boom 1>&2; exit 3"], &dir, &[]).expect("runs");
+        assert!(lines.iter().any(|l| l.kind == "error" && l.text == "boom"));
+        assert!(lines
+            .iter()
+            .any(|l| l.kind == "error" && l.text.starts_with("exit:")));
+        let missing = run_child("definitely-not-a-tool-xyz", &[], &dir, &[]);
+        assert!(missing.unwrap_err().contains("toolchain missing"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_child_passes_the_environment() {
+        let dir = scratch("run-env");
+        let env = vec![("TONO_TEST_VALUE".to_string(), "42".to_string())];
+        let lines =
+            run_child("sh", &["-c", "printf %s \"$TONO_TEST_VALUE\""], &dir, &env).expect("runs");
+        assert!(lines.iter().any(|l| l.text == "42"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mock_server_answers_routes_and_records_requests() {
+        use std::io::{Read, Write};
+        let mut routes = std::collections::BTreeMap::new();
+        routes.insert(
+            "GET /users/{username}".to_string(),
+            MockRoute {
+                status: Some(201),
+                body: Some(serde_json::json!({ "ok": true })),
+            },
+        );
+        // A bare route falls back to 200 with an empty object.
+        routes.insert(
+            "GET /bare".to_string(),
+            MockRoute {
+                status: None,
+                body: None,
+            },
+        );
+        let server = MockServer::start(routes).expect("starts");
+        let addr = server.url.trim_start_matches("http://").to_string();
+
+        let ask = |path: &str| -> String {
+            let mut stream = std::net::TcpStream::connect(&addr).expect("connect");
+            write!(
+                stream,
+                "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+            )
+            .expect("write");
+            let mut out = String::new();
+            stream.read_to_string(&mut out).expect("read");
+            out
+        };
+        // The template answers a concrete path; anything else is a 404.
+        let hit = ask("/users/gandarfh");
+        assert!(hit.starts_with("HTTP/1.1 201"), "{hit}");
+        assert!(hit.contains("\"ok\":true"));
+        let miss = ask("/nope");
+        assert!(miss.starts_with("HTTP/1.1 404"), "{miss}");
+        let bare = ask("/bare");
+        assert!(bare.starts_with("HTTP/1.1 200"), "{bare}");
+
+        let seen = server.stop();
+        assert!(seen.iter().any(|l| l.text.contains("/users/gandarfh")));
+        assert!(seen
+            .iter()
+            .any(|l| l.text.contains("/nope") && l.text.contains("no mock")));
+    }
+
+    #[test]
+    fn execute_runs_or_reports_the_missing_toolchain() {
+        // The whole path: frontend compile, codegen, scaffold, mock server,
+        // child run. With go installed the empty main runs; without it the
+        // verdict is the missing toolchain, never a panic.
+        let request: RunRequest = serde_json::from_value(serde_json::json!({
+            "source": "pub struct note { id: string }",
+            "target": "go",
+            "module": "playground",
+            "snippet": "package main\n\nfunc main() {}\n",
+            "mocks": { "env": { "UNUSED": "$MOCK" } }
+        }))
+        .expect("request");
+        match execute(&request) {
+            Ok(lines) => assert!(!lines.iter().any(|l| l.kind == "error"), "{lines:?}"),
+            Err(message) => assert!(
+                message.contains("toolchain missing") || message.contains("frontend unavailable"),
+                "{message}"
+            ),
+        }
+    }
+
+    #[test]
+    fn handle_rejects_malformed_and_unknown_requests() {
+        let bad = handle("{not json");
+        assert_eq!(bad.status_code(), tiny_http::StatusCode(400));
+        let unknown = handle(
+            &serde_json::json!({
+                "source": "", "target": "cobol", "snippet": ""
+            })
+            .to_string(),
+        );
+        assert_eq!(unknown.status_code(), tiny_http::StatusCode(422));
     }
 }

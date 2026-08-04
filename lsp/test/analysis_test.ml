@@ -110,7 +110,8 @@ let completions_offer_declaration_keywords () =
   Alcotest.(check bool) "struct after pub" true (List.mem "struct" after_pub);
   Alcotest.(check bool) "no pub after pub" false (List.mem "pub" after_pub);
   let mid = completion_labels "struct point { x: i64 }" (pos 0 10) in
-  Alcotest.(check bool) "no starter mid-declaration" false (List.mem "struct" mid);
+  Alcotest.(check bool)
+    "no starter mid-declaration" false (List.mem "struct" mid);
   let ty = completion_labels "struct point { x: " (pos 0 18) in
   Alcotest.(check bool) "map in type position" true (List.mem "map" ty)
 

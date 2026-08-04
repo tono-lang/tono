@@ -77,26 +77,39 @@ fn open_browser(url: &str) {
 fn handle(mut request: tiny_http::Request, assets: &assets::Assets) {
     let method = request.method().clone();
     let path = request.url().split('?').next().unwrap_or("/").to_string();
-    let response = match (method, path.as_str()) {
-        (tiny_http::Method::Get, "/api/capabilities") => capabilities_response(),
-        (tiny_http::Method::Post, "/api/run") => {
-            let mut body = String::new();
-            match request.as_reader().read_to_string(&mut body) {
-                Ok(_) => run::handle(&body),
-                Err(e) => json_error(400, &format!("unreadable body: {e}")),
-            }
-        }
-        (tiny_http::Method::Post, "/api/complete") => {
-            let mut body = String::new();
-            match request.as_reader().read_to_string(&mut body) {
-                Ok(_) => lspproxy::handle(&body),
-                Err(e) => json_error(400, &format!("unreadable body: {e}")),
-            }
-        }
-        (tiny_http::Method::Get, _) => assets.serve(&path),
-        _ => json_error(405, "method not allowed"),
+    let body = |request: &mut tiny_http::Request| {
+        let mut body = String::new();
+        request
+            .as_reader()
+            .read_to_string(&mut body)
+            .map(|_| body)
+            .map_err(|e| format!("unreadable body: {e}"))
     };
+    let response = route(&method, &path, || body(&mut request), assets);
     let _ = request.respond(response);
+}
+
+/// The server's whole surface, factored from the transport so it is testable
+/// without sockets: two POST endpoints, capabilities, and static assets.
+fn route(
+    method: &tiny_http::Method,
+    path: &str,
+    body: impl FnOnce() -> Result<String, String>,
+    assets: &assets::Assets,
+) -> Response {
+    match (method, path) {
+        (tiny_http::Method::Get, "/api/capabilities") => capabilities_response(),
+        (tiny_http::Method::Post, "/api/run") => match body() {
+            Ok(body) => run::handle(&body),
+            Err(e) => json_error(400, &e),
+        },
+        (tiny_http::Method::Post, "/api/complete") => match body() {
+            Ok(body) => lspproxy::handle(&body),
+            Err(e) => json_error(400, &e),
+        },
+        (tiny_http::Method::Get, _) => assets.serve(path),
+        _ => json_error(405, "method not allowed"),
+    }
 }
 
 pub(crate) type Response = tiny_http::Response<std::io::Cursor<Vec<u8>>>;
@@ -127,4 +140,93 @@ fn capabilities_response() -> Response {
             "lspTargets": lspproxy::available(),
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn options_parse_port_ui_dir_and_no_open() {
+        let options = parse(&args(&[
+            "--port",
+            "8080",
+            "--ui-dir",
+            "/tmp/x",
+            "--no-open",
+        ]))
+        .expect("parses");
+        assert_eq!(options.port, 8080);
+        assert_eq!(
+            options.ui_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/x"))
+        );
+        assert!(!options.open);
+        let defaults = parse(&[]).expect("parses");
+        assert_eq!(defaults.port, 7690);
+        assert!(defaults.open);
+    }
+
+    #[test]
+    fn bad_flags_and_ports_are_usage_errors() {
+        assert!(parse(&args(&["--wat"])).is_err());
+        assert!(parse(&args(&["--port"])).is_err());
+        assert!(parse(&args(&["--port", "nope"])).is_err());
+    }
+
+    #[test]
+    fn json_responses_carry_status_and_content_type() {
+        let ok = json_response(200, serde_json::json!({ "a": 1 }));
+        assert_eq!(ok.status_code(), tiny_http::StatusCode(200));
+        let err = json_error(422, "why");
+        assert_eq!(err.status_code(), tiny_http::StatusCode(422));
+    }
+
+    #[test]
+    fn routing_covers_the_whole_surface() {
+        let dir = std::env::temp_dir().join(format!("tono-route-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("index.html"), "<title>x</title>").expect("index");
+        let assets = assets::Assets::new(Some(dir.clone())).expect("assets");
+        let get = tiny_http::Method::Get;
+        let post = tiny_http::Method::Post;
+        let ok_body = || Ok(String::from("{oops"));
+        assert_eq!(
+            route(&get, "/api/capabilities", ok_body, &assets).status_code(),
+            tiny_http::StatusCode(200)
+        );
+        assert_eq!(
+            route(&post, "/api/run", ok_body, &assets).status_code(),
+            tiny_http::StatusCode(400)
+        );
+        assert_eq!(
+            route(&post, "/api/complete", ok_body, &assets).status_code(),
+            tiny_http::StatusCode(400)
+        );
+        assert_eq!(
+            route(&post, "/api/run", || Err(String::from("broken")), &assets).status_code(),
+            tiny_http::StatusCode(400)
+        );
+        assert_eq!(
+            route(&get, "/index.html", ok_body, &assets).status_code(),
+            tiny_http::StatusCode(200)
+        );
+        assert_eq!(
+            route(&tiny_http::Method::Delete, "/x", ok_body, &assets).status_code(),
+            tiny_http::StatusCode(405)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capabilities_report_versions_and_probed_targets() {
+        // Contents depend on the machine; the shape and status do not.
+        let response = capabilities_response();
+        assert_eq!(response.status_code(), tiny_http::StatusCode(200));
+    }
 }

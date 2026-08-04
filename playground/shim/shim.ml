@@ -49,7 +49,8 @@ let compile_js src_js name_js =
         { F.Ir.tono_ir_version = F.Ir_json.current_ir_version; modules = [ m ] }
       in
       Js.Opt.return
-        (Js.string (F.Ir_json.to_canonical_string (F.Ir_json.encode_model model)))
+        (Js.string
+           (F.Ir_json.to_canonical_string (F.Ir_json.encode_model model)))
   in
   object%js
     val ir = ir
@@ -154,8 +155,7 @@ let hover_js src_js line character =
         match h.contents with
         | `MarkupContent (m : MarkupContent.t) -> m.value
         | `MarkedString (m : MarkedString.t) -> (
-            match m with
-            | { value; language = _ } -> value)
+            match m with { value; language = _ } -> value)
         | `List ms ->
             String.concat "\n\n"
               (List.map (fun (m : MarkedString.t) -> m.value) ms)

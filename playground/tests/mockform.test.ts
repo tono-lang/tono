@@ -13,7 +13,7 @@ describe("mock form round-trip", () => {
     expect(back).toEqual(JSON.parse(json));
   });
 
-  it("returns null for unparseable text instead of dropping content", () => {
+  it("returns null for unparsable text instead of dropping content", () => {
     expect(formFromJson("{nope")).toBeNull();
   });
 

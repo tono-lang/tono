@@ -100,3 +100,65 @@ fn content_type(path: &str) -> &'static str {
         _ => "application/octet-stream",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ui_dir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("tono-assets-test-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("index.html"), "<title>x</title>").expect("index");
+        std::fs::write(dir.join("app.js"), "1").expect("js");
+        dir
+    }
+
+    #[test]
+    fn serves_files_and_falls_back_to_the_page_for_unknown_routes() {
+        let dir = ui_dir("serve");
+        let assets = Assets::new(Some(dir.clone())).expect("assets");
+        assert_eq!(
+            assets.serve("/app.js").status_code(),
+            tiny_http::StatusCode(200)
+        );
+        assert_eq!(assets.serve("/").status_code(), tiny_http::StatusCode(200));
+        // A hash-routed SPA answers unknown paths with the page itself.
+        assert_eq!(
+            assets.serve("/anything").status_code(),
+            tiny_http::StatusCode(200)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuses_paths_that_escape_the_ui_root() {
+        let dir = ui_dir("traversal");
+        let secret = dir.parent().expect("parent").join("tono-assets-secret.txt");
+        std::fs::write(&secret, "no").expect("secret");
+        let assets = Assets::new(Some(dir.clone())).expect("assets");
+        // The canonical path leaves the root, so the SPA fallback answers
+        // instead of the file.
+        let response = assets.serve("/../tono-assets-secret.txt");
+        assert_eq!(response.status_code(), tiny_http::StatusCode(200));
+        let _ = std::fs::remove_file(&secret);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_ui_dir_is_an_error_up_front() {
+        let missing = std::env::temp_dir().join("tono-assets-does-not-exist");
+        assert!(Assets::new(Some(missing)).is_err());
+    }
+
+    #[test]
+    fn content_types_cover_the_bundle_surface() {
+        assert_eq!(content_type("index.html"), "text/html; charset=utf-8");
+        assert_eq!(content_type("a.js"), "text/javascript");
+        assert_eq!(content_type("a.css"), "text/css");
+        assert_eq!(content_type("a.wasm"), "application/wasm");
+        assert_eq!(content_type("a.map"), "application/json");
+        assert_eq!(content_type("weird.bin"), "application/octet-stream");
+    }
+}

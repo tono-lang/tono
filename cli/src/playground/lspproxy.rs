@@ -309,13 +309,19 @@ fn complete(request: &CompleteRequest) -> Result<Vec<serde_json::Value>, String>
         }
     };
 
+    Ok(completion_items(&result))
+}
+
+/// Flatten an LSP completion answer (a bare array or a CompletionList) into
+/// the wire items the editor consumes, documentation in either LSP shape.
+fn completion_items(result: &serde_json::Value) -> Vec<serde_json::Value> {
     let items = result
         .get("items")
         .and_then(|i| i.as_array())
         .cloned()
         .or_else(|| result.as_array().cloned())
         .unwrap_or_default();
-    Ok(items
+    items
         .into_iter()
         .take(120)
         .map(|item| {
@@ -332,5 +338,76 @@ fn complete(request: &CompleteRequest) -> Result<Vec<serde_json::Value>, String>
                 "insertText": item.get("insertText").and_then(|t| t.as_str()).unwrap_or(""),
             })
         })
-        .collect())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probing_a_missing_binary_is_false_not_an_error() {
+        assert!(!probe("definitely-not-a-language-server-xyz"));
+        // Whatever this machine has installed, probing must only answer.
+        let _ = available();
+    }
+
+    #[test]
+    fn workspace_hashes_track_source_and_module() {
+        assert_eq!(hash_of("a", "m"), hash_of("a", "m"));
+        assert_ne!(hash_of("a", "m"), hash_of("b", "m"));
+        assert_ne!(hash_of("a", "m"), hash_of("a", "n"));
+    }
+
+    #[test]
+    fn uris_are_file_scheme() {
+        assert!(uri_of(std::path::Path::new("/tmp/x")).starts_with("file:///tmp/x"));
+    }
+
+    #[test]
+    fn handle_rejects_malformed_and_serverless_targets() {
+        assert_eq!(handle("{oops").status_code(), tiny_http::StatusCode(400));
+        let unknown = handle(
+            &serde_json::json!({
+                "target": "cobol", "source": "", "snippet": "", "line": 0, "character": 0
+            })
+            .to_string(),
+        );
+        assert_eq!(unknown.status_code(), tiny_http::StatusCode(422));
+    }
+
+    #[test]
+    fn completion_answers_flatten_in_both_lsp_shapes() {
+        // A bare array and a CompletionList carry the same items; markup and
+        // plain documentation both surface.
+        let bare = serde_json::json!([
+            { "label": "GetAccount", "kind": 2, "detail": "func()",
+              "documentation": { "kind": "markdown", "value": "docs" } },
+            { "label": "x", "documentation": "plain" }
+        ]);
+        let items = completion_items(&bare);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["label"], "GetAccount");
+        assert_eq!(items[0]["documentation"], "docs");
+        assert_eq!(items[1]["kind"], 1);
+        assert_eq!(items[1]["documentation"], "plain");
+        let list = serde_json::json!({ "isIncomplete": false, "items": [{ "label": "y" }] });
+        assert_eq!(completion_items(&list).len(), 1);
+        assert_eq!(completion_items(&serde_json::Value::Null).len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lsp_framing_round_trips_through_a_cat_echo() {
+        // cat echoes our framed request back: the client first sees a message
+        // carrying both id and method (a server-to-client request), answers
+        // it, then reads its own echoed answer, whose id matches, and
+        // resolves. One spawn exercises framing, dispatch, and the reply path.
+        let dir = std::env::temp_dir();
+        let mut lsp = Lsp::spawn("cat", &dir).expect("spawns");
+        let result = lsp
+            .request("test/echo", serde_json::json!({ "x": 1 }))
+            .expect("round-trips");
+        assert_eq!(result, serde_json::Value::Null);
+    }
 }

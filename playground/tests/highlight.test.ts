@@ -63,7 +63,7 @@ describe("highlightRanges", () => {
   it("keeps ranges sorted for the editor's range builder", () => {
     const source = "pub // c\npub";
     const ranges = highlightRanges(source, [tok("keyword", 0, 3), tok("keyword", 9, 12)]);
-    const froms = ranges.map((r) => r.from);
-    expect(froms).toEqual([...froms].sort((a, b) => a - b));
+    const starts = ranges.map((r) => r.from);
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
   });
 });

@@ -400,9 +400,7 @@ let keyword_item (word : string) : CompletionItem.t =
   match Hover_docs.construct_doc word with
   | Some doc ->
       CompletionItem.create ~label:word ~kind:CompletionItemKind.Keyword
-        ~detail:"keyword"
-        ~documentation:(`String doc)
-        ()
+        ~detail:"keyword" ~documentation:(`String doc) ()
   | None ->
       CompletionItem.create ~label:word ~kind:CompletionItemKind.Keyword
         ~detail:"keyword" ()

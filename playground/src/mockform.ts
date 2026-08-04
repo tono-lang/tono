@@ -27,7 +27,7 @@ export function emptyForm(): MockForm {
   return { env: [], routes: [], passthrough: false };
 }
 
-/* mocks.json text -> form. Unparseable text yields null so the caller keeps
+/* mocks.json text -> form. Unparsable text yields null so the caller keeps
    the raw editor open instead of dropping user content. */
 export function formFromJson(text: string): MockForm | null {
   try {
