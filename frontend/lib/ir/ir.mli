@@ -153,11 +153,88 @@ type extension = {
   ext_conformance : string option;
 }
 
+(* Declared tests (see ir.ml for the field commentary). *)
+type test_dep = Dep_http | Dep_impl
+
+type test_construction = {
+  tc_binding : string;
+  tc_entry : string;
+  tc_values : (string * json) list;
+}
+
+type stub_answer =
+  | Answer_http of {
+      ans_status : int;
+      ans_headers : (string * string) list;
+      ans_body : string;
+    }
+  | Answer_value of json
+  | Answer_error of { ans_shape : string; ans_data : json }
+  | Answer_contract
+
+type test_stub = {
+  ts_binding : string option;
+  ts_client : string;
+  ts_op : string;
+  ts_dep : test_dep;
+  ts_answers : stub_answer list;
+}
+
+type test_call = {
+  call_binding : string;
+  call_client : string;
+  call_op : string;
+  call_input : json option;
+}
+
+type field_pattern = Fp_pat of test_pattern | Fp_absent | Fp_present
+
+and test_pattern =
+  | P_eq of json
+  | P_struct of {
+      ps_shape : string;
+      ps_open : bool;
+      ps_fields : (string * field_pattern) list;
+    }
+  | P_error of {
+      pe_shape : string;
+      pe_open : bool;
+      pe_fields : (string * field_pattern) list;
+    }
+  | P_taxonomy of {
+      pt_category : string;
+      pt_open : bool;
+      pt_fields : (string * field_pattern) list;
+    }
+  | P_ok
+
+type request_pattern = {
+  rp_open : bool;
+  rp_fields : (string * field_pattern) list;
+  rp_headers : (string * field_pattern) list option;
+}
+
+type test_expect =
+  | Expect_outcome of { ex_subject : string; ex_pattern : test_pattern }
+  | Expect_requests of {
+      ex_subject : string;
+      ex_requests : request_pattern list;
+    }
+
+type test_decl = {
+  t_name : string;
+  t_constructions : test_construction list;
+  t_stubs : test_stub list;
+  t_calls : test_call list;
+  t_expects : test_expect list;
+}
+
 type module_ = {
   mod_name : string;
   shapes : shape list;
   operations : shape list;
   extensions : extension list;
+  tests : test_decl list;
 }
 
 type model = {

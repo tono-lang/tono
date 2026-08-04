@@ -97,13 +97,14 @@ pub(super) fn method_decl(m: Method<'_>) -> Decl {
         )),
     );
 
+    let seam = impl_seam_var(n, op);
     let body = if binding.raw {
         raw_body(RawBody {
             op,
             module,
             input_present: input.is_some(),
             output,
-            symbol: binding.symbol,
+            symbol: &seam,
             boundary: &boundary,
             ret_zero,
             fail,
@@ -116,10 +117,7 @@ pub(super) fn method_decl(m: Method<'_>) -> Decl {
             Some(_) => ("out, err := ", "\treturn out, nil"),
             None => ("err := ", "\treturn nil"),
         };
-        format!(
-            "\t{bind}{sym}(ctx, &c.settings{call_args})\n{boundary}{tail}",
-            sym = binding.symbol,
-        )
+        format!("\t{bind}{seam}(ctx, &c.settings{call_args})\n{boundary}{tail}",)
     };
 
     let doc = doc_of(&op.traits)
@@ -127,7 +125,11 @@ pub(super) fn method_decl(m: Method<'_>) -> Decl {
         .unwrap_or_default();
     Decl::raw_with(
         format!(
-            "{doc}// {method} is implemented by the bespoke {sym}, which lives in this\n\
+            "// {seam} is the call the generated method goes through to reach the\n\
+             // bespoke implementation; a test generated from conformance vectors swaps\n\
+             // it to simulate an outcome without running the implementation.\n\
+             var {seam} = {sym}\n\n\
+             {doc}// {method} is implemented by the bespoke {sym}, which lives in this\n\
              // package (drop {module_path} into it):\n\
              //\n\
              //\t{signature}\n\
@@ -140,6 +142,13 @@ pub(super) fn method_decl(m: Method<'_>) -> Decl {
         ),
         refs,
     )
+}
+
+/// The unexported per-operation variable the generated method calls instead of
+/// the bespoke symbol directly. Package-level so a `_test.go` file in the same
+/// package can swap and restore it.
+pub(super) fn impl_seam_var(n: &Names, op: &Shape) -> String {
+    super::camel(&format!("{}{}_impl", n.op_prefix, op_local_name(&op.id)))
 }
 
 struct RawBody<'a> {

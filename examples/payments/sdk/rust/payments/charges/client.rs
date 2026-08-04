@@ -55,6 +55,16 @@ impl ClientBuilder {
     /// Resolves the declared sources top-down, runs client_init on top
     /// (bespoke wins), then the declared validation.
     pub fn build(self) -> Result<Client, TonoError> {
+        self.build_with_transport(None)
+    }
+
+    /// `build` plus the transport seam the generated tests construct through:
+    /// a `Some` transport replaces whatever construction resolved, after
+    /// client_init ran, so a test answers canonically without a server.
+    pub(crate) fn build_with_transport(
+        self,
+        transport: Option<tono_http_runtime::Transport>,
+    ) -> Result<Client, TonoError> {
         let mut s = Settings {
             api_key: String::new(),
             endpoint: String::new(),
@@ -114,6 +124,10 @@ impl ClientBuilder {
             "max_retries".to_string(),
             serde_json::Value::from(s.max_retries),
         );
+        if let Some(t) = transport {
+            s.transport = Some(t);
+            s.client = None;
+        }
         let runtime = tono_http_runtime::Runtime::new(tono_http_runtime::Options {
             base_url: String::new(),
             client: s.client.clone(),

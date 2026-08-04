@@ -157,7 +157,9 @@ pub fn module_declared_errors(module: &Module) -> Vec<DeclaredError> {
 /// member type, an operation input, or an operation output anywhere in the
 /// module. A client only ever *decodes* an error response, never encodes one
 /// to send, so an `encode` function for such a shape is generated but never
-/// called: this is the set a target skips it for.
+/// called: this is the set a target skips it for. A shape whose whole wire
+/// object a declared test pins is kept out of the set: the generated test
+/// re-encodes the decoded error for its one total comparison.
 pub fn error_only_shapes(module: &Module) -> std::collections::BTreeSet<String> {
     let declared: std::collections::BTreeSet<String> = module_declared_errors(module)
         .into_iter()
@@ -167,9 +169,12 @@ pub fn error_only_shapes(module: &Module) -> std::collections::BTreeSet<String> 
         return declared;
     }
     let referenced = referenced_as_data(module);
+    let pinned = crate::codegen::declared_tests::error_shapes_pinned_whole(module);
     declared
         .into_iter()
-        .filter(|id| !referenced.contains(id))
+        .filter(|id| {
+            !referenced.contains(id) && !pinned.contains(id.rsplit('#').next().unwrap_or(id))
+        })
         .collect()
 }
 
@@ -409,6 +414,7 @@ mod tests {
 
     fn module(shapes: Vec<Shape>, operations: Vec<Shape>) -> Module {
         Module {
+            tests: vec![],
             name: "m".into(),
             shapes,
             operations,

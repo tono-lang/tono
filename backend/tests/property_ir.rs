@@ -200,6 +200,7 @@ fn shape() -> impl Strategy<Value = Shape> {
 fn module() -> impl Strategy<Value = Module> {
     (modname(), vec(shape(), 0..3), vec(shape(), 0..2)).prop_map(|(name, shapes, operations)| {
         Module {
+            tests: vec![],
             name,
             shapes,
             operations,

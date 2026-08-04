@@ -636,6 +636,15 @@ let parse_decl st : Ast.decl option =
   | Token.KwEnum -> Some (parse_enum st ~pub ~dtraits)
   | Token.KwOp -> Some (parse_op st ~pub ~dtraits)
   | Token.KwExt -> Some (parse_ext st ~pub ~dtraits)
+  | Token.KwTest ->
+      (* A test is neither exported nor decorated: it is not a shape. *)
+      if pub then
+        P.error st (P.peek st).span "a test declaration cannot be 'pub'";
+      (match dtraits with
+      | { Ast.tspan; _ } :: _ ->
+          P.error st tspan "a test declaration carries no traits"
+      | [] -> ());
+      Some (Parser_tests.parse_test st)
   | _ ->
       P.error st (P.peek st).span
         (Printf.sprintf
@@ -687,7 +696,7 @@ let parse_import st : Ast.import =
    keywords; resynchronization skips to the next such token. *)
 let is_decl_start = function
   | Token.At | Token.KwImport | Token.KwPub | Token.KwStruct | Token.KwUnion
-  | Token.KwEnum | Token.KwOp | Token.KwExt ->
+  | Token.KwEnum | Token.KwOp | Token.KwExt | Token.KwTest ->
       true
   | _ -> false
 

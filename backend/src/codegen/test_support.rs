@@ -44,6 +44,7 @@ pub fn member_constrained(name: &str, target: Tref, constraints: Vec<Constraint>
 /// the taxonomy the operation surface would have brought.
 pub fn constrained_module() -> Module {
     Module {
+        tests: vec![],
         name: "billing".into(),
         shapes: vec![structure(
             "billing#charge",
@@ -201,6 +202,7 @@ pub fn operation(id: &str, traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
 /// tests exercise the same taxonomy, client, and discrimination inputs.
 pub fn error_demo_module() -> Module {
     Module {
+        tests: vec![],
         name: "m".into(),
         shapes: vec![
             structure(
@@ -316,6 +318,11 @@ pub fn assert_emits_no_op_stub(target: &impl Target) {
 // source size ceiling; they are part of the same helper surface.
 mod entries;
 pub use entries::*;
+
+// The declared-test builders likewise: one bed the per-target native test
+// emitters parametrize, so each target's tests carry only their assertions.
+mod declared;
+pub use declared::*;
 
 /// Resolve a module's emitted groups the way the pipeline does: record which
 /// group declares each symbol, then re-point every reference at it. A unit test

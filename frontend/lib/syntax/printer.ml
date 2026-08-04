@@ -206,6 +206,108 @@ let print_op ~indent (d : Ast.decl) : string =
       signature ^ String.concat "" traits
   | _ -> assert false
 
+(* ── Test blocks ───────────────────────────────────────────────────────── *)
+
+let is_bare_key (s : string) : bool =
+  s <> ""
+  && (match s.[0] with 'a' .. 'z' | 'A' .. 'Z' | '_' -> true | _ -> false)
+  && String.for_all
+       (function
+         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false)
+       s
+
+(* A map key prints bare when it lexes as an identifier, quoted otherwise
+   (header names carry dashes). *)
+let print_map_key (k : string) : string =
+  if is_bare_key k then k else string_literal k
+
+let print_value_head (h : Ast.value_head) : string =
+  String.concat "." h.Ast.vh_segs
+
+(* One canonical inline layout for values and patterns: a test reads as a
+   script of one-line steps, and the fixture bodies are opaque strings. *)
+let rec print_test_value (v : Ast.test_value) : string =
+  match v with
+  | Ast.TvStr (s, _) -> string_literal s
+  | Ast.TvInt (n, _) -> string_of_int n
+  | Ast.TvFloat (f, _) -> float_literal f
+  | Ast.TvBool (b, _) -> if b then "true" else "false"
+  | Ast.TvCtor c ->
+      print_value_head c.tc_head ^ " " ^ print_ctor_body c.tc_fields
+  | Ast.TvList (items, _) ->
+      "[" ^ String.concat ", " (List.map print_test_value items) ^ "]"
+  | Ast.TvMap ([], _) -> "{}"
+  | Ast.TvMap (entries, _) ->
+      "{ "
+      ^ String.concat ", "
+          (List.map
+             (fun ((k, _), v) -> print_map_key k ^ ": " ^ print_test_value v)
+             entries)
+      ^ " }"
+  | Ast.TvRef { base; path; _ } -> String.concat "." (base :: path)
+  | Ast.TvError _ -> "_"
+
+and print_ctor_body (fields : (string * Span.span * Ast.test_value) list) :
+    string =
+  match fields with
+  | [] -> "{}"
+  | fs ->
+      "{ "
+      ^ String.concat ", "
+          (List.map (fun (n, _, v) -> n ^ ": " ^ print_test_value v) fs)
+      ^ " }"
+
+let rec print_test_pattern (p : Ast.test_pattern) : string =
+  match p with
+  | Ast.TpLit v -> print_test_value v
+  | Ast.TpOk _ -> "ok"
+  | Ast.TpCtor c ->
+      print_value_head c.tp_head ^ " "
+      ^ print_pattern_body
+          (List.map (fun (n, _, f) -> (n, f)) c.tp_fields)
+          c.tp_open
+  | Ast.TpList (items, _) ->
+      "[" ^ String.concat ", " (List.map print_test_pattern items) ^ "]"
+  | Ast.TpMap { entries; map_open; _ } ->
+      print_pattern_body
+        (List.map (fun ((k, _), f) -> (print_map_key k, f)) entries)
+        map_open
+  | Ast.TpError _ -> "_"
+
+(* The '..' mark prints last regardless of where it was written. *)
+and print_pattern_body (fields : (string * Ast.test_pattern_field) list)
+    (open_ : bool) : string =
+  let entries =
+    List.map (fun (n, f) -> n ^ ": " ^ print_pattern_field f) fields
+    @ if open_ then [ ".." ] else []
+  in
+  match entries with [] -> "{}" | es -> "{ " ^ String.concat ", " es ^ " }"
+
+and print_pattern_field (f : Ast.test_pattern_field) : string =
+  match f with
+  | Ast.TpfPat p -> print_test_pattern p
+  | Ast.TpfAny _ -> "any"
+  | Ast.TpfAbsent _ -> "None"
+
+let print_test_item (i : Ast.test_item) : string =
+  match i with
+  | Ast.TiConstruct { bind; entry; fields; _ } ->
+      "  " ^ bind ^ ": " ^ entry ^ " " ^ print_ctor_body fields
+  | Ast.TiStub { bind; target; value; _ } ->
+      let prefix = match bind with Some (b, _) -> b ^ ": " | None -> "" in
+      "  " ^ prefix ^ "stub "
+      ^ String.concat "."
+          [ target.Ast.st_binding; target.Ast.st_op; target.Ast.st_dep ]
+      ^ ": " ^ print_test_value value
+  | Ast.TiCall { bind; recv; op; input; _ } ->
+      "  " ^ bind ^ ": " ^ recv ^ "." ^ op ^ "("
+      ^ (match input with Some v -> print_test_value v | None -> "")
+      ^ ")"
+  | Ast.TiExpect { subject; requests; pattern; _ } ->
+      "  expect " ^ subject
+      ^ (if requests then ".requests" else "")
+      ^ ": " ^ print_test_pattern pattern
+
 let print_decl (d : Ast.decl) : string =
   let pub = if d.Ast.pub then "pub " else "" in
   match d.Ast.dkind with
@@ -277,6 +379,10 @@ let print_decl (d : Ast.decl) : string =
             braced
               (pub ^ "ext " ^ kw ^ " " ^ d.Ast.dname ^ raw ^ signature)
               lines
+        | Ast.DTest { titems } ->
+            braced
+              ("test " ^ string_literal d.Ast.dname)
+              (List.map print_test_item titems)
         | Ast.DOp _ -> assert false
       in
       above ^ body

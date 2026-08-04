@@ -4,11 +4,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const IR: &str = r#"{"tono_ir_version":6,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR: &str = r#"{"tono_ir_version":7,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// A contract extension with no conformance reference: the generator must refuse
 /// to emit (AC-4). Everything else is well-formed.
-const IR_UNCONFORMANT_CONTRACT: &str = r#"{"tono_ir_version":6,"modules":[{"name":"demo","shapes":[],"operations":[],"extensions":[{"name":"sign","kind":"contract","bindings":{"ts":"ext/ts/s.ts#sign"},"signature":{"input":{"prim":"string"},"output":{"prim":"string"}}}]}]}"#;
+const IR_UNCONFORMANT_CONTRACT: &str = r#"{"tono_ir_version":7,"modules":[{"name":"demo","shapes":[],"operations":[],"extensions":[{"name":"sign","kind":"contract","bindings":{"ts":"ext/ts/s.ts#sign"},"signature":{"input":{"prim":"string"},"output":{"prim":"string"}}}]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))
@@ -176,7 +176,7 @@ fn unknown_command_fails() {
 
 /// A single dotted module, so the sub-package mapping and the config hooks have
 /// something to place under a directory.
-const DOTTED_IR: &str = r#"{"tono_ir_version":6,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const DOTTED_IR: &str = r#"{"tono_ir_version":7,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// Run `tono gen` with the given extra args, feeding `DOTTED_IR` on stdin.
 fn gen_dotted(out: &Path, extra: &[&str]) {
@@ -231,7 +231,7 @@ fn gen_module_remap_rewrites_the_prefix() {
 }
 
 /// Two modules where one references the other across the boundary.
-const TWO_MODULE_IR: &str = r#"{"tono_ir_version":6,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]},{"name":"payments.charge","shapes":[{"id":"payments.charge#Charge","kind":"structure","params":[],"members":[{"name":"total","required":true,"target":{"ref":"payments.common#Money","args":[]},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const TWO_MODULE_IR: &str = r#"{"tono_ir_version":7,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]},{"name":"payments.charge","shapes":[{"id":"payments.charge#Charge","kind":"structure","params":[],"members":[{"name":"total","required":true,"target":{"ref":"payments.common#Money","args":[]},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// Run `tono gen --target go` with the given extra args, feeding `TWO_MODULE_IR`.
 fn gen_two_module_go(out: &Path, extra: &[&str]) -> bool {
@@ -262,7 +262,7 @@ fn gen_multi_module_go_needs_a_module_path() {
 // --- manifest mode ----------------------------------------------------------
 
 /// A module with a multi-word field, so a casing override is observable.
-const CASING_IR: &str = r#"{"tono_ir_version":6,"modules":[{"name":"demo","shapes":[{"id":"demo#Event","kind":"structure","params":[],"members":[{"name":"created_at","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const CASING_IR: &str = r#"{"tono_ir_version":7,"modules":[{"name":"demo","shapes":[{"id":"demo#Event","kind":"structure","params":[],"members":[{"name":"created_at","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// Run `tono gen <extra>` from `cwd`, feeding `ir` on stdin; returns the output.
 /// The write ignores a broken pipe: a manifest error makes the CLI exit before it
@@ -637,5 +637,83 @@ fn an_unparsable_package_json_stops_generation_untouched() {
         std::fs::read_to_string(dir.join("ts/package.json")).unwrap()
     );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An entry whose module declares tests inline in the IR: one hermetic test
+/// stubbing the op's http dependency and one live test with no stub.
+const IR_WITH_TESTS: &str = r#"{"tono_ir_version":7,"modules":[{"name":"demo","shapes":[{"id":"demo#client","kind":"entry","fields":[],"operations":[{"id":"demo#client.ping","kind":"operation","input":null,"output":{"prim":"string"},"errors":[],"traits":[{"id":"wire_descriptor","value":{"http_method":"GET","uri":"/ping","bindings":{}}}]}]}],"operations":[],"tests":[{"name":"answers","constructions":[{"binding":"c","entry":"client","values":{}}],"stubs":[{"binding":"s","client":"c","op":"ping","dep":"http","answers":[{"status":200,"headers":{},"body":"\"pong\""}]}],"calls":[{"binding":"got","client":"c","op":"ping"}],"expects":[{"subject":"got","pattern":{"eq":"pong"}}]},{"name":"answers for real","constructions":[{"binding":"c","entry":"client","values":{}}],"stubs":[],"calls":[{"binding":"got","client":"c","op":"ping"}],"expects":[{"subject":"got","pattern":{"eq":"pong"}}]}]}]}"#;
+
+#[test]
+fn gen_emits_native_tests_from_declared_tests() {
+    let dir = tmpdir("declared-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ir.json"), IR_WITH_TESTS).unwrap();
+    let out = dir.join("sdk");
+    let output = tono()
+        .args([
+            "gen",
+            "--target",
+            "go",
+            "--go-module",
+            "example.com/sdk",
+            "--out",
+            out.to_str().unwrap(),
+            dir.join("ir.json").to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The hermetic test lands in the package's own _test.go, the stubless one
+    // in the live file behind the build tag.
+    let hermetic =
+        std::fs::read_to_string(out.join("go").join("demo").join("client_test.go")).unwrap();
+    assert!(hermetic.contains("DO NOT EDIT"));
+    assert!(hermetic.contains("func TestPingAnswers(t *testing.T)"));
+    let live =
+        std::fs::read_to_string(out.join("go").join("demo").join("client_live_test.go")).unwrap();
+    assert!(live.contains("//go:build live"));
+    assert!(live.contains("func TestPingAnswersForRealLive(t *testing.T)"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn gen_refuses_an_invalid_declared_test() {
+    // A test beyond the generated subset is a loud refusal naming the test,
+    // never a silently skipped case.
+    let dir = tmpdir("declared-tests-invalid");
+    std::fs::create_dir_all(&dir).unwrap();
+    let broken = IR_WITH_TESTS.replace(
+        r#""calls":[{"binding":"got","client":"c","op":"ping"}],"expects":[{"subject":"got","pattern":{"eq":"pong"}}]},{"name":"answers for real""#,
+        r#""calls":[{"binding":"got","client":"c","op":"ping"},{"binding":"again","client":"c","op":"ping"}],"expects":[]},{"name":"answers for real""#,
+    );
+    assert_ne!(broken, IR_WITH_TESTS);
+    std::fs::write(dir.join("ir.json"), &broken).unwrap();
+    let output = tono()
+        .args([
+            "gen",
+            "--target",
+            "go",
+            "--go-module",
+            "example.com/sdk",
+            "--out",
+            dir.join("sdk").to_str().unwrap(),
+            dir.join("ir.json").to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("multi-call flows are not generated yet"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("answers"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }

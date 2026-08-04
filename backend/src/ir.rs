@@ -9,6 +9,10 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+// The declared-test types live in their own file to stay within the file-size
+// gate; re-exporting them here keeps the IR mirror a single public surface.
+pub use crate::ir_tests_model::*;
+
 /// IR schema revision this build understands. Bumped by one on every
 /// incompatible change; there is no negotiation across versions.
 /// v2 removed the enum `open` field (every enum is open).
@@ -21,7 +25,9 @@ use serde_json::Value;
 /// trait values may carry field references (`{"field": [...]}`).
 /// v6 added the `impl` extension kind (a bespoke operation implementation) and
 /// its optional `raw` flag.
-pub const TONO_IR_VERSION: u32 = 6;
+/// v7 added the module `tests` array: declared tests (constructions, stubs,
+/// calls, and expect patterns).
+pub const TONO_IR_VERSION: u32 = 7;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -457,6 +463,10 @@ pub struct Module {
     // the cross-language round-trip byte-for-byte.
     #[serde(default)]
     pub extensions: Vec<Extension>,
+    // Always written by the frontend for the same round-trip reason as
+    // `extensions`.
+    #[serde(default)]
+    pub tests: Vec<TestDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

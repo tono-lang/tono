@@ -615,5 +615,5 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
               variants
       | Ast.DEnum _ -> check_non_struct_sources d
       | Ast.DOp _ -> check_op_boundary ctx d @ check_loose_op d
-      | Ast.DExt _ -> [])
+      | Ast.DExt _ | Ast.DTest _ -> [])
     decls

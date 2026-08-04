@@ -107,13 +107,7 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
         carrier_refs,
     ));
     for f in configurable {
-        // The public option name honors @rename(go); the carrier member stays
-        // the plain camel name (it is internal and read the same way in resolve).
-        let display = rename_of(&f.traits, LANG).unwrap_or_else(|| f.name.clone());
-        let fn_name = pascal(&format!(
-            "with_{}",
-            companion_name(entry.name, &display, multi)
-        ));
+        let fn_name = with_option_name(entry.name, f, multi);
         // godoc reads a doc comment as documentation only when it opens with the
         // declared identifier, so the canonical sentence leads and any @doc /
         // @deprecated lines follow as continuation.
@@ -171,6 +165,17 @@ pub(super) fn client_decls(entry: &EntryModel<'_>, n: &Names, config: &CasingCon
             refs,
         ),
     ]
+}
+
+/// The public functional-option name of a `@with` field, honoring
+/// `@rename(go)`; the carrier member stays the plain camel name (it is
+/// internal and read the same way in resolve).
+pub(super) fn with_option_name(entry_name: &str, f: &EntryField, multi: bool) -> String {
+    let display = rename_of(&f.traits, LANG).unwrap_or_else(|| f.name.clone());
+    pascal(&format!(
+        "with_{}",
+        companion_name(entry_name, &display, multi)
+    ))
 }
 
 /// One operation's Go method signature (shared by the interface and the

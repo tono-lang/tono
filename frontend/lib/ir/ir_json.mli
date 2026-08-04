@@ -28,6 +28,8 @@ val encode_bind : Ir.bind -> Ir.json
 val decode_bind : Ir.json -> (Ir.bind, string) result
 val encode_entry_field : Ir.entry_field -> Ir.json
 val decode_entry_field : Ir.json -> (Ir.entry_field, string) result
+val encode_test : Ir.test_decl -> Ir.json
+val decode_test : Ir.json -> (Ir.test_decl, string) result
 val encode_shape : Ir.shape -> Ir.json
 val decode_shape : Ir.json -> (Ir.shape, string) result
 val encode_extension : Ir.extension -> Ir.json

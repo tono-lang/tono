@@ -104,34 +104,60 @@ fn entry_operations(module: &Module) -> Vec<&Shape> {
         .collect()
 }
 
-/// The strong bespoke gate: a `kind=contract` extension must carry a conformance
-/// reference, or the generator refuses to emit. An `impl` bound in more than one
-/// language falls under the same regime: nothing else proves the implementations
-/// agree, and the whole point of a multi-language binding is that they do. A
-/// hook/constraint is lighter and needs none. An unknown hook slot cannot reach
-/// here: `HookSlot` is not part of the wire (the frontend validates the closed
-/// lifecycle), and an unrecognized `kind` fails to decode before generation.
+/// The strong bespoke gate. A `kind=contract` extension must carry a
+/// conformance reference, or the generator refuses to emit. An `impl` bound in
+/// more than one language must be covered by a declared test whose call
+/// exercises the operation: nothing else proves the implementations agree, and
+/// the whole point of a multi-language binding is that they do. A
+/// hook/constraint is lighter and needs neither. An unknown hook slot cannot
+/// reach here: `HookSlot` is not part of the wire (the frontend validates the
+/// closed lifecycle), and an unrecognized `kind` fails to decode before
+/// generation.
 pub fn validate_extensions(model: &Model) -> Result<(), String> {
     for module in &model.modules {
         for ext in &module.extensions {
-            let needs_conformance = match ext.kind {
-                ExtKind::Contract => true,
-                ExtKind::Impl => ext.bindings.len() > 1,
-                ExtKind::Hook | ExtKind::Constraint => false,
-            };
-            if needs_conformance && ext.conformance.is_none() {
-                let what = match ext.kind {
-                    ExtKind::Impl => "impl extension bound in more than one language",
-                    _ => "contract extension",
-                };
-                return Err(format!(
-                    "{what} '{}' in module '{}' requires a conformance reference but has none",
-                    ext.name, module.name
-                ));
+            match ext.kind {
+                ExtKind::Contract => {
+                    if ext.conformance.is_none() {
+                        return Err(format!(
+                            "contract extension '{}' in module '{}' requires a conformance reference but has none",
+                            ext.name, module.name
+                        ));
+                    }
+                }
+                ExtKind::Impl => {
+                    if ext.bindings.len() > 1 && !impl_covered_by_test(module, ext) {
+                        return Err(format!(
+                            "impl extension '{}' in module '{}' is bound in more than one language \
+                             but no declared test calls the operation; add a `test` block that \
+                             exercises it",
+                            ext.name, module.name
+                        ));
+                    }
+                }
+                ExtKind::Hook | ExtKind::Constraint => {}
             }
         }
     }
     Ok(())
+}
+
+/// Whether any declared test of the module calls the operation the impl
+/// binds. An impl may be written against the bare op name or the qualified
+/// `entry.op` form; a test call carries the entry (through its construction)
+/// and the bare op name.
+fn impl_covered_by_test(module: &Module, ext: &crate::ir::Extension) -> bool {
+    module.tests.iter().any(|test| {
+        test.calls.iter().any(|call| {
+            let entry = test
+                .constructions
+                .iter()
+                .find(|c| c.binding == call.client)
+                .map(|c| c.entry.as_str());
+            let qualified = entry.map(|e| format!("{e}.{}", call.op));
+            ext.name == call.op || qualified.as_deref() == Some(ext.name.as_str())
+        })
+    })
 }
 
 /// The implementation count, per target. The frontend proves every entry
@@ -182,6 +208,7 @@ mod tests {
         Model {
             tono_ir_version: crate::ir::TONO_IR_VERSION,
             modules: vec![Module {
+                tests: vec![],
                 name: "m".into(),
                 shapes: vec![],
                 operations: vec![],
@@ -250,6 +277,7 @@ mod tests {
         Model {
             tono_ir_version: crate::ir::TONO_IR_VERSION,
             modules: vec![Module {
+                tests: vec![],
                 name: "m".into(),
                 shapes: vec![Shape {
                     id: "m#client".into(),
@@ -283,21 +311,62 @@ mod tests {
         }
     }
 
+    /// A declared test whose single call exercises `op` on entry `client`.
+    fn covering_test(op: &str) -> crate::ir::TestDecl {
+        crate::ir::TestDecl {
+            name: "covers it".into(),
+            constructions: vec![crate::ir::TestConstruction {
+                binding: "c".into(),
+                entry: "client".into(),
+                values: Default::default(),
+            }],
+            stubs: vec![],
+            calls: vec![crate::ir::TestCall {
+                binding: "got".into(),
+                client: "c".into(),
+                op: op.into(),
+                input: None,
+            }],
+            expects: vec![],
+        }
+    }
+
     #[test]
-    fn a_multi_language_impl_without_conformance_refuses_to_emit() {
-        // Two implementations of one operation are only trustworthy if something
-        // proves they agree, so the conformance regime covers them like a
-        // contract. One language is the lighter case and needs none.
+    fn a_multi_language_impl_without_a_covering_test_refuses_to_emit() {
+        // Two implementations of one operation are only trustworthy if
+        // something proves they agree, so the gate demands a declared test
+        // that calls the operation. One language is the lighter case and
+        // needs none.
         let one = entry_model("m#client.save", vec![impl_ext("save", &["ts"], None)]);
         assert!(validate_extensions(&one).is_ok());
         let two = entry_model("m#client.save", vec![impl_ext("save", &["ts", "go"], None)]);
         let err = validate_extensions(&two).unwrap_err();
         assert!(err.contains("bound in more than one language"), "{err}");
+        assert!(err.contains("test"), "{err}");
+        // A conformance reference no longer stands in for the test.
         let vectored = entry_model(
             "m#client.save",
             vec![impl_ext("save", &["ts", "go"], Some("vectors/save.json"))],
         );
-        assert!(validate_extensions(&vectored).is_ok());
+        assert!(validate_extensions(&vectored).is_err());
+        // A test calling the op satisfies the gate, for the bare and the
+        // qualified impl spelling alike.
+        for written in ["save", "client.save"] {
+            let mut covered = entry_model(
+                "m#client.save",
+                vec![impl_ext(written, &["ts", "go"], None)],
+            );
+            covered.modules[0].tests = vec![covering_test("save")];
+            assert!(
+                validate_extensions(&covered).is_ok(),
+                "'{written}' should be covered"
+            );
+        }
+        // A test calling some other op does not.
+        let mut miscovered =
+            entry_model("m#client.save", vec![impl_ext("save", &["ts", "go"], None)]);
+        miscovered.modules[0].tests = vec![covering_test("other")];
+        assert!(validate_extensions(&miscovered).is_err());
     }
 
     #[test]

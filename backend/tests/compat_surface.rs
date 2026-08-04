@@ -6,12 +6,13 @@
 
 use serde_json::json;
 use tono_backend::compat::diff;
-use tono_backend::ir::{Member, Model, Module, Prim, Shape, ShapeKind, Trait, Tref};
+use tono_backend::ir::{Member, Model, Module, Prim, Shape, ShapeKind, TestDecl, Trait, Tref};
 
 fn model(shapes: Vec<Shape>) -> Model {
     Model {
         tono_ir_version: 6,
         modules: vec![Module {
+            tests: vec![],
             name: "billing".into(),
             extensions: vec![],
             shapes,
@@ -112,4 +113,24 @@ fn a_shape_leaving_or_joining_the_surface_is_still_a_change() {
         .changes
         .iter()
         .any(|c| c.key.contains("billing#Note")));
+}
+
+/// Declared tests exercise the generated SDK; no consumer can observe them, so
+/// adding, changing, or removing them is never a surface change.
+#[test]
+fn declared_tests_are_not_surface() {
+    let bare = model(vec![public(structure(
+        "billing#Charge",
+        vec![member("amount", Tref::Prim(Prim::I64), true)],
+    ))]);
+    let mut with_tests = bare.clone();
+    with_tests.modules[0].tests = vec![TestDecl {
+        name: "charge decodes".into(),
+        constructions: vec![],
+        stubs: vec![],
+        calls: vec![],
+        expects: vec![],
+    }];
+    assert!(diff(&bare, &with_tests).changes.is_empty());
+    assert!(diff(&with_tests, &bare).changes.is_empty());
 }

@@ -13,6 +13,7 @@ fn model(shapes: Vec<Shape>) -> Model {
     Model {
         tono_ir_version: 3,
         modules: vec![Module {
+            tests: vec![],
             name: "billing".into(),
             extensions: vec![],
             shapes,
@@ -600,6 +601,7 @@ fn an_operation_signature_change_is_source_breaking() {
     let op = |input: &str| Model {
         tono_ir_version: 3,
         modules: vec![Module {
+            tests: vec![],
             name: "billing".into(),
             extensions: vec![],
             shapes: vec![],
@@ -692,6 +694,7 @@ fn service_with_op(op_ids: Vec<&str>, keep_op_shape: bool) -> Model {
     Model {
         tono_ir_version: 3,
         modules: vec![Module {
+            tests: vec![],
             name: "billing".into(),
             extensions: vec![],
             shapes: vec![service],

@@ -13,6 +13,7 @@ fn model(shapes: Vec<Shape>) -> Model {
     Model {
         tono_ir_version: 6,
         modules: vec![Module {
+            tests: vec![],
             name: "billing".into(),
             extensions: vec![],
             shapes,

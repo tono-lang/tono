@@ -321,6 +321,15 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
                 .providing(provides),
         );
     }
+    // The native test files the declared tests generate. Their bodies name
+    // the module's codecs and the shared runtime helpers in text, so their
+    // imports are recovered the same way an entry group's are.
+    let mut test_files =
+        crate::codegen::targets::typescript::entry::vector_tests::test_files(module, config);
+    for file in &mut test_files {
+        attach_text_refs(&mut file.file.decls, &codec_names);
+    }
+    files.extend(test_files);
     files
 }
 
@@ -416,6 +425,7 @@ mod tests {
     #[test]
     fn emit_module_assembles_aliases_helpers_types_and_codecs() {
         let module = Module {
+            tests: vec![],
             name: "billing".into(),
             shapes: vec![Shape {
                 id: "billing#Charge".into(),
@@ -464,6 +474,7 @@ mod tests {
     #[test]
     fn an_empty_module_emits_only_a_types_file() {
         let module = Module {
+            tests: vec![],
             name: "billing".into(),
             shapes: vec![],
             operations: vec![],

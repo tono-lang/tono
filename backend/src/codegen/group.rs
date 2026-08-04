@@ -52,6 +52,14 @@ pub const INTERNAL: &str = "internal";
 /// consumer names: the branded well-known types.
 pub const SUPPORT: &str = "support";
 
+/// The suffix marking an entry's generated test group (`client.test`). A dot
+/// cannot occur in an entry identifier, so a spec-named entry group can never
+/// collide with a test group's name.
+const TEST_SUFFIX: &str = ".test";
+/// The suffix marking the live variant of an entry's test group: the same
+/// vector cases, run against the real endpoint instead of a mock.
+const LIVE_TEST_SUFFIX: &str = ".live";
+
 /// The SDK-root support group's path. A symbol table names it when it maps a
 /// well-known primitive, since those are one set of types for the whole SDK
 /// rather than one per module: two modules' `Timestamp` have to be the same
@@ -160,6 +168,29 @@ impl Group {
         }
     }
 
+    /// The test group of one entry: the native test file generated from the
+    /// entry's declared tests. Public rather than internal because the
+    /// tests must sit beside the client they exercise (a Go `_test.go` file
+    /// belongs to the package it tests), and each target's tooling already
+    /// keeps a test file out of the shipped surface.
+    pub fn tests(module: &str, entry: &str, live: bool) -> Self {
+        let suffix = if live { LIVE_TEST_SUFFIX } else { TEST_SUFFIX };
+        Self {
+            module: Some(module.into()),
+            name: format!("{entry}{suffix}"),
+            origin: Origin::Generator,
+            audience: Audience::Public,
+            colocated: false,
+        }
+    }
+
+    /// The entry a test group belongs to and whether it is the live variant, or
+    /// `None` for any other group.
+    pub fn tests_of(&self) -> Option<(&str, bool)> {
+        self.module.as_deref()?;
+        strip_test_suffix(&self.name)
+    }
+
     /// This group's path, the string the component tree and the import engine
     /// carry in place of a bare module name.
     pub fn path(&self) -> String {
@@ -187,9 +218,21 @@ impl Group {
             (Some(module), TYPES) => Self::types(module),
             (Some(module), CODEC) => Self::codec(module),
             (Some(module), INTERNAL) => Self::module_internal(module),
-            (Some(module), entry) => Self::entry(module, entry),
+            (Some(module), name) => match strip_test_suffix(name) {
+                Some((entry, live)) => Self::tests(module, entry, live),
+                None => Self::entry(module, name),
+            },
         })
     }
+}
+
+/// The entry a test-group name encodes and whether it is the live variant, or
+/// `None` for a plain entry name.
+fn strip_test_suffix(name: &str) -> Option<(&str, bool)> {
+    if let Some(entry) = name.strip_suffix(TEST_SUFFIX) {
+        return Some((entry, false));
+    }
+    name.strip_suffix(LIVE_TEST_SUFFIX).map(|e| (e, true))
 }
 
 /// Split a group path back into its module (`None` at the SDK root) and group
@@ -284,6 +327,8 @@ mod tests {
             Group::codec("payments.common"),
             Group::module_internal("payments.common"),
             Group::entry("payments.charges", "client"),
+            Group::tests("payments.charges", "client", false),
+            Group::tests("payments.charges", "client", true),
         ] {
             assert_eq!(Group::from_path(&group.path()).as_ref(), Some(&group));
         }
@@ -343,6 +388,21 @@ mod tests {
         assert!(Group::codec("notes").is_internal());
         assert!(Group::codec("notes").colocated);
         assert!(!Group::module_internal("notes").colocated);
+    }
+
+    #[test]
+    fn a_test_group_knows_its_entry_and_its_mode() {
+        let hermetic = Group::tests("notes", "client", false);
+        assert_eq!(hermetic.path(), "notes::client.test");
+        assert_eq!(hermetic.tests_of(), Some(("client", false)));
+        assert_eq!(hermetic.origin, Origin::Generator);
+        assert!(!hermetic.is_internal());
+        let live = Group::tests("notes", "client", true);
+        assert_eq!(live.path(), "notes::client.live");
+        assert_eq!(live.tests_of(), Some(("client", true)));
+        // An entry group is not a test group, and the entry's own name never
+        // carries the marker (a dot cannot occur in an identifier).
+        assert_eq!(Group::entry("notes", "client").tests_of(), None);
     }
 
     #[test]

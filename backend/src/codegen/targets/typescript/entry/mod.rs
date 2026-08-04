@@ -220,6 +220,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
         return EntryEmission::empty();
     };
+    let tested = crate::codegen::declared_tests::entries_with_tests(module);
     let mut helpers = Helpers::default();
     let mut decls = Vec::new();
     decls.extend(config_interfaces(module, config));
@@ -258,9 +259,11 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
+        let has_tests = tested.contains(entry.name);
         let mut own = vec![settings_interface(entry, &n, config, module)];
         own.extend(config_object_interface(entry, &n, config, module));
         own.extend(descriptor_decls(entry, &n));
+        own.extend(impl_op::seam_decls(entry, &n, module, &bound, has_tests));
         own.push(class_decl(
             entry,
             &n,
@@ -269,6 +272,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             &bound,
             &mut helpers,
             multi,
+            has_tests,
         ));
         own.extend(discriminator_decls_for(entry, &n, module, &bound));
         per_entry.push((entry.name.to_string(), own));
@@ -290,6 +294,7 @@ fn class_decl(
     bound: &[BoundExtension<'_>],
     helpers: &mut Helpers,
     multi: bool,
+    has_tests: bool,
 ) -> Decl {
     let en = error_names();
     let mut refs = vec![
@@ -538,6 +543,45 @@ fn class_decl(
         methods.push('\n');
     }
 
+    // The construction seam the generated tests use, emitted only when the
+    // entry declares tests so the shipped surface stays clean. The real
+    // construction path runs first (resolution, client_init, validation),
+    // then the canonical transport replaces whatever construction resolved, so
+    // a test answers canonically without a server. ClientOptions spells its
+    // slots readonly, so the swap goes through a mutable view of the frozen
+    // options object (the object itself is a plain literal).
+    let for_test = if has_tests {
+        refs.push(runtime_import("CanonicalTransport"));
+        let sig_params = if params.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", params.join(", "))
+        };
+        let mut pass: Vec<String> = args
+            .iter()
+            .map(|f| plan::arg_camel(&f.name, &f.traits, LANG))
+            .collect();
+        if !entry.with_fields().is_empty() {
+            pass.push("config".to_string());
+        }
+        format!(
+            "  // forTest is the constructor plus the transport seam the generated\n\
+             \x20 // tests construct through: the real construction path runs first, then\n\
+             \x20 // the canonical transport wins over anything bespoke.\n\
+             \x20 static forTest(seam: {{ transport: CanonicalTransport }}{sig_params}): {client} {{\n\
+             \x20   const client = new {client}({pass});\n\
+             \x20   const options = client.options as {{ transport?: CanonicalTransport; fetch?: typeof fetch }};\n\
+             \x20   options.transport = seam.transport;\n\
+             \x20   options.fetch = undefined;\n\
+             \x20   return client;\n\
+             \x20 }}\n\n",
+            client = n.client,
+            pass = pass.join(", "),
+        )
+    } else {
+        String::new()
+    };
+
     let doc = doc_of(&entry.shape.traits)
         .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
         .unwrap_or_default();
@@ -550,7 +594,7 @@ fn class_decl(
          \x20 private readonly settings: {settings};\n\
          \x20 private readonly options: ClientOptions;\n\
          {hooks_field}\
-         \x20 constructor({params}) {{\n{body}  }}\n\n{methods}}}",
+         \x20 constructor({params}) {{\n{body}  }}\n\n{for_test}{methods}}}",
         client = n.client,
         entry_name = entry.name,
         settings = n.settings,
@@ -634,6 +678,7 @@ fn op_method(
         // the frontend proved are bound, and the generator gate proved are bound
         // for this target.
         return impl_op::method(impl_op::Method {
+            n,
             op,
             module,
             name: &name,
@@ -689,6 +734,7 @@ mod resolve;
 mod surface;
 #[cfg(test)]
 mod tests;
+pub(crate) mod vector_tests;
 
 use checks::{access, config_error, presence_guard, value_cast, value_expr};
 use resolve::Resolver;

@@ -76,6 +76,7 @@ fn module(config: &CodegenConfig, m: &Module) -> Module {
         shapes: m.shapes.iter().map(|s| shape(config, s)).collect(),
         operations: m.operations.iter().map(|s| shape(config, s)).collect(),
         extensions: m.extensions.iter().map(|e| extension(config, e)).collect(),
+        tests: m.tests.clone(),
     }
 }
 
@@ -225,6 +226,7 @@ mod tests {
         let model = Model {
             tono_ir_version: 2,
             modules: vec![Module {
+                tests: vec![],
                 name: "payments.common".into(),
                 shapes: vec![Shape {
                     id: "payments.common#money".into(),
@@ -291,6 +293,7 @@ mod tests {
         let model = Model {
             tono_ir_version: 5,
             modules: vec![Module {
+                tests: vec![],
                 name: "payments.api".into(),
                 shapes: vec![
                     Shape {

@@ -18,7 +18,8 @@ use crate::codegen::visibility::Exposed;
 use crate::ir::{Model, Module};
 
 /// Emit every emission group a module produces for a target: its public types,
-/// one group per entry declaration, and its internal group.
+/// one group per entry declaration, its internal group, and the test files its
+/// declared tests generate.
 pub(crate) fn emit_module_files(
     module: &Module,
     target: TargetKind,

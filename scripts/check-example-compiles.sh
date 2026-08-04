@@ -168,7 +168,8 @@ EOF
 # Deny warnings so a deprecated field (or any other lint) in the generated SDK
 # fails here rather than in a downstream consumer's stricter build.
 (cd "$work/rust" && RUSTFLAGS="-D warnings" cargo build --quiet \
-    && RUSTFLAGS="-D warnings" cargo run --quiet --bin verify)
+    && RUSTFLAGS="-D warnings" cargo run --quiet --bin verify \
+    && RUSTFLAGS="-D warnings" cargo test --quiet)
 
 # Rust fences with visibility rather than with a location: a declaration no
 # public type reaches is `pub(crate)`, so a consumer crate cannot name it however
@@ -251,7 +252,7 @@ EOF
     && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
     && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
     && go mod tidy >/dev/null \
-    && go build ./... && go run ./verify)
+    && go build ./... && go run ./verify && go test ./...)
 
 # Every group Go moves under internal/ (the SDK's shared helpers, and each
 # module's own hidden declarations) is fenced off by the toolchain: a module
@@ -307,7 +308,8 @@ cat >"$work/ts/tsconfig.json" <<EOF
     "skipLibCheck": true,
     "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["**/*.test.ts"]
 }
 EOF
 (cd "$work/ts" && "$tsc" -p tsconfig.json)
@@ -413,11 +415,15 @@ mkdir -p "$work/auth"
 "$frontend" compile "$root/examples/auth-bearer/auth.tono" --module auth >"$work/auth/ir.json"
 "$root/target/debug/tono" gen --target go,typescript --out "$work/auth/out" \
     --go-module example.com/auth "$work/auth/ir.json"
+# The Go hook is called unqualified from inside the generated package, so the
+# bespoke file lands there before the build (the client_init wrapper names it).
+cp "$root/examples/auth-bearer/ext/go/auth.go" "$work/auth/out/go/auth/bespoke.go"
 (cd "$work/auth/out/go" && go mod init example.com/auth >/dev/null 2>&1 \
     && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
     && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
     && go mod tidy >/dev/null \
     && go build ./...)
+(cd "$work/auth/out/go" && go test ./...)
 cp -R "$root/examples/auth-bearer/ext" "$work/auth/out/typescript/"
 cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
 {
@@ -431,7 +437,8 @@ cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
     "skipLibCheck": true,
     "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["**/*.test.ts"]
 }
 EOF
 (cd "$work/auth/out/typescript" && "$tsc" -p tsconfig.json)

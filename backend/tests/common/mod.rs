@@ -67,6 +67,7 @@ pub fn matrix_module() -> Module {
         value: serde_json::json!(true),
     }];
     Module {
+        tests: vec![],
         name: "models".into(),
         shapes: vec![
             // The constraints cover a value range plus every length measure

@@ -13,6 +13,7 @@ let show_kind : Token.kind -> string = function
   | KwImport -> "import"
   | KwAs -> "as"
   | KwExt -> "ext"
+  | KwTest -> "test"
   | Ident s -> "id:" ^ s
   | Prim s -> "prim:" ^ s
   | Str s -> "str:" ^ s

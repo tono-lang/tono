@@ -64,6 +64,7 @@ op origin(): point
           };
         ];
       extensions = [];
+      tests = [];
     }
   in
   Alcotest.(check string)

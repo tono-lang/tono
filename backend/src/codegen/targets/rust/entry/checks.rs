@@ -97,6 +97,7 @@ mod tests {
 
     fn m() -> Module {
         Module {
+            tests: vec![],
             name: "m".into(),
             shapes: vec![crate::ir::Shape {
                 id: "m#client".into(),

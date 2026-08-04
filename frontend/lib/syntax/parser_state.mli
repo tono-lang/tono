@@ -7,6 +7,9 @@ val create : Token.t list -> t
 (* The current token (never past [Eof]). *)
 val peek : t -> Token.t
 
+(* The token [n] positions past the cursor, clamped to the trailing [Eof]. *)
+val peek_ahead : t -> int -> Token.t
+
 (* Return the current token and move forward (stops at [Eof]). *)
 val advance : t -> Token.t
 

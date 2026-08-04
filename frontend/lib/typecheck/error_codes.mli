@@ -80,3 +80,17 @@ val raw_error_unreachable : string
 (* A bare trait outside the compiler's vocabulary: carried into the IR but read
    by nothing, so almost always a misspelling. *)
 val unknown_trait : string
+
+(* Declared tests (see error_codes.ml for the rule commentary). *)
+val test_binding_unknown : string
+val test_op_unknown : string
+val test_dep_invalid : string
+val test_stub_value_invalid : string
+val test_value_invalid : string
+val test_pattern_invalid : string
+val test_expect_missing : string
+val test_requests_subject_invalid : string
+val test_shape_ambiguous : string
+val test_import_missing : string
+val tono_root_reserved : string
+val test_binding_duplicate : string

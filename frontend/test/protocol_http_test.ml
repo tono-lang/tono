@@ -222,7 +222,13 @@ let module_attaches_trait () =
         ]
   in
   let m : Ir.module_ =
-    { mod_name = "m"; shapes = []; operations = [ o ]; extensions = [] }
+    {
+      mod_name = "m";
+      shapes = [];
+      operations = [ o ];
+      extensions = [];
+      tests = [];
+    }
   in
   let m' = Protocol_http.resolve_module m in
   let op' = List.hd m'.operations in

@@ -29,6 +29,7 @@ fn entry_shape(id: &str, fields: Vec<EntryField>) -> Shape {
 
 fn module_of(shapes: Vec<Shape>) -> Module {
     Module {
+        tests: vec![],
         name: "m".into(),
         shapes,
         operations: vec![],
@@ -397,6 +398,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     let model = |shapes: Vec<Shape>, extensions: Vec<crate::ir::Extension>| crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![Module {
+            tests: vec![],
             name: "m".into(),
             shapes,
             operations: vec![],
@@ -573,6 +575,7 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
     let model = |shapes: Vec<Shape>| crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![Module {
+            tests: vec![],
             name: "m".into(),
             shapes,
             operations: vec![],
@@ -636,6 +639,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
     let mut m = crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![Module {
+            tests: vec![],
             name: "m".into(),
             shapes: vec![entry_shape("m#sdk", vec![])],
             operations: vec![loose_op],

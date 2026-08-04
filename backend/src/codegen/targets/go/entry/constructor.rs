@@ -10,6 +10,12 @@ use crate::codegen::entries::plan;
 /// sources resolve top-down, `client_init` runs over the result (bespoke
 /// wins), the consumed chains and declared constraints validate last, and the
 /// resolved values are frozen into the runtime options.
+///
+/// With `test_seam`, the whole body moves into an unexported variant taking a
+/// transport, and the public constructor delegates with none: a generated test
+/// runs the real construction path (resolution, client_init, validation) and
+/// only the transport is swapped, after bespoke code ran, so the test sees
+/// exactly the request the SDK would send.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn new_decl(
     entry: &EntryModel<'_>,
@@ -19,6 +25,7 @@ pub(super) fn new_decl(
     bound: &[BoundExtension<'_>],
     helpers: &mut Helpers,
     multi: bool,
+    test_seam: bool,
 ) -> Decl {
     let en = error_names();
     let mut refs = vec![runtime_symbol()];
@@ -210,6 +217,11 @@ pub(super) fn new_decl(
 
     // The runtime: one per client; the per-operation endpoint resolves from
     // the descriptor's ref against these values.
+    if test_seam {
+        body.push_str(
+            "\tif transport != nil {\n\t\ts.Transport = transport\n\t\ts.HTTPClient = nil\n\t}\n",
+        );
+    }
     body.push_str(
         "\truntime, err := tonohttp.New(tonohttp.Options{Client: s.HTTPClient, Transport: s.Transport, Headers: s.Headers, Values: values})\n\
          \tif err != nil {\n\t\treturn nil, err\n\t}\n",
@@ -239,16 +251,67 @@ pub(super) fn new_decl(
         client = n.client,
     ));
 
-    let text = format!(
+    let doc = format!(
         "// {new_fn} constructs {client}: positional @arg values, options for @with,\n\
          // declared sources resolved top-down, client_init on top (bespoke wins),\n\
-         // then the declared validation.\n\
-         func {new_fn}({params}{opts_param}) (*{client}, error) {{\n{body}}}",
+         // then the declared validation.\n",
         new_fn = n.new_fn,
         client = n.client,
-        params = params.join(", "),
     );
+    let text = if test_seam {
+        let seam_fn = seam_fn_name(&n.new_fn);
+        let pass_args: Vec<String> = args
+            .iter()
+            .map(|f| plan::arg_camel(&f.name, &f.traits, LANG))
+            .collect();
+        let pass_opts = if entry.with_fields().is_empty() {
+            String::new()
+        } else {
+            format!("{}opts...", if pass_args.is_empty() { "" } else { ", " })
+        };
+        let seam_params = if params.is_empty() && opts_param.is_empty() {
+            String::new()
+        } else {
+            format!(", {}{opts_param}", params.join(", "))
+        };
+        format!(
+            "{doc}func {new_fn}({params}{opts_param}) (*{client}, error) {{\n\
+             \treturn {seam_fn}(nil{pass_sep}{pass_args}{pass_opts})\n\
+             }}\n\n\
+             // {seam_fn} is {new_fn} plus the transport seam the generated tests use: a\n\
+             // non-nil transport replaces whatever construction resolved, after\n\
+             // client_init ran, so a test answers canonically without a server.\n\
+             func {seam_fn}(transport tonohttp.Transport{seam_params}) (*{client}, error) {{\n{body}}}",
+            new_fn = n.new_fn,
+            client = n.client,
+            params = params.join(", "),
+            pass_sep = if pass_args.is_empty() && pass_opts.is_empty() {
+                ""
+            } else {
+                ", "
+            },
+            pass_args = pass_args.join(", "),
+        )
+    } else {
+        format!(
+            "{doc}func {new_fn}({params}{opts_param}) (*{client}, error) {{\n{body}}}",
+            new_fn = n.new_fn,
+            client = n.client,
+            params = params.join(", "),
+        )
+    };
     Decl::raw_with(text, refs)
+}
+
+/// The unexported name of the constructor variant carrying the transport seam:
+/// `New` -> `newWithTransport`, `NewAdmin` -> `newAdminWithTransport`.
+pub(super) fn seam_fn_name(new_fn: &str) -> String {
+    let mut chars = new_fn.chars();
+    let lowered = match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    };
+    format!("{lowered}WithTransport")
 }
 
 pub(super) fn indent(block: &str) -> String {

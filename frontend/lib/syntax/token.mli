@@ -10,6 +10,7 @@ type kind =
   | KwImport
   | KwAs
   | KwExt
+  | KwTest
   | Ident of string
   | Prim of string
   | Str of string

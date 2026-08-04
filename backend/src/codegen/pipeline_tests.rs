@@ -13,6 +13,7 @@ fn union_model() -> Model {
     Model {
         tono_ir_version: 3,
         modules: vec![Module {
+            tests: vec![],
             name: "payments".into(),
             shapes: vec![
                 structure(
@@ -53,6 +54,7 @@ fn demo_model() -> Model {
     Model {
         tono_ir_version: 3,
         modules: vec![Module {
+            tests: vec![],
             name: "payments".into(),
             shapes: vec![structure(
                 "payments#Charge",
@@ -333,6 +335,7 @@ fn sub_package_model() -> Model {
         tono_ir_version: 2,
         modules: vec![
             Module {
+                tests: vec![],
                 name: "payments.common".into(),
                 shapes: vec![structure(
                     "payments.common#Money",
@@ -342,6 +345,7 @@ fn sub_package_model() -> Model {
                 extensions: vec![],
             },
             Module {
+                tests: vec![],
                 name: "payments.charge".into(),
                 shapes: vec![structure(
                     "payments.charge#Charge",
@@ -508,6 +512,7 @@ fn go_modules_sharing_a_last_segment_are_rejected() {
         tono_ir_version: 2,
         modules: vec![
             Module {
+                tests: vec![],
                 name: "a.common".into(),
                 shapes: vec![structure(
                     "a.common#Money",
@@ -517,6 +522,7 @@ fn go_modules_sharing_a_last_segment_are_rejected() {
                 extensions: vec![],
             },
             Module {
+                tests: vec![],
                 name: "b.common".into(),
                 shapes: vec![structure(
                     "b.common#Rate",
@@ -548,6 +554,7 @@ fn bare_entry_model() -> Model {
     Model {
         tono_ir_version: 6,
         modules: vec![Module {
+            tests: vec![],
             name: "payments".into(),
             shapes: vec![Shape {
                 id: "payments#client".into(),
@@ -623,6 +630,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
         tono_ir_version: 6,
         modules: vec![
             Module {
+                tests: vec![],
                 name: "payments.common".into(),
                 shapes: vec![structure(
                     "payments.common#money",
@@ -632,6 +640,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                 extensions: vec![],
             },
             Module {
+                tests: vec![],
                 name: "payments.charges".into(),
                 shapes: vec![
                     structure(

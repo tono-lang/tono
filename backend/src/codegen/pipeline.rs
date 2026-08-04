@@ -85,7 +85,14 @@ fn render_module(
             // A module's groups are files of one package, named for the module's
             // last segment; the SDK-root group has its own package name.
             let package = go_selector(&module_file.group.path()).unwrap_or_default();
-            format!("{}{}", go::emit::package_clause(&package), rough)
+            // The live test file opts out of a default `go test` run: build
+            // constraints go before the package clause, so the tag is spliced
+            // here rather than emitted as a declaration.
+            let tag = match module_file.group.tests_of() {
+                Some((_, true)) => "//go:build live\n\n",
+                _ => "",
+            };
+            format!("{tag}{}{}", go::emit::package_clause(&package), rough)
         }
         TargetKind::TypeScript => {
             render_file_with(file, &resolver, &typescript::TsRules, &passthrough).text
@@ -247,6 +254,7 @@ pub fn generate(
     let langs: Vec<&[&str]> = targets.iter().map(|t| t.binding_langs()).collect();
     crate::codegen::extensions::validate_impl_coverage(model, &langs)?;
     crate::codegen::entries::validate_entries(model)?;
+    crate::codegen::declared_tests::validate_declared_tests(model)?;
     let (model, union_ids, exposed) = prepare(model, config);
     let mut files = Vec::new();
     for &target in targets {
@@ -278,6 +286,7 @@ pub fn generate_target(
     crate::codegen::extensions::validate_extensions(model)?;
     crate::codegen::extensions::validate_impl_coverage(model, &[target.binding_langs()])?;
     crate::codegen::entries::validate_entries(model)?;
+    crate::codegen::declared_tests::validate_declared_tests(model)?;
     let (model, union_ids, exposed) = prepare(model, config);
     let files = emit_target(&model, target, casing, config, &union_ids, &exposed);
     reject_duplicate_paths(&files)?;

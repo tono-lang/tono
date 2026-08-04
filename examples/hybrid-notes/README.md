@@ -15,9 +15,11 @@ it refuses to emit.
 notes.tono ──frontend──▶ ir.json ──tono gen──▶ SDK
    │
    ├── ext/go/notes.go    (the bespoke half, in Go)
-   ├── ext/ts/notes.ts    (the bespoke half, in TypeScript)
-   └── vectors/*.json     (proof the two agree)
+   └── ext/ts/notes.ts    (the bespoke half, in TypeScript)
 ```
+
+The `test` blocks at the bottom of `notes.tono` are the proof the two halves
+agree: the generator emits them as native test files beside each client.
 
 ## The two forms
 
@@ -54,34 +56,48 @@ store reads `s.APIToken` directly.
 `updated_at` is the canonical name and the only one that travels. Go spells it
 `Modified` and TypeScript `modified`, because the field carries
 `@rename(go: "Modified", typescript: "modified")`. The bespoke implementations
-see their own language's spelling; the wire, and therefore the vectors, see
+see their own language's spelling; the wire, and therefore the tests, see
 `updated_at`.
 
-## Conformance
+## Generated tests
 
 An operation implemented in two languages is only trustworthy if something
-proves the implementations agree. The vectors under `vectors/` are that proof,
-and the generator will not emit a multi-language `ext impl` without one.
+proves the implementations agree. The `test` blocks in `notes.tono` are that
+proof, and the generator will not emit a multi-language `ext impl` without a
+test that calls the operation.
 
-Each vector case names an input and the outcome a caller should observe. The
-drivers under `conformance/` run every case through the *generated client* (not
-the bespoke symbol directly, since the glue is part of what the caller sees) and
-print the result in one closed vocabulary. `scripts/check-impl-conformance.sh`
-runs both and requires that they match each other and the declared expectation.
+Each block constructs the client, optionally stubs one declared dependency,
+calls an operation, and asserts the outcome a caller should observe. The
+generator emits them as native test files beside the client
+(`notes/client_test.go`, `notes/client.test.ts`): no driver to write, one body
+of declared cases running under plain `go test` and Vitest in both languages.
+
+Where a test is cut off from the world follows from its stub:
+
+- `stub c.fetch_note.http: http.response { ... }` answers the transport with a
+  pinned fixture, and `expect s.requests: [...]` asserts what the SDK actually
+  sent: method, path, and headers.
+- `stub c.save_note.impl: <typed value or error>` simulates the bespoke
+  implementation's outcome, so the test runs without the real store executing.
+- No stub at all runs the call against the real dependency. Those land in a
+  separate file behind an opt-in marker (`//go:build live`, an env-gated Vitest
+  suite), so a default CI run stays hermetic. For this example the "real thing"
+  is the deterministic in-repo store, so `scripts/check-impl-conformance.sh`
+  runs the live suites too:
 
 ```
 scripts/check-impl-conformance.sh
 ```
 
-The cases cover the whole boundary: a normal result, a declared error crossing
+The tests cover the whole boundary: a normal result, a declared error crossing
 typed, an undeclared failure becoming a `ContractError`, an unmatched code
 falling back to the generic API error, a response missing a required member, and
 a constraint violation caught before the store is ever reached.
 
 ## Regenerating
 
-This example is source only (the `.tono`, the bespoke halves, and the vectors);
-the SDK is generated on demand:
+This example is source only (the `.tono`, with its `test` blocks, and the
+bespoke halves); the SDK is generated on demand:
 
 ```
 tono-frontend compile examples/hybrid-notes/notes.tono --module notes > ir.json

@@ -22,8 +22,10 @@
    @bind composition; entry ops nest inside the entry shape and their trait
    values may carry field references ({"field": [...]}).
    v6 added the "impl" extension kind (a bespoke operation implementation) and
-   its optional "raw" flag. *)
-let current_ir_version = 6
+   its optional "raw" flag.
+   v7 added the module [tests] table (declared tests: constructions, stubs,
+   calls, and expect patterns, with values in wire form). *)
+let current_ir_version = 7
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -54,6 +56,8 @@ let encode_bind = Ir_json_entry.encode_bind
 let decode_bind = Ir_json_entry.decode_bind
 let encode_entry_field = Ir_json_entry.encode_entry_field
 let decode_entry_field = Ir_json_entry.decode_entry_field
+let encode_test = Ir_json_tests.encode_test
+let decode_test = Ir_json_tests.decode_test
 let ( let* ) = Result.bind
 let err fmt = Printf.ksprintf (fun s -> Error s) fmt
 let map_result = Ir_json_base.map_result
@@ -153,6 +157,7 @@ let encode_module (m : Ir.module_) : Ir.json =
       ("shapes", `List (List.map encode_shape m.shapes));
       ("operations", `List (List.map encode_shape m.operations));
       ("extensions", `List (List.map encode_extension m.extensions));
+      ("tests", `List (List.map encode_test m.tests));
     ]
 
 let encode_model (m : Ir.model) : Ir.json =
@@ -360,7 +365,14 @@ let decode_module j =
         let* xs = as_list v in
         map_result decode_extension xs
   in
-  Ok ({ mod_name; shapes; operations; extensions } : Ir.module_)
+  let* tests =
+    match List.assoc_opt "tests" kvs with
+    | None -> Ok []
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_test xs
+  in
+  Ok ({ mod_name; shapes; operations; extensions; tests } : Ir.module_)
 
 let decode_model j =
   let* kvs = as_assoc j in

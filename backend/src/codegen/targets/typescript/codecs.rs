@@ -413,7 +413,7 @@ fn guard_null(member: &Member, access: &str, expr: String) -> String {
 
 /// The TypeScript expression that encodes `value` of IR type `t` to its wire
 /// form. Only the cases that differ from JSON-native pass through a codec.
-fn encode_expr(value: &str, t: &Tref) -> String {
+pub(crate) fn encode_expr(value: &str, t: &Tref) -> String {
     match t {
         Tref::Prim(Prim::I64 | Prim::U64) => format!("encodeI64({value})"),
         Tref::Prim(Prim::Bytes) => format!("encodeBytes({value})"),
