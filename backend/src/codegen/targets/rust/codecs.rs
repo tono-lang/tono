@@ -94,7 +94,6 @@ pub(crate) fn enum_item(
 
     Decl::Raw(Raw {
         text,
-        refs: Vec::new(),
         ..Raw::default()
     })
 }
@@ -143,7 +142,6 @@ pub(crate) fn enum_serde_item(backing: &EnumBacking, values: &[EnumValue], name:
 
     Decl::Raw(Raw {
         text,
-        refs: Vec::new(),
         ..Raw::default()
     })
 }
@@ -160,7 +158,6 @@ pub(crate) fn enum_serde_item(backing: &EnumBacking, values: &[EnumValue], name:
 pub(crate) fn open_enum_macro() -> Decl {
     Decl::Raw(Raw {
         text: OPEN_ENUM_MACRO.to_string(),
-        refs: Vec::new(),
         ..Raw::default()
     })
 }
@@ -367,7 +364,6 @@ pub(crate) fn runtime_helpers(helpers: HelperSet, group: &str) -> Vec<Decl> {
         .map(|text| {
             Decl::Raw(Raw {
                 text,
-                refs: Vec::new(),
                 ..Raw::default()
             })
         })
