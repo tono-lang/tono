@@ -32,6 +32,6 @@
     "typescript": "^5.9.3",
     "vite": "^6",
     "vitest": "^3",
-    "wasm-pack": "^0.13"
+    "wasm-pack": "^0.15"
   }
 }
