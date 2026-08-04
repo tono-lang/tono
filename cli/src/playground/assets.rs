@@ -1,6 +1,6 @@
 //! The web app's static files: compiled into the binary under the `embed-ui`
-//! feature (release builds), or served from a directory (`--ui-dir`, or the
-//! repo's `playground/dist` during development) so plain cargo builds never
+//! feature (every shipped release), or discovered from a dev checkout's
+//! `playground/dist` (`cargo run -- playground`) so plain cargo builds never
 //! need node.
 
 use super::Response;
@@ -15,21 +15,25 @@ pub struct Assets {
 }
 
 impl Assets {
-    pub fn new(dir: Option<std::path::PathBuf>) -> Result<Self, String> {
-        let dir = match dir {
-            Some(d) => Some(
-                d.canonicalize()
-                    .map_err(|e| format!("--ui-dir {}: {e}", d.display()))?,
-            ),
-            None => Self::default_dir(),
-        };
+    pub fn new() -> Result<Self, String> {
+        let dir = Self::default_dir();
         if dir.is_none() && !cfg!(feature = "embed-ui") {
             return Err(
-                "no UI to serve: build playground/dist (npm run build) or pass --ui-dir"
+                "no UI to serve: build playground/dist (npm run build), or build tono with --features embed-ui"
                     .to_string(),
             );
         }
         Ok(Assets { dir })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(dir: std::path::PathBuf) -> Self {
+        // Canonicalized, matching default_dir(): load()'s traversal guard
+        // compares against this path, and a non-canonical root (e.g. a
+        // symlinked temp dir on macOS) would make every load() miss.
+        Assets {
+            dir: Some(dir.canonicalize().expect("test ui dir exists")),
+        }
     }
 
     /// A dev checkout's `playground/dist`, discovered relative to the running
@@ -118,7 +122,7 @@ mod tests {
     #[test]
     fn serves_files_and_falls_back_to_the_page_for_unknown_routes() {
         let dir = ui_dir("serve");
-        let assets = Assets::new(Some(dir.clone())).expect("assets");
+        let assets = Assets::for_test(dir.clone());
         assert_eq!(
             assets.serve("/app.js").status_code(),
             tiny_http::StatusCode(200)
@@ -137,7 +141,7 @@ mod tests {
         let dir = ui_dir("traversal");
         let secret = dir.parent().expect("parent").join("tono-assets-secret.txt");
         std::fs::write(&secret, "no").expect("secret");
-        let assets = Assets::new(Some(dir.clone())).expect("assets");
+        let assets = Assets::for_test(dir.clone());
         // The canonical path leaves the root, so the SPA fallback answers
         // instead of the file.
         let response = assets.serve("/../tono-assets-secret.txt");
@@ -147,9 +151,12 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_ui_dir_is_an_error_up_front() {
-        let missing = std::env::temp_dir().join("tono-assets-does-not-exist");
-        assert!(Assets::new(Some(missing)).is_err());
+    #[cfg(not(feature = "embed-ui"))]
+    fn no_ui_available_is_an_error_up_front() {
+        // Outside a dev checkout and without the embed-ui feature, there is
+        // nothing to serve: this is the state a plain `cargo build` (no
+        // embed-ui, no playground/dist nearby) leaves the binary in.
+        assert!(Assets::new().is_err());
     }
 
     #[test]

@@ -50,7 +50,7 @@ const USAGE: &str = "usage: tono (\n  \
     check <file.tono>\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
-    playground [--port <n>] [--ui-dir <path>] [--no-open]\n  \
+    playground [--port <n>] [--no-open]\n  \
     breaking [<ir.json>] [--baseline <ref>] [--baseline-path <path>] [--config <cfg.json>] [--level <cat>=<sev>]... [--allow <key>]...\n  \
     split --branch <name> [--config <tono.toml>] [--ref <committish>] [<ir.json>]\n  \
     version)";

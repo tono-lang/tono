@@ -14,8 +14,10 @@ path = "src/main.rs"
 # render-and-check pass) but drops the terminal UI and its dependency stack.
 default = ["preview", "playground"]
 # The local web playground server. embed-ui additionally compiles the built web
-# assets into the binary (requires playground/dist to exist); without it the
-# command serves from --ui-dir, so cargo builds never depend on node.
+# assets into the binary (requires playground/dist to exist) and is what every
+# shipped release builds with; without it the command falls back to a dev
+# checkout's playground/dist (cargo run -- playground), so plain cargo builds
+# never depend on node.
 playground = ["dep:tiny_http", "dep:rust-embed"]
 embed-ui = ["playground", "dep:rust-embed"]
 preview = [
