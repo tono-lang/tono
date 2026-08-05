@@ -21,7 +21,6 @@ function descriptor(over: Partial<WireDescriptor> = {}): WireDescriptor {
     bindings: [],
     response_bindings: [],
     success: [[200, null]],
-    errors: [],
     ...over,
   };
 }

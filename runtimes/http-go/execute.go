@@ -16,10 +16,14 @@ import (
 // classify, and are never misreported as transport failures nor retried.
 //
 // When the descriptor declares retry, an attempt whose outcome is retryable (a
-// transport failure, or an error response matching a declared retryable error)
-// is repeated up to the declared maximum, with exponential full-jitter backoff
+// transport failure, or an error response the retryable predicate accepts) is
+// repeated up to the declared maximum, with exponential full-jitter backoff
 // between attempts. The declared timeout bounds each attempt separately.
-func (r *Runtime) Execute(ctx context.Context, d *WireDescriptor, input map[string]any, hooks *Hooks) (Outcome, error) {
+// retryable classifies an error response by status and raw body; the
+// generated client builds it from its own decode/Retryable() methods so the
+// retry decision and the decoded error type can never disagree. A nil
+// retryable means no declared error is ever retryable (an op with none).
+func (r *Runtime) Execute(ctx context.Context, d *WireDescriptor, input map[string]any, hooks *Hooks, retryable func(status int, body string) bool) (Outcome, error) {
 	maxRetries := resolveMaxRetries(d.Retry, r.opts.Values)
 	timeout := resolveTimeout(d.Timeout, r.opts.Values)
 	for attempt := 0; ; attempt++ {
@@ -27,7 +31,7 @@ func (r *Runtime) Execute(ctx context.Context, d *WireDescriptor, input map[stri
 		if err != nil {
 			return Outcome{}, err
 		}
-		if attempt >= maxRetries || !isRetryable(d, outcome) {
+		if attempt >= maxRetries || !isRetryable(outcome, retryable) {
 			return outcome, nil
 		}
 		if err := r.sleep(ctx, backoffDelay(attempt, r.randFloat())); err != nil {

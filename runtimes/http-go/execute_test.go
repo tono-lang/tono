@@ -65,7 +65,7 @@ func TestCanonicalTransportReceivesTheBuiltRequest(t *testing.T) {
 			binding("field", "body", ""),
 		}
 	})
-	outcome, err := r.Execute(context.Background(), d, map[string]any{"id": "1", "q": "2", "h": "3", "field": "4"}, nil)
+	outcome, err := r.Execute(context.Background(), d, map[string]any{"id": "1", "q": "2", "h": "3", "field": "4"}, nil, nil)
 	if err != nil || outcome.Kind != OutcomeSuccess {
 		t.Fatalf("outcome: %+v %v", outcome, err)
 	}
@@ -94,7 +94,7 @@ func TestContentTypeDefault(t *testing.T) {
 
 	transport, calls := recorder(200, "{}", nil)
 	r := newRuntime(t, Options{BaseURL: "https://api.test", Transport: transport})
-	if _, err := r.Execute(context.Background(), d, map[string]any{}, nil); err != nil {
+	if _, err := r.Execute(context.Background(), d, map[string]any{}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := (*calls)[0].Headers["content-type"]; ok || (*calls)[0].Body != nil {
@@ -107,7 +107,7 @@ func TestContentTypeDefault(t *testing.T) {
 		Transport: transport,
 		Headers:   map[string]string{"Content-Type": "application/vnd.api+json"},
 	})
-	if _, err := r.Execute(context.Background(), d, map[string]any{"a": float64(1)}, nil); err != nil {
+	if _, err := r.Execute(context.Background(), d, map[string]any{"a": float64(1)}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	headers := (*calls)[0].Headers
@@ -144,7 +144,7 @@ func TestNativeSlotAgainstARealServer(t *testing.T) {
 		}
 		d.ResponseBindings = []ResponseBinding{{Member: "requestId", Part: ResponsePart{Kind: "header", Name: "X-Request-Id"}}}
 	})
-	outcome, err := r.Execute(context.Background(), d, map[string]any{"id": "7", "q": "v", "trace": "t1", "a": float64(1)}, nil)
+	outcome, err := r.Execute(context.Background(), d, map[string]any{"id": "7", "q": "v", "trace": "t1", "a": float64(1)}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,14 +168,14 @@ func TestNativeSlotAgainstARealServer(t *testing.T) {
 
 func TestNativeTransportFailures(t *testing.T) {
 	r := newRuntime(t, Options{BaseURL: "http://127.0.0.1:0"})
-	outcome, err := r.Execute(context.Background(), desc(nil), nil, nil)
+	outcome, err := r.Execute(context.Background(), desc(nil), nil, nil, nil)
 	if err != nil || outcome.Kind != OutcomeTransport || outcome.Cause == nil {
 		t.Fatalf("network failure must be a transport outcome: %+v %v", outcome, err)
 	}
 
 	// An invalid method fails request construction, which is transport too.
 	d := desc(func(d *WireDescriptor) { d.HTTPMethod = "BAD METHOD" })
-	outcome, err = r.Execute(context.Background(), d, nil, nil)
+	outcome, err = r.Execute(context.Background(), d, nil, nil, nil)
 	if err != nil || outcome.Kind != OutcomeTransport {
 		t.Fatalf("bad method: %+v %v", outcome, err)
 	}
@@ -199,7 +199,7 @@ func TestNativeBodyReadFailureIsTransport(t *testing.T) {
 	}))
 	defer server.Close()
 	r := newRuntime(t, Options{BaseURL: server.URL, Client: server.Client()})
-	outcome, err := r.Execute(context.Background(), desc(nil), nil, nil)
+	outcome, err := r.Execute(context.Background(), desc(nil), nil, nil, nil)
 	if err != nil || outcome.Kind != OutcomeTransport || outcome.Cause == nil {
 		t.Fatalf("body-read failure must be a transport outcome: %+v %v", outcome, err)
 	}
@@ -209,7 +209,7 @@ func TestSuccessClassification(t *testing.T) {
 	run := func(status int, mutate func(*WireDescriptor)) Outcome {
 		transport, _ := recorder(status, "{}", nil)
 		r := newRuntime(t, Options{BaseURL: "https://api.test", Transport: transport})
-		outcome, err := r.Execute(context.Background(), desc(mutate), nil, nil)
+		outcome, err := r.Execute(context.Background(), desc(mutate), nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,7 +240,7 @@ func TestResponseBindings(t *testing.T) {
 	run := func(body string, headers map[string]string, mutate func(*WireDescriptor)) Outcome {
 		transport, _ := recorder(200, body, headers)
 		r := newRuntime(t, Options{BaseURL: "https://api.test", Transport: transport})
-		outcome, err := r.Execute(context.Background(), desc(mutate), nil, nil)
+		outcome, err := r.Execute(context.Background(), desc(mutate), nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -285,7 +285,7 @@ func TestHooks(t *testing.T) {
 			return req, nil
 		},
 	}
-	if _, err := r.Execute(context.Background(), desc(nil), nil, hooks); err != nil {
+	if _, err := r.Execute(context.Background(), desc(nil), nil, hooks, nil); err != nil {
 		t.Fatal(err)
 	}
 	if (*calls)[0].Headers["Authorization"] != "signed" {
@@ -300,7 +300,7 @@ func TestHooks(t *testing.T) {
 			return res, nil
 		},
 	}
-	outcome, err := r.Execute(context.Background(), desc(nil), nil, rewrite)
+	outcome, err := r.Execute(context.Background(), desc(nil), nil, rewrite, nil)
 	if err != nil || outcome.Kind != OutcomeSuccess {
 		t.Fatalf("classification must read the post-hook response: %+v %v", outcome, err)
 	}
@@ -316,21 +316,19 @@ func TestHookErrorsPropagateRawAndNeverRetry(t *testing.T) {
 		BeforeRequest: func(ctx context.Context, req CanonicalRequest) (CanonicalRequest, error) {
 			return req, boom
 		},
-	})
+	}, nil)
 	if !errors.Is(err, boom) || len(*calls) != 0 {
 		t.Fatalf("BeforeRequest error must propagate before any attempt: %v, %d calls", err, len(*calls))
 	}
 
 	transport, calls = recorder(503, "{}", nil)
 	r = newRuntime(t, Options{BaseURL: "https://api.test", Transport: transport})
-	_, err = r.Execute(context.Background(), desc(func(d *WireDescriptor) {
-		withRetry(d)
-		d.Errors = []DeclaredError{{Status: 503, ID: "svc#unavailable", Retryable: true}}
-	}), nil, &Hooks{
+	retryable := func(status int, body string) bool { return status == 503 }
+	_, err = r.Execute(context.Background(), desc(withRetry), nil, &Hooks{
 		AfterResponse: func(ctx context.Context, res CanonicalResponse) (CanonicalResponse, error) {
 			return res, boom
 		},
-	})
+	}, retryable)
 	if !errors.Is(err, boom) || len(*calls) != 1 {
 		t.Fatalf("AfterResponse error must propagate, not retry: %v, %d calls", err, len(*calls))
 	}
@@ -342,7 +340,7 @@ func TestUnencodableInputSurfacesAsAnError(t *testing.T) {
 	d := desc(func(d *WireDescriptor) {
 		d.Bindings = []Binding{binding("a", "body", "")}
 	})
-	if _, err := r.Execute(context.Background(), d, map[string]any{"a": make(chan int)}, nil); err == nil {
+	if _, err := r.Execute(context.Background(), d, map[string]any{"a": make(chan int)}, nil, nil); err == nil {
 		t.Fatal("unencodable input must error, not call the transport")
 	}
 	if len(*calls) != 0 {
@@ -357,14 +355,14 @@ func TestTimeoutDeadlineIsSetOnlyWhenDeclared(t *testing.T) {
 		return CanonicalResponse{Status: 200, Body: "{}"}, nil
 	}
 	r := newRuntime(t, Options{BaseURL: "https://api.test", Transport: transport})
-	if _, err := r.Execute(context.Background(), desc(nil), nil, nil); err != nil {
+	if _, err := r.Execute(context.Background(), desc(nil), nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if hadDeadline {
 		t.Fatal("no declared timeout must mean no deadline")
 	}
 	d := desc(func(d *WireDescriptor) { d.Timeout = &ValueSource{Lit: lit(5000)} })
-	if _, err := r.Execute(context.Background(), d, nil, nil); err != nil {
+	if _, err := r.Execute(context.Background(), d, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !hadDeadline {
@@ -390,7 +388,7 @@ func TestExecuteResolvesEndpointAndDeclaredHeadersBeforeTheHook(t *testing.T) {
 		hookSaw = req
 		return req, nil
 	}}
-	outcome, err := r.Execute(context.Background(), d, nil, hooks)
+	outcome, err := r.Execute(context.Background(), d, nil, hooks, nil)
 	if err != nil || outcome.Kind != OutcomeSuccess {
 		t.Fatalf("execute: %+v %v", outcome, err)
 	}
@@ -413,7 +411,7 @@ func TestExecuteFallsBackToBaseURLWhenTheEndpointValueIsAbsent(t *testing.T) {
 	d := desc(func(d *WireDescriptor) {
 		d.Endpoint = []string{"endpoint"}
 	})
-	if _, err := r.Execute(context.Background(), d, nil, nil); err != nil {
+	if _, err := r.Execute(context.Background(), d, nil, nil, nil); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	if (*calls)[0].URL != "https://fallback.test/things" {

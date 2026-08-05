@@ -50,11 +50,6 @@ export interface WireDescriptor {
   // status -> output type ref (opaque here; the SDK owns decoding). The runtime
   // uses only the status to decide success vs error.
   readonly success: ReadonlyArray<readonly [number, unknown]>;
-  // status -> error shape id -> optional @errorCode discriminator value ->
-  // whether the error is retryable. The SDK's discriminator consumes the id;
-  // the runtime consumes status, code, and the retryable flag (absent in
-  // descriptors emitted before retry existed, meaning not retryable).
-  readonly errors: ReadonlyArray<readonly [number, string, string | null, boolean?]>;
   // Absent retry means one attempt, ever. `timeout` is the per-attempt budget
   // in milliseconds; absent means no per-attempt deadline.
   readonly retry?: RetrySpec | null;

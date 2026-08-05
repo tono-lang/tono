@@ -9,13 +9,13 @@ mod retry;
 mod runtime;
 
 pub use descriptor::{
-    Binding, DeclaredError, Part, RequestHeader, ResponseBinding, ResponsePart, RetrySpec,
-    SuccessCase, TemplatePart, ValueExpr, ValueSource, WireDescriptor,
+    Binding, Part, RequestHeader, ResponseBinding, ResponsePart, RetrySpec, SuccessCase,
+    TemplatePart, ValueExpr, ValueSource, WireDescriptor,
 };
 pub use runtime::{
     AfterResponseHook, BeforeRequestHook, BoxFuture, CanonicalRequest, CanonicalResponse,
-    ExclusiveTransportError, ExecuteError, Hooks, Options, Outcome, OutcomeKind, Runtime,
-    Transport,
+    ExclusiveTransportError, ExecuteError, Hooks, Options, Outcome, OutcomeKind, RetryPredicate,
+    Runtime, Transport,
 };
 
 #[cfg(test)]

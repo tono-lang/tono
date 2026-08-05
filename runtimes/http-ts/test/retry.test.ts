@@ -26,7 +26,6 @@ function descriptor(over: Partial<WireDescriptor> = {}): WireDescriptor {
     bindings: [],
     response_bindings: [],
     success: [[200, null]],
-    errors: [],
     ...over,
   };
 }
@@ -124,41 +123,60 @@ describe("backoff", () => {
 });
 
 describe("retryable classification", () => {
-  const d = descriptor({
-    errors: [
-      [429, "svc#overloaded", "overloaded", true],
-      [429, "svc#quota", "quota", false],
-      [503, "svc#unavailable", null, true],
-      [404, "svc#not_found", null, false],
-    ],
-  });
+  // Stands in for a generated decode<Op>Error + retryable() pair: the first
+  // status match with an agreeing code decides (a declared code must equal
+  // the body's "code" field; a null code matches any body).
+  function classifyLikeDiscriminator(
+    declared: ReadonlyArray<readonly [number, string | null, boolean]>,
+  ): (status: number, body: string) => boolean {
+    return (status, body) => {
+      let code: unknown;
+      try {
+        const parsed: unknown = JSON.parse(body);
+        code = parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>)["code"] : undefined;
+      } catch {
+        code = undefined;
+      }
+      for (const [declaredStatus, declaredCode, retryable] of declared) {
+        if (declaredStatus !== status) continue;
+        if (declaredCode === null || code === declaredCode) return retryable;
+      }
+      return false;
+    };
+  }
+
+  const retryable = classifyLikeDiscriminator([
+    [429, "overloaded", true],
+    [429, "quota", false],
+    [503, null, true],
+    [404, null, false],
+  ]);
   const error = (status: number, body: string): Outcome => ({ outcome: "error", status, body });
 
   it("always retries a transport failure and never a success", () => {
-    expect(isRetryable(d, { outcome: "transport", cause: new Error("x") })).toBe(true);
-    expect(isRetryable(d, { outcome: "success", status: 200, body: "{}" })).toBe(false);
+    expect(isRetryable({ outcome: "transport", cause: new Error("x") }, retryable)).toBe(true);
+    expect(isRetryable({ outcome: "success", status: 200, body: "{}" }, retryable)).toBe(false);
     // Even when a success status collides with a declared retryable error
     // (a declared non-2xx success), the outcome kind decides.
-    expect(isRetryable(d, { outcome: "success", status: 429, body: '{"code":"overloaded"}' })).toBe(
-      false,
-    );
+    expect(
+      isRetryable({ outcome: "success", status: 429, body: '{"code":"overloaded"}' }, retryable),
+    ).toBe(false);
   });
 
   it("discriminates declared errors by status and code", () => {
-    expect(isRetryable(d, error(429, '{"code":"overloaded"}'))).toBe(true);
-    expect(isRetryable(d, error(429, '{"code":"quota"}'))).toBe(false);
-    expect(isRetryable(d, error(429, '{"code":"other"}'))).toBe(false);
-    expect(isRetryable(d, error(429, "not json"))).toBe(false);
-    expect(isRetryable(d, error(429, "null"))).toBe(false);
-    expect(isRetryable(d, error(429, '{"code":5}'))).toBe(false);
-    expect(isRetryable(d, error(503, "not json"))).toBe(true);
-    expect(isRetryable(d, error(404, "{}"))).toBe(false);
-    expect(isRetryable(d, error(500, "{}"))).toBe(false);
+    expect(isRetryable(error(429, '{"code":"overloaded"}'), retryable)).toBe(true);
+    expect(isRetryable(error(429, '{"code":"quota"}'), retryable)).toBe(false);
+    expect(isRetryable(error(429, '{"code":"other"}'), retryable)).toBe(false);
+    expect(isRetryable(error(429, "not json"), retryable)).toBe(false);
+    expect(isRetryable(error(429, "null"), retryable)).toBe(false);
+    expect(isRetryable(error(429, '{"code":5}'), retryable)).toBe(false);
+    expect(isRetryable(error(503, "not json"), retryable)).toBe(true);
+    expect(isRetryable(error(404, "{}"), retryable)).toBe(false);
+    expect(isRetryable(error(500, "{}"), retryable)).toBe(false);
   });
 
-  it("treats a three-element declared error (no flag) as not retryable", () => {
-    const legacy = descriptor({ errors: [[503, "svc#unavailable", null]] });
-    expect(isRetryable(legacy, error(503, "{}"))).toBe(false);
+  it("treats an absent predicate (no declared errors) as never retryable", () => {
+    expect(isRetryable(error(503, "{}"), undefined)).toBe(false);
   });
 });
 
@@ -243,6 +261,7 @@ describe("retry loop", () => {
       {},
       { baseUrl: "https://api.test", transport },
       undefined,
+      undefined,
       s,
     );
     expect(outcome.outcome).toBe("transport");
@@ -257,13 +276,11 @@ describe("retry loop", () => {
     ]);
     const { delays, seams: s } = seams();
     const outcome = await execute(
-      descriptor({
-        retry: { max: { lit: 5 } },
-        errors: [[503, "svc#unavailable", null, true]],
-      }),
+      descriptor({ retry: { max: { lit: 5 } } }),
       {},
       { baseUrl: "https://api.test", transport },
       undefined,
+      (status) => status === 503,
       s,
     );
     expect(outcome).toEqual({ outcome: "error", status: 404, body: "{}" });
@@ -283,6 +300,7 @@ describe("retry loop", () => {
       descriptor({ retry: { max: { lit: 1 } } }),
       {},
       { baseUrl: "https://api.test", fetch: fetchImpl },
+      undefined,
       undefined,
       s,
     );
@@ -329,6 +347,7 @@ describe("retry loop", () => {
             throw boom;
           },
         },
+        undefined,
         seams().seams,
       ),
     ).rejects.toBe(boom);
@@ -340,10 +359,7 @@ describe("retry loop", () => {
     const boom = new Error("hook broke");
     await expect(
       execute(
-        descriptor({
-          retry: { max: { lit: 3 } },
-          errors: [[503, "svc#unavailable", null, true]],
-        }),
+        descriptor({ retry: { max: { lit: 3 } } }),
         {},
         { baseUrl: "https://api.test", transport },
         {
@@ -351,6 +367,7 @@ describe("retry loop", () => {
             throw boom;
           },
         },
+        (status) => status === 503,
         seams().seams,
       ),
     ).rejects.toBe(boom);
@@ -361,13 +378,11 @@ describe("retry loop", () => {
     const { transport, attempts } = scripted([{ kind: "response", status: 503, body: "{}" }]);
     const { delays, seams: s } = seams();
     const outcome = await execute(
-      descriptor({
-        retry: { max: { lit: 3 } },
-        errors: [[503, "svc#unavailable", null, true]],
-      }),
+      descriptor({ retry: { max: { lit: 3 } } }),
       {},
       { baseUrl: "https://api.test", transport },
       { after_response: (res) => ({ ...res, status: 200 }) },
+      (status) => status === 503,
       s,
     );
     expect(outcome.outcome).toBe("success");
@@ -387,6 +402,7 @@ describe("per-attempt timeout", () => {
       descriptor({ retry: { max: { lit: 1 } }, timeout: { lit: 30 } }),
       {},
       { baseUrl: "https://api.test", transport },
+      undefined,
       undefined,
       s,
     );

@@ -78,46 +78,6 @@ impl<'de> Deserialize<'de> for SuccessCase {
     }
 }
 
-/// One declared error of the operation: its status, the error shape id, the
-/// optional discriminator value matched against the body's `"code"` field, and
-/// whether the error is retryable. The wire form is a three- or four-element
-/// array; a missing fourth element (retryable) means not retryable.
-#[derive(Debug, Clone)]
-pub struct DeclaredError {
-    pub status: i64,
-    pub id: String,
-    pub code: Option<String>,
-    pub retryable: bool,
-}
-
-impl<'de> Deserialize<'de> for DeclaredError {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let parts = Vec::<Value>::deserialize(deserializer)?;
-        if parts.len() < 3 {
-            return Err(D::Error::custom("declared error is not a 3+ element array"));
-        }
-        let status = parts[0]
-            .as_i64()
-            .ok_or_else(|| D::Error::custom("declared error status is not an integer"))?;
-        let id = parts[1]
-            .as_str()
-            .ok_or_else(|| D::Error::custom("declared error id is not a string"))?
-            .to_string();
-        let code =
-            serde_json::from_value::<Option<String>>(parts[2].clone()).map_err(D::Error::custom)?;
-        let retryable = match parts.get(3) {
-            Some(v) => serde_json::from_value::<bool>(v.clone()).map_err(D::Error::custom)?,
-            None => false,
-        };
-        Ok(DeclaredError {
-            status,
-            id,
-            code,
-            retryable,
-        })
-    }
-}
-
 /// One piece of a template position: a literal run, an entry-field
 /// placeholder resolved from the client values by its dotted path, or an
 /// operation-input placeholder resolved from the call's input record. Exactly
@@ -190,8 +150,6 @@ pub struct WireDescriptor {
     pub response_bindings: Vec<ResponseBinding>,
     #[serde(default)]
     pub success: Vec<SuccessCase>,
-    #[serde(default)]
-    pub errors: Vec<DeclaredError>,
     /// Absent when the operation declares no retry: absent means one attempt,
     /// ever.
     #[serde(default)]
@@ -224,7 +182,7 @@ mod tests {
     #[test]
     fn parses_a_minimal_descriptor() {
         let d = WireDescriptor::parse(
-            r#"{"http_method":"POST","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[]}"#,
+            r#"{"http_method":"POST","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]]}"#,
         )
         .unwrap();
         assert_eq!(d.http_method, "POST");
@@ -235,32 +193,9 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_error_without_a_fourth_element_is_not_retryable() {
-        let d = WireDescriptor::parse(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[],"errors":[[404,"svc#not_found",null]]}"#,
-        )
-        .unwrap();
-        assert_eq!(d.errors.len(), 1);
-        assert_eq!(d.errors[0].status, 404);
-        assert_eq!(d.errors[0].id, "svc#not_found");
-        assert_eq!(d.errors[0].code, None);
-        assert!(!d.errors[0].retryable);
-    }
-
-    #[test]
-    fn a_declared_error_with_a_fourth_element_carries_retryable() {
-        let d = WireDescriptor::parse(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[],"errors":[[429,"svc#overloaded","overloaded",true]]}"#,
-        )
-        .unwrap();
-        assert_eq!(d.errors[0].code.as_deref(), Some("overloaded"));
-        assert!(d.errors[0].retryable);
-    }
-
-    #[test]
     fn a_binding_reads_the_member_part_pair() {
         let d = WireDescriptor::parse(
-            r#"{"http_method":"GET","uri":"/x/{id}","bindings":[["id",{"kind":"label"}]],"response_bindings":[],"success":[],"errors":[]}"#,
+            r#"{"http_method":"GET","uri":"/x/{id}","bindings":[["id",{"kind":"label"}]],"response_bindings":[],"success":[]}"#,
         )
         .unwrap();
         assert_eq!(d.bindings[0].member, "id");
@@ -270,7 +205,7 @@ mod tests {
     #[test]
     fn a_request_header_reads_the_key_value_pair() {
         let d = WireDescriptor::parse(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[],"errors":[],"request_headers":[[[{"lit":"X-Client"}],{"field":["client_name"]}]]}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[],"request_headers":[[[{"lit":"X-Client"}],{"field":["client_name"]}]]}"#,
         )
         .unwrap();
         let h = &d.request_headers[0];
@@ -284,7 +219,7 @@ mod tests {
     #[test]
     fn a_ref_value_source_and_a_lit_value_source_both_parse() {
         let d = WireDescriptor::parse(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[],"errors":[],"retry":{"max":{"ref":"max_retries"}},"timeout":{"lit":30}}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[],"retry":{"max":{"ref":"max_retries"}},"timeout":{"lit":30}}"#,
         )
         .unwrap();
         assert_eq!(d.retry.unwrap().max.r#ref.as_deref(), Some("max_retries"));
@@ -294,6 +229,6 @@ mod tests {
     #[test]
     fn a_malformed_descriptor_fails_to_parse() {
         assert!(WireDescriptor::parse("not json").is_err());
-        assert!(WireDescriptor::parse(r#"{"errors":[[404]]}"#).is_err());
+        assert!(WireDescriptor::parse(r#"{"uri":"/x"}"#).is_err());
     }
 }

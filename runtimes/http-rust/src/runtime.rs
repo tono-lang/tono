@@ -84,6 +84,11 @@ pub type AfterResponseHook = Arc<
         + Sync,
 >;
 
+/// Classifies an error response by status and raw body. The generated client
+/// builds it from its own decode/retryable() pair, so the retry decision and
+/// the decoded error type can never disagree.
+pub type RetryPredicate = dyn Fn(u16, &str) -> bool + Send + Sync;
+
 /// The lifecycle slots the runtime invokes around the transport, once per
 /// attempt. A hook error propagates raw (the generated wrapper owns turning
 /// it into its taxonomy); it is never misreported as a transport failure and
@@ -211,15 +216,20 @@ impl Runtime {
     /// is never misreported as a transport failure nor retried.
     ///
     /// When the descriptor declares retry, an attempt whose outcome is
-    /// retryable (a transport failure, or an error response matching a
-    /// declared retryable error) is repeated up to the declared maximum, with
+    /// retryable (a transport failure, or an error response the `retryable`
+    /// predicate accepts) is repeated up to the declared maximum, with
     /// exponential full-jitter backoff between attempts. The declared timeout
-    /// bounds each attempt separately.
+    /// bounds each attempt separately. `retryable` classifies an error
+    /// response by status and raw body; the generated client builds it from
+    /// its own decode/retryable() pair, so the retry decision and the decoded
+    /// error type can never disagree. `None` (an op with no declared errors)
+    /// means no error response is ever retryable.
     pub async fn execute(
         &self,
         d: &WireDescriptor,
         input: &Value,
         hooks: Option<&Hooks>,
+        retryable: Option<&RetryPredicate>,
     ) -> Result<Outcome, ExecuteError> {
         let record = input.as_object().cloned().unwrap_or_default();
         let max_retries = resolve_max_retries(d.retry.as_ref(), &self.options.values);
@@ -227,7 +237,7 @@ impl Runtime {
         let mut attempt_no = 0u32;
         loop {
             let outcome = self.attempt(d, &record, hooks, timeout).await?;
-            if attempt_no >= max_retries || !is_retryable(d, &outcome) {
+            if attempt_no >= max_retries || !is_retryable(&outcome, retryable) {
                 return Ok(outcome);
             }
             (self.sleep)(backoff_delay(attempt_no, (self.random)())).await;
@@ -450,7 +460,7 @@ mod tests {
     #[tokio::test]
     async fn a_success_status_is_never_retried() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[],"retry":{"max":{"lit":3}}}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"retry":{"max":{"lit":3}}}"#,
         );
         let options = Options {
             transport: Some(scripted_transport(vec![ok(200, "{}")])),
@@ -458,7 +468,7 @@ mod tests {
         };
         let runtime = deterministic_runtime(options);
         let outcome = runtime
-            .execute(&d, &Value::Object(Map::new()), None)
+            .execute(&d, &Value::Object(Map::new()), None, None)
             .await
             .unwrap();
         assert_eq!(outcome.kind, OutcomeKind::Success);
@@ -468,7 +478,7 @@ mod tests {
     #[tokio::test]
     async fn a_transport_failure_retries_until_success() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[],"retry":{"max":{"lit":2}}}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"retry":{"max":{"lit":2}}}"#,
         );
         let options = Options {
             transport: Some(scripted_transport(vec![
@@ -480,7 +490,7 @@ mod tests {
         };
         let runtime = deterministic_runtime(options);
         let outcome = runtime
-            .execute(&d, &Value::Object(Map::new()), None)
+            .execute(&d, &Value::Object(Map::new()), None, None)
             .await
             .unwrap();
         assert_eq!(outcome.kind, OutcomeKind::Success);
@@ -490,7 +500,7 @@ mod tests {
     #[tokio::test]
     async fn exhausted_retries_return_the_last_outcome_after_exactly_max_plus_one_attempts() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[],"retry":{"max":{"lit":1}}}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"retry":{"max":{"lit":1}}}"#,
         );
         // Exactly two scripted failures: one attempt plus one retry. A broken
         // exit condition (the attempt counter never advancing, or the OR
@@ -501,7 +511,7 @@ mod tests {
         };
         let runtime = deterministic_runtime(options);
         let outcome = runtime
-            .execute(&d, &Value::Object(Map::new()), None)
+            .execute(&d, &Value::Object(Map::new()), None, None)
             .await
             .unwrap();
         assert_eq!(outcome.kind, OutcomeKind::Transport);
@@ -510,7 +520,7 @@ mod tests {
     #[tokio::test]
     async fn no_retry_declared_means_one_attempt_ever() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[]}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]]}"#,
         );
         let options = Options {
             transport: Some(scripted_transport(vec![ok(500, "{}")])),
@@ -518,7 +528,7 @@ mod tests {
         };
         let runtime = deterministic_runtime(options);
         let outcome = runtime
-            .execute(&d, &Value::Object(Map::new()), None)
+            .execute(&d, &Value::Object(Map::new()), None, None)
             .await
             .unwrap();
         assert_eq!(outcome.kind, OutcomeKind::Error);
@@ -528,7 +538,7 @@ mod tests {
     #[tokio::test]
     async fn a_hook_error_propagates_raw_and_is_never_retried() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[],"retry":{"max":{"lit":3}}}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"retry":{"max":{"lit":3}}}"#,
         );
         let options = Options {
             transport: Some(scripted_transport(vec![ok(200, "{}")])),
@@ -542,7 +552,7 @@ mod tests {
             after_response: None,
         };
         let err = runtime
-            .execute(&d, &Value::Object(Map::new()), Some(&hooks))
+            .execute(&d, &Value::Object(Map::new()), Some(&hooks), None)
             .await
             .unwrap_err();
         assert_eq!(err.to_string(), "hook failed");
@@ -555,7 +565,7 @@ mod tests {
         // panic instead of a transport that hangs the whole per-mutant test
         // run past its budget.
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[],"timeout":{"lit":10}}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"timeout":{"lit":10}}"#,
         );
         let calls = Arc::new(Mutex::new(0u32));
         let options = Options {
@@ -582,7 +592,7 @@ mod tests {
         };
         let runtime = deterministic_runtime(options);
         let outcome = runtime
-            .execute(&d, &Value::Object(Map::new()), None)
+            .execute(&d, &Value::Object(Map::new()), None, None)
             .await
             .unwrap();
         assert_eq!(outcome.kind, OutcomeKind::Transport);
@@ -601,7 +611,7 @@ mod tests {
     #[test]
     fn is_success_status_accepts_any_2xx_and_a_declared_non_2xx() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[201,null]],"errors":[]}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[201,null]]}"#,
         );
         assert!(is_success_status(&d, 200));
         assert!(is_success_status(&d, 201));
@@ -611,7 +621,7 @@ mod tests {
     #[test]
     fn apply_response_bindings_folds_status_and_header_into_the_body() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[["code",{"kind":"statusCode"}],["req_id",{"kind":"header","name":"X-Request-Id"}]],"success":[[200,null]],"errors":[]}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[["code",{"kind":"statusCode"}],["req_id",{"kind":"header","name":"X-Request-Id"}]],"success":[[200,null]]}"#,
         );
         let res = CanonicalResponse {
             status: 200,
@@ -628,7 +638,7 @@ mod tests {
     #[tokio::test]
     async fn a_body_gets_a_default_content_type_when_none_is_set() {
         let d = descriptor(
-            r#"{"http_method":"POST","uri":"/x","bindings":[["note",{"kind":"body","name":"note"}]],"response_bindings":[],"success":[[200,null]],"errors":[]}"#,
+            r#"{"http_method":"POST","uri":"/x","bindings":[["note",{"kind":"body","name":"note"}]],"response_bindings":[],"success":[[200,null]]}"#,
         );
         let (transport, recorded) = recording_transport(ok(200, "{}"));
         let options = Options {
@@ -639,7 +649,7 @@ mod tests {
         let mut input = Map::new();
         input.insert("note".to_string(), Value::String("hi".into()));
         runtime
-            .execute(&d, &Value::Object(input), None)
+            .execute(&d, &Value::Object(input), None, None)
             .await
             .unwrap();
         let recorded = recorded.lock().unwrap();
@@ -652,7 +662,7 @@ mod tests {
     #[tokio::test]
     async fn a_caller_supplied_content_type_is_not_overridden() {
         let d = descriptor(
-            r#"{"http_method":"POST","uri":"/x","bindings":[["note",{"kind":"body","name":"note"}]],"response_bindings":[],"success":[[200,null]],"errors":[]}"#,
+            r#"{"http_method":"POST","uri":"/x","bindings":[["note",{"kind":"body","name":"note"}]],"response_bindings":[],"success":[[200,null]]}"#,
         );
         let (transport, recorded) = recording_transport(ok(200, "{}"));
         let options = Options {
@@ -664,7 +674,7 @@ mod tests {
         let mut input = Map::new();
         input.insert("note".to_string(), Value::String("hi".into()));
         runtime
-            .execute(&d, &Value::Object(input), None)
+            .execute(&d, &Value::Object(input), None, None)
             .await
             .unwrap();
         let recorded = recorded.lock().unwrap();
@@ -677,7 +687,7 @@ mod tests {
     #[tokio::test]
     async fn a_bodyless_request_gets_no_content_type() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[]}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]]}"#,
         );
         let (transport, recorded) = recording_transport(ok(200, "{}"));
         let options = Options {
@@ -686,7 +696,7 @@ mod tests {
         };
         let runtime = deterministic_runtime(options);
         runtime
-            .execute(&d, &Value::Object(Map::new()), None)
+            .execute(&d, &Value::Object(Map::new()), None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -698,7 +708,7 @@ mod tests {
     #[tokio::test]
     async fn a_url_with_no_query_bindings_carries_no_question_mark() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]],"errors":[]}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[[200,null]]}"#,
         );
         let (transport, recorded) = recording_transport(ok(200, "{}"));
         let options = Options {
@@ -708,7 +718,7 @@ mod tests {
         };
         let runtime = deterministic_runtime(options);
         runtime
-            .execute(&d, &Value::Object(Map::new()), None)
+            .execute(&d, &Value::Object(Map::new()), None, None)
             .await
             .unwrap();
         assert_eq!(recorded.lock().unwrap()[0].url, "https://api.test/x");
@@ -717,7 +727,7 @@ mod tests {
     #[tokio::test]
     async fn a_url_with_a_query_binding_appends_the_question_mark() {
         let d = descriptor(
-            r#"{"http_method":"GET","uri":"/x","bindings":[["q",{"kind":"query","name":"q"}]],"response_bindings":[],"success":[[200,null]],"errors":[]}"#,
+            r#"{"http_method":"GET","uri":"/x","bindings":[["q",{"kind":"query","name":"q"}]],"response_bindings":[],"success":[[200,null]]}"#,
         );
         let (transport, recorded) = recording_transport(ok(200, "{}"));
         let options = Options {
@@ -729,7 +739,7 @@ mod tests {
         let mut input = Map::new();
         input.insert("q".to_string(), Value::String("hi".into()));
         runtime
-            .execute(&d, &Value::Object(input), None)
+            .execute(&d, &Value::Object(input), None, None)
             .await
             .unwrap();
         assert_eq!(recorded.lock().unwrap()[0].url, "https://api.test/x?q=hi");

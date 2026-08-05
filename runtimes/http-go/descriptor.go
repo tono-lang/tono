@@ -87,41 +87,6 @@ func (s *SuccessCase) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// DeclaredError is one declared error of the operation: its status, the error
-// shape id, the optional discriminator value matched against the body's "code"
-// field, and whether the error is retryable. The wire form is a three- or
-// four-element array; the fourth element (retryable) is absent in descriptors
-// emitted before retry existed, and absence means not retryable.
-type DeclaredError struct {
-	Status    int
-	ID        string
-	Code      *string
-	Retryable bool
-}
-
-// UnmarshalJSON reads [status, id, code] or [status, id, code, retryable].
-func (e *DeclaredError) UnmarshalJSON(data []byte) error {
-	var parts []json.RawMessage
-	if err := json.Unmarshal(data, &parts); err != nil || len(parts) < 3 {
-		return fmt.Errorf("declared error is not a 3+ element array: %s", string(data))
-	}
-	if err := json.Unmarshal(parts[0], &e.Status); err != nil {
-		return fmt.Errorf("declared error status: %w", err)
-	}
-	if err := json.Unmarshal(parts[1], &e.ID); err != nil {
-		return fmt.Errorf("declared error id: %w", err)
-	}
-	if err := json.Unmarshal(parts[2], &e.Code); err != nil {
-		return fmt.Errorf("declared error code: %w", err)
-	}
-	if len(parts) > 3 {
-		if err := json.Unmarshal(parts[3], &e.Retryable); err != nil {
-			return fmt.Errorf("declared error retryable: %w", err)
-		}
-	}
-	return nil
-}
-
 // TemplatePart is one piece of a template position: a literal run, an
 // entry-field placeholder resolved from Options.Values by its dotted path, or
 // an operation-input placeholder resolved from the call's input record.
@@ -188,7 +153,6 @@ type WireDescriptor struct {
 	Bindings         []Binding         `json:"bindings"`
 	ResponseBindings []ResponseBinding `json:"response_bindings"`
 	Success          []SuccessCase     `json:"success"`
-	Errors           []DeclaredError   `json:"errors"`
 	// Retry is absent when the operation declares no retry: absent means one
 	// attempt, ever. Timeout is the per-attempt budget in milliseconds; absent
 	// means no per-attempt deadline.
