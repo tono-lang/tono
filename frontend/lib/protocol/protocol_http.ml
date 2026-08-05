@@ -14,7 +14,6 @@ type wire_descriptor = {
   bindings : (string * part) list;
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list;
-  errors : (int * Ir.shape_id * string option * bool) list;
   endpoint : string list option;
   request_headers : (Ir.template_part list * value_expr) list;
   timeout : string list option;
@@ -122,32 +121,12 @@ let members_of (lookup : Ir.shape_id -> Ir.shape option) (t : Ir.tref option) :
       | _ -> [])
   | _ -> []
 
-(* ── Error discrimination ──────────────────────────────────────────────── *)
-
-let error_entry (lookup : Ir.shape_id -> Ir.shape option) (t : Ir.tref) :
-    (int * Ir.shape_id * string option * bool) option =
-  match t with
-  | Ir.Ref (id, _) -> (
-      match lookup id with
-      | Some s ->
-          let status =
-            Option.bind (trait_by "status" s.traits) (fun t -> int_arg t.value)
-          in
-          let code =
-            Option.bind (trait_by "errorCode" s.traits) (fun t ->
-                string_arg t.value)
-          in
-          let retryable = has_trait "retryable" s.traits in
-          Option.map (fun st -> (st, id, code, retryable)) status
-      | None -> None)
-  | _ -> None
-
 (* ── Resolution ────────────────────────────────────────────────────────── *)
 
 let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
     wire_descriptor option =
   match (op.kind, trait_by "http" op.traits) with
-  | Ir.Operation { input; output; errors }, Some http ->
+  | Ir.Operation { input; output; errors = _ }, Some http ->
       let str k default =
         Option.value ~default (Option.bind (obj_field k http.value) string_arg)
       in
@@ -169,7 +148,6 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
           (members_of lookup output)
       in
       let success = [ (code, output) ] in
-      let errors = List.filter_map (error_entry lookup) errors in
       (* Entry-scoped positions: the endpoint ref on @http, op-level @header
          key/value pairs, and the @timeout/@retry field refs. The single
          positional argument of @timeout/@retry arrives as a one-element array
@@ -198,7 +176,6 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
           bindings;
           response_bindings;
           success;
-          errors;
           endpoint;
           request_headers;
           timeout;
@@ -230,18 +207,6 @@ let encode (d : wire_descriptor) : Ir.json =
         (match out with Some t -> Ir_json.encode_tref t | None -> `Null);
       ]
   in
-  (* The retryable flag rides as a fourth element only when set: both
-     runtimes read its absence as not retryable, so the pre-retry three
-     element form stays the common case. *)
-  let err (status, id, code, retryable) =
-    `List
-      ([
-         `Int status;
-         `String id;
-         (match code with Some c -> `String c | None -> `Null);
-       ]
-      @ if retryable then [ `Bool true ] else [])
-  in
   let path segs = `List (List.map (fun s -> `String s) segs) in
   let value_expr = function
     | Vlit j -> `Assoc [ ("lit", j) ]
@@ -263,7 +228,6 @@ let encode (d : wire_descriptor) : Ir.json =
        ("bindings", `List (List.map pair d.bindings));
        ("response_bindings", `List (List.map rpair d.response_bindings));
        ("success", `List (List.map succ d.success));
-       ("errors", `List (List.map err d.errors));
      ]
     @ opt_path "endpoint" d.endpoint
     @ (match d.request_headers with
