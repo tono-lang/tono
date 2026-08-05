@@ -562,16 +562,31 @@ fn op_method_decl(
         ),
         None => "\tvar record map[string]any\n".to_string(),
     };
-    let error_expr = if declared_errors(op, module).is_empty() {
+    let has_declared_errors = !declared_errors(op, module).is_empty();
+    let discriminator = discriminator_name(n, op);
+    let error_expr = if has_declared_errors {
+        format!("{discriminator}(outcome.Status, []byte(outcome.Body))")
+    } else {
         format!(
             "&{api}{{Status: outcome.Status, Body: outcome.Body}}",
             api = en.api
         )
-    } else {
+    };
+    // The retry loop and the decoded error type read the same discriminator,
+    // so they can never disagree: a declared error's own Retryable() method
+    // is the only place @retryable is materialized. An op with no declared
+    // errors passes nil (no discriminator exists to call).
+    let retryable_arg = if has_declared_errors {
         format!(
-            "{}(outcome.Status, []byte(outcome.Body))",
-            discriminator_name(n, op)
+            "func(status int, body string) bool {{\n\
+             \t\tif re, ok := {discriminator}(status, []byte(body)).(interface{{ Retryable() bool }}); ok {{\n\
+             \t\t\treturn re.Retryable()\n\
+             \t\t}}\n\
+             \t\treturn false\n\
+             \t}}"
         )
+    } else {
+        "nil".to_string()
     };
     let success = decode::success_block(
         output,
@@ -589,7 +604,7 @@ fn op_method_decl(
     let text = format!(
         "{doc}func (c *{client}) {sig} {{\n\
          {zero_decl}{validate_block}{record}\
-         \toutcome, err := c.runtime.Execute(ctx, {descriptor}, record, c.hooks)\n\
+         \toutcome, err := c.runtime.Execute(ctx, {descriptor}, record, c.hooks, {retryable_arg})\n\
          \tif err != nil {{\n\t\treturn {ret_zero}{fail_hook}\n\t}}\n\
          \tswitch outcome.Kind {{\n\
          \tcase tonohttp.OutcomeTransport:\n\t\treturn {ret_zero}{fail_transport}\n\

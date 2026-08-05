@@ -32,7 +32,6 @@ describe("no built-in auth", () => {
       bindings: [],
       response_bindings: [],
       success: [[200, null]],
-      errors: [],
     };
 
     await execute(descriptor, {}, { baseUrl: "https://api.test", fetch: fetchImpl });

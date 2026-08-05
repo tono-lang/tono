@@ -618,18 +618,26 @@ fn op_method(
         });
     }
 
+    let has_declared_errors = !declared_errors(op, module).is_empty();
+    let discriminator = surface::discriminator_fn_name(n, op);
     let descriptor_fn = surface::descriptor_fn_name(n, op);
-    let error_line = if declared_errors(op, module).is_empty() {
+    let error_line = if has_declared_errors {
+        format!("{discriminator}(outcome.status, outcome.body.as_deref().unwrap_or(\"\"))")
+    } else {
         format!(
             "TonoError::Api({failure}::Undeclared({api} {{ status: outcome.status, body: outcome.body.unwrap_or_default() }}))",
             failure = en.api_failure,
             api = en.api,
         )
+    };
+    // The retry loop and the returned error read the same discriminator, so
+    // they can never disagree: TonoError::retryable() is the only place
+    // @retryable is materialized. An op with no declared errors passes None
+    // (no discriminator exists to call).
+    let retryable_arg = if has_declared_errors {
+        format!("Some(&|status, body| {discriminator}(status, body).retryable())")
     } else {
-        format!(
-            "{}(outcome.status, outcome.body.as_deref().unwrap_or(\"\"))",
-            surface::discriminator_fn_name(n, op)
-        )
+        "None".to_string()
     };
     let success = decode::success_block(output, module, "outcome.body.as_deref().unwrap_or(\"\")");
     let record = match input_ty {
@@ -639,7 +647,7 @@ fn op_method(
 
     let comma = if param.is_empty() { "" } else { ", " };
     format!(
-        "{doc}    pub {effect}fn {name}(&self{comma}{param}) -> Result<{ret}, TonoError> {{\n{validate_block}        let record = {record};\n        let outcome = self.runtime.execute({descriptor_fn}(), &record, self.hooks.as_ref()){awaited}\n            .map_err(|cause| match cause.downcast::<TonoError>() {{\n                Ok(declared) => *declared,\n                Err(other) => TonoError::Contract(ContractError {{ contract_name: {opname:?}.to_string(), cause: other }}),\n            }})?;\n        match outcome.kind {{\n            tono_http_runtime::OutcomeKind::Transport => Err(TonoError::Transport(TransportError {{ cause: outcome.cause.unwrap() }})),\n            tono_http_runtime::OutcomeKind::Error => Err({error_line}),\n            tono_http_runtime::OutcomeKind::Success => {{\n{success}\n            }}\n        }}\n    }}",
+        "{doc}    pub {effect}fn {name}(&self{comma}{param}) -> Result<{ret}, TonoError> {{\n{validate_block}        let record = {record};\n        let outcome = self.runtime.execute({descriptor_fn}(), &record, self.hooks.as_ref(), {retryable_arg}){awaited}\n            .map_err(|cause| match cause.downcast::<TonoError>() {{\n                Ok(declared) => *declared,\n                Err(other) => TonoError::Contract(ContractError {{ contract_name: {opname:?}.to_string(), cause: other }}),\n            }})?;\n        match outcome.kind {{\n            tono_http_runtime::OutcomeKind::Transport => Err(TonoError::Transport(TransportError {{ cause: outcome.cause.unwrap() }})),\n            tono_http_runtime::OutcomeKind::Error => Err({error_line}),\n            tono_http_runtime::OutcomeKind::Success => {{\n{success}\n            }}\n        }}\n    }}",
         opname = op_local_name(&op.id),
         validate_block = indent(&validate_block, 2),
     )

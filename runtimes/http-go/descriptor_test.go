@@ -7,7 +7,7 @@ import (
 
 // The exact literal the compiler embeds in a generated SDK (taken from the
 // payments example): parsing it is the contract with the emitter.
-const embeddedDescriptor = `{"bindings":[["id",{"kind":"body"}],["amount",{"kind":"body"}]],"errors":[[402,"payments.charges#card_declined","card_declined"],[404,"payments.charges#not_found",null]],"http_method":"POST","response_bindings":[],"success":[[200,{"args":[],"ref":"payments.charges#charge"}]],"uri":"/charges"}`
+const embeddedDescriptor = `{"bindings":[["id",{"kind":"body"}],["amount",{"kind":"body"}]],"http_method":"POST","response_bindings":[],"success":[[200,{"args":[],"ref":"payments.charges#charge"}]],"uri":"/charges"}`
 
 func TestParseEmbeddedDescriptor(t *testing.T) {
 	d, err := ParseDescriptor([]byte(embeddedDescriptor))
@@ -23,34 +23,16 @@ func TestParseEmbeddedDescriptor(t *testing.T) {
 	if len(d.Success) != 1 || d.Success[0].Status != 200 {
 		t.Fatalf("success: %+v", d.Success)
 	}
-	if len(d.Errors) != 2 {
-		t.Fatalf("errors: %+v", d.Errors)
-	}
-	declined := d.Errors[0]
-	if declined.Status != 402 || declined.ID != "payments.charges#card_declined" {
-		t.Fatalf("first error: %+v", declined)
-	}
-	if declined.Code == nil || *declined.Code != "card_declined" {
-		t.Fatalf("first error code: %+v", declined.Code)
-	}
-	// A three-element error (emitted before retry existed) is not retryable.
-	if declined.Retryable {
-		t.Fatal("three-element error parsed as retryable")
-	}
-	if d.Errors[1].Code != nil {
-		t.Fatalf("null code parsed as: %+v", d.Errors[1].Code)
-	}
 	if d.Retry != nil || d.Timeout != nil {
 		t.Fatalf("absent retry/timeout parsed as present: %+v %+v", d.Retry, d.Timeout)
 	}
 }
 
-func TestParseRetryTimeoutAndRetryableFlag(t *testing.T) {
+func TestParseRetryAndTimeout(t *testing.T) {
 	raw := `{
 		"http_method": "POST", "uri": "/x", "bindings": [],
 		"response_bindings": [["requestId", {"kind": "header", "name": "X-Request-Id"}], ["httpStatus", {"kind": "statusCode"}]],
 		"success": [[200, null]],
-		"errors": [[429, "svc#overloaded", "overloaded", true], [404, "svc#not_found", null, false]],
 		"retry": {"max": {"ref": "max_retries"}},
 		"timeout": {"lit": 5000}
 	}`
@@ -61,9 +43,6 @@ func TestParseRetryTimeoutAndRetryableFlag(t *testing.T) {
 	if len(d.ResponseBindings) != 2 || d.ResponseBindings[0].Member != "requestId" ||
 		d.ResponseBindings[0].Part.Name != "X-Request-Id" || d.ResponseBindings[1].Part.Kind != "statusCode" {
 		t.Fatalf("response bindings: %+v", d.ResponseBindings)
-	}
-	if !d.Errors[0].Retryable || d.Errors[1].Retryable {
-		t.Fatalf("retryable flags: %+v", d.Errors)
 	}
 	if d.Retry == nil || d.Retry.Max.Ref == nil || *d.Retry.Max.Ref != "max_retries" || d.Retry.Max.Lit != nil {
 		t.Fatalf("retry: %+v", d.Retry)
@@ -96,11 +75,6 @@ func TestParseRejectsMalformedShapes(t *testing.T) {
 		"response part not object": `{"response_bindings": [["m", 5]]}`,
 		"success not array":        `{"success": [200]}`,
 		"success status not int":   `{"success": [["x", null]]}`,
-		"error too short":          `{"errors": [[402, "id"]]}`,
-		"error status not int":     `{"errors": [["x", "id", null]]}`,
-		"error id not string":      `{"errors": [[402, 5, null]]}`,
-		"error code not string":    `{"errors": [[402, "id", 5]]}`,
-		"error retryable not bool": `{"errors": [[402, "id", null, "yes"]]}`,
 	}
 	for name, raw := range cases {
 		if _, err := ParseDescriptor([]byte(raw)); err == nil {

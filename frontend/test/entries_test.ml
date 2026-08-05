@@ -260,13 +260,10 @@ let descriptor_carries_refs () =
         "retry wraps its max value-source" true
         (get "retry"
         = Some (`Assoc [ ("max", `Assoc [ ("ref", `String "max_retries") ]) ]));
-      Alcotest.(check bool)
-        "retryable error carries the flag" true
-        (match get "errors" with
-        | Some (`List [ `List [ `Int 529; `String _; `String _; `Bool true ] ])
-          ->
-            true
-        | _ -> false);
+      (* A declared error's (status, @errorCode, @retryable) is the generated
+         SDK's own decode<Op>Error + .retryable() pair to own; the descriptor
+         carries no parallel copy. *)
+      Alcotest.(check bool) "no errors key" true (get "errors" = None);
       Alcotest.(check bool)
         "one declared header" true
         (match get "request_headers" with

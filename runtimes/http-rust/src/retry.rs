@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use crate::descriptor::{RetrySpec, ValueSource, WireDescriptor};
-use crate::runtime::{Outcome, OutcomeKind};
+use crate::descriptor::{RetrySpec, ValueSource};
+use crate::runtime::{Outcome, OutcomeKind, RetryPredicate};
 
 /// Backoff is a fixed runtime policy (exponential with full jitter), not
 /// declarable in the descriptor: delay before retry `n` is
@@ -62,38 +62,19 @@ pub fn resolve_timeout(source: Option<&ValueSource>, values: &Map<String, Value>
     }
 }
 
-/// Reads the `"code"` discriminator field from an error body, when the body
-/// is a JSON object carrying one as a string.
-pub fn body_code(body: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(body).ok()?;
-    value.get("code")?.as_str().map(str::to_string)
-}
-
 /// Classifies one outcome for the retry loop: a transport failure always
-/// retries; an error status retries only when it matches a declared
-/// retryable error. Matching walks the declared errors in descriptor order
-/// and the first status match with an agreeing code decides (a declared code
-/// must equal the body's `"code"` field; a null code matches any body).
-pub fn is_retryable(descriptor: &WireDescriptor, outcome: &Outcome) -> bool {
-    let (status, body) = match outcome.kind {
-        OutcomeKind::Transport => return true,
-        OutcomeKind::Success => return false,
-        OutcomeKind::Error => (outcome.status as i64, outcome.body.as_deref().unwrap_or("")),
-    };
-    let code = body_code(body);
-    for err in &descriptor.errors {
-        if err.status != status {
-            continue;
-        }
-        let agrees = match &err.code {
-            None => true,
-            Some(declared) => code.as_deref() == Some(declared.as_str()),
-        };
-        if agrees {
-            return err.retryable;
-        }
+/// retries; a success never does; an error status retries only when the
+/// caller-supplied predicate accepts its status and raw body. The predicate
+/// is the generated client's own decode/retryable() pair, so `None` (an op
+/// with no declared errors) means no error response is ever retryable.
+pub fn is_retryable(outcome: &Outcome, retryable: Option<&RetryPredicate>) -> bool {
+    match outcome.kind {
+        OutcomeKind::Transport => true,
+        OutcomeKind::Success => false,
+        OutcomeKind::Error => retryable
+            .map(|f| f(outcome.status, outcome.body.as_deref().unwrap_or("")))
+            .unwrap_or(false),
     }
-    false
 }
 
 #[cfg(test)]
@@ -228,23 +209,6 @@ mod tests {
         assert_eq!(resolve_timeout(Some(&source), &Map::new()), Duration::ZERO);
     }
 
-    #[test]
-    fn body_code_reads_the_string_discriminator() {
-        assert_eq!(
-            body_code(r#"{"code":"overloaded"}"#),
-            Some("overloaded".into())
-        );
-        assert_eq!(body_code("not json"), None);
-        assert_eq!(body_code(r#"{"code":1}"#), None);
-    }
-
-    fn descriptor_with_errors(errors_json: &str) -> WireDescriptor {
-        WireDescriptor::parse(&format!(
-            r#"{{"http_method":"GET","uri":"/x","bindings":[],"response_bindings":[],"success":[],"errors":{errors_json}}}"#
-        ))
-        .unwrap()
-    }
-
     fn error_outcome(status: u16, body: &str) -> Outcome {
         Outcome {
             kind: OutcomeKind::Error,
@@ -254,60 +218,90 @@ mod tests {
         }
     }
 
+    /// Stands in for a generated `decode_<op>_error` + `retryable()` pair:
+    /// the first status match with an agreeing code decides (a declared code
+    /// must equal the body's `"code"` field; a null code matches any body).
+    fn classify_like_discriminator(
+        declared: &'static [(u16, Option<&'static str>, bool)],
+    ) -> impl Fn(u16, &str) -> bool {
+        move |status, body| {
+            let code = serde_json::from_str::<Value>(body)
+                .ok()
+                .and_then(|v| v.get("code").and_then(|c| c.as_str().map(str::to_string)));
+            for &(declared_status, declared_code, retryable) in declared {
+                if declared_status != status {
+                    continue;
+                }
+                let agrees = match declared_code {
+                    None => true,
+                    Some(c) => code.as_deref() == Some(c),
+                };
+                if agrees {
+                    return retryable;
+                }
+            }
+            false
+        }
+    }
+
     #[test]
     fn a_transport_outcome_always_retries() {
-        let d = descriptor_with_errors("[]");
         let outcome = Outcome {
             kind: OutcomeKind::Transport,
             status: 0,
             body: None,
             cause: None,
         };
-        assert!(is_retryable(&d, &outcome));
+        assert!(is_retryable(&outcome, None));
     }
 
     #[test]
     fn a_success_outcome_never_retries() {
-        let d = descriptor_with_errors("[]");
         let outcome = Outcome {
             kind: OutcomeKind::Success,
             status: 200,
             body: Some("{}".into()),
             cause: None,
         };
-        assert!(!is_retryable(&d, &outcome));
+        assert!(!is_retryable(&outcome, None));
     }
 
     #[test]
-    fn an_undeclared_status_does_not_retry() {
-        let d = descriptor_with_errors("[]");
-        assert!(!is_retryable(&d, &error_outcome(500, "{}")));
+    fn an_absent_predicate_never_retries_an_error() {
+        assert!(!is_retryable(&error_outcome(500, "{}"), None));
     }
 
     #[test]
     fn a_null_code_matches_any_body() {
-        let d = descriptor_with_errors(r#"[[503,"svc#unavailable",null,true]]"#);
-        assert!(is_retryable(&d, &error_outcome(503, "not json")));
+        let retryable = classify_like_discriminator(&[(503, None, true)]);
+        assert!(is_retryable(
+            &error_outcome(503, "not json"),
+            Some(&retryable)
+        ));
     }
 
     #[test]
     fn a_mismatched_code_falls_through_to_no_match() {
-        let d = descriptor_with_errors(r#"[[503,"svc#unavailable","unavailable",true]]"#);
-        assert!(!is_retryable(&d, &error_outcome(503, "not json")));
+        let retryable = classify_like_discriminator(&[(503, Some("unavailable"), true)]);
+        assert!(!is_retryable(
+            &error_outcome(503, "not json"),
+            Some(&retryable)
+        ));
     }
 
     #[test]
     fn the_first_status_and_code_match_decides() {
-        let d = descriptor_with_errors(
-            r#"[[429,"svc#overloaded","overloaded",true],[429,"svc#quota_exceeded","quota_exceeded",false]]"#,
-        );
+        let retryable = classify_like_discriminator(&[
+            (429, Some("overloaded"), true),
+            (429, Some("quota_exceeded"), false),
+        ]);
         assert!(is_retryable(
-            &d,
-            &error_outcome(429, r#"{"code":"overloaded"}"#)
+            &error_outcome(429, r#"{"code":"overloaded"}"#),
+            Some(&retryable)
         ));
         assert!(!is_retryable(
-            &d,
-            &error_outcome(429, r#"{"code":"quota_exceeded"}"#)
+            &error_outcome(429, r#"{"code":"quota_exceeded"}"#),
+            Some(&retryable)
         ));
     }
 }

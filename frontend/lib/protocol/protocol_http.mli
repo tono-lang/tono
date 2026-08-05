@@ -37,10 +37,11 @@ type wire_descriptor = {
   bindings : (string * part) list; (* input member -> request part *)
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list; (* status -> output type, if any *)
-  errors : (int * Ir.shape_id * string option * bool) list;
-      (* status, error shape id, the @errorCode body value if any, and whether
-         the error is @retryable (the runtime's retry loop consumes it; on the
-         wire the flag is a fourth element present only when set) *)
+  (* Declared errors ((status, shape id, @errorCode, @retryable)) are not
+     carried here: the generated SDK's own decode<Op>Error + .retryable()
+     pair is the single owner of that classification, consumed by the
+     runtime's retry loop through a predicate the generated call site builds.
+     Duplicating it on the descriptor let the two drift apart. *)
   endpoint : string list option; (* @http endpoint: entry-field path *)
   request_headers : (Ir.template_part list * value_expr) list;
       (* @header(key, value): key template -> value *)

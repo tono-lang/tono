@@ -1,7 +1,6 @@
 package tonohttp
 
 import (
-	"encoding/json"
 	"math"
 	"time"
 )
@@ -71,39 +70,17 @@ func resolveTimeout(source *ValueSource, values map[string]any) time.Duration {
 	return time.Duration(ms * float64(time.Millisecond))
 }
 
-// bodyCode reads the "code" discriminator field from an error body, when the
-// body is a JSON object carrying one as a string.
-func bodyCode(body string) *string {
-	var object map[string]any
-	if err := json.Unmarshal([]byte(body), &object); err != nil {
-		return nil
-	}
-	if code, ok := object["code"].(string); ok {
-		return &code
-	}
-	return nil
-}
-
 // isRetryable classifies one outcome for the retry loop: a transport failure
-// always retries; an error status retries only when it matches a declared
-// retryable error. Matching walks the declared errors in descriptor order and
-// the first status match with an agreeing code decides (a declared code must
-// equal the body's "code" field; a null code matches any body).
-func isRetryable(d *WireDescriptor, o Outcome) bool {
+// always retries; a success never does; an error status retries only when the
+// caller-supplied predicate accepts its status and raw body. The predicate is
+// the generated client's own decode/Retryable() pair, so a nil predicate (an
+// op with no declared errors) means no error response is ever retryable.
+func isRetryable(o Outcome, retryable func(status int, body string) bool) bool {
 	if o.Kind == OutcomeTransport {
 		return true
 	}
-	if o.Kind != OutcomeError {
+	if o.Kind != OutcomeError || retryable == nil {
 		return false
 	}
-	code := bodyCode(o.Body)
-	for _, e := range d.Errors {
-		if e.Status != o.Status {
-			continue
-		}
-		if e.Code == nil || (code != nil && *code == *e.Code) {
-			return e.Retryable
-		}
-	}
-	return false
+	return retryable(o.Status, o.Body)
 }

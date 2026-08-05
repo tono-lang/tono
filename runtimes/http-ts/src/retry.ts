@@ -3,7 +3,7 @@
 // are declared in the descriptor; the constants are part of the cross-runtime
 // parity contract and must match the other HTTP runtimes.
 
-import type { Outcome, RetrySpec, ValueSource, WireDescriptor } from "./descriptor";
+import type { Outcome, RetrySpec, ValueSource } from "./descriptor";
 
 export const BACKOFF_BASE_MS = 100;
 export const BACKOFF_CAP_MS = 2000;
@@ -54,37 +54,16 @@ export function resolveTimeoutMs(
   return ms === undefined ? 0 : ms;
 }
 
-// The "code" discriminator field of an error body: the parsed body's "code"
-// member, when the body parses at all. A non-JSON body, a null body, and a
-// missing member all yield undefined, which no declared code equals (the
-// comparison below is strict, so a non-string member never matches either).
-function bodyCode(body: string): unknown {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return undefined;
-  }
-  // Only null blows up on member access; any other primitive just yields
-  // undefined for it.
-  if (parsed === null) return undefined;
-  return (parsed as Record<string, unknown>)["code"];
-}
-
 // Classify one outcome for the retry loop: a transport failure always
-// retries; an error status retries only when it matches a declared retryable
-// error. Matching walks the declared errors in descriptor order and the first
-// status match with an agreeing code decides (a declared code must equal the
-// body's "code" field; a null code matches any body).
-export function isRetryable(descriptor: WireDescriptor, outcome: Outcome): boolean {
+// retries; a success never does; an error status retries only when the
+// caller-supplied predicate accepts its status and raw body. The predicate is
+// the generated client's own decode/retryable() pair, so an absent predicate
+// (an op with no declared errors) means no error response is ever retryable.
+export function isRetryable(
+  outcome: Outcome,
+  retryable?: (status: number, body: string) => boolean,
+): boolean {
   if (outcome.outcome === "transport") return true;
-  if (outcome.outcome !== "error") return false;
-  const code = bodyCode(outcome.body);
-  for (const [status, , declaredCode, retryable] of descriptor.errors) {
-    if (status !== outcome.status) continue;
-    if (declaredCode === null || code === declaredCode) {
-      return retryable === true;
-    }
-  }
-  return false;
+  if (outcome.outcome !== "error" || !retryable) return false;
+  return retryable(outcome.status, outcome.body);
 }

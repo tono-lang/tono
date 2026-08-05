@@ -2,6 +2,7 @@ package tonohttp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -90,44 +91,84 @@ func TestBackoffDelay(t *testing.T) {
 	}
 }
 
-func TestIsRetryableClassification(t *testing.T) {
-	d := desc(func(d *WireDescriptor) {
-		d.Errors = []DeclaredError{
-			{Status: 429, ID: "svc#overloaded", Code: ref("overloaded"), Retryable: true},
-			{Status: 429, ID: "svc#quota", Code: ref("quota"), Retryable: false},
-			{Status: 503, ID: "svc#unavailable", Retryable: true},
-			{Status: 404, ID: "svc#not_found", Retryable: false},
+// declaredErrorRule is one entry of a stand-in for a generated
+// Decode<Op>Error + Retryable() pair: a status, an optional @errorCode
+// discriminator, and whether that error is retryable.
+type declaredErrorRule struct {
+	Status    int
+	Code      *string
+	Retryable bool
+}
+
+// classifyLikeDiscriminator builds the predicate a generated client passes to
+// Execute: the first status match with an agreeing code decides (a declared
+// code must equal the body's "code" field; a null code matches any body),
+// exactly the ordering discrimination_order gives the real emitter.
+func classifyLikeDiscriminator(declared []declaredErrorRule) func(status int, body string) bool {
+	return func(status int, body string) bool {
+		code := bodyCodeForTest(body)
+		for _, e := range declared {
+			if e.Status != status {
+				continue
+			}
+			if e.Code == nil || (code != nil && *code == *e.Code) {
+				return e.Retryable
+			}
 		}
+		return false
+	}
+}
+
+func bodyCodeForTest(body string) *string {
+	var object map[string]any
+	if err := json.Unmarshal([]byte(body), &object); err != nil {
+		return nil
+	}
+	if code, ok := object["code"].(string); ok {
+		return &code
+	}
+	return nil
+}
+
+func TestIsRetryableClassification(t *testing.T) {
+	retryable := classifyLikeDiscriminator([]declaredErrorRule{
+		{Status: 429, Code: ref("overloaded"), Retryable: true},
+		{Status: 429, Code: ref("quota"), Retryable: false},
+		{Status: 503, Code: nil, Retryable: true},
+		{Status: 404, Code: nil, Retryable: false},
 	})
-	if !isRetryable(d, Outcome{Kind: OutcomeTransport}) {
+	if !isRetryable(Outcome{Kind: OutcomeTransport}, retryable) {
 		t.Fatal("transport failures always retry")
 	}
-	if isRetryable(d, Outcome{Kind: OutcomeSuccess, Status: 200}) {
+	if isRetryable(Outcome{Kind: OutcomeSuccess, Status: 200}, retryable) {
 		t.Fatal("a success never retries")
 	}
-	if !isRetryable(d, Outcome{Kind: OutcomeError, Status: 429, Body: `{"code":"overloaded"}`}) {
+	if !isRetryable(Outcome{Kind: OutcomeError, Status: 429, Body: `{"code":"overloaded"}`}, retryable) {
 		t.Fatal("retryable code match must retry")
 	}
-	if isRetryable(d, Outcome{Kind: OutcomeError, Status: 429, Body: `{"code":"quota"}`}) {
+	if isRetryable(Outcome{Kind: OutcomeError, Status: 429, Body: `{"code":"quota"}`}, retryable) {
 		t.Fatal("non-retryable code match must not retry")
 	}
-	if isRetryable(d, Outcome{Kind: OutcomeError, Status: 429, Body: `{"code":"other"}`}) {
+	if isRetryable(Outcome{Kind: OutcomeError, Status: 429, Body: `{"code":"other"}`}, retryable) {
 		t.Fatal("an unmatched code must not retry")
 	}
-	if isRetryable(d, Outcome{Kind: OutcomeError, Status: 429, Body: "not json"}) {
+	if isRetryable(Outcome{Kind: OutcomeError, Status: 429, Body: "not json"}, retryable) {
 		t.Fatal("a body without a code cannot match a coded error")
 	}
-	if !isRetryable(d, Outcome{Kind: OutcomeError, Status: 503, Body: "not json"}) {
+	if !isRetryable(Outcome{Kind: OutcomeError, Status: 503, Body: "not json"}, retryable) {
 		t.Fatal("a null code matches any body")
 	}
-	if isRetryable(d, Outcome{Kind: OutcomeError, Status: 404, Body: "{}"}) {
+	if isRetryable(Outcome{Kind: OutcomeError, Status: 404, Body: "{}"}, retryable) {
 		t.Fatal("declared non-retryable must not retry")
 	}
-	if isRetryable(d, Outcome{Kind: OutcomeError, Status: 500, Body: "{}"}) {
+	if isRetryable(Outcome{Kind: OutcomeError, Status: 500, Body: "{}"}, retryable) {
 		t.Fatal("an undeclared status must not retry")
 	}
-	if isRetryable(d, Outcome{Kind: OutcomeError, Status: 429, Body: `{"code":5}`}) {
+	if isRetryable(Outcome{Kind: OutcomeError, Status: 429, Body: `{"code":5}`}, retryable) {
 		t.Fatal("a non-string code field cannot match")
+	}
+	if isRetryable(Outcome{Kind: OutcomeError, Status: 500, Body: "{}"}, nil) {
+		t.Fatal("a nil predicate (no declared errors) must not retry")
 	}
 }
 
@@ -139,7 +180,7 @@ func TestRetryLoopHonorsMaxAndBackoff(t *testing.T) {
 	}
 	r, delays := deterministic(t, Options{BaseURL: "https://api.test", Transport: transport})
 	d := desc(func(d *WireDescriptor) { d.Retry = &RetrySpec{Max: ValueSource{Lit: lit(3)}} })
-	outcome, err := r.Execute(context.Background(), d, nil, nil)
+	outcome, err := r.Execute(context.Background(), d, nil, nil, nil)
 	if err != nil || outcome.Kind != OutcomeTransport {
 		t.Fatalf("exhausted retries must return the last outcome: %+v %v", outcome, err)
 	}
@@ -172,9 +213,9 @@ func TestRetryStopsAtFirstNonRetryableOutcome(t *testing.T) {
 	r, delays := deterministic(t, Options{BaseURL: "https://api.test", Transport: transport})
 	d := desc(func(d *WireDescriptor) {
 		d.Retry = &RetrySpec{Max: ValueSource{Lit: lit(5)}}
-		d.Errors = []DeclaredError{{Status: 503, ID: "svc#unavailable", Retryable: true}}
 	})
-	outcome, err := r.Execute(context.Background(), d, nil, nil)
+	retryable := func(status int, body string) bool { return status == 503 }
+	outcome, err := r.Execute(context.Background(), d, nil, nil, retryable)
 	if err != nil || outcome.Kind != OutcomeError || outcome.Status != 404 {
 		t.Fatalf("first non-retryable outcome must surface: %+v %v", outcome, err)
 	}
@@ -205,7 +246,7 @@ func TestPerAttemptTimeoutRetriesAndRecovers(t *testing.T) {
 		d.Timeout = &ValueSource{Lit: lit(20)}
 	})
 	start := time.Now()
-	outcome, err := r.Execute(context.Background(), d, nil, nil)
+	outcome, err := r.Execute(context.Background(), d, nil, nil, nil)
 	if err != nil || outcome.Kind != OutcomeSuccess {
 		t.Fatalf("timeout must count as transport failure and retry: %+v %v", outcome, err)
 	}
@@ -229,7 +270,7 @@ func TestCancellationDuringBackoffSurfacesAsTransport(t *testing.T) {
 		return sleepContext(ctx, d)
 	}
 	d := desc(func(d *WireDescriptor) { d.Retry = &RetrySpec{Max: ValueSource{Lit: lit(3)}} })
-	outcome, err := r.Execute(ctx, d, nil, nil)
+	outcome, err := r.Execute(ctx, d, nil, nil, nil)
 	if err != nil || outcome.Kind != OutcomeTransport || !errors.Is(outcome.Cause, context.Canceled) {
 		t.Fatalf("cancellation during backoff: %+v %v", outcome, err)
 	}

@@ -54,14 +54,6 @@ let show_desc (d : Protocol_http.wire_descriptor) : string =
   let success =
     List.map (fun (s, t) -> Printf.sprintf "%d:%s" s (show_tref t)) d.success
   in
-  let errors =
-    List.map
-      (fun (s, id, c, retryable) ->
-        Printf.sprintf "%d:%s:%s%s" s id
-          (Option.value ~default:"-" c)
-          (if retryable then ":retry" else ""))
-      d.errors
-  in
   String.concat "|"
     [
       d.http_method;
@@ -69,7 +61,6 @@ let show_desc (d : Protocol_http.wire_descriptor) : string =
       String.concat "," bindings;
       String.concat "," rbindings;
       String.concat "," success;
-      String.concat "," errors;
     ]
 
 (* A lookup over a fixed shape list, standing in for the module index. *)
@@ -96,7 +87,6 @@ let all_parts () =
         member "code" ~traits:[ trait "httpResponseCode" `Null ];
       ]
   in
-  let nf = error_shape "nf" 404 None in
   let o =
     op "get_thing"
       ~traits:
@@ -107,12 +97,11 @@ let all_parts () =
         ]
       ~input:(Ir.Ref ("req", []))
       ~output:(Ir.Ref ("resp", []))
-      ~errors:[ Ir.Ref ("nf", []) ]
   in
-  let d = resolve [ req; resp; nf ] o in
+  let d = resolve [ req; resp ] o in
   Alcotest.(check string)
     "descriptor"
-    "GET|/things/{id}|id=label,limit=query(limit),auth=header(Authorization),note=body|trace<-header(X-Trace),code<-statusCode|200:resp|404:nf:-"
+    "GET|/things/{id}|id=label,limit=query(limit),auth=header(Authorization),note=body|trace<-header(X-Trace),code<-statusCode|200:resp"
     (show_desc d)
 
 (* An unmarked input defaults to body; success status defaults to 200. *)
@@ -129,7 +118,7 @@ let body_default () =
       ~output:(Ir.Ref ("req", []))
   in
   Alcotest.(check string)
-    "body default + 200" "POST|/x|a=body,b=body||200:req|"
+    "body default + 200" "POST|/x|a=body,b=body||200:req"
     (show_desc (resolve [ req ] o))
 
 (* An explicit @httpPayload member occupies the whole body. *)
@@ -148,7 +137,7 @@ let payload_whole_body () =
   in
   (* No output type, but 200 is still the declared success status (no body). *)
   Alcotest.(check string)
-    "payload" "PUT|/x|raw=payload||200:-|"
+    "payload" "PUT|/x|raw=payload||200:-"
     (show_desc (resolve [ req ] o))
 
 (* A success code override rides @http(code:). *)
@@ -167,13 +156,10 @@ let success_code_override () =
         ]
       ~output:(Ir.Ref ("thing", []))
   in
-  Alcotest.(check string)
-    "201" "POST|/x|||201:thing|"
-    (show_desc (resolve [] o))
+  Alcotest.(check string) "201" "POST|/x|||201:thing" (show_desc (resolve [] o))
 
-(* A bare @httpQuery/@httpHeader binds under the member's own name; an error
-   whose shape lacks @status (or does not resolve) never enters the map. *)
-let bare_bindings_and_dropped_errors () =
+(* A bare @httpQuery/@httpHeader binds under the member's own name. *)
+let bare_bindings () =
   let req =
     structure "req"
       [
@@ -181,7 +167,6 @@ let bare_bindings_and_dropped_errors () =
         member "h" ~traits:[ trait "httpHeader" `Null ];
       ]
   in
-  let no_status = structure "no_status" [] in
   let o =
     op "act"
       ~traits:
@@ -190,12 +175,10 @@ let bare_bindings_and_dropped_errors () =
             (`Assoc [ ("method", `String "get"); ("path", `String "/x") ]);
         ]
       ~input:(Ir.Ref ("req", []))
-      ~errors:[ Ir.Ref ("no_status", []); Ir.Ref ("missing", []) ]
   in
   Alcotest.(check string)
-    "bare names, no discriminable errors"
-    "GET|/x|q=query(q),h=header(h)||200:-|"
-    (show_desc (resolve [ req; no_status ] o))
+    "bare names" "GET|/x|q=query(q),h=header(h)||200:-"
+    (show_desc (resolve [ req ] o))
 
 (* An operation with no @http trait carries no descriptor. *)
 let no_http_no_descriptor () =
@@ -238,7 +221,10 @@ let module_attaches_trait () =
        (fun (t : Ir.trait) -> t.trait_id = "wire_descriptor")
        op'.traits)
 
-(* The JSON encoding exercises every part, response part, and error form. *)
+(* The JSON encoding exercises every part and response part. It carries no
+   error information at all: a declared operation error's (status,
+   @errorCode, @retryable) is the generated SDK's own decode<Op>Error +
+   .retryable() pair to own, not a second copy on the wire descriptor. *)
 let encode_covers_all_forms () =
   let req =
     structure "req"
@@ -297,10 +283,8 @@ let encode_covers_all_forms () =
       {|"kind":"payload"|};
       {|"kind":"statusCode"|};
       {|["auth"|};
-      (* error with a code, and one without *)
-      {|[402,"coded","declined"]|};
-      {|[404,"plain",null]|};
-    ]
+    ];
+  Alcotest.(check bool) "no errors key" false (has {|"errors"|})
 
 (* ── Check_http negatives (spans, via source) ──────────────────────────── *)
 
@@ -404,8 +388,7 @@ let () =
           Alcotest.test_case "payload whole body" `Quick payload_whole_body;
           Alcotest.test_case "success code override" `Quick
             success_code_override;
-          Alcotest.test_case "bare bindings + dropped errors" `Quick
-            bare_bindings_and_dropped_errors;
+          Alcotest.test_case "bare bindings" `Quick bare_bindings;
           Alcotest.test_case "no http no descriptor" `Quick
             no_http_no_descriptor;
           Alcotest.test_case "non-operation is none" `Quick

@@ -694,17 +694,27 @@ fn op_method(
         });
     }
 
-    let error_line = if declared_errors(op, module).is_empty() {
+    let has_declared_errors = !declared_errors(op, module).is_empty();
+    let discriminator = discriminator_name(n, op);
+    let error_line = if has_declared_errors {
+        throw(format!("{discriminator}(outcome.status, outcome.body)"))
+    } else {
         refs.push(module_symbol(&en.api, module));
         throw(format!("new {}(outcome.status, outcome.body)", en.api))
-    } else {
-        throw(format!(
-            "{}(outcome.status, outcome.body)",
-            discriminator_name(n, op)
-        ))
     };
     let success_block = decode::success_block(output, module, &ret, &throw, refs);
-    let hooks_arg = if passes_hooks { ", this.hooks" } else { "" };
+    // The retry loop and the thrown error read the same discriminator, so
+    // they can never disagree: TonoError's retryable() is the only place
+    // @retryable is materialized. An op with no declared errors omits the
+    // predicate (no discriminator exists to call).
+    let retryable_expr = has_declared_errors
+        .then(|| format!("(status, body) => {discriminator}(status, body).retryable()"));
+    let call_tail = match (passes_hooks, &retryable_expr) {
+        (false, None) => String::new(),
+        (true, None) => ", this.hooks".to_string(),
+        (false, Some(r)) => format!(", undefined, {r}"),
+        (true, Some(r)) => format!(", this.hooks, {r}"),
+    };
     let transport_throw = throw(format!("new {}(outcome.cause)", en.transport));
     let doc = doc_of(&op.traits)
         .map(|d| format!("  // {}\n", d.replace('\n', "\n  // ")))
@@ -712,7 +722,7 @@ fn op_method(
     format!(
         "{doc}  async {name}({param}): Promise<{ret}> {{\n\
          {validate_block}\
-         \x20   const outcome = await execute({descriptor}, {input_expr}, this.options{hooks_arg});\n\
+         \x20   const outcome = await execute({descriptor}, {input_expr}, this.options{call_tail});\n\
          \x20   if (outcome.outcome === \"transport\") {{\n\
          \x20     {transport_throw}\n\
          \x20   }}\n\

@@ -371,11 +371,16 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// retryable classifies an error response by status and raw body; the
+// generated client builds it from its own decode/retryable() pair, so the
+// retry decision and the decoded error type can never disagree. Absent (an
+// op with no declared errors) means no error response is ever retryable.
 export async function execute(
   descriptor: WireDescriptor,
   input: unknown,
   options: ClientOptions,
   hooks?: Hooks,
+  retryable?: (status: number, body: string) => boolean,
   seams?: ExecuteSeams,
 ): Promise<Outcome> {
   assertExclusiveTransport(options);
@@ -386,7 +391,7 @@ export async function execute(
   const sleep = seams?.sleep ?? defaultSleep;
   for (let attempt = 0; ; attempt++) {
     const outcome = await attemptCall(descriptor, record, options, hooks, timeoutMs);
-    if (attempt >= maxRetries || !isRetryable(descriptor, outcome)) return outcome;
+    if (attempt >= maxRetries || !isRetryable(outcome, retryable)) return outcome;
     await sleep(backoffDelayMs(attempt, random()));
   }
 }
