@@ -40,7 +40,7 @@ pub mod visibility;
 pub use assemble::resolve_groups;
 pub use casing::{CaseStyle, CasingConfig};
 pub use check::{check, CheckOptions, CheckOutcome};
-pub use format::{Formatted, Formatter};
+pub use format::{Formatted, Formatter, Warning};
 pub use group::{Audience, Group, Origin};
 pub use layout::check_layout;
 pub use modules::CodegenConfig;

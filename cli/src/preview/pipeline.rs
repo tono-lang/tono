@@ -147,9 +147,7 @@ pub fn run(
     // read (a missing formatter degrades to the rough text), and the checker
     // compiles the same bytes the pane shows.
     for file in &mut files {
-        file.text = Formatter::for_output(file.target, &file.path)
-            .run(&file.text)
-            .text;
+        file.text = pane_text(Formatter::for_output(file.target, &file.path).run(&file.text));
     }
     let generated = assemble(&files);
     let verdict = match check(target, &files, scratch, options) {
@@ -161,6 +159,29 @@ pub fn run(
         target,
         generated,
         verdict,
+    }
+}
+
+/// What one formatted file shows in the pane. A rejected input means the
+/// generator emitted invalid syntax; the preview is interactive, so instead of
+/// aborting, the file is annotated with the rejection so the pane says why the
+/// text below is unformatted (`//` opens a comment in every target, so the
+/// annotated file still assembles and checks). A missing formatter stays
+/// silent: the rough text is correct source and the checker's own
+/// `ToolchainMissing` verdict already reports environment gaps.
+fn pane_text(formatted: tono_backend::codegen::Formatted) -> String {
+    use tono_backend::codegen::Warning;
+    match formatted.warning {
+        Some(Warning::FormatterRejected {
+            program, stderr, ..
+        }) => {
+            let reason = stderr.lines().next().unwrap_or("").trim();
+            format!(
+                "// [tono] {program} rejected this file (generator bug): {reason}\n{}",
+                formatted.text
+            )
+        }
+        _ => formatted.text,
     }
 }
 
@@ -234,6 +255,46 @@ mod tests {
             }),
             Verdict::ToolchainMissing("cargo".into())
         );
+    }
+
+    #[test]
+    fn pane_text_passes_clean_and_unavailable_output_through() {
+        use tono_backend::codegen::{Formatted, Warning};
+        let clean = Formatted {
+            text: "pub struct Charge;\n".into(),
+            warning: None,
+        };
+        assert_eq!(pane_text(clean), "pub struct Charge;\n");
+
+        let unavailable = Formatted {
+            text: "rough\n".into(),
+            warning: Some(Warning::FormatterUnavailable {
+                program: "rustfmt".into(),
+            }),
+        };
+        assert_eq!(pane_text(unavailable), "rough\n");
+    }
+
+    #[test]
+    fn pane_text_annotates_a_rejected_file_with_the_first_stderr_line() {
+        use tono_backend::codegen::{Formatted, Warning};
+        let rejected = Formatted {
+            text: "broken {\n".into(),
+            warning: Some(Warning::FormatterRejected {
+                program: "gofmt".into(),
+                status: Some(2),
+                stderr: "expected declaration, found '}'\nmore detail\n".into(),
+            }),
+        };
+        let out = pane_text(rejected);
+        assert!(
+            out.starts_with(
+                "// [tono] gofmt rejected this file (generator bug): \
+                 expected declaration, found '}'\n"
+            ),
+            "annotation heads the pane: {out}"
+        );
+        assert!(out.ends_with("broken {\n"), "rough text preserved: {out}");
     }
 
     #[test]
