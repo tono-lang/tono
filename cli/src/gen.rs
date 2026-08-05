@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use tono_backend::codegen::{
     casing_for, check_layout, generate, generate_target, is_generated, parse_targets, CasingConfig,
-    CodegenConfig, Formatter, TargetKind,
+    CodegenConfig, Formatter, TargetKind, Warning,
 };
 use tono_backend::config as manifest;
 use tono_backend::ir::{decode_model, Model};
@@ -81,12 +81,16 @@ fn gen_from_flags(
     // module path, or two modules mapping to the same package) instead of writing
     // silently-broken source.
     check_layout(&model, &targets, config)?;
+    let mut warned = std::collections::HashSet::new();
     for target in &targets {
         let mut written = Vec::new();
         for file in generate(&model, &[*target], config)? {
-            let formatted = Formatter::for_output(file.target, &file.path)
-                .run(&file.text)
-                .text;
+            let formatted = apply_format(
+                &Formatter::for_output(file.target, &file.path),
+                &file.path,
+                &file.text,
+                &mut warned,
+            )?;
             let dest = out_root.join(&file.path);
             write_generated(&dest, file.target, &formatted)?;
             written.push(dest);
@@ -150,10 +154,14 @@ pub(crate) fn target_outputs(
     let casing = resolved_casing(target);
     check_layout(model, &[target.kind], &codegen)?;
     let mut files = Vec::new();
+    let mut warned = std::collections::HashSet::new();
     for file in generate_target(model, target.kind, &codegen, &casing)? {
-        let formatted = Formatter::for_output(file.target, &file.path)
-            .run(&file.text)
-            .text;
+        let formatted = apply_format(
+            &Formatter::for_output(file.target, &file.path),
+            &file.path,
+            &file.text,
+            &mut warned,
+        )?;
         // Paths carry the `<target-dir>/` prefix; strip it so the files land
         // directly under the target's configured `out`.
         let rel = file
@@ -164,6 +172,41 @@ pub(crate) fn target_outputs(
         files.push((rel, formatted));
     }
     Ok(files)
+}
+
+/// Run the formatter over one generated file and decide what a fallback means.
+/// A rejected input fails the run: the formatter parses the source, so a
+/// rejection means the generator emitted invalid syntax, and broken source must
+/// never reach disk looking like a successful generation. An absent formatter
+/// is only an environment gap — the rough text is still correct source — so it
+/// is written as-is with a note on stderr, once per missing program.
+fn apply_format(
+    formatter: &Formatter,
+    path: &Path,
+    text: &str,
+    warned: &mut std::collections::HashSet<String>,
+) -> Result<String, String> {
+    let formatted = formatter.run(text);
+    match formatted.warning {
+        None => Ok(formatted.text),
+        Some(Warning::FormatterUnavailable { program }) => {
+            if warned.insert(program.clone()) {
+                eprintln!("warning: {program} not found; writing unformatted source");
+            }
+            Ok(formatted.text)
+        }
+        Some(Warning::FormatterRejected {
+            program,
+            status,
+            stderr,
+        }) => Err(format!(
+            "{}: {program} rejected the generated source (exit {}): {}\n\
+             this is a bug in tono: the generator emitted invalid syntax",
+            path.display(),
+            status.map_or_else(|| "signal".to_string(), |code| code.to_string()),
+            stderr.trim(),
+        )),
+    }
 }
 
 /// Report what a target produced, and when asked, clear what it no longer
@@ -371,4 +414,55 @@ fn merge_package_json(dest: &Path, generated: &str) -> Result<String, String> {
         serde_json::to_string_pretty(&merged).map_err(|e| format!("{}: {e}", dest.display()))?;
     text.push('\n');
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `cat`, `false`, and a nonexistent binary exercise the three formatter
+    // outcomes deterministically, the same stand-ins format.rs's own tests use.
+    #[test]
+    fn a_clean_format_returns_the_formatted_text() {
+        let mut warned = std::collections::HashSet::new();
+        let out = apply_format(
+            &Formatter::new("cat", vec![]),
+            Path::new("pkg/file.go"),
+            "package pkg\n",
+            &mut warned,
+        );
+        assert_eq!(out, Ok("package pkg\n".to_string()));
+        assert!(warned.is_empty());
+    }
+
+    #[test]
+    fn a_missing_formatter_falls_back_to_rough_text_and_records_the_program() {
+        let mut warned = std::collections::HashSet::new();
+        let formatter = Formatter::new("tono-no-such-formatter-xyz", vec![]);
+        let out = apply_format(&formatter, Path::new("pkg/file.go"), "rough", &mut warned);
+        assert_eq!(out, Ok("rough".to_string()));
+        assert!(warned.contains("tono-no-such-formatter-xyz"));
+
+        // A second file through the same missing formatter must not re-record
+        // (the stderr note is emitted only on first insertion).
+        let out = apply_format(&formatter, Path::new("pkg/other.go"), "rough", &mut warned);
+        assert_eq!(out, Ok("rough".to_string()));
+        assert_eq!(warned.len(), 1);
+    }
+
+    #[test]
+    fn a_rejected_input_fails_the_run_naming_the_file_and_program() {
+        let mut warned = std::collections::HashSet::new();
+        let out = apply_format(
+            &Formatter::new("false", vec![]),
+            Path::new("pkg/file.go"),
+            "broken source",
+            &mut warned,
+        );
+        let err = out.expect_err("a rejection must fail generation");
+        assert!(err.contains("pkg/file.go"), "error names the file: {err}");
+        assert!(err.contains("false"), "error names the program: {err}");
+        assert!(err.contains("bug in tono"), "error owns the blame: {err}");
+        assert!(warned.is_empty());
+    }
 }

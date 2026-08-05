@@ -81,6 +81,8 @@ jobs:
         working-directory: backend/codegen-tests/typescript
       - name: Generate, compile, and round-trip the emitted TypeScript
         run: cargo test --test typescript_roundtrip
+      - name: Property-check the printed syntax against prettier
+        run: cargo test --test property_render typescript_printer
 
   rust-codegen:
     name: Rust codegen
@@ -93,6 +95,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Generate, compile, and round-trip the emitted Rust
         run: cargo test --test rust_roundtrip
+      - name: Property-check the printed syntax against rustfmt
+        run: cargo test --test property_render rust_printer
 
   go-codegen:
     name: Go codegen
@@ -106,6 +110,8 @@ jobs:
           go-version: "1.21"
       - name: Generate, compile, and round-trip the emitted Go
         run: cargo test --test go_roundtrip
+      - name: Property-check the printed syntax against gofmt
+        run: cargo test --test property_render go_printer
 
   conformance:
     name: Cross-language conformance
