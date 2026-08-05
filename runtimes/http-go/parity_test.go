@@ -27,20 +27,21 @@ type parityVector struct {
 
 // parityConfig is real client construction for the TypeScript harness (which
 // drives a generated SDK directly) and, here, the literal retry/timeout
-// values a synthetic descriptor is built from: every surviving vector uses a
-// literal, never a late-bound ref, so a lookup keyed by op name is enough to
-// reconstruct exactly the descriptor this harness built from JSON before.
+// values a synthetic descriptor is built from.
 type parityConfig struct {
 	MaxRetries *float64 `json:"max_retries"`
 	TimeoutMs  *float64 `json:"timeout_ms"`
 }
 
-// descriptorFor rebuilds the synthetic WireDescriptor a vector's op and
-// config describe. Runtime/Execute are exercised exactly as before; only the
-// descriptor's origin moves from "parsed off JSON" to "built from a 3-case
-// lookup table," since the JSON vector no longer carries one directly.
-func descriptorFor(t *testing.T, op string, config parityConfig) json.RawMessage {
-	t.Helper()
+// descriptorFor rebuilds the synthetic WireDescriptor a vector's config
+// describes: a retry key only when the vector sets max_retries, a timeout
+// key only when it sets timeout_ms. Which fields are set already says
+// everything spec.tono's op declares (a @retry field or a @timeout field),
+// so this needs no per-op knowledge and nothing here changes when an op is
+// added, renamed, or removed there. Runtime/Execute are exercised exactly
+// as before; only the descriptor's origin moves from "parsed off JSON" to
+// "built from config," since the JSON vector no longer carries one directly.
+func descriptorFor(config parityConfig) json.RawMessage {
 	base := map[string]any{
 		"http_method":       "POST",
 		"uri":               "/x",
@@ -48,40 +49,17 @@ func descriptorFor(t *testing.T, op string, config parityConfig) json.RawMessage
 		"response_bindings": []any{},
 		"success":           []any{[]any{200, nil}},
 	}
-	switch op {
-	case "retrying":
-		base["retry"] = map[string]any{"max": map[string]any{"lit": config.mustMaxRetries(t)}}
-	case "retrying_with_timeout":
-		base["retry"] = map[string]any{"max": map[string]any{"lit": config.mustMaxRetries(t)}}
-		base["timeout"] = map[string]any{"lit": config.mustTimeoutMs(t)}
-	case "timeout_only":
-		if config.TimeoutMs != nil {
-			base["timeout"] = map[string]any{"lit": *config.TimeoutMs}
-		}
-	default:
-		t.Fatalf("parity vector: unknown op %q", op)
+	if config.MaxRetries != nil {
+		base["retry"] = map[string]any{"max": map[string]any{"lit": *config.MaxRetries}}
+	}
+	if config.TimeoutMs != nil {
+		base["timeout"] = map[string]any{"lit": *config.TimeoutMs}
 	}
 	data, err := json.Marshal(base)
 	if err != nil {
-		t.Fatalf("descriptorFor: %v", err)
+		panic(fmt.Sprintf("descriptorFor: %v", err))
 	}
 	return data
-}
-
-func (c parityConfig) mustMaxRetries(t *testing.T) float64 {
-	t.Helper()
-	if c.MaxRetries == nil {
-		t.Fatal("parity vector: op requires config.max_retries")
-	}
-	return *c.MaxRetries
-}
-
-func (c parityConfig) mustTimeoutMs(t *testing.T) float64 {
-	t.Helper()
-	if c.TimeoutMs == nil {
-		t.Fatal("parity vector: op requires config.timeout_ms")
-	}
-	return *c.TimeoutMs
 }
 
 // parityDeclErr is one [status, code|null, retryable] triple: the fixture's
@@ -210,7 +188,7 @@ func TestParityVectors(t *testing.T) {
 	for _, vector := range loadParityVectors(t) {
 		vector := vector
 		t.Run(vector.Name, func(t *testing.T) {
-			d, err := ParseDescriptor(descriptorFor(t, vector.Op, vector.Config))
+			d, err := ParseDescriptor(descriptorFor(vector.Config))
 			if err != nil {
 				t.Fatalf("descriptor: %v", err)
 			}

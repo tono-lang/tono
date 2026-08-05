@@ -13,10 +13,21 @@ cd "$(dirname "$0")/.."
 root="$PWD"
 lang="${1:-typescript}"
 
-if [ "$lang" != "typescript" ]; then
-    echo "run-parity.sh: unsupported target '$lang' (only 'typescript' is repointed so far)" >&2
+case "$lang" in
+typescript) ;;
+go)
+    echo "run-parity.sh: go is not repointed against a generated SDK yet; its share of the parity gate runs through 'go test ./...' in runtimes/http-go (set TONO_PARITY_VECTORS to require it)" >&2
     exit 1
-fi
+    ;;
+rust)
+    echo "run-parity.sh: rust is not repointed against a generated SDK yet; its share of the parity gate runs through 'cargo test' in runtimes/http-rust (set TONO_PARITY_VECTORS to require it)" >&2
+    exit 1
+    ;;
+*)
+    echo "run-parity.sh: unknown target '$lang' (expected typescript, go, or rust)" >&2
+    exit 1
+    ;;
+esac
 
 echo "building the frontend and backend CLIs..."
 frontend="$root/_build/default/frontend/bin/tono_frontend.exe"
