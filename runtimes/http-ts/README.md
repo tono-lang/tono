@@ -53,12 +53,13 @@ transport failure.
 
 These semantics are pinned by the cross-runtime parity suite in
 `../parity/vectors.json`. The generated TypeScript SDK inlines this same
-retry/timeout logic rather than calling into this package, so `test/parity.test.ts`
-here now drives that generated SDK instead of this package's own `Runtime`:
-`../../scripts/run-parity.sh` compiles `../parity/spec.tono`, generates the
-SDK into a work directory, copies this file next to it, and runs it there.
-Go and Rust still run their harness directly against their own runtime
-package.
+retry/timeout logic rather than calling into this package, so the TypeScript
+harness (`../parity/typescript/parity.test.ts`) drives that generated SDK
+instead of this package's `Runtime`: `../../scripts/run-parity.sh` compiles
+`../parity/spec.tono`, generates the SDK into a work directory, copies the
+harness next to it, and runs it there. Go and Rust still run their own
+harness directly against this style of runtime package (`parity_test.go`,
+`parity.rs`).
 
 ## Develop
 

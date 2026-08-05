@@ -55,7 +55,7 @@ fi
 "$tono" gen --target typescript --out "$work/sdk" <"$work/ir.json"
 
 echo "dropping the parity harness into the generated SDK..."
-cp "$root/runtimes/http-ts/test/parity.test.ts" "$work/sdk/typescript/"
+cp "$root/runtimes/parity/typescript/parity.test.ts" "$work/sdk/typescript/"
 cp "$root/runtimes/parity/vectors.json" "$work/sdk/typescript/"
 
 echo "running the parity suite against the generated SDK..."
