@@ -156,9 +156,7 @@ let success_code_override () =
         ]
       ~output:(Ir.Ref ("thing", []))
   in
-  Alcotest.(check string)
-    "201" "POST|/x|||201:thing"
-    (show_desc (resolve [] o))
+  Alcotest.(check string) "201" "POST|/x|||201:thing" (show_desc (resolve [] o))
 
 (* A bare @httpQuery/@httpHeader binds under the member's own name. *)
 let bare_bindings () =
@@ -179,8 +177,7 @@ let bare_bindings () =
       ~input:(Ir.Ref ("req", []))
   in
   Alcotest.(check string)
-    "bare names"
-    "GET|/x|q=query(q),h=header(h)||200:-"
+    "bare names" "GET|/x|q=query(q),h=header(h)||200:-"
     (show_desc (resolve [ req ] o))
 
 (* An operation with no @http trait carries no descriptor. *)
