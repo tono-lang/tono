@@ -728,6 +728,7 @@ mod tests {
                 input: None,
                 output: None,
                 errors: vec![],
+                wire: None,
             },
             traits: vec![],
         };

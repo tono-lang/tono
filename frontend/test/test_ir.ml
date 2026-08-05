@@ -131,7 +131,8 @@ let index_resolves () =
   let op : Ir.shape =
     {
       id = "payments#ListCharges";
-      kind = Ir.Operation { input = None; output = None; errors = [] };
+      kind =
+        Ir.Operation { input = None; output = None; errors = []; wire = None };
       traits = [];
     }
   in
@@ -476,6 +477,7 @@ let operation_shape : Ir.shape =
           input = None;
           output = Some page_charge;
           errors = [ Ir.Ref ("payments#NotFound", []) ];
+          wire = None;
         };
     traits = [];
   }

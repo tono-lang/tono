@@ -24,8 +24,14 @@
    v6 added the "impl" extension kind (a bespoke operation implementation) and
    its optional "raw" flag.
    v7 added the module [tests] table (declared tests: constructions, stubs,
-   calls, and expect patterns, with values in wire form). *)
-let current_ir_version = 7
+   calls, and expect patterns, with values in wire form).
+   v8 added an operation's optional "wire" field: the resolved HTTP binding
+   (method, uri, per-member bindings, response bindings, success status
+   codes, and the entry-scoped endpoint/header/timeout/retry refs) as typed
+   structure, replacing the opaque wire_descriptor trait blob for direct
+   consumption (the blob itself still rides the trait bag, unchanged, for
+   backward compatibility). *)
+let current_ir_version = 8
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -58,6 +64,15 @@ let encode_entry_field = Ir_json_entry.encode_entry_field
 let decode_entry_field = Ir_json_entry.decode_entry_field
 let encode_test = Ir_json_tests.encode_test
 let decode_test = Ir_json_tests.decode_test
+let encode_wire_part = Ir_json_wire.encode_wire_part
+let decode_wire_part = Ir_json_wire.decode_wire_part
+let encode_wire_response_part = Ir_json_wire.encode_wire_response_part
+let decode_wire_response_part = Ir_json_wire.decode_wire_response_part
+let encode_wire_value = Ir_json_wire.encode_wire_value
+let decode_wire_value = Ir_json_wire.decode_wire_value
+let encode_wire_binding = Ir_json_wire.encode_wire_binding
+let decode_wire_binding = Ir_json_wire.decode_wire_binding
+let decode_wire_binding_opt = Ir_json_wire.decode_wire_binding_opt
 let ( let* ) = Result.bind
 let err fmt = Printf.ksprintf (fun s -> Error s) fmt
 let map_result = Ir_json_base.map_result
@@ -96,7 +111,7 @@ let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("kind", `String "service");
         ("operations", `List (List.map (fun s -> `String s) operations));
       ]
-  | Operation { input; output; errors } ->
+  | Operation { input; output; errors; wire } -> (
       let opt = function None -> `Null | Some t -> encode_tref t in
       [
         ("kind", `String "operation");
@@ -104,6 +119,10 @@ let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("output", opt output);
         ("errors", `List (List.map encode_tref errors));
       ]
+      @
+      match wire with
+      | None -> []
+      | Some w -> [ ("wire", encode_wire_binding w) ])
   | Entry { fields; operations } ->
       [
         ("kind", `String "entry");
@@ -238,7 +257,8 @@ let rec decode_shape_kind kvs =
             let* xs = as_list v in
             map_result decode_tref xs
       in
-      Ok (Ir.Operation { input; output; errors })
+      let* wire = decode_wire_binding_opt (get "wire") in
+      Ok (Ir.Operation { input; output; errors; wire })
   | "entry" ->
       let* fields = decode_fields (get "fields") in
       let* operations =

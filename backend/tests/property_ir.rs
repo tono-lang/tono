@@ -180,10 +180,14 @@ fn shape_kind() -> impl Strategy<Value = ShapeKind> {
             }),
         vec(ident(), 0..3).prop_map(|operations| ShapeKind::Service { operations }),
         (option::of(tref()), option::of(tref()), vec(tref(), 0..2)).prop_map(
+            // Matches this generator's existing precedent of not chasing newer
+            // IR additions (Entry/Config are likewise absent here): wire is
+            // left unfuzzed.
             |(input, output, errors)| ShapeKind::Operation {
                 input,
                 output,
                 errors,
+                wire: None,
             }
         ),
     ]

@@ -158,6 +158,7 @@ fn removed_shape_severity_follows_the_reference_position() {
             }),
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![],
     };
@@ -202,6 +203,7 @@ fn unchanged_entry_and_config_produce_no_changes() {
                         input: None,
                         output: None,
                         errors: vec![],
+                        wire: None,
                     },
                     traits: vec![],
                 }],
@@ -222,6 +224,7 @@ fn removing_an_op_from_an_entry_is_source_breaking() {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![],
     };
@@ -614,6 +617,7 @@ fn an_operation_signature_change_is_source_breaking() {
                     }),
                     output: None,
                     errors: vec![],
+                    wire: None,
                 },
                 traits: vec![],
             }],
@@ -685,6 +689,7 @@ fn service_with_op(op_ids: Vec<&str>, keep_op_shape: bool) -> Model {
                 input: None,
                 output: None,
                 errors: vec![],
+                wire: None,
             },
             traits: vec![],
         }]

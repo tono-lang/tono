@@ -148,7 +148,7 @@ let op_full () =
   in
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   match shape.kind with
-  | Ir.Operation { input; output; errors } ->
+  | Ir.Operation { input; output; errors; _ } ->
       Alcotest.(check string)
         "input" {|{"args":[],"ref":"create_charge_input"}|} (tref_opt input);
       Alcotest.(check string)
@@ -165,7 +165,7 @@ let op_full () =
 let op_no_input () =
   let shape, _ = run Parser.parse_op "op list_charges(): page[charge]" in
   match shape.kind with
-  | Ir.Operation { input; output; errors } ->
+  | Ir.Operation { input; output; errors; _ } ->
       Alcotest.(check string) "no input" "<none>" (tref_opt input);
       Alcotest.(check string)
         "output" {|{"args":[{"args":[],"ref":"charge"}],"ref":"page"}|}
@@ -176,7 +176,7 @@ let op_no_input () =
 let op_no_output () =
   let shape, _ = run Parser.parse_op "op fire(event)" in
   match shape.kind with
-  | Ir.Operation { input; output; errors } ->
+  | Ir.Operation { input; output; errors; _ } ->
       Alcotest.(check string)
         "input" {|{"args":[],"ref":"event"}|} (tref_opt input);
       Alcotest.(check string) "no output" "<none>" (tref_opt output);

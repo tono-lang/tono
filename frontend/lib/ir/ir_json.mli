@@ -30,6 +30,17 @@ val encode_entry_field : Ir.entry_field -> Ir.json
 val decode_entry_field : Ir.json -> (Ir.entry_field, string) result
 val encode_test : Ir.test_decl -> Ir.json
 val decode_test : Ir.json -> (Ir.test_decl, string) result
+val encode_wire_part : Ir.wire_part -> Ir.json
+val decode_wire_part : Ir.json -> (Ir.wire_part, string) result
+val encode_wire_response_part : Ir.wire_response_part -> Ir.json
+
+val decode_wire_response_part :
+  Ir.json -> (Ir.wire_response_part, string) result
+
+val encode_wire_value : Ir.wire_value -> Ir.json
+val decode_wire_value : Ir.json -> (Ir.wire_value, string) result
+val encode_wire_binding : Ir.wire_binding -> Ir.json
+val decode_wire_binding : Ir.json -> (Ir.wire_binding, string) result
 val encode_shape : Ir.shape -> Ir.json
 val decode_shape : Ir.json -> (Ir.shape, string) result
 val encode_extension : Ir.extension -> Ir.json

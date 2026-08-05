@@ -59,6 +59,7 @@ fn op(id: &str, traits: Vec<Trait>) -> Shape {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits,
     }
@@ -388,6 +389,7 @@ fn an_entry_op_signature_change_is_source_breaking() {
                 }),
                 output: None,
                 errors: vec![],
+                wire: None,
             },
             traits: vec![],
         }],

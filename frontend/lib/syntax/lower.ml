@@ -420,7 +420,13 @@ let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~input ~output ~pub_trait
     Ir.id;
     kind =
       Ir.Operation
-        { input = lower_opt input; output = lower_opt output; errors };
+        {
+          input = lower_opt input;
+          output = lower_opt output;
+          errors;
+          wire = None;
+          (* Protocol resolution happens strictly after lowering. *)
+        };
     traits = pub_trait @ lower_bag_traits rest;
   }
 

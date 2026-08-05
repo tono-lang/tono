@@ -610,7 +610,8 @@ let resolver_tolerates_value_template () =
   let op : Ir.shape =
     {
       id = "m#c.o";
-      kind = Ir.Operation { input = None; output = None; errors = [] };
+      kind =
+        Ir.Operation { input = None; output = None; errors = []; wire = None };
       traits =
         [
           { Ir.trait_id = "http"; value = `Assoc [ ("method", `String "GET") ] };

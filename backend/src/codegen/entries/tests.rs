@@ -286,6 +286,7 @@ fn entry_with_op_traits(traits: Vec<(&str, serde_json::Value)>) -> Module {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: traits
             .into_iter()
@@ -442,6 +443,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![],
     };
@@ -451,6 +453,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![],
     };
@@ -476,6 +479,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![],
     };
@@ -633,6 +637,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![],
     };

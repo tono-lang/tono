@@ -57,11 +57,20 @@ type wire_descriptor = {
 val resolve_op :
   (Ir.shape_id -> Ir.shape option) -> Ir.shape -> wire_descriptor option
 
-(* The JSON encoding embedded, opaque, in the generated stub. *)
+(* The JSON encoding embedded, opaque, in the generated stub. Kept, unchanged,
+   for backward compatibility until every emitter reads [Ir.wire_binding]
+   directly instead. *)
 val encode : wire_descriptor -> Ir.json
 
-(* Attach the resolved descriptor to every operation of a module as a synthesized
-   [wire_descriptor] trait, leaving all other shapes untouched. Protocol is an
-   IR -> IR annotation step: the descriptor rides the trait bag, so the core IR
-   stays protocol-agnostic and the wire format needs no version bump. *)
+(* The typed counterpart of [encode]: the same resolution as a first-class IR
+   value instead of an opaque blob, minus the errors array (redundant with the
+   operation's own [errors] field) and the success tref (every runtime already
+   discards it), with [timeout]/[retry] kept as a plain entry-field path. *)
+val to_ir_binding : wire_descriptor -> Ir.wire_binding
+
+(* Attach the resolved binding to every operation of a module: a typed [wire]
+   field on the operation's [Ir.shape_kind] for direct consumption, plus
+   (temporarily, until callers migrate off it) the same resolution serialized
+   as an opaque [wire_descriptor] trait for backward compatibility. Leaves all
+   other shapes untouched. *)
 val resolve_module : Ir.module_ -> Ir.module_

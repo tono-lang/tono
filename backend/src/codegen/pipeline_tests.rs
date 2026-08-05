@@ -221,6 +221,7 @@ fn ops_model() -> Model {
                 id: "payments#not_found".into(),
                 args: vec![],
             }],
+            wire: None,
         },
         traits: vec![
             crate::ir::Trait {
@@ -663,6 +664,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                                         args: vec![],
                                     }),
                                     errors: vec![],
+                                    wire: None,
                                 },
                                 traits: vec![crate::ir::Trait {
                                     id: "wire_descriptor".into(),

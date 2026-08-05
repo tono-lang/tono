@@ -29,6 +29,7 @@ fn wire_op(id: &str) -> Shape {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![Trait {
             id: "wire_descriptor".into(),

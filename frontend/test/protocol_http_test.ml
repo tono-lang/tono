@@ -23,7 +23,7 @@ let error_shape id status code : Ir.shape =
   }
 
 let op ?(traits = []) ?input ?output ?(errors = []) id : Ir.shape =
-  { Ir.id; kind = Ir.Operation { input; output; errors }; traits }
+  { Ir.id; kind = Ir.Operation { input; output; errors; wire = None }; traits }
 
 (* A stable rendering of a descriptor, doubling as the snapshot format. *)
 let show_part : Protocol_http.part -> string = function

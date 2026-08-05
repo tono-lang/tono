@@ -13,6 +13,7 @@ fn op(id: &str, traits: Vec<Trait>, errors: Vec<Tref>) -> Shape {
             input: Some(Tref::Prim(Prim::String)),
             output: Some(Tref::Prim(Prim::String)),
             errors,
+            wire: None,
         },
         traits,
     }

@@ -132,10 +132,14 @@ fn kind(config: &CodegenConfig, k: &ShapeKind) -> ShapeKind {
             input,
             output,
             errors,
+            wire,
         } => ShapeKind::Operation {
             input: input.as_ref().map(|t| tref(config, t)),
             output: output.as_ref().map(|t| tref(config, t)),
             errors: errors.iter().map(|t| tref(config, t)).collect(),
+            // Nothing inside a wire binding carries a shape id to rewrite
+            // (its refs are entry-field paths and literal HTTP names).
+            wire: wire.clone(),
         },
         ShapeKind::Entry { fields, operations } => ShapeKind::Entry {
             fields: fields.iter().map(|f| entry_field(config, f)).collect(),
@@ -309,6 +313,7 @@ mod tests {
                                     }),
                                     output: None,
                                     errors: vec![],
+                                    wire: None,
                                 },
                                 traits: vec![],
                             }],

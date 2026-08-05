@@ -215,8 +215,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_7 () =
-  Alcotest.(check int) "wire version" 7 Ir_json.current_ir_version
+let version_is_8 () =
+  Alcotest.(check int) "wire version" 8 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -302,6 +302,103 @@ let loose_descriptor_has_no_entry_fields () =
            (fun k -> not (List.mem_assoc k kvs))
            [ "endpoint"; "request_headers"; "timeout"; "retry" ])
   | _ -> Alcotest.fail "descriptor is not an object"
+
+(* A second, dedicated snippet (kept separate from [canonical_client] so its
+   many other tests stay untouched): query/payload input bindings and
+   header/status-code response bindings, which [canonical_client] never
+   exercises. Covers [Protocol_http.to_ir_binding]'s full match surface
+   together with [descriptor_carries_refs]'s label/header/endpoint/timeout/
+   retry coverage above. *)
+let wire_probe_client =
+  {|
+struct probe_body {
+  note: string
+}
+
+struct probe_input {
+  id: string @httpLabel
+  filter: string @httpQuery("q")
+  x_key: string @httpHeader("X-Key")
+  body: probe_body @httpPayload
+}
+
+struct probe_output {
+  value: string
+  trace_id: string @httpHeader("X-Trace-Id")
+  code: i32 @httpResponseCode
+}
+
+pub struct probe_client {
+  api_key: string @arg
+  endpoint: string @env("ENDPOINT")
+
+  op probe(probe_input): probe_output
+    @http(method: "POST", path: "/probe/{id}", endpoint: .endpoint)
+    @header("X-Client", .api_key)
+    @header("X-Combo", "v-{.api_key}")
+}
+|}
+
+let wire_field_covers_query_payload_and_response_bindings () =
+  let m = Protocol_http.resolve_module (compile wire_probe_client) in
+  let client = shape_by_id m "m#probe_client" in
+  match client.kind with
+  | Ir.Entry { operations; _ } -> (
+      let op = List.hd operations in
+      match op.kind with
+      | Ir.Operation { wire = Some w; _ } ->
+          Alcotest.(check string) "method" "POST" w.wb_method;
+          Alcotest.(check (list string))
+            "uri keeps the label placeholder" [ "/probe/"; "{id}" ]
+            (List.filter_map
+               (function
+                 | Ir.Tpl_lit s -> Some s
+                 | Ir.Tpl_input n -> Some (Printf.sprintf "{%s}" n)
+                 | Ir.Tpl_field _ -> None)
+               w.wb_uri);
+          let binding name = List.assoc_opt name w.wb_bindings in
+          Alcotest.(check bool)
+            "id is a label" true
+            (binding "id" = Some Ir.Wire_label);
+          Alcotest.(check bool)
+            "filter is a named query" true
+            (binding "filter" = Some (Ir.Wire_query "q"));
+          Alcotest.(check bool)
+            "x_key is a named header" true
+            (binding "x_key" = Some (Ir.Wire_header "X-Key"));
+          Alcotest.(check bool)
+            "body is the whole payload" true
+            (binding "body" = Some Ir.Wire_payload);
+          let response_binding name =
+            List.assoc_opt name w.wb_response_bindings
+          in
+          Alcotest.(check bool)
+            "trace_id is a response header" true
+            (response_binding "trace_id"
+            = Some (Ir.Wire_response_header "X-Trace-Id"));
+          Alcotest.(check bool)
+            "code is the response status code" true
+            (response_binding "code" = Some Ir.Wire_response_status_code);
+          Alcotest.(check bool)
+            "single success code" true (w.wb_success = [ 200 ]);
+          Alcotest.(check bool)
+            "endpoint ref" true
+            (w.wb_endpoint = Some [ "endpoint" ]);
+          Alcotest.(check bool) "no timeout ref" true (w.wb_timeout = None);
+          Alcotest.(check bool) "no retry ref" true (w.wb_retry = None);
+          Alcotest.(check bool)
+            "two declared headers: a field ref and a template" true
+            (match w.wb_request_headers with
+            | [
+             (_, Ir.Wire_field [ "api_key" ]);
+             ( _,
+               Ir.Wire_template [ Ir.Tpl_lit "v-"; Ir.Tpl_field [ "api_key" ] ]
+             );
+            ] ->
+                true
+            | _ -> false)
+      | _ -> Alcotest.fail "nested op has no typed wire binding")
+  | _ -> Alcotest.fail "client is not an entry"
 
 (* ── Typecheck rejections ──────────────────────────────────────────────── *)
 
@@ -465,7 +562,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 7" `Quick version_is_7;
+          Alcotest.test_case "version 8" `Quick version_is_8;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",
@@ -473,6 +570,8 @@ let () =
           Alcotest.test_case "descriptor refs" `Quick descriptor_carries_refs;
           Alcotest.test_case "loose descriptor" `Quick
             loose_descriptor_has_no_entry_fields;
+          Alcotest.test_case "wire field: query/payload/response" `Quick
+            wire_field_covers_query_payload_and_response_bindings;
         ] );
       ( "reject",
         [

@@ -143,10 +143,13 @@ fn references(shape: &Shape) -> Vec<String> {
         ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => {
             members.iter().flat_map(|m| refs_in(&m.target)).collect()
         }
+        // wire carries entry-field paths and literal HTTP names, never a
+        // shape id, so it contributes no references here.
         ShapeKind::Operation {
             input,
             output,
             errors,
+            ..
         } => input
             .iter()
             .chain(output.iter())
@@ -333,6 +336,7 @@ mod tests {
                     id: "m#not_found".into(),
                     args: vec![],
                 }],
+                wire: None,
             },
             traits: vec![],
         };

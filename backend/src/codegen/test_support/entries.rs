@@ -198,6 +198,7 @@ pub fn entries_matrix_module() -> Module {
                 args: vec![],
             }),
             errors: vec![],
+            wire: None,
         },
         traits: vec![
             descriptor.clone(),
@@ -229,6 +230,7 @@ pub fn entries_matrix_module() -> Module {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![descriptor.clone()],
     };
@@ -238,6 +240,7 @@ pub fn entries_matrix_module() -> Module {
             input: None,
             output: Some(Tref::Prim(Prim::I32)),
             errors: vec![],
+            wire: None,
         },
         traits: vec![descriptor],
     };
@@ -250,6 +253,7 @@ pub fn entries_matrix_module() -> Module {
             }),
             output: Some(Tref::Prim(Prim::String)),
             errors: vec![],
+            wire: None,
         },
         traits: vec![],
     };

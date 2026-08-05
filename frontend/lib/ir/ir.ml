@@ -80,6 +80,7 @@ and shape_kind =
       input : tref option;
       output : tref option;
       errors : tref list;
+      wire : wire_binding option;
     }
     (* tref, so an operation can reference an applied generic directly *)
   | Entry of { fields : entry_field list; operations : shape list }
@@ -110,6 +111,46 @@ and template_part =
   | Tpl_lit of string
   | Tpl_field of string list
   | Tpl_input of string
+
+(* The resolved HTTP binding a Protocol pass computes once and a Target reads
+   directly: the typed counterpart of the wire_descriptor blob a protocol
+   trait used to carry. Constructors are [Wire_]-prefixed (and record fields
+   [wb_]-prefixed) to stay unambiguous next to Protocol_http's own local
+   part/response_part/value_expr types, which compute the legacy blob
+   unchanged, and because [method] is an OCaml keyword. *)
+and wire_part =
+  | Wire_label (* path parameter: substitutes {name} in the uri *)
+  | Wire_query of string (* query-string parameter with this name *)
+  | Wire_header of string (* HTTP header with this name *)
+  | Wire_body (* a field inside the JSON request body (default) *)
+  | Wire_payload (* this member is the whole body, no envelope *)
+
+and wire_response_part =
+  | Wire_response_header of string
+  | Wire_response_status_code
+
+and wire_value =
+  | Wire_lit of json
+  | Wire_field of string list
+  | Wire_template of template_part list
+
+and wire_binding = {
+  wb_method : string;
+  wb_uri : template_part list;
+      (* path template, {name} and {.field} placeholders parsed *)
+  wb_bindings : (string * wire_part) list;
+      (* input member name -> request part *)
+  wb_response_bindings : (string * wire_response_part) list;
+  wb_success : int list;
+      (* status codes; the output type is always the op's own output *)
+  wb_endpoint : string list option; (* @http endpoint: entry-field path *)
+  wb_request_headers : (template_part list * wire_value) list;
+      (* @header(key, value): key template -> value *)
+  wb_timeout : string list option;
+      (* @timeout(.field): the entry-field path, unresolved *)
+  wb_retry : string list option;
+      (* @retry(.field): the entry-field path, unresolved *)
+}
 
 (* The selection table of [field: T = match .subject { ... }]. A pattern is a
    scalar JSON literal; [None] is the wildcard arm. *)

@@ -147,7 +147,9 @@ let gen_shape_kind : Ir.shape_kind G.t =
       (let+ input = gen_opt gen_tref
        and+ output = gen_opt gen_tref
        and+ errors = G.list_size (G.int_range 0 2) gen_tref in
-       Ir.Operation { input; output; errors });
+       (* Matches this generator's existing precedent of not chasing newer IR
+          additions (Entry/Config, module tests): wire is left unfuzzed here. *)
+       Ir.Operation { input; output; errors; wire = None });
     ]
 
 let gen_shape : Ir.shape G.t =
