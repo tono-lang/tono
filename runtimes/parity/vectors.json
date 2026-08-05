@@ -1,57 +1,37 @@
 {
-  "comment": "Cross-runtime behavior vectors for the HTTP runtimes' retry/timeout executor. Each runtime runs every vector through its canonical transport slot with random pinned to 0.5 and an instant, recording sleep. Script entries are consumed one per attempt: response returns that status/body, transport_failure fails the attempt, hang blocks until the per-attempt timeout fires. expect.attempts is the number of transport calls; expect.delays_ms are the backoff sleeps between attempts (random * min(2000, 100 * 2^retry)). A vector's optional declared_errors ([status, code|null, retryable] triples) stands in for a generated decode<Op>Error + retryable() pair: each harness builds a retryable(status, body) predicate from it (first status match with an agreeing code decides; a null code matches any body) and passes that to Execute/execute, exactly the shape the real compiler emits inline at each operation's call site. A vector with no declared_errors means no error response is ever retryable.",
+  "comment": "Cross-runtime behavior vectors for the retry/timeout mechanics behind an HTTP entry operation. `op` names an operation in spec.tono (retrying, retrying_with_timeout, or timeout_only); the TypeScript harness (runtimes/parity/typescript/parity.test.ts) compiles that spec, generates the real SDK, and drives it directly. Go and Rust are not repointed yet: their harnesses still run against the hand-written runtime package, using a small local op-name -> synthetic WireDescriptor lookup fed by `config` in place of the retired `descriptor` field. Each runtime runs every vector with random pinned to 0.5 and an instant, recording sleep. Script entries are consumed one per attempt: response returns that status/body, transport_failure fails the attempt, hang blocks until the per-attempt timeout fires. expect.attempts is the number of transport calls; expect.delays_ms are the backoff sleeps between attempts (random * min(2000, 100 * 2^retry)). `config` (max_retries / timeout_ms) is real client construction for the TypeScript harness and literal descriptor values for Go/Rust; no vector needs a late-bound ref anymore (see the removals below). A vector's optional declared_errors ([status, code|null, retryable] triples) stands in for spec.tono's own @errorCode/@retryable declarations: Go and Rust still build a retryable(status, body) predicate from it directly; the generated TypeScript SDK decides retryability for real, from the operation's own decode<Op>Error. A vector with no declared_errors means no error response is ever retryable.\n\nFour vectors that existed before the generated SDK became the target are gone, not merely trimmed: (1) \"the retry maximum resolves through a ref into the client values\" and (2) \"a ref that resolves to nothing disables retry\" described a synthetic descriptor's `{ref: ...}` late binding, a concept the generated client has no equivalent of (a @retry field is always a real, always-resolved client field); (3) \"a fractional retry maximum floors\" is now a compile error, since @retry only accepts an integer-scalar field; (4) \"an unresolved endpoint falls back to the caller base url\" tested a fallback branch that PR #87 deleted outright after confirming it was unreachable (an entry @http operation always has a resolved endpoint field; there was never a public way to leave it unresolved). The fifth former vector, \"the endpoint ref and declared headers resolve from the client values\", survives as a `test` block in spec.tono instead of an entry here: it needs no timing seam, and the declarative form now generates the same assertion natively in all three languages.",
   "vectors": [
     {
       "name": "no retry declared means one attempt, ever",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]]
-      },
-      "values": {},
+      "op": "timeout_only",
+      "config": {},
       "input": {},
       "script": [{ "kind": "response", "status": 500, "body": "{}" }],
       "expect": { "outcome": "error", "status": 500, "body": "{}", "attempts": 1, "delays_ms": [] }
     },
     {
       "name": "transport failures retry until success",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 2 } }
-      },
-      "values": {},
+      "op": "retrying",
+      "config": { "max_retries": 2 },
       "input": {},
       "script": [
         { "kind": "transport_failure" },
         { "kind": "transport_failure" },
-        { "kind": "response", "status": 200, "body": "{\"ok\":true}" }
+        { "kind": "response", "status": 200, "body": "{}" }
       ],
       "expect": {
         "outcome": "success",
         "status": 200,
-        "body": "{\"ok\":true}",
+        "body": "{}",
         "attempts": 3,
         "delays_ms": [50, 100]
       }
     },
     {
       "name": "a declared retryable error retries",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 3 } }
-      },
+      "op": "retrying",
+      "config": { "max_retries": 3 },
       "declared_errors": [[429, "overloaded", true]],
-      "values": {},
       "input": {},
       "script": [
         { "kind": "response", "status": 429, "body": "{\"code\":\"overloaded\"}" },
@@ -61,50 +41,29 @@
     },
     {
       "name": "a declared non-retryable error does not retry",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 3 } }
-      },
+      "op": "retrying",
+      "config": { "max_retries": 3 },
       "declared_errors": [[404, null, false]],
-      "values": {},
       "input": {},
       "script": [{ "kind": "response", "status": 404, "body": "{}" }],
       "expect": { "outcome": "error", "status": 404, "body": "{}", "attempts": 1, "delays_ms": [] }
     },
     {
       "name": "an undeclared error status does not retry",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 3 } }
-      },
-      "values": {},
+      "op": "retrying",
+      "config": { "max_retries": 3 },
       "input": {},
       "script": [{ "kind": "response", "status": 500, "body": "{}" }],
       "expect": { "outcome": "error", "status": 500, "body": "{}", "attempts": 1, "delays_ms": [] }
     },
     {
       "name": "the code discriminator blocks retry when the non-retryable error matches",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 3 } }
-      },
+      "op": "retrying",
+      "config": { "max_retries": 3 },
       "declared_errors": [
         [429, "overloaded", true],
         [429, "quota_exceeded", false]
       ],
-      "values": {},
       "input": {},
       "script": [{ "kind": "response", "status": 429, "body": "{\"code\":\"quota_exceeded\"}" }],
       "expect": {
@@ -117,19 +76,12 @@
     },
     {
       "name": "the code discriminator allows retry when the retryable error matches",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 2 } }
-      },
+      "op": "retrying",
+      "config": { "max_retries": 2 },
       "declared_errors": [
         [429, "overloaded", true],
         [429, "quota_exceeded", false]
       ],
-      "values": {},
       "input": {},
       "script": [
         { "kind": "response", "status": 429, "body": "{\"code\":\"overloaded\"}" },
@@ -139,119 +91,38 @@
       "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 3, "delays_ms": [50, 100] }
     },
     {
-      "name": "a null declared code matches any body, including a non-JSON one",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 1 } }
-      },
+      "name": "a null declared code matches any body, even one lacking a code field",
+      "op": "retrying",
+      "config": { "max_retries": 1 },
       "declared_errors": [[503, null, true]],
-      "values": {},
       "input": {},
       "script": [
-        { "kind": "response", "status": 503, "body": "service melting" },
+        { "kind": "response", "status": 503, "body": "{}" },
         { "kind": "response", "status": 200, "body": "{}" }
       ],
       "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 2, "delays_ms": [50] }
     },
     {
       "name": "a declared code with a non-matching body does not retry",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 3 } }
-      },
-      "declared_errors": [[503, "unavailable", true]],
-      "values": {},
+      "op": "retrying",
+      "config": { "max_retries": 3 },
+      "declared_errors": [[502, "bad_gateway", true]],
       "input": {},
-      "script": [{ "kind": "response", "status": 503, "body": "not json" }],
-      "expect": { "outcome": "error", "status": 503, "body": "not json", "attempts": 1, "delays_ms": [] }
+      "script": [{ "kind": "response", "status": 502, "body": "not json" }],
+      "expect": { "outcome": "error", "status": 502, "body": "not json", "attempts": 1, "delays_ms": [] }
     },
     {
       "name": "exhausted retries return the last outcome",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 1 } }
-      },
-      "values": {},
+      "op": "retrying",
+      "config": { "max_retries": 1 },
       "input": {},
       "script": [{ "kind": "transport_failure" }, { "kind": "transport_failure" }],
       "expect": { "outcome": "transport", "attempts": 2, "delays_ms": [50] }
     },
     {
-      "name": "the retry maximum resolves through a ref into the client values",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "ref": "max_retries" } }
-      },
-      "values": { "max_retries": 2 },
-      "input": {},
-      "script": [
-        { "kind": "transport_failure" },
-        { "kind": "transport_failure" },
-        { "kind": "response", "status": 200, "body": "{}" }
-      ],
-      "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 3, "delays_ms": [50, 100] }
-    },
-    {
-      "name": "a ref that resolves to nothing disables retry",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "ref": "absent" } }
-      },
-      "values": {},
-      "input": {},
-      "script": [{ "kind": "transport_failure" }],
-      "expect": { "outcome": "transport", "attempts": 1, "delays_ms": [] }
-    },
-    {
-      "name": "a fractional retry maximum floors",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 2.5 } }
-      },
-      "values": {},
-      "input": {},
-      "script": [
-        { "kind": "transport_failure" },
-        { "kind": "transport_failure" },
-        { "kind": "transport_failure" }
-      ],
-      "expect": { "outcome": "transport", "attempts": 3, "delays_ms": [50, 100] }
-    },
-    {
       "name": "backoff grows exponentially and caps",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 6 } }
-      },
-      "values": {},
+      "op": "retrying",
+      "config": { "max_retries": 6 },
       "input": {},
       "script": [
         { "kind": "transport_failure" },
@@ -272,101 +143,27 @@
     },
     {
       "name": "a success is never retried",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 3 } }
-      },
-      "values": {},
+      "op": "retrying",
+      "config": { "max_retries": 3 },
       "input": {},
       "script": [{ "kind": "response", "status": 200, "body": "{}" }],
       "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 1, "delays_ms": [] }
     },
     {
       "name": "a timed-out attempt is a transport failure and retries",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "retry": { "max": { "lit": 1 } },
-        "timeout": { "lit": 30 }
-      },
-      "values": {},
+      "op": "retrying_with_timeout",
+      "config": { "max_retries": 1, "timeout_ms": 30 },
       "input": {},
       "script": [{ "kind": "hang" }, { "kind": "response", "status": 200, "body": "{}" }],
       "expect": { "outcome": "success", "status": 200, "body": "{}", "attempts": 2, "delays_ms": [50] }
     },
     {
       "name": "a timeout without retry surfaces as a transport outcome",
-      "descriptor": {
-        "http_method": "POST",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "timeout": { "ref": "timeout_ms" }
-      },
-      "values": { "timeout_ms": 30 },
+      "op": "timeout_only",
+      "config": { "timeout_ms": 30 },
       "input": {},
       "script": [{ "kind": "hang" }],
       "expect": { "outcome": "transport", "attempts": 1, "delays_ms": [] }
-    },
-    {
-      "name": "the endpoint ref and declared headers resolve from the client values",
-      "descriptor": {
-        "http_method": "GET",
-        "uri": "/notes/{.suffix}",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "endpoint": ["endpoint"],
-        "request_headers": [
-          [[{ "lit": "Authorization" }], { "template": [{ "lit": "Bearer " }, { "field": ["token"] }] }],
-          [[{ "lit": "X-Client" }], { "field": ["client_name"] }],
-          [[{ "lit": "X-Missing" }], { "field": ["gone"] }]
-        ]
-      },
-      "values": { "endpoint": "https://acme.test", "token": "t0", "client_name": "demo", "suffix": "s 1" },
-      "input": {},
-      "script": [{ "kind": "response", "status": 200, "body": "{}" }],
-      "expect": {
-        "outcome": "success",
-        "status": 200,
-        "body": "{}",
-        "attempts": 1,
-        "delays_ms": [],
-        "request": {
-          "url": "https://acme.test/notes/s%201",
-          "headers": { "Authorization": "Bearer t0", "X-Client": "demo" }
-        }
-      }
-    },
-    {
-      "name": "an unresolved endpoint falls back to the caller base url",
-      "descriptor": {
-        "http_method": "GET",
-        "uri": "/x",
-        "bindings": [],
-        "response_bindings": [],
-        "success": [[200, null]],
-        "endpoint": ["endpoint"]
-      },
-      "values": {},
-      "input": {},
-      "script": [{ "kind": "response", "status": 200, "body": "{}" }],
-      "expect": {
-        "outcome": "success",
-        "status": 200,
-        "body": "{}",
-        "attempts": 1,
-        "delays_ms": [],
-        "request": { "url": "https://api.test/x" }
-      }
     }
   ]
 }

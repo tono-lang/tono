@@ -14,7 +14,7 @@ is strong on the hand-written (bespoke) seam.
 | Bespoke (codecs + error taxonomy) | golden + differential + **mutation** | **strong** | `backend/tests/conformance.rs`, `.cargo/mutants.toml` |
 | User bespoke (ext impls, hooks, live API) | conformance vectors -> generated native tests | opt-in per operation | `examples/*/vectors/*.json`, emitted `*_test.go` / `*.test.ts` / `*_test.rs` |
 | Bespoke runtime (HTTP transport) | property + **mutation** | **strong** | `runtimes/http-ts/test`, `runtimes/http-ts/stryker.config.json`, `runtimes/http-go/*_test.go`, `runtimes/http-go/.gremlins.yaml` |
-| Runtime parity (retry/timeout/errors) | shared behavior vectors | breaks build | `runtimes/parity/vectors.json`, run by every HTTP runtime's test suite |
+| Runtime parity (retry/timeout/errors) | shared behavior vectors | breaks build | `runtimes/parity/vectors.json`; TypeScript drives a generated SDK compiled from `runtimes/parity/spec.tono` (`scripts/run-parity.sh`), Go and Rust still drive their own runtime package directly |
 | Generator (codegen) | snapshot | review | `backend/tests/snapshot_codegen.rs` |
 | IR (frontend <-> backend) | round-trip | breaks build | `backend/tests/ir_roundtrip.rs`, `frontend/test/golden_test.ml` |
 
@@ -98,4 +98,9 @@ to avoid equivalent mutants (no redundant guards) instead.
 The HTTP runtimes also share one behavior-vector suite
 (`runtimes/parity/vectors.json`): every runtime runs the same retry, timeout,
 and error-classification scenarios with pinned jitter and recorded backoff, so
-the runtimes cannot drift apart.
+the runtimes cannot drift apart. TypeScript's harness (`runtimes/parity/typescript/parity.test.ts`)
+compiles `runtimes/parity/spec.tono`, generates the real SDK, and drives that
+generated client directly (via `scripts/run-parity.sh`), so it proves what a
+consumer actually imports, not just that the hand-written runtime interprets
+a synthetic descriptor correctly. Go and Rust still exercise their runtime
+packages the original way.

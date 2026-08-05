@@ -52,7 +52,14 @@ transport call and body read) separately; a timed-out attempt counts as a
 transport failure.
 
 These semantics are pinned by the cross-runtime parity suite in
-`../parity/vectors.json`, which every HTTP runtime runs.
+`../parity/vectors.json`. The generated TypeScript SDK inlines this same
+retry/timeout logic rather than calling into this package, so the TypeScript
+harness (`../parity/typescript/parity.test.ts`) drives that generated SDK
+instead of this package's `Runtime`: `../../scripts/run-parity.sh` compiles
+`../parity/spec.tono`, generates the SDK into a work directory, copies the
+harness next to it, and runs it there. Go and Rust still run their own
+harness directly against this style of runtime package (`parity_test.go`,
+`parity.rs`).
 
 ## Develop
 

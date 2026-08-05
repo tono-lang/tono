@@ -23,18 +23,56 @@ struct ParityFile {
 #[derive(Deserialize)]
 struct ParityVector {
     name: String,
-    descriptor: Value,
+    #[serde(default)]
+    config: ParityConfig,
     // [status, code|null, retryable] triples: a stand-in for what a generated
     // decode<Op>Error + retryable() pair would classify, without depending on
     // any generated code to exist.
     #[serde(default)]
     declared_errors: Vec<(u16, Option<String>, bool)>,
     #[serde(default)]
-    values: Map<String, Value>,
-    #[serde(default)]
     input: Map<String, Value>,
     script: Vec<ParityStep>,
     expect: ParityExpect,
+}
+
+/// Real client construction for the TypeScript harness (which drives a
+/// generated SDK directly) and, here, the literal retry/timeout values a
+/// synthetic descriptor is built from.
+#[derive(Deserialize, Default)]
+struct ParityConfig {
+    max_retries: Option<f64>,
+    timeout_ms: Option<f64>,
+}
+
+/// Rebuilds the synthetic `WireDescriptor` a vector's config describes: a
+/// retry key only when the vector sets `max_retries`, a timeout key only
+/// when it sets `timeout_ms`. Which fields are set already says everything
+/// spec.tono's op declares (a `@retry` field or a `@timeout` field), so this
+/// needs no per-op knowledge and nothing here changes when an op is added,
+/// renamed, or removed there. `Runtime`/`execute` are exercised exactly as
+/// before; only the descriptor's origin moves from "parsed off JSON" to
+/// "built from config," since the JSON vector no longer carries one
+/// directly.
+fn descriptor_for(config: &ParityConfig) -> Value {
+    let mut base = serde_json::json!({
+        "http_method": "POST",
+        "uri": "/x",
+        "bindings": [],
+        "response_bindings": [],
+        "success": [[200, null]],
+    });
+    let obj = base.as_object_mut().unwrap();
+    if let Some(max_retries) = config.max_retries {
+        obj.insert(
+            "retry".into(),
+            serde_json::json!({ "max": { "lit": max_retries } }),
+        );
+    }
+    if let Some(timeout_ms) = config.timeout_ms {
+        obj.insert("timeout".into(), serde_json::json!({ "lit": timeout_ms }));
+    }
+    base
 }
 
 #[derive(Deserialize)]
@@ -152,7 +190,8 @@ async fn parity_vectors() {
     };
 
     for vector in vectors {
-        let descriptor_text = serde_json::to_string(&vector.descriptor).unwrap();
+        let descriptor = descriptor_for(&vector.config);
+        let descriptor_text = serde_json::to_string(&descriptor).unwrap();
         let d = WireDescriptor::parse(&descriptor_text)
             .unwrap_or_else(|e| panic!("{}: descriptor: {e}", vector.name));
 
@@ -167,7 +206,6 @@ async fn parity_vectors() {
                 attempts.clone(),
                 requests.clone(),
             )),
-            values: vector.values,
             ..Options::default()
         };
         let delays_for_seam = delays.clone();

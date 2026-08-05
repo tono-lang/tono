@@ -17,12 +17,49 @@ import (
 
 type parityVector struct {
 	Name           string          `json:"name"`
-	Descriptor     json.RawMessage `json:"descriptor"`
+	Op             string          `json:"op"`
+	Config         parityConfig    `json:"config"`
 	DeclaredErrors []parityDeclErr `json:"declared_errors"`
-	Values         map[string]any  `json:"values"`
 	Input          map[string]any  `json:"input"`
 	Script         []parityStep    `json:"script"`
 	Expect         parityExpect    `json:"expect"`
+}
+
+// parityConfig is real client construction for the TypeScript harness (which
+// drives a generated SDK directly) and, here, the literal retry/timeout
+// values a synthetic descriptor is built from.
+type parityConfig struct {
+	MaxRetries *float64 `json:"max_retries"`
+	TimeoutMs  *float64 `json:"timeout_ms"`
+}
+
+// descriptorFor rebuilds the synthetic WireDescriptor a vector's config
+// describes: a retry key only when the vector sets max_retries, a timeout
+// key only when it sets timeout_ms. Which fields are set already says
+// everything spec.tono's op declares (a @retry field or a @timeout field),
+// so this needs no per-op knowledge and nothing here changes when an op is
+// added, renamed, or removed there. Runtime/Execute are exercised exactly
+// as before; only the descriptor's origin moves from "parsed off JSON" to
+// "built from config," since the JSON vector no longer carries one directly.
+func descriptorFor(config parityConfig) json.RawMessage {
+	base := map[string]any{
+		"http_method":       "POST",
+		"uri":               "/x",
+		"bindings":          []any{},
+		"response_bindings": []any{},
+		"success":           []any{[]any{200, nil}},
+	}
+	if config.MaxRetries != nil {
+		base["retry"] = map[string]any{"max": map[string]any{"lit": *config.MaxRetries}}
+	}
+	if config.TimeoutMs != nil {
+		base["timeout"] = map[string]any{"lit": *config.TimeoutMs}
+	}
+	data, err := json.Marshal(base)
+	if err != nil {
+		panic(fmt.Sprintf("descriptorFor: %v", err))
+	}
+	return data
 }
 
 // parityDeclErr is one [status, code|null, retryable] triple: the fixture's
@@ -151,7 +188,7 @@ func TestParityVectors(t *testing.T) {
 	for _, vector := range loadParityVectors(t) {
 		vector := vector
 		t.Run(vector.Name, func(t *testing.T) {
-			d, err := ParseDescriptor(vector.Descriptor)
+			d, err := ParseDescriptor(descriptorFor(vector.Config))
 			if err != nil {
 				t.Fatalf("descriptor: %v", err)
 			}
@@ -160,7 +197,6 @@ func TestParityVectors(t *testing.T) {
 			r, delays := deterministic(t, Options{
 				BaseURL:   "https://api.test",
 				Transport: scriptedTransport(t, vector.Script, &attempts, &requests),
-				Values:    vector.Values,
 			})
 			outcome, err := r.Execute(context.Background(), d, vector.Input, nil, vector.retryable())
 			if err != nil {
