@@ -183,7 +183,7 @@ fn has_query_and_query_lines_agree_on_query_bound_members() {
 }
 
 #[test]
-#[should_panic(expected = "an entry @http op names its endpoint")]
+#[should_panic(expected = "validate_entries rejects an entry @http op with no endpoint")]
 fn endpoint_expr_with_no_declared_endpoint_is_an_emission_defect() {
     endpoint_expr(&wire(), &stub_field_expr);
 }

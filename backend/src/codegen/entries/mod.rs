@@ -386,6 +386,25 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
             continue;
         }
         for entry in &entries {
+            // The frontend requires an entry @http operation to name its
+            // endpoint, but the IR is also accepted straight from a file or
+            // stdin, so the gap surfaces here as a clean generation error
+            // instead of a panic inside an emitter.
+            for op in entry.operations {
+                if let ShapeKind::Operation {
+                    wire: Some(wire), ..
+                } = &op.kind
+                {
+                    if wire.endpoint.is_none() {
+                        return Err(format!(
+                            "module {}: entry {} operation {} carries an @http binding with no endpoint; an entry operation's @http must name its endpoint",
+                            module.name,
+                            entry.name,
+                            local_name(&op.id)
+                        ));
+                    }
+                }
+            }
             let declared = entry.declared();
             for field in declared.iter().copied() {
                 if RESERVED_SLOT_FIELDS.contains(&field.name.as_str()) {

@@ -94,14 +94,15 @@ fn wire_value_expr(v: &WireValue, field_expr: &dyn Fn(&[String]) -> String) -> S
 
 /// The base-URL expression: the typed read of the resolved endpoint field,
 /// concatenated with the URI template by the caller. The frontend rejects an
-/// entry `@http` op that does not name a string endpoint field, so the read
-/// needs no runtime guard and a missing binding is an emission defect, not a
-/// fallback case.
+/// entry `@http` op that does not name a string endpoint field, and
+/// `validate_entries` re-checks it at generation time (IR can arrive from a
+/// file without ever passing the frontend), so by emission time the binding
+/// always carries an endpoint and the read needs no runtime guard.
 fn endpoint_expr(wire: &WireBinding, field_expr: &dyn Fn(&[String]) -> String) -> String {
     let path = wire
         .endpoint
         .as_ref()
-        .expect("an entry @http op names its endpoint; None means unchecked IR");
+        .expect("validate_entries rejects an entry @http op with no endpoint");
     field_expr(path)
 }
 
