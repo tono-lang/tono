@@ -156,8 +156,14 @@ fn the_method_maps_the_raw_outcome_onto_the_taxonomy() {
     let serde = entry_text(&module);
     // The descriptor is embedded verbatim, an opaque blob.
     assert!(serde.contains("var saveNoteDescriptor = descriptor.MustDescriptor("));
-    assert!(serde
-        .contains("outcome, err := c.runtime.Execute(ctx, saveNoteDescriptor, record, c.hooks)"));
+    // The retry loop and the decoded error type read the same discriminator
+    // via an inline predicate, so they can never disagree.
+    assert!(serde.contains(
+        "outcome, err := c.runtime.Execute(ctx, saveNoteDescriptor, record, c.hooks, func(status int, body string) bool {"
+    ));
+    assert!(serde.contains(
+        "if re, ok := DecodeSaveNoteError(status, []byte(body)).(interface{ Retryable() bool }); ok {"
+    ));
     assert!(serde.contains("case tonohttp.OutcomeTransport:"));
     assert!(serde.contains("&TransportError{Cause: outcome.Cause}"));
     assert!(serde.contains("DecodeSaveNoteError(outcome.Status, []byte(outcome.Body))"));

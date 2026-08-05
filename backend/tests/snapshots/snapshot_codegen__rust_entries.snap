@@ -1,5 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
+assertion_line: 166
 expression: "render_sdk(entries_module(), TargetKind::Rust, None)"
 ---
 // ==== rust/env.rs ====
@@ -265,7 +266,7 @@ use crate::notes::types::*;
 
 fn save_note_descriptor() -> &'static tono_http_runtime::WireDescriptor {
     static DESCRIPTOR: std::sync::OnceLock<tono_http_runtime::WireDescriptor> = std::sync::OnceLock::new();
-    DESCRIPTOR.get_or_init(|| tono_http_runtime::WireDescriptor::parse("{\"bindings\":[[\"id\",{\"kind\":\"label\"}],[\"body\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[529,\"notes#overloaded\",\"overloaded\",true]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-Client-Name\"}],{\"field\":[\"client_name\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,null]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/notes/{id}\"}").expect("valid wire descriptor"))
+    DESCRIPTOR.get_or_init(|| tono_http_runtime::WireDescriptor::parse("{\"bindings\":[[\"id\",{\"kind\":\"label\"}],[\"body\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-Client-Name\"}],{\"field\":[\"client_name\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,null]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/notes/{id}\"}").expect("valid wire descriptor"))
 }
 
 /// Settings are the resolved construction values of the client entry:
@@ -500,7 +501,7 @@ impl Client {
     }
     pub async fn save_note(&self, input: Note) -> Result<Note, TonoError> {
         let record = serde_json::to_value(&input).map_err(|e| TonoError::Decode(DecodeError { path: "$".to_string(), expected: "input".to_string(), raw: e.to_string() }))?;
-        let outcome = self.runtime.execute(save_note_descriptor(), &record, self.hooks.as_ref()).await
+        let outcome = self.runtime.execute(save_note_descriptor(), &record, self.hooks.as_ref(), Some(&|status, body| decode_save_note_error(status, body).retryable())).await
             .map_err(|cause| match cause.downcast::<TonoError>() {
                 Ok(declared) => *declared,
                 Err(other) => TonoError::Contract(ContractError { contract_name: "save_note".to_string(), cause: other }),

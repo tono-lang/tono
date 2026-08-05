@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 175
+assertion_line: 182
 expression: "render_sdk(entries_module(), TargetKind::TypeScript, None)"
 ---
 // ==== typescript/env.ts ====
@@ -213,14 +213,6 @@ const saveNoteDescriptor: WireDescriptor = JSON.parse(`{
   ],
   "endpoint": [
     "endpoint"
-  ],
-  "errors": [
-    [
-      529,
-      "notes#overloaded",
-      "overloaded",
-      true
-    ]
   ],
   "http_method": "POST",
   "request_headers": [
@@ -472,7 +464,7 @@ export class Client {
   }
 
   async saveNote(input: Note): Promise<Note> {
-    const outcome = await execute(saveNoteDescriptor, encodeNote(input), this.options);
+    const outcome = await execute(saveNoteDescriptor, encodeNote(input), this.options, undefined, (status, body) => decodeSaveNoteError(status, body).retryable());
     if (outcome.outcome === "transport") {
       throw new TransportError(outcome.cause);
     }

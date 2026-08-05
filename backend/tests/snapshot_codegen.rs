@@ -149,7 +149,6 @@ fn entries_module() -> tono_backend::ir::Module {
                         "bindings": [["id", {"kind": "label"}], ["body", {"kind": "body"}]],
                         "response_bindings": [],
                         "success": [[200, null]],
-                        "errors": [[529, "notes#overloaded", "overloaded", true]],
                         "endpoint": ["endpoint"],
                         "request_headers": [[[{"lit": "X-Client-Name"}], {"field": ["client_name"]}]],
                         "timeout": {"ref": "timeout"},
