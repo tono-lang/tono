@@ -3,7 +3,10 @@
 //! builders so neither file outgrows the size ceiling.
 
 use super::{enum_shape, enum_values, member, member_constrained, structure};
-use crate::ir::{Constraint, EnumBacking, Module, Prim, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{
+    Constraint, EnumBacking, Module, Prim, Shape, ShapeKind, TemplatePart, Trait, Tref,
+    WireBinding, WireValue,
+};
 
 /// An entry module exercising every resolution idiom the entry emitters
 /// spell: each env-parsed primitive, guaranteed and why-tracked chains, a
@@ -198,7 +201,23 @@ pub fn entries_matrix_module() -> Module {
                 args: vec![],
             }),
             errors: vec![],
-            wire: None,
+            wire: Some(Box::new(WireBinding {
+                method: "GET".into(),
+                uri: vec![
+                    TemplatePart::Lit("/x/".into()),
+                    TemplatePart::Field(vec!["naming".into()]),
+                ],
+                bindings: Default::default(),
+                response_bindings: Default::default(),
+                success: vec![200],
+                endpoint: Some(vec!["naming".into()]),
+                request_headers: vec![(
+                    vec![TemplatePart::Lit("X-K".into())],
+                    WireValue::Field(vec!["derived".into()]),
+                )],
+                timeout: Some(vec!["wait".into()]),
+                retry: Some(vec!["tiny".into()]),
+            })),
         },
         traits: vec![
             descriptor.clone(),
@@ -224,13 +243,26 @@ pub fn entries_matrix_module() -> Module {
             },
         ],
     };
+    fn bare_wire() -> WireBinding {
+        WireBinding {
+            method: "GET".into(),
+            uri: vec![TemplatePart::Lit("/x".into())],
+            bindings: Default::default(),
+            response_bindings: Default::default(),
+            success: vec![200],
+            endpoint: Some(vec!["naming".into()]),
+            request_headers: Vec::new(),
+            timeout: None,
+            retry: None,
+        }
+    }
     let op_bare = Shape {
         id: "m#api.ping".into(),
         kind: ShapeKind::Operation {
             input: None,
             output: None,
             errors: vec![],
-            wire: None,
+            wire: Some(Box::new(bare_wire())),
         },
         traits: vec![descriptor.clone()],
     };
@@ -240,7 +272,7 @@ pub fn entries_matrix_module() -> Module {
             input: None,
             output: Some(Tref::Prim(Prim::I32)),
             errors: vec![],
-            wire: None,
+            wire: Some(Box::new(bare_wire())),
         },
         traits: vec![descriptor],
     };

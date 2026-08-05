@@ -310,6 +310,16 @@ pub fn wire_descriptor(op: &Shape) -> Option<&serde_json::Value> {
     find_trait(&op.traits, "wire_descriptor").map(|t| &t.value)
 }
 
+/// The typed wire binding a Protocol pass resolved for this operation (IR v8),
+/// meant to be read directly by a target instead of the opaque wire_descriptor
+/// blob above. `None` for a purely local operation.
+pub fn wire_binding(op: &Shape) -> Option<&crate::ir::WireBinding> {
+    match &op.kind {
+        ShapeKind::Operation { wire, .. } => wire.as_deref(),
+        _ => None,
+    }
+}
+
 /// Build the client declaration: one method signature per operation, the
 /// effect classified here and lowered by the target's render rules. The
 /// per-language pieces ride the parameters, exactly like `emit_shape`: the

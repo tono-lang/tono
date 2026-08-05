@@ -28,7 +28,7 @@ use crate::codegen::targets::typescript::types::LANG;
 use crate::codegen::tree::{Decl, ModuleFile};
 use crate::ir::{EnvName, HttpAnswer, Module, Source, StubAnswer, StubDep, TestPattern, Tref};
 
-use super::{field_camel_ren, literal, module_symbol, names, runtime_import, Names};
+use super::{field_camel_ren, literal, module_symbol, names, support_symbol, Names};
 
 #[path = "vector_expects.rs"]
 mod expects;
@@ -267,8 +267,8 @@ fn transport_block(answers: &[&HttpAnswer]) -> String {
     };
     match answers {
         [only] => format!(
-            "const seen: CanonicalRequest[] = [];\n\
-             const transport: CanonicalTransport = async (req) => {{\n\
+            "const seen: HttpRequest[] = [];\n\
+             const transport: HttpTransport = async (req) => {{\n\
              \x20 seen.push(req);\n\
              \x20 return {response};\n\
              }};\n",
@@ -280,9 +280,9 @@ fn transport_block(answers: &[&HttpAnswer]) -> String {
                 .map(|a| format!("  {},\n", literal(a)))
                 .collect();
             format!(
-                "const seen: CanonicalRequest[] = [];\n\
+                "const seen: HttpRequest[] = [];\n\
                  const responses = [\n{responses}];\n\
-                 const transport: CanonicalTransport = async (req) => {{\n\
+                 const transport: HttpTransport = async (req) => {{\n\
                  \x20 seen.push(req);\n\
                  \x20 return responses[Math.min(seen.length - 1, responses.length - 1)];\n\
                  }};\n",
@@ -445,8 +445,8 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
         let stub = ctx.test.stub.expect("a hermetic call has its stub");
         match stub.dep {
             StubDep::Http => {
-                refs.push(runtime_import("CanonicalRequest"));
-                refs.push(runtime_import("CanonicalTransport"));
+                refs.push(support_symbol("HttpRequest"));
+                refs.push(support_symbol("HttpTransport"));
                 let answers: Vec<&HttpAnswer> = stub
                     .answers
                     .iter()

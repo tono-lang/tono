@@ -155,6 +155,33 @@ fn entries_module() -> tono_backend::ir::Module {
                         "retry": {"max": {"ref": "max_retries"}}
                     }),
                 });
+                // The IR v8 typed counterpart of the same resolution, which the
+                // TypeScript target now reads directly instead of the opaque
+                // blob above (Rust/Go still read only the blob).
+                if let tono_backend::ir::ShapeKind::Operation { wire, .. } = &mut op.kind {
+                    *wire = Some(Box::new(tono_backend::ir::WireBinding {
+                        method: "POST".into(),
+                        uri: vec![
+                            tono_backend::ir::TemplatePart::Lit("/notes/".into()),
+                            tono_backend::ir::TemplatePart::Input("id".into()),
+                        ],
+                        bindings: [
+                            ("id".to_string(), tono_backend::ir::WirePart::Label),
+                            ("body".to_string(), tono_backend::ir::WirePart::Body),
+                        ]
+                        .into_iter()
+                        .collect(),
+                        response_bindings: Default::default(),
+                        success: vec![200],
+                        endpoint: Some(vec!["endpoint".into()]),
+                        request_headers: vec![(
+                            vec![tono_backend::ir::TemplatePart::Lit("X-Client-Name".into())],
+                            tono_backend::ir::WireValue::Field(vec!["client_name".into()]),
+                        )],
+                        timeout: Some(vec!["timeout".into()]),
+                        retry: Some(vec!["max_retries".into()]),
+                    }));
+                }
             }
         }
     }

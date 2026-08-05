@@ -11,15 +11,13 @@
 //! so the descriptor's ref positions (endpoint, headers, timeout, retry)
 //! resolve in the runtime without the client interpreting a descriptor.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
-use crate::codegen::entries::{
-    companion_name, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
-};
+use crate::codegen::entries::{companion_name, op_local_name, plan, EntryModel, FieldShape};
 use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
-use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
+use crate::codegen::ops::{declared_errors, error_names, wire_binding, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
 use crate::codegen::targets::typescript::render::TsRules;
@@ -27,9 +25,6 @@ use crate::codegen::targets::typescript::types::{type_expr_of, TsVal, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
 use crate::ir::{EntryField, EnvName, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref};
-
-/// The runtime package (same one the loose-op client uses).
-use crate::codegen::targets::typescript::client::RUNTIME_PKG;
 
 const BINDING_LANGS: [&str; 2] = ["ts", "typescript"];
 
@@ -136,10 +131,6 @@ fn type_refs(t: &Tref, module: &Module) -> Vec<Symbol> {
     }
 }
 
-fn runtime_import(name: &str) -> Symbol {
-    Symbol::imported(name, RUNTIME_PKG, name)
-}
-
 /// The zero value the mutable Settings draft starts from, per declared type.
 fn zero_value(t: &Tref) -> String {
     match t {
@@ -157,16 +148,6 @@ fn zero_value(t: &Tref) -> String {
         Tref::Ref { .. } => format!("{{}} as {}", ts_type(t)),
         _ => format!("\"\" as {}", ts_type(t)),
     }
-}
-
-/// Whether the value is string-shaped in TypeScript (assignable from a raw env
-/// string with at most a branded cast).
-fn string_like(t: &Tref) -> bool {
-    matches!(
-        t,
-        Tref::Prim(Prim::String | Prim::Uuid | Prim::Timestamp | Prim::Date | Prim::Duration)
-            | Tref::Ref { .. }
-    )
 }
 
 fn cast_string(t: &Tref, v: &str) -> String {
@@ -253,7 +234,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     decls.extend(plan::output_decode_decls(
         &entries,
         module,
-        |op| wire_descriptor(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
+        |op| wire_binding(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
         |shape| decode::output_decode_decl(shape, module),
     ));
     let mut per_entry = Vec::new();
@@ -262,7 +243,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         let has_tests = tested.contains(entry.name);
         let mut own = vec![settings_interface(entry, &n, config, module)];
         own.extend(config_object_interface(entry, &n, config, module));
-        own.extend(descriptor_decls(entry, &n));
         own.extend(impl_op::seam_decls(entry, &n, module, &bound, has_tests));
         own.push(class_decl(
             entry,
@@ -298,8 +278,7 @@ fn class_decl(
 ) -> Decl {
     let en = error_names();
     let mut refs = vec![
-        runtime_import("ClientOptions"),
-        runtime_import("execute"),
+        support_symbol("ClientOptions"),
         module_symbol(&en.transport, module),
     ];
     for f in &entry.fields {
@@ -449,64 +428,71 @@ fn class_decl(
         ));
     }
 
-    // Freeze the resolved values for the runtime's ref positions.
-    body.push_str("    const values: Record<string, unknown> = {};\n");
+    // Every distinct `@timeout` field path any operation actually declares
+    // (usually one, but a multi-op entry could bind more than one) becomes
+    // its own private field: the constructor converts Duration to
+    // milliseconds once, eagerly, so a malformed value still fails
+    // construction (ConfigError) rather than surfacing at the first call
+    // that happens to need it. `@retry`/`endpoint`/`@header`/path-template
+    // positions all read the typed Settings (or, for retry, the resolved
+    // numeric field) directly at the call site (see `op_method`'s
+    // `field_expr`), so there is no runtime values map left to freeze into.
+    let timeout_paths: BTreeMap<String, Vec<String>> = entry
+        .operations
+        .iter()
+        .filter_map(|op| match &op.kind {
+            ShapeKind::Operation { wire: Some(w), .. } => {
+                w.timeout.as_ref().map(|p| (p.join("."), p.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut timeout_field_decls = String::new();
+    let mut timeout_field_by_path: BTreeMap<String, String> = BTreeMap::new();
     for vp in entry.value_paths(module) {
-        // An enum-typed leaf is a branded string wherever it sits (a field or
-        // a composed/structured member): it freezes like any other scalar the
-        // descriptor's refs can name.
-        let scalar_ref = ref_is_enum(vp.target, module);
-        if value_expr(&vp, config, scalar_ref).is_none() {
+        let Some(segments) = timeout_paths.get(&vp.path) else {
             continue;
-        }
+        };
+        let field_name = timeout_field_name(entry, config, segments);
+        timeout_field_decls.push_str(&format!("  private readonly {field_name}: number;\n"));
         // A member of a structured draft may be undefined (the draft starts
-        // from an empty object); reading it through its zero keeps the frozen
-        // values and the presence guard aligned with Go's zero struct. A
-        // string-like member falls back to the empty string (its Go zero),
-        // never to the draft's empty-object spelling.
+        // from an empty object); reading it through its zero keeps this
+        // aligned with the constructor's other member reads.
         let expr = if vp.member.is_some() {
-            let zero = if string_like(vp.target) {
+            format!(
+                "(s.{} ?? {})",
+                access(&vp, config),
                 cast_string(vp.target, "\"\"")
-            } else {
-                zero_value(vp.target)
-            };
-            format!("(s.{} ?? {})", access(&vp, config), zero)
+            )
         } else {
             format!("s.{}", access(&vp, config))
         };
-        let assign = if let Tref::Prim(Prim::Duration) = vp.target {
-            helpers.duration_ms = true;
-            let fail = config_error(&format!(
-                "`{path}: invalid duration ${{JSON.stringify(String({expr}))}}`",
-                path = vp.path,
-            ));
-            format!(
-                "    try {{\n      values[{path:?}] = durationToMs(String({expr}));\n    }} catch {{\n      {fail}\n    }}\n",
-                path = vp.path,
-            )
-        } else {
-            format!(
-                "    values[{path:?}] = {value};\n",
-                path = vp.path,
-                value = value_cast(vp.target, &expr),
-            )
-        };
+        helpers.duration_ms = true;
+        let fail = config_error(&format!(
+            "`{path}: invalid duration ${{JSON.stringify(String({expr}))}}`",
+            path = vp.path,
+        ));
+        let assign = format!(
+            "    try {{\n      this.{field_name} = durationToMs(String({expr}));\n    }} catch {{\n      {fail}\n    }}\n",
+        );
         match presence_guard(entry, &vp, &expr) {
-            Some(guard) => body.push_str(&format!("    if ({guard}) {{\n  {assign}    }}\n",)),
+            Some(guard) => body.push_str(&format!(
+                "    if ({guard}) {{\n  {assign}    }} else {{\n      this.{field_name} = 0;\n    }}\n",
+            )),
             None => body.push_str(&assign),
         }
+        timeout_field_by_path.insert(vp.path.clone(), field_name);
     }
 
     // The frozen client options: entry construction leaves baseUrl empty (the
-    // per-operation endpoint resolves from the descriptor's ref), and the
+    // per-operation endpoint resolves from the wire binding), and the
     // transport slots come off the bridged Settings.
     body.push_str(
-        "    this.settings = s;\n    this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers, values };\n",
+        "    this.settings = s;\n    this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers };\n",
     );
     // The mutually-exclusive transport slots are rejected at construction (as Go
     // does in New), so a misconfigured client fails to build instead of failing
     // obscurely on its first call.
-    refs.push(runtime_import("assertExclusiveTransport"));
     body.push_str("    assertExclusiveTransport(this.options);\n");
 
     let hooks_field = {
@@ -520,15 +506,18 @@ fn class_decl(
         if slots.is_empty() {
             String::new()
         } else {
-            refs.push(runtime_import("Hooks"));
+            refs.push(support_symbol("Hooks"));
             format!(
                 "  private readonly hooks: Hooks = {{ {} }};\n",
                 slots.join(", ")
             )
         }
     };
-    let passes_hooks = !hooks_field.is_empty();
-
+    // The already-converted, already-validated millisecond value for a
+    // `@timeout` field path, read off its private field rather than
+    // re-deriving `durationToMs` at every call site.
+    let timeout_field_expr =
+        |path: &[String]| format!("this.{}", timeout_field_by_path[&path.join(".")]);
     let mut methods = String::new();
     for op in entry.operations {
         methods.push_str(&op_method(
@@ -536,8 +525,9 @@ fn class_decl(
             op,
             module,
             config,
+            entry,
             bound,
-            passes_hooks,
+            &timeout_field_expr,
             &mut refs,
         ));
         methods.push('\n');
@@ -551,7 +541,7 @@ fn class_decl(
     // slots readonly, so the swap goes through a mutable view of the frozen
     // options object (the object itself is a plain literal).
     let for_test = if has_tests {
-        refs.push(runtime_import("CanonicalTransport"));
+        refs.push(support_symbol("HttpTransport"));
         let sig_params = if params.is_empty() {
             String::new()
         } else {
@@ -568,9 +558,9 @@ fn class_decl(
             "  // forTest is the constructor plus the transport seam the generated\n\
              \x20 // tests construct through: the real construction path runs first, then\n\
              \x20 // the canonical transport wins over anything bespoke.\n\
-             \x20 static forTest(seam: {{ transport: CanonicalTransport }}{sig_params}): {client} {{\n\
+             \x20 static forTest(seam: {{ transport: HttpTransport }}{sig_params}): {client} {{\n\
              \x20   const client = new {client}({pass});\n\
-             \x20   const options = client.options as {{ transport?: CanonicalTransport; fetch?: typeof fetch }};\n\
+             \x20   const options = client.options as {{ transport?: HttpTransport; fetch?: typeof fetch }};\n\
              \x20   options.transport = seam.transport;\n\
              \x20   options.fetch = undefined;\n\
              \x20   return client;\n\
@@ -593,6 +583,7 @@ fn class_decl(
          export class {client} {{\n\
          \x20 private readonly settings: {settings};\n\
          \x20 private readonly options: ClientOptions;\n\
+         {timeout_field_decls}\
          {hooks_field}\
          \x20 constructor({params}) {{\n{body}  }}\n\n{for_test}{methods}}}",
         client = n.client,
@@ -616,8 +607,9 @@ fn op_method(
     op: &Shape,
     module: &Module,
     config: &CasingConfig,
+    entry: &EntryModel<'_>,
     bound: &[BoundExtension<'_>],
-    passes_hooks: bool,
+    timeout_field_expr: &dyn Fn(&[String]) -> String,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let en = error_names();
@@ -673,7 +665,7 @@ fn op_method(
         }
     }
 
-    if wire_descriptor(op).is_none() {
+    let Some(wire) = wire_binding(op) else {
         // No protocol binding: the operation is implemented by bespoke sources
         // the frontend proved are bound, and the generator gate proved are bound
         // for this target.
@@ -692,7 +684,7 @@ fn op_method(
             discriminator: &discriminator_name(n, op),
             refs,
         });
-    }
+    };
 
     let has_declared_errors = !declared_errors(op, module).is_empty();
     let discriminator = discriminator_name(n, op);
@@ -703,35 +695,40 @@ fn op_method(
         throw(format!("new {}(outcome.status, outcome.body)", en.api))
     };
     let success_block = decode::success_block(output, module, &ret, &throw, refs);
-    // The retry loop and the thrown error read the same discriminator, so
-    // they can never disagree: TonoError's retryable() is the only place
-    // @retryable is materialized. An op with no declared errors omits the
-    // predicate (no discriminator exists to call).
-    let retryable_expr = has_declared_errors
-        .then(|| format!("(status, body) => {discriminator}(status, body).retryable()"));
-    let call_tail = match (passes_hooks, &retryable_expr) {
-        (false, None) => String::new(),
-        (true, None) => ", this.hooks".to_string(),
-        (false, Some(r)) => format!(", undefined, {r}"),
-        (true, Some(r)) => format!(", this.hooks, {r}"),
-    };
-    let transport_throw = throw(format!("new {}(outcome.cause)", en.transport));
+    let before_request_bound = hook_binding(bound, "before_request").is_some();
+    let after_response_bound = hook_binding(bound, "after_response").is_some();
+    let http_method = wire.method.clone();
+    // The frontend guarantees an endpoint/@header/path-template/@retry field
+    // reference resolves to a value already sitting, typed, on the resolved
+    // Settings — read it there directly instead of through a runtime bag.
+    // @timeout is the one exception: its field converts (Duration to
+    // milliseconds) rather than passing through, so it reads the private,
+    // already-converted field the constructor built (see class_decl).
+    let field_expr = |path: &[String]| field_path_expr(entry, config, path, "this.settings");
+    let transport_body = transport::op_call(
+        wire,
+        &http_method,
+        &input_expr,
+        has_declared_errors,
+        &discriminator,
+        &error_line,
+        &success_block,
+        &en.transport,
+        &throw,
+        before_request_bound,
+        after_response_bound,
+        &field_expr,
+        timeout_field_expr,
+        refs,
+    );
     let doc = doc_of(&op.traits)
         .map(|d| format!("  // {}\n", d.replace('\n', "\n  // ")))
         .unwrap_or_default();
     format!(
         "{doc}  async {name}({param}): Promise<{ret}> {{\n\
          {validate_block}\
-         \x20   const outcome = await execute({descriptor}, {input_expr}, this.options{call_tail});\n\
-         \x20   if (outcome.outcome === \"transport\") {{\n\
-         \x20     {transport_throw}\n\
-         \x20   }}\n\
-         \x20   if (outcome.outcome === \"error\") {{\n\
-         \x20     {error_line}\n\
-         \x20   }}\n\
-         {success_block}\n\
+         {transport_body}\
          \x20 }}",
-        descriptor = descriptor_var(n, op),
     )
 }
 
@@ -744,9 +741,10 @@ mod resolve;
 mod surface;
 #[cfg(test)]
 mod tests;
+pub(crate) mod transport;
 pub(crate) mod vector_tests;
 
-use checks::{access, config_error, presence_guard, value_cast, value_expr};
+use checks::{access, config_error, field_path_expr, presence_guard, timeout_field_name};
 use resolve::Resolver;
 use surface::*;
 pub use surface::{casing_helpers, duration_helpers, env_helpers, resolution_helpers};
