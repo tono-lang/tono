@@ -37,9 +37,9 @@ struct ParityVector {
     expect: ParityExpect,
 }
 
-/// Real client construction for the TypeScript harness (TASK-112 repointed
-/// it against the generated SDK) and, here, the literal retry/timeout values
-/// a synthetic descriptor is built from: every surviving vector uses a
+/// Real client construction for the TypeScript harness (which drives a
+/// generated SDK directly) and, here, the literal retry/timeout values a
+/// synthetic descriptor is built from: every surviving vector uses a
 /// literal, never a late-bound ref, so a lookup keyed by op name is enough
 /// to reconstruct exactly the descriptor this harness built from JSON
 /// before.
@@ -50,10 +50,9 @@ struct ParityConfig {
 }
 
 /// Rebuilds the synthetic `WireDescriptor` a vector's op and config
-/// describe. This is not the generated-SDK repoint (TASK-114 for Rust):
-/// `Runtime`/`execute` are exercised exactly as before, only the
-/// descriptor's origin moves from "parsed off JSON" to "built from a
-/// 3-case lookup table."
+/// describe. `Runtime`/`execute` are exercised exactly as before; only the
+/// descriptor's origin moves from "parsed off JSON" to "built from a 3-case
+/// lookup table," since the JSON vector no longer carries one directly.
 fn descriptor_for(op: &str, config: &ParityConfig) -> Value {
     let mut base = serde_json::json!({
         "http_method": "POST",

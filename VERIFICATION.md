@@ -98,9 +98,9 @@ to avoid equivalent mutants (no redundant guards) instead.
 The HTTP runtimes also share one behavior-vector suite
 (`runtimes/parity/vectors.json`): every runtime runs the same retry, timeout,
 and error-classification scenarios with pinned jitter and recorded backoff, so
-the runtimes cannot drift apart. TypeScript's harness (`runtimes/parity/typescript/parity.test.ts`)
+the runtimes cannot drift apart. TypeScript's harness (`runtimes/http-ts/test/parity.test.ts`)
 compiles `runtimes/parity/spec.tono`, generates the real SDK, and drives that
-generated client directly, so it proves what a consumer actually imports, not
-just that the hand-written runtime interprets a synthetic descriptor
-correctly. Go and Rust still exercise their runtime packages the original way
-(see `runtimes/parity/README.md`).
+generated client directly (via `scripts/run-parity.sh`), so it proves what a
+consumer actually imports, not just that the hand-written runtime interprets
+a synthetic descriptor correctly. Go and Rust still exercise their runtime
+packages the original way.

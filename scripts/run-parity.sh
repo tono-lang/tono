@@ -5,9 +5,8 @@
 # and runs that target's native test suite.
 #
 # Only TypeScript is repointed against the generated SDK so far; Go and Rust
-# still exercise their runtime packages directly (see runtimes/parity/README.md).
-# This script is structured so those two slot in as additional cases later,
-# without a rewrite.
+# still exercise their runtime packages directly. This script is structured
+# so those two slot in as additional cases later, without a rewrite.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -45,7 +44,7 @@ fi
 "$tono" gen --target typescript --out "$work/sdk" <"$work/ir.json"
 
 echo "dropping the parity harness into the generated SDK..."
-cp "$root/runtimes/parity/typescript/parity.test.ts" "$work/sdk/typescript/"
+cp "$root/runtimes/http-ts/test/parity.test.ts" "$work/sdk/typescript/"
 cp "$root/runtimes/parity/vectors.json" "$work/sdk/typescript/"
 
 echo "running the parity suite against the generated SDK..."

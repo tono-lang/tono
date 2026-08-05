@@ -25,21 +25,20 @@ type parityVector struct {
 	Expect         parityExpect    `json:"expect"`
 }
 
-// parityConfig is real client construction for the TypeScript harness
-// (TASK-112 repointed it against the generated SDK) and, here, the literal
-// retry/timeout values a synthetic descriptor is built from: every surviving
-// vector uses a literal, never a late-bound ref, so a lookup keyed by op name
-// is enough to reconstruct exactly the descriptor this harness built from
-// JSON before.
+// parityConfig is real client construction for the TypeScript harness (which
+// drives a generated SDK directly) and, here, the literal retry/timeout
+// values a synthetic descriptor is built from: every surviving vector uses a
+// literal, never a late-bound ref, so a lookup keyed by op name is enough to
+// reconstruct exactly the descriptor this harness built from JSON before.
 type parityConfig struct {
 	MaxRetries *float64 `json:"max_retries"`
 	TimeoutMs  *float64 `json:"timeout_ms"`
 }
 
 // descriptorFor rebuilds the synthetic WireDescriptor a vector's op and
-// config describe. This is not the generated-SDK repoint (TASK-113 for Go):
-// Runtime/Execute are exercised exactly as before, only the descriptor's
-// origin moves from "parsed off JSON" to "built from a 3-case lookup table."
+// config describe. Runtime/Execute are exercised exactly as before; only the
+// descriptor's origin moves from "parsed off JSON" to "built from a 3-case
+// lookup table," since the JSON vector no longer carries one directly.
 func descriptorFor(t *testing.T, op string, config parityConfig) json.RawMessage {
 	t.Helper()
 	base := map[string]any{

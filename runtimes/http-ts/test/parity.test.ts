@@ -1,10 +1,10 @@
 // The cross-runtime parity suite, TypeScript side: unlike the Go and Rust
 // harnesses (still exercising the hand-written runtime package directly),
-// this one drives the real generated SDK compiled from ../spec.tono. This
-// file is not run in place: scripts/run-parity.sh copies it (and
-// ../vectors.json) into the SDK's own generated output directory before
-// invoking Vitest, so the relative imports below resolve against generated
-// code, not against this source tree.
+// this one drives the real generated SDK compiled from ../../parity/spec.tono.
+// This file is not run in place: scripts/run-parity.sh copies it (and
+// ../../parity/vectors.json) into the SDK's own generated output directory
+// before invoking Vitest, so the relative imports below resolve against
+// generated code, not against this source tree.
 //
 // Jitter is pinned to 0.5 and backoff sleeps are recorded through the
 // generated client's own timingSeam (./http), the same seam PR #86 added
