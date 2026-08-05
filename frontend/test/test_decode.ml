@@ -159,7 +159,106 @@ let shape_suite =
       {|{"id": "x#O", "kind": "operation", "input": null, "output": null}|};
     ok "operation absent io" Ir_json.decode_shape
       {|{"id": "x#O", "kind": "operation"}|};
+    ok "operation null wire" Ir_json.decode_shape
+      {|{"id": "x#O", "kind": "operation", "wire": null}|};
+    ok "operation with wire" Ir_json.decode_shape
+      {|{"id": "x#O", "kind": "operation", "wire": {"method": "GET"}}|};
+    fails "operation malformed wire" Ir_json.decode_shape
+      {|{"id": "x#O", "kind": "operation", "wire": {"method": 5}}|};
   ]
+
+(* ── Resolved wire bindings ────────────────────────────────────────────── *)
+
+let wire_part_suite =
+  [
+    fails "wire part not an object" Ir_json.decode_wire_part {|5|};
+    fails "wire part missing kind" Ir_json.decode_wire_part {|{}|};
+    fails "wire part unknown kind" Ir_json.decode_wire_part
+      {|{"kind": "bogus"}|};
+    fails "wire part query missing name" Ir_json.decode_wire_part
+      {|{"kind": "query"}|};
+    fails "wire part header missing name" Ir_json.decode_wire_part
+      {|{"kind": "header"}|};
+    ok "wire part label" Ir_json.decode_wire_part {|{"kind": "label"}|};
+    ok "wire part query" Ir_json.decode_wire_part
+      {|{"kind": "query", "name": "q"}|};
+    ok "wire part header" Ir_json.decode_wire_part
+      {|{"kind": "header", "name": "X-Key"}|};
+    ok "wire part body" Ir_json.decode_wire_part {|{"kind": "body"}|};
+    ok "wire part payload" Ir_json.decode_wire_part {|{"kind": "payload"}|};
+  ]
+
+let wire_response_part_suite =
+  [
+    fails "wire response part not an object" Ir_json.decode_wire_response_part
+      {|5|};
+    fails "wire response part missing kind" Ir_json.decode_wire_response_part
+      {|{}|};
+    fails "wire response part unknown kind" Ir_json.decode_wire_response_part
+      {|{"kind": "bogus"}|};
+    fails "wire response part header missing name"
+      Ir_json.decode_wire_response_part {|{"kind": "header"}|};
+    ok "wire response part header" Ir_json.decode_wire_response_part
+      {|{"kind": "header", "name": "X-Trace-Id"}|};
+    ok "wire response part status code" Ir_json.decode_wire_response_part
+      {|{"kind": "statusCode"}|};
+  ]
+
+let wire_value_suite =
+  [
+    fails "wire value not an object" Ir_json.decode_wire_value {|5|};
+    fails "wire value empty" Ir_json.decode_wire_value {|{}|};
+    fails "wire value multiple keys" Ir_json.decode_wire_value
+      {|{"lit": 1, "field": ["a"]}|};
+    fails "wire value unknown key" Ir_json.decode_wire_value {|{"bogus": 1}|};
+    ok "wire value lit" Ir_json.decode_wire_value {|{"lit": 5}|};
+    ok "wire value field" Ir_json.decode_wire_value {|{"field": ["a", "b"]}|};
+    ok "wire value template" Ir_json.decode_wire_value
+      {|{"template": [{"lit": "x"}]}|};
+  ]
+
+let wire_binding_suite =
+  [
+    fails "wire binding not an object" Ir_json.decode_wire_binding {|5|};
+    fails "wire binding missing method" Ir_json.decode_wire_binding {|{}|};
+    fails "wire binding method not string" Ir_json.decode_wire_binding
+      {|{"method": 5}|};
+    fails "wire binding uri not array" Ir_json.decode_wire_binding
+      {|{"method": "GET", "uri": 5}|};
+    fails "wire binding bindings not object" Ir_json.decode_wire_binding
+      {|{"method": "GET", "bindings": 5}|};
+    fails "wire binding bindings bad part" Ir_json.decode_wire_binding
+      {|{"method": "GET", "bindings": {"id": {"kind": "bogus"}}}|};
+    fails "wire binding response_bindings not object"
+      Ir_json.decode_wire_binding {|{"method": "GET", "response_bindings": 5}|};
+    fails "wire binding success not array" Ir_json.decode_wire_binding
+      {|{"method": "GET", "success": 5}|};
+    fails "wire binding endpoint not array of strings"
+      Ir_json.decode_wire_binding {|{"method": "GET", "endpoint": [5]}|};
+    fails "wire binding request_headers malformed" Ir_json.decode_wire_binding
+      {|{"method": "GET", "request_headers": [5]}|};
+    fails "wire binding timeout not array" Ir_json.decode_wire_binding
+      {|{"method": "GET", "timeout": 5}|};
+    fails "wire binding retry not array" Ir_json.decode_wire_binding
+      {|{"method": "GET", "retry": 5}|};
+    ok "wire binding minimal" Ir_json.decode_wire_binding {|{"method": "GET"}|};
+    ok "wire binding full" Ir_json.decode_wire_binding
+      {|{
+          "method": "POST",
+          "uri": [{"lit": "/charges/"}, {"input": "id"}],
+          "bindings": {"id": {"kind": "label"}, "q": {"kind": "query", "name": "q"}},
+          "response_bindings": {"trace_id": {"kind": "header", "name": "X-Trace-Id"}},
+          "success": [200, 202],
+          "endpoint": ["endpoint"],
+          "request_headers": [[[{"lit": "X-Client"}], {"field": ["client_name"]}]],
+          "timeout": ["timeout"],
+          "retry": ["settings", "max_retries"]
+        }|};
+  ]
+
+let wire_suite =
+  wire_part_suite @ wire_response_part_suite @ wire_value_suite
+  @ wire_binding_suite
 
 let union_discriminator_defaults () =
   match Ir_json.decode_shape (parse {|{"id": "x#U", "kind": "union"}|}) with
@@ -245,6 +344,7 @@ let () =
       ("trait", trait_suite);
       ("member", member_suite);
       ("shape", shape_suite);
+      ("wire", wire_suite);
       ("model", model_suite);
       ("helpers", helper_suite);
     ]

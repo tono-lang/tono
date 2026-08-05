@@ -59,6 +59,7 @@ let list_charges : Ir.model =
             input = None;
             output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
             errors = [];
+            wire = None;
           };
       traits = [];
     }
@@ -283,6 +284,7 @@ let service_api : Ir.model =
             input = Some (ref_ "payments#ListChargesRequest" []);
             output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
             errors = [ ref_ "payments#NotFound" [] ];
+            wire = None;
           };
       traits = [];
     }
@@ -410,6 +412,7 @@ let entries_client : Ir.model =
             input = Some (ref_ "notes#note" []);
             output = Some (ref_ "notes#note" []);
             errors = [ ref_ "notes#overloaded" [] ];
+            wire = None;
           };
       traits =
         [
@@ -574,6 +577,7 @@ let bespoke_impl : Ir.model =
             input = Some (ref_ input []);
             output = Some (ref_ output []);
             errors = [ ref_ "notes#overloaded" [] ];
+            wire = None;
           };
       traits;
     }
@@ -689,6 +693,86 @@ let bespoke_impl : Ir.model =
       ];
   }
 
+(* Example: the resolved wire binding (v8) an operation carries directly,
+   replacing the wire_descriptor blob trait for direct consumption: every
+   part/response-part/value kind, a uri template mixing all three placeholder
+   forms, and the entry-scoped endpoint/timeout/retry refs. *)
+let resolved_wire : Ir.model =
+  let charge : Ir.shape =
+    {
+      id = "payments#Charge";
+      kind = Ir.Structure { params = []; members = [ member "id" string_t ] };
+      traits = [];
+    }
+  in
+  let get_charge : Ir.shape =
+    {
+      id = "payments#client.get_charge";
+      kind =
+        Ir.Operation
+          {
+            input = Some (ref_ "payments#Charge" []);
+            output = Some (ref_ "payments#Charge" []);
+            errors = [];
+            wire =
+              Some
+                {
+                  Ir.wb_method = "GET";
+                  wb_uri =
+                    [
+                      Ir.Tpl_lit "/charges/";
+                      Ir.Tpl_input "id";
+                      Ir.Tpl_lit "/";
+                      Ir.Tpl_field [ "endpoint_suffix" ];
+                    ];
+                  wb_bindings =
+                    [
+                      ("id", Ir.Wire_label);
+                      ("q", Ir.Wire_query "q");
+                      ("x_key", Ir.Wire_header "X-Key");
+                      ("payload", Ir.Wire_payload);
+                      ("extra", Ir.Wire_body);
+                    ];
+                  wb_response_bindings =
+                    [
+                      ("trace_id", Ir.Wire_response_header "X-Trace-Id");
+                      ("status", Ir.Wire_response_status_code);
+                    ];
+                  (* [Protocol_http.to_ir_binding] only ever produces a
+                     singleton: this fixture exercises the JSON shape space,
+                     not a realistic resolver output. *)
+                  wb_success = [ 200; 202 ];
+                  wb_endpoint = Some [ "endpoint" ];
+                  wb_request_headers =
+                    [
+                      ( [ Ir.Tpl_lit "X-Client" ],
+                        Ir.Wire_field [ "client_name" ] );
+                      ([ Ir.Tpl_lit "X-Fixed" ], Ir.Wire_lit (`String "v1"));
+                      ( [ Ir.Tpl_lit "X-Combo" ],
+                        Ir.Wire_template
+                          [ Ir.Tpl_lit "v-"; Ir.Tpl_field [ "client_name" ] ] );
+                    ];
+                  wb_timeout = Some [ "timeout" ];
+                  wb_retry = Some [ "settings"; "max_retries" ];
+                };
+          };
+      traits = [];
+    }
+  in
+  {
+    tono_ir_version = Ir_json.current_ir_version;
+    modules =
+      [
+        {
+          mod_name = "payments";
+          shapes = [ charge ];
+          operations = [ get_charge ];
+          extensions = [];
+          tests = [];
+        };
+      ];
+  }
+
 (* The full corpus, keyed by fixture file name. *)
 
 let examples : (string * Ir.model) list =
@@ -702,4 +786,5 @@ let examples : (string * Ir.model) list =
     ("entries_client", entries_client);
     ("bespoke_impl", bespoke_impl);
     ("declared_tests", Ir_corpus_tests.declared_tests);
+    ("resolved_wire", resolved_wire);
   ]
