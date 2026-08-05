@@ -92,19 +92,18 @@ fn wire_value_expr(v: &WireValue, field_expr: &dyn Fn(&[String]) -> String) -> S
     }
 }
 
-/// The path expression: `this.options.baseUrl` (or the resolved endpoint
-/// field) concatenated with the URI template. The frontend guarantees an
-/// `endpoint:` reference is a `string` field, so the typed settings read
-/// needs no runtime guard; the empty-string fallback is business logic (an
-/// unset endpoint means "use baseUrl"), not a type check, and stays.
+/// The base-URL expression: the typed read of the resolved endpoint field,
+/// concatenated with the URI template by the caller. The frontend rejects an
+/// entry `@http` op that does not name a string endpoint field, and
+/// `validate_entries` re-checks it at generation time (IR can arrive from a
+/// file without ever passing the frontend), so by emission time the binding
+/// always carries an endpoint and the read needs no runtime guard.
 fn endpoint_expr(wire: &WireBinding, field_expr: &dyn Fn(&[String]) -> String) -> String {
-    match &wire.endpoint {
-        None => "this.options.baseUrl".to_string(),
-        Some(path) => {
-            let v = field_expr(path);
-            format!("({v} !== \"\" ? {v} : this.options.baseUrl)")
-        }
-    }
+    let path = wire
+        .endpoint
+        .as_ref()
+        .expect("validate_entries rejects an entry @http op with no endpoint");
+    field_expr(path)
 }
 
 fn uri_expr(wire: &WireBinding, field_expr: &dyn Fn(&[String]) -> String) -> String {
@@ -529,7 +528,7 @@ pub(crate) fn http_support_decls() -> Vec<Decl> {
              // operation. Exactly one transport slot may be set: fetch (native) or\n\
              // transport (canonical); setting both is a construction error. No slot\n\
              // ships its own auth; a bespoke hook sets an auth header through headers.\n\
-             export interface ClientOptions {\n  readonly baseUrl: string;\n  readonly fetch?: typeof fetch;\n  readonly transport?: HttpTransport;\n  readonly headers?: Readonly<Record<string, string>>;\n}",
+             export interface ClientOptions {\n  readonly fetch?: typeof fetch;\n  readonly transport?: HttpTransport;\n  readonly headers?: Readonly<Record<string, string>>;\n}",
             vec![support_symbol("HttpTransport")],
         ),
         Decl::raw_providing(

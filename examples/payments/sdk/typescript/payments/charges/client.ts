@@ -128,7 +128,6 @@ export class Client {
     }
     this.settings = s;
     this.options = {
-      baseUrl: "",
       fetch: s.fetch,
       transport: s.transport,
       headers: s.headers,
@@ -159,10 +158,7 @@ export class Client {
     if (invalid) {
       throw invalid;
     }
-    const url =
-      (this.settings.endpoint !== ""
-        ? this.settings.endpoint
-        : this.options.baseUrl) + "/charges";
+    const url = this.settings.endpoint + "/charges";
     const headers: Record<string, string> = {};
     setHeader(headers, "X-API-Key", formatScalar(this.settings.apiKey));
     for (const [k, v] of Object.entries(this.options.headers ?? {}))

@@ -484,11 +484,11 @@ fn class_decl(
         timeout_field_by_path.insert(vp.path.clone(), field_name);
     }
 
-    // The frozen client options: entry construction leaves baseUrl empty (the
-    // per-operation endpoint resolves from the wire binding), and the
-    // transport slots come off the bridged Settings.
+    // The frozen client options: the per-operation endpoint resolves from the
+    // wire binding, so the options carry only the transport slots bridged off
+    // the resolved Settings.
     body.push_str(
-        "    this.settings = s;\n    this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers };\n",
+        "    this.settings = s;\n    this.options = { fetch: s.fetch, transport: s.transport, headers: s.headers };\n",
     );
     // The mutually-exclusive transport slots are rejected at construction (as Go
     // does in New), so a misconfigured client fails to build instead of failing

@@ -533,6 +533,41 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     ))
     .unwrap_err();
     assert!(err.contains("endpoint_why"), "{err}");
+    // An entry op with an @http binding that names no endpoint: the frontend
+    // enforces this, but IR read from a file or stdin never went through it.
+    let no_endpoint_op = Shape {
+        id: "m#sdk.get".into(),
+        kind: ShapeKind::Operation {
+            input: None,
+            output: None,
+            errors: vec![],
+            wire: Some(Box::new(crate::ir::WireBinding {
+                method: "GET".into(),
+                uri: vec![TemplatePart::Lit("/x".into())],
+                bindings: Default::default(),
+                response_bindings: Default::default(),
+                success: vec![200],
+                endpoint: None,
+                request_headers: vec![],
+                timeout: None,
+                retry: None,
+            })),
+        },
+        traits: vec![],
+    };
+    let err = validate_entries(&model(
+        vec![Shape {
+            id: "m#sdk".into(),
+            kind: ShapeKind::Entry {
+                fields: vec![],
+                operations: vec![no_endpoint_op],
+            },
+            traits: vec![],
+        }],
+        vec![],
+    ))
+    .unwrap_err();
+    assert!(err.contains("no endpoint"), "{err}");
     // A single entry named new collides with the Go constructor.
     let err = validate_entries(&model(vec![entry_shape("m#new", vec![])], vec![])).unwrap_err();
     assert!(err.contains("New constructor"), "{err}");

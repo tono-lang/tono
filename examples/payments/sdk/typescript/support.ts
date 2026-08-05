@@ -36,7 +36,6 @@ export type HttpTransport = (
 // transport (canonical); setting both is a construction error. No slot
 // ships its own auth; a bespoke hook sets an auth header through headers.
 export interface ClientOptions {
-  readonly baseUrl: string;
   readonly fetch?: typeof fetch;
   readonly transport?: HttpTransport;
   readonly headers?: Readonly<Record<string, string>>;
