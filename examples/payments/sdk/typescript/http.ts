@@ -2,6 +2,17 @@
 
 import { ClientOptions, HttpRequest, HttpResponse } from "./support";
 
+// formatScalar renders a value the way the wire expects it in a path,
+// query, or header position: strings verbatim, everything else as JSON.
+export function formatScalar(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 // setHeader overrides across casings: header names are case-insensitive,
 // so a bespoke "authorization" replaces a declared "Authorization" rather
 // than riding beside it.
@@ -125,6 +136,15 @@ export function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Math.random seeds only the retry backoff's jitter, never anything
+// security-sensitive (no token, no session id, no cryptographic use),
+// so a predictable PRNG is fine here.
 export function defaultRandom(): number {
-  return Math.random();
+  return Math.random(); // NOSONAR: jitter timing only, not a cryptographic use
+}
+
+// retryDelay waits out one attempt's exponential-backoff delay before a
+// retried call.
+export async function retryDelay(attempt: number): Promise<void> {
+  await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
 }

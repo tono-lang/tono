@@ -4,13 +4,12 @@ import { durationToMs } from "../../duration";
 import { readEnv } from "../../env";
 import {
   assertExclusiveTransport,
-  backoffDelayMs,
-  defaultRandom,
-  defaultSleep,
+  formatScalar,
   hasHeader,
   httpSendWithTimeout,
   resolveMaxRetries,
   resolveTimeoutMs,
+  retryDelay,
   setHeader,
 } from "../../http";
 import {
@@ -175,7 +174,7 @@ export class Client {
     setHeader(
       headers,
       "X-API-Key",
-      String(this.options.values?.["api_key"] ?? ""),
+      formatScalar(this.options.values?.["api_key"]),
     );
     for (const [k, v] of Object.entries(this.options.headers ?? {}))
       setHeader(headers, k, v);
@@ -207,26 +206,26 @@ export class Client {
       try {
         response = await httpSendWithTimeout(this.options, request, timeoutMs);
       } catch (cause) {
-        if (attempt >= maxRetries) {
-          throw new TransportError(cause);
-        }
-        await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
-        continue;
-      }
-      const outcome = { status: response.status, body: response.body };
-      if (!(response.status >= 200 && response.status < 300)) {
-        const err = decodeCreateChargeError(outcome.status, outcome.body);
-        if (attempt < maxRetries && err.retryable()) {
-          await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
+        if (attempt < maxRetries) {
+          await retryDelay(attempt);
           continue;
         }
-        throw err;
+        throw new TransportError(cause);
       }
-      try {
-        return parseCharge(outcome.body);
-      } catch (path) {
-        throw new DecodeError(path as string, "Charge", outcome.body);
+      const outcome = { status: response.status, body: response.body };
+      if (response.status >= 200 && response.status < 300) {
+        try {
+          return parseCharge(outcome.body);
+        } catch (path) {
+          throw new DecodeError(path as string, "Charge", outcome.body);
+        }
       }
+      const err = decodeCreateChargeError(outcome.status, outcome.body);
+      if (attempt < maxRetries && err.retryable()) {
+        await retryDelay(attempt);
+        continue;
+      }
+      throw err;
     }
   }
 }

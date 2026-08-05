@@ -90,7 +90,7 @@ fn wire_value_expr(v: &WireValue) -> String {
             Some(s) => js_str(s),
             None => json.to_string(),
         },
-        WireValue::Field(path) => format!("String({} ?? \"\")", values_lookup(path)),
+        WireValue::Field(path) => format!("formatScalar({})", values_lookup(path)),
         WireValue::Template(parts) => template_expr(parts),
     }
 }
@@ -133,7 +133,7 @@ fn per_call_header_lines(wire: &WireBinding, indent_str: &str) -> String {
         .iter()
         .filter_map(|(name, part)| match part {
             WirePart::Header { name: header_name } => Some(format!(
-                "{indent_str}setHeader(headers, {}, String(record[{}] ?? \"\"));\n",
+                "{indent_str}setHeader(headers, {}, formatScalar(record[{}]));\n",
                 js_str(header_name),
                 js_str(name)
             )),
@@ -250,11 +250,68 @@ fn response_fold_expr(wire: &WireBinding) -> String {
     )
 }
 
+/// The URL assembly lines: the query string builder only when a member is
+/// query-bound, folded into `url` either way.
+fn url_lines(wire: &WireBinding, indent_str: &str) -> String {
+    if !has_query(wire) {
+        return format!(
+            "{indent_str}const url = {} + {};\n",
+            endpoint_expr(wire),
+            uri_expr(wire)
+        );
+    }
+    format!(
+        "{indent_str}const qs = new URLSearchParams();\n\
+         {q}\
+         {indent_str}const url = {} + {}{tail};\n",
+        endpoint_expr(wire),
+        uri_expr(wire),
+        q = query_lines(wire, indent_str),
+        tail = " + (qs.toString() ? `?${qs.toString()}` : \"\")",
+    )
+}
+
+/// The tail shared by the transport-failure catch and the declared-error
+/// check: retry while attempts remain (and, for a declared error, while
+/// `extra_cond` — its `retryable()` read — also holds), otherwise throw.
+/// `has_retry: false` collapses to an unconditional throw (an error response
+/// never retries when the operation declares no errors to classify it by, and
+/// nothing retries when the operation declares no `@retry`).
+fn retry_or_throw(
+    indent_str: &str,
+    has_retry: bool,
+    extra_cond: Option<&str>,
+    throw_expr: &str,
+) -> String {
+    if !has_retry {
+        return format!("{indent_str}{throw_expr}\n");
+    }
+    let cond = match extra_cond {
+        Some(c) => format!("attempt < maxRetries && {c}"),
+        None => "attempt < maxRetries".to_string(),
+    };
+    format!(
+        "{indent_str}if ({cond}) {{\n\
+         {indent_str}  await retryDelay(attempt);\n\
+         {indent_str}  continue;\n\
+         {indent_str}}}\n\
+         {indent_str}{throw_expr}\n"
+    )
+}
+
+/// One lifecycle hook invocation, or nothing when the slot is unbound.
+fn hook_line(indent_str: &str, bound: bool, slot: &str, var: &str) -> String {
+    if !bound {
+        return String::new();
+    }
+    format!("{indent_str}if (this.hooks.{slot}) {var} = await this.hooks.{slot}({var});\n")
+}
+
 /// One operation's transport call, replacing the descriptor-plus-`execute()`
-/// call. `success_block` (built by `decode::success_block`) is embedded at the
-/// depth the retry loop (when present) requires; a non-retrying operation
-/// leaves it at the method's own depth, appended by the caller in that case —
-/// see the `has_retry` branch below, which embeds it itself instead.
+/// call. Built once as a single "attempt" block, indented one level deeper
+/// and wrapped in a retry loop when `wire.retry` is declared; a non-retrying
+/// operation runs the identical text straight-line, so there is no separate
+/// retrying/non-retrying code path to keep in sync.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn op_call(
     wire: &WireBinding,
@@ -275,33 +332,16 @@ pub(super) fn op_call(
 
     let has_retry = wire.retry.is_some();
     let has_timeout = wire.timeout.is_some();
-    let record_needed = needs_record(wire);
-    let query_needed = has_query(wire);
     let body = body_expr(wire);
     let transport_throw = throw(format!("new {transport_error}(cause)"));
 
     let mut out = String::new();
-    if record_needed {
+    if needs_record(wire) {
         out.push_str(&format!(
             "    const record = {input_expr} as unknown as Record<string, unknown>;\n"
         ));
     }
-    if query_needed {
-        out.push_str("    const qs = new URLSearchParams();\n");
-        out.push_str(&query_lines(wire, "    "));
-        out.push_str(&format!(
-            "    const url = {} + {}{};\n",
-            endpoint_expr(wire),
-            uri_expr(wire),
-            " + (qs.toString() ? `?${qs.toString()}` : \"\")",
-        ));
-    } else {
-        out.push_str(&format!(
-            "    const url = {} + {};\n",
-            endpoint_expr(wire),
-            uri_expr(wire)
-        ));
-    }
+    out.push_str(&url_lines(wire, "    "));
     out.push_str("    const headers: Record<string, string> = {};\n");
     out.push_str(&declared_header_lines(wire, "    "));
     out.push_str(
@@ -326,7 +366,6 @@ pub(super) fn op_call(
         "{{ method: {}, url, headers: {{ ...headers }}, {body_field} }}",
         js_str(method)
     );
-
     let send_call = if has_timeout {
         let path = wire.timeout.as_deref().unwrap_or_default();
         out.push_str(&format!(
@@ -337,91 +376,79 @@ pub(super) fn op_call(
     } else {
         "httpSend(this.options, request, undefined)".to_string()
     };
-
     if has_retry {
         let path = wire.retry.as_deref().unwrap_or_default();
         out.push_str(&format!(
             "    const maxRetries = resolveMaxRetries({});\n",
             values_lookup(path)
         ));
-        let request_kw = if before_request_bound { "let" } else { "const" };
+    }
+
+    // The per-attempt body: `d` is its own statement depth, one level deeper
+    // than the method (`"    "`) when a retry loop wraps it.
+    let d = if has_retry { "      " } else { "    " };
+    let request_kw = if before_request_bound { "let" } else { "const" };
+    let mut attempt = String::new();
+    attempt.push_str(&format!(
+        "{d}{request_kw} request: HttpRequest = {request_literal};\n"
+    ));
+    attempt.push_str(&hook_line(
+        d,
+        before_request_bound,
+        "before_request",
+        "request",
+    ));
+    attempt.push_str(&format!("{d}let response: HttpResponse;\n"));
+    attempt.push_str(&format!("{d}try {{\n"));
+    attempt.push_str(&format!("{d}  response = await {send_call};\n"));
+    attempt.push_str(&format!("{d}}} catch (cause) {{\n"));
+    attempt.push_str(&retry_or_throw(
+        &format!("{d}  "),
+        has_retry,
+        None,
+        &transport_throw,
+    ));
+    attempt.push_str(&format!("{d}}}\n"));
+    attempt.push_str(&hook_line(
+        d,
+        after_response_bound,
+        "after_response",
+        "response",
+    ));
+    attempt.push_str(&format!(
+        "{d}const outcome = {{ status: response.status, body: {} }};\n",
+        outcome_body_expr(wire),
+    ));
+    // The success path is control-flow-terminal (`success_block` always
+    // returns or throws), so the error path below it needs no `else`: it is
+    // only ever reached once the response missed.
+    attempt.push_str(&format!("{d}if ({}) {{\n", success_expr(wire)));
+    attempt.push_str(&indent(
+        success_block,
+        &" ".repeat(d.len().saturating_sub(2)),
+    ));
+    attempt.push('\n');
+    attempt.push_str(&format!("{d}}}\n"));
+    if has_declared_errors {
+        attempt.push_str(&format!(
+            "{d}const err = {discriminator}(outcome.status, outcome.body);\n"
+        ));
+        attempt.push_str(&retry_or_throw(
+            d,
+            has_retry,
+            Some("err.retryable()"),
+            &throw("err".to_string()),
+        ));
+    } else {
+        attempt.push_str(&retry_or_throw(d, false, None, error_line));
+    }
+
+    if has_retry {
         out.push_str("    for (let attempt = 0; ; attempt++) {\n");
-        out.push_str(&format!(
-            "      {request_kw} request: HttpRequest = {request_literal};\n"
-        ));
-        if before_request_bound {
-            out.push_str(
-                "      if (this.hooks.before_request) request = await this.hooks.before_request(request);\n",
-            );
-        }
-        out.push_str("      let response: HttpResponse;\n");
-        out.push_str("      try {\n");
-        out.push_str(&format!("        response = await {send_call};\n"));
-        out.push_str("      } catch (cause) {\n");
-        out.push_str("        if (attempt >= maxRetries) {\n");
-        out.push_str(&format!("          {transport_throw}\n"));
-        out.push_str("        }\n");
-        out.push_str(
-            "        await defaultSleep(backoffDelayMs(attempt, defaultRandom()));\n        continue;\n",
-        );
-        out.push_str("      }\n");
-        if after_response_bound {
-            out.push_str(
-                "      if (this.hooks.after_response) response = await this.hooks.after_response(response);\n",
-            );
-        }
-        out.push_str(&format!(
-            "      const outcome = {{ status: response.status, body: {} }};\n",
-            outcome_body_expr(wire),
-        ));
-        out.push_str(&format!("      if (!({})) {{\n", success_expr(wire)));
-        if has_declared_errors {
-            out.push_str(&format!(
-                "        const err = {discriminator}(outcome.status, outcome.body);\n"
-            ));
-            out.push_str("        if (attempt < maxRetries && err.retryable()) {\n");
-            out.push_str(
-                "          await defaultSleep(backoffDelayMs(attempt, defaultRandom()));\n          continue;\n",
-            );
-            out.push_str("        }\n");
-            out.push_str(&format!("        {}\n", throw("err".to_string())));
-        } else {
-            out.push_str(&format!("        {error_line}\n"));
-        }
-        out.push_str("      }\n");
-        out.push_str(&indent(success_block, "  "));
-        out.push('\n');
+        out.push_str(&attempt);
         out.push_str("    }\n");
     } else {
-        let request_kw = if before_request_bound { "let" } else { "const" };
-        out.push_str(&format!(
-            "    {request_kw} request: HttpRequest = {request_literal};\n"
-        ));
-        if before_request_bound {
-            out.push_str(
-                "    if (this.hooks.before_request) request = await this.hooks.before_request(request);\n",
-            );
-        }
-        out.push_str("    let response: HttpResponse;\n");
-        out.push_str("    try {\n");
-        out.push_str(&format!("      response = await {send_call};\n"));
-        out.push_str("    } catch (cause) {\n");
-        out.push_str(&format!("      {transport_throw}\n"));
-        out.push_str("    }\n");
-        if after_response_bound {
-            out.push_str(
-                "    if (this.hooks.after_response) response = await this.hooks.after_response(response);\n",
-            );
-        }
-        out.push_str(&format!(
-            "    const outcome = {{ status: response.status, body: {} }};\n",
-            outcome_body_expr(wire),
-        ));
-        out.push_str(&format!("    if (!({})) {{\n", success_expr(wire)));
-        out.push_str(&format!("      {error_line}\n"));
-        out.push_str("    }\n");
-        out.push_str(success_block);
-        out.push('\n');
+        out.push_str(&attempt);
     }
     out
 }
@@ -675,8 +702,20 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
         ),
         Decl::raw_providing(
             "defaultRandom",
-            "export function defaultRandom(): number {\n\
-             \x20 return Math.random();\n\
+            "// Math.random seeds only the retry backoff's jitter, never anything\n\
+             // security-sensitive (no token, no session id, no cryptographic use),\n\
+             // so a predictable PRNG is fine here.\n\
+             export function defaultRandom(): number {\n\
+             \x20 return Math.random(); // NOSONAR: jitter timing only, not a cryptographic use\n\
+             }",
+            Vec::new(),
+        ),
+        Decl::raw_providing(
+            "retryDelay",
+            "// retryDelay waits out one attempt's exponential-backoff delay before a\n\
+             // retried call.\n\
+             export async function retryDelay(attempt: number): Promise<void> {\n\
+             \x20 await defaultSleep(backoffDelayMs(attempt, defaultRandom()));\n\
              }",
             Vec::new(),
         ),

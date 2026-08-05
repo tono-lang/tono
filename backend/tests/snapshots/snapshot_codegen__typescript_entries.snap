@@ -195,8 +195,17 @@ export function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Math.random seeds only the retry backoff's jitter, never anything
+// security-sensitive (no token, no session id, no cryptographic use),
+// so a predictable PRNG is fine here.
 export function defaultRandom(): number {
-  return Math.random();
+  return Math.random(); // NOSONAR: jitter timing only, not a cryptographic use
+}
+
+// retryDelay waits out one attempt's exponential-backoff delay before a
+// retried call.
+export async function retryDelay(attempt: number): Promise<void> {
+  await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
 }
 
 // ==== typescript/notes/types.ts ====
@@ -329,7 +338,7 @@ export class OverloadedError extends APIError {
 import { strUpperSnake } from "../casing";
 import { durationToMs } from "../duration";
 import { readEnv } from "../env";
-import { assertExclusiveTransport, backoffDelayMs, defaultRandom, defaultSleep, hasHeader, httpSendWithTimeout, pathPart, resolveMaxRetries, resolveTimeoutMs, setHeader } from "../http";
+import { assertExclusiveTransport, formatScalar, hasHeader, httpSendWithTimeout, pathPart, resolveMaxRetries, resolveTimeoutMs, retryDelay, setHeader } from "../http";
 import { decodeCredentials, decodeOverloaded, encodeNote, parseNote } from "./codec";
 import { APIError, CODE_OVERLOADED, ClientOptions, ConfigError, Credentials, DecodeError, Duration, HttpRequest, HttpResponse, HttpTransport, Note, OverloadedError, STATUS_OVERLOADED, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./types";
 
@@ -587,7 +596,7 @@ export class Client {
     const record = encodeNote(input) as unknown as Record<string, unknown>;
     const url = (typeof this.options.values?.["endpoint"] === "string" && this.options.values?.["endpoint"] !== "" ? (this.options.values?.["endpoint"] as string) : this.options.baseUrl) + `/notes/${pathPart(record["id"])}`;
     const headers: Record<string, string> = {};
-    setHeader(headers, "X-Client-Name", String(this.options.values?.["client_name"] ?? ""));
+    setHeader(headers, "X-Client-Name", formatScalar(this.options.values?.["client_name"]));
     for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);
     const body = JSON.stringify({ "body": record["body"] });
     if (!hasHeader(headers, "content-type")) headers["content-type"] = "application/json";
@@ -599,26 +608,26 @@ export class Client {
       try {
         response = await httpSendWithTimeout(this.options, request, timeoutMs);
       } catch (cause) {
-        if (attempt >= maxRetries) {
-          throw new TransportError(cause);
-        }
-        await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
-        continue;
-      }
-      const outcome = { status: response.status, body: response.body };
-      if (!(response.status >= 200 && response.status < 300)) {
-        const err = decodeSaveNoteError(outcome.status, outcome.body);
-        if (attempt < maxRetries && err.retryable()) {
-          await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
+        if (attempt < maxRetries) {
+          await retryDelay(attempt);
           continue;
         }
-        throw err;
+        throw new TransportError(cause);
       }
-      try {
-        return parseNote(outcome.body);
-      } catch (path) {
-        throw new DecodeError(path as string, "Note", outcome.body);
+      const outcome = { status: response.status, body: response.body };
+      if (response.status >= 200 && response.status < 300) {
+        try {
+          return parseNote(outcome.body);
+        } catch (path) {
+          throw new DecodeError(path as string, "Note", outcome.body);
+        }
       }
+      const err = decodeSaveNoteError(outcome.status, outcome.body);
+      if (attempt < maxRetries && err.retryable()) {
+        await retryDelay(attempt);
+        continue;
+      }
+      throw err;
     }
   }
 }

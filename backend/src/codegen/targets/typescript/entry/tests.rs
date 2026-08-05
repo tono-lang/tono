@@ -675,3 +675,54 @@ fn an_enum_member_of_a_config_freezes_as_a_branded_string() {
     // empty-object spelling.
     assert!(out.contains("values[\"settings.mode\"] = (s.settings.mode ?? \"\" as Mode);"));
 }
+
+/// The default `with_descriptors` fixture declares neither `@retry` nor
+/// `@timeout`; its own transport call must therefore carry no trace of
+/// either, not just a pruned-away shared helper.
+#[test]
+fn an_operation_with_no_retry_or_timeout_declares_neither() {
+    let module = with_descriptors(fixture_module());
+    let out = text(&module);
+    assert!(!out.contains("for (let attempt"));
+    assert!(!out.contains("retryDelay"));
+    // "maxRetries" alone would also match the fixture's unrelated @with
+    // config field of the same name; the retry-resolution call is the
+    // precise signal that the transport call itself declared no retry.
+    assert!(!out.contains("resolveMaxRetries("));
+    assert!(!out.contains("const maxRetries ="));
+    assert!(!out.contains("httpSendWithTimeout"));
+    assert!(!out.contains("timeoutMs"));
+    assert!(out.contains("await httpSend(this.options, request, undefined);"));
+}
+
+/// A retrying operation's declared-error path must retry only while the
+/// decoded error itself reports `retryable()`; attempts remaining alone is
+/// not enough (an undeclared-retryable error still throws on the first try).
+#[test]
+fn a_retrying_operation_checks_retryable_before_retrying_a_declared_error() {
+    let mut module = with_descriptors(fixture_module());
+    for shape in &mut module.shapes {
+        let ShapeKind::Entry { operations, .. } = &mut shape.kind else {
+            continue;
+        };
+        for op in operations {
+            if let ShapeKind::Operation {
+                wire: Some(wire), ..
+            } = &mut op.kind
+            {
+                wire.retry = Some(vec!["max_retries".into()]);
+            }
+        }
+    }
+    let out = text(&module);
+    assert!(out.contains("for (let attempt = 0; ; attempt++) {"));
+    assert!(out
+        .contains("const maxRetries = resolveMaxRetries(this.options.values?.[\"max_retries\"]);"));
+    // The transport-failure catch retries unconditionally (a network error is
+    // always retryable); the declared-error path additionally reads
+    // `retryable()`, so the two must not share one bare `attempt < maxRetries`
+    // condition.
+    assert!(out.contains("const err = decodeSaveNoteError(outcome.status, outcome.body);"));
+    assert!(out.contains("if (attempt < maxRetries && err.retryable()) {"));
+    assert!(out.contains("throw err;"));
+}
