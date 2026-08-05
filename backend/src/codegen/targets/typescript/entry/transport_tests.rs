@@ -183,11 +183,9 @@ fn has_query_and_query_lines_agree_on_query_bound_members() {
 }
 
 #[test]
-fn endpoint_expr_falls_back_to_base_url_with_no_declared_endpoint() {
-    assert_eq!(
-        endpoint_expr(&wire(), &stub_field_expr),
-        "this.options.baseUrl"
-    );
+#[should_panic(expected = "an entry @http op names its endpoint")]
+fn endpoint_expr_with_no_declared_endpoint_is_an_emission_defect() {
+    endpoint_expr(&wire(), &stub_field_expr);
 }
 
 #[test]
@@ -195,11 +193,11 @@ fn endpoint_expr_reads_the_typed_settings_field_with_no_runtime_guard() {
     let mut w = wire();
     w.endpoint = Some(vec!["endpoint".into()]);
     // The frontend guarantees `endpoint:` names a string field, so this
-    // needs no `typeof`/`as string` guard: only the empty-string-falls-back
-    // business rule, not a type check.
+    // needs no `typeof`/`as string` guard and no fallback ternary: the bare
+    // typed field access is the whole expression.
     assert_eq!(
         endpoint_expr(&w, &stub_field_expr),
-        "(this.settings.endpoint !== \"\" ? this.settings.endpoint : this.options.baseUrl)"
+        "this.settings.endpoint"
     );
 }
 

@@ -32,7 +32,9 @@ fn with_descriptors(mut module: Module) -> Module {
                         bindings: [("id".to_string(), WirePart::Label)].into_iter().collect(),
                         response_bindings: Default::default(),
                         success: vec![200],
-                        endpoint: None,
+                        // The typechecker rejects an entry @http op without an
+                        // endpoint, so the fixture always carries one.
+                        endpoint: Some(vec!["endpoint".into()]),
                         request_headers: Vec::new(),
                         timeout: None,
                         retry: None,
@@ -122,13 +124,13 @@ fn the_resolution_mirrors_the_go_spelling() {
         "endpointErr = new ConfigError(`endpoint_v1 <- ${endpointV1Err.message}`, endpointV1Err);"
     ));
     assert!(out.contains("composed.apiKey = s.apiKey;"));
-    // Entry construction leaves baseUrl empty: the endpoint resolves per
-    // operation from the wire binding; there is no runtime values bag left
-    // to freeze into (endpoint/header/path-template/@retry read the typed
-    // Settings directly; @timeout's own private field is covered by
-    // an_operation_with_a_timeout_field_converts_it_once_at_construction).
+    // The frozen options carry only the transport slots: the endpoint
+    // resolves per operation from the wire binding; there is no runtime
+    // values bag left to freeze into (endpoint/header/path-template/@retry
+    // read the typed Settings directly; @timeout's own private field is
+    // covered by an_operation_with_a_timeout_field_converts_it_once_at_construction).
     assert!(out.contains(
-        "this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers };"
+        "this.options = { fetch: s.fetch, transport: s.transport, headers: s.headers };"
     ));
 }
 
@@ -753,25 +755,10 @@ fn a_retrying_operation_checks_retryable_before_retrying_a_declared_error() {
 /// value conversion the constructor already validates eagerly).
 #[test]
 fn an_http_endpoint_binding_reads_the_typed_settings_field() {
-    let mut module = with_descriptors(fixture_module());
-    for shape in &mut module.shapes {
-        let ShapeKind::Entry { operations, .. } = &mut shape.kind else {
-            continue;
-        };
-        for op in operations {
-            if let ShapeKind::Operation {
-                wire: Some(wire), ..
-            } = &mut op.kind
-            {
-                wire.endpoint = Some(vec!["endpoint".into()]);
-            }
-        }
-    }
+    let module = with_descriptors(fixture_module());
     let out = text(&module);
-    // The exact shape pins that no runtime typeof/cast guard survives around
-    // the endpoint read: only the empty-string-falls-back business rule.
-    assert!(out.contains(
-        "const url = (this.settings.endpoint !== \"\" ? this.settings.endpoint : this.options.baseUrl)"
-    ));
+    // The exact shape pins that no runtime typeof/cast guard and no fallback
+    // ternary survive around the endpoint read: the bare typed field access.
+    assert!(out.contains("const url = this.settings.endpoint + "));
     assert!(!out.contains("this.options.values?.[\"endpoint\"]"));
 }
