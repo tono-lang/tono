@@ -178,19 +178,7 @@ export class Client {
     );
     for (const [k, v] of Object.entries(this.options.headers ?? {}))
       setHeader(headers, k, v);
-    const body = JSON.stringify({
-      amount: record["amount"],
-      created: record["created"],
-      currency: record["currency"],
-      fee: record["fee"],
-      id: record["id"],
-      metadata: record["metadata"],
-      method: record["method"],
-      note: record["note"],
-      receipt: record["receipt"],
-      status: record["status"],
-      tags: record["tags"],
-    });
+    const body = JSON.stringify(record);
     if (!hasHeader(headers, "content-type"))
       headers["content-type"] = "application/json";
     const timeoutMs = resolveTimeoutMs(this.options.values?.["timeout"]);
@@ -212,7 +200,7 @@ export class Client {
         }
         throw new TransportError(cause);
       }
-      const outcome = { status: response.status, body: response.body };
+      const outcome = response;
       if (response.status >= 200 && response.status < 300) {
         try {
           return parseCharge(outcome.body);

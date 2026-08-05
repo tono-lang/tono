@@ -693,6 +693,10 @@ fn an_operation_with_no_retry_or_timeout_declares_neither() {
     assert!(!out.contains("httpSendWithTimeout"));
     assert!(!out.contains("timeoutMs"));
     assert!(out.contains("await httpSend(this.options, request, undefined);"));
+    // No hook is bound (the fixture's default extensions are empty), so no
+    // hook invocation is emitted either.
+    assert!(!out.contains("this.hooks.before_request"));
+    assert!(!out.contains("this.hooks.after_response"));
 }
 
 /// A retrying operation's declared-error path must retry only while the

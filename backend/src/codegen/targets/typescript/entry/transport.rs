@@ -185,6 +185,15 @@ fn body_expr(wire: &WireBinding) -> Option<String> {
     if fields.is_empty() {
         return None;
     }
+    // Every binding is a Body member (no Label/Query/Header/Payload carved any
+    // out): `record` already *is* exactly the body, so serializing it whole
+    // is both simpler and, unlike re-listing by canonical name, correct even
+    // when a member's `encode` wire key differs from its canonical name
+    // (`@wire`) — `bindings` is keyed canonically, but `record`'s own keys
+    // already follow whatever `encode` actually wrote.
+    if fields.len() == wire.bindings.len() {
+        return Some("JSON.stringify(record)".to_string());
+    }
     let object = fields
         .iter()
         .map(|name| format!("{}: record[{}]", js_str(name), js_str(name)))
@@ -415,10 +424,18 @@ pub(super) fn op_call(
         "after_response",
         "response",
     ));
-    attempt.push_str(&format!(
-        "{d}const outcome = {{ status: response.status, body: {} }};\n",
-        outcome_body_expr(wire),
-    ));
+    // `outcome` is the classified response `success_block`/`error_line` read;
+    // with nothing to fold in, `response` already has the shape they need
+    // (`.status`, `.body`), so it stands in directly rather than being
+    // reconstructed field by field.
+    if wire.response_bindings.is_empty() {
+        attempt.push_str(&format!("{d}const outcome = response;\n"));
+    } else {
+        attempt.push_str(&format!(
+            "{d}const outcome = {{ status: response.status, body: {} }};\n",
+            outcome_body_expr(wire),
+        ));
+    }
     // The success path is control-flow-terminal (`success_block` always
     // returns or throws), so the error path below it needs no `else`: it is
     // only ever reached once the response missed.
@@ -500,6 +517,31 @@ pub(crate) fn http_support_decls() -> Vec<Decl> {
             vec![support_symbol("HttpRequest"), support_symbol("HttpResponse")],
         ),
     ]
+}
+
+/// One HTTP dispatch function: `httpSend` and `httpSendWithTimeout` share the
+/// same leading `(options: ClientOptions, request: HttpRequest, ...)` shape
+/// and the same three-type refs list, so both are built through this one
+/// place rather than as two near-identical `Decl::raw_providing` calls.
+fn http_dispatch_fn(name: &str, doc: &str, extra_params: &str, body: &str) -> Decl {
+    Decl::raw_providing(
+        name,
+        format!(
+            "{doc}\n\
+             export async function {name}(\n\
+             \x20 options: ClientOptions,\n\
+             \x20 request: HttpRequest,\n\
+             {extra_params}\
+             ): Promise<HttpResponse> {{\n\
+             {body}\n\
+             }}"
+        ),
+        vec![
+            support_symbol("ClientOptions"),
+            support_symbol("HttpRequest"),
+            support_symbol("HttpResponse"),
+        ],
+    )
 }
 
 /// The internal transport helpers (`Group::root("http")`), pruned SDK-wide by
@@ -609,16 +651,12 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
              }",
             vec![support_symbol("ClientOptions")],
         ),
-        Decl::raw_providing(
+        http_dispatch_fn(
             "httpSend",
             "// httpSend performs one attempt: the canonical transport when set,\n\
-             // otherwise fetch.\n\
-             export async function httpSend(\n\
-             \x20 options: ClientOptions,\n\
-             \x20 request: HttpRequest,\n\
-             \x20 signal: AbortSignal | undefined,\n\
-             ): Promise<HttpResponse> {\n\
-             \x20 if (options.transport) return options.transport(request, signal);\n\
+             // otherwise fetch.",
+            "\x20 signal: AbortSignal | undefined,\n",
+            "\x20 if (options.transport) return options.transport(request, signal);\n\
              \x20 const transport = options.fetch ?? fetch;\n\
              \x20 const response = await transport(request.url, {\n\
              \x20   method: request.method,\n\
@@ -627,21 +665,15 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
              \x20   signal,\n\
              \x20 });\n\
              \x20 const text = await response.text();\n\
-             \x20 return { status: response.status, headers: headerRecord(response.headers), body: text };\n\
-             }",
-            vec![support_symbol("ClientOptions"), support_symbol("HttpRequest"), support_symbol("HttpResponse")],
+             \x20 return { status: response.status, headers: headerRecord(response.headers), body: text };",
         ),
-        Decl::raw_providing(
+        http_dispatch_fn(
             "httpSendWithTimeout",
             "// httpSendWithTimeout bounds one attempt: the timeout aborts the signal\n\
              // (so a cooperating transport cancels its work) and rejects the attempt\n\
-             // regardless, so a transport that ignores the signal still times out.\n\
-             export async function httpSendWithTimeout(\n\
-             \x20 options: ClientOptions,\n\
-             \x20 request: HttpRequest,\n\
-             \x20 timeoutMs: number,\n\
-             ): Promise<HttpResponse> {\n\
-             \x20 if (timeoutMs <= 0) return httpSend(options, request, undefined);\n\
+             // regardless, so a transport that ignores the signal still times out.",
+            "\x20 timeoutMs: number,\n",
+            "\x20 if (timeoutMs <= 0) return httpSend(options, request, undefined);\n\
              \x20 const controller = new AbortController();\n\
              \x20 let timer: ReturnType<typeof setTimeout> | undefined;\n\
              \x20 const expiry = new Promise<never>((_, reject) => {\n\
@@ -658,9 +690,7 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
              \x20   return await raced;\n\
              \x20 } finally {\n\
              \x20   clearTimeout(timer);\n\
-             \x20 }\n\
-             }",
-            vec![support_symbol("ClientOptions"), support_symbol("HttpRequest"), support_symbol("HttpResponse")],
+             \x20 }",
         ),
         Decl::raw_providing(
             "backoffDelayMs",
@@ -691,23 +721,21 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
             Vec::new(),
         ),
         Decl::raw_providing(
-            "defaultSleep",
-            "// defaultSleep and defaultRandom are the timing seam: internal to the\n\
-             // package (this group is excluded from package.json's exports map), so\n\
-             // nothing outside the generated SDK can reach or override them.\n\
-             export function defaultSleep(ms: number): Promise<void> {\n\
-             \x20 return new Promise((resolve) => setTimeout(resolve, ms));\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "defaultRandom",
-            "// Math.random seeds only the retry backoff's jitter, never anything\n\
-             // security-sensitive (no token, no session id, no cryptographic use),\n\
-             // so a predictable PRNG is fine here.\n\
-             export function defaultRandom(): number {\n\
-             \x20 return Math.random(); // NOSONAR: jitter timing only, not a cryptographic use\n\
-             }",
+            "timingSeam",
+            "// timingSeam is the sleep/random behind the retry loop's backoff, as a\n\
+             // mutable object rather than fixed functions: an ES module import\n\
+             // binding is read-only, so a plain `export function` could never be\n\
+             // substituted from outside its own file, but a property of an\n\
+             // exported object can. Internal to the package (this group is\n\
+             // excluded from package.json's exports map), so only code shipped in\n\
+             // the same SDK, never a consumer, can reach or override it. Math.random\n\
+             // seeds only this jitter, never anything security-sensitive (no token,\n\
+             // no session id, no cryptographic use), so a predictable PRNG default\n\
+             // is fine.\n\
+             export const timingSeam: { sleep: (ms: number) => Promise<void>; random: () => number } = {\n\
+             \x20 sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),\n\
+             \x20 random: () => Math.random(), // NOSONAR: jitter timing only, not a cryptographic use\n\
+             };",
             Vec::new(),
         ),
         Decl::raw_providing(
@@ -715,9 +743,13 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
             "// retryDelay waits out one attempt's exponential-backoff delay before a\n\
              // retried call.\n\
              export async function retryDelay(attempt: number): Promise<void> {\n\
-             \x20 await defaultSleep(backoffDelayMs(attempt, defaultRandom()));\n\
+             \x20 await timingSeam.sleep(backoffDelayMs(attempt, timingSeam.random()));\n\
              }",
             Vec::new(),
         ),
     ]
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;

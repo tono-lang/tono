@@ -188,24 +188,25 @@ export function resolveTimeoutMs(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-// defaultSleep and defaultRandom are the timing seam: internal to the
-// package (this group is excluded from package.json's exports map), so
-// nothing outside the generated SDK can reach or override them.
-export function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Math.random seeds only the retry backoff's jitter, never anything
-// security-sensitive (no token, no session id, no cryptographic use),
-// so a predictable PRNG is fine here.
-export function defaultRandom(): number {
-  return Math.random(); // NOSONAR: jitter timing only, not a cryptographic use
-}
+// timingSeam is the sleep/random behind the retry loop's backoff, as a
+// mutable object rather than fixed functions: an ES module import
+// binding is read-only, so a plain `export function` could never be
+// substituted from outside its own file, but a property of an
+// exported object can. Internal to the package (this group is
+// excluded from package.json's exports map), so only code shipped in
+// the same SDK, never a consumer, can reach or override it. Math.random
+// seeds only this jitter, never anything security-sensitive (no token,
+// no session id, no cryptographic use), so a predictable PRNG default
+// is fine.
+export const timingSeam: { sleep: (ms: number) => Promise<void>; random: () => number } = {
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  random: () => Math.random(), // NOSONAR: jitter timing only, not a cryptographic use
+};
 
 // retryDelay waits out one attempt's exponential-backoff delay before a
 // retried call.
 export async function retryDelay(attempt: number): Promise<void> {
-  await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
+  await timingSeam.sleep(backoffDelayMs(attempt, timingSeam.random()));
 }
 
 // ==== typescript/notes/types.ts ====
@@ -614,7 +615,7 @@ export class Client {
         }
         throw new TransportError(cause);
       }
-      const outcome = { status: response.status, body: response.body };
+      const outcome = response;
       if (response.status >= 200 && response.status < 300) {
         try {
           return parseNote(outcome.body);
