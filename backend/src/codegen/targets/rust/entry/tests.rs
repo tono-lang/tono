@@ -51,6 +51,7 @@ fn push_client_op(
             input,
             output,
             errors,
+            wire: None,
         },
         traits: vec![],
     });
@@ -113,6 +114,7 @@ pub(super) fn simple_entry_module() -> Module {
                 id: "m#payment_declined".into(),
                 args: vec![],
             }],
+            wire: None,
         },
         traits: vec![
             Trait {
@@ -361,6 +363,7 @@ fn a_multi_entry_module_prefixes_settings_descriptors_and_discriminators() {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![
             Trait {
@@ -659,6 +662,7 @@ fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
                         input: None,
                         output: None,
                         errors: vec![],
+                        wire: None,
                     },
                     traits: vec![],
                 });

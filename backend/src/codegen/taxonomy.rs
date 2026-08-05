@@ -163,6 +163,7 @@ mod tests {
                 input: None,
                 output: None,
                 errors: vec![],
+                wire: None,
             },
             traits: vec![crate::ir::Trait {
                 id: "wire_descriptor".into(),
@@ -178,6 +179,7 @@ mod tests {
                 input: None,
                 output: None,
                 errors: vec![],
+                wire: None,
             },
             traits: vec![],
         }
@@ -297,6 +299,7 @@ mod tests {
                     id: "m#bad".into(),
                     args: vec![],
                 }],
+                wire: None,
             },
             traits: vec![],
         };

@@ -372,16 +372,22 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
                 values: cv,
             },
         ) => diff_enum(&b.id, bb, bv, cb, cv, out),
+        // wire is deliberately excluded from this diff: it is derived from
+        // traits (@http, @timeout, @retry, ...) that this same function
+        // already diffs elsewhere, so comparing it too would double-report
+        // the same break under a different name.
         (
             ShapeKind::Operation {
                 input: bi,
                 output: bo,
                 errors: be,
+                wire: _,
             },
             ShapeKind::Operation {
                 input: ci,
                 output: co,
                 errors: ce,
+                wire: _,
             },
         ) => diff_operation(&b.id, bi, bo, be, ci, co, ce, out),
         (ShapeKind::Service { operations: bo }, ShapeKind::Service { operations: co }) => {

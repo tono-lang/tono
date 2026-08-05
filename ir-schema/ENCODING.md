@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 6, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 8, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **6**.
+The current version is **8**.
 
 ## Modules
 
@@ -136,7 +136,8 @@ construction kinds (`entry` and `config`, below).
 
 { "id": "payments#ListCharges", "kind": "operation",
   "input": null, "output": { "ref": "core#Page", "args": [ /* ... */ ] },
-  "errors": [], "traits": [] }
+  "errors": [], "traits": [],
+  "wire": { /* see "Resolved wire bindings" below; omitted when there is no @http trait */ } }
 ```
 
 - `union` always emits an explicit `discriminator` (default `"type"`).
@@ -150,7 +151,9 @@ construction kinds (`entry` and `config`, below).
   native doc comment.
 - `operation` carries `input`/`output` as a type reference or `null`, and
   `errors` as an array of type references. They are type references (not bare
-  ids) so an operation can return an applied generic directly.
+  ids) so an operation can return an applied generic directly. `wire` (the
+  resolved HTTP binding, see below) is present only on an operation with an
+  `@http` trait; the key is omitted otherwise.
 
 ## Entries and configs (v5)
 
@@ -204,6 +207,70 @@ A field reference inside an operation trait value is the structured object
 `{"field": ["a", "b"]}` (e.g. `@http`'s `endpoint:`, `@header` values,
 `@timeout`/`@retry`); path templates keep both placeholder scopes verbatim in
 the string (`"/notes/{.x}/{id}"`).
+
+## Resolved wire bindings (v8)
+
+An operation's `@http` annotations resolve once, in the frontend, into a
+typed `wire` field on the operation shape (see the `operation` kind above) so
+the backend can read the binding directly instead of parsing an opaque blob.
+(A `wire_descriptor` trait carrying the same resolution as an opaque JSON
+blob still rides the trait bag too, kept for backward compatibility until
+every emitter reads `wire` instead.)
+
+```json
+{ "method": "GET",
+  "uri": [ { "lit": "/charges/" }, { "input": "id" } ],
+  "bindings": { "id": { "kind": "label" },
+                "q": { "kind": "query", "name": "q" },
+                "x_key": { "kind": "header", "name": "X-Key" },
+                "body": { "kind": "payload" } },
+  "response_bindings": { "trace_id": { "kind": "header", "name": "X-Trace-Id" },
+                          "status": { "kind": "statusCode" } },
+  "success": [ 200 ],
+  "endpoint": [ "endpoint" ],
+  "request_headers": [ [ [ { "lit": "X-Client" } ], { "field": [ "client_name" ] } ] ],
+  "timeout": [ "timeout" ],
+  "retry": [ "settings", "max_retries" ] }
+```
+
+- `method` is the uppercased HTTP method; `uri` is the path template,
+  pre-parsed into the same `lit`/`field`/`input` parts as `format` above
+  (`input` for a `{name}` operation-input placeholder, `field` for a
+  `{.x}` entry-field placeholder).
+- `bindings` maps an input member's name to where it travels in the request:
+  `{"kind":"label"}`, `{"kind":"query","name":...}`,
+  `{"kind":"header","name":...}`, `{"kind":"body"}` (the default, an
+  unmarked member), or `{"kind":"payload"}` (the member is the whole body).
+  `response_bindings` maps an output member's name the same way, restricted
+  to `{"kind":"header","name":...}` and `{"kind":"statusCode"}`; an
+  unmarked output member carries no entry (it is an ordinary body field).
+  Both are JSON objects (member names are unique), unlike the array-of-pairs
+  the legacy blob used.
+- `success` is the list of status codes the operation succeeds on. Unlike the
+  legacy blob's `success`, there is no type reference alongside the status:
+  the output type is always the operation's own declared `output`, and every
+  runtime already discarded the blob's ref on decode.
+- `endpoint`, `timeout`, and `retry` are entry-scoped: present only on an
+  operation nested in an entry body, `null`/absent for a loose operation.
+  Each is the plain entry-field path the `@http(endpoint:)`/`@timeout`/
+  `@retry` argument named (e.g. `["settings", "max_retries"]` for a nested
+  config field), for an emitter to resolve into a typed access at the call
+  site. This differs from the legacy blob's `timeout`/`retry`, which
+  pre-join the same path into a dotted string wrapped in a
+  `{"ref": "..."}` runtime-lookup convention (`{"max": {"ref": "..."}}` for
+  retry) meant for a string-keyed lookup against a `Values` map built at
+  construction time.
+- `request_headers` is `[[key, value], ...]`: `key` is a parsed template
+  (same `lit`/`field`/`input` parts as `uri`), `value` is
+  `{"lit": <json>}`, `{"field": [...]}`, or `{"template": [...]}`.
+  Declared by op-level `@header(key, value)`; either a loose or an
+  entry-nested operation may carry these.
+- The legacy blob's `errors` array (status, error shape id, `@errorCode`
+  value, `@retryable` flag) has no counterpart here: the backend's typed
+  error taxonomy is derived directly from the operation's own `errors` field
+  (type references, see the `operation` kind above) and the referenced error
+  shapes' own `@status`/`@errorCode`/`@retryable` traits, never from the
+  wire binding.
 
 ## Numbers
 

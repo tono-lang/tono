@@ -27,7 +27,13 @@ pub use crate::ir_tests_model::*;
 /// its optional `raw` flag.
 /// v7 added the module `tests` array: declared tests (constructions, stubs,
 /// calls, and expect patterns).
-pub const TONO_IR_VERSION: u32 = 7;
+/// v8 added an operation's optional `wire` field: the resolved HTTP binding
+/// (method, uri, per-member bindings, response bindings, success status
+/// codes, and the entry-scoped endpoint/header/timeout/retry refs) as typed
+/// structure, replacing the opaque wire_descriptor trait blob for direct
+/// consumption (the blob itself still rides the trait bag, unchanged, for
+/// backward compatibility).
+pub const TONO_IR_VERSION: u32 = 8;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -341,6 +347,68 @@ pub struct EntryField {
     pub traits: Vec<Trait>,
 }
 
+/// Where an input member travels in the HTTP request. The resolved
+/// counterpart of the wire_descriptor blob's part encoding: same wire shape
+/// (`{"kind":"label"}`, `{"kind":"query","name":"x"}`, ...), now a typed IR
+/// field instead of opaque JSON a Target could only forward.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum WirePart {
+    Label,
+    Query { name: String },
+    Header { name: String },
+    Body,
+    Payload,
+}
+
+/// Where an output member is read from in the HTTP response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum WireResponsePart {
+    Header {
+        name: String,
+    },
+    #[serde(rename = "statusCode")]
+    StatusCode,
+}
+
+/// A value position in a protocol trait: a literal, an entry-field
+/// reference, or a template mixing literal runs with entry-field
+/// placeholders.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WireValue {
+    Lit(Value),
+    Field(Vec<String>),
+    Template(Vec<TemplatePart>),
+}
+
+/// The resolved HTTP binding a Protocol pass computes once and a Target
+/// reads directly: the typed counterpart of the wire_descriptor blob. Absent
+/// (`None`) for an operation with no `@http` trait. `bindings`/
+/// `response_bindings` are keyed by member name (unique by construction),
+/// matching the map convention already used for `Extension::bindings`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WireBinding {
+    pub method: String,
+    #[serde(default)]
+    pub uri: Vec<TemplatePart>,
+    #[serde(default)]
+    pub bindings: BTreeMap<String, WirePart>,
+    #[serde(default)]
+    pub response_bindings: BTreeMap<String, WireResponsePart>,
+    #[serde(default)]
+    pub success: Vec<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<Vec<String>>,
+    #[serde(default)]
+    pub request_headers: Vec<(Vec<TemplatePart>, WireValue)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<Vec<String>>,
+}
+
 /// Shape kind, internally tagged by `kind` and flattened next to a shape's
 /// `id` and `traits`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -377,6 +445,11 @@ pub enum ShapeKind {
         output: Option<Tref>,
         #[serde(default)]
         errors: Vec<Tref>,
+        // Boxed: WireBinding is far larger than the other Operation fields, and
+        // an unboxed Option<WireBinding> would inflate ShapeKind's overall size
+        // for every non-Operation variant too (clippy::large_enum_variant).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wire: Option<Box<WireBinding>>,
     },
     /// A struct with ops in its body: the SDK construction surface plus its
     /// methods; never a wire type.

@@ -192,6 +192,7 @@ pub fn operation(id: &str, traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
             input: Some(reference("m#charge_input")),
             output: Some(reference("m#charge")),
             errors: errors.into_iter().map(reference).collect(),
+            wire: None,
         },
         traits,
     }
@@ -306,6 +307,7 @@ pub fn assert_emits_no_op_stub(target: &impl Target) {
             input: None,
             output: None,
             errors: vec![],
+            wire: None,
         },
         traits: vec![],
     };

@@ -140,10 +140,13 @@ pub(crate) fn references_on_wire(shape: &Shape, target: &str) -> bool {
         ShapeKind::Structure { members, .. } | ShapeKind::Union { members, .. } => {
             members.iter().any(|m| refs_tref(&m.target))
         }
+        // wire carries entry-field paths and literal HTTP names, never a
+        // shape id, so it is not a reachability source here.
         ShapeKind::Operation {
             input,
             output,
             errors,
+            ..
         } => {
             input.as_ref().is_some_and(&refs_tref)
                 || output.as_ref().is_some_and(&refs_tref)

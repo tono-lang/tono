@@ -104,6 +104,7 @@ let declared_tests : Ir.model =
             input = Some (ref_ "github#user_ref" []);
             output = Some (ref_ "github#user" []);
             errors = [];
+            wire = None;
           };
       traits =
         [
@@ -126,6 +127,7 @@ let declared_tests : Ir.model =
             input = Some (ref_ "github#note" []);
             output = Some (ref_ "github#note" []);
             errors = [ ref_ "github#overloaded" [] ];
+            wire = None;
           };
       traits = [];
     }

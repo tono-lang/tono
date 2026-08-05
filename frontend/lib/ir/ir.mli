@@ -76,7 +76,9 @@ and shape_kind =
   | Operation of {
       input : tref option;
       output : tref option;
-      errors : tref list; (* tref so an operation can apply a generic directly *)
+      errors : tref list;
+          (* tref so an operation can apply a generic directly *)
+      wire : wire_binding option;
     }
   | Entry of { fields : entry_field list; operations : shape list }
     (* a struct with ops in its body: the SDK construction surface plus its
@@ -98,6 +100,37 @@ and template_part =
   | Tpl_lit of string
   | Tpl_field of string list
   | Tpl_input of string
+
+(* The resolved HTTP binding a Protocol pass computes once and a Target reads
+   directly: the typed counterpart of the wire_descriptor blob a protocol
+   trait used to carry. *)
+and wire_part =
+  | Wire_label
+  | Wire_query of string
+  | Wire_header of string
+  | Wire_body
+  | Wire_payload
+
+and wire_response_part =
+  | Wire_response_header of string
+  | Wire_response_status_code
+
+and wire_value =
+  | Wire_lit of json
+  | Wire_field of string list
+  | Wire_template of template_part list
+
+and wire_binding = {
+  wb_method : string;
+  wb_uri : template_part list;
+  wb_bindings : (string * wire_part) list;
+  wb_response_bindings : (string * wire_response_part) list;
+  wb_success : int list;
+  wb_endpoint : string list option;
+  wb_request_headers : (template_part list * wire_value) list;
+  wb_timeout : string list option;
+  wb_retry : string list option;
+}
 
 (* The selection table of [field: T = match .subject { ... }]; a pattern is a
    scalar JSON literal, [None] the wildcard arm. *)

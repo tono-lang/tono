@@ -396,6 +396,7 @@ mod tests {
                         args: vec![],
                     })
                     .collect(),
+                wire: None,
             },
             traits,
         }
@@ -445,6 +446,7 @@ mod tests {
                 id: "m#retry_hint".into(),
                 args: vec![],
             }],
+            wire: None,
         };
         let m = module(vec![error_shape("m#retry_hint", vec![])], vec![input_op]);
         assert!(error_only_shapes(&m).is_empty());
@@ -505,6 +507,7 @@ mod tests {
                 id: "m#not_found".into(),
                 args: vec![],
             }],
+            wire: None,
         };
         let entry = Shape {
             id: "m#client".into(),

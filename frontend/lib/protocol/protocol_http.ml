@@ -126,7 +126,7 @@ let members_of (lookup : Ir.shape_id -> Ir.shape option) (t : Ir.tref option) :
 let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
     wire_descriptor option =
   match (op.kind, trait_by "http" op.traits) with
-  | Ir.Operation { input; output; errors = _ }, Some http ->
+  | Ir.Operation { input; output; _ }, Some http ->
       let str k default =
         Option.value ~default (Option.bind (obj_field k http.value) string_arg)
       in
@@ -182,6 +182,47 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
           retry;
         }
   | _ -> None
+
+(* ── Resolved wire binding (the typed IR field) ────────────────────────── *)
+
+let to_wire_part : part -> Ir.wire_part = function
+  | Label -> Ir.Wire_label
+  | Query n -> Ir.Wire_query n
+  | Header n -> Ir.Wire_header n
+  | Body -> Ir.Wire_body
+  | Payload -> Ir.Wire_payload
+
+let to_wire_response_part : response_part -> Ir.wire_response_part = function
+  | Response_header n -> Ir.Wire_response_header n
+  | Response_status_code -> Ir.Wire_response_status_code
+
+let to_wire_value : value_expr -> Ir.wire_value = function
+  | Vlit j -> Ir.Wire_lit j
+  | Vfield p -> Ir.Wire_field p
+  | Vtemplate t -> Ir.Wire_template t
+
+(* The typed counterpart of [encode]: the same resolution, minus the dead
+   weight (the errors array duplicates the operation's own [errors] field and
+   the referenced shapes' own status/errorCode/retryable traits, which the
+   backend's error taxonomy already reads directly; the success tref is
+   discarded by every runtime today) and with [timeout]/[retry] kept as the
+   plain entry-field path instead of the blob's pre-joined "ref" convention,
+   so a future emitter can resolve them at the call site instead of a
+   runtime string-keyed lookup. *)
+let to_ir_binding (d : wire_descriptor) : Ir.wire_binding =
+  {
+    Ir.wb_method = d.http_method;
+    wb_uri = template_of d.uri;
+    wb_bindings = List.map (fun (n, p) -> (n, to_wire_part p)) d.bindings;
+    wb_response_bindings =
+      List.map (fun (n, p) -> (n, to_wire_response_part p)) d.response_bindings;
+    wb_success = List.map fst d.success;
+    wb_endpoint = d.endpoint;
+    wb_request_headers =
+      List.map (fun (k, v) -> (k, to_wire_value v)) d.request_headers;
+    wb_timeout = d.timeout;
+    wb_retry = d.retry;
+  }
 
 (* ── JSON encoding (the opaque blob) ───────────────────────────────────── *)
 
@@ -251,8 +292,16 @@ let resolve_module (m : Ir.module_) : Ir.module_ =
     match resolve_op lookup op with
     | None -> op
     | Some desc ->
+        let kind =
+          match op.kind with
+          | Ir.Operation o ->
+              Ir.Operation { o with wire = Some (to_ir_binding desc) }
+          | other -> other
+          (* unreachable: resolve_op only returns Some for an Operation *)
+        in
         {
           op with
+          kind;
           traits =
             op.traits
             @ [ { Ir.trait_id = "wire_descriptor"; value = encode desc } ];

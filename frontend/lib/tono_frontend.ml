@@ -59,9 +59,9 @@ let compile_to_json ?(module_name = "") (src : string) : (string, string) result
     Error (String.concat "\n" (List.map Diagnostic.to_string errors))
   else
     (* Protocol resolution is the final IR -> IR step: each operation's HTTP
-       annotations are materialized into an opaque wire descriptor the backend
-       embeds verbatim. It rides the trait bag, so the core IR stays
-       protocol-agnostic (the descriptor is data, not model structure). *)
+       annotations are materialized into a typed [wire] field plus (for
+       backward compatibility) an opaque wire_descriptor trait the backend
+       embeds verbatim. *)
     let m = Protocol_http.resolve_module m in
     let model =
       { Ir.tono_ir_version = Ir_json.current_ir_version; modules = [ m ] }
