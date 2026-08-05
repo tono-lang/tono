@@ -555,7 +555,7 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
         Decl::raw_providing(
             "parseJsonObject",
             "// parseJsonObject parses a response body for response-bound member\n\
-             // folding; a non-object or unparseable body leaves the bound fields to\n\
+             // folding; a non-object or unparsable body leaves the bound fields to\n\
              // stand on their own.\n\
              export function parseJsonObject(body: string): Record<string, unknown> {\n\
              \x20 if (body === \"\") return {};\n\
