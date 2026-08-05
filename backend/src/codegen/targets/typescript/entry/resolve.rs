@@ -191,22 +191,7 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     fn path_expr(&self, path: &[String]) -> String {
-        let mut out = "s".to_string();
-        for (i, seg) in path.iter().enumerate() {
-            out.push('.');
-            // Only the head is an entry field (it honors @rename); the tail
-            // reaches into config/struct members, spelled plainly.
-            if i == 0 {
-                out.push_str(&field_camel_ren(
-                    seg,
-                    self.entry.field_rename(seg, LANG).as_deref(),
-                    self.config,
-                ));
-            } else {
-                out.push_str(&field_camel(seg, self.config));
-            }
-        }
-        out
+        field_path_expr(self.entry, self.config, path, "s")
     }
 
     fn path_type(&self, path: &[String]) -> Tref {

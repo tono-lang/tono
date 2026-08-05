@@ -48,8 +48,9 @@ fn values_lookup(path: &[String]) -> String {
 /// Render a parsed template (the `uri`, a `request_headers` key, or a
 /// `WireValue::Template`) into a TypeScript expression: a single literal run
 /// needs no template-literal wrapper, and a placeholder resolves either from
-/// the resolved client values (`Field`) or the call's own record (`Input`).
-fn template_expr(parts: &[TemplatePart]) -> String {
+/// the resolved client settings (`Field`, via `field_expr`) or the call's own
+/// record (`Input`).
+fn template_expr(parts: &[TemplatePart], field_expr: &dyn Fn(&[String]) -> String) -> String {
     if let [TemplatePart::Lit(s)] = parts {
         return js_str(s);
     }
@@ -68,7 +69,7 @@ fn template_expr(parts: &[TemplatePart]) -> String {
             }
             TemplatePart::Field(path) => {
                 out.push_str("${pathPart(");
-                out.push_str(&values_lookup(path));
+                out.push_str(&field_expr(path));
                 out.push_str(")}");
             }
             TemplatePart::Input(name) => {
@@ -84,44 +85,49 @@ fn template_expr(parts: &[TemplatePart]) -> String {
 
 /// A `WireValue` position (a `request_headers` value) rendered the same way a
 /// template is, plus the two scalar forms.
-fn wire_value_expr(v: &WireValue) -> String {
+fn wire_value_expr(v: &WireValue, field_expr: &dyn Fn(&[String]) -> String) -> String {
     match v {
         WireValue::Lit(json) => match json.as_str() {
             Some(s) => js_str(s),
             None => json.to_string(),
         },
-        WireValue::Field(path) => format!("formatScalar({})", values_lookup(path)),
-        WireValue::Template(parts) => template_expr(parts),
+        WireValue::Field(path) => format!("formatScalar({})", field_expr(path)),
+        WireValue::Template(parts) => template_expr(parts, field_expr),
     }
 }
 
 /// The path expression: `this.options.baseUrl` (or the resolved endpoint
-/// field) concatenated with the URI template.
-fn endpoint_expr(wire: &WireBinding) -> String {
+/// field) concatenated with the URI template. The frontend guarantees an
+/// `endpoint:` reference is a `string` field, so the typed settings read
+/// needs no runtime guard; the empty-string fallback is business logic (an
+/// unset endpoint means "use baseUrl"), not a type check, and stays.
+fn endpoint_expr(wire: &WireBinding, field_expr: &dyn Fn(&[String]) -> String) -> String {
     match &wire.endpoint {
         None => "this.options.baseUrl".to_string(),
         Some(path) => {
-            let v = values_lookup(path);
-            format!(
-                "(typeof {v} === \"string\" && {v} !== \"\" ? ({v} as string) : this.options.baseUrl)"
-            )
+            let v = field_expr(path);
+            format!("({v} !== \"\" ? {v} : this.options.baseUrl)")
         }
     }
 }
 
-fn uri_expr(wire: &WireBinding) -> String {
-    template_expr(&wire.uri)
+fn uri_expr(wire: &WireBinding, field_expr: &dyn Fn(&[String]) -> String) -> String {
+    template_expr(&wire.uri, field_expr)
 }
 
 /// One `setHeader(...)` call per declared `request_headers` entry.
-fn declared_header_lines(wire: &WireBinding, indent_str: &str) -> String {
+fn declared_header_lines(
+    wire: &WireBinding,
+    indent_str: &str,
+    field_expr: &dyn Fn(&[String]) -> String,
+) -> String {
     wire.request_headers
         .iter()
         .map(|(key, value)| {
             format!(
                 "{indent_str}setHeader(headers, {}, {});\n",
-                template_expr(key),
-                wire_value_expr(value)
+                template_expr(key, field_expr),
+                wire_value_expr(value, field_expr)
             )
         })
         .collect()
@@ -273,20 +279,24 @@ fn response_fold_expr(wire: &WireBinding) -> String {
 
 /// The URL assembly lines: the query string builder only when a member is
 /// query-bound, folded into `url` either way.
-fn url_lines(wire: &WireBinding, indent_str: &str) -> String {
+fn url_lines(
+    wire: &WireBinding,
+    indent_str: &str,
+    field_expr: &dyn Fn(&[String]) -> String,
+) -> String {
     if !has_query(wire) {
         return format!(
             "{indent_str}const url = {} + {};\n",
-            endpoint_expr(wire),
-            uri_expr(wire)
+            endpoint_expr(wire, field_expr),
+            uri_expr(wire, field_expr)
         );
     }
     format!(
         "{indent_str}const qs = new URLSearchParams();\n\
          {q}\
          {indent_str}const url = {} + {}{tail};\n",
-        endpoint_expr(wire),
-        uri_expr(wire),
+        endpoint_expr(wire, field_expr),
+        uri_expr(wire, field_expr),
         q = query_lines(wire, indent_str),
         tail = " + (qs.toString() ? `?${qs.toString()}` : \"\")",
     )
@@ -346,6 +356,7 @@ pub(super) fn op_call(
     throw: &dyn Fn(String) -> String,
     before_request_bound: bool,
     after_response_bound: bool,
+    field_expr: &dyn Fn(&[String]) -> String,
     refs: &mut Vec<Symbol>,
 ) -> String {
     refs.push(support_symbol("HttpRequest"));
@@ -362,9 +373,9 @@ pub(super) fn op_call(
             "    const record = {input_expr} as unknown as Record<string, unknown>;\n"
         ));
     }
-    out.push_str(&url_lines(wire, "    "));
+    out.push_str(&url_lines(wire, "    ", field_expr));
     out.push_str("    const headers: Record<string, string> = {};\n");
-    out.push_str(&declared_header_lines(wire, "    "));
+    out.push_str(&declared_header_lines(wire, "    ", field_expr));
     out.push_str(
         "    for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);\n",
     );

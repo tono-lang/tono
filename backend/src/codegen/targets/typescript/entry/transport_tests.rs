@@ -22,6 +22,13 @@ fn wire() -> WireBinding {
     }
 }
 
+/// A stub standing in for the real `this.settings.<path>` closure `op_method`
+/// builds from the entry model: exercises the same call shape without
+/// needing a real `EntryModel` fixture in these pure-function tests.
+fn stub_field_expr(path: &[String]) -> String {
+    format!("this.settings.{}", path.join("."))
+}
+
 #[test]
 fn success_expr_defaults_to_the_2xx_range_alone() {
     assert_eq!(
@@ -45,7 +52,7 @@ fn success_expr_ors_in_only_the_out_of_range_declared_codes() {
 #[test]
 fn uri_expr_renders_a_pure_literal_without_a_template_wrapper() {
     let w = wire();
-    assert_eq!(uri_expr(&w), "\"/x\"");
+    assert_eq!(uri_expr(&w, &stub_field_expr), "\"/x\"");
 }
 
 #[test]
@@ -58,8 +65,8 @@ fn uri_expr_mixes_literal_field_and_input_placeholders() {
         TemplatePart::Field(vec!["region".into()]),
     ];
     assert_eq!(
-        uri_expr(&w),
-        "`/notes/${pathPart(record[\"id\"])}/${pathPart(this.options.values?.[\"region\"])}`"
+        uri_expr(&w, &stub_field_expr),
+        "`/notes/${pathPart(record[\"id\"])}/${pathPart(this.settings.region)}`"
     );
 }
 
@@ -177,16 +184,23 @@ fn has_query_and_query_lines_agree_on_query_bound_members() {
 
 #[test]
 fn endpoint_expr_falls_back_to_base_url_with_no_declared_endpoint() {
-    assert_eq!(endpoint_expr(&wire()), "this.options.baseUrl");
+    assert_eq!(
+        endpoint_expr(&wire(), &stub_field_expr),
+        "this.options.baseUrl"
+    );
 }
 
 #[test]
-fn endpoint_expr_prefers_a_non_empty_string_valued_field() {
+fn endpoint_expr_reads_the_typed_settings_field_with_no_runtime_guard() {
     let mut w = wire();
     w.endpoint = Some(vec!["endpoint".into()]);
-    let out = endpoint_expr(&w);
-    assert!(out.contains("this.options.values?.[\"endpoint\"]"));
-    assert!(out.contains("this.options.baseUrl"));
+    // The frontend guarantees `endpoint:` names a string field, so this
+    // needs no `typeof`/`as string` guard: only the empty-string-falls-back
+    // business rule, not a type check.
+    assert_eq!(
+        endpoint_expr(&w, &stub_field_expr),
+        "(this.settings.endpoint !== \"\" ? this.settings.endpoint : this.options.baseUrl)"
+    );
 }
 
 #[test]
@@ -223,8 +237,8 @@ fn declared_header_lines_render_a_literal_key_with_a_field_value() {
         WireValue::Field(vec!["client_name".into()]),
     )];
     assert_eq!(
-        declared_header_lines(&w, "  "),
-        "  setHeader(headers, \"X-Client\", formatScalar(this.options.values?.[\"client_name\"]));\n"
+        declared_header_lines(&w, "  ", &stub_field_expr),
+        "  setHeader(headers, \"X-Client\", formatScalar(this.settings.client_name));\n"
     );
 }
 

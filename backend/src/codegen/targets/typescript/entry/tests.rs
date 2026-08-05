@@ -730,3 +730,33 @@ fn a_retrying_operation_checks_retryable_before_retrying_a_declared_error() {
     assert!(out.contains("if (attempt < maxRetries && err.retryable()) {"));
     assert!(out.contains("throw err;"));
 }
+
+/// An `@http(endpoint: .field)` binding reads the resolved `Settings`
+/// directly: the frontend guarantees the field is `string`-typed, so this
+/// needs no runtime `typeof`/`as string` guard, unlike `@timeout`/`@retry`
+/// (still read through `this.options.values`, since those carry a real
+/// value conversion the constructor already validates eagerly).
+#[test]
+fn an_http_endpoint_binding_reads_the_typed_settings_field() {
+    let mut module = with_descriptors(fixture_module());
+    for shape in &mut module.shapes {
+        let ShapeKind::Entry { operations, .. } = &mut shape.kind else {
+            continue;
+        };
+        for op in operations {
+            if let ShapeKind::Operation {
+                wire: Some(wire), ..
+            } = &mut op.kind
+            {
+                wire.endpoint = Some(vec!["endpoint".into()]);
+            }
+        }
+    }
+    let out = text(&module);
+    // The exact shape pins that no runtime typeof/cast guard survives around
+    // the endpoint read: only the empty-string-falls-back business rule.
+    assert!(out.contains(
+        "const url = (this.settings.endpoint !== \"\" ? this.settings.endpoint : this.options.baseUrl)"
+    ));
+    assert!(!out.contains("this.options.values?.[\"endpoint\"]"));
+}

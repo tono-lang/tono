@@ -165,16 +165,11 @@ export class Client {
       throw invalid;
     }
     const url =
-      (typeof this.options.values?.["endpoint"] === "string" &&
-      this.options.values?.["endpoint"] !== ""
-        ? (this.options.values?.["endpoint"] as string)
+      (this.settings.endpoint !== ""
+        ? this.settings.endpoint
         : this.options.baseUrl) + "/charges";
     const headers: Record<string, string> = {};
-    setHeader(
-      headers,
-      "X-API-Key",
-      formatScalar(this.options.values?.["api_key"]),
-    );
+    setHeader(headers, "X-API-Key", formatScalar(this.settings.apiKey));
     for (const [k, v] of Object.entries(this.options.headers ?? {}))
       setHeader(headers, k, v);
     const body = JSON.stringify(encodeCharge(input));

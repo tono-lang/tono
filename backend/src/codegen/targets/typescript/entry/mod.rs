@@ -82,6 +82,34 @@ fn field_camel_ren(name: &str, rename: Option<&str>, config: &CasingConfig) -> S
     transform(name, SymbolKind::Field, config, rename)
 }
 
+/// `<root>.<path>`, honoring `@rename(ts)` on the leading segment only (a
+/// config/struct member's own name is never renamed, only an entry field's
+/// is) — the rule the constructor's own resolver ([`resolve::Resolver::path_expr`])
+/// and the transport's settings reads share, since both walk the same
+/// field-path shape rooted at a different identifier (`s` inside the
+/// constructor, `this.settings` from an operation method).
+fn field_path_expr(
+    entry: &EntryModel<'_>,
+    config: &CasingConfig,
+    path: &[String],
+    root: &str,
+) -> String {
+    let mut out = root.to_string();
+    for (i, seg) in path.iter().enumerate() {
+        out.push('.');
+        if i == 0 {
+            out.push_str(&field_camel_ren(
+                seg,
+                entry.field_rename(seg, LANG).as_deref(),
+                config,
+            ));
+        } else {
+            out.push_str(&field_camel(seg, config));
+        }
+    }
+    out
+}
+
 /// The JSDoc `@doc`/`@deprecated` block for an entry field's public surface (a
 /// Settings or config-object property), indented and newline-terminated, or
 /// empty when the field carries neither trait.
@@ -519,7 +547,7 @@ fn class_decl(
     };
     let mut methods = String::new();
     for op in entry.operations {
-        methods.push_str(&op_method(n, op, module, config, bound, &mut refs));
+        methods.push_str(&op_method(n, op, module, config, entry, bound, &mut refs));
         methods.push('\n');
     }
 
@@ -596,6 +624,7 @@ fn op_method(
     op: &Shape,
     module: &Module,
     config: &CasingConfig,
+    entry: &EntryModel<'_>,
     bound: &[BoundExtension<'_>],
     refs: &mut Vec<Symbol>,
 ) -> String {
@@ -685,6 +714,13 @@ fn op_method(
     let before_request_bound = hook_binding(bound, "before_request").is_some();
     let after_response_bound = hook_binding(bound, "after_response").is_some();
     let http_method = wire.method.clone();
+    // The frontend guarantees an endpoint/@header/path-template field
+    // reference resolves to a value already sitting, typed, on the resolved
+    // Settings — read it there directly rather than through the untyped,
+    // string-keyed values bag (which stays in use for @timeout/@retry only,
+    // since those need the constructor's eager duration-ms conversion and
+    // its construction-time validation, not a call-site re-derivation).
+    let field_expr = |path: &[String]| field_path_expr(entry, config, path, "this.settings");
     let transport_body = transport::op_call(
         wire,
         &http_method,
@@ -697,6 +733,7 @@ fn op_method(
         &throw,
         before_request_bound,
         after_response_bound,
+        &field_expr,
         refs,
     );
     let doc = doc_of(&op.traits)
