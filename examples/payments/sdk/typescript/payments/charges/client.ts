@@ -164,7 +164,6 @@ export class Client {
     if (invalid) {
       throw invalid;
     }
-    const record = encodeCharge(input) as unknown as Record<string, unknown>;
     const url =
       (typeof this.options.values?.["endpoint"] === "string" &&
       this.options.values?.["endpoint"] !== ""
@@ -178,7 +177,7 @@ export class Client {
     );
     for (const [k, v] of Object.entries(this.options.headers ?? {}))
       setHeader(headers, k, v);
-    const body = JSON.stringify(record);
+    const body = JSON.stringify(encodeCharge(input));
     if (!hasHeader(headers, "content-type"))
       headers["content-type"] = "application/json";
     const timeoutMs = resolveTimeoutMs(this.options.values?.["timeout"]);

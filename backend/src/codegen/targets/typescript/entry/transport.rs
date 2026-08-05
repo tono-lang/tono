@@ -168,7 +168,7 @@ fn query_lines(wire: &WireBinding, indent_str: &str) -> String {
 /// runtime's current early-return semantics), otherwise a compile-time-known
 /// object literal of the `Body`-kind members. `None` when the operation sends
 /// no body at all.
-fn body_expr(wire: &WireBinding) -> Option<String> {
+fn body_expr(wire: &WireBinding, input_expr: &str) -> Option<String> {
     if let Some((name, _)) = wire
         .bindings
         .iter()
@@ -186,13 +186,15 @@ fn body_expr(wire: &WireBinding) -> Option<String> {
         return None;
     }
     // Every binding is a Body member (no Label/Query/Header/Payload carved any
-    // out): `record` already *is* exactly the body, so serializing it whole
-    // is both simpler and, unlike re-listing by canonical name, correct even
-    // when a member's `encode` wire key differs from its canonical name
-    // (`@wire`) — `bindings` is keyed canonically, but `record`'s own keys
-    // already follow whatever `encode` actually wrote.
+    // out): the encoded input already *is* exactly the body, so stringifying
+    // it directly is both simpler and, unlike re-listing by canonical name,
+    // correct even when a member's `encode` wire key differs from its
+    // canonical name (`@wire`) — `bindings` is keyed canonically, but the
+    // encoded input's own keys already follow whatever `encode` actually
+    // wrote. `needs_record` agrees this case needs no `record` alias, so
+    // this reads the raw encoded input instead of indexing through one.
     if fields.len() == wire.bindings.len() {
-        return Some("JSON.stringify(record)".to_string());
+        return Some(format!("JSON.stringify({input_expr})"));
     }
     let object = fields
         .iter()
@@ -203,9 +205,19 @@ fn body_expr(wire: &WireBinding) -> Option<String> {
 }
 
 /// Whether the operation's input carries any member a request position reads
-/// (so a `record` alias of the encoded input is needed at all).
+/// individually via `record[name]` — so a `record` alias of the encoded
+/// input is needed. Not needed when there is nothing bound at all, and not
+/// needed when every bound member is a `Body` member: that case reads the
+/// encoded input directly (see `body_expr`'s whole-body branch) rather than
+/// through `record`, so building the alias would be dead weight (and an
+/// unnecessary `as unknown as Record<string, unknown>` cast) on the request.
 fn needs_record(wire: &WireBinding) -> bool {
-    !wire.bindings.is_empty()
+    let uri_reads_record = wire
+        .uri
+        .iter()
+        .any(|part| matches!(part, TemplatePart::Input(_)));
+    let any_non_body_binding = wire.bindings.values().any(|p| !matches!(p, WirePart::Body));
+    uri_reads_record || any_non_body_binding
 }
 
 /// `response.status >= 200 && response.status < 300`, plus one `||` arm per
@@ -341,7 +353,7 @@ pub(super) fn op_call(
 
     let has_retry = wire.retry.is_some();
     let has_timeout = wire.timeout.is_some();
-    let body = body_expr(wire);
+    let body = body_expr(wire, input_expr);
     let transport_throw = throw(format!("new {transport_error}(cause)"));
 
     let mut out = String::new();
@@ -703,9 +715,9 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
         ),
         Decl::raw_providing(
             "resolveMaxRetries",
-            "// resolveMaxRetries reads the resolved client value the descriptor's\n\
-             // retry field names: a non-numeric value or one below one both mean zero\n\
-             // retries; a fractional value floors.\n\
+            "// resolveMaxRetries reads the resolved client value the operation's\n\
+             // @retry field path names: a non-numeric value or one below one both mean\n\
+             // zero retries; a fractional value floors.\n\
              export function resolveMaxRetries(value: unknown): number {\n\
              \x20 return typeof value === \"number\" && Number.isFinite(value) && value >= 1 ? Math.floor(value) : 0;\n\
              }",
@@ -713,8 +725,8 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
         ),
         Decl::raw_providing(
             "resolveTimeoutMs",
-            "// resolveTimeoutMs reads the resolved client value the descriptor's\n\
-             // timeout field names: a non-numeric value means no deadline.\n\
+            "// resolveTimeoutMs reads the resolved client value the operation's\n\
+             // @timeout field path names: a non-numeric value means no deadline.\n\
              export function resolveTimeoutMs(value: unknown): number {\n\
              \x20 return typeof value === \"number\" && Number.isFinite(value) ? value : 0;\n\
              }",

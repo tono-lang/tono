@@ -67,7 +67,7 @@ fn uri_expr_mixes_literal_field_and_input_placeholders() {
 fn body_expr_is_none_with_no_body_bound_members() {
     let mut w = wire();
     w.bindings = [("id".to_string(), WirePart::Label)].into_iter().collect();
-    assert_eq!(body_expr(&w), None);
+    assert_eq!(body_expr(&w, "record"), None);
 }
 
 #[test]
@@ -81,13 +81,13 @@ fn body_expr_lists_only_the_body_members_when_mixed_with_other_kinds() {
     .into_iter()
     .collect();
     assert_eq!(
-        body_expr(&w).as_deref(),
+        body_expr(&w, "record").as_deref(),
         Some("JSON.stringify({ \"amount\": record[\"amount\"], \"note\": record[\"note\"] })")
     );
 }
 
 #[test]
-fn body_expr_serializes_the_whole_record_when_every_member_is_body() {
+fn body_expr_serializes_the_encoded_input_directly_when_every_member_is_body() {
     let mut w = wire();
     w.bindings = [
         ("amount".to_string(), WirePart::Body),
@@ -96,9 +96,14 @@ fn body_expr_serializes_the_whole_record_when_every_member_is_body() {
     .into_iter()
     .collect();
     // No member carved out of `record` (no label/query/header/payload), so
-    // serializing it whole is equivalent to (and simpler than) re-listing
-    // every field by name.
-    assert_eq!(body_expr(&w).as_deref(), Some("JSON.stringify(record)"));
+    // stringifying the encoded input directly is both simpler than and, in
+    // the presence of a `@wire` rename, more correct than re-listing every
+    // field by its canonical name. needs_record agrees this case needs no
+    // `record` alias, so the input expression is used as-is.
+    assert_eq!(
+        body_expr(&w, "encodeThing(input)").as_deref(),
+        Some("JSON.stringify(encodeThing(input))")
+    );
 }
 
 #[test]
@@ -111,9 +116,48 @@ fn body_expr_prefers_the_payload_member_over_any_body_members() {
     .into_iter()
     .collect();
     assert_eq!(
-        body_expr(&w).as_deref(),
+        body_expr(&w, "record").as_deref(),
         Some("JSON.stringify(record[\"envelope\"])")
     );
+}
+
+#[test]
+fn needs_record_is_false_with_no_bindings_at_all() {
+    assert!(!needs_record(&wire()));
+}
+
+#[test]
+fn needs_record_is_false_when_every_binding_is_a_body_member() {
+    let mut w = wire();
+    w.bindings = [
+        ("amount".to_string(), WirePart::Body),
+        ("note".to_string(), WirePart::Body),
+    ]
+    .into_iter()
+    .collect();
+    assert!(!needs_record(&w));
+}
+
+#[test]
+fn needs_record_is_true_when_a_label_binding_mixes_with_body_members() {
+    let mut w = wire();
+    w.uri = vec![TemplatePart::Input("id".into())];
+    w.bindings = [
+        ("id".to_string(), WirePart::Label),
+        ("amount".to_string(), WirePart::Body),
+    ]
+    .into_iter()
+    .collect();
+    assert!(needs_record(&w));
+}
+
+#[test]
+fn needs_record_is_true_for_a_query_or_header_binding_alone() {
+    let mut w = wire();
+    w.bindings = [("tag".to_string(), WirePart::Query { name: "tag".into() })]
+        .into_iter()
+        .collect();
+    assert!(needs_record(&w));
 }
 
 #[test]

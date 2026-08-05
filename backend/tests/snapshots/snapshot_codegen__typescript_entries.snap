@@ -175,15 +175,15 @@ export function backoffDelayMs(attempt: number, random: number): number {
   return random * Math.min(2000, 100 * 2 ** attempt);
 }
 
-// resolveMaxRetries reads the resolved client value the descriptor's
-// retry field names: a non-numeric value or one below one both mean zero
-// retries; a fractional value floors.
+// resolveMaxRetries reads the resolved client value the operation's
+// @retry field path names: a non-numeric value or one below one both mean
+// zero retries; a fractional value floors.
 export function resolveMaxRetries(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 1 ? Math.floor(value) : 0;
 }
 
-// resolveTimeoutMs reads the resolved client value the descriptor's
-// timeout field names: a non-numeric value means no deadline.
+// resolveTimeoutMs reads the resolved client value the operation's
+// @timeout field path names: a non-numeric value means no deadline.
 export function resolveTimeoutMs(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
