@@ -1,5 +1,5 @@
 {
-  "comment": "Cross-runtime behavior vectors for the HTTP runtimes' retry/timeout executor. Each runtime runs every vector through its canonical transport slot with random pinned to 0.5 and an instant, recording sleep. Script entries are consumed one per attempt: response returns that status/body, transport_failure fails the attempt, hang blocks until the per-attempt timeout fires. expect.attempts is the number of transport calls; expect.delays_ms are the backoff sleeps between attempts (random * min(2000, 100 * 2^retry)).",
+  "comment": "Cross-runtime behavior vectors for the HTTP runtimes' retry/timeout executor. Each runtime runs every vector through its canonical transport slot with random pinned to 0.5 and an instant, recording sleep. Script entries are consumed one per attempt: response returns that status/body, transport_failure fails the attempt, hang blocks until the per-attempt timeout fires. expect.attempts is the number of transport calls; expect.delays_ms are the backoff sleeps between attempts (random * min(2000, 100 * 2^retry)). A vector's optional declared_errors ([status, code|null, retryable] triples) stands in for a generated decode<Op>Error + retryable() pair: each harness builds a retryable(status, body) predicate from it (first status match with an agreeing code decides; a null code matches any body) and passes that to Execute/execute, exactly the shape the real compiler emits inline at each operation's call site. A vector with no declared_errors means no error response is ever retryable.",
   "vectors": [
     {
       "name": "no retry declared means one attempt, ever",
@@ -8,8 +8,7 @@
         "uri": "/x",
         "bindings": [],
         "response_bindings": [],
-        "success": [[200, null]],
-        "errors": []
+        "success": [[200, null]]
       },
       "values": {},
       "input": {},
@@ -24,7 +23,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "lit": 2 } }
       },
       "values": {},
@@ -50,9 +48,9 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [[429, "svc#overloaded", "overloaded", true]],
         "retry": { "max": { "lit": 3 } }
       },
+      "declared_errors": [[429, "overloaded", true]],
       "values": {},
       "input": {},
       "script": [
@@ -69,9 +67,9 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [[404, "svc#not_found", null, false]],
         "retry": { "max": { "lit": 3 } }
       },
+      "declared_errors": [[404, null, false]],
       "values": {},
       "input": {},
       "script": [{ "kind": "response", "status": 404, "body": "{}" }],
@@ -85,7 +83,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "lit": 3 } }
       },
       "values": {},
@@ -101,12 +98,12 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [
-          [429, "svc#overloaded", "overloaded", true],
-          [429, "svc#quota_exceeded", "quota_exceeded", false]
-        ],
         "retry": { "max": { "lit": 3 } }
       },
+      "declared_errors": [
+        [429, "overloaded", true],
+        [429, "quota_exceeded", false]
+      ],
       "values": {},
       "input": {},
       "script": [{ "kind": "response", "status": 429, "body": "{\"code\":\"quota_exceeded\"}" }],
@@ -126,12 +123,12 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [
-          [429, "svc#overloaded", "overloaded", true],
-          [429, "svc#quota_exceeded", "quota_exceeded", false]
-        ],
         "retry": { "max": { "lit": 2 } }
       },
+      "declared_errors": [
+        [429, "overloaded", true],
+        [429, "quota_exceeded", false]
+      ],
       "values": {},
       "input": {},
       "script": [
@@ -149,9 +146,9 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [[503, "svc#unavailable", null, true]],
         "retry": { "max": { "lit": 1 } }
       },
+      "declared_errors": [[503, null, true]],
       "values": {},
       "input": {},
       "script": [
@@ -168,9 +165,9 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [[503, "svc#unavailable", "unavailable", true]],
         "retry": { "max": { "lit": 3 } }
       },
+      "declared_errors": [[503, "unavailable", true]],
       "values": {},
       "input": {},
       "script": [{ "kind": "response", "status": 503, "body": "not json" }],
@@ -184,7 +181,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "lit": 1 } }
       },
       "values": {},
@@ -200,7 +196,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "ref": "max_retries" } }
       },
       "values": { "max_retries": 2 },
@@ -220,7 +215,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "ref": "absent" } }
       },
       "values": {},
@@ -236,7 +230,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "lit": 2.5 } }
       },
       "values": {},
@@ -256,7 +249,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "lit": 6 } }
       },
       "values": {},
@@ -286,7 +278,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "lit": 3 } }
       },
       "values": {},
@@ -302,7 +293,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "retry": { "max": { "lit": 1 } },
         "timeout": { "lit": 30 }
       },
@@ -319,7 +309,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "timeout": { "ref": "timeout_ms" }
       },
       "values": { "timeout_ms": 30 },
@@ -335,7 +324,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "endpoint": ["endpoint"],
         "request_headers": [
           [[{ "lit": "Authorization" }], { "template": [{ "lit": "Bearer " }, { "field": ["token"] }] }],
@@ -366,7 +354,6 @@
         "bindings": [],
         "response_bindings": [],
         "success": [[200, null]],
-        "errors": [],
         "endpoint": ["endpoint"]
       },
       "values": {},

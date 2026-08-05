@@ -23,6 +23,10 @@ interface ParityStep {
 interface ParityVector {
   name: string;
   descriptor: WireDescriptor;
+  // [status, code|null, retryable] triples: a stand-in for what a generated
+  // decode<Op>Error + retryable() pair would classify, without depending on
+  // any generated code to exist. Absent means no error response ever retries.
+  declared_errors?: ReadonlyArray<readonly [number, string | null, boolean]>;
   values: Record<string, unknown>;
   input: Record<string, unknown>;
   script: ParityStep[];
@@ -40,6 +44,32 @@ interface ParityVector {
 }
 
 const file = vectorsJson as unknown as { vectors: ParityVector[] };
+
+// Builds the predicate execute() expects, exactly as a generated client would
+// build it from its own decode<Op>Error + retryable() pair: the first status
+// match with an agreeing code decides (a declared code must equal the body's
+// "code" field; a null code matches any body).
+function classifyLikeDiscriminator(
+  declared: ReadonlyArray<readonly [number, string | null, boolean]>,
+): (status: number, body: string) => boolean {
+  return (status, body) => {
+    let code: unknown;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      code =
+        parsed !== null && typeof parsed === "object"
+          ? (parsed as Record<string, unknown>)["code"]
+          : undefined;
+    } catch {
+      code = undefined;
+    }
+    for (const [declaredStatus, declaredCode, retryable] of declared) {
+      if (declaredStatus !== status) continue;
+      if (declaredCode === null || code === declaredCode) return retryable;
+    }
+    return false;
+  };
+}
 
 function scripted(script: ParityStep[]) {
   let attempts = 0;
@@ -86,8 +116,9 @@ describe("parity vectors", () => {
         vector.input,
         { baseUrl: "https://api.test", transport, values: vector.values },
         undefined,
+        vector.declared_errors ? classifyLikeDiscriminator(vector.declared_errors) : undefined,
         {
-          sleep: (ms) => {
+          sleep: (ms: number) => {
             delays.push(ms);
             return Promise.resolve();
           },

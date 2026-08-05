@@ -16,12 +16,53 @@ import (
 // runtimes' harnesses.
 
 type parityVector struct {
-	Name       string          `json:"name"`
-	Descriptor json.RawMessage `json:"descriptor"`
-	Values     map[string]any  `json:"values"`
-	Input      map[string]any  `json:"input"`
-	Script     []parityStep    `json:"script"`
-	Expect     parityExpect    `json:"expect"`
+	Name           string          `json:"name"`
+	Descriptor     json.RawMessage `json:"descriptor"`
+	DeclaredErrors []parityDeclErr `json:"declared_errors"`
+	Values         map[string]any  `json:"values"`
+	Input          map[string]any  `json:"input"`
+	Script         []parityStep    `json:"script"`
+	Expect         parityExpect    `json:"expect"`
+}
+
+// parityDeclErr is one [status, code|null, retryable] triple: the fixture's
+// stand-in for what a generated Decode<Op>Error + Retryable() pair would
+// classify, without depending on any generated code to exist.
+type parityDeclErr struct {
+	Status    int
+	Code      *string
+	Retryable bool
+}
+
+func (e *parityDeclErr) UnmarshalJSON(data []byte) error {
+	var parts [3]json.RawMessage
+	if err := json.Unmarshal(data, &parts); err != nil {
+		return fmt.Errorf("declared_errors entry is not a 3-element array: %w", err)
+	}
+	if err := json.Unmarshal(parts[0], &e.Status); err != nil {
+		return fmt.Errorf("declared_errors status: %w", err)
+	}
+	if err := json.Unmarshal(parts[1], &e.Code); err != nil {
+		return fmt.Errorf("declared_errors code: %w", err)
+	}
+	if err := json.Unmarshal(parts[2], &e.Retryable); err != nil {
+		return fmt.Errorf("declared_errors retryable: %w", err)
+	}
+	return nil
+}
+
+// retryable builds the predicate Execute expects, exactly as a generated
+// client would build it from its own Decode<Op>Error + Retryable() pair. A
+// vector with no declared errors passes nil (never retryable).
+func (v parityVector) retryable() func(status int, body string) bool {
+	if len(v.DeclaredErrors) == 0 {
+		return nil
+	}
+	rules := make([]declaredErrorRule, len(v.DeclaredErrors))
+	for i, e := range v.DeclaredErrors {
+		rules[i] = declaredErrorRule{Status: e.Status, Code: e.Code, Retryable: e.Retryable}
+	}
+	return classifyLikeDiscriminator(rules)
 }
 
 type parityStep struct {
@@ -121,7 +162,7 @@ func TestParityVectors(t *testing.T) {
 				Transport: scriptedTransport(t, vector.Script, &attempts, &requests),
 				Values:    vector.Values,
 			})
-			outcome, err := r.Execute(context.Background(), d, vector.Input, nil)
+			outcome, err := r.Execute(context.Background(), d, vector.Input, nil, vector.retryable())
 			if err != nil {
 				t.Fatalf("execute: %v", err)
 			}

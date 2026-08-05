@@ -24,6 +24,11 @@ struct ParityFile {
 struct ParityVector {
     name: String,
     descriptor: Value,
+    // [status, code|null, retryable] triples: a stand-in for what a generated
+    // decode<Op>Error + retryable() pair would classify, without depending on
+    // any generated code to exist.
+    #[serde(default)]
+    declared_errors: Vec<(u16, Option<String>, bool)>,
     #[serde(default)]
     values: Map<String, Value>,
     #[serde(default)]
@@ -177,8 +182,31 @@ async fn parity_vectors() {
             Arc::new(|| 0.5),
         );
 
+        // Stands in for a generated decode<Op>Error + retryable() pair: the
+        // first status match with an agreeing code decides (a declared code
+        // must equal the body's "code" field; a null code matches any body).
+        let declared_errors = vector.declared_errors;
+        let retryable = move |status: u16, body: &str| -> bool {
+            let code = serde_json::from_str::<Value>(body)
+                .ok()
+                .and_then(|v| v.get("code").and_then(|c| c.as_str().map(str::to_string)));
+            for (declared_status, declared_code, is_retryable) in &declared_errors {
+                if *declared_status != status {
+                    continue;
+                }
+                let agrees = match declared_code {
+                    None => true,
+                    Some(c) => code.as_deref() == Some(c.as_str()),
+                };
+                if agrees {
+                    return *is_retryable;
+                }
+            }
+            false
+        };
+
         let outcome = runtime
-            .execute(&d, &Value::Object(vector.input), None)
+            .execute(&d, &Value::Object(vector.input), None, Some(&retryable))
             .await
             .unwrap_or_else(|e| panic!("{}: execute: {e}", vector.name));
 
