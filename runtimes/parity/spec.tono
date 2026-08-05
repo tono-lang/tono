@@ -1,0 +1,94 @@
+import tono.http
+import tono.errors
+
+@doc("The empty payload every parity operation exchanges: these vectors are about retry/timeout/error-discrimination mechanics, never about payload shape.")
+struct thing {}
+
+@doc("Names a thing for a labeled-path operation.")
+struct thing_ref {
+  id: string @httpLabel
+}
+
+@doc("A retryable rate-limit error, discriminated by code.")
+@status(429)
+@errorCode("overloaded")
+@retryable
+struct overloaded {
+  message: string?
+}
+
+@doc("A non-retryable rate-limit error sharing status 429 with `overloaded`, discriminated by a different code.")
+@status(429)
+@errorCode("quota_exceeded")
+struct quota_exceeded {
+  message: string?
+}
+
+@doc("A non-retryable, codeless not-found error.")
+@status(404)
+struct not_found {
+  message: string?
+}
+
+@doc("A retryable upstream error, discriminated by code.")
+@status(502)
+@errorCode("bad_gateway")
+@retryable
+struct bad_gateway {
+  message: string?
+}
+
+@doc("A retryable, codeless error: any body at this status matches, since there is no code to discriminate on.")
+@status(503)
+@retryable
+struct service_unavailable {
+  message: string?
+}
+
+@doc("The parity SDK entry: operation shapes covering every retry/timeout/error-discrimination case the parity vectors exercise.")
+pub struct client {
+  endpoint: string @arg
+  token: string @with @default("")
+  client_name: string @with @default("")
+  auth_header: string @with @default("")
+  max_retries: i32 @with @default(0)
+  timeout: duration @with @default("0ms")
+
+  @doc("Retries on transport failure or a declared retryable error; never times out a single attempt.")
+  op retrying(thing): thing
+    @http(method: "POST", path: "/x", endpoint: .endpoint)
+    @retry(.max_retries)
+    @errors(overloaded, quota_exceeded, not_found, bad_gateway, service_unavailable)
+
+  @doc("Retries on transport failure (including a per-attempt timeout); never inspects a declared error.")
+  op retrying_with_timeout(thing): thing
+    @http(method: "POST", path: "/x", endpoint: .endpoint)
+    @retry(.max_retries)
+    @timeout(.timeout)
+
+  @doc("Never retries. Also stands in for the plain no-retry-declared vectors, since a fast response and a timed-out one behave the same when nothing loops.")
+  op timeout_only(thing): thing
+    @http(method: "POST", path: "/x", endpoint: .endpoint)
+    @timeout(.timeout)
+
+  @doc("Exercises declared-header resolution and @httpLabel url-encoding; no retry or timeout involved.")
+  op fetch_thing(thing_ref): thing
+    @http(method: "GET", path: "/things/{id}", endpoint: .endpoint)
+    @header("Authorization", .auth_header)
+    @header("X-Client", .client_name)
+}
+
+// The two former "endpoint ref and declared headers resolve" vectors collapse
+// into this one declarative case: the request-side assertion (method, path,
+// headers) is exactly what a `test` block can express. The "unresolved
+// endpoint falls back to the caller base url" vector has no analogue here:
+// `endpoint` is a required, always-resolved field in the entry model (an
+// entry @http op with no reachable endpoint ref does not compile), so there
+// is no unresolved state left to construct.
+test "the declared headers resolve and the label is url-encoded" {
+  c: client { endpoint: "https://acme.test", token: "t0", client_name: "demo", auth_header: "Bearer t0" }
+  s: stub c.fetch_thing.http: http.response { status: 200, body: "{}" }
+  got: c.fetch_thing(thing_ref { id: "s 1" })
+  expect got: thing {}
+  expect s.requests: [http.request { method: "GET", path: "/things/s%201", headers: { "authorization": "Bearer t0", "x-client": "demo", .. }, .. }]
+}
