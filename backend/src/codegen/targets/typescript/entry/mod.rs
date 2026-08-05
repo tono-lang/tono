@@ -19,7 +19,7 @@ use crate::codegen::entries::{
     companion_name, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
 };
 use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
-use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
+use crate::codegen::ops::{declared_errors, error_names, wire_binding, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
 use crate::codegen::targets::typescript::render::TsRules;
@@ -27,9 +27,6 @@ use crate::codegen::targets::typescript::types::{type_expr_of, TsVal, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
 use crate::ir::{EntryField, EnvName, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref};
-
-/// The runtime package (same one the loose-op client uses).
-use crate::codegen::targets::typescript::client::RUNTIME_PKG;
 
 const BINDING_LANGS: [&str; 2] = ["ts", "typescript"];
 
@@ -134,10 +131,6 @@ fn type_refs(t: &Tref, module: &Module) -> Vec<Symbol> {
         }
         _ => Vec::new(),
     }
-}
-
-fn runtime_import(name: &str) -> Symbol {
-    Symbol::imported(name, RUNTIME_PKG, name)
 }
 
 /// The zero value the mutable Settings draft starts from, per declared type.
@@ -253,7 +246,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     decls.extend(plan::output_decode_decls(
         &entries,
         module,
-        |op| wire_descriptor(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
+        |op| wire_binding(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
         |shape| decode::output_decode_decl(shape, module),
     ));
     let mut per_entry = Vec::new();
@@ -262,7 +255,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         let has_tests = tested.contains(entry.name);
         let mut own = vec![settings_interface(entry, &n, config, module)];
         own.extend(config_object_interface(entry, &n, config, module));
-        own.extend(descriptor_decls(entry, &n));
         own.extend(impl_op::seam_decls(entry, &n, module, &bound, has_tests));
         own.push(class_decl(
             entry,
@@ -298,8 +290,7 @@ fn class_decl(
 ) -> Decl {
     let en = error_names();
     let mut refs = vec![
-        runtime_import("ClientOptions"),
-        runtime_import("execute"),
+        support_symbol("ClientOptions"),
         module_symbol(&en.transport, module),
     ];
     for f in &entry.fields {
@@ -506,7 +497,6 @@ fn class_decl(
     // The mutually-exclusive transport slots are rejected at construction (as Go
     // does in New), so a misconfigured client fails to build instead of failing
     // obscurely on its first call.
-    refs.push(runtime_import("assertExclusiveTransport"));
     body.push_str("    assertExclusiveTransport(this.options);\n");
 
     let hooks_field = {
@@ -520,26 +510,16 @@ fn class_decl(
         if slots.is_empty() {
             String::new()
         } else {
-            refs.push(runtime_import("Hooks"));
+            refs.push(support_symbol("Hooks"));
             format!(
                 "  private readonly hooks: Hooks = {{ {} }};\n",
                 slots.join(", ")
             )
         }
     };
-    let passes_hooks = !hooks_field.is_empty();
-
     let mut methods = String::new();
     for op in entry.operations {
-        methods.push_str(&op_method(
-            n,
-            op,
-            module,
-            config,
-            bound,
-            passes_hooks,
-            &mut refs,
-        ));
+        methods.push_str(&op_method(n, op, module, config, bound, &mut refs));
         methods.push('\n');
     }
 
@@ -551,7 +531,7 @@ fn class_decl(
     // slots readonly, so the swap goes through a mutable view of the frozen
     // options object (the object itself is a plain literal).
     let for_test = if has_tests {
-        refs.push(runtime_import("CanonicalTransport"));
+        refs.push(support_symbol("HttpTransport"));
         let sig_params = if params.is_empty() {
             String::new()
         } else {
@@ -568,9 +548,9 @@ fn class_decl(
             "  // forTest is the constructor plus the transport seam the generated\n\
              \x20 // tests construct through: the real construction path runs first, then\n\
              \x20 // the canonical transport wins over anything bespoke.\n\
-             \x20 static forTest(seam: {{ transport: CanonicalTransport }}{sig_params}): {client} {{\n\
+             \x20 static forTest(seam: {{ transport: HttpTransport }}{sig_params}): {client} {{\n\
              \x20   const client = new {client}({pass});\n\
-             \x20   const options = client.options as {{ transport?: CanonicalTransport; fetch?: typeof fetch }};\n\
+             \x20   const options = client.options as {{ transport?: HttpTransport; fetch?: typeof fetch }};\n\
              \x20   options.transport = seam.transport;\n\
              \x20   options.fetch = undefined;\n\
              \x20   return client;\n\
@@ -617,7 +597,6 @@ fn op_method(
     module: &Module,
     config: &CasingConfig,
     bound: &[BoundExtension<'_>],
-    passes_hooks: bool,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let en = error_names();
@@ -673,7 +652,7 @@ fn op_method(
         }
     }
 
-    if wire_descriptor(op).is_none() {
+    let Some(wire) = wire_binding(op) else {
         // No protocol binding: the operation is implemented by bespoke sources
         // the frontend proved are bound, and the generator gate proved are bound
         // for this target.
@@ -692,7 +671,7 @@ fn op_method(
             discriminator: &discriminator_name(n, op),
             refs,
         });
-    }
+    };
 
     let has_declared_errors = !declared_errors(op, module).is_empty();
     let discriminator = discriminator_name(n, op);
@@ -703,35 +682,31 @@ fn op_method(
         throw(format!("new {}(outcome.status, outcome.body)", en.api))
     };
     let success_block = decode::success_block(output, module, &ret, &throw, refs);
-    // The retry loop and the thrown error read the same discriminator, so
-    // they can never disagree: TonoError's retryable() is the only place
-    // @retryable is materialized. An op with no declared errors omits the
-    // predicate (no discriminator exists to call).
-    let retryable_expr = has_declared_errors
-        .then(|| format!("(status, body) => {discriminator}(status, body).retryable()"));
-    let call_tail = match (passes_hooks, &retryable_expr) {
-        (false, None) => String::new(),
-        (true, None) => ", this.hooks".to_string(),
-        (false, Some(r)) => format!(", undefined, {r}"),
-        (true, Some(r)) => format!(", this.hooks, {r}"),
-    };
-    let transport_throw = throw(format!("new {}(outcome.cause)", en.transport));
+    let before_request_bound = hook_binding(bound, "before_request").is_some();
+    let after_response_bound = hook_binding(bound, "after_response").is_some();
+    let http_method = wire.method.clone();
+    let transport_body = transport::op_call(
+        wire,
+        &http_method,
+        &input_expr,
+        has_declared_errors,
+        &discriminator,
+        &error_line,
+        &success_block,
+        &en.transport,
+        &throw,
+        before_request_bound,
+        after_response_bound,
+        refs,
+    );
     let doc = doc_of(&op.traits)
         .map(|d| format!("  // {}\n", d.replace('\n', "\n  // ")))
         .unwrap_or_default();
     format!(
         "{doc}  async {name}({param}): Promise<{ret}> {{\n\
          {validate_block}\
-         \x20   const outcome = await execute({descriptor}, {input_expr}, this.options{call_tail});\n\
-         \x20   if (outcome.outcome === \"transport\") {{\n\
-         \x20     {transport_throw}\n\
-         \x20   }}\n\
-         \x20   if (outcome.outcome === \"error\") {{\n\
-         \x20     {error_line}\n\
-         \x20   }}\n\
-         {success_block}\n\
+         {transport_body}\
          \x20 }}",
-        descriptor = descriptor_var(n, op),
     )
 }
 
@@ -744,6 +719,7 @@ mod resolve;
 mod surface;
 #[cfg(test)]
 mod tests;
+pub(crate) mod transport;
 pub(crate) mod vector_tests;
 
 use checks::{access, config_error, presence_guard, value_cast, value_expr};

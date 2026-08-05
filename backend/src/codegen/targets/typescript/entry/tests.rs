@@ -19,13 +19,26 @@ pub(super) fn fixture_module() -> Module {
 }
 
 fn with_descriptors(mut module: Module) -> Module {
+    use crate::ir::{TemplatePart, WireBinding, WirePart};
     for shape in &mut module.shapes {
         if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
             for op in operations {
-                op.traits.push(crate::ir::Trait {
-                    id: "wire_descriptor".into(),
-                    value: serde_json::json!({"http_method": "POST", "uri": "/notes/{id}"}),
-                });
+                if let ShapeKind::Operation { wire, .. } = &mut op.kind {
+                    *wire = Some(Box::new(WireBinding {
+                        method: "POST".into(),
+                        uri: vec![
+                            TemplatePart::Lit("/notes/".into()),
+                            TemplatePart::Input("id".into()),
+                        ],
+                        bindings: [("id".to_string(), WirePart::Label)].into_iter().collect(),
+                        response_bindings: Default::default(),
+                        success: vec![200],
+                        endpoint: None,
+                        request_headers: Vec::new(),
+                        timeout: None,
+                        retry: None,
+                    }));
+                }
             }
         }
     }
@@ -81,7 +94,7 @@ fn the_entry_class_replaces_the_generic_client_surface() {
     assert!(out.contains("constructor(apiKey: string, config: ClientConfig = {}) {"));
     assert!(out.contains("export interface Settings {"));
     assert!(out.contains("  fetch?: typeof fetch;"));
-    assert!(out.contains("  transport?: CanonicalTransport;"));
+    assert!(out.contains("  transport?: HttpTransport;"));
     assert!(out.contains("  headers: Record<string, string>;"));
     assert!(out.contains("export interface ClientConfig {"));
     assert!(out.contains("  clientName?: string;"));
@@ -89,10 +102,11 @@ fn the_entry_class_replaces_the_generic_client_surface() {
     // The config interface is construction-only, hidden (not exported).
     assert!(out.contains("interface Conf {"));
     assert!(!out.contains("export interface Conf {"));
-    // The descriptor is embedded verbatim and the method maps the outcome.
-    assert!(out.contains("const saveNoteDescriptor: WireDescriptor = JSON.parse("));
+    // The transport is emitted inline: no descriptor blob, no runtime import.
+    assert!(!out.contains("WireDescriptor"));
+    assert!(!out.contains("Descriptor = JSON.parse("));
     assert!(out.contains("async saveNote(input: Note): Promise<Note> {"));
-    assert!(out.contains("throw new TransportError(outcome.cause);"));
+    assert!(out.contains("throw new TransportError(cause);"));
     assert!(out.contains("decodeSaveNoteError(outcome.status, outcome.body)"));
 }
 
@@ -295,7 +309,7 @@ fn a_constrained_op_input_is_validated_before_transport() {
     assert!(out.contains("throw invalid;"));
     // The check runs before the transport call, not after.
     let val = out.find("validateNote(input)").expect("validate call");
-    let exec = out.find("await execute(").expect("execute call");
+    let exec = out.find("await httpSend(").expect("transport call");
     assert!(val < exec);
 }
 

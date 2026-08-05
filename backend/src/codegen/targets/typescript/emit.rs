@@ -23,7 +23,7 @@ use crate::ir::Module;
 /// The branded well-known type aliases: zero-dependency nominal types that are a
 /// `string` underneath, distinguished only at the type level.
 pub fn well_known_decls() -> Vec<Decl> {
-    ["Timestamp", "LocalDate", "Duration"]
+    let mut decls: Vec<Decl> = ["Timestamp", "LocalDate", "Duration"]
         .iter()
         .map(|name| {
             Decl::Alias(Alias {
@@ -31,7 +31,9 @@ pub fn well_known_decls() -> Vec<Decl> {
                 value: format!("string & {{ readonly __brand: \"{name}\" }}"),
             })
         })
-        .collect()
+        .collect();
+    decls.extend(crate::codegen::targets::typescript::entry::transport::http_support_decls());
+    decls
 }
 
 /// What a group exports, split by what a re-export of it has to spell.
@@ -102,6 +104,7 @@ pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
         ("env", entry::env_helpers()),
         ("duration", entry::duration_helpers()),
         ("casing", entry::casing_helpers()),
+        ("http", entry::transport::internal_helpers()),
     ]
 }
 

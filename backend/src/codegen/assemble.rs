@@ -210,6 +210,21 @@ pub(crate) fn build_index(files: &[ModuleFile]) -> SymbolIndex {
 /// whole pipeline, which would otherwise render references still pointing at bare
 /// IR module names.
 pub fn resolve_groups(files: &mut Vec<ModuleFile>, target: TargetKind) {
+    // Every other root group is pruned first, to what the rest of the SDK
+    // reaches; the paths are read from the files themselves, since the
+    // emitters own that vocabulary. Support is judged last (below): a root
+    // group's own text is what may still reach a support type, so support
+    // can only be pruned to what survives once nothing upstream of it can
+    // shrink any further (a root group referencing a support type only in
+    // declarations nothing else calls must not keep that type alive).
+    let other_roots: Vec<String> = files
+        .iter()
+        .filter(|f| f.group.module.is_none() && f.group != Group::root_support())
+        .map(|f| f.group.path())
+        .collect();
+    for path in other_roots {
+        prune_root_group(files, &path);
+    }
     // With no group of their own, the support declarations ride the public group
     // of the module they serve. Folding here rather than at each caller is what
     // keeps a caller that drives one target's emitter directly (the round-trip
@@ -221,16 +236,8 @@ pub fn resolve_groups(files: &mut Vec<ModuleFile>, target: TargetKind) {
             decls.append(&mut types.file.decls);
             types.file.decls = decls;
         }
-    }
-    // Every root group is pruned to what the rest of the SDK reaches; the paths
-    // are read from the files themselves, since the emitters own that vocabulary.
-    let roots: Vec<String> = files
-        .iter()
-        .filter(|f| f.group.module.is_none())
-        .map(|f| f.group.path())
-        .collect();
-    for path in roots {
-        prune_root_group(files, &path);
+    } else {
+        prune_root_group(files, group::ROOT_SUPPORT);
     }
     let index = build_index(files);
     for file in files.iter_mut() {

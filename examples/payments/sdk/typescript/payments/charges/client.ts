@@ -2,14 +2,24 @@
 
 import { durationToMs } from "../../duration";
 import { readEnv } from "../../env";
-import { Duration } from "../../support";
 import {
-  CanonicalTransport,
-  ClientOptions,
-  WireDescriptor,
   assertExclusiveTransport,
-  execute,
-} from "@tono/http-runtime-ts";
+  backoffDelayMs,
+  defaultRandom,
+  defaultSleep,
+  hasHeader,
+  httpSendWithTimeout,
+  resolveMaxRetries,
+  resolveTimeoutMs,
+  setHeader,
+} from "../../http";
+import {
+  ClientOptions,
+  Duration,
+  HttpRequest,
+  HttpResponse,
+  HttpTransport,
+} from "../../support";
 import {
   decodeCardDeclined,
   decodeNotFound,
@@ -45,7 +55,7 @@ export interface Settings {
   timeout: Duration;
   maxRetries: number;
   fetch?: typeof fetch;
-  transport?: CanonicalTransport;
+  transport?: HttpTransport;
   headers: Record<string, string>;
 }
 
@@ -54,114 +64,6 @@ export interface ClientConfig {
   timeout?: Duration;
   maxRetries?: number;
 }
-
-const createChargeDescriptor: WireDescriptor = JSON.parse(`{
-  "bindings": [
-    [
-      "id",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "amount",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "fee",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "receipt",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "currency",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "note",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "tags",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "metadata",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "created",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "status",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "method",
-      {
-        "kind": "body"
-      }
-    ]
-  ],
-  "endpoint": [
-    "endpoint"
-  ],
-  "http_method": "POST",
-  "request_headers": [
-    [
-      [
-        {
-          "lit": "X-API-Key"
-        }
-      ],
-      {
-        "field": [
-          "api_key"
-        ]
-      }
-    ]
-  ],
-  "response_bindings": [],
-  "retry": {
-    "max": {
-      "ref": "max_retries"
-    }
-  },
-  "success": [
-    [
-      200,
-      {
-        "args": [],
-        "ref": "payments.charges#charge"
-      }
-    ]
-  ],
-  "timeout": {
-    "ref": "timeout"
-  },
-  "uri": "/charges"
-}`);
 
 // The payments SDK entry: the construction surface and its operations.
 // Client is the generated SDK client the client entry declares. The
@@ -244,13 +146,13 @@ export class Client {
   // tests construct through: the real construction path runs first, then
   // the canonical transport wins over anything bespoke.
   static forTest(
-    seam: { transport: CanonicalTransport },
+    seam: { transport: HttpTransport },
     apiKey: string,
     config: ClientConfig = {},
   ): Client {
     const client = new Client(apiKey, config);
     const options = client.options as {
-      transport?: CanonicalTransport;
+      transport?: HttpTransport;
       fetch?: typeof fetch;
     };
     options.transport = seam.transport;
@@ -263,23 +165,68 @@ export class Client {
     if (invalid) {
       throw invalid;
     }
-    const outcome = await execute(
-      createChargeDescriptor,
-      encodeCharge(input),
-      this.options,
-      undefined,
-      (status, body) => decodeCreateChargeError(status, body).retryable(),
+    const record = encodeCharge(input) as unknown as Record<string, unknown>;
+    const url =
+      (typeof this.options.values?.["endpoint"] === "string" &&
+      this.options.values?.["endpoint"] !== ""
+        ? (this.options.values?.["endpoint"] as string)
+        : this.options.baseUrl) + "/charges";
+    const headers: Record<string, string> = {};
+    setHeader(
+      headers,
+      "X-API-Key",
+      String(this.options.values?.["api_key"] ?? ""),
     );
-    if (outcome.outcome === "transport") {
-      throw new TransportError(outcome.cause);
-    }
-    if (outcome.outcome === "error") {
-      throw decodeCreateChargeError(outcome.status, outcome.body);
-    }
-    try {
-      return parseCharge(outcome.body);
-    } catch (path) {
-      throw new DecodeError(path as string, "Charge", outcome.body);
+    for (const [k, v] of Object.entries(this.options.headers ?? {}))
+      setHeader(headers, k, v);
+    const body = JSON.stringify({
+      amount: record["amount"],
+      created: record["created"],
+      currency: record["currency"],
+      fee: record["fee"],
+      id: record["id"],
+      metadata: record["metadata"],
+      method: record["method"],
+      note: record["note"],
+      receipt: record["receipt"],
+      status: record["status"],
+      tags: record["tags"],
+    });
+    if (!hasHeader(headers, "content-type"))
+      headers["content-type"] = "application/json";
+    const timeoutMs = resolveTimeoutMs(this.options.values?.["timeout"]);
+    const maxRetries = resolveMaxRetries(this.options.values?.["max_retries"]);
+    for (let attempt = 0; ; attempt++) {
+      const request: HttpRequest = {
+        method: "POST",
+        url,
+        headers: { ...headers },
+        body,
+      };
+      let response: HttpResponse;
+      try {
+        response = await httpSendWithTimeout(this.options, request, timeoutMs);
+      } catch (cause) {
+        if (attempt >= maxRetries) {
+          throw new TransportError(cause);
+        }
+        await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
+        continue;
+      }
+      const outcome = { status: response.status, body: response.body };
+      if (!(response.status >= 200 && response.status < 300)) {
+        const err = decodeCreateChargeError(outcome.status, outcome.body);
+        if (attempt < maxRetries && err.retryable()) {
+          await defaultSleep(backoffDelayMs(attempt, defaultRandom()));
+          continue;
+        }
+        throw err;
+      }
+      try {
+        return parseCharge(outcome.body);
+      } catch (path) {
+        throw new DecodeError(path as string, "Charge", outcome.body);
+      }
     }
   }
 }

@@ -44,7 +44,7 @@ pub(super) fn settings_interface(
     entry_module: &Module,
 ) -> Decl {
     let mut fields = String::new();
-    let mut refs = vec![runtime_import("CanonicalTransport")];
+    let mut refs = vec![support_symbol("HttpTransport")];
     for f in entry.declared() {
         fields.push_str(&format!(
             "{doc}  {}: {};\n",
@@ -62,7 +62,7 @@ pub(super) fn settings_interface(
              // Exactly one transport slot may be set: fetch (native) or transport\n\
              // (canonical). headers are the base request headers (bespoke auth writes\n\
              // here); a declared @header wins only where nothing else set the name.\n\
-             export interface {settings} {{\n{fields}  fetch?: typeof fetch;\n  transport?: CanonicalTransport;\n  headers: Record<string, string>;\n}}",
+             export interface {settings} {{\n{fields}  fetch?: typeof fetch;\n  transport?: HttpTransport;\n  headers: Record<string, string>;\n}}",
             settings = n.settings,
             entry = entry.name,
         ),
@@ -107,14 +107,6 @@ pub(super) fn config_object_interface(
     )]
 }
 
-pub(super) fn descriptor_var(n: &Names, op: &Shape) -> String {
-    camel(&format!(
-        "{}{}_descriptor",
-        n.op_prefix,
-        op_local_name(&op.id)
-    ))
-}
-
 pub(super) fn discriminator_name(n: &Names, op: &Shape) -> String {
     format!(
         "decode{}Error",
@@ -130,43 +122,6 @@ pub(super) fn method_name(op: &Shape, config: &CasingConfig) -> String {
         config,
         rename.as_deref(),
     )
-}
-
-/// The JSON descriptor embedded as a template literal the runtime parses at
-/// load (an opaque blob, no field ever read): pretty-printed for a reader,
-/// escaped only where a template literal would otherwise misread the text.
-///
-/// A backtick would end the literal early and a bare `${` would be read as
-/// interpolation, so both are escaped; JSON's own backslash escapes (`\n`,
-/// `\"`, ...) are escaped too, since a template literal cooks them the same
-/// way a plain string would and would otherwise hand `JSON.parse` an
-/// already-decoded (and no longer valid) payload. Plain content, the common
-/// case, needs none of this and comes out untouched.
-pub(super) fn embed(descriptor: &serde_json::Value) -> String {
-    let json = serde_json::to_string_pretty(descriptor).unwrap_or_else(|_| "null".into());
-    let escaped = json
-        .replace('\\', "\\\\")
-        .replace('`', "\\`")
-        .replace('$', "\\$");
-    format!("`{escaped}`")
-}
-
-pub(super) fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
-    entry
-        .operations
-        .iter()
-        .filter_map(|op| {
-            let descriptor = wire_descriptor(op)?;
-            Some(Decl::raw_with(
-                format!(
-                    "const {var}: WireDescriptor = JSON.parse({literal});",
-                    var = descriptor_var(n, op),
-                    literal = embed(descriptor),
-                ),
-                vec![runtime_import("WireDescriptor")],
-            ))
-        })
-        .collect()
 }
 
 /// The discrimination functions for the entry's operations, named through the
@@ -188,7 +143,7 @@ pub(super) fn discriminator_decls_for(
         .filter_map(|op| {
             let ordered = crate::codegen::ops::discrimination_order(op, module);
             let name = discriminator_name(n, op);
-            if crate::codegen::ops::wire_descriptor(op).is_some() {
+            if crate::codegen::ops::wire_binding(op).is_some() {
                 return Some(errors::discriminator_fn_named(&name, &ordered, module));
             }
             match crate::codegen::extensions::impl_binding(bound, &op.id) {
@@ -207,8 +162,8 @@ pub(super) fn transport_hook_wrappers(bound: &[BoundExtension<'_>], module: &Mod
     let en = error_names();
     let mut decls = Vec::new();
     for (slot, ty, wrapper) in [
-        ("before_request", "CanonicalRequest", "wrapBeforeRequest"),
-        ("after_response", "CanonicalResponse", "wrapAfterResponse"),
+        ("before_request", "HttpRequest", "wrapBeforeRequest"),
+        ("after_response", "HttpResponse", "wrapAfterResponse"),
     ] {
         let Some(b) = hook_binding(bound, slot) else {
             continue;
@@ -222,7 +177,7 @@ pub(super) fn transport_hook_wrappers(bound: &[BoundExtension<'_>], module: &Mod
             ),
             vec![
                 Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
-                runtime_import(ty),
+                support_symbol(ty),
                 module_symbol(&en.root, module),
                 module_symbol(&en.contract, module),
             ],
@@ -435,55 +390,4 @@ pub fn resolution_helpers() -> Vec<Decl> {
     decls.extend(duration_helpers());
     decls.extend(casing_helpers());
     decls
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// What a JS template literal cooks an escaped string down to: `\\`,
-    /// `` \` ``, and `\$` each collapse to the single character they guard.
-    /// Mirroring that here is what proves `embed`'s escaping round-trips
-    /// instead of merely trusting it does.
-    fn cook(escaped: &str) -> String {
-        let mut out = String::new();
-        let mut chars = escaped.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                if let Some(&next) = chars.peek() {
-                    out.push(next);
-                    chars.next();
-                    continue;
-                }
-            }
-            out.push(c);
-        }
-        out
-    }
-
-    #[test]
-    fn plain_content_needs_no_escaping() {
-        let descriptor = serde_json::json!({"method": "POST", "path": "/notes/{id}"});
-        let literal = embed(&descriptor);
-        assert!(literal.starts_with('`') && literal.ends_with('`'));
-        assert!(!literal.contains('\\'));
-    }
-
-    #[test]
-    fn a_backtick_dollar_brace_and_backslash_survive_the_round_trip() {
-        // A spec-authored literal (a header value, say) could contain any of
-        // these; the wire descriptor must still decode to the same value.
-        let descriptor = serde_json::json!({
-            "header": "a`b${c}\\d\ne\"f",
-        });
-        let literal = embed(&descriptor);
-        let inner = literal
-            .strip_prefix('`')
-            .and_then(|s| s.strip_suffix('`'))
-            .expect("embed wraps in backticks");
-        let cooked = cook(inner);
-        let round_tripped: serde_json::Value =
-            serde_json::from_str(&cooked).expect("cooked text is valid JSON");
-        assert_eq!(round_tripped, descriptor);
-    }
 }

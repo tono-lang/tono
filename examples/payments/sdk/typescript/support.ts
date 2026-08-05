@@ -3,3 +3,42 @@
 export type Timestamp = string & { readonly __brand: "Timestamp" };
 
 export type Duration = string & { readonly __brand: "Duration" };
+
+// HttpResponse is the response the runtime reads before classifying it.
+// An after_response hook may return a mutated copy.
+export interface HttpResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+// HttpRequest is the request the runtime builds before sending it. A
+// before_request hook receives this and may return a mutated copy (set an
+// auth header, sign the body).
+export interface HttpRequest {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string | undefined;
+}
+
+// HttpTransport adapts any HTTP stack by mapping HttpRequest/HttpResponse,
+// without emulating fetch. One call is one attempt: the generated client
+// owns retry, so a transport with internal retries does not combine with
+// it.
+export type HttpTransport = (
+  req: HttpRequest,
+  signal?: AbortSignal,
+) => Promise<HttpResponse>;
+
+// ClientOptions is what the caller supplies once, shared across every
+// operation. Exactly one transport slot may be set: fetch (native) or
+// transport (canonical); setting both is a construction error. No slot
+// ships its own auth; a bespoke hook sets an auth header through headers.
+export interface ClientOptions {
+  readonly baseUrl: string;
+  readonly fetch?: typeof fetch;
+  readonly transport?: HttpTransport;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly values?: Readonly<Record<string, unknown>>;
+}

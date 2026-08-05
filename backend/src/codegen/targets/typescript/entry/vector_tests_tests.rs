@@ -37,7 +37,7 @@ fn declared_tests_swap_the_construction_and_impl_seams() {
     // through; the override lands after construction ran, so the test
     // transport wins over anything bespoke.
     assert!(out.contains(
-        "static forTest(seam: { transport: CanonicalTransport }, apiKey: string, config: ClientConfig = {}): Client {"
+        "static forTest(seam: { transport: HttpTransport }, apiKey: string, config: ClientConfig = {}): Client {"
     ));
     assert!(out.contains("options.transport = seam.transport;"));
     assert!(out.contains("options.fetch = undefined;"));
@@ -120,7 +120,7 @@ fn an_http_stub_generates_a_request_matching_test() {
     assert!(text
         .contains("Object.entries(req0.headers).map(([k, v]) => [k.toLowerCase(), v] as const)"));
     assert!(text.contains("expect(lower0[\"authorization\"]).toBe(\"Bearer k\");"));
-    assert!(!text.contains("as CanonicalRequest"));
+    assert!(!text.contains("as HttpRequest"));
     assert!(!text.contains("function "));
 }
 
