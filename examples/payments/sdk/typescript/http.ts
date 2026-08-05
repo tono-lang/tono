@@ -114,19 +114,13 @@ export function backoffDelayMs(attempt: number, random: number): number {
   return random * Math.min(2000, 100 * 2 ** attempt);
 }
 
-// resolveMaxRetries reads the resolved client value the operation's
-// @retry field path names: a non-numeric value or one below one both mean
-// zero retries; a fractional value floors.
-export function resolveMaxRetries(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 1
-    ? Math.floor(value)
-    : 0;
-}
-
-// resolveTimeoutMs reads the resolved client value the operation's
-// @timeout field path names: a non-numeric value means no deadline.
-export function resolveTimeoutMs(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+// resolveMaxRetries clamps the operation's @retry field: a non-finite
+// value or one below one both mean zero retries; a fractional value
+// floors. bigint (an i64/u64-typed @retry field) narrows to a number
+// first, the same conversion every other numeric ref narrows through.
+export function resolveMaxRetries(value: number | bigint): number {
+  const n = typeof value === "bigint" ? Number(value) : value;
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
 }
 
 // timingSeam is the sleep/random behind the retry loop's backoff, as a

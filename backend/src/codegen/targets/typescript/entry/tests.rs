@@ -4,8 +4,7 @@ use crate::codegen::targets::typescript::TsRules;
 use crate::codegen::test_support::{
     bare_entry_field, push_config_member, push_entry_field, push_entry_op_trait, rendered,
     set_entry_op_outputs, with_bytes_and_constrained_port, with_derived_config_members,
-    with_enum_config_member, with_member_select_on_absent_subject, with_structured_sources,
-    with_transformed_chain_field,
+    with_member_select_on_absent_subject, with_structured_sources, with_transformed_chain_field,
 };
 use crate::ir::decode_model;
 
@@ -123,17 +122,14 @@ fn the_resolution_mirrors_the_go_spelling() {
         "endpointErr = new ConfigError(`endpoint_v1 <- ${endpointV1Err.message}`, endpointV1Err);"
     ));
     assert!(out.contains("composed.apiKey = s.apiKey;"));
-    // Values freeze under canonical dotted names; bigints narrow, the
-    // duration flows in milliseconds.
-    // A member read goes through its zero so an undefined draft member
-    // freezes (or guards) exactly like Go's zero struct member.
-    assert!(out.contains("values[\"settings.api_key\"] = (s.settings.apiKey ?? \"\");"));
-    assert!(out.contains("values[\"timeout\"] = durationToMs(String(s.timeout));"));
     // Entry construction leaves baseUrl empty: the endpoint resolves per
-    // operation from the descriptor's ref.
+    // operation from the wire binding; there is no runtime values bag left
+    // to freeze into (endpoint/header/path-template/@retry read the typed
+    // Settings directly; @timeout's own private field is covered by
+    // an_operation_with_a_timeout_field_converts_it_once_at_construction).
     assert!(out.contains(
-            "this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers, values };"
-        ));
+        "this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers };"
+    ));
 }
 
 #[test]
@@ -377,8 +373,6 @@ fn an_entry_field_rename_retargets_every_ts_identifier() {
     assert!(out.contains("authToken: string"));
     assert!(out.contains("s.authToken = authToken;"));
     assert!(!out.contains("primaryKey"));
-    // The canonical dotted key the runtime reads is unchanged.
-    assert!(out.contains("values[\"primary_key\"]"));
 }
 
 /// An `ext impl` binding for the fixture's `save_note`, typed or raw.
@@ -498,9 +492,8 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(out.contains("Number.isFinite(n)"));
     assert!(out.contains("durationToMs(v)"));
     assert!(out.contains("v === \"true\" || v === \"1\""));
-    // An enum field is a branded string: cast at the boundary, frozen.
+    // An enum field is a branded string, cast at the boundary.
     assert!(out.contains("s.mode = v as Mode;"));
-    assert!(out.contains("values[\"mode\"] = s.mode;"));
     // Guaranteed and error-tracked dynamic env names.
     assert!(out.contains("readEnv(s.sureName)"));
     assert!(
@@ -666,14 +659,37 @@ fn a_64_bit_operation_output_decodes_from_its_wire_string() {
     assert!(out.contains("return decodeI64(JSON.parse(outcome.body)) as bigint;"));
 }
 
+/// A `@timeout` field converts once, in the constructor, into a private
+/// millisecond field: a malformed duration still fails construction
+/// (`ConfigError`), never a later call, and the call site reads the
+/// already-converted field directly rather than reconverting per attempt.
 #[test]
-fn an_enum_member_of_a_config_freezes_as_a_branded_string() {
-    let mut module = fixture_module();
-    with_enum_config_member(&mut module);
+fn an_operation_with_a_timeout_field_converts_it_once_at_construction() {
+    let mut module = with_descriptors(fixture_module());
+    for shape in &mut module.shapes {
+        let ShapeKind::Entry { operations, .. } = &mut shape.kind else {
+            continue;
+        };
+        for op in operations {
+            if let ShapeKind::Operation {
+                wire: Some(wire), ..
+            } = &mut op.kind
+            {
+                wire.timeout = Some(vec!["timeout".into()]);
+            }
+        }
+    }
     let out = text(&module);
-    // The member reads through the branded empty string, never the draft's
-    // empty-object spelling.
-    assert!(out.contains("values[\"settings.mode\"] = (s.settings.mode ?? \"\" as Mode);"));
+    assert!(out.contains("private readonly timeoutMs: number;"));
+    assert!(out.contains(
+        "try {\n      this.timeoutMs = durationToMs(String(s.timeout));\n    } catch {\n      throw new ConfigError(`timeout: invalid duration ${JSON.stringify(String(s.timeout))}`);\n    }"
+    ));
+    assert!(out.contains("const timeoutMs = this.timeoutMs;"));
+    // Nothing left reads through the old runtime bag or the function it used
+    // to resolve through.
+    assert!(!out.contains("resolveTimeoutMs"));
+    assert!(!out.contains("this.options.values"));
+    assert!(!out.contains("values?:"));
 }
 
 /// The default `with_descriptors` fixture declares neither `@retry` nor
@@ -720,8 +736,7 @@ fn a_retrying_operation_checks_retryable_before_retrying_a_declared_error() {
     }
     let out = text(&module);
     assert!(out.contains("for (let attempt = 0; ; attempt++) {"));
-    assert!(out
-        .contains("const maxRetries = resolveMaxRetries(this.options.values?.[\"max_retries\"]);"));
+    assert!(out.contains("const maxRetries = resolveMaxRetries(this.settings.maxRetries);"));
     // The transport-failure catch retries unconditionally (a network error is
     // always retryable); the declared-error path additionally reads
     // `retryable()`, so the two must not share one bare `attempt < maxRetries`

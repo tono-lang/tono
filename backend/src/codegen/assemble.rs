@@ -217,6 +217,13 @@ pub fn resolve_groups(files: &mut Vec<ModuleFile>, target: TargetKind) {
     // can only be pruned to what survives once nothing upstream of it can
     // shrink any further (a root group referencing a support type only in
     // declarations nothing else calls must not keep that type alive).
+    // One ordered pass is sufficient, not just convenient: `Group::root_support()`
+    // is the SDK's leaf group by construction (its own declarations reference
+    // only other support types and language primitives — a Target's
+    // `http_support_decls()`-style functions never reach back into a root
+    // group), so pruning it can never re-open what an already-pruned root
+    // group needed. No cycle is possible, so no fixed-point loop is needed
+    // here.
     let other_roots: Vec<String> = files
         .iter()
         .filter(|f| f.group.module.is_none() && f.group != Group::root_support())

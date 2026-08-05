@@ -11,13 +11,11 @@
 //! so the descriptor's ref positions (endpoint, headers, timeout, retry)
 //! resolve in the runtime without the client interpreting a descriptor.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
-use crate::codegen::entries::{
-    companion_name, op_local_name, plan, ref_is_enum, EntryModel, FieldShape,
-};
+use crate::codegen::entries::{companion_name, op_local_name, plan, EntryModel, FieldShape};
 use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_binding, wire_descriptor};
 use crate::codegen::symbol::{Symbol, SymbolKind};
@@ -80,34 +78,6 @@ fn field_camel(name: &str, config: &CasingConfig) -> String {
 /// override. Config members and path tails keep the plain [`field_camel`].
 fn field_camel_ren(name: &str, rename: Option<&str>, config: &CasingConfig) -> String {
     transform(name, SymbolKind::Field, config, rename)
-}
-
-/// `<root>.<path>`, honoring `@rename(ts)` on the leading segment only (a
-/// config/struct member's own name is never renamed, only an entry field's
-/// is) — the rule the constructor's own resolver ([`resolve::Resolver::path_expr`])
-/// and the transport's settings reads share, since both walk the same
-/// field-path shape rooted at a different identifier (`s` inside the
-/// constructor, `this.settings` from an operation method).
-fn field_path_expr(
-    entry: &EntryModel<'_>,
-    config: &CasingConfig,
-    path: &[String],
-    root: &str,
-) -> String {
-    let mut out = root.to_string();
-    for (i, seg) in path.iter().enumerate() {
-        out.push('.');
-        if i == 0 {
-            out.push_str(&field_camel_ren(
-                seg,
-                entry.field_rename(seg, LANG).as_deref(),
-                config,
-            ));
-        } else {
-            out.push_str(&field_camel(seg, config));
-        }
-    }
-    out
 }
 
 /// The JSDoc `@doc`/`@deprecated` block for an entry field's public surface (a
@@ -178,16 +148,6 @@ fn zero_value(t: &Tref) -> String {
         Tref::Ref { .. } => format!("{{}} as {}", ts_type(t)),
         _ => format!("\"\" as {}", ts_type(t)),
     }
-}
-
-/// Whether the value is string-shaped in TypeScript (assignable from a raw env
-/// string with at most a branded cast).
-fn string_like(t: &Tref) -> bool {
-    matches!(
-        t,
-        Tref::Prim(Prim::String | Prim::Uuid | Prim::Timestamp | Prim::Date | Prim::Duration)
-            | Tref::Ref { .. }
-    )
 }
 
 fn cast_string(t: &Tref, v: &str) -> String {
@@ -468,59 +428,67 @@ fn class_decl(
         ));
     }
 
-    // Freeze the resolved values for the runtime's ref positions.
-    body.push_str("    const values: Record<string, unknown> = {};\n");
+    // Every distinct `@timeout` field path any operation actually declares
+    // (usually one, but a multi-op entry could bind more than one) becomes
+    // its own private field: the constructor converts Duration to
+    // milliseconds once, eagerly, so a malformed value still fails
+    // construction (ConfigError) rather than surfacing at the first call
+    // that happens to need it. `@retry`/`endpoint`/`@header`/path-template
+    // positions all read the typed Settings (or, for retry, the resolved
+    // numeric field) directly at the call site (see `op_method`'s
+    // `field_expr`), so there is no runtime values map left to freeze into.
+    let timeout_paths: BTreeMap<String, Vec<String>> = entry
+        .operations
+        .iter()
+        .filter_map(|op| match &op.kind {
+            ShapeKind::Operation { wire: Some(w), .. } => {
+                w.timeout.as_ref().map(|p| (p.join("."), p.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut timeout_field_decls = String::new();
+    let mut timeout_field_by_path: BTreeMap<String, String> = BTreeMap::new();
     for vp in entry.value_paths(module) {
-        // An enum-typed leaf is a branded string wherever it sits (a field or
-        // a composed/structured member): it freezes like any other scalar the
-        // descriptor's refs can name.
-        let scalar_ref = ref_is_enum(vp.target, module);
-        if value_expr(&vp, config, scalar_ref).is_none() {
+        let Some(segments) = timeout_paths.get(&vp.path) else {
             continue;
-        }
+        };
+        let field_name = timeout_field_name(entry, config, segments);
+        timeout_field_decls.push_str(&format!("  private readonly {field_name}: number;\n"));
         // A member of a structured draft may be undefined (the draft starts
-        // from an empty object); reading it through its zero keeps the frozen
-        // values and the presence guard aligned with Go's zero struct. A
-        // string-like member falls back to the empty string (its Go zero),
-        // never to the draft's empty-object spelling.
+        // from an empty object); reading it through its zero keeps this
+        // aligned with the constructor's other member reads.
         let expr = if vp.member.is_some() {
-            let zero = if string_like(vp.target) {
+            format!(
+                "(s.{} ?? {})",
+                access(&vp, config),
                 cast_string(vp.target, "\"\"")
-            } else {
-                zero_value(vp.target)
-            };
-            format!("(s.{} ?? {})", access(&vp, config), zero)
+            )
         } else {
             format!("s.{}", access(&vp, config))
         };
-        let assign = if let Tref::Prim(Prim::Duration) = vp.target {
-            helpers.duration_ms = true;
-            let fail = config_error(&format!(
-                "`{path}: invalid duration ${{JSON.stringify(String({expr}))}}`",
-                path = vp.path,
-            ));
-            format!(
-                "    try {{\n      values[{path:?}] = durationToMs(String({expr}));\n    }} catch {{\n      {fail}\n    }}\n",
-                path = vp.path,
-            )
-        } else {
-            format!(
-                "    values[{path:?}] = {value};\n",
-                path = vp.path,
-                value = value_cast(vp.target, &expr),
-            )
-        };
+        helpers.duration_ms = true;
+        let fail = config_error(&format!(
+            "`{path}: invalid duration ${{JSON.stringify(String({expr}))}}`",
+            path = vp.path,
+        ));
+        let assign = format!(
+            "    try {{\n      this.{field_name} = durationToMs(String({expr}));\n    }} catch {{\n      {fail}\n    }}\n",
+        );
         match presence_guard(entry, &vp, &expr) {
-            Some(guard) => body.push_str(&format!("    if ({guard}) {{\n  {assign}    }}\n",)),
+            Some(guard) => body.push_str(&format!(
+                "    if ({guard}) {{\n  {assign}    }} else {{\n      this.{field_name} = 0;\n    }}\n",
+            )),
             None => body.push_str(&assign),
         }
+        timeout_field_by_path.insert(vp.path.clone(), field_name);
     }
 
     // The frozen client options: entry construction leaves baseUrl empty (the
-    // per-operation endpoint resolves from the descriptor's ref), and the
+    // per-operation endpoint resolves from the wire binding), and the
     // transport slots come off the bridged Settings.
     body.push_str(
-        "    this.settings = s;\n    this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers, values };\n",
+        "    this.settings = s;\n    this.options = { baseUrl: \"\", fetch: s.fetch, transport: s.transport, headers: s.headers };\n",
     );
     // The mutually-exclusive transport slots are rejected at construction (as Go
     // does in New), so a misconfigured client fails to build instead of failing
@@ -545,9 +513,23 @@ fn class_decl(
             )
         }
     };
+    // The already-converted, already-validated millisecond value for a
+    // `@timeout` field path, read off its private field rather than
+    // re-deriving `durationToMs` at every call site.
+    let timeout_field_expr =
+        |path: &[String]| format!("this.{}", timeout_field_by_path[&path.join(".")]);
     let mut methods = String::new();
     for op in entry.operations {
-        methods.push_str(&op_method(n, op, module, config, entry, bound, &mut refs));
+        methods.push_str(&op_method(
+            n,
+            op,
+            module,
+            config,
+            entry,
+            bound,
+            &timeout_field_expr,
+            &mut refs,
+        ));
         methods.push('\n');
     }
 
@@ -601,6 +583,7 @@ fn class_decl(
          export class {client} {{\n\
          \x20 private readonly settings: {settings};\n\
          \x20 private readonly options: ClientOptions;\n\
+         {timeout_field_decls}\
          {hooks_field}\
          \x20 constructor({params}) {{\n{body}  }}\n\n{for_test}{methods}}}",
         client = n.client,
@@ -626,6 +609,7 @@ fn op_method(
     config: &CasingConfig,
     entry: &EntryModel<'_>,
     bound: &[BoundExtension<'_>],
+    timeout_field_expr: &dyn Fn(&[String]) -> String,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let en = error_names();
@@ -714,12 +698,12 @@ fn op_method(
     let before_request_bound = hook_binding(bound, "before_request").is_some();
     let after_response_bound = hook_binding(bound, "after_response").is_some();
     let http_method = wire.method.clone();
-    // The frontend guarantees an endpoint/@header/path-template field
+    // The frontend guarantees an endpoint/@header/path-template/@retry field
     // reference resolves to a value already sitting, typed, on the resolved
-    // Settings — read it there directly rather than through the untyped,
-    // string-keyed values bag (which stays in use for @timeout/@retry only,
-    // since those need the constructor's eager duration-ms conversion and
-    // its construction-time validation, not a call-site re-derivation).
+    // Settings — read it there directly instead of through a runtime bag.
+    // @timeout is the one exception: its field converts (Duration to
+    // milliseconds) rather than passing through, so it reads the private,
+    // already-converted field the constructor built (see class_decl).
     let field_expr = |path: &[String]| field_path_expr(entry, config, path, "this.settings");
     let transport_body = transport::op_call(
         wire,
@@ -734,6 +718,7 @@ fn op_method(
         before_request_bound,
         after_response_bound,
         &field_expr,
+        timeout_field_expr,
         refs,
     );
     let doc = doc_of(&op.traits)
@@ -759,7 +744,7 @@ mod tests;
 pub(crate) mod transport;
 pub(crate) mod vector_tests;
 
-use checks::{access, config_error, presence_guard, value_cast, value_expr};
+use checks::{access, config_error, field_path_expr, presence_guard, timeout_field_name};
 use resolve::Resolver;
 use surface::*;
 pub use surface::{casing_helpers, duration_helpers, env_helpers, resolution_helpers};

@@ -27,24 +27,63 @@ pub(super) fn access(vp: &crate::codegen::entries::ValuePath<'_>, config: &Casin
     crate::codegen::entries::value_path_access(vp, config, LANG)
 }
 
-/// Whether a value path freezes into the runtime values. See
-/// [`crate::codegen::entries::value_path_frozen_expr`] for the shared
-/// decision this only forwards to.
-pub(super) fn value_expr(
-    vp: &crate::codegen::entries::ValuePath<'_>,
+/// `<root>.<path>`, honoring `@rename(ts)` on the leading segment only (a
+/// config/struct member's own name is never renamed, only an entry field's
+/// is) — the rule the constructor's own resolver ([`super::resolve::Resolver::path_expr`])
+/// and the transport's settings reads share, since both walk the same
+/// field-path shape rooted at a different identifier (`s` inside the
+/// constructor, `this.settings` from an operation method).
+pub(super) fn field_path_expr(
+    entry: &EntryModel<'_>,
     config: &CasingConfig,
-    scalar_ref: bool,
-) -> Option<String> {
-    crate::codegen::entries::value_path_frozen_expr(vp, config, LANG, scalar_ref)
+    path: &[String],
+    root: &str,
+) -> String {
+    let mut out = root.to_string();
+    for (i, seg) in path.iter().enumerate() {
+        out.push('.');
+        if i == 0 {
+            out.push_str(&field_camel_ren(
+                seg,
+                entry.field_rename(seg, LANG).as_deref(),
+                config,
+            ));
+        } else {
+            out.push_str(&field_camel(seg, config));
+        }
+    }
+    out
 }
 
-/// The conversion into the runtime's value positions: bigints narrow to
-/// numbers (the descriptor's numeric refs), everything else passes as is.
-pub(super) fn value_cast(t: &Tref, expr: &str) -> String {
-    match t {
-        Tref::Prim(Prim::I64 | Prim::U64) => format!("Number({expr})"),
-        _ => expr.to_string(),
+/// A private, synthesized field name for a `@timeout` field path's converted
+/// millisecond value: the same per-segment casing `field_path_expr` applies,
+/// joined without dots (a tail segment capitalized, since this identifier is
+/// synthesized rather than public) and suffixed `Ms`. Collision-free within
+/// the class since it derives from the field's own (unique) path.
+pub(super) fn timeout_field_name(
+    entry: &EntryModel<'_>,
+    config: &CasingConfig,
+    path: &[String],
+) -> String {
+    let mut out = String::new();
+    for (i, seg) in path.iter().enumerate() {
+        if i == 0 {
+            out.push_str(&field_camel_ren(
+                seg,
+                entry.field_rename(seg, LANG).as_deref(),
+                config,
+            ));
+        } else {
+            let tail = field_camel(seg, config);
+            let mut chars = tail.chars();
+            if let Some(first) = chars.next() {
+                out.extend(first.to_uppercase());
+                out.push_str(chars.as_str());
+            }
+        }
     }
+    out.push_str("Ms");
+    out
 }
 
 /// The presence condition guarding a value entry, or `None` when the value is

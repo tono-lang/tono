@@ -41,10 +41,6 @@ fn js_str(s: &str) -> String {
     format!("{s:?}")
 }
 
-fn values_lookup(path: &[String]) -> String {
-    format!("this.options.values?.[{}]", js_str(&path.join(".")))
-}
-
 /// Render a parsed template (the `uri`, a `request_headers` key, or a
 /// `WireValue::Template`) into a TypeScript expression: a single literal run
 /// needs no template-literal wrapper, and a placeholder resolves either from
@@ -357,6 +353,7 @@ pub(super) fn op_call(
     before_request_bound: bool,
     after_response_bound: bool,
     field_expr: &dyn Fn(&[String]) -> String,
+    timeout_field_expr: &dyn Fn(&[String]) -> String,
     refs: &mut Vec<Symbol>,
 ) -> String {
     refs.push(support_symbol("HttpRequest"));
@@ -401,8 +398,8 @@ pub(super) fn op_call(
     let send_call = if has_timeout {
         let path = wire.timeout.as_deref().unwrap_or_default();
         out.push_str(&format!(
-            "    const timeoutMs = resolveTimeoutMs({});\n",
-            values_lookup(path)
+            "    const timeoutMs = {};\n",
+            timeout_field_expr(path)
         ));
         "httpSendWithTimeout(this.options, request, timeoutMs)".to_string()
     } else {
@@ -412,7 +409,7 @@ pub(super) fn op_call(
         let path = wire.retry.as_deref().unwrap_or_default();
         out.push_str(&format!(
             "    const maxRetries = resolveMaxRetries({});\n",
-            values_lookup(path)
+            field_expr(path)
         ));
     }
 
@@ -447,10 +444,14 @@ pub(super) fn op_call(
         "after_response",
         "response",
     ));
-    // `outcome` is the classified response `success_block`/`error_line` read;
-    // with nothing to fold in, `response` already has the shape they need
-    // (`.status`, `.body`), so it stands in directly rather than being
-    // reconstructed field by field.
+    // `outcome` is the name `success_block`/`error_line` (built in decode.rs)
+    // reads `.status`/`.body` off — a name shared with the raw-bespoke impl
+    // path, whose own `outcome` is a genuinely different shape (`{success,
+    // status, code, body}`) that decode.rs's generic text has to fit both
+    // without knowing which one it is. With nothing to fold in, `response`
+    // already has the `.status`/`.body` shape that name needs, so it stands
+    // in directly (not a leftover alias) rather than being reconstructed
+    // field by field.
     if wire.response_bindings.is_empty() {
         attempt.push_str(&format!("{d}const outcome = response;\n"));
     } else {
@@ -528,7 +529,7 @@ pub(crate) fn http_support_decls() -> Vec<Decl> {
              // operation. Exactly one transport slot may be set: fetch (native) or\n\
              // transport (canonical); setting both is a construction error. No slot\n\
              // ships its own auth; a bespoke hook sets an auth header through headers.\n\
-             export interface ClientOptions {\n  readonly baseUrl: string;\n  readonly fetch?: typeof fetch;\n  readonly transport?: HttpTransport;\n  readonly headers?: Readonly<Record<string, string>>;\n  readonly values?: Readonly<Record<string, unknown>>;\n}",
+             export interface ClientOptions {\n  readonly baseUrl: string;\n  readonly fetch?: typeof fetch;\n  readonly transport?: HttpTransport;\n  readonly headers?: Readonly<Record<string, string>>;\n}",
             vec![support_symbol("HttpTransport")],
         ),
         Decl::raw_providing(
@@ -726,20 +727,13 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
         ),
         Decl::raw_providing(
             "resolveMaxRetries",
-            "// resolveMaxRetries reads the resolved client value the operation's\n\
-             // @retry field path names: a non-numeric value or one below one both mean\n\
-             // zero retries; a fractional value floors.\n\
-             export function resolveMaxRetries(value: unknown): number {\n\
-             \x20 return typeof value === \"number\" && Number.isFinite(value) && value >= 1 ? Math.floor(value) : 0;\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "resolveTimeoutMs",
-            "// resolveTimeoutMs reads the resolved client value the operation's\n\
-             // @timeout field path names: a non-numeric value means no deadline.\n\
-             export function resolveTimeoutMs(value: unknown): number {\n\
-             \x20 return typeof value === \"number\" && Number.isFinite(value) ? value : 0;\n\
+            "// resolveMaxRetries clamps the operation's @retry field: a non-finite\n\
+             // value or one below one both mean zero retries; a fractional value\n\
+             // floors. bigint (an i64/u64-typed @retry field) narrows to a number\n\
+             // first, the same conversion every other numeric ref narrows through.\n\
+             export function resolveMaxRetries(value: number | bigint): number {\n\
+             \x20 const n = typeof value === \"bigint\" ? Number(value) : value;\n\
+             \x20 return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;\n\
              }",
             Vec::new(),
         ),

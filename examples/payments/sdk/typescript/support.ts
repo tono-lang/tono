@@ -40,5 +40,4 @@ export interface ClientOptions {
   readonly fetch?: typeof fetch;
   readonly transport?: HttpTransport;
   readonly headers?: Readonly<Record<string, string>>;
-  readonly values?: Readonly<Record<string, unknown>>;
 }

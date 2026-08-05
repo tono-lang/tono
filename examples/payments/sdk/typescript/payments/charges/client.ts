@@ -8,7 +8,6 @@ import {
   hasHeader,
   httpSendWithTimeout,
   resolveMaxRetries,
-  resolveTimeoutMs,
   retryDelay,
   setHeader,
 } from "../../http";
@@ -72,6 +71,7 @@ export interface ClientConfig {
 export class Client {
   private readonly settings: Settings;
   private readonly options: ClientOptions;
+  private readonly timeoutMs: number;
   constructor(apiKey: string, config: ClientConfig = {}) {
     const s: Settings = {
       apiKey: "",
@@ -119,24 +119,19 @@ export class Client {
     if (violations.length > 0) {
       throw new ValidationError(violations);
     }
-    const values: Record<string, unknown> = {};
-    values["api_key"] = s.apiKey;
-    values["endpoint"] = s.endpoint;
     try {
-      values["timeout"] = durationToMs(String(s.timeout));
+      this.timeoutMs = durationToMs(String(s.timeout));
     } catch {
       throw new ConfigError(
         `timeout: invalid duration ${JSON.stringify(String(s.timeout))}`,
       );
     }
-    values["max_retries"] = s.maxRetries;
     this.settings = s;
     this.options = {
       baseUrl: "",
       fetch: s.fetch,
       transport: s.transport,
       headers: s.headers,
-      values,
     };
     assertExclusiveTransport(this.options);
   }
@@ -175,8 +170,8 @@ export class Client {
     const body = JSON.stringify(encodeCharge(input));
     if (!hasHeader(headers, "content-type"))
       headers["content-type"] = "application/json";
-    const timeoutMs = resolveTimeoutMs(this.options.values?.["timeout"]);
-    const maxRetries = resolveMaxRetries(this.options.values?.["max_retries"]);
+    const timeoutMs = this.timeoutMs;
+    const maxRetries = resolveMaxRetries(this.settings.maxRetries);
     for (let attempt = 0; ; attempt++) {
       const request: HttpRequest = {
         method: "POST",

@@ -175,17 +175,13 @@ export function backoffDelayMs(attempt: number, random: number): number {
   return random * Math.min(2000, 100 * 2 ** attempt);
 }
 
-// resolveMaxRetries reads the resolved client value the operation's
-// @retry field path names: a non-numeric value or one below one both mean
-// zero retries; a fractional value floors.
-export function resolveMaxRetries(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 1 ? Math.floor(value) : 0;
-}
-
-// resolveTimeoutMs reads the resolved client value the operation's
-// @timeout field path names: a non-numeric value means no deadline.
-export function resolveTimeoutMs(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+// resolveMaxRetries clamps the operation's @retry field: a non-finite
+// value or one below one both mean zero retries; a fractional value
+// floors. bigint (an i64/u64-typed @retry field) narrows to a number
+// first, the same conversion every other numeric ref narrows through.
+export function resolveMaxRetries(value: number | bigint): number {
+  const n = typeof value === "bigint" ? Number(value) : value;
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
 }
 
 // timingSeam is the sleep/random behind the retry loop's backoff, as a
@@ -247,7 +243,6 @@ export interface ClientOptions {
   readonly fetch?: typeof fetch;
   readonly transport?: HttpTransport;
   readonly headers?: Readonly<Record<string, string>>;
-  readonly values?: Readonly<Record<string, unknown>>;
 }
 
 export interface Note {
@@ -339,7 +334,7 @@ export class OverloadedError extends APIError {
 import { strUpperSnake } from "../casing";
 import { durationToMs } from "../duration";
 import { readEnv } from "../env";
-import { assertExclusiveTransport, formatScalar, hasHeader, httpSendWithTimeout, pathPart, resolveMaxRetries, resolveTimeoutMs, retryDelay, setHeader } from "../http";
+import { assertExclusiveTransport, formatScalar, hasHeader, httpSendWithTimeout, pathPart, resolveMaxRetries, retryDelay, setHeader } from "../http";
 import { decodeCredentials, decodeOverloaded, encodeNote, parseNote } from "./codec";
 import { APIError, CODE_OVERLOADED, ClientOptions, ConfigError, Credentials, DecodeError, Duration, HttpRequest, HttpResponse, HttpTransport, Note, OverloadedError, STATUS_OVERLOADED, TonoError, TransportError, ValidationError, Violation, validateCredentials } from "./types";
 
@@ -384,6 +379,7 @@ export interface ClientConfig {
 export class Client {
   private readonly settings: Settings;
   private readonly options: ClientOptions;
+  private readonly timeoutMs: number;
   constructor(apiKey: string, config: ClientConfig = {}) {
     const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, headers: {} };
     s.apiKey = apiKey;
@@ -555,41 +551,13 @@ export class Client {
     if (violations.length > 0) {
       throw new ValidationError(violations);
     }
-    const values: Record<string, unknown> = {};
-    values["api_key"] = s.apiKey;
-    values["client_name"] = s.clientName;
-    values["client_key"] = s.clientKey;
-    values["endpoint_env"] = s.endpointEnv;
-    values["endpoint_version"] = s.endpointVersion;
-    if (s.endpointV1 !== "") {
-      values["endpoint_v1"] = s.endpointV1;
-    }
-    if (s.endpointV2 !== "") {
-      values["endpoint_v2"] = s.endpointV2;
-    }
-    if (s.endpoint !== "") {
-      values["endpoint"] = s.endpoint;
-    }
     try {
-      values["timeout"] = durationToMs(String(s.timeout));
+      this.timeoutMs = durationToMs(String(s.timeout));
     } catch {
       throw new ConfigError(`timeout: invalid duration ${JSON.stringify(String(s.timeout))}`);
     }
-    values["max_retries"] = s.maxRetries;
-    if ((s.settings.apiKey ?? "") !== "") {
-      values["settings.api_key"] = (s.settings.apiKey ?? "");
-    }
-    if ((s.settings.region ?? "") !== "") {
-      values["settings.region"] = (s.settings.region ?? "");
-    }
-    if ((s.creds.token ?? "") !== "") {
-      values["creds.token"] = (s.creds.token ?? "");
-    }
-    if ((s.creds.accountID ?? "") !== "") {
-      values["creds.account_id"] = (s.creds.accountID ?? "");
-    }
     this.settings = s;
-    this.options = { baseUrl: "", fetch: s.fetch, transport: s.transport, headers: s.headers, values };
+    this.options = { baseUrl: "", fetch: s.fetch, transport: s.transport, headers: s.headers };
     assertExclusiveTransport(this.options);
   }
 
@@ -601,8 +569,8 @@ export class Client {
     for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);
     const body = JSON.stringify({ "body": record["body"] });
     if (!hasHeader(headers, "content-type")) headers["content-type"] = "application/json";
-    const timeoutMs = resolveTimeoutMs(this.options.values?.["timeout"]);
-    const maxRetries = resolveMaxRetries(this.options.values?.["max_retries"]);
+    const timeoutMs = this.timeoutMs;
+    const maxRetries = resolveMaxRetries(this.settings.maxRetries);
     for (let attempt = 0; ; attempt++) {
       const request: HttpRequest = { method: "POST", url, headers: { ...headers }, body };
       let response: HttpResponse;
