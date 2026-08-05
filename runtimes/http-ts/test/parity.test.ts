@@ -13,6 +13,12 @@
 // internally (see httpSendWithTimeout in ./http) — only the retry backoff
 // is mocked — so a "hang" vector costs a few real milliseconds, not the
 // seconds a naive backoff would otherwise take.
+//
+// This file stays here, inside runtimes/http-ts, only as long as that
+// package does. Once Go and Rust are repointed the same way and the
+// package is retired, this harness (and its Go and Rust counterparts) has
+// to move out first; deleting the package around it would take the parity
+// gate with it, with nothing left to notice.
 
 import { describe, expect, it } from "vitest";
 
