@@ -127,19 +127,6 @@ const createChargeDescriptor: WireDescriptor = JSON.parse(`{
   "endpoint": [
     "endpoint"
   ],
-  "errors": [
-    [
-      402,
-      "payments.charges#card_declined",
-      "card_declined",
-      true
-    ],
-    [
-      404,
-      "payments.charges#not_found",
-      null
-    ]
-  ],
   "http_method": "POST",
   "request_headers": [
     [
@@ -280,6 +267,8 @@ export class Client {
       createChargeDescriptor,
       encodeCharge(input),
       this.options,
+      undefined,
+      (status, body) => decodeCreateChargeError(status, body).retryable(),
     );
     if (outcome.outcome === "transport") {
       throw new TransportError(outcome.cause);

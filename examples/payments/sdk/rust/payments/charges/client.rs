@@ -9,7 +9,7 @@ use crate::payments::charges::types::*;
 fn create_charge_descriptor() -> &'static tono_http_runtime::WireDescriptor {
     static DESCRIPTOR: std::sync::OnceLock<tono_http_runtime::WireDescriptor> =
         std::sync::OnceLock::new();
-    DESCRIPTOR.get_or_init(|| tono_http_runtime::WireDescriptor::parse("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"errors\":[[402,\"payments.charges#card_declined\",\"card_declined\",true],[404,\"payments.charges#not_found\",null]],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}").expect("valid wire descriptor"))
+    DESCRIPTOR.get_or_init(|| tono_http_runtime::WireDescriptor::parse("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}").expect("valid wire descriptor"))
 }
 
 /// Settings are the resolved construction values of the client entry:
@@ -171,7 +171,12 @@ impl Client {
         })?;
         let outcome = self
             .runtime
-            .execute(create_charge_descriptor(), &record, self.hooks.as_ref())
+            .execute(
+                create_charge_descriptor(),
+                &record,
+                self.hooks.as_ref(),
+                Some(&|status, body| decode_create_charge_error(status, body).retryable()),
+            )
             .await
             .map_err(|cause| match cause.downcast::<TonoError>() {
                 Ok(declared) => *declared,

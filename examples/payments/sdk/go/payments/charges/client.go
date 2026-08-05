@@ -198,19 +198,6 @@ var createChargeDescriptor = descriptor.MustDescriptor(`{
   "endpoint": [
     "endpoint"
   ],
-  "errors": [
-    [
-      402,
-      "payments.charges#card_declined",
-      "card_declined",
-      true
-    ],
-    [
-      404,
-      "payments.charges#not_found",
-      null
-    ]
-  ],
   "http_method": "POST",
   "request_headers": [
     [
@@ -256,7 +243,12 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	if err != nil {
 		return zero, err
 	}
-	outcome, err := c.runtime.Execute(ctx, createChargeDescriptor, record, c.hooks)
+	outcome, err := c.runtime.Execute(ctx, createChargeDescriptor, record, c.hooks, func(status int, body string) bool {
+		if re, ok := DecodeCreateChargeError(status, []byte(body)).(interface{ Retryable() bool }); ok {
+			return re.Retryable()
+		}
+		return false
+	})
 	if err != nil {
 		return zero, err
 	}
