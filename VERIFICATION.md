@@ -98,10 +98,13 @@ to avoid equivalent mutants (no redundant guards) instead.
 The HTTP runtimes also share one behavior-vector suite
 (`runtimes/parity/vectors.json`): every runtime runs the same retry, timeout,
 and error-classification scenarios with pinned jitter and recorded backoff, so
-the runtimes cannot drift apart. The TypeScript harness (`runtimes/parity/typescript/parity.test.ts`)
-and the Go harness (`runtimes/parity/go/parity_test.go`) compile
-`runtimes/parity/spec.tono`, generate the real SDK, and drive that generated
-client directly (via `scripts/run-parity.sh`), so they prove what a consumer
+the runtimes cannot drift apart. Every target's harness compiles
+`runtimes/parity/spec.tono`, generates the real SDK, and drives that generated
+client directly (via `scripts/run-parity.sh`): TypeScript through
+`runtimes/parity/typescript/parity.test.ts`, Go through
+`runtimes/parity/go/parity_test.go`, and Rust through
+`runtimes/parity/rust/parity_harness.rs`. The suite proves what a consumer
 actually imports, not just that a hand-written runtime interprets a synthetic
-descriptor correctly. Rust still exercises its runtime package the original
-way.
+descriptor correctly (the Rust harness runs as a `#[cfg(test)]` module of the
+generated crate, which is what lets it pin the client's crate-visible retry
+timing seam).

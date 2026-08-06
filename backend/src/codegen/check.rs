@@ -105,15 +105,23 @@ fn scaffold_rust(files: &[GeneratedFile], scratch: &Path) -> io::Result<CheckPla
     }
     fs::write(src.join("lib.rs"), lib)?;
 
+    // reqwest (default-on feature) and tokio mirror the manifest a consumer
+    // embeds a generated entry client with; a model with no entry simply
+    // leaves them unused.
     fs::write(
         scratch.join("Cargo.toml"),
         "[package]\n\
          name = \"tono_preview\"\n\
          version = \"0.0.0\"\n\
          edition = \"2021\"\n\
+         [features]\n\
+         default = [\"reqwest\"]\n\
+         reqwest = [\"dep:reqwest\"]\n\
          [dependencies]\n\
          serde = { version = \"1\", features = [\"derive\"] }\n\
          serde_json = \"1\"\n\
+         reqwest = { version = \"0.12\", default-features = false, features = [\"rustls-tls\"], optional = true }\n\
+         tokio = { version = \"1\", features = [\"time\"] }\n\
          [workspace]\n",
     )?;
 

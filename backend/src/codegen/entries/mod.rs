@@ -18,6 +18,7 @@ use crate::ir::{
 mod checks;
 mod order;
 pub mod plan;
+pub mod wire;
 
 pub use checks::{needs_presence_guard, value_path_access, value_path_frozen_expr};
 use order::resolution_order;

@@ -18,59 +18,6 @@ pub(super) fn config_error(message_expr: &str) -> String {
     format!("return Err(TonoError::Config(ConfigError {{ message: {message_expr} }}));")
 }
 
-/// Whether a value path freezes into the runtime values, and if so, the
-/// (already-Rust) expression reading it off `s`. See
-/// [`crate::codegen::entries::value_path_frozen_expr`] for the shared
-/// decision this only forwards to.
-pub(super) fn value_expr(
-    vp: &crate::codegen::entries::ValuePath<'_>,
-    config: &CasingConfig,
-    scalar_ref: bool,
-) -> Option<String> {
-    crate::codegen::entries::value_path_frozen_expr(vp, config, LANG, scalar_ref)
-}
-
-/// The conversion of a resolved field expression into a `serde_json::Value`
-/// for the frozen `values` map. `serde_json::Value::from` covers every
-/// numeric width and `bool` directly; string-shaped values clone into an
-/// owned `String` first (the expression reads through a borrow of `s`).
-/// `Duration` is handled by the caller (it freezes as milliseconds, not its
-/// wire string), never reaching here.
-pub(super) fn value_cast(t: &Tref, expr: &str) -> String {
-    match t {
-        Tref::Prim(
-            Prim::Bool
-            | Prim::I8
-            | Prim::I16
-            | Prim::I32
-            | Prim::I64
-            | Prim::U8
-            | Prim::U16
-            | Prim::U32
-            | Prim::U64
-            | Prim::Float,
-        ) => format!("serde_json::Value::from({expr})"),
-        Tref::Prim(Prim::String | Prim::Uuid) => format!("serde_json::Value::from({expr}.clone())"),
-        Tref::Prim(Prim::Timestamp | Prim::Date) => {
-            format!("serde_json::Value::from({expr}.0.clone())")
-        }
-        Tref::Prim(Prim::Bytes) => {
-            // No struct field in this module is guaranteed to have routed
-            // bytes through the base64 helper, so an entry field of type
-            // `bytes` consumed by a descriptor ref position (a rare shape:
-            // headers/timeouts/retries are otherwise string/numeric) freezes
-            // through a lossy UTF-8 read rather than pulling in a codec this
-            // file does not otherwise need.
-            format!("serde_json::Value::from(String::from_utf8_lossy(&{expr}).into_owned())")
-        }
-        Tref::Prim(Prim::Duration) => unreachable!("duration freezes as ms; handled by the caller"),
-        // Only an enum-typed ref reaches here (value_expr's scalar_ref
-        // gate); Display gives its wire spelling directly.
-        Tref::Ref { .. } => format!("serde_json::Value::from({expr}.to_string())"),
-        _ => format!("{expr}.clone()"),
-    }
-}
-
 /// The presence condition guarding a value entry, or `None` when the value is
 /// always frozen (the decision lives in
 /// [`crate::codegen::entries::needs_presence_guard`]; this only spells the
@@ -91,26 +38,6 @@ pub(super) fn presence_guard(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::targets::rust::rust_casing;
-    use crate::codegen::test_support::{bare_entry_field, push_entry_field};
-    use crate::ir::Source;
-
-    fn m() -> Module {
-        Module {
-            tests: vec![],
-            name: "m".into(),
-            shapes: vec![crate::ir::Shape {
-                id: "m#client".into(),
-                kind: ShapeKind::Entry {
-                    fields: vec![],
-                    operations: vec![],
-                },
-                traits: vec![],
-            }],
-            operations: vec![],
-            extensions: vec![],
-        }
-    }
 
     #[test]
     fn config_error_wraps_the_message_expression() {
@@ -118,41 +45,5 @@ mod tests {
             config_error("\"bad\".to_string()"),
             "return Err(TonoError::Config(ConfigError { message: \"bad\".to_string() }));"
         );
-    }
-
-    #[test]
-    fn value_cast_of_bytes_reads_lossily_since_no_base64_helper_is_guaranteed() {
-        assert_eq!(
-            value_cast(&Tref::Prim(Prim::Bytes), "s.receipt"),
-            "serde_json::Value::from(String::from_utf8_lossy(&s.receipt).into_owned())"
-        );
-    }
-
-    #[test]
-    fn value_cast_falls_back_to_a_clone_for_a_container_type() {
-        assert_eq!(
-            value_cast(&Tref::List(Box::new(Tref::Prim(Prim::String))), "s.tags"),
-            "s.tags.clone()"
-        );
-    }
-
-    #[test]
-    fn a_duration_default_pulls_in_the_parser_helper() {
-        let mut module = m();
-        push_entry_field(
-            &mut module,
-            bare_entry_field(
-                "wait",
-                Tref::Prim(Prim::Duration),
-                vec![Source::Default(serde_json::json!("5s"))],
-            ),
-        );
-        let out = entry_text(&module, &rust_casing());
-        // `entry_text` renders declarations in isolation, without the
-        // assembler's cross-group import resolution (see
-        // `crate::codegen::pipeline_tests::rust_entry_resolution_helpers_prune_to_only_what_the_model_uses`
-        // for the full-pipeline proof that the `use` this call site pulls
-        // in actually lands); this asserts only the call site itself.
-        assert!(out.contains("match parse_duration_ms(&s.wait.0) {"));
     }
 }

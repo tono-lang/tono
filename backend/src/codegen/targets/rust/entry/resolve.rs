@@ -95,6 +95,32 @@ impl Resolver<'_, '_> {
         )
     }
 
+    /// The `@with` accessor as an owned `Option`: a `Copy`-typed option
+    /// reads bare (a `.clone()` on it trips the generated SDK's
+    /// clone-on-copy lint), everything else clones out of the borrow.
+    fn arg_take(&self, field: &EntryField) -> String {
+        let acc = self.arg_read(field);
+        if matches!(
+            field.target,
+            Tref::Prim(
+                Prim::Bool
+                    | Prim::I8
+                    | Prim::I16
+                    | Prim::I32
+                    | Prim::I64
+                    | Prim::U8
+                    | Prim::U16
+                    | Prim::U32
+                    | Prim::U64
+                    | Prim::Float
+            )
+        ) {
+            acc
+        } else {
+            format!("{acc}.clone()")
+        }
+    }
+
     /// The casing-transformed identifier for one canonical field name,
     /// honoring its `@rename(rust)` override — the leaf `ident` and
     /// `path_expr`'s own head segment both read a field through.
@@ -297,13 +323,16 @@ impl Emitter for Resolver<'_, '_> {
 
     fn env_read_call(&mut self, name_expr: &str) -> String {
         self.refs.push(shared_symbol("read_env"));
-        // `name_expr` is a `String`-typed expression when the variable name
-        // is itself dynamic (`to_string_expr`'s output; a literal name is
-        // `&'static str`, already reference-shaped); `read_env` takes `&str`,
-        // and a leading `&` here satisfies both through deref coercion
-        // (`&String -> &str`, `&&str -> &str`) without needing to know which
-        // one it is.
-        format!("{}(&{name_expr})", shared_slot("read_env"))
+        // A literal name is already `&'static str` and passes bare; a
+        // dynamic name is a `String`-typed expression (`to_string_expr`'s
+        // output) and borrows into the `&str` parameter. The literal case
+        // must not borrow again: `&&str` coerces, but trips the generated
+        // SDK's needless-borrow lint.
+        if name_expr.starts_with('"') {
+            format!("{}({name_expr})", shared_slot("read_env"))
+        } else {
+            format!("{}(&{name_expr})", shared_slot("read_env"))
+        }
     }
 
     fn env_miss_error(&mut self, name: &EnvName) -> String {
@@ -374,9 +403,9 @@ impl Emitter for Resolver<'_, '_> {
     /// The `@with` presence step of a non-guaranteed chain, relative to
     /// column zero.
     fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String {
-        let acc = self.arg_read(field);
+        let acc = self.arg_take(field);
         format!(
-            "if let Some(v) = {acc}.clone() {{\n    {dest} = v;\n    {err} = None;\n}} else {{\n    {err} = Some({miss});\n}}",
+            "if let Some(v) = {acc} {{\n    {dest} = v;\n    {err} = None;\n}} else {{\n    {err} = Some({miss});\n}}",
             miss = self.config_error_expr("\"not configured\".to_string()", None),
         )
     }
@@ -407,9 +436,9 @@ impl Emitter for Resolver<'_, '_> {
         for source in &field.sources {
             match source {
                 Source::With => {
-                    let acc = self.arg_read(field);
+                    let acc = self.arg_take(field);
                     out.push_str(&format!(
-                        "{}if let Some(v) = {acc}.clone() {{\n    {dest} = v;\n}}",
+                        "{}if let Some(v) = {acc} {{\n    {dest} = v;\n}}",
                         if first { "" } else { " else " },
                     ));
                     first = false;

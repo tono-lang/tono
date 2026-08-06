@@ -19,3 +19,55 @@ impl std::fmt::Display for Duration {
         write!(f, "{}", self.0)
     }
 }
+
+/// The boxed, `Send` future every async transport seam returns (a
+/// canonical transport's call, the retry sleep seam).
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+/// The error a transport attempt (or a lifecycle hook) fails with; the
+/// generated client classifies it into its own error taxonomy.
+pub type HttpError = Box<dyn std::error::Error + Send + Sync>;
+
+/// HttpRequest is the request the generated client builds before sending
+/// it. A before_request hook receives it and may return a mutated copy
+/// (set an auth header, sign the body). `body` is `None` when the
+/// request carries no body.
+#[derive(Clone, Debug)]
+pub struct HttpRequest {
+    pub method: String,
+    pub url: String,
+    pub headers: std::collections::HashMap<String, String>,
+    pub body: Option<String>,
+}
+
+/// HttpResponse is the response the generated client reads before
+/// classifying it. Header keys are lowercased (HTTP header names are
+/// case-insensitive). An after_response hook may return a mutated copy.
+#[derive(Clone, Debug)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: std::collections::HashMap<String, String>,
+    pub body: String,
+}
+
+/// HttpTransport adapts any HTTP stack by mapping HttpRequest to
+/// HttpResponse, without emulating `reqwest`. One call is one attempt:
+/// the generated client owns retry, so a transport with internal
+/// retries does not combine with it.
+pub type HttpTransport = std::sync::Arc<
+    dyn Fn(HttpRequest) -> BoxFuture<'static, Result<HttpResponse, HttpError>> + Send + Sync,
+>;
+
+/// ClientOptions is what construction froze off the resolved Settings,
+/// shared across every operation. Exactly one transport slot may be
+/// set: `client` (native `reqwest`, present only with the crate's
+/// default-on `reqwest` feature) or `transport` (canonical); setting
+/// both is a construction error, and with the feature off the
+/// canonical slot is required. No slot ships its own auth; a bespoke
+/// hook sets an auth header through `headers`.
+pub struct ClientOptions {
+    #[cfg(feature = "reqwest")]
+    pub client: Option<reqwest::Client>,
+    pub transport: Option<HttpTransport>,
+    pub headers: std::collections::HashMap<String, String>,
+}

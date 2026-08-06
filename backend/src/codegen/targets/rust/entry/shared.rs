@@ -158,5 +158,6 @@ pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
         ("env", env_helpers()),
         ("duration", duration_helpers()),
         ("casing", casing_helpers()),
+        ("http", super::transport_decls::internal_helpers()),
     ]
 }

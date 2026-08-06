@@ -45,7 +45,7 @@ pub mod base64_bytes {
         let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'\n' && c != b'\r').collect();
         let pad = bytes.iter().rev().take_while(|&&c| c == b'=').count();
         let body = &bytes[..bytes.len() - pad];
-        if bytes.len() % 4 != 0 || pad > 2 || body.contains(&b'=') {
+        if !bytes.len().is_multiple_of(4) || pad > 2 || body.contains(&b'=') {
             return Err("invalid base64".to_string());
         }
         let mut out = Vec::new();

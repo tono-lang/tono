@@ -129,3 +129,7 @@ pub(super) fn output_decode_decl(shape: &Shape) -> Option<Decl> {
     );
     Some(Decl::raw(text))
 }
+
+#[cfg(test)]
+#[path = "decode_tests.rs"]
+mod tests;
