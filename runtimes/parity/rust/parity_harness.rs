@@ -16,10 +16,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 
-use crate::parity::{
-    decode_retrying_error, APIError, APIFailure, Client, Duration, HttpRequest, HttpResponse,
-    HttpTransport, Thing, TonoError,
-};
+use crate::parity::{decode_retrying_error, APIError, APIFailure, Client, Thing, TonoError};
+use crate::support::{Duration, HttpRequest, HttpResponse, HttpTransport};
 
 const VECTORS: &str = include_str!("vectors.json");
 
