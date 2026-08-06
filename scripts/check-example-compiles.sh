@@ -249,8 +249,6 @@ EOF
 # throwaway module resolves it from this repo, the way a consumer pins it.
 # tidy keeps stderr so a resolution failure names its cause.
 (cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 \
-    && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
-    && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
     && go mod tidy >/dev/null \
     && go build ./... && go run ./verify && go test ./...)
 
@@ -419,8 +417,6 @@ mkdir -p "$work/auth"
 # bespoke file lands there before the build (the client_init wrapper names it).
 cp "$root/examples/auth-bearer/ext/go/auth.go" "$work/auth/out/go/auth/bespoke.go"
 (cd "$work/auth/out/go" && go mod init example.com/auth >/dev/null 2>&1 \
-    && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
-    && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
     && go mod tidy >/dev/null \
     && go build ./...)
 (cd "$work/auth/out/go" && go test ./...)

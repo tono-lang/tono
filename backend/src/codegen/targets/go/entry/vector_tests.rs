@@ -26,7 +26,7 @@ use crate::codegen::tree::{Decl, ModuleFile};
 use crate::ir::{EnvName, HttpAnswer, Module, Source, StubAnswer, StubDep, TestPattern, Tref};
 
 use super::surface::{method_name, with_option_name};
-use super::{go_type, import, pascal, push_type_symbols, runtime_symbol, EntryModel};
+use super::{go_type, import, pascal, push_type_symbols, support_symbol, EntryModel};
 
 #[path = "vector_expects.rs"]
 mod expects;
@@ -251,6 +251,8 @@ fn join_args(head: &str, parts: &[&str]) -> String {
 /// recorded for the `requests` expectations. A single answer returns directly,
 /// with no sequence machinery.
 fn transport_block(answers: &[&HttpAnswer]) -> String {
+    let request = super::shared_slot("HTTPRequest");
+    let response = super::shared_slot("HTTPResponse");
     let literal = |a: &&HttpAnswer| {
         let headers: String = a
             .headers
@@ -266,16 +268,13 @@ fn transport_block(answers: &[&HttpAnswer]) -> String {
     let (responses_decl, closure_body) = match answers {
         [only] => (
             String::new(),
-            format!(
-                "\t\treturn tonohttp.CanonicalResponse{}, nil\n",
-                literal(only)
-            ),
+            format!("\t\treturn {response}{}, nil\n", literal(only)),
         ),
         _ => {
             let list: Vec<String> = answers.iter().map(literal).collect();
             (
                 format!(
-                    "\tresponses := []tonohttp.CanonicalResponse{{{list}}}\n",
+                    "\tresponses := []{response}{{{list}}}\n",
                     list = list.join(", "),
                 ),
                 "\t\ti := len(seen) - 1\n\
@@ -286,9 +285,9 @@ fn transport_block(answers: &[&HttpAnswer]) -> String {
         }
     };
     format!(
-        "\tvar seen []tonohttp.CanonicalRequest\n\
+        "\tvar seen []{request}\n\
          {responses_decl}\
-         \ttransport := func(ctx context.Context, req tonohttp.CanonicalRequest) (tonohttp.CanonicalResponse, error) {{\n\
+         \ttransport := func(ctx context.Context, req {request}) ({response}, error) {{\n\
          \t\tseen = append(seen, req)\n\
          {closure_body}\
          \t}}\n"
@@ -548,7 +547,8 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Decl {
         let stub = ctx.test.stub.expect("a hermetic call has its stub");
         let construct = match stub.dep {
             StubDep::Http => {
-                refs.push(runtime_symbol());
+                refs.push(support_symbol("HTTPRequest"));
+                refs.push(support_symbol("HTTPResponse"));
                 refs.push(import("context", "context"));
                 let answers: Vec<&HttpAnswer> = stub
                     .answers

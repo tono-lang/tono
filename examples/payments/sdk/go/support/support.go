@@ -2,6 +2,36 @@
 
 package support
 
+import "context"
+
 type Timestamp string
 
 type Duration string
+
+// HTTPRequest is the request the generated transport builds before sending
+// it. A before_request hook receives it and may return a mutated copy (set
+// an auth header, sign the body). Body is nil when the request carries no
+// body.
+type HTTPRequest struct {
+	Method  string
+	URL     string
+	Headers map[string]string
+	Body    []byte
+}
+
+// HTTPResponse is the response the generated transport reads before
+// classifying it. Header keys are lowercased (HTTP header names are
+// case-insensitive). An after_response hook may return a mutated copy.
+type HTTPResponse struct {
+	Status  int
+	Headers map[string]string
+	Body    string
+}
+
+// HTTPTransport is the canonical transport slot: adapt any HTTP stack by
+// mapping HTTPRequest/HTTPResponse, without emulating *http.Client. One
+// call is one attempt: the generated client owns retry, so a transport
+// with internal retries does not combine with it. The transport must honor
+// ctx cancellation; a declared per-attempt timeout arrives as a ctx
+// deadline.
+type HTTPTransport func(ctx context.Context, req HTTPRequest) (HTTPResponse, error)

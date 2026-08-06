@@ -54,7 +54,10 @@ pub(super) fn settings_decl(
     module: &Module,
 ) -> Decl {
     let mut fields = String::new();
-    let mut refs = vec![import("http", "net/http"), runtime_symbol()];
+    let mut refs = vec![
+        import("http", "net/http"),
+        super::support_symbol("HTTPTransport"),
+    ];
     for f in entry.declared() {
         push_type_symbols(&f.target, &mut refs);
         fields.push_str(&format!(
@@ -71,9 +74,10 @@ pub(super) fn settings_decl(
          // Exactly one transport slot may be set: HTTPClient (native) or Transport\n\
          // (canonical). Headers are the base request headers (bespoke auth writes\n\
          // here); a declared @header wins only where nothing else set the name.\n\
-         type {settings} struct {{\n{fields}\n\tHTTPClient *http.Client\n\tTransport  tonohttp.Transport\n\tHeaders    map[string]string\n}}",
+         type {settings} struct {{\n{fields}\n\tHTTPClient *http.Client\n\tTransport  {transport}\n\tHeaders    map[string]string\n}}",
         settings = n.settings,
         entry = entry.name,
+        transport = shared_slot("HTTPTransport"),
     );
     Decl::raw_with(text, refs)
 }
@@ -131,14 +135,47 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
 }
 
 /// The client struct, its mock interface (one method per operation, `ctx`
-/// first), and the compile-time conformance assertion.
-pub(super) fn client_decls(entry: &EntryModel<'_>, n: &Names, config: &CasingConfig) -> Vec<Decl> {
+/// first), and the compile-time conformance assertion. Besides the resolved
+/// settings the struct carries only what this entry's operations declare: the
+/// bound hooks, one pre-converted field per distinct `@timeout` path, and the
+/// retry backoff's timing seam.
+pub(super) fn client_decls(
+    entry: &EntryModel<'_>,
+    n: &Names,
+    config: &CasingConfig,
+    bound: &[BoundExtension<'_>],
+) -> Vec<Decl> {
     let mut methods = String::new();
     let mut refs = vec![import("context", "context")];
     for op in entry.operations {
         let (sig, sig_refs) = method_signature(op, config);
         refs.extend(sig_refs);
         methods.push_str(&format!("\t{sig}\n"));
+    }
+    let mut struct_fields = format!("\tsettings {settings}\n", settings = n.settings);
+    let mut struct_refs = Vec::new();
+    if hook_binding(bound, "before_request").is_some()
+        || hook_binding(bound, "after_response").is_some()
+    {
+        struct_fields.push_str(&format!("\thooks *{}\n", shared_slot("Hooks")));
+        struct_refs.push(super::shared_symbol("Hooks"));
+    }
+    for path in timeout_paths(entry).values() {
+        struct_fields.push_str(&format!(
+            "\t// {ident} is the operation @timeout, converted once at construction.\n\
+             \t{ident} time.Duration\n",
+            ident = super::timeout_field_ident(entry, config, path),
+        ));
+        struct_refs.push(import("time", "time"));
+    }
+    if entry_has_retry(entry) {
+        struct_fields.push_str(&format!(
+            "\t// timing is the clock behind the retry backoff; a test in this package\n\
+             \t// may pin it. The zero value uses the real clock and jitter.\n\
+             \ttiming {}\n",
+            shared_slot("Timing"),
+        ));
+        struct_refs.push(super::shared_symbol("Timing"));
     }
     let doc = doc_of(&entry.shape.traits)
         .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
@@ -147,12 +184,11 @@ pub(super) fn client_decls(entry: &EntryModel<'_>, n: &Names, config: &CasingCon
         Decl::raw_with(
             format!(
                 "{doc}// {client} is the generated SDK client the {entry} entry declares.\n\
-                 type {client} struct {{\n\tsettings {settings}\n\truntime  *tonohttp.Runtime\n\thooks    *tonohttp.Hooks\n}}",
+                 type {client} struct {{\n{struct_fields}}}",
                 client = n.client,
                 entry = entry.name,
-                settings = n.settings,
             ),
-            vec![runtime_symbol()],
+            struct_refs,
         ),
         Decl::raw_with(
             format!(
@@ -165,6 +201,32 @@ pub(super) fn client_decls(entry: &EntryModel<'_>, n: &Names, config: &CasingCon
             refs,
         ),
     ]
+}
+
+/// The distinct `@timeout` field paths this entry's operations declare, keyed
+/// by their dotted spelling (usually one, but a multi-op entry could bind more
+/// than one).
+pub(super) fn timeout_paths(
+    entry: &EntryModel<'_>,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    entry
+        .operations
+        .iter()
+        .filter_map(|op| match &op.kind {
+            ShapeKind::Operation { wire: Some(w), .. } => {
+                w.timeout.as_ref().map(|p| (p.join("."), p.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether any of the entry's operations declares `@retry`, which is what puts
+/// the timing seam on the client.
+pub(super) fn entry_has_retry(entry: &EntryModel<'_>) -> bool {
+    entry.operations.iter().any(
+        |op| matches!(&op.kind, ShapeKind::Operation { wire: Some(w), .. } if w.retry.is_some()),
+    )
 }
 
 /// The public functional-option name of a `@with` field, honoring
@@ -219,9 +281,10 @@ pub(super) fn entry_type_decls(
     module: &Module,
     config: &CasingConfig,
     multi: bool,
+    bound: &[BoundExtension<'_>],
 ) -> Vec<Decl> {
     let mut decls = vec![settings_decl(entry, n, config, module)];
     decls.extend(option_decls(entry, n, multi));
-    decls.extend(client_decls(entry, n, config));
+    decls.extend(client_decls(entry, n, config, bound));
     decls
 }

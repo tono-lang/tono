@@ -232,6 +232,26 @@ pub fn resolve_groups(files: &mut Vec<ModuleFile>, target: TargetKind) {
     for path in other_roots {
         prune_root_group(files, &path);
     }
+    // A surviving root group referencing a support type cannot borrow it from
+    // a module's public group: in Go that import would be a cycle (the
+    // module's client imports the root group, which would import the module
+    // back). When the single-module fold would do that, the support group is
+    // materialized anyway; the pruning below still cuts it to what is reached.
+    // Judged after the root groups shrank, so a group the SDK dropped whole
+    // cannot force a support file into being.
+    if !files.iter().any(|f| f.group == Group::root_support()) {
+        let root_reaches_support = files
+            .iter()
+            .filter(|f| f.group.module.is_none())
+            .flat_map(|f| crate::codegen::imports::collect(&f.file))
+            .any(|import| import.module == group::ROOT_SUPPORT);
+        if root_reaches_support {
+            files.push(ModuleFile::new(
+                Group::root_support(),
+                all_support_decls(target),
+            ));
+        }
+    }
     // With no group of their own, the support declarations ride the public group
     // of the module they serve. Folding here rather than at each caller is what
     // keeps a caller that drives one target's emitter directly (the round-trip

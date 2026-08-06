@@ -6,9 +6,9 @@
 //! names the variable and the type), lowers a match selection to a `switch`,
 //! decodes a structured source strictly, composes a config through `@bind`,
 //! runs the bound `client_init` hook over the resolved `Settings` (bespoke
-//! wins), and validates last. The resolved fields are handed to the runtime as
-//! `Options.Values`, so the descriptor's ref positions (endpoint, headers,
-//! timeout, retry) resolve without the client ever interpreting a descriptor.
+//! wins), and validates last. Each operation method reads the typed resolved
+//! `Settings` directly and drives the SDK's own emitted transport (see
+//! [`send`] and [`transport`]); no runtime package and no values bag exist.
 
 use std::collections::BTreeSet;
 
@@ -19,7 +19,7 @@ use crate::codegen::conventions::{
 use crate::codegen::entries::plan;
 use crate::codegen::entries::{companion_name, op_local_name, ref_is_enum, EntryModel};
 use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
-use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
+use crate::codegen::ops::{declared_errors, error_names, wire_binding};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
 use crate::codegen::targets::go::types::{type_expr_of, GoVal, LANG};
@@ -28,11 +28,6 @@ use crate::codegen::validation;
 use crate::ir::{
     EntryField, EnvName, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Trait, Tref,
 };
-
-/// The Go module path of the hand-written HTTP runtime the generated client
-/// drives. The import spells the path; Go resolves the package name
-/// (`tonohttp`) from the package clause.
-pub const RUNTIME_MODULE: &str = "github.com/tono-lang/tono/runtimes/http-go";
 
 const BINDING_LANGS: [&str; 1] = ["go"];
 
@@ -54,8 +49,11 @@ fn camel(name: &str) -> String {
     )
 }
 
-fn runtime_symbol() -> Symbol {
-    Symbol::imported("tonohttp", RUNTIME_MODULE, "tonohttp")
+/// A reference to a declaration of the SDK's shared (public) support group:
+/// the transport shapes a bespoke hook types against live there, beside the
+/// branded well-known types.
+pub(super) fn support_symbol(name: &str) -> Symbol {
+    Symbol::imported(name, crate::codegen::group::ROOT_SUPPORT, name)
 }
 
 pub(super) fn import(name: &str, module: &str) -> Symbol {
@@ -253,7 +251,6 @@ fn pattern_literal(v: &serde_json::Value) -> String {
 /// once per module.
 #[derive(Default)]
 struct Helpers {
-    duration_ms: bool,
     transforms: BTreeSet<&'static str>,
 }
 
@@ -277,16 +274,14 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     shared.extend(plan::output_decode_decls(
         &entries,
         module,
-        |op| wire_descriptor(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
+        |op| wire_binding(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
         decode::output_decode_decl,
     ));
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
-        // The constructor comes right after the type (ADR-0031); the
-        // descriptor vars are wiring the methods below consume, not part of
-        // that pair, so they ride after it in their own block.
-        let mut decls = surface::entry_type_decls(entry, &n, module, config, multi);
+        // The constructor comes right after the type (ADR-0031).
+        let mut decls = surface::entry_type_decls(entry, &n, module, config, multi, &bound);
         decls.push(new_decl(
             entry,
             &n,
@@ -297,45 +292,13 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             multi,
             tested.contains(entry.name),
         ));
-        decls.extend(descriptor_decls(entry, &n));
         for op in entry.operations {
-            decls.push(op_method_decl(&n, op, module, config, &bound));
+            decls.push(op_method_decl(entry, &n, op, module, config, &bound));
         }
         decls.extend(discriminator_decls_for(entry, &n, module, &bound));
         per_entry.push((entry.name.to_string(), decls));
     }
     EntryEmission { shared, per_entry }
-}
-
-/// One `var <op>Descriptor = mustDescriptor(...)` per operation. The literal
-/// is the descriptor pretty-printed inside a Go raw string: an opaque blob
-/// the runtime parses byte-for-byte, but one a reader can actually read.
-/// JSON never contains a backtick, so the raw string needs no escaping.
-fn descriptor_decls(entry: &EntryModel<'_>, n: &Names) -> Vec<Decl> {
-    entry
-        .operations
-        .iter()
-        .filter_map(|op| {
-            let descriptor = wire_descriptor(op)?;
-            let json = serde_json::to_string_pretty(descriptor).unwrap_or_else(|_| "null".into());
-            Some(Decl::raw_with(
-                format!(
-                    "var {var} = {helper}(`{json}`)",
-                    var = descriptor_var(n, op),
-                    helper = shared_slot("MustDescriptor"),
-                ),
-                vec![shared_symbol("MustDescriptor")],
-            ))
-        })
-        .collect()
-}
-
-fn descriptor_var(n: &Names, op: &Shape) -> String {
-    camel(&format!(
-        "{}{}_descriptor",
-        n.op_prefix,
-        op_local_name(&op.id)
-    ))
 }
 
 fn discriminator_name(n: &Names, op: &Shape) -> String {
@@ -362,7 +325,7 @@ fn discriminator_decls_for(
         .filter_map(|op| {
             let ordered = crate::codegen::ops::discrimination_order(op, module);
             let name = discriminator_name(n, op);
-            if wire_descriptor(op).is_some() {
+            if wire_binding(op).is_some() {
                 return Some(super::errors::discriminator_fn_named(&name, &ordered));
             }
             // A typed impl already returns declared errors as typed values, so
@@ -432,23 +395,22 @@ fn hook_wrapper_decls(
         }
     }
     for (slot, var, shape) in [
-        ("before_request", "req", "CanonicalRequest"),
-        ("after_response", "res", "CanonicalResponse"),
+        ("before_request", "req", "HTTPRequest"),
+        ("after_response", "res", "HTTPResponse"),
     ] {
         if let Some(b) = hook_binding(bound, slot) {
+            let shape_slot = shared_slot(shape);
             decls.push(Decl::raw_with(
                 wrap(
                     slot,
                     &format!("{}(ctx, {var})", b.symbol),
-                    &format!(
-                        "(ctx context.Context, {var} tonohttp.{shape}) (tonohttp.{shape}, error)"
-                    ),
+                    &format!("(ctx context.Context, {var} {shape_slot}) ({shape_slot}, error)"),
                     "out",
                 ),
                 vec![
                     import("errors", "errors"),
                     import("context", "context"),
-                    runtime_symbol(),
+                    support_symbol(shape),
                 ],
             ));
         }
@@ -505,9 +467,87 @@ pub(super) fn validate_block(
     }
 }
 
-/// One concrete client method: encode the input record, hand the descriptor to
-/// the runtime, and map the raw outcome onto the generated taxonomy.
+/// The Go read of a resolved entry-field path off `root`, honoring
+/// `@rename(go)` on the leading segment only (a config/struct member's own
+/// name is never renamed, only an entry field's is).
+pub(super) fn field_path_expr(
+    entry: &EntryModel<'_>,
+    config: &CasingConfig,
+    path: &[String],
+    root: &str,
+) -> String {
+    let mut out = root.to_string();
+    for (i, seg) in path.iter().enumerate() {
+        out.push('.');
+        if i == 0 {
+            out.push_str(&field_pascal_ren(
+                seg,
+                entry.field_rename(seg, LANG).as_deref(),
+                config,
+            ));
+        } else {
+            out.push_str(&field_pascal(seg, config));
+        }
+    }
+    out
+}
+
+/// The unexported client field holding a `@timeout` path's pre-converted
+/// `time.Duration`: the path's segments camel-joined, suffixed `Duration`.
+/// Collision-free within the client since it derives from the field's own
+/// (unique) path.
+pub(super) fn timeout_field_ident(
+    entry: &EntryModel<'_>,
+    _config: &CasingConfig,
+    path: &[String],
+) -> String {
+    let mut out = String::new();
+    for (i, seg) in path.iter().enumerate() {
+        let rename = if i == 0 {
+            entry.field_rename(seg, LANG)
+        } else {
+            None
+        };
+        let word = transform(
+            seg,
+            SymbolKind::Field,
+            &CasingConfig::new(CaseStyle::Camel),
+            rename.as_deref(),
+        );
+        if i == 0 {
+            out.push_str(&word);
+        } else {
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                out.extend(first.to_uppercase());
+                out.push_str(chars.as_str());
+            }
+        }
+    }
+    out.push_str("Duration");
+    out
+}
+
+/// How a resolved field path spells in a wire string position, read off the
+/// declared value paths: a string is used verbatim, a branded string flattens
+/// through `string(...)`, everything else routes through the shared
+/// `FormatScalar`.
+fn field_kind_of(target: Option<&Tref>, module: &Module) -> transport::FieldKind {
+    match target {
+        Some(Tref::Prim(Prim::String | Prim::Uuid)) => transport::FieldKind::StringLike,
+        Some(Tref::Prim(Prim::Timestamp | Prim::Date | Prim::Duration)) => {
+            transport::FieldKind::Branded
+        }
+        Some(t @ Tref::Ref { .. }) if ref_is_enum(t, module) => transport::FieldKind::Branded,
+        _ => transport::FieldKind::Other,
+    }
+}
+
+/// One concrete client method: assemble the request from the typed resolved
+/// Settings and the encoded input, drive the SDK's emitted transport, and map
+/// the raw outcome onto the generated taxonomy.
 fn op_method_decl(
+    entry: &EntryModel<'_>,
     n: &Names,
     op: &Shape,
     module: &Module,
@@ -531,7 +571,7 @@ fn op_method_decl(
         push_type_symbols(t, &mut refs);
     }
     let validate_block = validate_block(input, module, ret_zero, &fail);
-    if wire_descriptor(op).is_none() {
+    let Some(wire) = wire_binding(op) else {
         // No protocol binding: the operation is implemented by bespoke sources
         // the frontend proved are bound, and the generator gate proved are bound
         // for this target.
@@ -548,96 +588,90 @@ fn op_method_decl(
             fail: &fail,
             discriminator: &discriminator_name(n, op),
         });
-    }
-    refs.push(runtime_symbol());
-    if input.is_some() {
-        refs.push(shared_symbol("EncodeRecord"));
-    }
-    let record = match input {
-        Some(_) => format!(
-            "\trecord, err := {encode}(input)\n\
-             \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
-            encode = shared_slot("EncodeRecord"),
-            fail_enc = fail("err".to_string()),
-        ),
-        None => "\tvar record map[string]any\n".to_string(),
     };
     let has_declared_errors = !declared_errors(op, module).is_empty();
     let discriminator = discriminator_name(n, op);
-    let error_expr = if has_declared_errors {
-        format!("{discriminator}(outcome.Status, []byte(outcome.Body))")
-    } else {
-        format!(
-            "&{api}{{Status: outcome.Status, Body: outcome.Body}}",
-            api = en.api
+    // A wire position reads the typed resolved Settings directly. @timeout is
+    // the one exception: its field converts (Duration to time.Duration) rather
+    // than passing through, so it reads the unexported, already-converted
+    // client field the constructor built.
+    let value_paths = entry.value_paths(module);
+    let field_access = |path: &[String]| field_path_expr(entry, config, path, "c.settings");
+    let field_kind = |path: &[String]| {
+        let key = path.join(".");
+        field_kind_of(
+            value_paths
+                .iter()
+                .find(|vp| vp.path == key)
+                .map(|vp| vp.target),
+            module,
         )
-    };
-    // The retry loop and the decoded error type read the same discriminator,
-    // so they can never disagree: a declared error's own Retryable() method
-    // is the only place @retryable is materialized. An op with no declared
-    // errors passes nil (no discriminator exists to call).
-    let retryable_arg = if has_declared_errors {
-        format!(
-            "func(status int, body string) bool {{\n\
-             \t\tif re, ok := {discriminator}(status, []byte(body)).(interface{{ Retryable() bool }}); ok {{\n\
-             \t\t\treturn re.Retryable()\n\
-             \t\t}}\n\
-             \t\treturn false\n\
-             \t}}"
-        )
-    } else {
-        "nil".to_string()
     };
     let success = decode::success_block(
         output,
         module,
-        &decode::Payload {
-            text: "outcome.Body",
-            bytes: "[]byte(outcome.Body)",
+        &if wire.response_bindings.is_empty() {
+            decode::Payload {
+                text: "outcome.Body",
+                bytes: "[]byte(outcome.Body)",
+            }
+        } else {
+            decode::Payload {
+                text: "folded",
+                bytes: "[]byte(folded)",
+            }
         },
         &fail,
         &mut refs,
     );
+    let module_hooks = hook_binding(bound, "before_request").is_some()
+        || hook_binding(bound, "after_response").is_some();
+    let call = transport::OpCall {
+        wire,
+        has_input: input.is_some(),
+        ret_zero,
+        discriminator: has_declared_errors.then_some(discriminator.as_str()),
+        api_error: &en.api,
+        transport_error: &en.transport,
+        success_block: &success,
+        module_hooks,
+        retry_expr: wire
+            .retry
+            .as_deref()
+            .map(|path| format!("int({})", field_access(path))),
+        timeout_expr: wire
+            .timeout
+            .as_deref()
+            .map(|path| format!("c.{}", timeout_field_ident(entry, config, path))),
+    };
+    let body = transport::op_call(&call, &fail, &field_access, &field_kind, &mut refs);
     let doc = doc_of(&op.traits)
         .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
         .unwrap_or_default();
     let text = format!(
-        "{doc}func (c *{client}) {sig} {{\n\
-         {zero_decl}{validate_block}{record}\
-         \toutcome, err := c.runtime.Execute(ctx, {descriptor}, record, c.hooks, {retryable_arg})\n\
-         \tif err != nil {{\n\t\treturn {ret_zero}{fail_hook}\n\t}}\n\
-         \tswitch outcome.Kind {{\n\
-         \tcase tonohttp.OutcomeTransport:\n\t\treturn {ret_zero}{fail_transport}\n\
-         \tcase tonohttp.OutcomeError:\n\t\treturn {ret_zero}{fail_api}\n\
-         \t}}\n\
-         {success}\n\
-         }}",
+        "{doc}func (c *{client}) {sig} {{\n{zero_decl}{validate_block}{body}}}",
         client = n.client,
-        descriptor = descriptor_var(n, op),
-        fail_hook = fail("err".to_string()),
-        fail_transport = fail(format!(
-            "&{transport}{{Cause: outcome.Cause}}",
-            transport = en.transport
-        )),
-        fail_api = fail(error_expr),
     );
     Decl::raw_with(text, refs)
 }
 
+mod assembly;
 #[cfg(test)]
 mod bespoke_tests;
 mod constructor;
 mod decode;
 mod impl_op;
 mod resolve;
+pub(crate) mod send;
 mod shared;
 mod surface;
 #[cfg(test)]
 mod tests;
+mod transport;
 pub(crate) mod vector_tests;
 
 use constructor::{err_var, new_decl};
 use resolve::Resolver;
-pub use shared::shared_groups;
 use shared::{apply_transforms, shared_slot, shared_symbol};
+pub use shared::{shared_groups, shared_groups_for};
 use surface::method_signature;

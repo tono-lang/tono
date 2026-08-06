@@ -257,7 +257,7 @@ pub(super) fn taxonomy_asserts(
                 // member, not a structured field, so the check is containment.
                 refs.push(import("strings", "strings"));
                 text.push_str(&format!(
-                    "\tif !strings.Contains(cfg.Message, {field:?}) {{\n\t\tt.Errorf(\"config error names %q, want {field}\", cfg.Message)\n\t}}\n"
+                    "\tif !strings.Contains(cfg.Message, {field:?}) {{\n\t\tt.Errorf(\"config error names %q, want %q\", cfg.Message, {field:?})\n\t}}\n"
                 ));
             }
             text
@@ -281,15 +281,18 @@ pub(super) fn request_asserts(patterns: &[RequestPattern], refs: &mut Vec<Symbol
         text.push_str(&format!("\t{req} := seen[{i}]\n"));
         if let Some(m) = pattern.fields.get("method").and_then(eq_str) {
             text.push_str(&format!(
-                "\tif {req}.Method != {m:?} {{\n\t\tt.Errorf(\"request {i} method: got %q, want {m}\", {req}.Method)\n\t}}\n"
+                "\tif {req}.Method != {m:?} {{\n\t\tt.Errorf(\"request {i} method: got %q, want %q\", {req}.Method, {m:?})\n\t}}\n"
             ));
         }
         if let Some(p) = pattern.fields.get("path").and_then(eq_str) {
             refs.push(import("url", "net/url"));
+            // EscapedPath, not Path: the pattern names the path as it rides
+            // the wire, and a label's url-encoding is exactly what a test
+            // like this pins.
             text.push_str(&format!(
                 "\tu{i}, err := url.Parse({req}.URL)\n\
                  \tif err != nil {{\n\t\tt.Fatalf(\"parse request url %q: %v\", {req}.URL, err)\n\t}}\n\
-                 \tif u{i}.Path != {p:?} {{\n\t\tt.Errorf(\"request {i} path: got %q, want {p}\", u{i}.Path)\n\t}}\n"
+                 \tif u{i}.EscapedPath() != {p:?} {{\n\t\tt.Errorf(\"request {i} path: got %q, want %q\", u{i}.EscapedPath(), {p:?})\n\t}}\n"
             ));
         }
         let headers: Vec<_> = pattern.headers.iter().flatten().collect();
@@ -312,7 +315,7 @@ pub(super) fn request_asserts(patterns: &[RequestPattern], refs: &mut Vec<Symbol
                 _ => {
                     if let Some(want) = eq_str(leaf) {
                         text.push_str(&format!(
-                            "\tif lower{i}[{key:?}] != {want:?} {{\n\t\tt.Errorf(\"request {i} header {name}: got %q, want {want}\", lower{i}[{key:?}])\n\t}}\n"
+                            "\tif lower{i}[{key:?}] != {want:?} {{\n\t\tt.Errorf(\"request {i} header {name}: got %q, want %q\", lower{i}[{key:?}], {want:?})\n\t}}\n"
                         ));
                     }
                 }

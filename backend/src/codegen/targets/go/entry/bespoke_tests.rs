@@ -47,13 +47,14 @@ fn bound_hooks_wire_the_settings_bridge_and_the_transport_slots() {
     assert!(serde.contains("func clientInitHook(s *Settings) error {"));
     assert!(serde.contains("if err := clientInitHook(&s); err != nil {"));
     assert!(serde.contains("ContractError{ContractName: \"client_init\", Cause: err}"));
-    // The construction wires the transport slots and the resolved values.
+    // The mutually exclusive transport slots are rejected at construction.
+    assert!(serde.contains("if s.HTTPClient != nil && s.Transport != nil {"));
     assert!(serde.contains(
-            "tonohttp.New(tonohttp.Options{Client: s.HTTPClient, Transport: s.Transport, Headers: s.Headers, Values: values})"
-        ));
-    // before_request is handed to the runtime once per client.
-    assert!(serde.contains("func beforeRequestHook(ctx context.Context, req tonohttp.CanonicalRequest) (tonohttp.CanonicalRequest, error) {"));
-    assert!(serde.contains("hooks: &tonohttp.Hooks{BeforeRequest: beforeRequestHook}"));
+        "errors.New(\"Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both\")"
+    ));
+    // before_request rides the client once, typed against the support shapes.
+    assert!(serde.contains("func beforeRequestHook(ctx context.Context, req support.HTTPRequest) (support.HTTPRequest, error) {"));
+    assert!(serde.contains("hooks: &transport.Hooks{BeforeRequest: beforeRequestHook}"));
     // The hook order lands in the emitted text: init before the requires.
     let init = serde.find("clientInitHook(&s)").unwrap();
     let require = serde
@@ -142,12 +143,12 @@ fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
         "func New(apiKey string, opts ...ClientOption) (*Client, error) {\n\treturn newWithTransport(nil, apiKey, opts...)\n}"
     ));
     assert!(text.contains(
-        "func newWithTransport(transport tonohttp.Transport, apiKey string, opts ...ClientOption) (*Client, error) {"
+        "func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...ClientOption) (*Client, error) {"
     ));
-    // The override lands after client_init and validation, right before the
-    // runtime freezes, so the test transport wins over anything bespoke.
+    // The override lands after client_init and validation, so the test
+    // transport wins over anything bespoke.
     assert!(text.contains(
-        "if transport != nil {\n\t\ts.Transport = transport\n\t\ts.HTTPClient = nil\n\t}"
+        "if canonical != nil {\n\t\ts.Transport = canonical\n\t\ts.HTTPClient = nil\n\t}"
     ));
     // Without declared tests the seam is not emitted at all.
     module.tests.clear();
@@ -219,7 +220,7 @@ fn an_http_stub_generates_a_request_matching_test() {
     // canned sequence, the last response repeating; construction goes through
     // the seam variant.
     assert!(text.contains("seen = append(seen, req)"));
-    assert!(text.contains("responses := []tonohttp.CanonicalResponse{{Status: 500,"));
+    assert!(text.contains("responses := []support.HTTPResponse{{Status: 500,"));
     assert!(text.contains("if i >= len(responses) {"));
     assert!(text.contains("c, err := newWithTransport(transport, \"k\")"));
     // The open struct pattern compares field by field over the wire form.
@@ -234,7 +235,7 @@ fn an_http_stub_generates_a_request_matching_test() {
     assert!(text.contains("req1 := seen[1]"));
     assert!(text.contains("if req0.Method != \"POST\" {"));
     assert!(text.contains("u0, err := url.Parse(req0.URL)"));
-    assert!(text.contains("if u0.Path != \"/notes\" {"));
+    assert!(text.contains("if u0.EscapedPath() != \"/notes\" {"));
     assert!(text.contains("lower1 := map[string]string{}"));
     assert!(text.contains("for k, v := range req1.Headers {"));
     assert!(text.contains("lower1[strings.ToLower(k)] = v"));
@@ -308,7 +309,7 @@ fn two_entries_with_tests_share_the_package_without_redefining_symbols() {
     assert!(client.contains("func TestClientSaveNoteHitsTheWire(t *testing.T) {"));
     assert!(admin.contains("func TestAdminSaveNoteHitsTheWire(t *testing.T) {"));
     // A single canned answer returns directly: no slice, no index clamp.
-    assert!(client.contains("return tonohttp.CanonicalResponse{Status: 200,"));
+    assert!(client.contains("return support.HTTPResponse{Status: 200,"));
     assert!(!client.contains("responses :="));
     // Zero helper functions, and no function declared by both files.
     assert!(!client.contains("func vector"));
@@ -359,7 +360,7 @@ fn after_response_and_on_error_hooks_get_boundary_wrappers() {
         hook("on_error", "ext/go/err.go#MapError"),
     ];
     let serde = entry_text(&module);
-    assert!(serde.contains("func afterResponseHook(ctx context.Context, res tonohttp.CanonicalResponse) (tonohttp.CanonicalResponse, error) {"));
+    assert!(serde.contains("func afterResponseHook(ctx context.Context, res support.HTTPResponse) (support.HTTPResponse, error) {"));
     assert!(serde.contains("func onErrorHook(err error) error {"));
     // The wrapper preserves any generated SDK error (marker interface), wrapping
     // only a foreign one as a ContractError. It no longer keeps just

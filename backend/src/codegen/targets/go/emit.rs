@@ -32,10 +32,11 @@ use crate::codegen::validation;
 use crate::codegen::visibility::Exposed;
 use crate::ir::{Module, ShapeKind};
 
-/// The branded well-known types: distinct named string types, so they serialize
-/// exactly as their inner value while staying distinct in code.
+/// The branded well-known types (distinct named string types, so they
+/// serialize exactly as their inner value while staying distinct in code),
+/// plus the transport shapes a bespoke hook types against.
 pub fn well_known_decls() -> Vec<Decl> {
-    ["Timestamp", "LocalDate", "Duration"]
+    let mut decls: Vec<Decl> = ["Timestamp", "LocalDate", "Duration"]
         .iter()
         .map(|name| {
             Decl::Alias(Alias {
@@ -43,7 +44,9 @@ pub fn well_known_decls() -> Vec<Decl> {
                 value: "string".into(),
             })
         })
-        .collect()
+        .collect();
+    decls.extend(crate::codegen::targets::go::entry::send::support_decls());
+    decls
 }
 
 /// The Go package clause for a module name, which the caller prepends before
@@ -58,14 +61,17 @@ pub fn package_clause(name: &str) -> String {
 /// packages rather than being repeated per module, and nothing in them names a
 /// declaration the spec wrote.
 ///
-/// Nothing type-level goes here. A method has to live in its receiver's package,
-/// and a type a public struct exposes has to be nameable by a consumer, which
-/// `internal/` forbids; both keep the module's own package.
+/// No consumer-facing type goes here. A method has to live in its receiver's
+/// package, and a type a public struct exposes has to be nameable by a
+/// consumer, which `internal/` forbids; both keep the module's own package (or
+/// the public `support` group). A type only the generated call sites name (the
+/// transport's `Request`) is fine: `internal/` is reachable from anywhere
+/// inside the SDK's own module.
 pub fn shared_groups(model: &crate::ir::Model) -> Vec<(&'static str, Vec<Decl>)> {
     if !model_has_entries(model) {
         return Vec::new();
     }
-    crate::codegen::targets::go::entry::shared_groups()
+    crate::codegen::targets::go::entry::shared_groups_for(model)
 }
 
 /// Whether anything in the model declares an entry, which is what puts anything

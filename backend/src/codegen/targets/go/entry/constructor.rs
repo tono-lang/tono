@@ -28,7 +28,7 @@ pub(super) fn new_decl(
     test_seam: bool,
 ) -> Decl {
     let en = error_names();
-    let mut refs = vec![runtime_symbol()];
+    let mut refs = Vec::new();
     // Every declared field's type can surface in the body as a zero value, a
     // default cast or a parse, all of them opaque text, so the references are
     // declared once here rather than at each spelling.
@@ -175,58 +175,48 @@ pub(super) fn new_decl(
     // emitted, so this is the point where an unread one can be told apart.
     body.push_str(&discard_unread_errs(&body, entry));
 
-    // Freeze the resolved values for the runtime's ref positions.
-    body.push_str("\tvalues := map[string]any{}\n");
-    for vp in entry.value_paths(module) {
-        // An enum-typed leaf is a branded string wherever it sits (a field or
-        // a composed/structured member): it freezes like any other scalar the
-        // descriptor's refs can name.
+    let mut client_fields = vec!["settings: s".to_string()];
+
+    // Each distinct @timeout field converts once, eagerly, so a malformed
+    // value still fails construction (ConfigError) rather than surfacing at
+    // the first call that happens to need it. Every other wire position
+    // (endpoint, @header, path templates, @retry) reads the typed Settings
+    // directly at the call site, so nothing else is frozen here.
+    for (key, segments) in surface::timeout_paths(entry) {
+        let Some(vp) = entry
+            .value_paths(module)
+            .into_iter()
+            .find(|vp| vp.path == key)
+        else {
+            continue;
+        };
         let scalar_ref = ref_is_enum(vp.target, module);
         let Some(expr) = value_expr(&vp, config, scalar_ref) else {
             continue;
         };
-
-        let assign = if let Tref::Prim(Prim::Duration) = vp.target {
-            helpers.duration_ms = true;
-            refs.push(import("fmt", "fmt"));
-            refs.push(super::shared_symbol("DurationMs"));
-            let fail = config_errorf(&format!(
-                "\"{path}: invalid duration %q\", string({expr})",
-                path = vp.path,
-            ));
-            format!(
-                "\t{{\n\t\tms, err := {duration}(string({expr}))\n\t\tif err != nil {{\n\t\t\t{fail}\n\t\t}}\n\t\tvalues[{path:?}] = ms\n\t}}\n",
-                duration = super::shared_slot("DurationMs"),
-                path = vp.path,
-            )
-        } else {
-            format!(
-                "\tvalues[{path:?}] = {value}\n",
-                path = vp.path,
-                value = value_cast(vp.target, &expr)
-            )
-        };
-        match presence_guard(entry, &vp, &expr) {
-            Some(guard) => body.push_str(&format!(
-                "\tif {guard} {{\n{assign}\t}}\n",
-                assign = indent(&assign),
-            )),
-            None => body.push_str(&assign),
-        }
-    }
-
-    // The runtime: one per client; the per-operation endpoint resolves from
-    // the descriptor's ref against these values.
-    if test_seam {
-        body.push_str(
-            "\tif transport != nil {\n\t\ts.Transport = transport\n\t\ts.HTTPClient = nil\n\t}\n",
+        let ident = super::timeout_field_ident(entry, config, &segments);
+        refs.push(import("time", "time"));
+        refs.push(import("fmt", "fmt"));
+        let fail = config_errorf(&format!(
+            "\"{path}: invalid duration %q\", string({expr})",
+            path = vp.path,
+        ));
+        let parse = format!(
+            "\t\td, err := time.ParseDuration(string({expr}))\n\
+             \t\tif err != nil {{\n\t\t\t{fail}\n\t\t}}\n\
+             \t\t{ident} = d\n",
         );
+        body.push_str(&format!("\t{ident} := time.Duration(0)\n"));
+        match presence_guard(entry, &vp, &expr) {
+            Some(guard) => body.push_str(&format!("\tif {guard} {{\n{parse}\t}}\n")),
+            None => body.push_str(&format!("\t{{\n{parse}\t}}\n")),
+        }
+        client_fields.push(format!("{ident}: {ident}"));
     }
-    body.push_str(
-        "\truntime, err := tonohttp.New(tonohttp.Options{Client: s.HTTPClient, Transport: s.Transport, Headers: s.Headers, Values: values})\n\
-         \tif err != nil {\n\t\treturn nil, err\n\t}\n",
-    );
-    let hooks = {
+
+    if hook_binding(bound, "before_request").is_some()
+        || hook_binding(bound, "after_response").is_some()
+    {
         let mut slots = Vec::new();
         if hook_binding(bound, "before_request").is_some() {
             slots.push(format!(
@@ -240,15 +230,32 @@ pub(super) fn new_decl(
                 hook_wrapper_name("after_response")
             ));
         }
-        if slots.is_empty() {
-            "nil".to_string()
-        } else {
-            format!("&tonohttp.Hooks{{{}}}", slots.join(", "))
-        }
-    };
+        refs.push(super::shared_symbol("Hooks"));
+        client_fields.push(format!(
+            "hooks: &{hooks}{{{slots}}}",
+            hooks = super::shared_slot("Hooks"),
+            slots = slots.join(", "),
+        ));
+    }
+
+    if test_seam {
+        body.push_str(
+            "\tif canonical != nil {\n\t\ts.Transport = canonical\n\t\ts.HTTPClient = nil\n\t}\n",
+        );
+    }
+    // The mutually exclusive transport slots are rejected at construction, so
+    // a misconfigured client fails to build instead of failing obscurely on
+    // its first call.
+    refs.push(import("errors", "errors"));
+    body.push_str(
+        "\tif s.HTTPClient != nil && s.Transport != nil {\n\
+         \t\treturn nil, errors.New(\"Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both\")\n\
+         \t}\n",
+    );
     body.push_str(&format!(
-        "\treturn &{client}{{settings: s, runtime: runtime, hooks: {hooks}}}, nil\n",
+        "\treturn &{client}{{{fields}}}, nil\n",
         client = n.client,
+        fields = client_fields.join(", "),
     ));
 
     let doc = format!(
@@ -274,17 +281,19 @@ pub(super) fn new_decl(
         } else {
             format!(", {}{opts_param}", params.join(", "))
         };
+        refs.push(super::support_symbol("HTTPTransport"));
         format!(
             "{doc}func {new_fn}({params}{opts_param}) (*{client}, error) {{\n\
              \treturn {seam_fn}(nil{pass_sep}{pass_args}{pass_opts})\n\
              }}\n\n\
              // {seam_fn} is {new_fn} plus the transport seam the generated tests use: a\n\
-             // non-nil transport replaces whatever construction resolved, after\n\
-             // client_init ran, so a test answers canonically without a server.\n\
-             func {seam_fn}(transport tonohttp.Transport{seam_params}) (*{client}, error) {{\n{body}}}",
+             // non-nil canonical transport replaces whatever construction resolved,\n\
+             // after client_init ran, so a test answers canonically without a server.\n\
+             func {seam_fn}(canonical {transport}{seam_params}) (*{client}, error) {{\n{body}}}",
             new_fn = n.new_fn,
             client = n.client,
             params = params.join(", "),
+            transport = super::shared_slot("HTTPTransport"),
             pass_sep = if pass_args.is_empty() && pass_opts.is_empty() {
                 ""
             } else {
@@ -312,13 +321,6 @@ pub(super) fn seam_fn_name(new_fn: &str) -> String {
         None => String::new(),
     };
     format!("{lowered}WithTransport")
-}
-
-pub(super) fn indent(block: &str) -> String {
-    block
-        .lines()
-        .map(|l| format!("\t{l}\n"))
-        .collect::<String>()
 }
 
 pub(super) use plan::err_var;
@@ -381,29 +383,6 @@ pub(super) fn value_expr(
                 field_pascal(member, config)
             ))
         }
-    }
-}
-
-/// The cast that makes a resolved value directly usable by the runtime's
-/// value positions: integers widen to int64, branded strings flatten.
-pub(super) fn value_cast(t: &Tref, expr: &str) -> String {
-    match t {
-        Tref::Prim(
-            Prim::I8
-            | Prim::I16
-            | Prim::I32
-            | Prim::I64
-            | Prim::U8
-            | Prim::U16
-            | Prim::U32
-            | Prim::U64,
-        ) => format!("int64({expr})"),
-        Tref::Prim(Prim::Float) => format!("float64({expr})"),
-        Tref::Prim(Prim::Bool | Prim::String | Prim::Uuid) => expr.to_string(),
-        Tref::Prim(Prim::Timestamp | Prim::Date) | Tref::Ref { .. } => {
-            format!("string({expr})")
-        }
-        _ => expr.to_string(),
     }
 }
 

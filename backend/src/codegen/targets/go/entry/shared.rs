@@ -1,17 +1,31 @@
-//! The SDK-root shared package: the descriptor/record/duration parse helpers
+//! The SDK-root shared packages: the emitted transport, the record encoder,
 //! and the casing transforms an `@str::` pipeline lowers to. Every entry of
-//! every module calls into this one package rather than each carrying its own
-//! copy, so a reference to one of these names is a slot the caller declares
-//! (see [`shared_symbol`]/[`shared_slot`]) instead of a direct call.
+//! every module calls into these rather than each carrying its own copy, so a
+//! reference to one of these names is a slot the caller declares (see
+//! [`shared_symbol`]/[`shared_slot`]) instead of a direct call.
 
 use super::*;
 
-/// The SDK-root groups this target emits, each named for what it holds.
+/// The SDK-root groups this target emits, each named for what it holds, with
+/// every optional transport piece on. Used for name-to-group resolution (see
+/// [`shared_group`]), where only which group declares a name matters;
+/// emission goes through [`shared_groups_for`], which prunes the transport to
+/// what the model uses.
 pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
+    shared_groups_with(&send::Usage::all())
+}
+
+/// The SDK-root groups shaped by what the model actually uses: a model with no
+/// `@retry`, `@timeout`, or request hook anywhere gets a transport without
+/// those pieces.
+pub fn shared_groups_for(model: &crate::ir::Model) -> Vec<(&'static str, Vec<Decl>)> {
+    shared_groups_with(&send::usage_of(model))
+}
+
+fn shared_groups_with(usage: &send::Usage) -> Vec<(&'static str, Vec<Decl>)> {
     vec![
-        ("descriptor", vec![descriptor_decl()]),
+        ("transport", send::internal_helpers(usage)),
         ("record", vec![record_decl()]),
-        ("duration", vec![duration_decl()]),
         ("casing", casing_decls()),
     ]
 }
@@ -43,30 +57,13 @@ pub(super) fn shared_slot(name: &str) -> String {
     crate::codegen::tree::symbol_slot(name)
 }
 
-/// Reading a compiler-emitted descriptor literal at package load. Exported
-/// because a Go package boundary is what makes it shared, and `internal/` is
-/// what keeps it out of a consumer's reach.
-fn descriptor_decl() -> Decl {
-    Decl::raw_providing(
-        "MustDescriptor",
-        "// MustDescriptor parses a compiler-emitted descriptor literal at package\n\
-         // load; a parse failure is a build defect, never a runtime input.\n\
-         func MustDescriptor(literal string) *tonohttp.WireDescriptor {\n\
-         \td, err := tonohttp.ParseDescriptor([]byte(literal))\n\
-         \tif err != nil {\n\t\tpanic(err)\n\t}\n\
-         \treturn d\n\
-         }"
-        .to_string(),
-        vec![runtime_symbol()],
-    )
-}
-
-/// Turning a typed input into the wire record the runtime binds from.
+/// Turning a typed input into the wire record the request positions read
+/// individual members from.
 fn record_decl() -> Decl {
     Decl::raw_providing(
         "EncodeRecord",
-        "// EncodeRecord turns a typed input into the wire record the runtime binds\n\
-         // from, through the type's own JSON tags.\n\
+        "// EncodeRecord turns a typed input into the wire record the request\n\
+         // positions bind from, through the type's own JSON tags.\n\
          func EncodeRecord(v any) (map[string]any, error) {\n\
          \tb, err := json.Marshal(v)\n\
          \tif err != nil {\n\t\treturn nil, err\n\t}\n\
@@ -76,22 +73,6 @@ fn record_decl() -> Decl {
          }"
         .to_string(),
         vec![import("json", "encoding/json")],
-    )
-}
-
-/// Reading a duration field into the millisecond value the runtime takes.
-fn duration_decl() -> Decl {
-    Decl::raw_providing(
-        "DurationMs",
-        "// DurationMs parses a duration field for the runtime's millisecond value\n\
-         // positions.\n\
-         func DurationMs(v string) (float64, error) {\n\
-         \td, err := time.ParseDuration(v)\n\
-         \tif err != nil {\n\t\treturn 0, err\n\t}\n\
-         \treturn float64(d) / float64(time.Millisecond), nil\n\
-         }"
-        .to_string(),
-        vec![import("time", "time")],
     )
 }
 
