@@ -286,7 +286,6 @@ mod tests {
                 _ => vec![],
             }
         }
-
     }
 
     // A formatter that leaves text unchanged: it makes the pipeline output exact

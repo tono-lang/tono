@@ -4,7 +4,9 @@
 use super::*;
 use crate::codegen::layout::check_layout;
 use crate::codegen::test_support::{member, structure, union_shape};
-use crate::ir::{EntryField, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref, WireBinding};
+use crate::ir::{
+    EntryField, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref, WireBinding,
+};
 use std::path::PathBuf;
 
 /// A model whose Go module carries a union, so Go splits into two files while

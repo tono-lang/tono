@@ -148,10 +148,7 @@ mod tests {
 
     #[test]
     fn a_bound_contract_emits_a_ts_boundary_wrapper() {
-        let module = module_with(vec![contract(
-            "sign_request",
-            "ext/ts/sign.ts#signRequest",
-        )]);
+        let module = module_with(vec![contract("sign_request", "ext/ts/sign.ts#signRequest")]);
         let bound = bound_extensions(&module, &["ts", "typescript"]);
         let mut refs = Vec::new();
         let out = contract_wrappers(&bound, &module, &mut refs);
@@ -180,5 +177,4 @@ mod tests {
         );
         assert_eq!(import_specifier("/abs/path.ts", "payments"), "/abs/path");
     }
-
 }

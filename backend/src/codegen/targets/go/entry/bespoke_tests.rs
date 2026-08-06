@@ -9,8 +9,7 @@ use super::tests::{entry_text, fixture_module};
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::{
-    eq, impl_extension, notes_bed, push_entry_op_wire, rendered, request_pattern, wired,
-    with_tests,
+    eq, impl_extension, notes_bed, push_entry_op_wire, rendered, request_pattern, wired, with_tests,
 };
 use crate::ir::{
     HttpAnswer, StubAnswer, StubDep, TestConstruction, TestDecl, TestExpect, TestPattern, TestStub,

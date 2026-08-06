@@ -93,7 +93,12 @@ impl Verdict {
 /// build directory (reused across passes so the toolchain keeps its incremental
 /// cache). Every problem, from an unreadable file to a scaffolding failure, is a
 /// [`Verdict`], so a pass always yields a [`Snapshot`] the UI can render.
-pub fn run(frontend: &Frontend, source_path: &Path, target: TargetKind, scratch: &Path) -> Snapshot {
+pub fn run(
+    frontend: &Frontend,
+    source_path: &Path,
+    target: TargetKind,
+    scratch: &Path,
+) -> Snapshot {
     let source = match std::fs::read_to_string(source_path) {
         Ok(text) => text,
         Err(e) => {

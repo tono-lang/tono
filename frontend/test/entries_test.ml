@@ -281,7 +281,8 @@ let loose_descriptor_has_no_entry_fields () =
   Alcotest.(check bool)
     "no entry-scoped fields" true
     (wb.Ir.wb_endpoint = None && wb.Ir.wb_timeout = None
-    && wb.Ir.wb_retry = None && wb.Ir.wb_request_headers = [])
+   && wb.Ir.wb_retry = None
+    && wb.Ir.wb_request_headers = [])
 
 (* A second, dedicated snippet (kept separate from [canonical_client] so its
    many other tests stay untouched): query/payload input bindings and

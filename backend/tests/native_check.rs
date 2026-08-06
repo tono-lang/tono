@@ -53,8 +53,12 @@ fn go_sdk_compiles() {
 #[ignore = "requires the typescript toolchain (tsc)"]
 fn typescript_sdk_compiles() {
     let dir = scratch("ts");
-    let outcome = check(TargetKind::TypeScript, &generated(TargetKind::TypeScript), &dir)
-        .expect("scaffold");
+    let outcome = check(
+        TargetKind::TypeScript,
+        &generated(TargetKind::TypeScript),
+        &dir,
+    )
+    .expect("scaffold");
     // Accept a missing tsc (it is often only a project-local dependency): the
     // point is that when it runs, it accepts the source.
     assert!(
