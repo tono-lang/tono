@@ -1,12 +1,40 @@
 //! The generated constructor (a builder's `build` or a plain `new`): source
 //! resolution in dependency order, the `client_init` bridge, the
-//! consumed-chain requires, declared validation, the frozen runtime values,
-//! and any bound `before_request`/`after_response` lifecycle hook wired into
-//! the runtime's `Hooks` slot. Split out of `mod.rs` to stay under this
-//! repo's per-file line ceiling; `construction_decls` is `mod.rs`'s only
-//! caller.
+//! consumed-chain requires, declared validation, the eager `@timeout`
+//! millisecond conversion, and the transport slots frozen into
+//! `ClientOptions`. Split out of `mod.rs` to stay under this repo's per-file
+//! line ceiling; `construction_decls` is `mod.rs`'s only caller.
+
+use std::collections::BTreeMap;
 
 use super::*;
+
+/// Every distinct `@timeout` field path any operation declares, keyed by its
+/// dotted spelling, paired with the private client field its converted
+/// millisecond value lands in. The constructor converts once, eagerly, so a
+/// malformed duration still fails construction (`ConfigError`) rather than
+/// surfacing at the first call that happens to need it.
+pub(super) fn timeout_fields(entry: &EntryModel<'_>) -> BTreeMap<String, String> {
+    entry
+        .operations
+        .iter()
+        .filter_map(|op| match &op.kind {
+            ShapeKind::Operation { wire: Some(w), .. } => w
+                .timeout
+                .as_ref()
+                .map(|p| (p.join("."), format!("{}_ms", snake(&p.join("_"))))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether any operation declares `@retry`, which is what puts the timing
+/// seam (the swappable sleep/random pair) on the generated client at all.
+fn has_retry(entry: &EntryModel<'_>) -> bool {
+    entry.operations.iter().any(
+        |op| matches!(&op.kind, ShapeKind::Operation { wire: Some(w), .. } if w.retry.is_some()),
+    )
+}
 
 /// The declared-validation guard access-prefix syntax the entry construction
 /// shares with structure validators.
@@ -48,29 +76,55 @@ pub(super) fn construction_decls(
     let mut refs = vec![];
     let with_fields = entry.with_fields();
     let args = entry.args();
+    let timeouts = timeout_fields(entry);
+    let seam = has_retry(entry);
 
-    // The client struct itself.
+    // The client struct itself: the resolved settings, the frozen transport
+    // options, one private field per distinct `@timeout` path (converted to
+    // milliseconds eagerly; see `resolution_body`), and, when any operation
+    // retries, the crate-visible timing seam the parity harness pins.
     let doc = doc_of(&entry.shape.traits)
         .map(|d| crate::codegen::doc::rustdoc(&d, ""))
         .unwrap_or_default();
-    decls.push(Decl::raw(format!(
-        // A purely declarative entry (every op's descriptor ref position
-        // resolves through the frozen runtime `values`, not a direct field
-        // read) never reads `settings` back after construction; a bespoke
-        // `ext impl` op or lifecycle hook does. `dead_code` is silenced per
-        // entry rather than omitting the field, so its shape stays uniform
-        // across entries regardless of which ops happen to need it.
-        "{doc}pub struct {client} {{\n    #[allow(dead_code)]\n    settings: {settings},\n    runtime: std::sync::Arc<tono_http_runtime::Runtime>,\n    hooks: Option<tono_http_runtime::Hooks>,\n}}",
-        client = n.client,
-        settings = n.settings,
-    )));
-    decls.extend(hook_wrapper_decls(bound));
+    let timeout_field_decls: String = timeouts
+        .values()
+        .map(|field| format!("    {field}: f64,\n"))
+        .collect();
+    let seam_field_decls = if seam {
+        "    pub(crate) sleep: SleepFn,\n    pub(crate) random: RandomFn,\n"
+    } else {
+        ""
+    };
+    let mut client_refs = vec![support_symbol("ClientOptions")];
+    if seam {
+        client_refs.push(shared_symbol("SleepFn"));
+        client_refs.push(shared_symbol("RandomFn"));
+    }
+    decls.push(Decl::raw_with(
+        format!(
+            // An entry whose ops read no settings field directly (every wire
+            // position a literal) never reads `settings` back after
+            // construction; a bespoke `ext impl` op or lifecycle hook does.
+            // `dead_code` is silenced per entry rather than omitting the
+            // field, so its shape stays uniform across entries regardless of
+            // which ops happen to need it.
+            "{doc}pub struct {client} {{\n    #[allow(dead_code)]\n    settings: {settings},\n    options: ClientOptions,\n{timeout_field_decls}{seam_field_decls}}}",
+            client = n.client,
+            settings = n.settings,
+        ),
+        client_refs,
+    ));
 
+    let ctx = BodyCtx {
+        timeouts: &timeouts,
+        seam,
+        test_seam,
+    };
     let body = resolution_body(
-        entry, n, module, config, bound, helpers, multi, "self.", test_seam, &mut refs,
+        entry, n, module, config, bound, helpers, multi, "self.", &ctx, &mut refs,
     );
     let plain_body = resolution_body(
-        entry, n, module, config, bound, helpers, multi, "", test_seam, &mut refs,
+        entry, n, module, config, bound, helpers, multi, "", &ctx, &mut refs,
     );
 
     if with_fields.is_empty() {
@@ -96,8 +150,9 @@ pub(super) fn construction_decls(
                 .map(|f| arg_snake(&f.name, &f.traits, LANG))
                 .collect();
             let comma = if params.is_empty() { "" } else { ", " };
+            refs.push(support_symbol("HttpTransport"));
             format!(
-                "{doc}    pub fn new({params}) -> Result<Self, TonoError> {{\n        Self::new_with_transport(None{comma}{pass})\n    }}\n\n    /// `new` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) fn new_with_transport(transport: Option<tono_http_runtime::Transport>{comma}{params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
+                "{doc}    pub fn new({params}) -> Result<Self, TonoError> {{\n        Self::new_with_transport(None{comma}{pass})\n    }}\n\n    /// `new` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) fn new_with_transport(transport: Option<HttpTransport>{comma}{params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
                 params = params.join(", "),
                 pass = pass.join(", "),
                 body = indent(&plain_body, 2),
@@ -113,7 +168,7 @@ pub(super) fn construction_decls(
             format!(
                 "impl {client} {{\n{constructors}{methods}}}",
                 client = n.client,
-                methods = op_methods(entry, n, module, config, bound, &mut refs),
+                methods = op_methods(entry, n, module, config, bound, &timeouts, &mut refs),
             ),
             refs,
         ));
@@ -160,8 +215,9 @@ pub(super) fn construction_decls(
 
         let build_doc = "    /// Resolves the declared sources top-down, runs client_init on top\n    /// (bespoke wins), then the declared validation.\n";
         let build_fns = if test_seam {
+            refs.push(support_symbol("HttpTransport"));
             format!(
-                "{build_doc}    pub fn build(self) -> Result<{client}, TonoError> {{\n        self.build_with_transport(None)\n    }}\n\n    /// `build` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) fn build_with_transport(self, transport: Option<tono_http_runtime::Transport>) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
+                "{build_doc}    pub fn build(self) -> Result<{client}, TonoError> {{\n        self.build_with_transport(None)\n    }}\n\n    /// `build` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
                 client = n.client,
                 body = indent(&body, 2),
             )
@@ -206,7 +262,7 @@ pub(super) fn construction_decls(
                 builder = n.builder,
                 params = params.join(", "),
                 inits = field_inits.join(", "),
-                methods = op_methods(entry, n, module, config, bound, &mut refs),
+                methods = op_methods(entry, n, module, config, bound, &timeouts, &mut refs),
             ),
             refs,
         ));
@@ -215,15 +271,26 @@ pub(super) fn construction_decls(
     decls
 }
 
+/// What the resolution body needs beyond the entry itself: the `@timeout`
+/// millisecond fields to convert into, whether the timing seam rides the
+/// client, and whether the test transport seam parameter exists.
+struct BodyCtx<'a> {
+    timeouts: &'a BTreeMap<String, String>,
+    seam: bool,
+    test_seam: bool,
+}
+
 /// The full resolution body shared by the builder's `build` and the
 /// plain-constructor `new`: zero the draft, resolve every field, bridge
 /// `client_init`, run the consumed-chain requires and the declared
-/// validation, freeze the resolved values, and build the runtime. `arg_prefix`
-/// is `"self."` when reading an `@arg` value off a builder (`build(self)`
-/// consumes it) or empty when reading it off a bare function parameter
-/// (`new`'s own arguments) — the only place the two entry points differ.
-/// With `test_seam`, a `transport` parameter override lands right before the
-/// runtime freezes, so the test transport wins over anything bespoke set.
+/// validation, convert each `@timeout` path to milliseconds eagerly (a
+/// malformed duration fails construction, not the first call), and freeze
+/// the transport slots into `ClientOptions`. `arg_prefix` is `"self."` when
+/// reading an `@arg` value off a builder (`build(self)` consumes it) or
+/// empty when reading it off a bare function parameter (`new`'s own
+/// arguments) — the only place the two entry points differ. With
+/// `test_seam`, a `transport` parameter override lands right before the
+/// options freeze, so the test transport wins over anything bespoke set.
 #[allow(clippy::too_many_arguments)]
 fn resolution_body(
     entry: &EntryModel<'_>,
@@ -234,7 +301,7 @@ fn resolution_body(
     helpers: &mut Helpers,
     multi: bool,
     arg_prefix: &'static str,
-    test_seam: bool,
+    ctx: &BodyCtx<'_>,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let mut body = String::new();
@@ -251,8 +318,9 @@ fn resolution_body(
         })
         .collect();
     body.push_str(&format!(
-        "let mut s = {settings} {{ {zeros}client: None, transport: None, headers: std::collections::HashMap::new() }};\n",
+        "let mut s = {settings} {{\n    {zeros}\n    #[cfg(feature = \"reqwest\")]\n    client: None,\n    transport: None,\n    headers: std::collections::HashMap::new(),\n}};\n",
         settings = n.settings,
+        zeros = zeros.trim_end(),
     ));
 
     {
@@ -337,107 +405,64 @@ fn resolution_body(
 
     body.push_str(&discard_unread_errs(&body, entry));
 
-    body.push_str("let mut values = serde_json::Map::new();\n");
-    for vp in entry.value_paths(module) {
-        let scalar_ref = ref_is_enum(vp.target, module);
-        let Some(expr) = checks::value_expr(&vp, config, scalar_ref) else {
+    // Each `@timeout` path converts to milliseconds now, so a malformed
+    // duration fails construction (`ConfigError`) rather than surfacing at
+    // the first call that happens to need it. `@retry`/endpoint/`@header`/
+    // path-template positions all read the typed Settings directly at the
+    // call site (see `transport::op_call`), so there is no runtime value bag
+    // left to freeze.
+    for (path, field_name) in ctx.timeouts {
+        let Some(vp) = entry
+            .value_paths(module)
+            .into_iter()
+            .find(|vp| vp.path == *path)
+        else {
             continue;
         };
-        let assign = if let Tref::Prim(Prim::Duration) = vp.target {
+        let expr = format!(
+            "s.{}",
+            crate::codegen::entries::value_path_access(&vp, config, LANG)
+        );
+        let convert = if let Tref::Prim(Prim::Duration) = vp.target {
             refs.push(shared_symbol("parse_duration_ms"));
-            let fail = checks::config_error(&format!(
-                "format!(\"{path}: invalid duration {{:?}}\", {expr}.0)",
-                path = vp.path,
-            ));
             format!(
-                "match {parse}(&{expr}.0) {{\n    Ok(ms) => {{\n        values.insert({path:?}.to_string(), serde_json::Value::from(ms));\n    }}\n    Err(_) => {{\n        {fail}\n    }}\n}}\n",
-                path = vp.path,
+                "match {parse}(&{expr}.0) {{\n    Ok(ms) => ms,\n    Err(_) => {{\n        return Err(TonoError::Config(ConfigError {{ message: format!(\"{path}: invalid duration {{:?}}\", {expr}.0) }}));\n    }}\n}}",
                 parse = shared_slot("parse_duration_ms"),
             )
         } else {
-            format!(
-                "values.insert({path:?}.to_string(), {value});\n",
-                path = vp.path,
-                value = checks::value_cast(vp.target, &expr),
-            )
+            format!("{expr} as f64")
         };
         match checks::presence_guard(entry, &vp, &expr, module, config) {
-            Some(guard) => body.push_str(&format!("if {guard} {{\n{}}}\n", indent(&assign, 1))),
-            None => body.push_str(&assign),
+            Some(guard) => body.push_str(&format!(
+                "let {field_name} = if {guard} {{\n{convert_in}}} else {{\n    0.0\n}};\n",
+                convert_in = indent(&convert, 1),
+            )),
+            None => body.push_str(&format!("let {field_name} = {convert};\n")),
         }
     }
 
-    if test_seam {
+    if ctx.test_seam {
         body.push_str(
-            "if let Some(t) = transport {\n    s.transport = Some(t);\n    s.client = None;\n}\n",
+            "if let Some(t) = transport {\n    s.transport = Some(t);\n    #[cfg(feature = \"reqwest\")]\n    {\n        s.client = None;\n    }\n}\n",
         );
     }
-    body.push_str(&format!(
-        "let runtime = tono_http_runtime::Runtime::new(tono_http_runtime::Options {{\n    base_url: String::new(),\n    client: s.client.clone(),\n    transport: s.transport.clone(),\n    headers: s.headers.clone(),\n    values,\n}})\n.map_err(|e| TonoError::Config(ConfigError {{ message: e.to_string() }}))?;\nOk({client} {{ settings: s, runtime: std::sync::Arc::new(runtime), hooks: {hooks} }})",
-        client = n.client,
-        hooks = hooks_expr(bound),
-    ));
+    refs.push(support_symbol("ClientOptions"));
+    refs.push(shared_symbol("check_transport"));
+    body.push_str(
+        "let options = ClientOptions {\n    #[cfg(feature = \"reqwest\")]\n    client: s.client.clone(),\n    transport: s.transport.clone(),\n    headers: s.headers.clone(),\n};\nif let Err(message) = check_transport(&options) {\n    return Err(TonoError::Config(ConfigError { message }));\n}\n",
+    );
+    let mut inits = String::from("settings: s, options");
+    for field_name in ctx.timeouts.values() {
+        inits.push_str(&format!(", {field_name}"));
+    }
+    if ctx.seam {
+        refs.push(shared_symbol("default_sleep"));
+        refs.push(shared_symbol("default_random"));
+        inits.push_str(", sleep: default_sleep(), random: default_random()");
+    }
+    body.push_str(&format!("Ok({client} {{ {inits} }})", client = n.client,));
 
     body
-}
-
-/// The name of the boundary-adapter free function for a bound lifecycle hook
-/// slot (`__before_request_hook`, `__after_response_hook`).
-fn hook_wrapper_name(slot: &str) -> String {
-    format!("__{slot}_hook")
-}
-
-/// The wrapper fn decls for any bound `before_request`/`after_response`
-/// hook: the runtime hands each hook slot an `Arc<dyn Fn(..) -> BoxFuture<..>>`,
-/// so a bespoke `async fn` (the natural shape to write one in, since the
-/// runtime always awaits it) is boxed into that shape here. No error
-/// boundary is applied in the wrapper itself: a hook's error propagates raw
-/// through `tono_http_runtime::ExecuteError` (already `Box<dyn Error + Send
-/// + Sync>`, the same type a bespoke fn returns), and the classification
-/// into a declared `TonoError` vs. a `ContractError` happens once,
-/// centrally, at every op method's `Runtime::execute(...).map_err(...)`
-/// boundary. Each wrapper is a standalone free function tied to no entry's
-/// `Settings`, so unlike `client_init` it is wired regardless of `multi`.
-fn hook_wrapper_decls(bound: &[BoundExtension<'_>]) -> Vec<Decl> {
-    [
-        ("before_request", "req", "CanonicalRequest"),
-        ("after_response", "res", "CanonicalResponse"),
-    ]
-    .into_iter()
-    .filter_map(|(slot, var, shape)| {
-        let b = hook_binding(bound, slot)?;
-        let wrapper = hook_wrapper_name(slot);
-        Some(Decl::raw_with(
-            format!(
-                "fn {wrapper}({var}: tono_http_runtime::{shape}) -> tono_http_runtime::BoxFuture<'static, Result<tono_http_runtime::{shape}, tono_http_runtime::ExecuteError>> {{\n    Box::pin({sym}({var}))\n}}",
-                sym = b.symbol,
-            ),
-            vec![Symbol::imported(b.symbol, use_path(b.module), b.symbol)],
-        ))
-    })
-    .collect()
-}
-
-/// The `hooks:` field expression for the `Client` struct literal: `None`
-/// when neither slot is bound (the common, current case), otherwise a
-/// `Hooks` value with each bound slot wrapped and each unbound slot `None`.
-fn hooks_expr(bound: &[BoundExtension<'_>]) -> String {
-    let slot = |name: &str| -> String {
-        if hook_binding(bound, name).is_some() {
-            format!("Some(std::sync::Arc::new({}))", hook_wrapper_name(name))
-        } else {
-            "None".to_string()
-        }
-    };
-    let before = slot("before_request");
-    let after = slot("after_response");
-    if before == "None" && after == "None" {
-        "None".to_string()
-    } else {
-        format!(
-            "Some(tono_http_runtime::Hooks {{ before_request: {before}, after_response: {after} }})"
-        )
-    }
 }
 
 /// Discard statements for the error vars nothing reads (mirrors Go's

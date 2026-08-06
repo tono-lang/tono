@@ -32,13 +32,15 @@ path = "src/lib.rs"
 [[bin]]
 name = "verify"
 path = "verify/main.rs"
+[features]
+default = ["reqwest"]
+reqwest = ["dep:reqwest"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tono_http_runtime = { package = "sdk-http-runtime-rs", path = "$root/runtimes/http-rust" }
 tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 [workspace]
 EOF
 # A driver that constructs the generated entry client, points it at a local
@@ -170,6 +172,12 @@ EOF
 (cd "$work/rust" && RUSTFLAGS="-D warnings" cargo build --quiet \
     && RUSTFLAGS="-D warnings" cargo run --quiet --bin verify \
     && RUSTFLAGS="-D warnings" cargo test --quiet)
+
+# The reqwest feature is the default-on native transport; with it off, the
+# generated SDK must still compile, with the canonical transport slot as the
+# only way to send.
+echo "rust --no-default-features..."
+(cd "$work/rust" && RUSTFLAGS="-D warnings" cargo build --quiet --lib --no-default-features)
 
 # Rust fences with visibility rather than with a location: a declaration no
 # public type reaches is `pub(crate)`, so a consumer crate cannot name it however

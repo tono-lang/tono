@@ -252,7 +252,7 @@ fn wire_tag(member: &Member) -> String {
 /// over `String`, so they serialize exactly as their inner value while staying
 /// distinct types in code. The assembler prepends these to a module.
 pub(crate) fn well_known_decls() -> Vec<Decl> {
-    ["Timestamp", "LocalDate", "Duration"]
+    let mut decls: Vec<Decl> = ["Timestamp", "LocalDate", "Duration"]
         .iter()
         .map(|name| {
             Decl::raw_providing(
@@ -261,7 +261,7 @@ pub(crate) fn well_known_decls() -> Vec<Decl> {
                     // PartialEq lets the generated entry construction compare a
                     // resolved value against its zero for its presence guard;
                     // Display lets it stringify one for a dynamic env-name
-                    // lookup or a frozen runtime value, without either caller
+                    // lookup or a wire value position, without either caller
                     // needing its own conversion.
                     "#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]\n\
                      #[serde(transparent)]\n\
@@ -271,7 +271,12 @@ pub(crate) fn well_known_decls() -> Vec<Decl> {
                 Vec::new(),
             )
         })
-        .collect()
+        .collect();
+    // The bespoke-facing transport types ride the same support group: an SDK
+    // with no entry (nothing references them) prunes them like any other
+    // support declaration.
+    decls.extend(crate::codegen::targets::rust::entry::transport::http_support_decls());
+    decls
 }
 
 /// Which `#[serde(with)]` helper modules a module's fields need. Each is emitted
@@ -465,7 +470,7 @@ const BASE64_BYTES_MODULE: &str = r#"pub mod base64_bytes {
         let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'\n' && c != b'\r').collect();
         let pad = bytes.iter().rev().take_while(|&&c| c == b'=').count();
         let body = &bytes[..bytes.len() - pad];
-        if bytes.len() % 4 != 0 || pad > 2 || body.contains(&b'=') {
+        if !bytes.len().is_multiple_of(4) || pad > 2 || body.contains(&b'=') {
             return Err("invalid base64".to_string());
         }
         let mut out = Vec::new();

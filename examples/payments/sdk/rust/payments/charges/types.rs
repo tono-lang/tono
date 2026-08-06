@@ -122,10 +122,7 @@ pub enum APIFailure {
 
 impl APIFailure {
     pub fn retryable(&self) -> bool {
-        match self {
-            APIFailure::CardDeclined(_) => true,
-            _ => false,
-        }
+        matches!(self, APIFailure::CardDeclined(_))
     }
 }
 

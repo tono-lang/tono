@@ -111,22 +111,26 @@ impl TestCtx<'_> {
     }
 }
 
+// Plain `//` comments, not `//!` module docs: a test file with an http stub
+// collects real imports (the transport support types), and the rendered
+// `use` section lands above the first declaration, where an inner doc
+// comment would no longer be at the top of the file (E0753).
 fn hermetic_doc() -> Decl {
     Decl::raw(
-        "//! Generated from the entry's declared tests: each one runs the real\n\
-         //! construction path and the real method, with only the stubbed\n\
-         //! transport swapped through the constructor's seam. Impl-stubbed tests\n\
-         //! generate nothing for Rust: its bespoke ops expose no swappable seam."
+        "// Generated from the entry's declared tests: each one runs the real\n\
+         // construction path and the real method, with only the stubbed\n\
+         // transport swapped through the constructor's seam. Impl-stubbed tests\n\
+         // generate nothing for Rust: its bespoke ops expose no swappable seam."
             .to_string(),
     )
 }
 
 fn live_doc() -> Decl {
     Decl::raw(
-        "//! The live tests of the entry's declared tests: no stub, so\n\
-         //! construction reads the ambient environment (real credentials) and\n\
-         //! every test is ignored by default; run `cargo test -- --ignored` to\n\
-         //! exercise the real dependency."
+        "// The live tests of the entry's declared tests: no stub, so\n\
+         // construction reads the ambient environment (real credentials) and\n\
+         // every test is ignored by default; run `cargo test -- --ignored` to\n\
+         // exercise the real dependency."
             .to_string(),
     )
 }
@@ -305,7 +309,7 @@ fn transport_block(answers: &[&HttpAnswer]) -> String {
             format!("std::collections::HashMap::from([{}])", pairs.join(", "))
         };
         format!(
-            "tono_http_runtime::CanonicalResponse {{\n\
+            "HttpResponse {{\n\
              {indent}    status: {status},\n\
              {indent}    headers: {headers},\n\
              {indent}    body: {body}.to_string(),\n\
@@ -343,10 +347,10 @@ fn transport_block(answers: &[&HttpAnswer]) -> String {
         )
     };
     format!(
-        "    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<tono_http_runtime::CanonicalRequest>::new()));\n\
+        "    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<HttpRequest>::new()));\n\
          \x20   let recorded = seen.clone();\n\
-         \x20   let transport: tono_http_runtime::Transport =\n\
-         \x20       std::sync::Arc::new(move |req: tono_http_runtime::CanonicalRequest| {{\n\
+         \x20   let transport: HttpTransport =\n\
+         \x20       std::sync::Arc::new(move |req: HttpRequest| {{\n\
          \x20           let recorded = recorded.clone();\n\
          \x20           Box::pin(async move {{\n\
          {record_and_answer}\
@@ -362,7 +366,7 @@ fn invoke_block(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
     let op = ctx.test.op.expect("a call resolved its op");
     let method = surface::method_name(op, ctx.config);
     let (input, _) = op_io(op);
-    let is_async = wire_descriptor(op).is_some() || effect_of(op) == Effect::Async;
+    let is_async = wire_binding(op).is_some() || effect_of(op) == Effect::Async;
     let mut text = String::new();
     let call_input = match (input, &call.input) {
         (Some(t), Some(value)) => {
@@ -405,6 +409,9 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Decl {
                 _ => None,
             })
             .collect();
+        refs.push(super::support_symbol("HttpRequest"));
+        refs.push(super::support_symbol("HttpResponse"));
+        refs.push(super::support_symbol("HttpTransport"));
         body.push_str(&transport_block(&answers));
         body.push_str(&format!(
             "    let c = {expr}.expect(\"construct client\");\n",
@@ -446,7 +453,7 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Decl {
 fn live_test_decl(ctx: &TestCtx<'_>) -> Decl {
     let mut refs = Vec::new();
     let op = ctx.test.op.expect("a live test has a call");
-    let is_async = wire_descriptor(op).is_some() || effect_of(op) == Effect::Async;
+    let is_async = wire_binding(op).is_some() || effect_of(op) == Effect::Async;
     let (attr, effect) = if is_async {
         ("#[tokio::test]", "async ")
     } else {

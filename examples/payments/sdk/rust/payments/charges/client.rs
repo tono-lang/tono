@@ -2,29 +2,29 @@
 
 use crate::duration::parse_duration_ms;
 use crate::env::read_env;
-use crate::support::Duration;
+use crate::http::{
+    backoff_delay_ms, check_transport, default_random, default_sleep, has_header,
+    http_send_with_timeout, resolve_max_retries, set_header, RandomFn, SleepFn,
+};
+use crate::support::{ClientOptions, Duration, HttpRequest, HttpTransport};
 
 use crate::payments::charges::types::*;
-
-fn create_charge_descriptor() -> &'static tono_http_runtime::WireDescriptor {
-    static DESCRIPTOR: std::sync::OnceLock<tono_http_runtime::WireDescriptor> =
-        std::sync::OnceLock::new();
-    DESCRIPTOR.get_or_init(|| tono_http_runtime::WireDescriptor::parse("{\"bindings\":[[\"id\",{\"kind\":\"body\"}],[\"amount\",{\"kind\":\"body\"}],[\"fee\",{\"kind\":\"body\"}],[\"receipt\",{\"kind\":\"body\"}],[\"currency\",{\"kind\":\"body\"}],[\"note\",{\"kind\":\"body\"}],[\"tags\",{\"kind\":\"body\"}],[\"metadata\",{\"kind\":\"body\"}],[\"created\",{\"kind\":\"body\"}],[\"status\",{\"kind\":\"body\"}],[\"method\",{\"kind\":\"body\"}]],\"endpoint\":[\"endpoint\"],\"http_method\":\"POST\",\"request_headers\":[[[{\"lit\":\"X-API-Key\"}],{\"field\":[\"api_key\"]}]],\"response_bindings\":[],\"retry\":{\"max\":{\"ref\":\"max_retries\"}},\"success\":[[200,{\"args\":[],\"ref\":\"payments.charges#charge\"}]],\"timeout\":{\"ref\":\"timeout\"},\"uri\":\"/charges\"}").expect("valid wire descriptor"))
-}
 
 /// Settings are the resolved construction values of the client entry:
 /// bespoke `client_init` code may overwrite any field (bespoke wins) and
 /// set transport through the slots. Exactly one transport slot may be
-/// set: `client` (native) or `transport` (canonical). `headers` are the
-/// base request headers (bespoke auth writes here); a declared
+/// set: `client` (native `reqwest`, present only with the crate's
+/// default-on `reqwest` feature) or `transport` (canonical). `headers`
+/// are the base request headers (bespoke auth writes here); a declared
 /// `@header` wins only where nothing else set the name.
 pub(crate) struct Settings {
     pub api_key: String,
     pub endpoint: String,
     pub timeout: Duration,
     pub max_retries: i32,
+    #[cfg(feature = "reqwest")]
     pub client: Option<reqwest::Client>,
-    pub transport: Option<tono_http_runtime::Transport>,
+    pub transport: Option<HttpTransport>,
     pub headers: std::collections::HashMap<String, String>,
 }
 
@@ -32,8 +32,10 @@ pub(crate) struct Settings {
 pub struct Client {
     #[allow(dead_code)]
     settings: Settings,
-    runtime: std::sync::Arc<tono_http_runtime::Runtime>,
-    hooks: Option<tono_http_runtime::Hooks>,
+    options: ClientOptions,
+    timeout_ms: f64,
+    pub(crate) sleep: SleepFn,
+    pub(crate) random: RandomFn,
 }
 
 pub struct ClientBuilder {
@@ -63,19 +65,20 @@ impl ClientBuilder {
     /// client_init ran, so a test answers canonically without a server.
     pub(crate) fn build_with_transport(
         self,
-        transport: Option<tono_http_runtime::Transport>,
+        transport: Option<HttpTransport>,
     ) -> Result<Client, TonoError> {
         let mut s = Settings {
             api_key: String::new(),
             endpoint: String::new(),
             timeout: Duration(String::new()),
             max_retries: 0,
+            #[cfg(feature = "reqwest")]
             client: None,
             transport: None,
             headers: std::collections::HashMap::new(),
         };
         s.api_key = self.api_key;
-        if let Some(v) = read_env(&"PAYMENTS_ENDPOINT") {
+        if let Some(v) = read_env("PAYMENTS_ENDPOINT") {
             s.endpoint = v;
         } else {
             s.endpoint = "https://api.payments.example.com".to_string();
@@ -85,7 +88,7 @@ impl ClientBuilder {
         } else {
             s.timeout = Duration("10s".to_string());
         }
-        if let Some(v) = self.max_retries.clone() {
+        if let Some(v) = self.max_retries {
             s.max_retries = v;
         } else {
             s.max_retries = 2;
@@ -101,49 +104,36 @@ impl ClientBuilder {
         if !violations.is_empty() {
             return Err(TonoError::Validation(ValidationError { violations }));
         }
-        let mut values = serde_json::Map::new();
-        values.insert(
-            "api_key".to_string(),
-            serde_json::Value::from(s.api_key.clone()),
-        );
-        values.insert(
-            "endpoint".to_string(),
-            serde_json::Value::from(s.endpoint.clone()),
-        );
-        match parse_duration_ms(&s.timeout.0) {
-            Ok(ms) => {
-                values.insert("timeout".to_string(), serde_json::Value::from(ms));
-            }
+        let timeout_ms = match parse_duration_ms(&s.timeout.0) {
+            Ok(ms) => ms,
             Err(_) => {
                 return Err(TonoError::Config(ConfigError {
                     message: format!("timeout: invalid duration {:?}", s.timeout.0),
                 }));
             }
-        }
-        values.insert(
-            "max_retries".to_string(),
-            serde_json::Value::from(s.max_retries),
-        );
+        };
         if let Some(t) = transport {
             s.transport = Some(t);
-            s.client = None;
+            #[cfg(feature = "reqwest")]
+            {
+                s.client = None;
+            }
         }
-        let runtime = tono_http_runtime::Runtime::new(tono_http_runtime::Options {
-            base_url: String::new(),
+        let options = ClientOptions {
+            #[cfg(feature = "reqwest")]
             client: s.client.clone(),
             transport: s.transport.clone(),
             headers: s.headers.clone(),
-            values,
-        })
-        .map_err(|e| {
-            TonoError::Config(ConfigError {
-                message: e.to_string(),
-            })
-        })?;
+        };
+        if let Err(message) = check_transport(&options) {
+            return Err(TonoError::Config(ConfigError { message }));
+        }
         Ok(Client {
             settings: s,
-            runtime: std::sync::Arc::new(runtime),
-            hooks: None,
+            options,
+            timeout_ms,
+            sleep: default_sleep(),
+            random: default_random(),
         })
     }
 }
@@ -162,42 +152,54 @@ impl Client {
         if let Err(e) = input.validate() {
             return Err(TonoError::Validation(e));
         }
-        let record = serde_json::to_value(&input).map_err(|e| {
+        let url = format!("{}/charges", self.settings.endpoint);
+        let mut headers: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        set_header(&mut headers, "X-API-Key", self.settings.api_key.clone());
+        for (k, v) in &self.options.headers {
+            set_header(&mut headers, k, v.clone());
+        }
+        let body = Some(serde_json::to_string(&input).map_err(|e| {
             TonoError::Decode(DecodeError {
                 path: "$".to_string(),
                 expected: "input".to_string(),
                 raw: e.to_string(),
             })
-        })?;
-        let outcome = self
-            .runtime
-            .execute(
-                create_charge_descriptor(),
-                &record,
-                self.hooks.as_ref(),
-                Some(&|status, body| decode_create_charge_error(status, body).retryable()),
-            )
-            .await
-            .map_err(|cause| match cause.downcast::<TonoError>() {
-                Ok(declared) => *declared,
-                Err(other) => TonoError::Contract(ContractError {
-                    contract_name: "create_charge".to_string(),
-                    cause: other,
-                }),
-            })?;
-        match outcome.kind {
-            tono_http_runtime::OutcomeKind::Transport => {
-                Err(TonoError::Transport(TransportError {
-                    cause: outcome.cause.unwrap(),
-                }))
+        })?);
+        if !has_header(&headers, "content-type") {
+            headers.insert("content-type".to_string(), "application/json".to_string());
+        }
+        let max_retries = resolve_max_retries(self.settings.max_retries as f64);
+        let mut attempt: u32 = 0;
+        loop {
+            let request = HttpRequest {
+                method: "POST".to_string(),
+                url: url.clone(),
+                headers: headers.clone(),
+                body: body.clone(),
+            };
+            let outcome =
+                match http_send_with_timeout(&self.options, request, self.timeout_ms).await {
+                    Ok(response) => response,
+                    Err(cause) => {
+                        if attempt < max_retries {
+                            (self.sleep)(backoff_delay_ms(attempt, (self.random)())).await;
+                            attempt += 1;
+                            continue;
+                        }
+                        return Err(TonoError::Transport(TransportError { cause }));
+                    }
+                };
+            if outcome.status >= 200 && outcome.status < 300 {
+                return decode_charge(&outcome.body);
             }
-            tono_http_runtime::OutcomeKind::Error => Err(decode_create_charge_error(
-                outcome.status,
-                outcome.body.as_deref().unwrap_or(""),
-            )),
-            tono_http_runtime::OutcomeKind::Success => {
-                decode_charge(outcome.body.as_deref().unwrap_or(""))
+            let err = decode_create_charge_error(outcome.status, &outcome.body);
+            if attempt < max_retries && err.retryable() {
+                (self.sleep)(backoff_delay_ms(attempt, (self.random)())).await;
+                attempt += 1;
+                continue;
             }
+            return Err(err);
         }
     }
 }

@@ -1,6 +1,6 @@
 //! The Rust entry client: the SDK construction surface an entry declares,
-//! spelled as idiomatic async Rust driving the hand-written
-//! `tono_http_runtime` crate. A `@with`-bearing entry gets a builder
+//! spelled as idiomatic async Rust carrying its own inline HTTP transport
+//! ([`transport`]). A `@with`-bearing entry gets a builder
 //! (`Client::builder(<@arg fields>) -> ClientBuilder`, `.with_<field>(v)` per
 //! `@with` field, `.build(self) -> Result<Client, TonoError>`); an entry with
 //! no `@with` fields gets a plain `Client::new(<@arg fields>) -> Result<Self,
@@ -11,9 +11,10 @@
 //! match selection to Rust's own `match`, decodes a structured source
 //! strictly, composes a config through `@bind`, runs the bound `client_init`
 //! hook over the resolved `Settings` (bespoke wins), validates last, and
-//! freezes the resolved fields into `tono_http_runtime::Options::values` so
-//! the descriptor's ref positions (endpoint, headers, timeout, retry)
-//! resolve in the runtime without the client ever interpreting a descriptor.
+//! freezes the transport slots into `ClientOptions`. An operation's wire
+//! positions (endpoint, headers, timeout, retry) read the typed resolved
+//! `Settings` directly at the call site — there is no runtime value bag and
+//! no descriptor left to interpret.
 //!
 //! Each entry declaration lands in its own emission group, named after it
 //! (`Group::entry`, [`emit`]'s `per_entry`): the whole surface
@@ -28,11 +29,9 @@ use std::collections::BTreeSet;
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
-use crate::codegen::entries::{companion_name, op_local_name, plan, ref_is_enum, EntryModel};
+use crate::codegen::entries::{companion_name, op_local_name, plan, EntryModel};
 use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
-use crate::codegen::ops::{
-    declared_errors, effect_of, error_names, op_io, wire_descriptor, Effect,
-};
+use crate::codegen::ops::{declared_errors, effect_of, op_io, wire_binding, Effect};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
 use crate::codegen::targets::rust::render::RustRules;
@@ -381,8 +380,14 @@ pub(super) fn apply_transforms(
 
 /// A reference to a name in one of the SDK's shared root groups, so the
 /// import is collected wherever the raw text calls it.
-fn shared_symbol(name: &str) -> Symbol {
+pub(super) fn shared_symbol(name: &str) -> Symbol {
     Symbol::imported(name, shared_group(name), name)
+}
+
+/// A reference to a declaration of the SDK's shared support group (the
+/// bespoke-facing transport types).
+pub(super) fn support_symbol(name: &str) -> Symbol {
+    Symbol::imported(name, crate::codegen::group::ROOT_SUPPORT, name)
 }
 
 /// A shared helper named inside opaque text: a slot, so its call spelling is
@@ -420,7 +425,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let decode_decls = plan::output_decode_decls(
         &entries,
         module,
-        |op| wire_descriptor(op).is_some(),
+        |op| wire_binding(op).is_some(),
         decode::output_decode_decl,
     );
     if !decode_decls.is_empty() {
@@ -440,8 +445,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         // so its `use` imports must list only the resolution helpers its own
         // body calls, not the whole module's.
         let mut helpers = Helpers::default();
-        let mut decls = surface::descriptor_decls(entry, &n);
-        decls.push(surface::settings_struct_decl(entry, &n, config, module));
+        let mut decls = vec![surface::settings_struct_decl(entry, &n, config, module)];
         decls.extend(constructor::construction_decls(
             entry,
             &n,
@@ -531,43 +535,52 @@ pub(super) fn indent(s: &str, n: usize) -> String {
 }
 
 /// One async (or sync, per `effect_of`) method per operation.
+#[allow(clippy::too_many_arguments)]
 fn op_methods(
     entry: &EntryModel<'_>,
     n: &Names,
     module: &Module,
     config: &CasingConfig,
     bound: &[BoundExtension<'_>],
+    timeout_fields: &std::collections::BTreeMap<String, String>,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let mut out = String::new();
     for op in entry.operations {
-        out.push_str(&op_method(n, op, module, config, bound, refs));
+        out.push_str(&op_method(
+            n,
+            op,
+            module,
+            config,
+            entry,
+            bound,
+            timeout_fields,
+            refs,
+        ));
         out.push('\n');
     }
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn op_method(
     n: &Names,
     op: &Shape,
     module: &Module,
     config: &CasingConfig,
+    entry: &EntryModel<'_>,
     bound: &[BoundExtension<'_>],
+    timeout_fields: &std::collections::BTreeMap<String, String>,
     refs: &mut Vec<Symbol>,
 ) -> String {
-    let en = error_names();
     let name = surface::method_name(op, config);
     let (input, output) = op_io(op);
-    // A wire-descriptor-bound op always calls `Runtime::execute` (an
-    // inherently async fn), so it is always `async` regardless of what
-    // `effect_of` classified it as (mirrors TypeScript's `execute`/
-    // `Promise`-returning client, which is unconditionally `async` for the
-    // same reason). Only a bespoke (`impl_op`) method's sync-vs-async
-    // follows `effect_of`, since that reflects the bound symbol's own
-    // signature.
-    let is_async = wire_descriptor(op).is_some() || effect_of(op) == Effect::Async;
-    let effect = if is_async { "async " } else { "" };
-    let awaited = ".await";
+    // A wire-bound op's method carries the transport's own awaits (the send,
+    // a retry's backoff sleep), so it is always `async` regardless of what
+    // `effect_of` classified it as. Only a bespoke (`impl_op`) method's
+    // sync-vs-async follows `effect_of`, since that reflects the bound
+    // symbol's own signature.
+    let is_async = wire_binding(op).is_some() || effect_of(op) == Effect::Async;
 
     let (param, input_ty) = match input {
         Some(t) => {
@@ -597,7 +610,7 @@ fn op_method(
         .map(|d| crate::codegen::doc::rustdoc(&d, "    "))
         .unwrap_or_default();
 
-    if wire_descriptor(op).is_none() {
+    let Some(wire) = wire_binding(op) else {
         let discriminator_name = surface::discriminator_fn_name(n, op);
         let discriminator =
             (!declared_errors(op, module).is_empty()).then_some(discriminator_name.as_str());
@@ -616,40 +629,41 @@ fn op_method(
             doc: &doc,
             refs,
         });
-    }
+    };
 
-    let has_declared_errors = !declared_errors(op, module).is_empty();
     let discriminator = surface::discriminator_fn_name(n, op);
-    let descriptor_fn = surface::descriptor_fn_name(n, op);
-    let error_line = if has_declared_errors {
-        format!("{discriminator}(outcome.status, outcome.body.as_deref().unwrap_or(\"\"))")
-    } else {
-        format!(
-            "TonoError::Api({failure}::Undeclared({api} {{ status: outcome.status, body: outcome.body.unwrap_or_default() }}))",
-            failure = en.api_failure,
-            api = en.api,
-        )
+    let success = decode::success_block(output, module, "&outcome.body");
+    let fields = transport::FieldCtx {
+        entry,
+        module,
+        config,
     };
-    // The retry loop and the returned error read the same discriminator, so
-    // they can never disagree: TonoError::retryable() is the only place
-    // @retryable is materialized. An op with no declared errors passes None
-    // (no discriminator exists to call).
-    let retryable_arg = if has_declared_errors {
-        format!("Some(&|status, body| {discriminator}(status, body).retryable())")
-    } else {
-        "None".to_string()
-    };
-    let success = decode::success_block(output, module, "outcome.body.as_deref().unwrap_or(\"\")");
-    let record = match input_ty {
-        Some(_) => "serde_json::to_value(&input).map_err(|e| TonoError::Decode(DecodeError { path: \"$\".to_string(), expected: \"input\".to_string(), raw: e.to_string() }))?".to_string(),
-        None => "serde_json::Value::Object(serde_json::Map::new())".to_string(),
-    };
-
-    let comma = if param.is_empty() { "" } else { ", " };
+    // The already-converted milliseconds field for the op's `@timeout` path,
+    // built by the constructor (see `constructor::timeout_conversions`).
+    let timeout_field = wire
+        .timeout
+        .as_ref()
+        .map(|path| timeout_fields[&path.join(".")].clone());
+    let body = transport::op_call(
+        &transport::OpCall {
+            wire,
+            method: &wire.method,
+            has_input: input.is_some(),
+            has_declared_errors: !declared_errors(op, module).is_empty(),
+            discriminator: &discriminator,
+            success_block: &success,
+            before_request: hook_binding(bound, "before_request"),
+            after_response: hook_binding(bound, "after_response"),
+            timeout_field,
+        },
+        &fields,
+        refs,
+    );
     format!(
-        "{doc}    pub {effect}fn {name}(&self{comma}{param}) -> Result<{ret}, TonoError> {{\n{validate_block}        let record = {record};\n        let outcome = self.runtime.execute({descriptor_fn}(), &record, self.hooks.as_ref(), {retryable_arg}){awaited}\n            .map_err(|cause| match cause.downcast::<TonoError>() {{\n                Ok(declared) => *declared,\n                Err(other) => TonoError::Contract(ContractError {{ contract_name: {opname:?}.to_string(), cause: other }}),\n            }})?;\n        match outcome.kind {{\n            tono_http_runtime::OutcomeKind::Transport => Err(TonoError::Transport(TransportError {{ cause: outcome.cause.unwrap() }})),\n            tono_http_runtime::OutcomeKind::Error => Err({error_line}),\n            tono_http_runtime::OutcomeKind::Success => {{\n{success}\n            }}\n        }}\n    }}",
-        opname = op_local_name(&op.id),
+        "{doc}    pub async fn {name}(&self{comma}{param}) -> Result<{ret}, TonoError> {{\n{validate_block}{body}    }}",
+        comma = if param.is_empty() { "" } else { ", " },
         validate_block = indent(&validate_block, 2),
+        body = indent(&body, 2),
     )
 }
 
@@ -669,6 +683,7 @@ mod shared;
 mod surface;
 #[cfg(test)]
 mod tests;
+pub(crate) mod transport;
 pub(crate) mod vector_tests;
 
 pub use shared::shared_groups;

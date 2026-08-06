@@ -136,18 +136,18 @@ fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
         "pub fn new(api_key: String) -> Result<Self, TonoError> {\n        Self::new_with_transport(None, api_key)\n    }"
     ));
     assert!(text.contains(
-        "pub(crate) fn new_with_transport(transport: Option<tono_http_runtime::Transport>, api_key: String) -> Result<Self, TonoError> {"
+        "pub(crate) fn new_with_transport(transport: Option<HttpTransport>, api_key: String) -> Result<Self, TonoError> {"
     ));
-    // The override lands after the values freeze and right before the runtime
-    // is built, so the test transport wins over anything bespoke set.
-    let values = text.find("let mut values").expect("values freeze");
+    // The override lands after source resolution and right before the
+    // options freeze, so the test transport wins over anything bespoke set.
+    let resolved = text.find("s.client_name = v;").expect("source resolution");
     let over = text
         .find("if let Some(t) = transport {")
         .expect("transport override");
     let freeze = text
-        .find("let runtime = tono_http_runtime::Runtime::new")
-        .expect("runtime construction");
-    assert!(values < over && over < freeze);
+        .find("let options = ClientOptions {")
+        .expect("options freeze");
+    assert!(resolved < over && over < freeze);
     assert!(text.contains("s.transport = Some(t);"));
     assert!(text.contains("s.client = None;"));
     // Without declared tests the seam is not emitted at all.
@@ -173,7 +173,7 @@ fn a_with_bearing_entry_routes_build_through_the_seam() {
         "pub fn build(self) -> Result<Client, TonoError> {\n        self.build_with_transport(None)\n    }"
     ));
     assert!(text.contains(
-        "pub(crate) fn build_with_transport(self, transport: Option<tono_http_runtime::Transport>) -> Result<Client, TonoError> {"
+        "pub(crate) fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<Client, TonoError> {"
     ));
 }
 
@@ -202,7 +202,7 @@ fn declared_tests_generate_a_hermetic_and_a_live_rust_test_file() {
     // single canned response directly (no sequence index); the input decodes
     // off the declared wire text.
     assert!(hermetic
-        .contains("recorded.lock().unwrap_or_else(|e| e.into_inner()).push(req);\n                Ok(tono_http_runtime::CanonicalResponse {"));
+        .contains("recorded.lock().unwrap_or_else(|e| e.into_inner()).push(req);\n                Ok(HttpResponse {"));
     assert!(hermetic.contains("status: 200,"));
     assert!(hermetic
         .contains("let input: Charge = serde_json::from_str(r#\"{\"id\":\"c1\"}\"#).expect(\"decode declared input\");"));
@@ -249,11 +249,15 @@ fn declared_tests_generate_a_hermetic_and_a_live_rust_test_file() {
 #[test]
 fn impl_stubbed_tests_are_skipped_for_rust() {
     let mut module = simple_entry_module();
-    // Rebind the op as bespoke: strip its wire descriptor and bind an impl.
+    // Rebind the op as bespoke: strip its wire binding (and the descriptor
+    // trait the declared-test validation still reads) and bind an impl.
     for shape in &mut module.shapes {
         if let crate::ir::ShapeKind::Entry { operations, .. } = &mut shape.kind {
             for op in operations {
                 op.traits.retain(|t| t.id != "wire_descriptor");
+                if let crate::ir::ShapeKind::Operation { wire, .. } = &mut op.kind {
+                    *wire = None;
+                }
             }
         }
     }

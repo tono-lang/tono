@@ -3,7 +3,7 @@ use crate::codegen::targets::rust::rust_casing;
 use crate::codegen::test_support::{
     bare_entry_field, error_shape, member, push_entry_field, structure,
 };
-use crate::ir::{EnvName, ExtKind, Extension, Source};
+use crate::ir::{EnvName, ExtKind, Extension, Source, WireBinding, WirePart, WireValue};
 
 fn text(module: &Module) -> String {
     entry_text(module, &rust_casing())
@@ -86,9 +86,10 @@ fn push_hook_extension(module: &mut Module, slot: &str, binding: &str) {
     });
 }
 
-/// A single-entry module: `@arg api_key`, `@env`/`@default` `client_name`,
-/// one `@http` op declaring a retryable coded error. Shared with the
-/// conformance-vector tests (`conformance_tests`), which layer vectors on it.
+/// A single-entry module: `@arg api_key`, `@env`/`@default` `client_name`
+/// and `endpoint`, one `@http` op declaring a retryable coded error. Shared
+/// with the conformance-vector tests (`conformance_tests`), which layer
+/// vectors on it.
 pub(super) fn simple_entry_module() -> Module {
     let api_key = bare_entry_field("api_key", Tref::Prim(Prim::String), vec![Source::Arg]);
     let client_name = bare_entry_field(
@@ -97,6 +98,14 @@ pub(super) fn simple_entry_module() -> Module {
         vec![
             Source::Env(EnvName::Name("CLIENT_NAME".into())),
             Source::Default(serde_json::json!("demo")),
+        ],
+    );
+    let endpoint = bare_entry_field(
+        "endpoint",
+        Tref::Prim(Prim::String),
+        vec![
+            Source::Env(EnvName::Name("ENDPOINT".into())),
+            Source::Default(serde_json::json!("https://api.test")),
         ],
     );
     let op = Shape {
@@ -114,7 +123,20 @@ pub(super) fn simple_entry_module() -> Module {
                 id: "m#payment_declined".into(),
                 args: vec![],
             }],
-            wire: None,
+            wire: Some(Box::new(WireBinding {
+                method: "POST".into(),
+                uri: vec![crate::ir::TemplatePart::Lit("/charges".into())],
+                bindings: [("id".to_string(), WirePart::Body)].into_iter().collect(),
+                response_bindings: Default::default(),
+                success: vec![200],
+                endpoint: Some(vec!["endpoint".into()]),
+                request_headers: vec![(
+                    vec![crate::ir::TemplatePart::Lit("X-Client".into())],
+                    WireValue::Field(vec!["client_name".into()]),
+                )],
+                timeout: None,
+                retry: None,
+            })),
         },
         traits: vec![
             Trait {
@@ -139,82 +161,12 @@ pub(super) fn simple_entry_module() -> Module {
         Shape {
             id: "m#client".into(),
             kind: ShapeKind::Entry {
-                fields: vec![api_key, client_name],
+                fields: vec![api_key, client_name, endpoint],
                 operations: vec![op],
             },
             traits: vec![],
         },
     ])
-}
-
-#[test]
-fn success_block_with_no_required_members_skips_the_presence_probe() {
-    let module = module_of(vec![structure(
-        "m#note",
-        vec![member("text", Tref::Prim(Prim::String), false)],
-    )]);
-    let out = decode::success_block(
-        Some(&Tref::Ref {
-            id: "m#note".into(),
-            args: vec![],
-        }),
-        &module,
-        "body",
-    );
-    assert!(!out.contains("probe"));
-    assert!(out.contains("serde_json::from_str::<Note>(body).map_err(|_| "));
-}
-
-#[test]
-fn success_block_with_required_members_calls_the_shared_per_type_decode() {
-    // The probe lives once per type (`output_decode_decl`), not once per call
-    // site: the call site here is just the call.
-    let out = decode::success_block(
-        Some(&Tref::Ref {
-            id: "m#charge".into(),
-            args: vec![],
-        }),
-        &module_of(vec![charge_shape()]),
-        "body",
-    );
-    assert_eq!(out, "decode_charge(body)");
-}
-
-#[test]
-fn output_decode_decl_probes_every_required_member_before_the_typed_decode() {
-    let decl = decode::output_decode_decl(&charge_shape()).expect("charge has a required member");
-    let text = crate::codegen::test_support::rendered(&[decl], &RustRules::default());
-    assert!(text.contains("const CHARGE_REQUIRED_FIELDS: &[&str] = &[\"id\"];"));
-    assert!(text.contains("fn decode_charge(body: &str) -> Result<Charge, TonoError> {"));
-    assert!(text.contains("for field in CHARGE_REQUIRED_FIELDS {"));
-    assert!(text.contains("if probe.get(field).map(|v| v.is_null()).unwrap_or(true) {"));
-    assert!(text.contains("path: format!(\"$.{field}\")"));
-    assert!(text.contains("serde_json::from_str::<Charge>(body).map_err("));
-}
-
-#[test]
-fn output_decode_decl_skips_a_shape_with_no_required_member() {
-    let shape = structure(
-        "m#note",
-        vec![member("text", Tref::Prim(Prim::String), false)],
-    );
-    assert!(decode::output_decode_decl(&shape).is_none());
-}
-
-#[test]
-fn success_block_of_a_bare_i64_output_parses_the_wire_string() {
-    let module = module_of(vec![]);
-    let out = decode::success_block(Some(&Tref::Prim(Prim::I64)), &module, "body");
-    assert!(out.contains("let wire: String = serde_json::from_str(body)"));
-    assert!(out.contains("wire.parse::<i64>()"));
-}
-
-#[test]
-fn success_block_of_a_bare_u64_output_parses_the_wire_string() {
-    let module = module_of(vec![]);
-    let out = decode::success_block(Some(&Tref::Prim(Prim::U64)), &module, "body");
-    assert!(out.contains("let wire: String = serde_json::from_str(body)"));
-    assert!(out.contains("wire.parse::<u64>()"));
 }
 
 #[test]
@@ -237,18 +189,29 @@ fn a_single_entry_with_arg_env_default_and_an_http_op_builds() {
     assert!(out.contains("pub fn new(api_key: String) -> Result<Self, TonoError> {"));
     assert!(!out.contains("struct ClientBuilder"));
     assert!(out.contains("s.api_key = api_key;"));
-    assert!(out.contains("read_env(&\"CLIENT_NAME\")"));
-    // The op is async (it carries a protocol binding) and maps the runtime
-    // outcome onto the taxonomy.
+    assert!(out.contains("read_env(\"CLIENT_NAME\")"));
+    // The op is async (it carries a protocol binding) and its transport is
+    // inline: the URL reads the typed endpoint field, the declared header
+    // reads its typed field, the whole-body input serializes directly, and a
+    // send failure maps onto the Transport category, with no descriptor and
+    // no runtime crate anywhere.
     assert!(out.contains(
         "pub async fn create_charge(&self, input: Charge) -> Result<Charge, TonoError> {"
     ));
-    assert!(out
-        .contains("fn create_charge_descriptor() -> &'static tono_http_runtime::WireDescriptor {"));
+    assert!(out.contains("let url = format!(\"{}/charges\", self.settings.endpoint);"));
+    assert!(
+        out.contains("set_header(&mut headers, \"X-Client\", self.settings.client_name.clone());")
+    );
+    assert!(out.contains("let body = Some(serde_json::to_string(&input)"));
+    assert!(out.contains("match http_send(&self.options, request).await {"));
+    assert!(
+        out.contains("Err(cause) => return Err(TonoError::Transport(TransportError { cause })),")
+    );
     assert!(
         out.contains("pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {")
     );
-    assert!(out.contains("tono_http_runtime::OutcomeKind::Transport => Err(TonoError::Transport(TransportError { cause: outcome.cause.unwrap() })),"));
+    assert!(!out.contains("tono_http_runtime"));
+    assert!(!out.contains("WireDescriptor"));
 }
 
 #[test]
@@ -363,18 +326,22 @@ fn a_multi_entry_module_prefixes_settings_descriptors_and_discriminators() {
             input: None,
             output: None,
             errors: vec![],
-            wire: None,
+            wire: Some(Box::new(WireBinding {
+                method: "GET".into(),
+                uri: vec![crate::ir::TemplatePart::Lit("/ping".into())],
+                bindings: Default::default(),
+                response_bindings: Default::default(),
+                success: vec![200],
+                endpoint: Some(vec!["token".into()]),
+                request_headers: vec![],
+                timeout: None,
+                retry: None,
+            })),
         },
-        traits: vec![
-            Trait {
-                id: "wire_descriptor".into(),
-                value: serde_json::json!({"http_method": "GET", "uri": "/ping"}),
-            },
-            Trait {
-                id: "http".into(),
-                value: serde_json::json!({"method": "GET", "path": "/ping"}),
-            },
-        ],
+        traits: vec![Trait {
+            id: "http".into(),
+            value: serde_json::json!({"method": "GET", "path": "/ping"}),
+        }],
     };
     module.shapes.push(Shape {
         id: "m#other".into(),
@@ -391,13 +358,11 @@ fn a_multi_entry_module_prefixes_settings_descriptors_and_discriminators() {
     let out = text(&module);
     assert!(out.contains("pub(crate) struct ClientSettings {"));
     assert!(out.contains("pub(crate) struct OtherSettings {"));
-    assert!(out.contains("fn client_create_charge_descriptor()"));
-    assert!(out.contains("fn other_ping_descriptor()"));
     assert!(out.contains("pub fn decode_client_create_charge_error("));
 }
 
 #[test]
-fn resolved_values_freeze_a_numeric_and_a_string_field() {
+fn retry_and_timeout_fields_read_typed_settings_with_the_seam_on_the_client() {
     let mut module = simple_entry_module();
     push_entry_field(
         &mut module,
@@ -407,13 +372,25 @@ fn resolved_values_freeze_a_numeric_and_a_string_field() {
             vec![Source::Default(serde_json::json!(5))],
         ),
     );
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations.iter_mut() {
+                if let ShapeKind::Operation { wire: Some(w), .. } = &mut op.kind {
+                    w.retry = Some(vec!["max_conns".into()]);
+                }
+            }
+        }
+    }
     let out = text(&module);
-    assert!(out.contains(
-        "values.insert(\"max_conns\".to_string(), serde_json::Value::from(s.max_conns));"
-    ));
-    assert!(out.contains(
-        "values.insert(\"client_name\".to_string(), serde_json::Value::from(s.client_name.clone()));"
-    ));
+    // The retry maximum reads the typed field at the call site; the timing
+    // seam rides the client as crate-visible fields (the parity harness, a
+    // test module of the same crate, pins them), defaulted at construction.
+    assert!(out.contains("let max_retries = resolve_max_retries(self.settings.max_conns as f64);"));
+    assert!(out.contains("pub(crate) sleep: SleepFn,"));
+    assert!(out.contains("pub(crate) random: RandomFn,"));
+    assert!(out.contains("sleep: default_sleep(), random: default_random()"));
+    // No runtime value bag is left anywhere in the construction.
+    assert!(!out.contains("values.insert"));
 }
 
 #[test]
@@ -566,16 +543,15 @@ fn a_client_init_hook_runs_after_source_resolution_and_its_error_is_guarded() {
 }
 
 #[test]
-fn with_no_hooks_bound_the_client_carries_none() {
+fn with_no_hooks_bound_the_ops_invoke_no_hook_at_all() {
     let module = simple_entry_module();
     let out = text(&module);
-    assert!(out.contains("hooks: None }"));
-    assert!(!out.contains("__before_request_hook"));
-    assert!(!out.contains("__after_response_hook"));
+    assert!(!out.contains("before_request"));
+    assert!(!out.contains("after_response"));
 }
 
 #[test]
-fn a_before_request_hook_is_boxed_and_wired_leaving_after_response_unset() {
+fn a_before_request_hook_is_called_inline_leaving_after_response_unset() {
     let mut module = simple_entry_module();
     push_hook_extension(
         &mut module,
@@ -583,16 +559,17 @@ fn a_before_request_hook_is_boxed_and_wired_leaving_after_response_unset() {
         "ext/rust/sign.rs#sign_request",
     );
     let out = text(&module);
+    // The bespoke symbol is awaited directly on the built request, and its
+    // failure classifies at the call site under the slot's name.
+    assert!(out.contains("let request = match sign_request(request).await {"));
     assert!(out.contains(
-        "fn __before_request_hook(req: tono_http_runtime::CanonicalRequest) -> tono_http_runtime::BoxFuture<'static, Result<tono_http_runtime::CanonicalRequest, tono_http_runtime::ExecuteError>> {\n    Box::pin(sign_request(req))\n}"
+        "TonoError::Contract(ContractError { contract_name: \"before_request\".to_string(), cause: other }),"
     ));
-    assert!(out.contains(
-        "hooks: Some(tono_http_runtime::Hooks { before_request: Some(std::sync::Arc::new(__before_request_hook)), after_response: None }) }"
-    ));
+    assert!(!out.contains("after_response"));
 }
 
 #[test]
-fn an_after_response_hook_is_boxed_and_wired_leaving_before_request_unset() {
+fn an_after_response_hook_is_called_inline_leaving_before_request_unset() {
     let mut module = simple_entry_module();
     push_hook_extension(
         &mut module,
@@ -600,12 +577,11 @@ fn an_after_response_hook_is_boxed_and_wired_leaving_before_request_unset() {
         "ext/rust/log.rs#log_response",
     );
     let out = text(&module);
+    assert!(out.contains("let response = match log_response(response).await {"));
     assert!(out.contains(
-        "fn __after_response_hook(res: tono_http_runtime::CanonicalResponse) -> tono_http_runtime::BoxFuture<'static, Result<tono_http_runtime::CanonicalResponse, tono_http_runtime::ExecuteError>> {\n    Box::pin(log_response(res))\n}"
+        "TonoError::Contract(ContractError { contract_name: \"after_response\".to_string(), cause: other }),"
     ));
-    assert!(out.contains(
-        "hooks: Some(tono_http_runtime::Hooks { before_request: None, after_response: Some(std::sync::Arc::new(__after_response_hook)) }) }"
-    ));
+    assert!(!out.contains("before_request"));
 }
 
 #[test]
@@ -622,9 +598,8 @@ fn both_lifecycle_request_hooks_bound_together_wire_both_slots() {
         "ext/rust/log.rs#log_response",
     );
     let out = text(&module);
-    assert!(out.contains(
-        "hooks: Some(tono_http_runtime::Hooks { before_request: Some(std::sync::Arc::new(__before_request_hook)), after_response: Some(std::sync::Arc::new(__after_response_hook)) }) }"
-    ));
+    assert!(out.contains("let request = match sign_request(request).await {"));
+    assert!(out.contains("let response = match log_response(response).await {"));
 }
 
 #[test]
@@ -675,7 +650,7 @@ fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
 }
 
 #[test]
-fn a_duration_field_freezes_as_milliseconds_and_pulls_the_parser() {
+fn a_timeout_duration_field_converts_to_milliseconds_eagerly() {
     let mut module = simple_entry_module();
     push_entry_field(
         &mut module,
@@ -685,10 +660,23 @@ fn a_duration_field_freezes_as_milliseconds_and_pulls_the_parser() {
             vec![Source::Default(serde_json::json!("5s"))],
         ),
     );
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations.iter_mut() {
+                if let ShapeKind::Operation { wire: Some(w), .. } = &mut op.kind {
+                    w.timeout = Some(vec!["wait".into()]);
+                }
+            }
+        }
+    }
     let out = text(&module);
-    // See the note on the base64 test above: the `use` this call site pulls
-    // in is proven at the full-pipeline level, not here.
-    assert!(out.contains("match parse_duration_ms(&s.wait.0) {"));
+    // The constructor converts once (a malformed value is a ConfigError at
+    // construction); the op reads the already-converted private field. See
+    // the note on the base64 test above: the `use` this call site pulls in
+    // is proven at the full-pipeline level, not here.
+    assert!(out.contains("let wait_ms = match parse_duration_ms(&s.wait.0) {"));
+    assert!(out.contains("wait: invalid duration"));
+    assert!(out.contains("http_send_with_timeout(&self.options, request, self.wait_ms)"));
 }
 
 #[test]
@@ -712,11 +700,8 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(out.contains("\"true\" | \"1\" => { s.flag = true; }"));
     assert!(out.contains("if parse_duration_ms(&v).is_err() {"));
     // An enum field is a branded type: cast at the boundary (Unknown catches
-    // an undeclared wire value), frozen into the values via its Display.
+    // an undeclared wire value).
     assert!(out.contains("s.mode = Mode::Unknown(v);"));
-    assert!(out.contains(
-        "values.insert(\"mode\".to_string(), serde_json::Value::from(s.mode.to_string()));"
-    ));
     // Guaranteed and error-tracked dynamic env names both spell one balanced run.
     assert!(out.contains("read_env(&s.naming)"));
     assert!(out.contains(
@@ -738,15 +723,11 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
         "return Err(TonoError::Config(ConfigError { message: format!(\"sure_pick: match on sure_name: unmatched value {}\", s.sure_name) }));"
     ));
     // Composition: a config struct built member by member (a bind layered
-    // over a sibling chain, a plain env member, a narrow-int member parse),
-    // then frozen as dotted value paths.
+    // over a sibling chain, a plain env member, a narrow-int member parse).
     assert!(out.contains("let mut composed = Conf {"));
     assert!(out.contains("composed.key = (s.naming).clone();"));
     assert!(out.contains("composed.sure = (s.sure_name).clone();"));
     assert!(out.contains("match v.parse::<i32>() {"));
-    assert!(out.contains(
-        "values.insert(\"composed.key\".to_string(), serde_json::Value::from(s.composed.key.clone()));"
-    ));
     // Structured and whole-JSON sources: an explicit @with value wins over
     // the env fallback, and the structured one probes its required member
     // before the strict decode.
@@ -763,12 +744,22 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(out.contains("if let Some(tiny_err) = &tiny_err {"));
     // An unread error var (nothing downstream consumes it) is explicitly discarded.
     assert!(out.contains("let _ = &small_err;"));
-    // Duration freezes as milliseconds, not its wire string.
+    // The `@timeout` duration converts to milliseconds eagerly at
+    // construction (guarded on presence: `wait` resolves only from env), and
+    // the retry maximum reads its typed field at the call site with the URL
+    // reading the typed endpoint.
+    assert!(out.contains("let wait_ms = if s.wait != Duration(String::new()) {"));
     assert!(out.contains("match parse_duration_ms(&s.wait.0) {"));
+    assert!(out.contains("let max_retries = resolve_max_retries(self.settings.tiny as f64);"));
+    assert!(out.contains("http_send_with_timeout(&self.options, request, self.wait_ms)"));
+    assert!(out.contains("set_header(&mut headers, \"X-K\", self.settings.derived.clone());"));
+    assert!(out.contains(
+        "format!(\"{}/x/{}\", self.settings.naming, percent_path(&self.settings.naming))"
+    ));
 
-    // The four method shapes: full descriptor with input/output, a bare
-    // descriptor with neither, a primitive (non-struct) output, and a bespoke
-    // stub with no binding for this target.
+    // The four method shapes: a full wire binding with input/output, a bare
+    // one with neither, a primitive (non-struct) output, and a bespoke stub
+    // with no binding for this target.
     assert!(
         out.contains("pub async fn fetch_note(&self, input: Note) -> Result<Note, TonoError> {")
     );

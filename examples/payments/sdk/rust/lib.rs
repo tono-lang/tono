@@ -7,6 +7,8 @@ mod duration;
 #[allow(dead_code)]
 mod env;
 #[allow(dead_code)]
+mod http;
+#[allow(dead_code)]
 mod number;
 pub mod payments;
 pub mod support;

@@ -162,21 +162,18 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames, liveness: &TaxonomyLiveness) 
             vec![],
         ));
 
-        let retryable_arms: String = declared
+        // `matches!` over an or-pattern rather than a hand-written match: a
+        // `X(_) => true, _ => false` match is exactly what the generated
+        // SDK's own match-like-matches lint rewrites to this.
+        let retryable_patterns: Vec<String> = declared
             .iter()
             .filter(|err| err.retryable)
-            .map(|err| {
-                format!(
-                    "            {}::{}(_) => true,\n",
-                    n.api_failure,
-                    error_type_name(err)
-                )
-            })
+            .map(|err| format!("{}::{}(_)", n.api_failure, error_type_name(err)))
             .collect();
-        let failure_retryable_body = if retryable_arms.is_empty() {
+        let failure_retryable_body = if retryable_patterns.is_empty() {
             "        false".to_string()
         } else {
-            format!("        match self {{\n{retryable_arms}            _ => false,\n        }}")
+            format!("        matches!(self, {})", retryable_patterns.join(" | "))
         };
         decls.push(Decl::raw(format!(
             "impl {} {{\n    pub fn retryable(&self) -> bool {{\n{failure_retryable_body}\n    }}\n}}",
@@ -454,7 +451,7 @@ mod tests {
         assert!(out.contains("    Undeclared(APIError),"));
         // @retryable lowers into the predicate; the root delegates to the
         // Api payload and reports false everywhere else.
-        assert!(out.contains("APIFailure::PaymentDeclined(_) => true,"));
+        assert!(out.contains("matches!(self, APIFailure::PaymentDeclined(_))"));
         assert!(out.contains("TonoError::Api(failure) => failure.retryable(),"));
     }
 
