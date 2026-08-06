@@ -53,13 +53,13 @@ typescript)
     cp "$root/runtimes/parity/vectors.json" "$work/sdk/typescript/"
 
     echo "running the parity suite against the generated SDK..."
-    # Reuses runtimes/http-ts's own Vitest install rather than provisioning a
-    # second toolchain for a throwaway package; --root points discovery at the
-    # generated tree instead of at runtimes/http-ts's own tests.
-    if [ ! -d "$root/runtimes/http-ts/node_modules" ]; then
-        (cd "$root/runtimes/http-ts" && npm ci --ignore-scripts)
+    # Reuses the codegen test toolchain's own Vitest install rather than
+    # provisioning a second one for a throwaway package; --root points
+    # discovery at the generated tree instead of at that toolchain's own tests.
+    if [ ! -d "$root/backend/codegen-tests/typescript/node_modules" ]; then
+        (cd "$root/backend/codegen-tests/typescript" && npm ci --ignore-scripts)
     fi
-    (cd "$root/runtimes/http-ts" && node node_modules/.bin/vitest run --root "$work/sdk/typescript")
+    (cd "$root/backend/codegen-tests/typescript" && node node_modules/.bin/vitest run --root "$work/sdk/typescript")
     ;;
 go)
     echo "generating the Go SDK..."

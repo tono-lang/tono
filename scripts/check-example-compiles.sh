@@ -296,10 +296,9 @@ EOF
 echo "typescript..."
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"
 # The TypeScript SDK is a nested tree (a file per module) split into types and
-# serde modules; the serde files import the types plus the hand-written HTTP
-# runtime. A tsconfig maps the runtime package to its source and compiles every
-# generated module together so cross-module and serde imports resolve, closing
-# the Protocol/Target seam end to end.
+# serde modules; a tsconfig compiles every generated module together so
+# cross-module and serde imports resolve, closing the Protocol/Target seam end
+# to end. No path mapping is needed: each entry carries its own transport.
 mkdir -p "$work/ts"
 cp -R "$sdk"/typescript/. "$work/ts/"
 cat >"$work/ts/tsconfig.json" <<EOF
@@ -311,8 +310,7 @@ cat >"$work/ts/tsconfig.json" <<EOF
     "module": "ES2022",
     "moduleResolution": "bundler",
     "lib": ["ES2020", "DOM"],
-    "skipLibCheck": true,
-    "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
+    "skipLibCheck": true
   },
   "include": ["**/*.ts"],
   "exclude": ["**/*.test.ts"]
@@ -376,8 +374,7 @@ cat >"$work/ts-barrel/tsconfig.json" <<EOF
     "module": "esnext",
     "moduleResolution": "bundler",
     "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
+    "allowImportingTsExtensions": true
   },
   "include": ["probe.ts"]
 }
@@ -438,8 +435,7 @@ cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
     "module": "ES2022",
     "moduleResolution": "bundler",
     "lib": ["ES2020", "DOM"],
-    "skipLibCheck": true,
-    "paths": { "@tono/http-runtime-ts": ["$root/runtimes/http-ts/src/index.ts"] }
+    "skipLibCheck": true
   },
   "include": ["**/*.ts"],
   "exclude": ["**/*.test.ts"]
