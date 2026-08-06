@@ -7,7 +7,9 @@
 //! Separate from `compat.rs` so each file stays within the repo size gate.
 
 use tono_backend::compat::{diff, Category};
-use tono_backend::ir::{EntryField, ExtKind, Extension, Prim, Shape, ShapeKind, Trait, Tref};
+use tono_backend::ir::{
+    EntryField, ExtKind, Extension, Prim, Shape, ShapeKind, TemplatePart, Tref, WireBinding,
+};
 
 fn model(shapes: Vec<Shape>, extensions: Vec<Extension>) -> tono_backend::ir::Model {
     tono_backend::ir::Model {
@@ -29,12 +31,19 @@ fn wire_op(id: &str) -> Shape {
             input: None,
             output: None,
             errors: vec![],
-            wire: None,
+            wire: Some(Box::new(WireBinding {
+                method: "GET".into(),
+                uri: vec![TemplatePart::Lit("/x".into())],
+                bindings: Default::default(),
+                response_bindings: Default::default(),
+                success: vec![200],
+                endpoint: Some(vec!["endpoint".into()]),
+                request_headers: vec![],
+                timeout: None,
+                retry: None,
+            })),
         },
-        traits: vec![Trait {
-            id: "wire_descriptor".into(),
-            value: serde_json::json!({}),
-        }],
+        traits: vec![],
     }
 }
 

@@ -4,7 +4,7 @@
 use super::*;
 use crate::codegen::layout::check_layout;
 use crate::codegen::test_support::{member, structure, union_shape};
-use crate::ir::{Module, Prim, Shape, ShapeKind, Tref};
+use crate::ir::{EntryField, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref, WireBinding};
 use std::path::PathBuf;
 
 /// A model whose Go module carries a union, so Go splits into two files while
@@ -196,8 +196,13 @@ fn a_union_module_splits_go_and_typescript_but_rusts_derive_keeps_it_single() {
     assert!(go_internal.contains("\"fmt\""));
 }
 
-/// A model with one async operation declaring one error, so every target
-/// emits the error surface, the client, and the discriminator.
+/// A model with one loose, bespoke (non-wire) async operation declaring one
+/// error, so every target emits the client interface, the error surface, and
+/// the discriminator around it. A loose operation is a trait/interface
+/// surface only in every target (generation rejects a wire-bound loose
+/// operation outright), so this fixture carries no `@http`/wire binding at
+/// all: `@async` alone keeps its effect async, and the declared error alone
+/// keeps the `Api` category and the discriminator live.
 fn ops_model() -> Model {
     let mut not_found = structure(
         "payments#not_found",
@@ -223,19 +228,10 @@ fn ops_model() -> Model {
             }],
             wire: None,
         },
-        traits: vec![
-            crate::ir::Trait {
-                id: "http".into(),
-                value: serde_json::json!({"method": "GET", "path": "/charges/{id}"}),
-            },
-            // The Protocol resolver always attaches this to a real wire
-            // operation; without it a target's taxonomy-liveness pass would
-            // wrongly read this as a purely local operation.
-            crate::ir::Trait {
-                id: "wire_descriptor".into(),
-                value: serde_json::json!({}),
-            },
-        ],
+        traits: vec![crate::ir::Trait {
+            id: "async".into(),
+            value: serde_json::Value::Null,
+        }],
     }];
     model
 }
@@ -282,8 +278,11 @@ fn a_module_with_operations_generates_the_error_surface_in_every_target() {
     assert!(ts_serde.contains(
         "export function decodeGetChargeError(status: number, body: string): TonoError {"
     ));
+    // No transport happens for a bespoke (non-wire) loose operation, so
+    // Client/DecodeError/TransportError stay out: only the categories the
+    // declared error and the discriminator actually construct are imported.
     assert!(ts_serde.contains(
-        "import { APIError, Charge, Client, DecodeError, NotFound, NotFoundError, STATUS_NOT_FOUND, TonoError, TransportError } from \"./types\";"
+        "import { APIError, Charge, NotFound, NotFoundError, STATUS_NOT_FOUND, TonoError } from \"./types\";"
     ));
 }
 
@@ -651,7 +650,20 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                     Shape {
                         id: "payments.charges#client".into(),
                         kind: ShapeKind::Entry {
-                            fields: vec![],
+                            fields: vec![EntryField {
+                                name: "ep".into(),
+                                target: Tref::Prim(Prim::String),
+                                sources: vec![
+                                    Source::With,
+                                    Source::Default(serde_json::json!("https://example.com")),
+                                ],
+                                format: None,
+                                transforms: vec![],
+                                select: None,
+                                binds: vec![],
+                                constraints: vec![],
+                                traits: vec![],
+                            }],
                             operations: vec![Shape {
                                 id: "payments.charges#client.create".into(),
                                 kind: ShapeKind::Operation {
@@ -664,15 +676,19 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                                         args: vec![],
                                     }),
                                     errors: vec![],
-                                    wire: None,
+                                    wire: Some(Box::new(WireBinding {
+                                        method: "POST".into(),
+                                        uri: vec![TemplatePart::Lit("/charges".into())],
+                                        bindings: Default::default(),
+                                        response_bindings: Default::default(),
+                                        success: vec![200],
+                                        endpoint: Some(vec!["ep".into()]),
+                                        request_headers: vec![],
+                                        timeout: None,
+                                        retry: None,
+                                    })),
                                 },
-                                traits: vec![crate::ir::Trait {
-                                    id: "wire_descriptor".into(),
-                                    value: serde_json::json!({
-                                        "http_method": "POST",
-                                        "uri": "/charges",
-                                    }),
-                                }],
+                                traits: vec![],
                             }],
                         },
                         traits: vec![],

@@ -138,16 +138,10 @@ pub(super) fn simple_entry_module() -> Module {
                 retry: None,
             })),
         },
-        traits: vec![
-            Trait {
-                id: "wire_descriptor".into(),
-                value: serde_json::json!({"http_method": "POST", "uri": "/charges"}),
-            },
-            Trait {
-                id: "http".into(),
-                value: serde_json::json!({"method": "POST", "path": "/charges"}),
-            },
-        ],
+        traits: vec![Trait {
+            id: "http".into(),
+            value: serde_json::json!({"method": "POST", "path": "/charges"}),
+        }],
     };
     module_of(vec![
         charge_shape(),

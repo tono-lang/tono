@@ -8,7 +8,7 @@ type value_expr =
   | Vfield of string list
   | Vtemplate of Ir.template_part list
 
-type wire_descriptor = {
+type resolution = {
   http_method : string;
   uri : string;
   bindings : (string * part) list;
@@ -124,7 +124,7 @@ let members_of (lookup : Ir.shape_id -> Ir.shape option) (t : Ir.tref option) :
 (* ── Resolution ────────────────────────────────────────────────────────── *)
 
 let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
-    wire_descriptor option =
+    resolution option =
   match (op.kind, trait_by "http" op.traits) with
   | Ir.Operation { input; output; _ }, Some http ->
       let str k default =
@@ -201,15 +201,14 @@ let to_wire_value : value_expr -> Ir.wire_value = function
   | Vfield p -> Ir.Wire_field p
   | Vtemplate t -> Ir.Wire_template t
 
-(* The typed counterpart of [encode]: the same resolution, minus the dead
+(* The typed IR value for [Ir.wire_binding]: the resolution minus the dead
    weight (the errors array duplicates the operation's own [errors] field and
    the referenced shapes' own status/errorCode/retryable traits, which the
    backend's error taxonomy already reads directly; the success tref is
-   discarded by every runtime today) and with [timeout]/[retry] kept as the
-   plain entry-field path instead of the blob's pre-joined "ref" convention,
-   so a future emitter can resolve them at the call site instead of a
-   runtime string-keyed lookup. *)
-let to_ir_binding (d : wire_descriptor) : Ir.wire_binding =
+   discarded by every emitter today) and with [timeout]/[retry] kept as the
+   plain entry-field path, so a target can resolve them at the call site
+   instead of a string-keyed lookup. *)
+let to_ir_binding (d : resolution) : Ir.wire_binding =
   {
     Ir.wb_method = d.http_method;
     wb_uri = template_of d.uri;
@@ -223,64 +222,6 @@ let to_ir_binding (d : wire_descriptor) : Ir.wire_binding =
     wb_timeout = d.timeout;
     wb_retry = d.retry;
   }
-
-(* ── JSON encoding (the opaque blob) ───────────────────────────────────── *)
-
-let encode_part : part -> Ir.json = function
-  | Label -> `Assoc [ ("kind", `String "label") ]
-  | Query name -> `Assoc [ ("kind", `String "query"); ("name", `String name) ]
-  | Header name -> `Assoc [ ("kind", `String "header"); ("name", `String name) ]
-  | Body -> `Assoc [ ("kind", `String "body") ]
-  | Payload -> `Assoc [ ("kind", `String "payload") ]
-
-let encode_response_part : response_part -> Ir.json = function
-  | Response_header name ->
-      `Assoc [ ("kind", `String "header"); ("name", `String name) ]
-  | Response_status_code -> `Assoc [ ("kind", `String "statusCode") ]
-
-let encode (d : wire_descriptor) : Ir.json =
-  let pair (name, p) = `List [ `String name; encode_part p ] in
-  let rpair (name, p) = `List [ `String name; encode_response_part p ] in
-  let succ (status, out) =
-    `List
-      [
-        `Int status;
-        (match out with Some t -> Ir_json.encode_tref t | None -> `Null);
-      ]
-  in
-  let path segs = `List (List.map (fun s -> `String s) segs) in
-  let value_expr = function
-    | Vlit j -> `Assoc [ ("lit", j) ]
-    | Vfield p -> `Assoc [ ("field", path p) ]
-    | Vtemplate parts ->
-        `Assoc
-          [ ("template", `List (List.map Ir_json.encode_template_part parts)) ]
-  in
-  let header (key, value) =
-    `List
-      [ `List (List.map Ir_json.encode_template_part key); value_expr value ]
-  in
-  let opt_path k = function None -> [] | Some p -> [ (k, path p) ] in
-  let value_ref p = `Assoc [ ("ref", `String (String.concat "." p)) ] in
-  `Assoc
-    ([
-       ("http_method", `String d.http_method);
-       ("uri", `String d.uri);
-       ("bindings", `List (List.map pair d.bindings));
-       ("response_bindings", `List (List.map rpair d.response_bindings));
-       ("success", `List (List.map succ d.success));
-     ]
-    @ opt_path "endpoint" d.endpoint
-    @ (match d.request_headers with
-      | [] -> []
-      | hs -> [ ("request_headers", `List (List.map header hs)) ])
-    @ (match d.timeout with
-      | None -> []
-      | Some p -> [ ("timeout", value_ref p) ])
-    @
-    match d.retry with
-    | None -> []
-    | Some p -> [ ("retry", `Assoc [ ("max", value_ref p) ]) ])
 
 (* ── Module pass ───────────────────────────────────────────────────────── *)
 
@@ -299,13 +240,7 @@ let resolve_module (m : Ir.module_) : Ir.module_ =
           | other -> other
           (* unreachable: resolve_op only returns Some for an Operation *)
         in
-        {
-          op with
-          kind;
-          traits =
-            op.traits
-            @ [ { Ir.trait_id = "wire_descriptor"; value = encode desc } ];
-        }
+        { op with kind }
   in
   (* Ops nested in an entry resolve exactly like loose ops; their descriptor
      additionally carries the entry-scoped refs the traits declared. *)

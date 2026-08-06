@@ -163,14 +163,14 @@ fn impl_covered_by_test(module: &Module, ext: &crate::ir::Extension) -> bool {
 /// The implementation count, per target. The frontend proves every entry
 /// operation has an implementation; only here is it known which languages are
 /// being emitted, so only here can "and one for *this* language" be checked. An
-/// operation with no wire descriptor is bespoke-bound, so it needs a binding for
+/// operation with no wire binding is bespoke-bound, so it needs a binding for
 /// every target in this run or its generated method would have no body.
 pub fn validate_impl_coverage(model: &Model, langs: &[&[&str]]) -> Result<(), String> {
     for module in &model.modules {
         for target in langs {
             let bound = bound_extensions(module, target);
             for op in entry_operations(module) {
-                if crate::codegen::ops::wire_descriptor(op).is_some() {
+                if crate::codegen::ops::wire_binding(op).is_some() {
                     continue;
                 }
                 if impl_binding(&bound, &op.id).is_none() {
@@ -386,10 +386,9 @@ mod tests {
     fn an_operation_with_a_descriptor_needs_no_impl() {
         let mut model = entry_model("m#client.save", vec![]);
         if let ShapeKind::Entry { operations, .. } = &mut model.modules[0].shapes[0].kind {
-            operations[0].traits.push(crate::ir::Trait {
-                id: "wire_descriptor".into(),
-                value: serde_json::json!({"http_method": "GET"}),
-            });
+            if let ShapeKind::Operation { wire, .. } = &mut operations[0].kind {
+                *wire = Some(crate::codegen::test_support::wire_binding("GET"));
+            }
         }
         assert!(validate_impl_coverage(&model, &[&["go"]]).is_ok());
     }

@@ -320,7 +320,6 @@ fn consumed_heads_read_the_raw_protocol_traits() {
         ("header", json!(["X-Client", {"field": ["client_name"]}])),
         ("timeout", json!([{"field": ["timeout"]}])),
         ("retry", json!([{"field": ["max_retries"]}])),
-        ("wire_descriptor", json!({"opaque": true})),
     ]);
     let entries = module_entries(&module);
     assert_eq!(
@@ -691,6 +690,31 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
     m.modules[0].extensions.clear();
     m.modules[0].operations.clear();
     assert!(validate_entries(&m).is_ok());
+    // A loose (non-entry) operation carrying a wire binding is rejected
+    // outright: entries are the only supported HTTP client surface.
+    let wire_loose_op = Shape {
+        id: "m#ping".into(),
+        kind: ShapeKind::Operation {
+            input: None,
+            output: None,
+            errors: vec![],
+            wire: Some(Box::new(crate::ir::WireBinding {
+                method: "GET".into(),
+                uri: vec![crate::ir::TemplatePart::Lit("/ping".into())],
+                bindings: Default::default(),
+                response_bindings: Default::default(),
+                success: vec![200],
+                endpoint: None,
+                request_headers: vec![],
+                timeout: None,
+                retry: None,
+            })),
+        },
+        traits: vec![],
+    };
+    m.modules[0].operations = vec![wire_loose_op];
+    let err = validate_entries(&m).unwrap_err();
+    assert!(err.contains("outside an entry"), "{err}");
 }
 
 #[test]

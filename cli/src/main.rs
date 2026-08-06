@@ -33,7 +33,7 @@ use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use tono_backend::codegen::{parse_targets, CheckOptions, TargetKind};
+use tono_backend::codegen::{parse_targets, TargetKind};
 use tono_backend::compat::{self, Category, Config, Severity};
 use tono_backend::config as manifest;
 use tono_backend::ir::decode_model;
@@ -165,17 +165,16 @@ fn run_preview(args: &[String]) -> Result<(), String> {
     let base = out.map(PathBuf::from).unwrap_or_else(|| {
         std::env::temp_dir().join(format!("tono-preview-{}", std::process::id()))
     });
-    let options = preview_options();
 
     if watch {
-        return run_preview_watch(&path, &targets, &base, &options);
+        return run_preview_watch(&path, &targets, &base);
     }
     // The split-pane needs a real terminal; piped output (CI, shell pipelines)
     // gets the plain printed pass so `tono preview | less` and tests just work.
     if !once && std::io::stdout().is_terminal() {
-        return launch_tui(PathBuf::from(path), targets, base, options);
+        return launch_tui(PathBuf::from(path), targets, base);
     }
-    match preview_pass(&path, &targets, &base, &options)? {
+    match preview_pass(&path, &targets, &base)? {
         true => Ok(()),
         false => Err("preview compile-check failed".to_string()),
     }
@@ -195,18 +194,13 @@ fn checker_tool(target: TargetKind) -> &'static str {
 /// toolchain is not a failure). Anything upstream of the compile-check (an
 /// unreadable file, a source the frontend rejects, a model the generator
 /// rejects) is a hard error and aborts the pass.
-fn preview_pass(
-    path: &str,
-    targets: &[TargetKind],
-    base: &Path,
-    options: &CheckOptions,
-) -> Result<bool, String> {
+fn preview_pass(path: &str, targets: &[TargetKind], base: &Path) -> Result<bool, String> {
     let frontend = Frontend::from_env();
     let mut all_ok = true;
     for &target in targets {
         println!("== target: {} ==", target.dir());
         let scratch = base.join(target.dir());
-        let snapshot = pipeline::run(&frontend, Path::new(path), target, &scratch, options);
+        let snapshot = pipeline::run(&frontend, Path::new(path), target, &scratch);
         match snapshot.verdict {
             Verdict::Compiles => {
                 println!("{}", snapshot.generated);
@@ -239,12 +233,7 @@ fn preview_pass(
 /// error (a save caught mid-edit) is printed and the watch continues rather than
 /// exiting. The watch ends cleanly when the file disappears: that is the edit
 /// session moving on (rename or delete), not a save to re-render.
-fn run_preview_watch(
-    path: &str,
-    targets: &[TargetKind],
-    base: &Path,
-    options: &CheckOptions,
-) -> Result<(), String> {
+fn run_preview_watch(path: &str, targets: &[TargetKind], base: &Path) -> Result<(), String> {
     use std::time::Duration;
     println!("watching {path} (Ctrl-C to stop; deleting the file ends the watch)");
     let mut last: Option<std::time::SystemTime> = None;
@@ -259,7 +248,7 @@ fn run_preview_watch(
                 if Some(stamp) != last {
                     last = Some(stamp);
                     println!("\n--- preview {path} ---");
-                    if let Err(e) = preview_pass(path, targets, base, options) {
+                    if let Err(e) = preview_pass(path, targets, base) {
                         eprintln!("{e}");
                     }
                 }
@@ -280,35 +269,17 @@ pub(crate) fn flag_value(args: &[String], i: &mut usize, flag: &str) -> Result<S
 /// Launch the interactive split-pane. Present only when built with the `preview`
 /// feature (the default).
 #[cfg(feature = "preview")]
-fn launch_tui(
-    source: PathBuf,
-    targets: Vec<TargetKind>,
-    base: PathBuf,
-    options: CheckOptions,
-) -> Result<(), String> {
-    preview::tui::run(source, targets, base, options).map_err(|e| format!("preview: {e}"))
+fn launch_tui(source: PathBuf, targets: Vec<TargetKind>, base: PathBuf) -> Result<(), String> {
+    preview::tui::run(source, targets, base).map_err(|e| format!("preview: {e}"))
 }
 
 /// Without the `preview` feature the terminal UI is not compiled in; the lean
 /// binary degrades to the printed pass, so `tono preview` still answers.
 #[cfg(not(feature = "preview"))]
-fn launch_tui(
-    source: PathBuf,
-    targets: Vec<TargetKind>,
-    base: PathBuf,
-    options: CheckOptions,
-) -> Result<(), String> {
-    match preview_pass(&source.to_string_lossy(), &targets, &base, &options)? {
+fn launch_tui(source: PathBuf, targets: Vec<TargetKind>, base: PathBuf) -> Result<(), String> {
+    match preview_pass(&source.to_string_lossy(), &targets, &base)? {
         true => Ok(()),
         false => Err("preview compile-check failed".to_string()),
-    }
-}
-
-/// Preview knobs from the environment: `TONO_HTTP_RUNTIME_TS` maps the hand-written
-/// TypeScript runtime so a generated client type-checks against it.
-fn preview_options() -> CheckOptions {
-    CheckOptions {
-        ts_runtime: std::env::var_os("TONO_HTTP_RUNTIME_TS").map(PathBuf::from),
     }
 }
 

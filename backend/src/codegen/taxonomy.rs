@@ -19,7 +19,7 @@
 
 use crate::codegen::entries::{has_entries, module_entries};
 use crate::codegen::extensions::{bound_extensions, impl_binding};
-use crate::codegen::ops::{module_declared_errors, wire_descriptor};
+use crate::codegen::ops::{module_declared_errors, wire_binding};
 use crate::codegen::validation::shape_has_checks;
 use crate::ir::Module;
 
@@ -57,16 +57,17 @@ impl TaxonomyLiveness {
 /// Derive liveness for a module against one target's binding languages (as
 /// [`bound_extensions`] takes them, e.g. `["rust"]` or `["ts", "typescript"]`).
 /// Meant for a module whose operations get a concrete client: every target's
-/// entries, and TypeScript's loose operations (its `HttpClient`).
+/// entries. A module's loose (non-entry) operations never get a concrete
+/// client in any target (every loose operation surface is a trait/interface
+/// only, an `ext impl` binds directly against it), so a loose-op-only module
+/// has no wire call site and this always derives `has_wire_ops = false` for
+/// it; see [`TaxonomyLiveness::all_live`].
 ///
 /// `transport`/`decode` are scoped to *wire* operations specifically, not
 /// every operation: a bespoke (`ext impl`-bound) loose or entry operation
 /// never goes through the runtime's HTTP call, so it never produces a
 /// transport failure or a decoded response to classify, only (conditionally)
-/// a `ContractError` — see [`contract_live`]. A module made only of bespoke
-/// loose operations (TypeScript's `HttpClient` skips it entirely; Rust/Go
-/// emit only a trait/interface for it, handled by [`TaxonomyLiveness::all_live`]
-/// instead of this function) has no wire call site either.
+/// a `ContractError` — see [`contract_live`].
 ///
 /// `api` is broader: it is also live whenever the module declares *any*
 /// operation error at all (wire or not), since the discriminator function and
@@ -77,7 +78,7 @@ pub fn derive(module: &Module, langs: &[&str]) -> TaxonomyLiveness {
     let has_wire_ops = module
         .operations
         .iter()
-        .any(|op| wire_descriptor(op).is_some())
+        .any(|op| wire_binding(op).is_some())
         || has_wire_entry_op(module);
     TaxonomyLiveness {
         validation: module.shapes.iter().any(shape_has_checks),
@@ -103,7 +104,7 @@ fn contract_live(module: &Module, langs: &[&str]) -> bool {
         entry
             .operations
             .iter()
-            .any(|op| wire_descriptor(op).is_none() && impl_binding(&bound, &op.id).is_none())
+            .any(|op| wire_binding(op).is_none() && impl_binding(&bound, &op.id).is_none())
     })
 }
 
@@ -128,16 +129,13 @@ pub fn derive_rust_entry(module: &Module, langs: &[&str]) -> TaxonomyLiveness {
     }
 }
 
-/// Whether any entry in the module has at least one wire-descriptor
-/// (`@http`-bound) operation: the module has a real HTTP call site, as
-/// opposed to entries made only of bespoke (`ext impl`-bound) operations.
+/// Whether any entry in the module has at least one wire-bound (`@http`)
+/// operation: the module has a real HTTP call site, as opposed to entries
+/// made only of bespoke (`ext impl`-bound) operations.
 pub fn has_wire_entry_op(module: &Module) -> bool {
-    module_entries(module).iter().any(|entry| {
-        entry
-            .operations
-            .iter()
-            .any(|op| wire_descriptor(op).is_some())
-    })
+    module_entries(module)
+        .iter()
+        .any(|entry| entry.operations.iter().any(|op| wire_binding(op).is_some()))
 }
 
 #[cfg(test)]
@@ -163,12 +161,9 @@ mod tests {
                 input: None,
                 output: None,
                 errors: vec![],
-                wire: None,
+                wire: Some(crate::codegen::test_support::wire_binding("GET")),
             },
-            traits: vec![crate::ir::Trait {
-                id: "wire_descriptor".into(),
-                value: serde_json::json!({}),
-            }],
+            traits: vec![],
         }
     }
 
@@ -359,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn has_wire_entry_op_is_true_only_when_an_entry_op_carries_a_wire_descriptor() {
+    fn has_wire_entry_op_is_true_only_when_an_entry_op_carries_a_wire_binding() {
         let wired = module(
             vec![entry("m#client", vec![wire_op("m#client.ping")])],
             vec![],

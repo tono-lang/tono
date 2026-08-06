@@ -21,7 +21,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph, Wrap};
 use ratatui::Frame;
 
-use tono_backend::codegen::{CheckOptions, TargetKind};
+use tono_backend::codegen::TargetKind;
 
 use crate::preview::highlight;
 use crate::preview::pipeline::{self, Snapshot, Verdict};
@@ -33,16 +33,14 @@ const TICK: Duration = Duration::from_millis(150);
 
 /// Launch the preview UI for `source_path`, starting on the first of `targets`
 /// (`Tab` cycles through them in the order given). `scratch_base` is the parent
-/// of the per-target throwaway build directories; `options` carries the
-/// TypeScript runtime mapping. Returns when the user quits.
+/// of the per-target throwaway build directories. Returns when the user quits.
 pub fn run(
     source_path: PathBuf,
     targets: Vec<TargetKind>,
     scratch_base: PathBuf,
-    options: CheckOptions,
 ) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
-    let mut app = App::new(source_path, targets, scratch_base, options);
+    let mut app = App::new(source_path, targets, scratch_base);
     app.trigger_refresh();
     let result = app.event_loop(&mut terminal);
     ratatui::restore();
@@ -58,7 +56,6 @@ struct App {
     targets: Vec<TargetKind>,
     target: TargetKind,
     scratch_base: PathBuf,
-    options: CheckOptions,
     snapshot: Option<Snapshot>,
     /// The panes' rendered text, highlighted once per snapshot (highlighting per
     /// frame would parse the whole buffer 60 times a second for nothing).
@@ -73,12 +70,7 @@ struct App {
 }
 
 impl App {
-    fn new(
-        source_path: PathBuf,
-        targets: Vec<TargetKind>,
-        scratch_base: PathBuf,
-        options: CheckOptions,
-    ) -> Self {
+    fn new(source_path: PathBuf, targets: Vec<TargetKind>, scratch_base: PathBuf) -> Self {
         let (tx, rx) = mpsc::channel();
         let target = targets.first().copied().unwrap_or(TargetKind::Rust);
         Self {
@@ -86,7 +78,6 @@ impl App {
             targets,
             target,
             scratch_base,
-            options,
             snapshot: None,
             source_view: Text::default(),
             generated_view: Text::default(),
@@ -152,12 +143,11 @@ impl App {
         let source = self.source_path.clone();
         let target = self.target;
         let scratch = self.scratch_base.join(target.dir());
-        let options = self.options.clone();
         // A fresh frontend handle per pass: it only holds the resolved program
         // name, so this is cheap and keeps the worker self-contained.
         std::thread::spawn(move || {
             let frontend = crate::frontend::Frontend::from_env();
-            let snapshot = pipeline::run(&frontend, &source, target, &scratch, &options);
+            let snapshot = pipeline::run(&frontend, &source, target, &scratch);
             // The receiver is gone only when the app is quitting; dropping the
             // result then is fine.
             let _ = tx.send(snapshot);
@@ -347,7 +337,6 @@ mod tests {
             PathBuf::from("x.tono"),
             vec![TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
             std::env::temp_dir(),
-            CheckOptions::default(),
         );
         // Draining the refresh each cycle triggers keeps the channel from filling;
         // we only assert the target rotation here.
@@ -365,7 +354,6 @@ mod tests {
             PathBuf::from("x.tono"),
             vec![TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
             std::env::temp_dir(),
-            CheckOptions::default(),
         );
         assert_eq!(app.on_key(KeyCode::Char('k')), Flow::Continue);
         assert_eq!(app.scroll, 0);
@@ -382,7 +370,6 @@ mod tests {
             PathBuf::from("x.tono"),
             vec![TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript],
             std::env::temp_dir(),
-            CheckOptions::default(),
         );
         assert_eq!(app.on_key(KeyCode::Char('q')), Flow::Quit);
         assert_eq!(app.on_key(KeyCode::Esc), Flow::Quit);

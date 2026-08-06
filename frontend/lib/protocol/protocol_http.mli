@@ -1,6 +1,7 @@
-(* The HTTP Protocol: resolves each operation into an opaque wire descriptor the
-   Target embeds verbatim and the runtime interprets. Protocol knows transport
-   (HTTP bindings) but not language; the descriptor it produces is pure data.
+(* The HTTP Protocol: resolves each operation into a typed wire binding
+   ([Ir.wire_binding]) a target reads directly to emit its own transport.
+   Protocol knows transport (HTTP bindings) but not language; the binding it
+   produces is pure data.
 
    Binding assignment is a materialization pass over the IR (it reads the trait
    bag the frontend already lowered). It assumes the HTTP annotations are valid;
@@ -19,19 +20,20 @@ type part =
 type response_part = Response_header of string | Response_status_code
 
 (* A value position in a protocol trait: a literal, an entry-field reference,
-   or a template mixing literal runs with entry-field placeholders. The runtime
-   interprets these verbatim; it never learns the field taxonomy. *)
+   or a template mixing literal runs with entry-field placeholders. A target
+   reads these directly; there is no runtime left to interpret them
+   generically. *)
 type value_expr =
   | Vlit of Ir.json
   | Vfield of string list
   | Vtemplate of Ir.template_part list
 
-(* The opaque, language-agnostic wire form of one operation. The Target embeds
-   its JSON encoding without interpreting any field. The endpoint, timeout, and
-   retry refs only arise on operations declared in an entry body (a loose op
-   leaves them empty); request_headers carries op-level @header declarations,
-   which either kind of operation may make. *)
-type wire_descriptor = {
+(* The language-agnostic wire form of one operation, en route to
+   [Ir.wire_binding]. The endpoint, timeout, and retry refs only arise on
+   operations declared in an entry body (a loose op leaves them empty);
+   request_headers carries op-level @header declarations, which either kind of
+   operation may make. *)
+type resolution = {
   http_method : string;
   uri : string; (* path template with {name} and {.field} placeholders *)
   bindings : (string * part) list; (* input member -> request part *)
@@ -55,22 +57,15 @@ type wire_descriptor = {
 (* Resolve one operation shape against a shape lookup. Returns [None] for an
    operation with no [@http] trait (a purely local op carries no descriptor). *)
 val resolve_op :
-  (Ir.shape_id -> Ir.shape option) -> Ir.shape -> wire_descriptor option
+  (Ir.shape_id -> Ir.shape option) -> Ir.shape -> resolution option
 
-(* The JSON encoding embedded, opaque, in the generated stub. Kept, unchanged,
-   for backward compatibility until every emitter reads [Ir.wire_binding]
-   directly instead. *)
-val encode : wire_descriptor -> Ir.json
-
-(* The typed counterpart of [encode]: the same resolution as a first-class IR
-   value instead of an opaque blob, minus the errors array (redundant with the
-   operation's own [errors] field) and the success tref (every runtime already
-   discards it), with [timeout]/[retry] kept as a plain entry-field path. *)
-val to_ir_binding : wire_descriptor -> Ir.wire_binding
+(* The resolution as a first-class IR value: minus the errors array (redundant
+   with the operation's own [errors] field) and the success tref (every
+   runtime already discards it), with [timeout]/[retry] kept as a plain
+   entry-field path. *)
+val to_ir_binding : resolution -> Ir.wire_binding
 
 (* Attach the resolved binding to every operation of a module: a typed [wire]
-   field on the operation's [Ir.shape_kind] for direct consumption, plus
-   (temporarily, until callers migrate off it) the same resolution serialized
-   as an opaque [wire_descriptor] trait for backward compatibility. Leaves all
+   field on the operation's [Ir.shape_kind] for direct consumption. Leaves all
    other shapes untouched. *)
 val resolve_module : Ir.module_ -> Ir.module_

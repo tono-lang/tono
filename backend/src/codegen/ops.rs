@@ -302,17 +302,8 @@ pub fn op_io(op: &Shape) -> (Option<&Tref>, Option<&Tref>) {
     }
 }
 
-/// The opaque wire descriptor the Protocol resolver attached to an operation, if
-/// any (a purely local op carries none). It is embedded verbatim by the target
-/// and interpreted only by the runtime, so it is returned as an opaque value and
-/// never destructured here (Protocol x Target orthogonality).
-pub fn wire_descriptor(op: &Shape) -> Option<&serde_json::Value> {
-    find_trait(&op.traits, "wire_descriptor").map(|t| &t.value)
-}
-
-/// The typed wire binding a Protocol pass resolved for this operation (IR v8),
-/// meant to be read directly by a target instead of the opaque wire_descriptor
-/// blob above. `None` for a purely local operation.
+/// The typed wire binding a Protocol pass resolved for this operation, meant
+/// to be read directly by a target. `None` for a purely local operation.
 pub fn wire_binding(op: &Shape) -> Option<&crate::ir::WireBinding> {
     match &op.kind {
         ShapeKind::Operation { wire, .. } => wire.as_deref(),

@@ -185,10 +185,6 @@ pub fn entries_matrix_module() -> Module {
         vec![Source::Arg],
     ));
 
-    let descriptor = Trait {
-        id: "wire_descriptor".into(),
-        value: serde_json::json!({"http_method": "GET", "uri": "/x", "endpoint": ["naming"]}),
-    };
     let op_full = Shape {
         id: "m#api.fetch_note".into(),
         kind: ShapeKind::Operation {
@@ -220,7 +216,6 @@ pub fn entries_matrix_module() -> Module {
             })),
         },
         traits: vec![
-            descriptor.clone(),
             Trait {
                 id: "doc".into(),
                 value: serde_json::json!(["Fetches."]),
@@ -264,7 +259,7 @@ pub fn entries_matrix_module() -> Module {
             errors: vec![],
             wire: Some(Box::new(bare_wire())),
         },
-        traits: vec![descriptor.clone()],
+        traits: vec![],
     };
     let op_prim = Shape {
         id: "m#api.count".into(),
@@ -274,7 +269,7 @@ pub fn entries_matrix_module() -> Module {
             errors: vec![],
             wire: Some(Box::new(bare_wire())),
         },
-        traits: vec![descriptor],
+        traits: vec![],
     };
     let op_stub = Shape {
         id: "m#api.local".into(),
@@ -393,6 +388,21 @@ pub fn push_entry_op_trait(module: &mut Module, id: &str, value: serde_json::Val
                     id: id.into(),
                     value: value.clone(),
                 });
+            }
+        }
+    }
+}
+
+/// Mark every entry operation as wire-bound, for a test that needs
+/// `has_wire` to hold (a declared test's `dep: http` stub, an impl-coverage
+/// check) without caring about any specific binding field.
+pub fn push_entry_op_wire(module: &mut Module, method: &str) {
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+            for op in operations {
+                if let ShapeKind::Operation { wire, .. } = &mut op.kind {
+                    *wire = Some(super::wire_binding(method));
+                }
             }
         }
     }

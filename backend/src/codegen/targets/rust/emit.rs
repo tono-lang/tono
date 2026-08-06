@@ -285,7 +285,7 @@ mod tests {
     use crate::codegen::targets::rust::types::rust_casing;
     use crate::codegen::targets::rust::RustRules;
     use crate::codegen::test_support::{
-        constrained_module, enum_shape, member, structure, union_shape,
+        constrained_module, enum_shape, member, structure, union_shape, wire_binding,
     };
     use crate::ir::{Prim, Tref};
 
@@ -353,18 +353,31 @@ mod tests {
 
     #[test]
     fn an_entry_with_a_wire_operation_keeps_transport_decode_and_api() {
+        let mut wire = wire_binding("GET");
+        wire.endpoint = Some(vec!["ep".into()]);
         let op = crate::ir::Shape {
             id: "notes#client.ping".into(),
             kind: crate::ir::ShapeKind::Operation {
                 input: None,
                 output: None,
                 errors: vec![],
-                wire: None,
+                wire: Some(wire),
             },
-            traits: vec![crate::ir::Trait {
-                id: "wire_descriptor".into(),
-                value: serde_json::json!({}),
-            }],
+            traits: vec![],
+        };
+        let ep = crate::ir::EntryField {
+            name: "ep".into(),
+            target: Tref::Prim(Prim::String),
+            sources: vec![
+                crate::ir::Source::With,
+                crate::ir::Source::Default(serde_json::json!("https://example.com")),
+            ],
+            format: None,
+            transforms: vec![],
+            select: None,
+            binds: vec![],
+            constraints: vec![],
+            traits: vec![],
         };
         let module = Module {
             tests: vec![],
@@ -372,7 +385,7 @@ mod tests {
             shapes: vec![crate::ir::Shape {
                 id: "notes#client".into(),
                 kind: crate::ir::ShapeKind::Entry {
-                    fields: vec![],
+                    fields: vec![ep],
                     operations: vec![op],
                 },
                 traits: vec![],

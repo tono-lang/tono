@@ -352,7 +352,7 @@ fn validate_stub(
             stub.op, call.op
         ));
     }
-    let has_wire = crate::codegen::ops::wire_descriptor(op).is_some();
+    let has_wire = crate::codegen::ops::wire_binding(op).is_some();
     match stub.dep {
         StubDep::Http if !has_wire => {
             return Err(format!(

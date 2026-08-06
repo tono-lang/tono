@@ -36,17 +36,6 @@ pub enum CheckOutcome {
     ToolchainMissing { program: String },
 }
 
-/// Knobs the caller supplies that the scaffold cannot infer on its own.
-#[derive(Debug, Clone, Default)]
-pub struct CheckOptions {
-    /// The hand-written TypeScript HTTP runtime source (its `index.ts`), mapped as
-    /// the `@tono/http-runtime-ts` package so a generated client that imports the
-    /// transport type-checks against the real runtime. Only consulted for the
-    /// TypeScript target; when absent, a client that imports the runtime fails the
-    /// check (reported as a normal rejection).
-    pub ts_runtime: Option<PathBuf>,
-}
-
 /// Scaffold a throwaway project for `target` around `files` in `scratch`, then
 /// build it with the target's toolchain and return the verdict. `scratch` is
 /// created if missing and is the caller's to reuse (for cache) or discard.
@@ -58,9 +47,8 @@ pub fn check(
     target: TargetKind,
     files: &[GeneratedFile],
     scratch: &Path,
-    options: &CheckOptions,
 ) -> io::Result<CheckOutcome> {
-    let plan = scaffold(target, files, scratch, options)?;
+    let plan = scaffold(target, files, scratch)?;
     Ok(run_checker(&plan.program, &plan.args, &plan.cwd))
 }
 
@@ -77,16 +65,11 @@ struct CheckPlan {
 /// generated paths are rooted at the target directory (`rust/…`, `go/…`,
 /// `typescript/…`); that first segment is the SDK's place in a consumer tree, not
 /// part of this throwaway project, so it is stripped here.
-fn scaffold(
-    target: TargetKind,
-    files: &[GeneratedFile],
-    scratch: &Path,
-    options: &CheckOptions,
-) -> io::Result<CheckPlan> {
+fn scaffold(target: TargetKind, files: &[GeneratedFile], scratch: &Path) -> io::Result<CheckPlan> {
     match target {
         TargetKind::Rust => scaffold_rust(files, scratch),
         TargetKind::Go => scaffold_go(files, scratch),
-        TargetKind::TypeScript => scaffold_typescript(files, scratch, options),
+        TargetKind::TypeScript => scaffold_typescript(files, scratch),
     }
 }
 
@@ -171,38 +154,21 @@ fn scaffold_go(files: &[GeneratedFile], scratch: &Path) -> io::Result<CheckPlan>
     })
 }
 
-/// The generated modules under a tsconfig that type-checks without emitting. The
-/// runtime package is mapped to its source (when provided) so a generated client
-/// that imports the transport resolves against the real runtime.
-fn scaffold_typescript(
-    files: &[GeneratedFile],
-    scratch: &Path,
-    options: &CheckOptions,
-) -> io::Result<CheckPlan> {
+/// The generated modules under a tsconfig that type-checks without emitting.
+fn scaffold_typescript(files: &[GeneratedFile], scratch: &Path) -> io::Result<CheckPlan> {
     write_sources(files, TargetKind::TypeScript, scratch)?;
 
-    // A runtime path is optional; when present it maps the transport package so a
-    // client that imports it type-checks. `paths` requires `baseUrl`.
-    let paths = match &options.ts_runtime {
-        Some(runtime) => format!(
-            "\n    \"baseUrl\": \".\",\n    \"paths\": {{ \"@tono/http-runtime-ts\": [{}] }}",
-            json_string(&runtime.to_string_lossy())
-        ),
-        None => String::new(),
-    };
     fs::write(
         scratch.join("tsconfig.json"),
-        format!(
-            "{{\n  \"compilerOptions\": {{\n    \
-             \"strict\": true,\n    \
-             \"noEmit\": true,\n    \
-             \"target\": \"ES2020\",\n    \
-             \"module\": \"ES2022\",\n    \
-             \"moduleResolution\": \"bundler\",\n    \
-             \"lib\": [\"ES2020\", \"DOM\"],\n    \
-             \"skipLibCheck\": true{paths}\n  }},\n  \
-             \"include\": [\"**/*.ts\"]\n}}\n"
-        ),
+        "{\n  \"compilerOptions\": {\n    \
+         \"strict\": true,\n    \
+         \"noEmit\": true,\n    \
+         \"target\": \"ES2020\",\n    \
+         \"module\": \"ES2022\",\n    \
+         \"moduleResolution\": \"bundler\",\n    \
+         \"lib\": [\"ES2020\", \"DOM\"],\n    \
+         \"skipLibCheck\": true\n  },\n  \
+         \"include\": [\"**/*.ts\"]\n}\n",
     )?;
 
     Ok(CheckPlan {
@@ -263,23 +229,6 @@ fn run_checker(program: &str, args: &[String], cwd: &Path) -> CheckOutcome {
             program: program.to_string(),
         },
     }
-}
-
-/// Encode `s` as a JSON string literal (quotes and backslashes escaped). The
-/// runtime path is the only interpolated value and it is a filesystem path, so
-/// this is enough to keep the tsconfig valid.
-fn json_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]
@@ -363,38 +312,19 @@ mod tests {
     }
 
     #[test]
-    fn typescript_scaffold_maps_the_runtime_when_given() {
-        let dir = scratch("ts-runtime");
+    fn typescript_scaffold_writes_a_plain_tsconfig() {
+        let dir = scratch("ts-scaffold");
         let files = vec![file(
             TargetKind::TypeScript,
             "typescript/payments.ts",
             "export interface Charge {}\n",
         )];
-        let options = CheckOptions {
-            ts_runtime: Some(PathBuf::from("/repo/runtimes/http-ts/src/index.ts")),
-        };
-        let plan = scaffold_typescript(&files, &dir, &options).expect("scaffold");
+        let plan = scaffold_typescript(&files, &dir).expect("scaffold");
         assert!(dir.join("payments.ts").exists());
-        let tsconfig = fs::read_to_string(dir.join("tsconfig.json")).unwrap();
-        assert!(tsconfig.contains("\"baseUrl\": \".\""));
-        assert!(tsconfig
-            .contains("\"@tono/http-runtime-ts\": [\"/repo/runtimes/http-ts/src/index.ts\"]"));
-        assert_eq!(plan.program, "tsc");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn typescript_scaffold_omits_paths_without_a_runtime() {
-        let dir = scratch("ts-no-runtime");
-        let files = vec![file(
-            TargetKind::TypeScript,
-            "typescript/payments.ts",
-            "export interface Charge {}\n",
-        )];
-        scaffold_typescript(&files, &dir, &CheckOptions::default()).expect("scaffold");
         let tsconfig = fs::read_to_string(dir.join("tsconfig.json")).unwrap();
         assert!(!tsconfig.contains("paths"));
         assert!(!tsconfig.contains("baseUrl"));
+        assert_eq!(plan.program, "tsc");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -471,8 +401,4 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn json_string_escapes_quotes_and_backslashes() {
-        assert_eq!(json_string(r#"a"b\c"#), r#""a\"b\\c""#);
-    }
 }

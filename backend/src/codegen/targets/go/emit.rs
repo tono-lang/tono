@@ -222,7 +222,7 @@ mod tests {
     use crate::codegen::group::{CODEC, INTERNAL, TYPES};
     use crate::codegen::targets::go::types::go_casing;
     use crate::codegen::targets::go::GoRules;
-    use crate::codegen::test_support::{member, structure, union_shape};
+    use crate::codegen::test_support::{member, structure, union_shape, wire_binding};
     use crate::ir::{Prim, Tref};
 
     /// A single module's own union ids, the set the pipeline builds model-wide.
@@ -301,18 +301,31 @@ mod tests {
         // an `on_error` hook is bound (`fail()` in `entry/mod.rs` passes the raw
         // error straight through otherwise), so this genuinely never constructs
         // one.
+        let mut wire = wire_binding("GET");
+        wire.endpoint = Some(vec!["ep".into()]);
         let op = crate::ir::Shape {
             id: "notes#client.ping".into(),
             kind: ShapeKind::Operation {
                 input: None,
                 output: None,
                 errors: vec![],
-                wire: None,
+                wire: Some(wire),
             },
-            traits: vec![crate::ir::Trait {
-                id: "wire_descriptor".into(),
-                value: serde_json::json!({}),
-            }],
+            traits: vec![],
+        };
+        let ep = crate::ir::EntryField {
+            name: "ep".into(),
+            target: Tref::Prim(Prim::String),
+            sources: vec![
+                crate::ir::Source::With,
+                crate::ir::Source::Default(serde_json::json!("https://example.com")),
+            ],
+            format: None,
+            transforms: vec![],
+            select: None,
+            binds: vec![],
+            constraints: vec![],
+            traits: vec![],
         };
         let module = Module {
             tests: vec![],
@@ -320,7 +333,7 @@ mod tests {
             shapes: vec![crate::ir::Shape {
                 id: "notes#client".into(),
                 kind: ShapeKind::Entry {
-                    fields: vec![],
+                    fields: vec![ep],
                     operations: vec![op],
                 },
                 traits: vec![],

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::ir::{
-    AnswerError, Empty, ExtKind, Extension, HttpAnswer, Prim, ShapePattern, TaxonomyPattern, Trait,
-    Tref,
+    AnswerError, Empty, ExtKind, Extension, HttpAnswer, Prim, ShapePattern, TaxonomyPattern,
+    TemplatePart, Trait, Tref, WireBinding,
 };
 
 fn op(id: &str, traits: Vec<Trait>, errors: Vec<Tref>) -> Shape {
@@ -19,10 +19,26 @@ fn op(id: &str, traits: Vec<Trait>, errors: Vec<Tref>) -> Shape {
     }
 }
 
-fn http_trait() -> Trait {
-    Trait {
-        id: "wire_descriptor".into(),
-        value: serde_json::json!({"http_method": "GET", "uri": "/x"}),
+fn http_op(id: &str) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Operation {
+            input: Some(Tref::Prim(Prim::String)),
+            output: Some(Tref::Prim(Prim::String)),
+            errors: vec![],
+            wire: Some(Box::new(WireBinding {
+                method: "GET".into(),
+                uri: vec![TemplatePart::Lit("/x".into())],
+                bindings: Default::default(),
+                response_bindings: Default::default(),
+                success: vec![200],
+                endpoint: None,
+                request_headers: vec![],
+                timeout: None,
+                retry: None,
+            })),
+        },
+        traits: vec![],
     }
 }
 
@@ -79,7 +95,7 @@ fn module(tests: Vec<TestDecl>) -> Module {
                         traits: vec![],
                     }],
                     operations: vec![
-                        op("notes#client.fetch_note", vec![http_trait()], vec![]),
+                        http_op("notes#client.fetch_note"),
                         op(
                             "notes#client.save_note",
                             vec![],
@@ -490,7 +506,7 @@ fn request_expects_resolve_to_the_http_stub_binding() {
 fn the_committed_fixture_decodes_and_names_its_entry() {
     // The cross-language contract fixture is the arbiter of the wire shape. It
     // is a codec-stage IR (its @http op still carries the raw `http` trait, not
-    // the resolved `wire_descriptor`), so full planning is not run over it;
+    // the resolved `wire` binding), so full planning is not run over it;
     // decoding and the seam-gating derivation must accept it as-is.
     let json = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

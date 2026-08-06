@@ -9,7 +9,7 @@ use super::tests::{entry_text, fixture_module};
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::{
-    eq, impl_extension, notes_bed, push_entry_op_trait, rendered, request_pattern, wired,
+    eq, impl_extension, notes_bed, push_entry_op_wire, rendered, request_pattern, wired,
     with_tests,
 };
 use crate::ir::{
@@ -70,7 +70,7 @@ fn impl_ext(raw: bool) -> crate::ir::Extension {
 
 #[test]
 fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
-    // The schema fixture carries no wire_descriptor (it is the canonical
+    // The schema fixture carries no wire binding (it is the canonical
     // pre-protocol encoding) and binds no impl, a combination the emit gate
     // refuses; a direct library caller that skipped it gets a diagnosable
     // method rather than one that does not compile.
@@ -249,11 +249,7 @@ fn an_http_stub_generates_a_request_matching_test() {
 #[test]
 fn two_entries_with_tests_share_the_package_without_redefining_symbols() {
     let mut module = fixture_module();
-    push_entry_op_trait(
-        &mut module,
-        "wire_descriptor",
-        serde_json::json!({"http_method": "POST", "uri": "/notes", "bindings": {}}),
-    );
+    push_entry_op_wire(&mut module, "POST");
     // Clone the entry as a sibling so the module carries two testable entries.
     let mut admin = module
         .shapes

@@ -141,23 +141,7 @@ fn entries_module() -> tono_backend::ir::Module {
     for shape in &mut module.shapes {
         if let tono_backend::ir::ShapeKind::Entry { operations, .. } = &mut shape.kind {
             for op in operations {
-                op.traits.push(tono_backend::ir::Trait {
-                    id: "wire_descriptor".into(),
-                    value: serde_json::json!({
-                        "http_method": "POST",
-                        "uri": "/notes/{id}",
-                        "bindings": [["id", {"kind": "label"}], ["body", {"kind": "body"}]],
-                        "response_bindings": [],
-                        "success": [[200, null]],
-                        "endpoint": ["endpoint"],
-                        "request_headers": [[[{"lit": "X-Client-Name"}], {"field": ["client_name"]}]],
-                        "timeout": {"ref": "timeout"},
-                        "retry": {"max": {"ref": "max_retries"}}
-                    }),
-                });
-                // The IR v8 typed counterpart of the same resolution, which the
-                // TypeScript target now reads directly instead of the opaque
-                // blob above (Rust/Go still read only the blob).
+                // The typed wire binding every target reads directly.
                 if let tono_backend::ir::ShapeKind::Operation { wire, .. } = &mut op.kind {
                     *wire = Some(Box::new(tono_backend::ir::WireBinding {
                         method: "POST".into(),

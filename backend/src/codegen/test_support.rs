@@ -4,11 +4,30 @@
 #![cfg(test)]
 
 use crate::codegen::symbol::Symbol;
-use crate::codegen::target::{RenderRules, Target};
+use crate::codegen::target::RenderRules;
 use crate::codegen::tree::Decl;
 use crate::ir::{
     Constraint, EnumBacking, EnumValue, Member, Module, Prim, Shape, ShapeKind, Trait, Tref,
+    WireBinding,
 };
+
+/// A minimal wire binding: just enough to mark an operation as wire-bound for
+/// a test that only checks presence (taxonomy liveness, impl coverage), not
+/// any specific field. Boxed to drop straight into a `ShapeKind::Operation`'s
+/// `wire` field.
+pub fn wire_binding(method: &str) -> Box<WireBinding> {
+    Box::new(WireBinding {
+        method: method.into(),
+        uri: vec![],
+        bindings: Default::default(),
+        response_bindings: Default::default(),
+        success: vec![],
+        endpoint: None,
+        request_headers: vec![],
+        timeout: None,
+        retry: None,
+    })
+}
 
 /// Convert `(wire, discriminant)` test tuples into bagless enum values.
 fn enum_values(values: Vec<(String, Option<i64>)>) -> Vec<EnumValue> {
@@ -223,20 +242,23 @@ pub fn error_demo_module() -> Module {
             ),
             error_shape("m#rate_limited", vec![], 429, None, false),
         ],
-        operations: vec![operation(
-            "m#create_charge",
-            vec![
-                trait_of(
+        operations: vec![{
+            let mut op = operation(
+                "m#create_charge",
+                vec![trait_of(
                     "http",
                     serde_json::json!({"method": "POST", "path": "/charges"}),
-                ),
-                // The Protocol resolver always attaches this to a real wire
-                // operation; without it a target's taxonomy-liveness pass would
-                // wrongly read this as a purely local operation.
-                trait_of("wire_descriptor", serde_json::json!({})),
-            ],
-            vec!["m#payment_declined", "m#rate_limited"],
-        )],
+                )],
+                vec!["m#payment_declined", "m#rate_limited"],
+            );
+            // The Protocol resolver always attaches this to a real wire
+            // operation; without it a target's taxonomy-liveness pass would
+            // wrongly read this as a purely local operation.
+            if let ShapeKind::Operation { wire, .. } = &mut op.kind {
+                *wire = Some(wire_binding("POST"));
+            }
+            op
+        }],
         extensions: vec![],
     }
 }
@@ -296,24 +318,6 @@ pub fn assert_param_and_collections(
         .name,
         map_name
     );
-}
-
-/// Assert a target emits nothing for an operation stub and ignores the opaque
-/// wire descriptor.
-pub fn assert_emits_no_op_stub(target: &impl Target) {
-    let op = Shape {
-        id: "billing#Create".into(),
-        kind: ShapeKind::Operation {
-            input: None,
-            output: None,
-            errors: vec![],
-            wire: None,
-        },
-        traits: vec![],
-    };
-    assert!(target
-        .emit_op_stub(&op, &serde_json::json!({"http_method": "POST"}))
-        .is_empty());
 }
 
 // The entry-model builders live in their own file so neither outgrows the

@@ -693,10 +693,10 @@ let bespoke_impl : Ir.model =
       ];
   }
 
-(* Example: the resolved wire binding (v8) an operation carries directly,
-   replacing the wire_descriptor blob trait for direct consumption: every
-   part/response-part/value kind, a uri template mixing all three placeholder
-   forms, and the entry-scoped endpoint/timeout/retry refs. *)
+(* Example: the resolved wire binding (v8) an operation carries directly for
+   a target to read: every part/response-part/value kind, a uri template
+   mixing all three placeholder forms, and the entry-scoped
+   endpoint/timeout/retry refs. *)
 let resolved_wire : Ir.model =
   let charge : Ir.shape =
     {

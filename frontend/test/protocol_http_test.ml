@@ -10,18 +10,6 @@ let member ?(traits = []) ?(target = Ir.Prim Ir.String) name : Ir.member =
 let structure id members : Ir.shape =
   { Ir.id; kind = Ir.Structure { params = []; members }; traits = [] }
 
-let error_shape id status code : Ir.shape =
-  let code_trait =
-    match code with
-    | Some c -> [ trait "errorCode" (`List [ `String c ]) ]
-    | None -> []
-  in
-  {
-    Ir.id;
-    kind = Ir.Structure { params = []; members = [] };
-    traits = trait "status" (`List [ `Int status ]) :: code_trait;
-  }
-
 let op ?(traits = []) ?input ?output ?(errors = []) id : Ir.shape =
   { Ir.id; kind = Ir.Operation { input; output; errors; wire = None }; traits }
 
@@ -42,7 +30,7 @@ let show_tref = function
   | Some _ -> "?"
   | None -> "-"
 
-let show_desc (d : Protocol_http.wire_descriptor) : string =
+let show_desc (d : Protocol_http.resolution) : string =
   let bindings =
     List.map (fun (n, p) -> Printf.sprintf "%s=%s" n (show_part p)) d.bindings
   in
@@ -194,8 +182,8 @@ let non_operation_is_none () =
     "structure -> none" true
     (Protocol_http.resolve_op (lookup []) s = None)
 
-(* resolve_module attaches the descriptor as a wire_descriptor trait on ops. *)
-let module_attaches_trait () =
+(* resolve_module attaches the resolution as a typed wire field on ops. *)
+let module_attaches_wire () =
   let o =
     op "make"
       ~traits:
@@ -215,76 +203,10 @@ let module_attaches_trait () =
   in
   let m' = Protocol_http.resolve_module m in
   let op' = List.hd m'.operations in
-  Alcotest.(check bool)
-    "has wire_descriptor" true
-    (List.exists
-       (fun (t : Ir.trait) -> t.trait_id = "wire_descriptor")
-       op'.traits)
-
-(* The JSON encoding exercises every part and response part. It carries no
-   error information at all: a declared operation error's (status,
-   @errorCode, @retryable) is the generated SDK's own decode<Op>Error +
-   .retryable() pair to own, not a second copy on the wire descriptor. *)
-let encode_covers_all_forms () =
-  let req =
-    structure "req"
-      [
-        member "id" ~traits:[ trait "httpLabel" `Null ];
-        member "limit" ~traits:[ trait "httpQuery" (`List [ `String "limit" ]) ];
-        member "auth"
-          ~traits:[ trait "httpHeader" (`List [ `String "Authorization" ]) ];
-        member "note";
-        member "raw" ~traits:[ trait "httpPayload" `Null ];
-      ]
-  in
-  let resp =
-    structure "resp"
-      [
-        member "trace"
-          ~traits:[ trait "httpHeader" (`List [ `String "X-Trace" ]) ];
-        member "code" ~traits:[ trait "httpResponseCode" `Null ];
-      ]
-  in
-  let coded = error_shape "coded" 402 (Some "declined") in
-  let plain = error_shape "plain" 404 None in
-  let o =
-    op "act"
-      ~traits:
-        [
-          trait "http"
-            (`Assoc [ ("method", `String "post"); ("path", `String "/a/{id}") ]);
-        ]
-      ~input:(Ir.Ref ("req", []))
-      ~output:(Ir.Ref ("resp", []))
-      ~errors:[ Ir.Ref ("coded", []); Ir.Ref ("plain", []) ]
-  in
-  let json =
-    Ir_json.to_canonical_string
-      (Protocol_http.encode (resolve [ req; resp; coded; plain ] o))
-  in
-  let has sub =
-    let ls = String.length json and lsub = String.length sub in
-    let rec go i =
-      if i + lsub > ls then false
-      else if String.equal (String.sub json i lsub) sub then true
-      else go (i + 1)
-    in
-    go 0
-  in
-  List.iter
-    (fun sub -> Alcotest.(check bool) sub true (has sub))
-    [
-      {|"http_method":"POST"|};
-      {|"uri":"/a/{id}"|};
-      {|"kind":"label"|};
-      {|"kind":"query","name":"limit"|};
-      {|"kind":"header","name":"Authorization"|};
-      {|"kind":"body"|};
-      {|"kind":"payload"|};
-      {|"kind":"statusCode"|};
-      {|["auth"|};
-    ];
-  Alcotest.(check bool) "no errors key" false (has {|"errors"|})
+  match op'.kind with
+  | Ir.Operation { wire = Some wb; _ } ->
+      Alcotest.(check string) "method" "POST" wb.Ir.wb_method
+  | _ -> Alcotest.fail "op has no wire binding"
 
 (* ── Check_http negatives (spans, via source) ──────────────────────────── *)
 
@@ -393,10 +315,7 @@ let () =
             no_http_no_descriptor;
           Alcotest.test_case "non-operation is none" `Quick
             non_operation_is_none;
-          Alcotest.test_case "module attaches trait" `Quick
-            module_attaches_trait;
-          Alcotest.test_case "encode covers all forms" `Quick
-            encode_covers_all_forms;
+          Alcotest.test_case "module attaches wire" `Quick module_attaches_wire;
         ] );
       ( "check_http",
         [

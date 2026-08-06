@@ -24,9 +24,10 @@ use crate::ir::{Module, Shape};
 /// The declarations for the types file: the taxonomy, the declared-error
 /// classes, and the client interface.
 ///
-/// Unlike Rust/Go, a loose (non-entry) operation still gets a concrete
-/// `HttpClient` in TypeScript, so `liveness` here is real, derived liveness
-/// (not [`TaxonomyLiveness::all_live`]): the caller passes what
+/// A loose (non-entry) operation is a trait/interface surface only in every
+/// target, TypeScript included (generation rejects a wire-bound loose
+/// operation outright), so `liveness` here is real, derived liveness (not
+/// [`TaxonomyLiveness::all_live`]): the caller passes what
 /// [`crate::codegen::taxonomy::derive`] reports for this module.
 pub fn type_decls(
     module: &Module,

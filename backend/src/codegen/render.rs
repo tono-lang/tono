@@ -78,7 +78,7 @@ mod tests {
         UnionDecl, Variant,
     };
     use crate::ir::{Member, Prim, Shape, ShapeKind, Tref};
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     // A minimal Rust-flavored render-rules implementation: enough surface syntax
     // to exercise the pipeline and stand in for a real target's render rules.
@@ -287,22 +287,6 @@ mod tests {
             }
         }
 
-        fn emit_op_stub(&self, op: &Shape, _descriptor: &Value) -> Fragment {
-            // The descriptor is opaque and deliberately unused here: the target
-            // never interprets it. A real backend embeds it as a blob.
-            vec![Decl::Method(Method {
-                name: Symbol::builtin(Self::local_name(&op.id)),
-                params: vec![],
-                ret: None,
-                err: None,
-                is_async: false,
-                doc: None,
-            })]
-        }
-
-        fn runtime_pkg(&self) -> &str {
-            "test-runtime"
-        }
     }
 
     // A formatter that leaves text unchanged: it makes the pipeline output exact
@@ -683,7 +667,6 @@ mod tests {
     fn target_surface_methods_are_usable() {
         let target = TestTarget;
         assert_eq!(target.name(), "test");
-        assert_eq!(target.runtime_pkg(), "test-runtime");
         // symbol_of over every Tref form.
         assert_eq!(target.symbol_of(&Tref::Prim(Prim::String)).name, "string");
         assert_eq!(target.symbol_of(&Tref::Param("T".into())).name, "T");
@@ -721,7 +704,7 @@ mod tests {
                 .name,
             "Bare"
         );
-        // emit_op_stub embeds nothing it interprets; the descriptor is ignored.
+        // A non-structure shape emits nothing from emit_type.
         let op = Shape {
             id: "billing#create_invoice".into(),
             kind: ShapeKind::Operation {
@@ -732,9 +715,6 @@ mod tests {
             },
             traits: vec![],
         };
-        let stub = target.emit_op_stub(&op, &json!({"http_method": "POST"}));
-        assert_eq!(stub.len(), 1);
-        // A non-structure shape emits nothing from emit_type.
         assert!(target.emit_type(&op).is_empty());
     }
 }
