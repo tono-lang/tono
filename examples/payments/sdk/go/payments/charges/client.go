@@ -142,7 +142,7 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	if !transport.HasHeader(headers, "content-type") {
 		headers["content-type"] = "application/json"
 	}
-	outcome, err := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{
+	outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{
 		Method:  "POST",
 		URL:     requestURL,
 		Headers: headers,
@@ -156,9 +156,6 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 			return false
 		}},
 	})
-	if err != nil {
-		return zero, err
-	}
 	if outcome.Cause != nil {
 		return zero, &TransportError{Cause: outcome.Cause}
 	}

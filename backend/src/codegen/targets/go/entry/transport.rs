@@ -452,15 +452,24 @@ pub(super) fn op_call(
         .iter()
         .map(|(name, value)| format!("\t\t{name}: {value},\n"))
         .collect();
+    // A hook's own failure propagates raw; the check exists only where a hook
+    // is bound, so a hook-free module's methods carry no dead error channel.
+    let hook_check = if call.module_hooks {
+        format!(
+            "\tif outcome.HookErr != nil {{\n\t\treturn {ret_zero}{fail_hook}\n\t}}\n",
+            fail_hook = fail("outcome.HookErr".to_string()),
+        )
+    } else {
+        String::new()
+    };
     out.push_str(&format!(
-        "\toutcome, err := {send}(ctx, c.settings.HTTPClient, c.settings.Transport, {request}{{\n\
+        "\toutcome := {send}(ctx, c.settings.HTTPClient, c.settings.Transport, {request}{{\n\
          {field_lines}\
          \t}})\n\
-         \tif err != nil {{\n\t\treturn {ret_zero}{fail_hook}\n\t}}\n\
+         {hook_check}\
          \tif outcome.Cause != nil {{\n\t\treturn {ret_zero}{fail_transport}\n\t}}\n",
         send = reached.slot("Send"),
         request = reached.slot("Request"),
-        fail_hook = fail("err".to_string()),
         fail_transport = fail(format!(
             "&{transport}{{Cause: outcome.Cause}}",
             transport = call.transport_error

@@ -10,7 +10,8 @@ fn package_text(usage: &Usage) -> String {
 fn a_bare_usage_emits_a_transport_with_no_retry_timeout_or_hook_piece() {
     let out = package_text(&Usage::default());
     // Send is the single attempt itself: no loop, no policy fields, no seams.
-    assert!(out.contains("func Send(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) (Outcome, error) {"));
+    assert!(out.contains("func Send(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) Outcome {"));
+    assert!(!out.contains("HookErr"));
     assert!(!out.contains("for attempt"));
     assert!(!out.contains("sendOnce"));
     assert!(!out.contains("type Retry struct"));
@@ -24,7 +25,7 @@ fn a_bare_usage_emits_a_transport_with_no_retry_timeout_or_hook_piece() {
     // The attempt still copies headers fresh and classifies a dispatch
     // failure as a transport outcome.
     assert!(out.contains("headers := make(map[string]string, len(req.Headers))"));
-    assert!(out.contains("return Outcome{Cause: err}, nil"));
+    assert!(out.contains("return Outcome{Cause: err}"));
 }
 
 #[test]
@@ -35,7 +36,7 @@ fn retry_usage_wraps_the_attempt_in_the_backoff_loop() {
     };
     let out = package_text(&usage);
     assert!(out.contains("for attempt := 0; ; attempt++ {"));
-    assert!(out.contains("outcome, err := sendOnce(ctx, native, canonical, req)"));
+    assert!(out.contains("outcome := sendOnce(ctx, native, canonical, req)"));
     assert!(out.contains("if attempt >= req.Retry.Max || !retryable(outcome, req) {"));
     // The parity contract's backoff constants.
     assert!(out.contains("exp := math.Min(2000, 100*math.Pow(2, float64(attempt)))"));
@@ -71,8 +72,10 @@ fn hook_usage_invokes_the_slots_around_the_dispatch() {
     assert!(out.contains("Hooks *Hooks"));
     assert!(out.contains("if req.Hooks != nil && req.Hooks.BeforeRequest != nil {"));
     assert!(out.contains("if req.Hooks != nil && req.Hooks.AfterResponse != nil {"));
-    // A hook failure propagates raw, never as a transport outcome.
-    assert!(out.contains("return Outcome{}, err"));
+    // A hook failure rides its own outcome field, raw, never as a transport
+    // failure; the retrying loop returns it before classifying.
+    assert!(out.contains("return Outcome{HookErr: err}"));
+    assert!(out.contains("HookErr error"));
 }
 
 #[test]

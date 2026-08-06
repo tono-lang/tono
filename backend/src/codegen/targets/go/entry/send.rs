@@ -288,20 +288,29 @@ fn hooks_decl() -> Decl {
     )
 }
 
-fn outcome_decl() -> Decl {
+fn outcome_decl(u: &Usage) -> Decl {
+    let hook_err = if u.hooks {
+        "\t// HookErr is a lifecycle hook's own failure, carried raw: the generated\n\
+         \t// client propagates it as-is, and it is never misreported as a transport\n\
+         \t// failure and never retried.\n\
+         \tHookErr error\n"
+    } else {
+        ""
+    };
     Decl::raw_providing(
         "Outcome",
-        "// Outcome is the raw result of one call: a response's status, headers, and\n\
-         // body, or the transport failure that prevented one (Cause non-nil). The\n\
-         // generated client maps it onto its own error taxonomy; this package stays\n\
-         // taxonomy-free so every module can share it.\n\
-         type Outcome struct {\n\
-         \tStatus  int\n\
-         \tHeaders map[string]string\n\
-         \tBody    string\n\
-         \tCause   error\n\
-         }"
-        .to_string(),
+        format!(
+            "// Outcome is the raw result of one call: a response's status, headers, and\n\
+             // body, or the transport failure that prevented one (Cause non-nil). The\n\
+             // generated client maps it onto its own error taxonomy; this package stays\n\
+             // taxonomy-free so every module can share it.\n\
+             type Outcome struct {{\n\
+             \tStatus  int\n\
+             \tHeaders map[string]string\n\
+             \tBody    string\n\
+             \tCause   error\n\
+             {hook_err}}}"
+        ),
         Vec::new(),
     )
 }
@@ -322,7 +331,7 @@ fn attempt_body(u: &Usage) -> String {
         out.push_str(
             "\tif req.Hooks != nil && req.Hooks.BeforeRequest != nil {\n\
              \t\thooked, err := req.Hooks.BeforeRequest(ctx, request)\n\
-             \t\tif err != nil {\n\t\t\treturn Outcome{}, err\n\t\t}\n\
+             \t\tif err != nil {\n\t\t\treturn Outcome{HookErr: err}\n\t\t}\n\
              \t\trequest = hooked\n\
              \t}\n",
         );
@@ -348,24 +357,24 @@ fn attempt_body(u: &Usage) -> String {
     } else {
         out.push_str("\tresponse, err := dispatch(ctx, native, canonical, request)\n");
     }
-    out.push_str("\tif err != nil {\n\t\treturn Outcome{Cause: err}, nil\n\t}\n");
+    out.push_str("\tif err != nil {\n\t\treturn Outcome{Cause: err}\n\t}\n");
     if u.hooks {
         out.push_str(
             "\tif req.Hooks != nil && req.Hooks.AfterResponse != nil {\n\
              \t\thooked, err := req.Hooks.AfterResponse(ctx, response)\n\
-             \t\tif err != nil {\n\t\t\treturn Outcome{}, err\n\t\t}\n\
+             \t\tif err != nil {\n\t\t\treturn Outcome{HookErr: err}\n\t\t}\n\
              \t\tresponse = hooked\n\
              \t}\n",
         );
     }
     out.push_str(
-        "\treturn Outcome{Status: response.Status, Headers: response.Headers, Body: response.Body}, nil\n",
+        "\treturn Outcome{Status: response.Status, Headers: response.Headers, Body: response.Body}\n",
     );
     out
 }
 
 const SEND_SIG: &str =
-    "(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) (Outcome, error)";
+    "(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) Outcome";
 
 fn send_refs() -> Vec<Symbol> {
     vec![
@@ -381,8 +390,8 @@ fn send_refs() -> Vec<Symbol> {
 /// and signature either way.
 fn send_decls(u: &Usage) -> Vec<Decl> {
     let hook_doc = if u.hooks {
-        "// around the hook slots. The returned error is a hook failure only: it\n\
-         // propagates raw and is never retried nor misreported as a transport\n\
+        "// around the hook slots. A hook's own failure comes back as\n\
+         // Outcome.HookErr, raw: never retried, never misreported as a transport\n\
          // failure.\n"
     } else {
         "// against the configured transport.\n"
@@ -399,6 +408,11 @@ fn send_decls(u: &Usage) -> Vec<Decl> {
             send_refs(),
         )];
     }
+    let hook_bail = if u.hooks {
+        "\t\tif outcome.HookErr != nil {\n\t\t\treturn outcome\n\t\t}\n"
+    } else {
+        ""
+    };
     vec![
         Decl::raw_providing(
             "Send",
@@ -410,13 +424,13 @@ fn send_decls(u: &Usage) -> Vec<Decl> {
                  // full-jitter backoff between attempts.\n\
                  func Send{SEND_SIG} {{\n\
                  \tfor attempt := 0; ; attempt++ {{\n\
-                 \t\toutcome, err := sendOnce(ctx, native, canonical, req)\n\
-                 \t\tif err != nil {{\n\t\t\treturn Outcome{{}}, err\n\t\t}}\n\
-                 \t\tif attempt >= req.Retry.Max || !retryable(outcome, req) {{\n\t\t\treturn outcome, nil\n\t\t}}\n\
+                 \t\toutcome := sendOnce(ctx, native, canonical, req)\n\
+                 {hook_bail}\
+                 \t\tif attempt >= req.Retry.Max || !retryable(outcome, req) {{\n\t\t\treturn outcome\n\t\t}}\n\
                  \t\tif err := retryDelay(ctx, attempt, req.Timing); err != nil {{\n\
                  \t\t\t// The caller gave up while we were waiting to retry: surface the\n\
                  \t\t\t// cancellation, not the stale outcome it interrupts.\n\
-                 \t\t\treturn Outcome{{Cause: err}}, nil\n\
+                 \t\t\treturn Outcome{{Cause: err}}\n\
                  \t\t}}\n\
                  \t}}\n\
                  }}"
@@ -630,7 +644,7 @@ pub(crate) fn internal_helpers(u: &Usage) -> Vec<Decl> {
     if u.hooks {
         decls.push(hooks_decl());
     }
-    decls.push(outcome_decl());
+    decls.push(outcome_decl(u));
     decls.extend(send_decls(u));
     decls.push(dispatch_decl());
     decls.extend(assembly_decls());

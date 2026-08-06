@@ -198,8 +198,10 @@ fn the_method_assembles_the_request_and_maps_the_outcome_onto_the_taxonomy() {
     // A mixed body assembles just the body-bound members.
     assert!(serde.contains("body, err := transport.EncodeBody(record, \"body\")"));
     assert!(serde.contains(
-        "outcome, err := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
+        "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));
+    // No hook is bound, so no dead hook-error check is emitted.
+    assert!(!serde.contains("HookErr"));
     // @timeout reads the pre-converted client field the constructor built.
     assert!(serde.contains("Timeout: c.timeoutDuration,"));
     assert!(serde.contains("d, err := time.ParseDuration(string(s.Timeout))"));
@@ -249,7 +251,7 @@ fn an_operation_with_no_retry_or_timeout_declares_neither() {
     assert!(!serde.contains("time.ParseDuration"));
     assert!(!serde.contains("Hooks"));
     assert!(serde.contains(
-        "outcome, err := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
+        "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));
 }
 
@@ -606,7 +608,7 @@ fn a_constrained_op_input_is_validated_before_transport() {
     // The check runs before the transport call, not after.
     let val = serde.find("ValidateNote(input)").expect("validate call");
     let send = serde
-        .find("outcome, err := transport.Send(ctx")
+        .find("outcome := transport.Send(ctx")
         .expect("send call");
     assert!(val < send);
 }

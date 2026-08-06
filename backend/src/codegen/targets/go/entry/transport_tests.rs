@@ -66,9 +66,10 @@ impl Case {
 fn a_plain_operation_carries_no_retry_timeout_or_hook_piece() {
     let out = Case::new(base_wire()).text();
     assert!(out.contains(
-        "outcome, err := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
+        "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));
     assert!(out.contains("Method: \"POST\","));
+    assert!(!out.contains("HookErr"));
     assert!(out.contains("requestURL := c.settings.endpoint + \"/charges\""));
     assert!(!out.contains("Retry"));
     assert!(!out.contains("Timing"));
@@ -120,6 +121,8 @@ fn a_bound_module_hook_rides_the_request() {
     case.module_hooks = true;
     let out = case.text();
     assert!(out.contains("Hooks: c.hooks,"));
+    // The hook-failure check exists exactly where a hook is bound.
+    assert!(out.contains("if outcome.HookErr != nil {"));
 }
 
 #[test]

@@ -135,25 +135,22 @@ type Outcome struct {
 // A retryable outcome (a transport failure, or an error response
 // Retry.When accepts) repeats up to Retry.Max times, with exponential
 // full-jitter backoff between attempts.
-func Send(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) (Outcome, error) {
+func Send(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) Outcome {
 	for attempt := 0; ; attempt++ {
-		outcome, err := sendOnce(ctx, native, canonical, req)
-		if err != nil {
-			return Outcome{}, err
-		}
+		outcome := sendOnce(ctx, native, canonical, req)
 		if attempt >= req.Retry.Max || !retryable(outcome, req) {
-			return outcome, nil
+			return outcome
 		}
 		if err := retryDelay(ctx, attempt, req.Timing); err != nil {
 			// The caller gave up while we were waiting to retry: surface the
 			// cancellation, not the stale outcome it interrupts.
-			return Outcome{Cause: err}, nil
+			return Outcome{Cause: err}
 		}
 	}
 }
 
 // sendOnce is one attempt of [Send].
-func sendOnce(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) (Outcome, error) {
+func sendOnce(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) Outcome {
 	headers := make(map[string]string, len(req.Headers))
 	for name, value := range req.Headers {
 		headers[name] = value
@@ -168,9 +165,9 @@ func sendOnce(ctx context.Context, native *http.Client, canonical support.HTTPTr
 	}
 	response, err := dispatch(attemptCtx, native, canonical, request)
 	if err != nil {
-		return Outcome{Cause: err}, nil
+		return Outcome{Cause: err}
 	}
-	return Outcome{Status: response.Status, Headers: response.Headers, Body: response.Body}, nil
+	return Outcome{Status: response.Status, Headers: response.Headers, Body: response.Body}
 }
 
 // dispatch performs the raw exchange: the canonical transport when set, the
