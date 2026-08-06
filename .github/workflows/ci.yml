@@ -171,6 +171,18 @@ jobs:
       # hermetic against their stubs and live against the in-repo stores.
       - name: Verify the bespoke implementations conform
         run: scripts/check-impl-conformance.sh
+      # The parity gate: scripts/run-parity.sh compiles runtimes/parity/spec.tono,
+      # generates the real SDK per target, and drives it directly against the
+      # shared behavior vectors (retry/timeout/error classification), so the
+      # three targets cannot drift apart. This job already carries every
+      # toolchain the script needs (OCaml, Rust, Go, Node), which is why the
+      # gate lives here instead of in its own job per target.
+      - name: TypeScript parity vectors against the generated SDK
+        run: scripts/run-parity.sh typescript
+      - name: Go parity vectors against the generated SDK
+        run: scripts/run-parity.sh go
+      - name: Rust parity vectors against the generated SDK
+        run: scripts/run-parity.sh rust
 
   mutation:
     name: Mutation (bespoke)
