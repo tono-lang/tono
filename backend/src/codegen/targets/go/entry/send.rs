@@ -67,13 +67,22 @@ pub(crate) fn usage_of(model: &Model) -> Usage {
     usage
 }
 
+/// One named opaque declaration per row. The table form exists so a run of
+/// sibling declarations does not restate the constructor boilerplate row
+/// after row; each row is just (name, text, references).
+fn decl_table(rows: Vec<(&str, &str, Vec<Symbol>)>) -> Vec<Decl> {
+    rows.into_iter()
+        .map(|(name, text, refs)| Decl::raw_providing(name, text, refs))
+        .collect()
+}
+
 /// The public, bespoke-facing transport shapes (the SDK's `support` package):
 /// the request/response a bound `before_request`/`after_response` hook types
 /// against, and the canonical transport slot a `client_init` hook (or a
 /// generated test) installs.
 pub(crate) fn support_decls() -> Vec<Decl> {
-    vec![
-        Decl::raw_providing(
+    decl_table(vec![
+        (
             "HTTPRequest",
             "// HTTPRequest is the request the generated transport builds before sending\n\
              // it. A before_request hook receives it and may return a mutated copy (set\n\
@@ -84,11 +93,10 @@ pub(crate) fn support_decls() -> Vec<Decl> {
              \tURL     string\n\
              \tHeaders map[string]string\n\
              \tBody    []byte\n\
-             }"
-            .to_string(),
+             }",
             Vec::new(),
         ),
-        Decl::raw_providing(
+        (
             "HTTPResponse",
             "// HTTPResponse is the response the generated transport reads before\n\
              // classifying it. Header keys are lowercased (HTTP header names are\n\
@@ -97,11 +105,10 @@ pub(crate) fn support_decls() -> Vec<Decl> {
              \tStatus  int\n\
              \tHeaders map[string]string\n\
              \tBody    string\n\
-             }"
-            .to_string(),
+             }",
             Vec::new(),
         ),
-        Decl::raw_providing(
+        (
             "HTTPTransport",
             "// HTTPTransport is the canonical transport slot: adapt any HTTP stack by\n\
              // mapping HTTPRequest/HTTPResponse, without emulating *http.Client. One\n\
@@ -109,15 +116,14 @@ pub(crate) fn support_decls() -> Vec<Decl> {
              // with internal retries does not combine with it. The transport must honor\n\
              // ctx cancellation; a declared per-attempt timeout arrives as a ctx\n\
              // deadline.\n\
-             type HTTPTransport func(ctx context.Context, req HTTPRequest) (HTTPResponse, error)"
-                .to_string(),
+             type HTTPTransport func(ctx context.Context, req HTTPRequest) (HTTPResponse, error)",
             vec![
                 import("context", "context"),
                 support_symbol("HTTPRequest"),
                 support_symbol("HTTPResponse"),
             ],
         ),
-    ]
+    ])
 }
 
 /// The `Request` struct: always the assembled call itself; the policy fields
@@ -173,8 +179,8 @@ fn request_decl(u: &Usage) -> Decl {
 }
 
 fn retry_decls() -> Vec<Decl> {
-    vec![
-        Decl::raw_providing(
+    decl_table(vec![
+        (
             "Retry",
             "// Retry is an operation's declared retry policy: Max retries beyond the\n\
              // first attempt, and When classifying an error response (status and raw\n\
@@ -183,11 +189,10 @@ fn retry_decls() -> Vec<Decl> {
              type Retry struct {\n\
              \tMax  int\n\
              \tWhen func(status int, body string) bool\n\
-             }"
-            .to_string(),
+             }",
             Vec::new(),
         ),
-        Decl::raw_providing(
+        (
             "Timing",
             "// Timing is the clock behind the retry backoff, swappable so a test can\n\
              // pin the jitter and record the sleeps instead of waiting them out. The\n\
@@ -196,11 +201,10 @@ fn retry_decls() -> Vec<Decl> {
              type Timing struct {\n\
              \tSleep  func(ctx context.Context, d time.Duration) error\n\
              \tRandom func() float64\n\
-             }"
-            .to_string(),
+             }",
             vec![import("context", "context"), import("time", "time")],
         ),
-        Decl::raw_providing(
+        (
             "retryable",
             "// retryable classifies one outcome for the retry loop: a transport failure\n\
              // always retries; a success never does; an error response only when\n\
@@ -209,11 +213,10 @@ fn retry_decls() -> Vec<Decl> {
              \tif o.Cause != nil {\n\t\treturn true\n\t}\n\
              \tif isSuccess(o.Status, req.Success) || req.Retry.When == nil {\n\t\treturn false\n\t}\n\
              \treturn req.Retry.When(o.Status, o.Body)\n\
-             }"
-            .to_string(),
+             }",
             Vec::new(),
         ),
-        Decl::raw_providing(
+        (
             "isSuccess",
             "// isSuccess: any 2xx is a success even when its exact code was not the one\n\
              // declared (a server may answer 200 where 201 was declared); a declared\n\
@@ -222,11 +225,10 @@ fn retry_decls() -> Vec<Decl> {
              \tif status >= 200 && status < 300 {\n\t\treturn true\n\t}\n\
              \tfor _, s := range declared {\n\t\tif s == status {\n\t\t\treturn true\n\t\t}\n\t}\n\
              \treturn false\n\
-             }"
-            .to_string(),
+             }",
             Vec::new(),
         ),
-        Decl::raw_providing(
+        (
             "backoffDelay",
             "// backoffDelay is exponential with full jitter: random * min(2000ms, 100ms\n\
              // * 2^attempt). The constants are part of the cross-runtime parity\n\
@@ -234,11 +236,10 @@ fn retry_decls() -> Vec<Decl> {
              func backoffDelay(attempt int, random float64) time.Duration {\n\
              \texp := math.Min(2000, 100*math.Pow(2, float64(attempt)))\n\
              \treturn time.Duration(random * exp * float64(time.Millisecond))\n\
-             }"
-            .to_string(),
+             }",
             vec![import("math", "math"), import("time", "time")],
         ),
-        Decl::raw_providing(
+        (
             "retryDelay",
             "// retryDelay waits out one attempt's backoff, on the request's timing seam\n\
              // when a test pinned it and the real clock otherwise. Jitter seeds only\n\
@@ -250,11 +251,10 @@ fn retry_decls() -> Vec<Decl> {
              \tsleep := timing.Sleep\n\
              \tif sleep == nil {\n\t\tsleep = sleepContext\n\t}\n\
              \treturn sleep(ctx, backoffDelay(attempt, random()))\n\
-             }"
-            .to_string(),
+             }",
             vec![import("context", "context"), import("rand", "math/rand")],
         ),
-        Decl::raw_providing(
+        (
             "sleepContext",
             "func sleepContext(ctx context.Context, d time.Duration) error {\n\
              \ttimer := time.NewTimer(d)\n\
@@ -263,11 +263,10 @@ fn retry_decls() -> Vec<Decl> {
              \tcase <-ctx.Done():\n\t\treturn ctx.Err()\n\
              \tcase <-timer.C:\n\t\treturn nil\n\
              \t}\n\
-             }"
-            .to_string(),
+             }",
             vec![import("context", "context"), import("time", "time")],
         ),
-    ]
+    ])
 }
 
 fn hooks_decl() -> Decl {
@@ -479,8 +478,8 @@ fn dispatch_decl() -> Decl {
 /// is its own declaration, so the root-group pruning drops the ones no
 /// operation in the SDK reaches.
 fn assembly_decls() -> Vec<Decl> {
-    vec![
-        Decl::raw_providing(
+    decl_table(vec![
+        (
             "FormatScalar",
             "// FormatScalar renders a value the way the wire expects it in a path,\n\
              // query, or header position. Decoded JSON numbers arrive as float64; an\n\
@@ -497,25 +496,23 @@ fn assembly_decls() -> Vec<Decl> {
              \t\tif err != nil {\n\t\t\treturn \"\"\n\t\t}\n\
              \t\treturn string(b)\n\
              \t}\n\
-             }"
-            .to_string(),
+             }",
             vec![
                 import("strconv", "strconv"),
                 import("json", "encoding/json"),
             ],
         ),
-        Decl::raw_providing(
+        (
             "PathPart",
             "// PathPart renders a path segment: an absent value substitutes empty\n\
              // rather than a literal \"null\".\n\
              func PathPart(v any) string {\n\
              \tif v == nil {\n\t\treturn \"\"\n\t}\n\
              \treturn url.PathEscape(FormatScalar(v))\n\
-             }"
-            .to_string(),
+             }",
             vec![import("url", "net/url")],
         ),
-        Decl::raw_providing(
+        (
             "SetHeader",
             "// SetHeader overrides across casings: header names are case-insensitive,\n\
              // so a bespoke \"authorization\" replaces a declared \"Authorization\" rather\n\
@@ -525,11 +522,10 @@ fn assembly_decls() -> Vec<Decl> {
              \t\tif strings.EqualFold(key, name) {\n\t\t\tdelete(headers, key)\n\t\t}\n\
              \t}\n\
              \theaders[name] = value\n\
-             }"
-            .to_string(),
+             }",
             vec![import("strings", "strings")],
         ),
-        Decl::raw_providing(
+        (
             "HasHeader",
             "// HasHeader reports whether a header is already set under any casing: a\n\
              // caller-supplied \"Content-Type\" must suppress the default rather than\n\
@@ -539,11 +535,10 @@ fn assembly_decls() -> Vec<Decl> {
              \t\tif strings.EqualFold(key, name) {\n\t\t\treturn true\n\t\t}\n\
              \t}\n\
              \treturn false\n\
-             }"
-            .to_string(),
+             }",
             vec![import("strings", "strings")],
         ),
-        Decl::raw_providing(
+        (
             "AppendQuery",
             "// AppendQuery serializes a query value as a repeated entry per element for\n\
              // a list, a single entry otherwise; a nil (absent) value is omitted, the\n\
@@ -558,22 +553,20 @@ fn assembly_decls() -> Vec<Decl> {
              \t\treturn entries\n\
              \t}\n\
              \treturn add(value)\n\
-             }"
-            .to_string(),
+             }",
             vec![import("url", "net/url")],
         ),
-        Decl::raw_providing(
+        (
             "QueryString",
             "// QueryString folds the collected query entries into the URL tail: empty\n\
              // when nothing survived the omit rules, \"?\"-prefixed otherwise.\n\
              func QueryString(entries []string) string {\n\
              \tif len(entries) == 0 {\n\t\treturn \"\"\n\t}\n\
              \treturn \"?\" + strings.Join(entries, \"&\")\n\
-             }"
-            .to_string(),
+             }",
             vec![import("strings", "strings")],
         ),
-        Decl::raw_providing(
+        (
             "EncodeBody",
             "// EncodeBody assembles the body-bound members into a JSON object, in the\n\
              // given member order. A member that is present but null still lands in the\n\
@@ -594,11 +587,10 @@ fn assembly_decls() -> Vec<Decl> {
              \t}\n\
              \tif fields == nil {\n\t\treturn nil, nil\n\t}\n\
              \treturn append(fields, '}'), nil\n\
-             }"
-            .to_string(),
+             }",
             vec![import("json", "encoding/json")],
         ),
-        Decl::raw_providing(
+        (
             "FoldResponse",
             "// FoldResponse folds the response-bound members (a header value, or the\n\
              // status code) into the decoded body so the generated decoder sees them as\n\
@@ -612,11 +604,10 @@ fn assembly_decls() -> Vec<Decl> {
              \t// so re-marshalling cannot fail.\n\
              \tfolded, _ := json.Marshal(object)\n\
              \treturn string(folded)\n\
-             }"
-            .to_string(),
+             }",
             vec![import("json", "encoding/json")],
         ),
-        Decl::raw_providing(
+        (
             "HeaderValue",
             "// HeaderValue reads a response header for a response-bound member: nil\n\
              // (the member decodes as absent) when the header is missing. Response\n\
@@ -624,11 +615,10 @@ fn assembly_decls() -> Vec<Decl> {
              func HeaderValue(headers map[string]string, name string) any {\n\
              \tif value, ok := headers[name]; ok {\n\t\treturn value\n\t}\n\
              \treturn nil\n\
-             }"
-            .to_string(),
+             }",
             Vec::new(),
         ),
-    ]
+    ])
 }
 
 /// The whole `internal/transport` package, shaped by what the SDK uses.
