@@ -202,7 +202,11 @@ fn a_single_entry_with_arg_env_default_and_an_http_op_builds() {
     assert!(
         out.contains("set_header(&mut headers, \"X-Client\", self.settings.client_name.clone());")
     );
-    assert!(out.contains("let body = Some(serde_json::to_string(&input)"));
+    // A failed input serialization is a Config problem with the supplied
+    // value, never the response-facing Decode category.
+    assert!(out.contains(
+        "let body = Some(serde_json::to_string(&input).map_err(|e| TonoError::Config(ConfigError { message: format!(\"input serialization: {e}\") }))?);"
+    ));
     assert!(out.contains("match http_send(&self.options, request).await {"));
     assert!(
         out.contains("Err(cause) => return Err(TonoError::Transport(TransportError { cause })),")

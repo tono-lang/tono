@@ -160,10 +160,8 @@ impl Client {
             set_header(&mut headers, k, v.clone());
         }
         let body = Some(serde_json::to_string(&input).map_err(|e| {
-            TonoError::Decode(DecodeError {
-                path: "$".to_string(),
-                expected: "input".to_string(),
-                raw: e.to_string(),
+            TonoError::Config(ConfigError {
+                message: format!("input serialization: {e}"),
             })
         })?);
         if !has_header(&headers, "content-type") {

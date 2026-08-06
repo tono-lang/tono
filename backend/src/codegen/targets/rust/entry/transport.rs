@@ -293,11 +293,14 @@ fn body_lines(wire: &WireBinding, has_input: bool) -> Option<String> {
     Some(out)
 }
 
-/// The Decode failure a failed input serialization maps to (the same category
-/// and shape the descriptor-era record conversion used).
+/// The failure a failed input serialization maps to: a Config problem with
+/// the value the caller supplied, not a Decode one (that category reads a
+/// *response* against the declared schema). Near-unreachable for
+/// derive-generated types, but the category still has to be right when it
+/// fires.
 fn encode_failure(cause: &str) -> String {
     format!(
-        "TonoError::Decode(DecodeError {{ path: \"$\".to_string(), expected: \"input\".to_string(), raw: {cause}.to_string() }})"
+        "TonoError::Config(ConfigError {{ message: format!(\"input serialization: {{{cause}}}\") }})"
     )
 }
 

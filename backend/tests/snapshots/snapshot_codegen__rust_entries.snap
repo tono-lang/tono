@@ -701,7 +701,7 @@ impl Client {
         ClientBuilder { api_key, client_name: None, timeout: None, max_retries: None }
     }
     pub async fn save_note(&self, input: Note) -> Result<Note, TonoError> {
-        let record = serde_json::to_value(&input).map_err(|e| TonoError::Decode(DecodeError { path: "$".to_string(), expected: "input".to_string(), raw: e.to_string() }))?;
+        let record = serde_json::to_value(&input).map_err(|e| TonoError::Config(ConfigError { message: format!("input serialization: {e}") }))?;
         let url = format!("{}/notes/{}", self.settings.endpoint, path_part(record.get("id")));
         let mut headers: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         set_header(&mut headers, "X-Client-Name", self.settings.client_name.clone());
