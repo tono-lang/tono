@@ -5,14 +5,13 @@ package charges
 import (
 	"context"
 	"encoding/json"
-	"example.com/sdk/internal/descriptor"
-	"example.com/sdk/internal/duration"
-	"example.com/sdk/internal/record"
+	"errors"
+	"example.com/sdk/internal/transport"
 	"example.com/sdk/support"
 	"fmt"
-	tonohttp "github.com/tono-lang/tono/runtimes/http-go"
 	"net/http"
 	"os"
+	"time"
 )
 
 // Settings are the resolved construction values of the client entry,
@@ -28,7 +27,7 @@ type Settings struct {
 	MaxRetries int32
 
 	HTTPClient *http.Client
-	Transport  tonohttp.Transport
+	Transport  support.HTTPTransport
 	Headers    map[string]string
 }
 
@@ -54,8 +53,11 @@ func WithMaxRetries(v int32) ClientOption {
 // Client is the generated SDK client the client entry declares.
 type Client struct {
 	settings Settings
-	runtime  *tonohttp.Runtime
-	hooks    *tonohttp.Hooks
+	// timeoutDuration is the operation @timeout, converted once at construction.
+	timeoutDuration time.Duration
+	// timing is the clock behind the retry backoff; a test in this package
+	// may pin it. The zero value uses the real clock and jitter.
+	timing transport.Timing
 }
 
 // ClientAPI is the operation surface of Client, for mocking.
@@ -73,9 +75,9 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 }
 
 // newWithTransport is New plus the transport seam the generated tests use: a
-// non-nil transport replaces whatever construction resolved, after
-// client_init ran, so a test answers canonically without a server.
-func newWithTransport(transport tonohttp.Transport, apiKey string, opts ...ClientOption) (*Client, error) {
+// non-nil canonical transport replaces whatever construction resolved,
+// after client_init ran, so a test answers canonically without a server.
+func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...ClientOption) (*Client, error) {
 	w := clientOptions{}
 	for _, opt := range opts {
 		opt(&w)
@@ -104,165 +106,70 @@ func newWithTransport(transport tonohttp.Transport, apiKey string, opts ...Clien
 	if len(violations) > 0 {
 		return nil, &ValidationError{Violations: violations}
 	}
-	values := map[string]any{}
-	values["api_key"] = s.APIKey
-	values["endpoint"] = s.Endpoint
+	timeoutDuration := time.Duration(0)
 	{
-		ms, err := duration.DurationMs(string(s.Timeout))
+		d, err := time.ParseDuration(string(s.Timeout))
 		if err != nil {
 			return nil, &ConfigError{Message: fmt.Sprintf("timeout: invalid duration %q", string(s.Timeout))}
 		}
-		values["timeout"] = ms
+		timeoutDuration = d
 	}
-	values["max_retries"] = int64(s.MaxRetries)
-	if transport != nil {
-		s.Transport = transport
+	if canonical != nil {
+		s.Transport = canonical
 		s.HTTPClient = nil
 	}
-	runtime, err := tonohttp.New(tonohttp.Options{Client: s.HTTPClient, Transport: s.Transport, Headers: s.Headers, Values: values})
-	if err != nil {
-		return nil, err
+	if s.HTTPClient != nil && s.Transport != nil {
+		return nil, errors.New("Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both")
 	}
-	return &Client{settings: s, runtime: runtime, hooks: nil}, nil
+	return &Client{settings: s, timeoutDuration: timeoutDuration}, nil
 }
-
-var createChargeDescriptor = descriptor.MustDescriptor(`{
-  "bindings": [
-    [
-      "id",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "amount",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "fee",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "receipt",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "currency",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "note",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "tags",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "metadata",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "created",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "status",
-      {
-        "kind": "body"
-      }
-    ],
-    [
-      "method",
-      {
-        "kind": "body"
-      }
-    ]
-  ],
-  "endpoint": [
-    "endpoint"
-  ],
-  "http_method": "POST",
-  "request_headers": [
-    [
-      [
-        {
-          "lit": "X-API-Key"
-        }
-      ],
-      {
-        "field": [
-          "api_key"
-        ]
-      }
-    ]
-  ],
-  "response_bindings": [],
-  "retry": {
-    "max": {
-      "ref": "max_retries"
-    }
-  },
-  "success": [
-    [
-      200,
-      {
-        "args": [],
-        "ref": "payments.charges#charge"
-      }
-    ]
-  ],
-  "timeout": {
-    "ref": "timeout"
-  },
-  "uri": "/charges"
-}`)
 
 func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error) {
 	var zero Charge
 	if invalid := ValidateCharge(input); invalid != nil {
 		return zero, invalid
 	}
-	record, err := record.EncodeRecord(input)
+	requestURL := c.settings.Endpoint + "/charges"
+	headers := map[string]string{}
+	transport.SetHeader(headers, "X-API-Key", c.settings.APIKey)
+	for name, value := range c.settings.Headers {
+		transport.SetHeader(headers, name, value)
+	}
+	body, err := json.Marshal(input)
 	if err != nil {
 		return zero, err
 	}
-	outcome, err := c.runtime.Execute(ctx, createChargeDescriptor, record, c.hooks, func(status int, body string) bool {
-		if re, ok := DecodeCreateChargeError(status, []byte(body)).(interface{ Retryable() bool }); ok {
-			return re.Retryable()
-		}
-		return false
+	if !transport.HasHeader(headers, "content-type") {
+		headers["content-type"] = "application/json"
+	}
+	outcome, err := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{
+		Method:  "POST",
+		URL:     requestURL,
+		Headers: headers,
+		Body:    body,
+		Timeout: c.timeoutDuration,
+		Timing:  c.timing,
+		Retry: transport.Retry{Max: int(c.settings.MaxRetries), When: func(status int, body string) bool {
+			if re, ok := DecodeCreateChargeError(status, []byte(body)).(interface{ Retryable() bool }); ok {
+				return re.Retryable()
+			}
+			return false
+		}},
 	})
 	if err != nil {
 		return zero, err
 	}
-	switch outcome.Kind {
-	case tonohttp.OutcomeTransport:
+	if outcome.Cause != nil {
 		return zero, &TransportError{Cause: outcome.Cause}
-	case tonohttp.OutcomeError:
-		return zero, DecodeCreateChargeError(outcome.Status, []byte(outcome.Body))
 	}
-	out, path, ok := DecodeCharge([]byte(outcome.Body))
-	if !ok {
-		return zero, &DecodeError{Path: path, Expected: "Charge", Raw: outcome.Body}
+	if outcome.Status >= 200 && outcome.Status < 300 {
+		out, path, ok := DecodeCharge([]byte(outcome.Body))
+		if !ok {
+			return zero, &DecodeError{Path: path, Expected: "Charge", Raw: outcome.Body}
+		}
+		return out, nil
 	}
-	return out, nil
+	return zero, DecodeCreateChargeError(outcome.Status, []byte(outcome.Body))
 }
 
 func DecodeCreateChargeError(status int, body []byte) error {

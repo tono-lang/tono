@@ -37,7 +37,7 @@ fn the_construction_surface_is_new_options_settings_and_the_mock_interface() {
     // Settings carry every resolved field plus the transport slots.
     assert!(types.contains("type Settings struct {"));
     assert!(types.contains("\tHTTPClient *http.Client\n"));
-    assert!(types.contains("\tTransport  tonohttp.Transport\n"));
+    assert!(types.contains("\tTransport  support.HTTPTransport\n"));
     assert!(types.contains("\tHeaders    map[string]string\n"));
     // The config is a construction-only struct, hidden (unexported) from the
     // package's public surface.
@@ -82,11 +82,9 @@ fn the_resolution_follows_the_declared_chains() {
     // keeps its own chain.
     assert!(serde.contains("composed.APIKey = s.APIKey"));
     assert!(serde.contains("composed.Region = \"us\""));
-    // The resolved values freeze for the runtime's ref positions, ints
-    // widened and durations in milliseconds.
-    assert!(serde.contains("values[\"max_retries\"] = int64(s.MaxRetries)"));
-    assert!(serde.contains("ms, err := duration.DurationMs(string(s.Timeout))"));
-    assert!(serde.contains("values[\"settings.api_key\"] = s.Settings.APIKey"));
+    // Nothing freezes into a runtime bag anymore: a wire position reads the
+    // typed Settings at its own call site.
+    assert!(!serde.contains("values :="));
 }
 
 #[test]
@@ -134,43 +132,125 @@ fn a_multi_entry_module_prefixes_the_colliding_companions() {
     assert!(serde.contains("func NewAdmin(apiKey string, opts ...AdminOption) (*Admin, error) {"));
 }
 
-/// Attach an opaque descriptor to every entry op, standing in for the
-/// frontend's protocol pass (the schema fixture is pre-protocol).
-fn with_descriptors(mut module: Module) -> Module {
+/// The full typed wire binding the fixture ops carry under test: a labeled
+/// path, a mixed body, a declared header, and the retry/timeout policy, so
+/// one emission exercises every request position. The typechecker rejects an
+/// entry @http op without an endpoint, so the fixture always carries one.
+fn typed_wire() -> crate::ir::WireBinding {
+    crate::ir::WireBinding {
+        method: "POST".into(),
+        uri: vec![
+            TemplatePart::Lit("/notes/".into()),
+            TemplatePart::Input("id".into()),
+        ],
+        bindings: [
+            ("id".to_string(), crate::ir::WirePart::Label),
+            ("body".to_string(), crate::ir::WirePart::Body),
+        ]
+        .into_iter()
+        .collect(),
+        response_bindings: Default::default(),
+        success: vec![200],
+        endpoint: Some(vec!["endpoint".into()]),
+        request_headers: vec![(
+            vec![TemplatePart::Lit("X-API-Key".into())],
+            crate::ir::WireValue::Field(vec!["api_key".into()]),
+        )],
+        timeout: Some(vec!["timeout".into()]),
+        retry: Some(vec!["max_retries".into()]),
+    }
+}
+
+/// Attach `wire` to every entry op, standing in for the frontend's protocol
+/// pass (the schema fixture is pre-protocol).
+fn with_wire(mut module: Module, wire: crate::ir::WireBinding) -> Module {
     for shape in &mut module.shapes {
         if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
             for op in operations {
-                op.traits.push(crate::ir::Trait {
-                    id: "wire_descriptor".into(),
-                    value: serde_json::json!({"http_method": "POST", "uri": "/notes/{id}"}),
-                });
+                if let ShapeKind::Operation { wire: slot, .. } = &mut op.kind {
+                    *slot = Some(Box::new(wire.clone()));
+                }
             }
         }
     }
     module
 }
 
+fn with_descriptors(module: Module) -> Module {
+    with_wire(module, typed_wire())
+}
+
 #[test]
-fn the_method_maps_the_raw_outcome_onto_the_taxonomy() {
+fn the_method_assembles_the_request_and_maps_the_outcome_onto_the_taxonomy() {
     let module = with_descriptors(fixture_module());
     let serde = entry_text(&module);
-    // The descriptor is embedded verbatim, an opaque blob.
-    assert!(serde.contains("var saveNoteDescriptor = descriptor.MustDescriptor("));
-    // The retry loop and the decoded error type read the same discriminator
-    // via an inline predicate, so they can never disagree.
+    // No embedded descriptor blob: the request assembles from the typed wire
+    // binding in the method's own text.
+    assert!(!serde.contains("MustDescriptor"));
+    assert!(serde.contains("record, err := record.EncodeRecord(input)"));
     assert!(serde.contains(
-        "outcome, err := c.runtime.Execute(ctx, saveNoteDescriptor, record, c.hooks, func(status int, body string) bool {"
+        "requestURL := c.settings.Endpoint + \"/notes/\" + transport.PathPart(record[\"id\"])"
+    ));
+    // Headers layer declared, then base, and the declared value reads the
+    // typed settings directly.
+    assert!(serde.contains("transport.SetHeader(headers, \"X-API-Key\", c.settings.APIKey)"));
+    assert!(serde.contains("for name, value := range c.settings.Headers {"));
+    // A mixed body assembles just the body-bound members.
+    assert!(serde.contains("body, err := transport.EncodeBody(record, \"body\")"));
+    assert!(serde.contains(
+        "outcome, err := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
+    ));
+    // @timeout reads the pre-converted client field the constructor built.
+    assert!(serde.contains("Timeout: c.timeoutDuration,"));
+    assert!(serde.contains("d, err := time.ParseDuration(string(s.Timeout))"));
+    assert!(serde.contains("timeoutDuration = d"));
+    // The retry policy and the decoded error type read the same
+    // discriminator, so they can never disagree.
+    assert!(serde.contains(
+        "Retry: transport.Retry{Max: int(c.settings.MaxRetries), When: func(status int, body string) bool {"
     ));
     assert!(serde.contains(
         "if re, ok := DecodeSaveNoteError(status, []byte(body)).(interface{ Retryable() bool }); ok {"
     ));
-    assert!(serde.contains("case tonohttp.OutcomeTransport:"));
+    // The timing seam rides the client for the package's own tests to pin.
+    assert!(serde.contains("Timing: c.timing,"));
+    assert!(serde.contains("timing transport.Timing"));
     assert!(serde.contains("&TransportError{Cause: outcome.Cause}"));
     assert!(serde.contains("DecodeSaveNoteError(outcome.Status, []byte(outcome.Body))"));
     // The required-member probe lives once per type (DecodeNote); the call
     // site only routes the returned path into its own DecodeError.
     assert!(serde.contains("out, path, ok := DecodeNote([]byte(outcome.Body))"));
     assert!(serde.contains("&DecodeError{Path: path, Expected: \"Note\", Raw: outcome.Body}"));
+}
+
+#[test]
+fn an_operation_with_no_retry_or_timeout_declares_neither() {
+    let mut wire = typed_wire();
+    wire.uri = vec![TemplatePart::Lit("/notes".into())];
+    wire.bindings = [
+        ("id".to_string(), crate::ir::WirePart::Body),
+        ("body".to_string(), crate::ir::WirePart::Body),
+    ]
+    .into_iter()
+    .collect();
+    wire.request_headers = Vec::new();
+    wire.retry = None;
+    wire.timeout = None;
+    let module = with_wire(fixture_module(), wire);
+    let serde = entry_text(&module);
+    // The all-body input marshals directly; no record indirection.
+    assert!(serde.contains("body, err := json.Marshal(input)"));
+    assert!(!serde.contains("EncodeRecord"));
+    // No trace of the undeclared policies, in the method or on the client.
+    assert!(!serde.contains("transport.Retry"));
+    assert!(!serde.contains("Timing"));
+    assert!(!serde.contains("Timeout:"));
+    assert!(!serde.contains("timeoutDuration"));
+    assert!(!serde.contains("time.ParseDuration"));
+    assert!(!serde.contains("Hooks"));
+    assert!(serde.contains(
+        "outcome, err := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
+    ));
 }
 
 #[test]
@@ -351,8 +431,15 @@ fn an_entry_field_rename_retargets_every_go_identifier() {
     assert!(serde.contains("AuthToken string"));
     assert!(serde.contains("s.AuthToken = AuthToken"));
     assert!(!serde.contains("PrimaryKey"));
-    // The canonical dotted key the runtime reads is unchanged (not renamed).
-    assert!(serde.contains("values[\"primary_key\"]"));
+    // A wire position naming the field by its canonical path still reads the
+    // renamed Go identifier.
+    let mut wire = typed_wire();
+    wire.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Auth".into())],
+        crate::ir::WireValue::Field(vec!["primary_key".into()]),
+    )];
+    let wired = entry_text(&with_wire(module, wire));
+    assert!(wired.contains("transport.SetHeader(headers, \"X-Auth\", c.settings.AuthToken)"));
 }
 
 #[test]
@@ -518,10 +605,10 @@ fn a_constrained_op_input_is_validated_before_transport() {
     assert!(serde.contains("return zero, invalid"));
     // The check runs before the transport call, not after.
     let val = serde.find("ValidateNote(input)").expect("validate call");
-    let exec = serde
-        .find("c.runtime.Execute(ctx, saveNoteDescriptor")
-        .expect("execute call");
-    assert!(val < exec);
+    let send = serde
+        .find("outcome, err := transport.Send(ctx")
+        .expect("send call");
+    assert!(val < send);
 }
 
 #[test]
@@ -560,10 +647,8 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(serde.contains("strconv.ParseFloat(v, 64)"));
     assert!(serde.contains("time.ParseDuration(v)"));
     assert!(serde.contains("case \"true\", \"1\":"));
-    // An enum field is a branded string: cast at the boundary, frozen into
-    // the values.
+    // An enum field is a branded string: cast at the boundary.
     assert!(serde.contains("s.Mode = Mode(v)"));
-    assert!(serde.contains("values[\"mode\"] = string(s.Mode)"));
     // Guaranteed and error-tracked dynamic env names both spell one balanced run.
     assert!(serde.contains("os.LookupEnv(s.SureName)"));
     assert!(serde.contains(
@@ -646,9 +731,17 @@ fn a_64_bit_operation_output_decodes_from_its_wire_string() {
 }
 
 #[test]
-fn an_enum_member_of_a_config_freezes_as_a_branded_string() {
+fn an_enum_member_of_a_config_flattens_at_a_wire_position() {
     let mut module = fixture_module();
     with_enum_config_member(&mut module);
-    let serde = entry_text(&module);
-    assert!(serde.contains("values[\"settings.mode\"] = string(s.Settings.Mode)"));
+    let mut wire = typed_wire();
+    wire.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Mode".into())],
+        crate::ir::WireValue::Field(vec!["settings".into(), "mode".into()]),
+    )];
+    let serde = entry_text(&with_wire(module, wire));
+    // A branded string flattens through string(...) rather than being
+    // JSON-marshalled (which would quote it).
+    assert!(serde
+        .contains("transport.SetHeader(headers, \"X-Mode\", string(c.settings.Settings.Mode))"));
 }

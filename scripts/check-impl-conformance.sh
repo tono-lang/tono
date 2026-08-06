@@ -54,8 +54,6 @@ cp -R "$work"/sdk/go/. "$work/go/"
 # imported.
 cp "$example/ext/go/notes.go" "$work/go/notes/bespoke.go"
 (cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 \
-    && go mod edit -require=github.com/tono-lang/tono/runtimes/http-go@v0.0.0 \
-    && go mod edit -replace=github.com/tono-lang/tono/runtimes/http-go="$root/runtimes/http-go" \
     && go mod edit -require=github.com/tono-lang/tono/runtimes/ext-go@v0.0.0 \
     && go mod edit -replace=github.com/tono-lang/tono/runtimes/ext-go="$root/runtimes/ext-go" \
     && go mod tidy >/dev/null \
