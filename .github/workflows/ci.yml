@@ -311,6 +311,17 @@ jobs:
       - name: Mutation (a live mutant fails the build)
         run: cargo mutants --jobs 4
         working-directory: runtimes/http-rust
+      # The parity gate: scripts/run-parity.sh compiles runtimes/parity/spec.tono,
+      # generates the real Rust SDK, and runs the harness as a test module of
+      # the generated crate itself, so this needs both compiler halves rather
+      # than just the runtime package above.
+      - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
+        with:
+          ocaml-compiler: "5.2"
+      - name: Install the frontend's OCaml dependencies
+        run: opam install yojson --yes
+      - name: Parity vectors against the generated SDK
+        run: scripts/run-parity.sh rust
 
   # Single aggregating check - this is the one to mark "required" in branch protection.
   ci-success:

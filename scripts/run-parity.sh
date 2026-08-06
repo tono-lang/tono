@@ -4,9 +4,9 @@
 # into a throwaway directory, drops the hand-written harness in next to it,
 # and runs that target's native test suite.
 #
-# TypeScript and Go are repointed against the generated SDK; Rust still
-# exercises its runtime package directly and slots in as another case later,
-# without a rewrite.
+# Every target (TypeScript, Go, Rust) is repointed against the generated SDK,
+# so the suite proves what a consumer actually imports, not that a
+# hand-written runtime interprets a synthetic descriptor.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -14,11 +14,7 @@ root="$PWD"
 lang="${1:-typescript}"
 
 case "$lang" in
-typescript | go) ;;
-rust)
-    echo "run-parity.sh: rust is not repointed against a generated SDK yet; its share of the parity gate runs through 'cargo test' in runtimes/http-rust (set TONO_PARITY_VECTORS to require it)" >&2
-    exit 1
-    ;;
+typescript | go | rust) ;;
 *)
     echo "run-parity.sh: unknown target '$lang' (expected typescript, go, or rust)" >&2
     exit 1
@@ -78,6 +74,39 @@ go)
 
     echo "running the parity suite against the generated SDK..."
     (cd "$work/sdk/go" && go mod init parity.test/sdk >/dev/null 2>&1 && go mod tidy >/dev/null && go test ./...)
+    ;;
+rust)
+    echo "generating the Rust SDK..."
+    "$tono" gen --target rust --out "$work/sdk" <"$work/ir.json"
+
+    echo "assembling the SDK crate with the parity harness..."
+    # The harness runs as a #[cfg(test)] module of the generated crate itself:
+    # that is what lets it reach the pub(crate) construction seam and pin the
+    # client's crate-visible sleep/random pair (a tests/ integration test
+    # would be a separate crate and see neither).
+    mkdir -p "$work/crate/src"
+    cp -R "$work/sdk/rust/." "$work/crate/src/"
+    cp "$root/runtimes/parity/rust/parity_harness.rs" "$work/crate/src/"
+    cp "$root/runtimes/parity/vectors.json" "$work/crate/src/"
+    printf '#[cfg(test)]\nmod parity_harness;\n' >>"$work/crate/src/lib.rs"
+    cat >"$work/crate/Cargo.toml" <<EOF
+[package]
+name = "parity_sdk"
+version = "0.0.0"
+edition = "2021"
+[features]
+default = ["reqwest"]
+reqwest = ["dep:reqwest"]
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+[workspace]
+EOF
+
+    echo "running the parity suite against the generated SDK..."
+    (cd "$work/crate" && cargo test --quiet)
     ;;
 esac
 
