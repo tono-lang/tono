@@ -655,6 +655,7 @@ fn op_method_decl(
     Decl::raw_with(text, refs)
 }
 
+mod assembly;
 #[cfg(test)]
 mod bespoke_tests;
 mod constructor;
