@@ -47,16 +47,16 @@ fn imports_render_as_go_import_lines() {
         rules.render_import("payments.charges::types", "encoding/json", &[]),
         "\"encoding/json\""
     );
-    // An external package whose path segment is not a legal identifier (the
-    // runtime's http-go) carries its alias explicitly, so the tonohttp.X
+    // An external package whose path segment is not a legal identifier (a
+    // hyphenated module name) carries its alias explicitly, so the alias.X
     // references resolve without leaning on the package clause.
     assert_eq!(
         rules.render_import(
             "payments.charges::types",
-            "github.com/tono-lang/tono/runtimes/http-go",
-            &["tonohttp"]
+            "github.com/example/some-package",
+            &["alias"]
         ),
-        "tonohttp \"github.com/tono-lang/tono/runtimes/http-go\""
+        "alias \"github.com/example/some-package\""
     );
     // The statements are one block, since gofmt will not fold loose ones.
     assert_eq!(

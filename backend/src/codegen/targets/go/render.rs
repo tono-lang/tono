@@ -285,13 +285,13 @@ impl RenderRules for GoRules {
             None => module.replace('.', "/"),
         };
         // Go infers the package selector from the path's last segment, but only
-        // when that segment is a legal identifier. The runtimes/http-go package
-        // clause is `tonohttp` and `http-go` is not an identifier (the hyphen),
-        // so the reference cannot resolve without an explicit alias. Emit it in
-        // that case, taking the alias from the import name. A legal-identifier
-        // segment (every stdlib package, every internal SDK module, the flat
-        // single-package layout) stays bare, so the `imported` slot (reused for
-        // the referenced symbol name in those layouts) is correctly ignored.
+        // when that segment is a legal identifier. A path whose last segment has
+        // a hyphen (a real-world module like "some-package") cannot resolve
+        // without an explicit alias, so emit one, taking it from the import
+        // name. A legal-identifier segment (every stdlib package, every
+        // internal SDK module, the flat single-package layout) stays bare, so
+        // the `imported` slot (reused for the referenced symbol name in those
+        // layouts) is correctly ignored.
         let inferred = full.rsplit('/').next().unwrap_or(&full);
         match names.first() {
             Some(alias) if !is_internal && !is_go_ident(inferred) => {
