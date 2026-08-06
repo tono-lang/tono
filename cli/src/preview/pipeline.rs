@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use tono_backend::codegen::{
-    check, check_layout, generate, CheckOptions, CheckOutcome, CodegenConfig, Formatter,
-    GeneratedFile, TargetKind,
+    check, check_layout, generate, CheckOutcome, CodegenConfig, Formatter, GeneratedFile,
+    TargetKind,
 };
 use tono_backend::ir::decode_model;
 
@@ -91,15 +91,13 @@ impl Verdict {
 
 /// Run the whole chain for `source_path` and `target`. `scratch` is the throwaway
 /// build directory (reused across passes so the toolchain keeps its incremental
-/// cache); `options` carries the TypeScript runtime mapping. Every problem, from an
-/// unreadable file to a scaffolding failure, is a [`Verdict`], so a pass always
-/// yields a [`Snapshot`] the UI can render.
+/// cache). Every problem, from an unreadable file to a scaffolding failure, is a
+/// [`Verdict`], so a pass always yields a [`Snapshot`] the UI can render.
 pub fn run(
     frontend: &Frontend,
     source_path: &Path,
     target: TargetKind,
     scratch: &Path,
-    options: &CheckOptions,
 ) -> Snapshot {
     let source = match std::fs::read_to_string(source_path) {
         Ok(text) => text,
@@ -150,7 +148,7 @@ pub fn run(
         file.text = pane_text(Formatter::for_output(file.target, &file.path).run(&file.text));
     }
     let generated = assemble(&files);
-    let verdict = match check(target, &files, scratch, options) {
+    let verdict = match check(target, &files, scratch) {
         Ok(outcome) => verdict_of(outcome),
         Err(e) => Verdict::CheckError(e.to_string()),
     };
@@ -302,13 +300,7 @@ mod tests {
         let frontend = Frontend::from_env();
         let missing = std::env::temp_dir().join("tono-preview-does-not-exist.tono");
         let _ = std::fs::remove_file(&missing);
-        let snapshot = run(
-            &frontend,
-            &missing,
-            TargetKind::Rust,
-            &std::env::temp_dir(),
-            &CheckOptions::default(),
-        );
+        let snapshot = run(&frontend, &missing, TargetKind::Rust, &std::env::temp_dir());
         assert!(matches!(snapshot.verdict, Verdict::SourceUnreadable(_)));
         assert!(snapshot.generated.is_empty());
     }

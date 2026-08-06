@@ -1,13 +1,12 @@
-// The cross-runtime parity suite, Go side: like the TypeScript harness (and
-// unlike Rust, still exercising the hand-written runtime package directly),
-// this one drives the real generated SDK compiled from ../spec.tono. This
+// The cross-runtime parity suite, Go side: like its TypeScript and Rust
+// siblings, drives the real generated SDK compiled from ../spec.tono. This
 // file is not run in place: scripts/run-parity.sh copies it into the SDK's
 // own generated package directory (and ../vectors.json next to the go.mod)
 // before running `go test`, so the same-package references below resolve
 // against generated code, not against this source tree. It lives here, next
-// to the spec and vectors it exercises, rather than inside runtimes/http-go:
-// that package (and its Rust counterpart) is retired once every target emits
-// its own transport, and this harness outlives both.
+// to the spec and vectors it exercises: the hand-written runtimes/http-go
+// package it used to drive is gone, retired once every target started
+// emitting its own transport.
 //
 // Jitter is pinned to 0.5 and backoff sleeps are recorded through the
 // generated client's own unexported timing seam (c.timing), reachable only

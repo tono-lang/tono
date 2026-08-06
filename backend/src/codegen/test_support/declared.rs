@@ -84,14 +84,10 @@ pub fn with_tests(mut module: Module, tests: Vec<TestDecl>) -> Module {
     module
 }
 
-/// Push the canonical wire descriptor onto every entry op (so an `.http` stub
-/// validates) and install the declared tests.
+/// Mark every entry op as wire-bound (so an `.http` stub validates) and
+/// install the declared tests.
 pub fn wired(mut module: Module, tests: Vec<TestDecl>) -> Module {
-    super::push_entry_op_trait(
-        &mut module,
-        "wire_descriptor",
-        serde_json::json!({"http_method": "POST", "uri": "/notes", "bindings": {}}),
-    );
+    super::push_entry_op_wire(&mut module, "POST");
     with_tests(module, tests)
 }
 

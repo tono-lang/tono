@@ -1,6 +1,5 @@
-(* JSON codec for the resolved wire binding: the typed counterpart of the
-   opaque wire_descriptor blob a protocol trait carries. [Ir_json] folds this
-   into the operation shape kind. *)
+(* JSON codec for the resolved wire binding, the "wire" field on an operation
+   shape. [Ir_json] folds this into the operation shape kind. *)
 
 let encode_template_part = Ir_json_entry.encode_template_part
 let decode_template_part = Ir_json_entry.decode_template_part

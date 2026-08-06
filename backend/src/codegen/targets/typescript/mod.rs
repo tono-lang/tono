@@ -22,7 +22,6 @@ crate::declare_target! {
         symbol_of: symbols::symbol_of,
         emit_type: types::emit_type,
         casing: types::ts_casing,
-        runtime_pkg: client::RUNTIME_PKG,
     }
 }
 
@@ -30,23 +29,15 @@ crate::declare_target! {
 mod tests {
     use super::*;
     use crate::codegen::target::Target;
-    use crate::codegen::test_support::assert_emits_no_op_stub;
     use crate::ir::{Prim, Tref};
 
     #[test]
-    fn target_identity_and_runtime() {
+    fn target_identity() {
         assert_eq!(TsTarget.name(), "typescript");
-        assert_eq!(TsTarget.runtime_pkg(), client::RUNTIME_PKG);
-        assert_eq!(TsTarget.runtime_pkg(), "@tono/http-runtime-ts");
     }
 
     #[test]
     fn symbol_of_delegates_to_the_symbol_table() {
         assert_eq!(TsTarget.symbol_of(&Tref::Prim(Prim::I64)).name, "bigint");
-    }
-
-    #[test]
-    fn emit_op_stub_emits_nothing_and_ignores_the_descriptor() {
-        assert_emits_no_op_stub(&TsTarget);
     }
 }

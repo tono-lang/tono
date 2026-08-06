@@ -1,8 +1,8 @@
 /* The Run panel: bundle the user's snippet against the generated TypeScript
-   SDK (and the real @tono/http-runtime-ts sources) with esbuild-wasm, then
-   execute the bundle in a sandboxed module worker. HTTP never leaves the
-   worker: the harness replaces global fetch with a route table the user
-   declares, and seeds process.env for @env fields the same way. */
+   SDK with esbuild-wasm, then execute the bundle in a sandboxed module
+   worker. HTTP never leaves the worker: the harness replaces global fetch
+   with a route table the user declares, and seeds process.env for @env
+   fields the same way. */
 import type { GeneratedFile } from "./types";
 
 export interface RunConfig {
@@ -135,12 +135,9 @@ async function loadEsbuild(): Promise<Esbuild> {
 }
 
 /* Virtual filesystem for the bundler: the generated TS files keep their
-   relative layout (minus the "typescript/" target prefix), the runtime
-   sources live under runtime/, and "sdk" resolves to the module barrel. */
-function virtualFiles(
-  files: GeneratedFile[],
-  runtime: Record<string, string>,
-): { fs: Map<string, string>; sdkEntry: string } {
+   relative layout (minus the "typescript/" target prefix), and "sdk"
+   resolves to the module barrel. */
+function virtualFiles(files: GeneratedFile[]): { fs: Map<string, string>; sdkEntry: string } {
   const fs = new Map<string, string>();
   let sdkEntry = "";
   for (const file of files) {
@@ -148,9 +145,6 @@ function virtualFiles(
     if (path === "package.json") continue;
     fs.set(path, file.text);
     if (path.endsWith("/index.ts") && !sdkEntry) sdkEntry = path;
-  }
-  for (const [name, text] of Object.entries(runtime)) {
-    fs.set(`runtime/${name}`, text);
   }
   if (!sdkEntry) sdkEntry = files.length > 0 ? "index.ts" : "";
   return { fs, sdkEntry };
@@ -165,11 +159,10 @@ function resolveVirtual(fs: Map<string, string>, spec: string): string | null {
 export async function bundleRun(options: {
   userCode: string;
   sdkFiles: GeneratedFile[];
-  runtimeSources: Record<string, string>;
   config: RunConfig;
 }): Promise<string> {
   const esbuild = await loadEsbuild();
-  const { fs, sdkEntry } = virtualFiles(options.sdkFiles, options.runtimeSources);
+  const { fs, sdkEntry } = virtualFiles(options.sdkFiles);
   const plugin = {
     name: "playground-virtual",
     setup(build: {
@@ -185,7 +178,6 @@ export async function bundleRun(options: {
           const hit = resolveVirtual(fs, args.path.slice(4));
           if (hit) return { path: hit, namespace: "v" };
         }
-        if (args.path === "@tono/http-runtime-ts") return { path: "runtime/index.ts", namespace: "v" };
         if (args.path.startsWith(".")) {
           const base = args.importer.includes("/")
             ? args.importer.slice(0, args.importer.lastIndexOf("/"))

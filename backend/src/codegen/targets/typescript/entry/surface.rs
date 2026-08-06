@@ -156,8 +156,8 @@ pub(super) fn discriminator_decls_for(
         .collect()
 }
 
-/// The runtime-facing hook wrappers (`before_request`/`after_response`),
-/// shared spelling with the loose-op client.
+/// The runtime-facing hook wrappers (`before_request`/`after_response`) an
+/// entry's transport calls before/after the request.
 pub(super) fn transport_hook_wrappers(bound: &[BoundExtension<'_>], module: &Module) -> Vec<Decl> {
     let en = error_names();
     let mut decls = Vec::new();

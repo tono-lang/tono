@@ -380,8 +380,25 @@ fn pascal_ident(name: &str) -> String {
 /// Generation-time validation of the entry surface: the cases the frontend
 /// cannot see (they are target rules) and that would otherwise produce
 /// uncompilable or silently wrong output. Returns the first offense.
+///
+/// This also covers the one loose-operation rule: entries are the only
+/// supported HTTP client surface, so a loose (non-entry) operation carrying a
+/// `wire` binding is rejected here, the same way an entry `@http` op with no
+/// endpoint is below. The frontend still accepts a loose `@http` op (nothing
+/// about the language changes), so this is a generation-time gap the same as
+/// the endpoint check, not a checker rule.
 pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
     for module in &model.modules {
+        for op in &module.operations {
+            if let ShapeKind::Operation { wire: Some(_), .. } = &op.kind {
+                return Err(format!(
+                    "module {}: operation {} carries an @http binding outside an entry; \
+                     entries are the only supported HTTP client surface",
+                    module.name,
+                    local_name(&op.id)
+                ));
+            }
+        }
         let entries = module_entries(module);
         if entries.is_empty() {
             continue;

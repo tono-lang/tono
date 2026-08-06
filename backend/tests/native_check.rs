@@ -8,15 +8,13 @@
 
 use std::path::PathBuf;
 
-use tono_backend::codegen::{
-    check, generate, CheckOptions, CheckOutcome, CodegenConfig, TargetKind,
-};
+use tono_backend::codegen::{check, generate, CheckOutcome, CodegenConfig, TargetKind};
 use tono_backend::ir::decode_model;
 
 /// A one-module model with a single `i64` field. The wide integer forces the
 /// serde split (a Rust helper module, TypeScript codecs), so the check exercises
 /// a multi-file layout, not just a lone type.
-const IR: &str = r#"{"tono_ir_version":8,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR: &str = r#"{"tono_ir_version":9,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("tono-native-check-{name}"));
@@ -33,13 +31,7 @@ fn generated(target: TargetKind) -> Vec<tono_backend::codegen::GeneratedFile> {
 #[ignore = "requires the rust toolchain (cargo)"]
 fn rust_sdk_compiles() {
     let dir = scratch("rust");
-    let outcome = check(
-        TargetKind::Rust,
-        &generated(TargetKind::Rust),
-        &dir,
-        &CheckOptions::default(),
-    )
-    .expect("scaffold");
+    let outcome = check(TargetKind::Rust, &generated(TargetKind::Rust), &dir).expect("scaffold");
     assert_eq!(
         outcome,
         CheckOutcome::Compiles,
@@ -52,13 +44,7 @@ fn rust_sdk_compiles() {
 #[ignore = "requires the go toolchain"]
 fn go_sdk_compiles() {
     let dir = scratch("go");
-    let outcome = check(
-        TargetKind::Go,
-        &generated(TargetKind::Go),
-        &dir,
-        &CheckOptions::default(),
-    )
-    .expect("scaffold");
+    let outcome = check(TargetKind::Go, &generated(TargetKind::Go), &dir).expect("scaffold");
     assert_eq!(outcome, CheckOutcome::Compiles, "generated Go must compile");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -67,13 +53,10 @@ fn go_sdk_compiles() {
 #[ignore = "requires the typescript toolchain (tsc)"]
 fn typescript_sdk_compiles() {
     let dir = scratch("ts");
-    // This model has no operations, so the client (the only importer of the HTTP
-    // runtime) is absent and no runtime mapping is needed.
     let outcome = check(
         TargetKind::TypeScript,
         &generated(TargetKind::TypeScript),
         &dir,
-        &CheckOptions::default(),
     )
     .expect("scaffold");
     // Accept a missing tsc (it is often only a project-local dependency): the

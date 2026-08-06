@@ -215,8 +215,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_8 () =
-  Alcotest.(check int) "wire version" 8 Ir_json.current_ir_version
+let version_is_9 () =
+  Alcotest.(check int) "wire version" 9 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -230,7 +230,7 @@ let fmt_roundtrip () =
     "printing is a fixpoint" printed
     (Printer.print_file reparsed)
 
-(* ── Protocol: entry refs land in the wire descriptor ──────────────────── *)
+(* ── Protocol: entry refs land in the typed wire binding ────────────────── *)
 
 let descriptor_carries_refs () =
   let m = Protocol_http.resolve_module (compile canonical_client) in
@@ -238,43 +238,31 @@ let descriptor_carries_refs () =
   match client.kind with
   | Ir.Entry { operations; _ } ->
       let op = List.hd operations in
-      let desc =
-        match
-          List.find_opt
-            (fun (t : Ir.trait) -> t.trait_id = "wire_descriptor")
-            op.traits
-        with
-        | Some t -> t.value
-        | None -> Alcotest.fail "nested op has no wire_descriptor"
-      in
-      let get k =
-        match desc with `Assoc kvs -> List.assoc_opt k kvs | _ -> None
+      let wb =
+        match op.kind with
+        | Ir.Operation { wire = Some wb; _ } -> wb
+        | _ -> Alcotest.fail "nested op has no wire binding"
       in
       Alcotest.(check bool)
         "endpoint ref" true
-        (get "endpoint" = Some (`List [ `String "endpoint" ]));
+        (wb.Ir.wb_endpoint = Some [ "endpoint" ]);
       Alcotest.(check bool)
-        "timeout is a value-source ref" true
-        (get "timeout" = Some (`Assoc [ ("ref", `String "timeout") ]));
+        "timeout is a plain entry-field ref" true
+        (wb.Ir.wb_timeout = Some [ "timeout" ]);
       Alcotest.(check bool)
-        "retry wraps its max value-source" true
-        (get "retry"
-        = Some (`Assoc [ ("max", `Assoc [ ("ref", `String "max_retries") ]) ]));
+        "retry is a plain entry-field ref" true
+        (wb.Ir.wb_retry = Some [ "max_retries" ]);
       (* A declared error's (status, @errorCode, @retryable) is the generated
-         SDK's own decode<Op>Error + .retryable() pair to own; the descriptor
-         carries no parallel copy. *)
-      Alcotest.(check bool) "no errors key" true (get "errors" = None);
+         SDK's own decode<Op>Error + .retryable() pair to own; wire_binding
+         has no field for it, so there is nothing to assert here. *)
       Alcotest.(check bool)
         "one declared header" true
-        (match get "request_headers" with
-        | Some
-            (`List [ `List [ _key; `Assoc [ ("field", `List [ `String f ]) ] ] ])
-          ->
-            String.equal f "client_name"
+        (match wb.Ir.wb_request_headers with
+        | [ (_key, Ir.Wire_field [ f ]) ] -> String.equal f "client_name"
         | _ -> false);
       Alcotest.(check bool)
-        "uri keeps both placeholder scopes verbatim" true
-        (get "uri" = Some (`String "/notes/{id}"))
+        "uri keeps both placeholder scopes as typed parts" true
+        (wb.Ir.wb_uri = [ Ir.Tpl_lit "/notes/"; Ir.Tpl_input "id" ])
   | _ -> Alcotest.fail "client is not an entry"
 
 let loose_descriptor_has_no_entry_fields () =
@@ -285,23 +273,16 @@ let loose_descriptor_has_no_entry_fields () =
           op o(w): w @http(method: \"GET\", path: \"/w\")")
   in
   let op = List.hd m.operations in
-  let desc =
-    match
-      List.find_opt
-        (fun (t : Ir.trait) -> t.trait_id = "wire_descriptor")
-        op.traits
-    with
-    | Some t -> t.value
-    | None -> Alcotest.fail "loose op has no wire_descriptor"
+  let wb =
+    match op.kind with
+    | Ir.Operation { wire = Some wb; _ } -> wb
+    | _ -> Alcotest.fail "loose op has no wire binding"
   in
-  match desc with
-  | `Assoc kvs ->
-      Alcotest.(check bool)
-        "no entry-scoped keys" true
-        (List.for_all
-           (fun k -> not (List.mem_assoc k kvs))
-           [ "endpoint"; "request_headers"; "timeout"; "retry" ])
-  | _ -> Alcotest.fail "descriptor is not an object"
+  Alcotest.(check bool)
+    "no entry-scoped fields" true
+    (wb.Ir.wb_endpoint = None && wb.Ir.wb_timeout = None
+   && wb.Ir.wb_retry = None
+    && wb.Ir.wb_request_headers = [])
 
 (* A second, dedicated snippet (kept separate from [canonical_client] so its
    many other tests stay untouched): query/payload input bindings and
@@ -562,7 +543,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 8" `Quick version_is_8;
+          Alcotest.test_case "version 9" `Quick version_is_9;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",

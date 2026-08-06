@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 8, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 9, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **8**.
+The current version is **9**.
 
 ## Modules
 
@@ -212,10 +212,10 @@ the string (`"/notes/{.x}/{id}"`).
 
 An operation's `@http` annotations resolve once, in the frontend, into a
 typed `wire` field on the operation shape (see the `operation` kind above) so
-the backend can read the binding directly instead of parsing an opaque blob.
-(A `wire_descriptor` trait carrying the same resolution as an opaque JSON
-blob still rides the trait bag too, kept for backward compatibility until
-every emitter reads `wire` instead.)
+the backend can read the binding directly. This is the only wire
+representation (v9 removed the `wire_descriptor` trait that carried the same
+resolution as an opaque JSON blob, kept until then for backward
+compatibility).
 
 ```json
 { "method": "GET",

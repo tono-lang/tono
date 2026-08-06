@@ -24,11 +24,10 @@ src/**.tono ──frontend──▶ ir.json ──tono gen──▶ sdk/{rust,go
     becomes the SDK construction surface: `New(apiKey, ...)` with functional
     options in Go, `new Client(apiKey, config?)` in TypeScript, each resolving
     the declared sources, validating, and freezing the resolved values for the
-    runtime. The `@http` binding is resolved into an opaque wire descriptor the
-    generated SDKs embed and hand to the hand-written runtimes
-    ([`runtimes/http-ts`](../../runtimes/http-ts),
-    [`runtimes/http-go`](../../runtimes/http-go)); the descriptor's endpoint,
-    header, timeout, and retry references resolve against those frozen values.
+    runtime. The `@http` binding is resolved into a typed wire binding that
+    each target's entry codegen renders into its own inline HTTP transport;
+    the binding's endpoint, header, timeout, and retry references resolve
+    against those frozen values.
 - [`ir.json`](ir.json) — the canonical IR the frontend emits (the contract the
   backend consumes). Shape ids are module-qualified (`payments.charges#charge`).
 - [`sdk/`](sdk) — the generated source, laid out in emission groups. Each module

@@ -249,12 +249,10 @@ fn declared_tests_generate_a_hermetic_and_a_live_rust_test_file() {
 #[test]
 fn impl_stubbed_tests_are_skipped_for_rust() {
     let mut module = simple_entry_module();
-    // Rebind the op as bespoke: strip its wire binding (and the descriptor
-    // trait the declared-test validation still reads) and bind an impl.
+    // Rebind the op as bespoke: strip its wire binding and bind an impl.
     for shape in &mut module.shapes {
         if let crate::ir::ShapeKind::Entry { operations, .. } = &mut shape.kind {
             for op in operations {
-                op.traits.retain(|t| t.id != "wire_descriptor");
                 if let crate::ir::ShapeKind::Operation { wire, .. } = &mut op.kind {
                     *wire = None;
                 }

@@ -372,7 +372,7 @@ async function start(): Promise<void> {
   function refreshTsLang(): void {
     if (!tsLang || !state.ir) return;
     try {
-      tsLang.update(compiler.generate(state.ir, "ts"), runtimeSources, state.moduleName);
+      tsLang.update(compiler.generate(state.ir, "ts"), state.moduleName);
     } catch {
       /* An SDK that does not generate leaves the last good types in place. */
     }
@@ -421,16 +421,6 @@ async function start(): Promise<void> {
       }
     });
   }
-
-  const runtimeSources: Record<string, string> = Object.fromEntries(
-    Object.entries(
-      import.meta.glob("./generated/runtime-ts/*.ts", {
-        eager: true,
-        query: "?raw",
-        import: "default",
-      }),
-    ).map(([path, text]) => [path.split("/").pop()!, text as string]),
-  );
 
   const RUN_TEMPLATES: Record<string, { lang: "ts" | "rust" | "go"; doc: (m: string) => string }> = {
     ts: {
@@ -655,7 +645,6 @@ func main() {
     bundleRun({
       userCode: runEditors.main.state.doc.toString(),
       sdkFiles,
-      runtimeSources,
       config,
     }).then(
       (bundle) => {

@@ -7,9 +7,10 @@
 //! type), lowers a match selection to a `switch`, decodes a structured source
 //! strictly, composes a config through `@bind`, runs the bound `client_init`
 //! hook over the resolved `Settings` (bespoke wins, by mutation), and
-//! validates last. The resolved fields are frozen into `ClientOptions.values`,
-//! so the descriptor's ref positions (endpoint, headers, timeout, retry)
-//! resolve in the runtime without the client interpreting a descriptor.
+//! validates last. Each operation method resolves its own `wire` binding's
+//! ref positions (endpoint, headers, timeout, retry) against the resolved
+//! fields directly and builds the request inline; no runtime interprets a
+//! descriptor.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,7 +18,7 @@ use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
 use crate::codegen::entries::{companion_name, op_local_name, plan, EntryModel, FieldShape};
 use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
-use crate::codegen::ops::{declared_errors, error_names, wire_binding, wire_descriptor};
+use crate::codegen::ops::{declared_errors, error_names, wire_binding};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
 use crate::codegen::targets::typescript::render::TsRules;
@@ -205,32 +206,19 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let mut helpers = Helpers::default();
     let mut decls = Vec::new();
     decls.extend(config_interfaces(module, config));
-    // The transport wrappers are shared spellings with the loose-op client;
-    // emit them here only when that client is absent, so a mixed module does
-    // not declare them twice.
-    let loose_client_present = module
-        .operations
-        .iter()
-        .any(|op| wire_descriptor(op).is_some());
-    if !loose_client_present {
-        decls.extend(transport_hook_wrappers(&bound, module));
-        // A bound contract/constraint gets its boundary wrapper here too;
-        // without this an entry-only module would leave the binding
-        // silently unused (the loose-op client is what emits it otherwise).
-        let mut contract_refs = Vec::new();
-        let contracts = crate::codegen::targets::typescript::client::contract_wrappers(
-            &bound,
-            module,
-            &mut contract_refs,
-        );
-        if !contracts.is_empty() {
-            decls.push(Decl::raw_with(contracts, contract_refs));
-        }
-        // In a mixed module the loose client owns wrapClientInit (with its
-        // Partial<ClientOptions> signature); generation rejects that
-        // combination upstream, so the bridge is only emitted here.
-        decls.extend(client_init_wrapper(&bound, &entries, multi, module));
+    decls.extend(transport_hook_wrappers(&bound, module));
+    // A bound contract/constraint gets its boundary wrapper here too, or the
+    // binding would go silently unused.
+    let mut contract_refs = Vec::new();
+    let contracts = crate::codegen::targets::typescript::client::contract_wrappers(
+        &bound,
+        module,
+        &mut contract_refs,
+    );
+    if !contracts.is_empty() {
+        decls.push(Decl::raw_with(contracts, contract_refs));
     }
+    decls.extend(client_init_wrapper(&bound, &entries, multi, module));
     decls.extend(plan::output_decode_decls(
         &entries,
         module,
@@ -600,7 +588,8 @@ fn class_decl(
     Decl::raw_with(text, refs)
 }
 
-/// One operation method (mirrors the loose-op client's outcome mapping).
+/// One operation method: builds the request from the resolved wire binding,
+/// calls the transport inline, and maps the outcome onto the taxonomy.
 #[allow(clippy::too_many_arguments)]
 fn op_method(
     n: &Names,

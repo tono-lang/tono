@@ -12,7 +12,7 @@
 
 use crate::codegen::entries::{op_local_name, EntryModel};
 use crate::codegen::extensions::{impl_binding, BoundExtension};
-use crate::codegen::ops::{declared_errors, error_names, wire_descriptor};
+use crate::codegen::ops::{declared_errors, error_names, wire_binding};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{Module, Shape, Tref};
@@ -49,7 +49,7 @@ pub(super) fn seam_decls(
 ) -> Vec<Decl> {
     let mut decls = Vec::new();
     for op in entry.operations {
-        if wire_descriptor(op).is_some() {
+        if wire_binding(op).is_some() {
             continue;
         }
         let Some(binding) = impl_binding(bound, &op.id) else {

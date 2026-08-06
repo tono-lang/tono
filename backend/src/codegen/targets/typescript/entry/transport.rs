@@ -1,8 +1,7 @@
 //! The inline HTTP transport: per-operation TypeScript built directly from a
-//! `WireBinding` (IR v8), plus the small set of shared declarations every
-//! operation's generated call draws on. Replaces the opaque `wire_descriptor`
-//! blob and the `execute()` call into `@tono/http-runtime-ts`: the generated
-//! SDK now carries its own transport and imports nothing for it.
+//! `WireBinding`, plus the small set of shared declarations every operation's
+//! generated call draws on. The generated SDK carries its own transport and
+//! imports nothing for it.
 //!
 //! Poda by use happens at two granularities: `internal_helpers()`'s
 //! declarations are pruned SDK-wide by the usual root-group mechanism (an SDK

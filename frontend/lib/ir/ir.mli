@@ -102,8 +102,7 @@ and template_part =
   | Tpl_input of string
 
 (* The resolved HTTP binding a Protocol pass computes once and a Target reads
-   directly: the typed counterpart of the wire_descriptor blob a protocol
-   trait used to carry. *)
+   directly. *)
 and wire_part =
   | Wire_label
   | Wire_query of string

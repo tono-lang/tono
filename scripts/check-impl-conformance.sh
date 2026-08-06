@@ -36,9 +36,9 @@ if [ ! -x "$tsc" ]; then
     echo "the TypeScript toolchain is not installed; run 'npm ci' in backend/codegen-tests/typescript" >&2
     exit 1
 fi
-vitest="$root/runtimes/http-ts/node_modules/.bin/vitest"
+vitest="$root/backend/codegen-tests/typescript/node_modules/.bin/vitest"
 if [ ! -x "$vitest" ]; then
-    echo "vitest is not installed; run 'npm ci' in runtimes/http-ts" >&2
+    echo "vitest is not installed; run 'npm ci' in backend/codegen-tests/typescript" >&2
     exit 1
 fi
 
@@ -64,8 +64,8 @@ echo "go test (live)..."
 (cd "$work/go" && NOTES_TOKEN=t0 go test -tags live ./...)
 
 echo "typescript..."
-# The runtimes are TypeScript sources, so they are compiled into the throwaway
-# node_modules once: that makes both tsc and node resolve them the way a
+# The ext runtime is TypeScript source, so it is compiled into the throwaway
+# node_modules once: that makes both tsc and node resolve it the way a
 # consumer's installed package would, with no path mapping to keep in sync.
 compile_runtime() {
     local name="$1" src="$2" dest="$work/ts/node_modules/@tono/$1"
@@ -77,7 +77,6 @@ compile_runtime() {
 mkdir -p "$work/ts"
 cp -R "$work"/sdk/typescript/. "$work/ts/"
 cp -R "$example/ext" "$work/ts/ext"
-compile_runtime http-runtime-ts "$root/runtimes/http-ts/src"
 compile_runtime ext-runtime-ts "$root/runtimes/ext-ts/src"
 echo "vitest (hermetic + live)..."
 (cd "$work/ts" && TONO_LIVE_TESTS=1 NOTES_TOKEN=t0 "$vitest" run --root .)

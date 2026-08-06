@@ -1,8 +1,6 @@
 //! The inline HTTP transport: per-operation Rust built directly from a
-//! `WireBinding` (IR v8). Replaces the opaque `wire_descriptor` blob and the
-//! `Runtime::execute` call into the hand-written `tono_http_runtime` crate:
-//! the generated SDK now carries its own transport and imports no runtime
-//! crate for it (`reqwest` stays as the native HTTP stack, behind the
+//! `WireBinding`. The generated SDK carries its own transport and imports no
+//! runtime crate for it (`reqwest` stays as the native HTTP stack, behind the
 //! consuming crate's default-on `reqwest` feature; the canonical transport
 //! slot is the escape hatch when it is off). The shared declaration text the
 //! emitted calls draw on lives in [`super::transport_decls`].

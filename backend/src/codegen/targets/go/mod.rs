@@ -27,7 +27,6 @@ crate::declare_target! {
         symbol_of: symbols::symbol_of,
         emit_type: types::emit_type,
         casing: types::go_casing,
-        runtime_pkg: "sdk-http-runtime-go",
     }
 }
 
@@ -35,22 +34,15 @@ crate::declare_target! {
 mod tests {
     use super::*;
     use crate::codegen::target::Target;
-    use crate::codegen::test_support::assert_emits_no_op_stub;
     use crate::ir::{Prim, Tref};
 
     #[test]
-    fn target_identity_and_runtime() {
+    fn target_identity() {
         assert_eq!(GoTarget.name(), "go");
-        assert_eq!(GoTarget.runtime_pkg(), "sdk-http-runtime-go");
     }
 
     #[test]
     fn symbol_of_delegates_to_the_symbol_table() {
         assert_eq!(GoTarget.symbol_of(&Tref::Prim(Prim::I64)).name, "int64");
-    }
-
-    #[test]
-    fn emit_op_stub_emits_nothing_and_ignores_the_descriptor() {
-        assert_emits_no_op_stub(&GoTarget);
     }
 }

@@ -31,9 +31,12 @@ pub use crate::ir_tests_model::*;
 /// (method, uri, per-member bindings, response bindings, success status
 /// codes, and the entry-scoped endpoint/header/timeout/retry refs) as typed
 /// structure, replacing the opaque wire_descriptor trait blob for direct
-/// consumption (the blob itself still rides the trait bag, unchanged, for
+/// consumption (the blob itself still rode the trait bag, unchanged, for
 /// backward compatibility).
-pub const TONO_IR_VERSION: u32 = 8;
+/// v9 removed the wire_descriptor trait blob the frontend attached alongside
+/// the typed `wire` field for backward compatibility; `wire` is the only
+/// representation now.
+pub const TONO_IR_VERSION: u32 = 9;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

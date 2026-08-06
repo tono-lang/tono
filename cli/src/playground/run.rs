@@ -5,9 +5,8 @@
 //! an env value becomes the mock server's URL).
 //!
 //! The scaffolds extend the compile-check ones: the same generated-source
-//! layout plus a main written from the snippet, and the HTTP runtimes the
-//! generated SDK imports, unpacked from copies embedded in this binary so an
-//! installed CLI works without a checkout.
+//! layout plus a main written from the snippet. Every target's generated SDK
+//! carries its own transport, so the scaffold needs no runtime dependency.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,26 +24,6 @@ use crate::frontend::{Frontend, FrontendError};
 /// How long a run may take end to end. Generous because the first Rust run
 /// cold-compiles the runtime's dependency tree.
 const RUN_TIMEOUT: Duration = Duration::from_secs(300);
-
-#[derive(rust_embed::Embed)]
-#[folder = "../runtimes/http-go"]
-#[include = "*.go"]
-#[include = "go.mod"]
-#[exclude = "*_test.go"]
-struct GoRuntime;
-
-#[derive(rust_embed::Embed)]
-#[folder = "../runtimes/http-rust"]
-#[include = "src/*.rs"]
-#[include = "Cargo.toml"]
-struct RustRuntime;
-
-#[derive(rust_embed::Embed)]
-#[folder = "../runtimes/http-ts"]
-#[include = "src/*.ts"]
-#[include = "package.json"]
-#[exclude = "src/*test*"]
-struct TsRuntime;
 
 /// Which targets this machine can execute, probed by the tool each scaffold
 /// invokes. TypeScript needs a runner that resolves bare specifiers and runs
@@ -278,22 +257,9 @@ fn write_sources(
     Ok(())
 }
 
-fn unpack<E: rust_embed::Embed>(root: &std::path::Path) -> std::io::Result<()> {
-    for name in E::iter() {
-        let file = E::get(&name).expect("embedded file iterates");
-        let dest = root.join(name.as_ref());
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(dest, file.data)?;
-    }
-    Ok(())
-}
-
 /// A binary crate over the generated SDK: the generated `lib.rs` is kept (it
-/// carries the module tree and re-exports), the snippet becomes `src/main.rs`,
-/// and the embedded HTTP runtime is a path dependency. The first run downloads
-/// the runtime's own dependencies from crates.io like any cargo project.
+/// carries the module tree and re-exports), and the snippet becomes
+/// `src/main.rs`.
 pub(crate) fn scaffold_rust(
     files: &[GeneratedFile],
     root: &std::path::Path,
@@ -305,7 +271,6 @@ pub(crate) fn scaffold_rust(
     std::fs::create_dir_all(&src)?;
     write_sources(files, TargetKind::Rust, &src)?;
     std::fs::write(src.join("main.rs"), snippet)?;
-    unpack::<RustRuntime>(&root.join("_runtime/http-rust"))?;
     std::fs::write(
         root.join("Cargo.toml"),
         "[package]\n\
@@ -317,14 +282,11 @@ pub(crate) fn scaffold_rust(
          serde_json = \"1\"\n\
          tokio = { version = \"1\", features = [\"rt-multi-thread\", \"macros\", \"time\"] }\n\
          reqwest = { version = \"0.12\", default-features = false, features = [\"rustls-tls\"] }\n\
-         sdk-http-runtime-rs = { path = \"_runtime/http-rust\" }\n\
-         [workspace]\n\
-         exclude = [\"_runtime/http-rust\"]\n",
+         [workspace]\n",
     )
 }
 
-/// A Go module over the generated packages: `main.go` is the snippet and the
-/// embedded HTTP runtime satisfies the SDK's import through a local replace.
+/// A Go module over the generated packages: `main.go` is the snippet.
 pub(crate) fn scaffold_go(
     files: &[GeneratedFile],
     root: &std::path::Path,
@@ -333,20 +295,15 @@ pub(crate) fn scaffold_go(
     std::fs::create_dir_all(root)?;
     write_sources(files, TargetKind::Go, root)?;
     std::fs::write(root.join("main.go"), snippet)?;
-    unpack::<GoRuntime>(&root.join("_runtime/http-go"))?;
     std::fs::write(
         root.join("go.mod"),
-        format!(
-            "module {GO_SCAFFOLD_MODULE}\n\ngo 1.21\n\n\
-             require github.com/tono-lang/tono/runtimes/http-go v0.0.0\n\n\
-             replace github.com/tono-lang/tono/runtimes/http-go => ./_runtime/http-go\n"
-        ),
+        format!("module {GO_SCAFFOLD_MODULE}\n\ngo 1.21\n"),
     )
 }
 
-/// The generated TS sources plus the snippet, with the embedded runtime as a
-/// real node_modules package and a tsconfig mapping "sdk" to the module
-/// barrel, so the same snippet works here and in the browser bundler.
+/// The generated TS sources plus the snippet, with a tsconfig mapping "sdk" to
+/// the module barrel, so the same snippet works here and in the browser
+/// bundler.
 fn scaffold_typescript(
     files: &[GeneratedFile],
     root: &std::path::Path,
@@ -354,7 +311,6 @@ fn scaffold_typescript(
 ) -> std::io::Result<()> {
     write_sources(files, TargetKind::TypeScript, root)?;
     std::fs::write(root.join("main.ts"), snippet)?;
-    unpack::<TsRuntime>(&root.join("node_modules/@tono/http-runtime-ts"))?;
     let barrel = files
         .iter()
         .filter(|f| f.target == TargetKind::TypeScript)
@@ -590,21 +546,19 @@ mod tests {
     }
 
     #[test]
-    fn go_scaffold_lays_out_module_main_and_runtime() {
+    fn go_scaffold_lays_out_module_and_main() {
         let root = scratch("go-scaffold");
         let files = vec![file("go/playground/types.go", "package playground\n")];
         scaffold_go(&files, &root, "package main\nfunc main() {}\n").expect("scaffold");
         let go_mod = std::fs::read_to_string(root.join("go.mod")).expect("go.mod");
         assert!(go_mod.contains(GO_SCAFFOLD_MODULE));
-        assert!(go_mod.contains("replace github.com/tono-lang/tono/runtimes/http-go"));
         assert!(root.join("main.go").is_file());
         assert!(root.join("playground/types.go").is_file());
-        assert!(root.join("_runtime/http-go/go.mod").is_file());
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn rust_scaffold_excludes_the_embedded_runtime_from_its_workspace() {
+    fn rust_scaffold_lays_out_a_crate_with_no_runtime_dependency() {
         let root = scratch("rust-scaffold");
         let files = vec![GeneratedFile {
             target: TargetKind::Rust,
@@ -613,11 +567,8 @@ mod tests {
         }];
         scaffold_rust(&files, &root, "fn main() {}\n").expect("scaffold");
         let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml");
-        // The embedded runtime declares its own [workspace]; without the
-        // exclude, cargo sees two roots and refuses to build.
-        assert!(manifest.contains("exclude = [\"_runtime/http-rust\"]"));
+        assert!(!manifest.contains("sdk-http-runtime-rs"));
         assert!(root.join("src/main.rs").is_file());
-        assert!(root.join("_runtime/http-rust/Cargo.toml").is_file());
         let _ = std::fs::remove_dir_all(&root);
     }
 

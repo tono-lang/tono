@@ -10,7 +10,6 @@
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::group::Group;
 use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::typescript::client;
 use crate::codegen::targets::typescript::codecs::emit_codecs;
 use crate::codegen::targets::typescript::errors;
 use crate::codegen::targets::typescript::types::{emit_type, emit_validators};
@@ -265,20 +264,19 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         }
     }
     let module_has_entries = crate::codegen::entries::has_entries(module);
-    // Operations bring the error classes and the client interface into the
-    // types file and the discriminators in with the codecs they call.
+    // Loose operations bring the error classes and the client interface into
+    // the types file and the discriminators in with the codecs they call.
+    // Generation rejects a wire-bound loose operation outright, so this is
+    // always a bespoke (`ext impl`-bound) surface: a trait/interface only,
+    // never a concrete client.
     if !module.operations.is_empty() {
         let liveness = taxonomy::derive(module, &["ts", "typescript"]);
         type_decls.extend(errors::type_decls(module, config, &liveness));
         codec_decls.extend(errors::serde_decls(module));
-        // The transport client lives with the codecs it calls (encode input,
-        // decode output, the error discriminator) and embeds each operation's
-        // opaque wire descriptor.
-        codec_decls.extend(client::client_decls(module, config));
     } else if module_has_entries {
         // An entry's client maps outcomes onto the same taxonomy; its client
-        // surface is its own exported class, so the loose-op interface (and
-        // the generic HttpClient) stays out.
+        // surface is its own exported class, so the loose-op interface stays
+        // out.
         let liveness = taxonomy::derive(module, &["ts", "typescript"]);
         type_decls.extend(errors::taxonomy_and_declared_decls(module, &liveness));
     } else if module.shapes.iter().any(validation::shape_has_checks) {

@@ -113,11 +113,10 @@ and template_part =
   | Tpl_input of string
 
 (* The resolved HTTP binding a Protocol pass computes once and a Target reads
-   directly: the typed counterpart of the wire_descriptor blob a protocol
-   trait used to carry. Constructors are [Wire_]-prefixed (and record fields
+   directly. Constructors are [Wire_]-prefixed (and record fields
    [wb_]-prefixed) to stay unambiguous next to Protocol_http's own local
-   part/response_part/value_expr types, which compute the legacy blob
-   unchanged, and because [method] is an OCaml keyword. *)
+   part/response_part/value_expr types, the intermediate resolution this is
+   built from, and because [method] is an OCaml keyword. *)
 and wire_part =
   | Wire_label (* path parameter: substitutes {name} in the uri *)
   | Wire_query of string (* query-string parameter with this name *)

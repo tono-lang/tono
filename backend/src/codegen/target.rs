@@ -7,8 +7,6 @@
 //! render rules. The engine owns everything in between (import collection,
 //! ordering, casing, the formatter), so a backend only adds these two pieces.
 
-use serde_json::Value;
-
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{Shape, Tref};
@@ -18,10 +16,8 @@ use crate::ir::{Shape, Tref};
 /// symbols they reference before anything is rendered.
 pub type Fragment = Vec<Decl>;
 
-/// The per-language Symbol table and emitters. A target never interprets the
-/// opaque wire descriptor — it embeds it as a blob and emits a `runtime.execute`
-/// call — which keeps it blind to protocol (Protocol x Target orthogonality).
-/// Casing and the formatter are engine utilities, not methods here.
+/// The per-language Symbol table and emitters. Casing and the formatter are
+/// engine utilities, not methods here.
 pub trait Target {
     /// The target language identifier, e.g. `"typescript"`.
     fn name(&self) -> &str;
@@ -31,15 +27,6 @@ pub trait Target {
 
     /// Emit the declaration(s) for a struct / union / enum shape.
     fn emit_type(&self, shape: &Shape) -> Fragment;
-
-    /// Emit an operation stub: a typed signature plus the opaque wire descriptor
-    /// embedded as a blob and a `runtime.execute` call. The `descriptor` is
-    /// never interpreted here.
-    fn emit_op_stub(&self, op: &Shape, descriptor: &Value) -> Fragment;
-
-    /// The `(protocol, language)` runtime package the generated SDK depends on,
-    /// e.g. `"@sdk/http-runtime-ts"`.
-    fn runtime_pkg(&self) -> &str;
 }
 
 /// How the shared component tree renders into a language's surface syntax. The
@@ -80,12 +67,10 @@ pub trait RenderRules {
 }
 
 /// Declare a target's zero-sized struct and its [`Target`] impl from the
-/// per-language pieces: the language name, its symbol table, its type emitter and
-/// casing, and the runtime package. The `Target` surface is otherwise identical
-/// across languages — `symbol_of`/`emit_type` delegate, operation stubs are
-/// uniformly empty (owned by the runtime phase) — so this keeps that boilerplate
-/// in one place, and adding a language is one invocation rather than a copied
-/// impl.
+/// per-language pieces: the language name, its symbol table, its type emitter
+/// and casing. The `Target` surface is otherwise identical across languages —
+/// `symbol_of`/`emit_type` delegate — so this keeps that boilerplate in one
+/// place, and adding a language is one invocation rather than a copied impl.
 #[macro_export]
 macro_rules! declare_target {
     (
@@ -94,8 +79,7 @@ macro_rules! declare_target {
             name: $name:expr,
             symbol_of: $symbol_of:path,
             emit_type: $emit_type:path,
-            casing: $casing:path,
-            runtime_pkg: $runtime:expr $(,)?
+            casing: $casing:path $(,)?
         }
     ) => {
         $(#[$meta])*
@@ -110,18 +94,6 @@ macro_rules! declare_target {
             }
             fn emit_type(&self, shape: &$crate::ir::Shape) -> $crate::codegen::target::Fragment {
                 $emit_type(shape, &$casing())
-            }
-            // The opaque wire descriptor is never interpreted; stubs are owned by
-            // the protocol/runtime work, so a target emits none here.
-            fn emit_op_stub(
-                &self,
-                _op: &$crate::ir::Shape,
-                _descriptor: &::serde_json::Value,
-            ) -> $crate::codegen::target::Fragment {
-                ::std::vec::Vec::new()
-            }
-            fn runtime_pkg(&self) -> &str {
-                $runtime
             }
         }
     };

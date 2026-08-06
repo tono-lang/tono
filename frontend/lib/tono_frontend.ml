@@ -59,9 +59,8 @@ let compile_to_json ?(module_name = "") (src : string) : (string, string) result
     Error (String.concat "\n" (List.map Diagnostic.to_string errors))
   else
     (* Protocol resolution is the final IR -> IR step: each operation's HTTP
-       annotations are materialized into a typed [wire] field plus (for
-       backward compatibility) an opaque wire_descriptor trait the backend
-       embeds verbatim. *)
+       annotations are materialized into a typed [wire] field a target reads
+       directly. *)
     let m = Protocol_http.resolve_module m in
     let model =
       { Ir.tono_ir_version = Ir_json.current_ir_version; modules = [ m ] }
@@ -72,7 +71,7 @@ let compile_to_json ?(module_name = "") (src : string) : (string, string) result
    per-module unit behind [compile_project], exposed so tooling (the LSP) can
    attribute diagnostics to files and cache per module without a second copy
    of the pipeline. The operation's HTTP annotations are materialized into the
-   wire descriptor, mirroring the single-module path. *)
+   typed wire binding, mirroring the single-module path. *)
 let check_project_module (index : Modules.index) ~(name : string)
     (file : Ast.file) : Ir.module_ * Diagnostic.t list =
   let resolve = Modules.resolver index ~this_module:name in

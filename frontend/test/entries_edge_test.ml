@@ -568,17 +568,13 @@ let descriptor_of src =
   match entry_shape.kind with
   | Ir.Entry { operations; _ } -> (
       let op = List.hd operations in
-      match
-        List.find_opt
-          (fun (t : Ir.trait) -> t.trait_id = "wire_descriptor")
-          op.traits
-      with
-      | Some t -> t.value
-      | None -> Alcotest.fail "no descriptor")
+      match op.kind with
+      | Ir.Operation { wire = Some wb; _ } -> wb
+      | _ -> Alcotest.fail "no wire binding")
   | _ -> assert false
 
 let header_key_template_and_literal_value () =
-  let desc =
+  let wb =
     descriptor_of
       ("pub struct c {\n\
        \  ep: string @env(\"EP\")\n\
@@ -587,22 +583,14 @@ let header_key_template_and_literal_value () =
         @header(\"X-{.k}\", \"v\") @header(\"Y\", .k)\n\
         }\n" ^ wire)
   in
-  match desc with
-  | `Assoc kvs -> (
-      match List.assoc_opt "request_headers" kvs with
-      | Some
-          (`List
-             [
-               `List [ key1; `Assoc [ ("lit", `String "v") ] ];
-               `List [ _key2; `Assoc [ ("field", `List [ `String "k" ]) ] ];
-             ]) ->
-          Alcotest.(check bool)
-            "templated key has a field part" true
-            (match key1 with
-            | `List [ `Assoc [ ("lit", _) ]; `Assoc [ ("field", _) ] ] -> true
-            | _ -> false)
-      | _ -> Alcotest.fail "unexpected request_headers shape")
-  | _ -> Alcotest.fail "descriptor is not an object"
+  match wb.Ir.wb_request_headers with
+  | [ (key1, Ir.Wire_lit (`String "v")); (_key2, Ir.Wire_field [ "k" ]) ] ->
+      Alcotest.(check bool)
+        "templated key has a field part" true
+        (match key1 with
+        | [ Ir.Tpl_lit _; Ir.Tpl_field _ ] -> true
+        | _ -> false)
+  | _ -> Alcotest.fail "unexpected request_headers shape"
 
 (* The resolver stays data-driven: a template that reaches a header value in
    hand-authored IR is forwarded, even though the surface rejects it. *)
