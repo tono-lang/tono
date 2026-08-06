@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::codegen::layout::check_layout;
-use crate::codegen::test_support::{member, structure, union_shape};
+use crate::codegen::test_support::{member, structure, union_shape, wire_binding};
 use crate::ir::{
     EntryField, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref, WireBinding,
 };
@@ -679,15 +679,10 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                                     }),
                                     errors: vec![],
                                     wire: Some(Box::new(WireBinding {
-                                        method: "POST".into(),
                                         uri: vec![TemplatePart::Lit("/charges".into())],
-                                        bindings: Default::default(),
-                                        response_bindings: Default::default(),
                                         success: vec![200],
                                         endpoint: Some(vec!["ep".into()]),
-                                        request_headers: vec![],
-                                        timeout: None,
-                                        retry: None,
+                                        ..*wire_binding("POST")
                                     })),
                                 },
                                 traits: vec![],
