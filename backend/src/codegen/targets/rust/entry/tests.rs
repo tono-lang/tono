@@ -385,7 +385,7 @@ fn retry_and_timeout_fields_read_typed_settings_with_the_seam_on_the_client() {
     // The retry maximum reads the typed field at the call site; the timing
     // seam rides the client as crate-visible fields (the parity harness, a
     // test module of the same crate, pins them), defaulted at construction.
-    assert!(out.contains("let max_retries = resolve_max_retries(self.settings.max_conns as f64);"));
+    assert!(out.contains("let max_retries = resolve_max_retries(self.settings.max_conns as i64);"));
     assert!(out.contains("pub(crate) sleep: SleepFn,"));
     assert!(out.contains("pub(crate) random: RandomFn,"));
     assert!(out.contains("sleep: default_sleep(), random: default_random()"));
@@ -750,7 +750,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     // reading the typed endpoint.
     assert!(out.contains("let wait_ms = if s.wait != Duration(String::new()) {"));
     assert!(out.contains("match parse_duration_ms(&s.wait.0) {"));
-    assert!(out.contains("let max_retries = resolve_max_retries(self.settings.tiny as f64);"));
+    assert!(out.contains("let max_retries = resolve_max_retries(self.settings.tiny as i64);"));
     assert!(out.contains("http_send_with_timeout(&self.options, request, self.wait_ms)"));
     assert!(out.contains("set_header(&mut headers, \"X-K\", self.settings.derived.clone());"));
     assert!(out.contains(

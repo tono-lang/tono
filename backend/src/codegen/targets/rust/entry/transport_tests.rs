@@ -328,7 +328,7 @@ fn op_call_with_retry_and_timeout_wraps_the_attempt_in_a_loop() {
         )
     });
     assert!(
-        out.contains("let max_retries = resolve_max_retries(self.settings.max_retries as f64);")
+        out.contains("let max_retries = resolve_max_retries(self.settings.max_retries as i64);")
     );
     assert!(out.contains("let mut attempt: u32 = 0;"));
     assert!(out.contains("loop {"));

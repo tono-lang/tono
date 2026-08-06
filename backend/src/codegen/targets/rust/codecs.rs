@@ -275,7 +275,7 @@ pub(crate) fn well_known_decls() -> Vec<Decl> {
     // The bespoke-facing transport types ride the same support group: an SDK
     // with no entry (nothing references them) prunes them like any other
     // support declaration.
-    decls.extend(crate::codegen::targets::rust::entry::transport::http_support_decls());
+    decls.extend(crate::codegen::targets::rust::entry::transport_decls::http_support_decls());
     decls
 }
 

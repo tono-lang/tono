@@ -169,7 +169,7 @@ impl Client {
         if !has_header(&headers, "content-type") {
             headers.insert("content-type".to_string(), "application/json".to_string());
         }
-        let max_retries = resolve_max_retries(self.settings.max_retries as f64);
+        let max_retries = resolve_max_retries(self.settings.max_retries as i64);
         let mut attempt: u32 = 0;
         loop {
             let request = HttpRequest {

@@ -684,6 +684,7 @@ mod surface;
 #[cfg(test)]
 mod tests;
 pub(crate) mod transport;
+pub(crate) mod transport_decls;
 pub(crate) mod vector_tests;
 
 pub use shared::shared_groups;

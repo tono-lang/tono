@@ -11,6 +11,7 @@
 //! own text, gated on `wire.retry`/`wire.timeout`, so a single operation with
 //! neither carries no trace of either in its own generated method.
 
+use crate::codegen::entries::wire::{extra_success_codes, has_query, needs_record};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{TemplatePart, WireBinding, WirePart, WireResponsePart, WireValue};
@@ -143,13 +144,6 @@ fn per_call_header_lines(wire: &WireBinding, indent_str: &str) -> String {
         .collect()
 }
 
-/// Whether any input member is bound to the query string.
-fn has_query(wire: &WireBinding) -> bool {
-    wire.bindings
-        .values()
-        .any(|p| matches!(p, WirePart::Query { .. }))
-}
-
 /// One `appendQuery(...)` call per input member bound to the query string.
 fn query_lines(wire: &WireBinding, indent_str: &str) -> String {
     wire.bindings
@@ -205,31 +199,17 @@ fn body_expr(wire: &WireBinding, input_expr: &str) -> Option<String> {
     Some(format!("JSON.stringify({{ {object} }})"))
 }
 
-/// Whether the operation's input carries any member a request position reads
-/// individually via `record[name]` — so a `record` alias of the encoded
-/// input is needed. Not needed when there is nothing bound at all, and not
-/// needed when every bound member is a `Body` member: that case reads the
-/// encoded input directly (see `body_expr`'s whole-body branch) rather than
-/// through `record`, so building the alias would be dead weight (and an
-/// unnecessary `as unknown as Record<string, unknown>` cast) on the request.
-fn needs_record(wire: &WireBinding) -> bool {
-    let uri_reads_record = wire
-        .uri
-        .iter()
-        .any(|part| matches!(part, TemplatePart::Input(_)));
-    let any_non_body_binding = wire.bindings.values().any(|p| !matches!(p, WirePart::Body));
-    uri_reads_record || any_non_body_binding
-}
-
 /// `response.status >= 200 && response.status < 300`, plus one `||` arm per
-/// declared success status outside the 2xx range: any 2xx succeeds even when
-/// not literally declared, matching the runtime's current `isSuccessStatus`.
+/// declared success status outside the 2xx range (the shared
+/// [`extra_success_codes`] rule; this only spells the TypeScript comparison).
+/// The `record` alias decision is shared too ([`needs_record`]): when every
+/// bound member is a `Body` member, `body_expr`'s whole-body branch reads the
+/// encoded input directly, so the alias (and its `as unknown as
+/// Record<string, unknown>` cast) would be dead weight on the request.
 fn success_expr(wire: &WireBinding) -> String {
     let mut out = String::from("response.status >= 200 && response.status < 300");
-    for code in &wire.success {
-        if !(200..300).contains(code) {
-            out.push_str(&format!(" || response.status === {code}"));
-        }
+    for code in extra_success_codes(wire) {
+        out.push_str(&format!(" || response.status === {code}"));
     }
     out
 }
