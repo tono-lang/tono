@@ -423,11 +423,10 @@ fn default_package(kind: TargetKind, base: &str) -> String {
 // --- native manifest scaffolding ------------------------------------------
 
 /// Write a minimal native manifest for `kind` under `dir`, unless one is
-/// already there. Deliberately not a complete, buildable project: the
-/// generated entry/client code additionally depends on the tono HTTP runtime
-/// package for each language, none of which are published anywhere yet
-/// (see `runtimes/http-*`), so wiring a working path to them from an
-/// arbitrary external project is left to the user for now.
+/// already there. Deliberately not a complete, buildable project: generated
+/// entry/client code emits its own HTTP transport inline, so no runtime
+/// dependency needs wiring in beyond what each target's own manifest already
+/// declares.
 fn scaffold_native_manifest(kind: TargetKind, dir: &Path, package: &str) -> Result<(), String> {
     let (file_name, contents): (&str, String) = match kind {
         TargetKind::Rust => (
@@ -440,10 +439,7 @@ fn scaffold_native_manifest(kind: TargetKind, dir: &Path, package: &str) -> Resu
                  \n\
                  [dependencies]\n\
                  serde = {{ version = \"1\", features = [\"derive\"] }}\n\
-                 serde_json = \"1\"\n\
-                 # Entry/client code additionally depends on the tono HTTP runtime\n\
-                 # crate (tono_http_runtime), not yet published; vendor it via a\n\
-                 # path or git dependency once you generate entries.\n"
+                 serde_json = \"1\"\n"
             ),
         ),
         TargetKind::Go => (
@@ -451,11 +447,7 @@ fn scaffold_native_manifest(kind: TargetKind, dir: &Path, package: &str) -> Resu
             format!(
                 "module {package}\n\
                  \n\
-                 go 1.21\n\
-                 \n\
-                 // Entry/client code additionally depends on the tono HTTP runtime\n\
-                 // module (github.com/tono-lang/tono/runtimes/http-go), not yet\n\
-                 // published; wire a require and replace once you generate entries.\n"
+                 go 1.21\n"
             ),
         ),
         TargetKind::TypeScript => (
@@ -472,13 +464,6 @@ fn scaffold_native_manifest(kind: TargetKind, dir: &Path, package: &str) -> Resu
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     fs::write(&path, contents).map_err(|e| format!("{}: {e}", path.display()))?;
     eprintln!("wrote {}", path.display());
-    if kind == TargetKind::TypeScript {
-        eprintln!(
-            "note: {} will also need the tono HTTP runtime (@tono/http-runtime-ts) \
-             once you generate entries; it is not published yet, wire it in manually.",
-            path.display()
-        );
-    }
     Ok(())
 }
 

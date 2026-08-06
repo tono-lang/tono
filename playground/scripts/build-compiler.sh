@@ -20,11 +20,6 @@ cp "$root/_build/default/playground/shim/shim.bc.js" "$pg/src/generated/tono_fro
 chmod 644 "$pg/src/generated/tono_frontend.js" "$pg/src/generated/tono_frontend.cjs"
 printf 'export {};\n' > "$pg/src/generated/tono_frontend.d.ts"
 
-echo "build: staging TS http runtime for the Run panel"
-rm -rf "$pg/src/generated/runtime-ts"
-mkdir -p "$pg/src/generated/runtime-ts"
-cp "$root"/runtimes/http-ts/src/*.ts "$pg/src/generated/runtime-ts/"
-
 echo "build: wasm backend"
 # CI installs wasm-pack as a prebuilt tool (npm ci runs with --ignore-scripts,
 # which skips the npm package's binary download); locally the npm dep works.

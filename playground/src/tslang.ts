@@ -1,7 +1,7 @@
 /* Real TypeScript intelligence for the Run snippet: a TypeScript language
-   service over an in-memory filesystem holding the generated SDK and the HTTP
-   runtime sources, wired into CodeMirror. Everything loads lazily (the
-   compiler is megabytes) and only when the Run panel is on TypeScript. */
+   service over an in-memory filesystem holding the generated SDK, wired into
+   CodeMirror. Everything loads lazily (the compiler is megabytes) and only
+   when the Run panel is on TypeScript. */
 import {
   autocompletion,
   type Completion,
@@ -13,7 +13,7 @@ import type { GeneratedFile } from "./types";
 
 export interface TsLang {
   extensions: Extension[];
-  update(files: GeneratedFile[], runtime: Record<string, string>, moduleName: string): void;
+  update(files: GeneratedFile[], moduleName: string): void;
 }
 
 /* The default TypeScript lib files, bundled as lazy raw assets so the
@@ -58,7 +58,6 @@ async function create(): Promise<TsLang> {
        renames; the alias re-exports whatever barrel the current module has. */
     paths: {
       sdk: ["/sdk-entry.ts"],
-      "@tono/http-runtime-ts": ["/runtime/index.ts"],
     },
   });
 
@@ -164,10 +163,7 @@ async function create(): Promise<TsLang> {
       autocompletion({ override: [source], maxRenderedOptions: 40 }),
       cmts.tsHover(),
     ],
-    update(files, runtime, moduleName) {
-      for (const [name, text] of Object.entries(runtime)) {
-        upsert(`/runtime/${name}`, text);
-      }
+    update(files, moduleName) {
       let barrel: string | null = null;
       for (const file of files) {
         const rel = file.path.replace(/^typescript\//, "");

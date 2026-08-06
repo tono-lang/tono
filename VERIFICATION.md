@@ -13,8 +13,8 @@ is strong on the hand-written (bespoke) seam.
 | Calculus | golden | light | `frontend/test/calculus_test.ml` |
 | Bespoke (codecs + error taxonomy) | golden + differential + **mutation** | **strong** | `backend/tests/conformance.rs`, `.cargo/mutants.toml` |
 | User bespoke (ext impls, hooks, live API) | conformance vectors -> generated native tests | opt-in per operation | `examples/*/vectors/*.json`, emitted `*_test.go` / `*.test.ts` / `*_test.rs` |
-| Bespoke runtime (HTTP transport) | property + **mutation** | **strong** | `runtimes/http-ts/test`, `runtimes/http-ts/stryker.config.json`, `runtimes/http-go/*_test.go`, `runtimes/http-go/.gremlins.yaml` |
-| Runtime parity (retry/timeout/errors) | shared behavior vectors | breaks build | `runtimes/parity/vectors.json`; TypeScript and Go drive a generated SDK compiled from `runtimes/parity/spec.tono` (`scripts/run-parity.sh`), Rust still drives its own runtime package directly |
+| HTTP transport (entry client) | codegen snapshot | review | `backend/src/codegen/targets/*/entry/transport*.rs`, `backend/tests/snapshot_codegen.rs` |
+| Runtime parity (retry/timeout/errors) | shared behavior vectors | breaks build | `runtimes/parity/vectors.json`; TypeScript, Go, and Rust all drive a generated SDK compiled from `runtimes/parity/spec.tono` (`scripts/run-parity.sh`) |
 | Generator (codegen) | snapshot | review | `backend/tests/snapshot_codegen.rs` |
 | IR (frontend <-> backend) | round-trip | breaks build | `backend/tests/ir_roundtrip.rs`, `frontend/test/golden_test.ml` |
 
@@ -81,30 +81,24 @@ cargo mutants            # exits non-zero if any bespoke mutant survives
 cargo mutants --list     # the mutants in scope
 ```
 
-The hand-written HTTP transport runtimes are bespoke too, so they carry the
-same strong gate through the mutation tool of their language:
-
-```
-cd runtimes/http-ts && npm run mutation   # StrykerJS, break threshold is 100
-cd runtimes/http-go && gremlins unleash   # gremlins, thresholds in .gremlins.yaml
-```
-
 A genuinely-equivalent mutant (one that cannot change observable behavior) is
-annotated at the site with a one-line reason: `#[mutants::skip]` on the Rust side,
-`// Stryker disable next-line` in the TypeScript runtime. There are no blanket
-exclusions. gremlins has no per-site annotation, so the Go runtime is written
-to avoid equivalent mutants (no redundant guards) instead.
+annotated at the site with a one-line reason: `#[mutants::skip]`. There are no
+blanket exclusions.
 
-The HTTP runtimes also share one behavior-vector suite
-(`runtimes/parity/vectors.json`): every runtime runs the same retry, timeout,
-and error-classification scenarios with pinned jitter and recorded backoff, so
-the runtimes cannot drift apart. Every target's harness compiles
-`runtimes/parity/spec.tono`, generates the real SDK, and drives that generated
-client directly (via `scripts/run-parity.sh`): TypeScript through
-`runtimes/parity/typescript/parity.test.ts`, Go through
+Each target's entry client now emits its own HTTP transport inline (retry,
+timeout, error classification) instead of depending on a hand-written runtime
+package; the templates that render it are not currently in the mutation gate's
+scope (`.cargo/mutants.toml` covers `ops.rs`/`taxonomy.rs`/codecs/errors, not
+`targets/*/entry/transport*.rs`). Correctness for that seam instead comes from
+one shared behavior-vector suite (`runtimes/parity/vectors.json`): every target
+runs the same retry, timeout, and error-classification scenarios with pinned
+jitter and recorded backoff, so the targets cannot drift apart. Every target's
+harness compiles `runtimes/parity/spec.tono`, generates the real SDK, and
+drives that generated client directly (via `scripts/run-parity.sh`): TypeScript
+through `runtimes/parity/typescript/parity.test.ts`, Go through
 `runtimes/parity/go/parity_test.go`, and Rust through
 `runtimes/parity/rust/parity_harness.rs`. The suite proves what a consumer
-actually imports, not just that a hand-written runtime interprets a synthetic
-descriptor correctly (the Rust harness runs as a `#[cfg(test)]` module of the
+actually imports (the Rust harness runs as a `#[cfg(test)]` module of the
 generated crate, which is what lets it pin the client's crate-visible retry
-timing seam).
+timing seam). Extending the mutation gate to the transport codegen templates
+is a follow-up, not covered here.
