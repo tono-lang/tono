@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{
-    deprecated_of, doc_of, prim_spelling, rename_of, type_ident_from_id, wire_key,
+    deprecated_of, doc_of, field_ident, prim_spelling, rename_of, type_ident_from_id, wire_key,
 };
 use crate::codegen::entries::plan;
 use crate::codegen::entries::{companion_name, op_local_name, ref_is_enum, EntryModel};
@@ -607,6 +607,17 @@ fn op_method_decl(
             module,
         )
     };
+    // A param-member reference resolves the same way, off the op's own
+    // parameter type instead of the entry: a same-module structure member
+    // reads as a typed `input.Field`; a cross-module parameter type is not
+    // chased here, so the caller falls back to the decoded record.
+    let param_access = |seg: &str| -> Option<(String, transport::FieldKind)> {
+        let member = crate::codegen::ops::param_member(module, input, seg)?;
+        Some((
+            field_ident(member, config, LANG),
+            field_kind_of(Some(&member.target), module),
+        ))
+    };
     let success = decode::success_block(
         output,
         module,
@@ -644,7 +655,14 @@ fn op_method_decl(
             .as_deref()
             .map(|path| format!("c.{}", timeout_field_ident(entry, config, path))),
     };
-    let body = transport::op_call(&call, &fail, &field_access, &field_kind, &mut refs);
+    let body = transport::op_call(
+        &call,
+        &fail,
+        &field_access,
+        &field_kind,
+        &param_access,
+        &mut refs,
+    );
     let doc = doc_of(&op.traits)
         .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
         .unwrap_or_default();

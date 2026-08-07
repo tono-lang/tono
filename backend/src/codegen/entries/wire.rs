@@ -5,49 +5,76 @@
 
 use crate::ir::{TemplatePart, WireBinding, WireValue};
 
-// A param reference with no further segments reads the whole typed input
-// value directly (a new capability the named-parameter form adds); one with
-// a segment reads a member of the input struct, exactly like the legacy
-// `{name}` placeholder does (an op has exactly one parameter, so "member of
-// the parameter" and "member of the input" are the same decoded record).
-fn part_reads_record(part: &TemplatePart) -> bool {
-    match part {
-        TemplatePart::Input(_) => true,
-        TemplatePart::Param(segs) => !segs.is_empty(),
-        TemplatePart::Lit(_) | TemplatePart::Field(_) => false,
-    }
-}
-
-fn template_reads_record(parts: &[TemplatePart]) -> bool {
-    parts.iter().any(part_reads_record)
-}
-
-fn value_reads_record(value: &WireValue) -> bool {
-    match value {
-        WireValue::Param(segs) => !segs.is_empty(),
-        WireValue::Template(parts) => template_reads_record(parts),
-        WireValue::Object(fields) => fields.iter().any(|(_, v)| value_reads_record(v)),
-        WireValue::Lit(_) | WireValue::Field(_) => false,
-    }
-}
-
 /// Whether the operation reads any input member individually off a decoded
 /// record (an op-parameter member reference in the uri/endpoint/header/
 /// query/body positions); a whole-body operation serializes the typed/
 /// encoded input directly instead.
 pub fn needs_record(wire: &WireBinding) -> bool {
-    let uri_reads_record = value_reads_record(&wire.uri);
-    let endpoint_reads_record = wire.endpoint.as_ref().is_some_and(value_reads_record);
-    let kv_reads_record = |kv: &[(Vec<TemplatePart>, WireValue)]| {
-        kv.iter()
-            .any(|(k, v)| template_reads_record(k) || value_reads_record(v))
+    needs_record_for_reads(wire, &|_| false) || body_reads_record(wire, &|_| false)
+}
+
+fn part_reads_record_with(part: &TemplatePart, resolves: &dyn Fn(&str) -> bool) -> bool {
+    match part {
+        TemplatePart::Input(_) => true,
+        TemplatePart::Param(segs) => match segs.first() {
+            None => false,
+            Some(name) => !resolves(name),
+        },
+        TemplatePart::Lit(_) | TemplatePart::Field(_) => false,
+    }
+}
+
+fn template_reads_record_with(parts: &[TemplatePart], resolves: &dyn Fn(&str) -> bool) -> bool {
+    parts.iter().any(|p| part_reads_record_with(p, resolves))
+}
+
+fn value_reads_record_with(value: &WireValue, resolves: &dyn Fn(&str) -> bool) -> bool {
+    match value {
+        WireValue::Param(segs) => match segs.first() {
+            None => false,
+            Some(name) => !resolves(name),
+        },
+        WireValue::Template(parts) => template_reads_record_with(parts, resolves),
+        WireValue::Object(fields) => fields
+            .iter()
+            .any(|(_, v)| value_reads_record_with(v, resolves)),
+        WireValue::Lit(_) | WireValue::Field(_) => false,
+    }
+}
+
+/// [`needs_record`]'s uri/endpoint/header/query half, but a param member the
+/// target can resolve through typed field access (`resolves(name)`) does not
+/// count. `body` is excluded: its own single-member form keeps reading the
+/// record regardless of resolvability (see [`body_reads_record`]), since that
+/// position also needs the presence check a decoded record gives for free (an
+/// absent optional member sends no body at all, not a `null`).
+pub fn needs_record_for_reads(wire: &WireBinding, resolves: &dyn Fn(&str) -> bool) -> bool {
+    let uri = value_reads_record_with(&wire.uri, resolves);
+    let endpoint = wire
+        .endpoint
+        .as_ref()
+        .is_some_and(|v| value_reads_record_with(v, resolves));
+    let kv = |kv: &[(Vec<TemplatePart>, WireValue)]| {
+        kv.iter().any(|(k, v)| {
+            template_reads_record_with(k, resolves) || value_reads_record_with(v, resolves)
+        })
     };
-    let body_reads_record = wire.body.as_ref().is_some_and(value_reads_record);
-    uri_reads_record
-        || endpoint_reads_record
-        || kv_reads_record(&wire.request_headers)
-        || kv_reads_record(&wire.query)
-        || body_reads_record
+    uri || endpoint || kv(&wire.request_headers) || kv(&wire.query)
+}
+
+/// Whether `body` needs the decoded record: a ctor/template/entry-field body
+/// resolves the same way any other position does, but a bare param-member
+/// body (`@body(.input.field)`) is special-cased by every target's own
+/// `body_lines`/`body_expr` to test the record for presence (an absent
+/// optional member sends no body), so it always needs the record, regardless
+/// of whether the target could otherwise resolve the member through typed
+/// field access.
+pub fn body_reads_record(wire: &WireBinding, resolves: &dyn Fn(&str) -> bool) -> bool {
+    match wire.body.as_ref() {
+        Some(WireValue::Param(segs)) => !segs.is_empty(),
+        Some(other) => value_reads_record_with(other, resolves),
+        None => false,
+    }
 }
 
 /// Whether the operation declares any query-string parameter.

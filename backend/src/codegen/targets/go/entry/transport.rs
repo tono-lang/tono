@@ -12,7 +12,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
+use crate::codegen::entries::wire::{
+    body_reads_record, has_query, needs_record_for_reads, success_test_expr,
+};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::symbol_slot;
 use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
@@ -28,6 +30,13 @@ pub(super) enum FieldKind {
     Branded,
     Other,
 }
+
+/// A resolved param-member access off `input`: the Go field identifier
+/// (`@rename(go)` already applied) and its [`FieldKind`]. `None` when the
+/// caller cannot resolve the member through typed field access (a
+/// cross-module parameter type, most commonly), in which case the position
+/// falls back to indexing the decoded record.
+pub(super) type ParamAccess<'a> = &'a dyn Fn(&str) -> Option<(String, FieldKind)>;
 
 /// Everything one operation's call needs from its surroundings. The spellings
 /// (`fail`, `field_access`, `field_kind`) stay closures so this module never
@@ -62,6 +71,27 @@ impl Reached {
     }
 }
 
+/// The wire-format rendering rules for an already-resolved (access
+/// expression, kind) pair: shared by an entry-sibling field path and a
+/// resolved param member, which render identically once each has produced its
+/// own typed access expression.
+fn scalar_of(access: &str, kind: FieldKind, reached: &mut Reached) -> String {
+    match kind {
+        FieldKind::StringLike => access.to_string(),
+        FieldKind::Branded => format!("string({access})"),
+        FieldKind::Other => format!("{}({access})", reached.slot("FormatScalar")),
+    }
+}
+
+/// The `PathPart`-bound form (which formats internally, so only the branded
+/// flattening happens here) of the same resolved access.
+fn path_part_of(access: &str, kind: FieldKind) -> String {
+    match kind {
+        FieldKind::Branded => format!("string({access})"),
+        _ => access.to_string(),
+    }
+}
+
 /// A resolved field read in a scalar wire position (a header value, a template
 /// run), flattened to a plain string expression.
 fn scalar_expr(
@@ -70,12 +100,7 @@ fn scalar_expr(
     field_kind: &dyn Fn(&[String]) -> FieldKind,
     reached: &mut Reached,
 ) -> String {
-    let access = field_access(path);
-    match field_kind(path) {
-        FieldKind::StringLike => access,
-        FieldKind::Branded => format!("string({access})"),
-        FieldKind::Other => format!("{}({access})", reached.slot("FormatScalar")),
-    }
+    scalar_of(&field_access(path), field_kind(path), reached)
 }
 
 /// A resolved field read handed to `PathPart` (which formats internally, so
@@ -85,10 +110,68 @@ fn path_part_arg(
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
 ) -> String {
-    let access = field_access(path);
-    match field_kind(path) {
-        FieldKind::Branded => format!("string({access})"),
-        _ => access,
+    path_part_of(&field_access(path), field_kind(path))
+}
+
+/// A `Param(segs)`/`TemplatePart::Param` position in a scalar wire string:
+/// the whole parameter (`segs` empty) always routes through the shared
+/// helper (its shape is not statically known here), a resolved member routes
+/// through the same typed rendering a `Field` path gets (bypassing the helper
+/// where the kind allows it), and an unresolved member falls back to the
+/// helper over the decoded record, exactly as before this position could ever
+/// resolve. `escape` picks `PathPart` (URI positions) or `FormatScalar`
+/// (header positions).
+fn param_scalar_expr(
+    segs: &[String],
+    param_access: ParamAccess<'_>,
+    escape: bool,
+    reached: &mut Reached,
+) -> String {
+    match segs.first() {
+        None => {
+            let helper = if escape {
+                reached.slot("PathPart")
+            } else {
+                reached.slot("FormatScalar")
+            };
+            format!("{helper}(input)")
+        }
+        Some(name) => match param_access(name) {
+            Some((field, kind)) => {
+                let access = format!("input.{field}");
+                if escape {
+                    format!(
+                        "{}({})",
+                        reached.slot("PathPart"),
+                        path_part_of(&access, kind)
+                    )
+                } else {
+                    scalar_of(&access, kind, reached)
+                }
+            }
+            None => {
+                let helper = if escape {
+                    reached.slot("PathPart")
+                } else {
+                    reached.slot("FormatScalar")
+                };
+                format!("{helper}(record[{name:?}])")
+            }
+        },
+    }
+}
+
+/// A `Param(segs)` position rendered as a Go `any` expression (a query value
+/// or a @body ctor field): the same branding `Field` gets in
+/// [`wire_value_any_expr`], applied to a resolved member's typed access, or
+/// the decoded record when unresolved.
+fn param_any_expr(segs: &[String], param_access: ParamAccess<'_>) -> String {
+    match segs.first() {
+        None => "input".to_string(),
+        Some(name) => match param_access(name) {
+            Some((field, kind)) => path_part_of(&format!("input.{field}"), kind),
+            None => format!("record[{name:?}]"),
+        },
     }
 }
 
@@ -103,6 +186,7 @@ fn template_expr(
     escape: bool,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     reached: &mut Reached,
 ) -> String {
     if let [TemplatePart::Lit(s)] = parts {
@@ -133,22 +217,14 @@ fn template_expr(
             }
             // [] is the whole typed parameter (read as `input` directly, no
             // record needed); one segment is a member of the input struct,
-            // exactly like the legacy `{name}` placeholder (an op has
-            // exactly one parameter, so "member of the parameter" and
-            // "member of the input" are the same decoded record). Deeper
-            // paths are not reachable: the typechecker only resolves an
-            // op-parameter reference one level deep.
+            // resolved through typed field access when the target can (see
+            // [`param_scalar_expr`]), the legacy decoded-record read
+            // otherwise (an op has exactly one parameter, so "member of the
+            // parameter" and "member of the input" are the same decoded
+            // record). Deeper paths are not reachable: the typechecker only
+            // resolves an op-parameter reference one level deep.
             TemplatePart::Param(segs) => {
-                let helper = if escape {
-                    reached.slot("PathPart")
-                } else {
-                    reached.slot("FormatScalar")
-                };
-                let arg = match segs.first() {
-                    None => "input".to_string(),
-                    Some(name) => format!("record[{name:?}]"),
-                };
-                out.push(format!("{helper}({arg})"));
+                out.push(param_scalar_expr(segs, param_access, escape, reached));
             }
         }
     }
@@ -161,6 +237,7 @@ fn wire_value_expr(
     value: &WireValue,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     reached: &mut Reached,
 ) -> String {
     match value {
@@ -169,13 +246,15 @@ fn wire_value_expr(
             None => format!("{:?}", json.to_string()),
         },
         WireValue::Field(path) => scalar_expr(path, field_access, field_kind, reached),
-        WireValue::Param(segs) => match segs.first() {
-            None => format!("{}(input)", reached.slot("FormatScalar")),
-            Some(name) => format!("{}(record[{name:?}])", reached.slot("FormatScalar")),
-        },
-        WireValue::Template(parts) => {
-            template_expr(parts, false, field_access, field_kind, reached)
-        }
+        WireValue::Param(segs) => param_scalar_expr(segs, param_access, false, reached),
+        WireValue::Template(parts) => template_expr(
+            parts,
+            false,
+            field_access,
+            field_kind,
+            param_access,
+            reached,
+        ),
         // The frontend only ever emits Object for @body, read through
         // wire_value_any_expr + json.Marshal (see body_lines), never through
         // this string-position renderer.
@@ -208,6 +287,7 @@ fn wire_value_any_expr(
     value: &WireValue,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     reached: &mut Reached,
 ) -> String {
     match value {
@@ -219,20 +299,22 @@ fn wire_value_any_expr(
                 _ => access,
             }
         }
-        WireValue::Param(segs) => match segs.first() {
-            None => "input".to_string(),
-            Some(name) => format!("record[{name:?}]"),
-        },
-        WireValue::Template(parts) => {
-            template_expr(parts, false, field_access, field_kind, reached)
-        }
+        WireValue::Param(segs) => param_any_expr(segs, param_access),
+        WireValue::Template(parts) => template_expr(
+            parts,
+            false,
+            field_access,
+            field_kind,
+            param_access,
+            reached,
+        ),
         WireValue::Object(entries) => {
             let items: Vec<String> = entries
                 .iter()
                 .map(|(k, v)| {
                     format!(
                         "{k:?}: {}",
-                        wire_value_any_expr(v, field_access, field_kind, reached)
+                        wire_value_any_expr(v, field_access, field_kind, param_access, reached)
                     )
                 })
                 .collect();
@@ -249,11 +331,14 @@ fn uri_expr(
     value: &WireValue,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     reached: &mut Reached,
 ) -> String {
     match value {
-        WireValue::Template(parts) => template_expr(parts, true, field_access, field_kind, reached),
-        other => wire_value_expr(other, field_access, field_kind, reached),
+        WireValue::Template(parts) => {
+            template_expr(parts, true, field_access, field_kind, param_access, reached)
+        }
+        other => wire_value_expr(other, field_access, field_kind, param_access, reached),
     }
 }
 
@@ -268,13 +353,14 @@ fn endpoint_expr(
     wire: &WireBinding,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     reached: &mut Reached,
 ) -> String {
     let value = wire
         .endpoint
         .as_ref()
         .expect("validate_entries rejects an entry @http op with no endpoint");
-    wire_value_expr(value, field_access, field_kind, reached)
+    wire_value_expr(value, field_access, field_kind, param_access, reached)
 }
 
 /// The Go spelling of the shared [`success_test_expr`] rule.
@@ -288,12 +374,13 @@ fn url_lines(
     wire: &WireBinding,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     reached: &mut Reached,
 ) -> String {
     let base = format!(
         "{} + {}",
-        endpoint_expr(wire, field_access, field_kind, reached),
-        uri_expr(&wire.uri, field_access, field_kind, reached)
+        endpoint_expr(wire, field_access, field_kind, param_access, reached),
+        uri_expr(&wire.uri, field_access, field_kind, param_access, reached)
     );
     if !has_query(wire) {
         return format!("\trequestURL := {base}\n");
@@ -303,8 +390,8 @@ fn url_lines(
     for (key, value) in &wire.query {
         out.push_str(&format!(
             "\tquery = {append}(query, {}, {})\n",
-            template_expr(key, false, field_access, field_kind, reached),
-            wire_value_any_expr(value, field_access, field_kind, reached),
+            template_expr(key, false, field_access, field_kind, param_access, reached),
+            wire_value_any_expr(value, field_access, field_kind, param_access, reached),
         ));
     }
     out.push_str(&format!(
@@ -321,6 +408,7 @@ fn header_lines(
     wire: &WireBinding,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     reached: &mut Reached,
 ) -> String {
     let set = reached.slot("SetHeader");
@@ -328,8 +416,8 @@ fn header_lines(
     for (key, value) in &wire.request_headers {
         out.push_str(&format!(
             "\t{set}(headers, {}, {})\n",
-            template_expr(key, false, field_access, field_kind, reached),
-            wire_value_expr(value, field_access, field_kind, reached),
+            template_expr(key, false, field_access, field_kind, param_access, reached),
+            wire_value_expr(value, field_access, field_kind, param_access, reached),
         ));
     }
     out.push_str(&format!(
@@ -350,6 +438,7 @@ fn body_lines(
     call: &OpCall<'_>,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     fail: &dyn Fn(String) -> String,
     reached: &mut Reached,
 ) -> (String, Option<bool>) {
@@ -384,7 +473,7 @@ fn body_lines(
     let text = format!(
         "\tbody, err := json.Marshal({})\n\
          \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
-        wire_value_any_expr(body, field_access, field_kind, reached),
+        wire_value_any_expr(body, field_access, field_kind, param_access, reached),
         fail_enc = fail("err".to_string()),
     );
     (text, Some(false))
@@ -436,6 +525,7 @@ pub(super) fn op_call(
     fail: &dyn Fn(String) -> String,
     field_access: &dyn Fn(&[String]) -> String,
     field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let wire = call.wire;
@@ -443,7 +533,9 @@ pub(super) fn op_call(
     let mut reached = Reached(BTreeSet::new());
     let mut out = String::new();
 
-    let with_record = call.has_input && needs_record(wire);
+    let resolves = |name: &str| param_access(name).is_some();
+    let with_record = call.has_input
+        && (needs_record_for_reads(wire, &resolves) || body_reads_record(wire, &resolves));
     if with_record {
         refs.push(shared_symbol("EncodeRecord"));
         out.push_str(&format!(
@@ -453,10 +545,28 @@ pub(super) fn op_call(
             fail_enc = fail("err".to_string()),
         ));
     }
-    out.push_str(&url_lines(wire, field_access, field_kind, &mut reached));
-    out.push_str(&header_lines(wire, field_access, field_kind, &mut reached));
-    let (body_text, content_type_guard) =
-        body_lines(call, field_access, field_kind, fail, &mut reached);
+    out.push_str(&url_lines(
+        wire,
+        field_access,
+        field_kind,
+        param_access,
+        &mut reached,
+    ));
+    out.push_str(&header_lines(
+        wire,
+        field_access,
+        field_kind,
+        param_access,
+        &mut reached,
+    ));
+    let (body_text, content_type_guard) = body_lines(
+        call,
+        field_access,
+        field_kind,
+        param_access,
+        fail,
+        &mut reached,
+    );
     out.push_str(&body_text);
     if body_text.contains("json.Marshal") {
         refs.push(super::import("json", "encoding/json"));

@@ -24,6 +24,11 @@ struct Case {
     module_hooks: bool,
     retry_expr: Option<String>,
     timeout_expr: Option<String>,
+    /// Param members the target can resolve through typed field access
+    /// (name, Go field identifier, kind); empty means every param member
+    /// falls back to the decoded record, matching every other case in this
+    /// file.
+    resolved_params: Vec<(&'static str, &'static str, FieldKind)>,
 }
 
 impl Case {
@@ -34,6 +39,7 @@ impl Case {
             module_hooks: false,
             retry_expr: None,
             timeout_expr: None,
+            resolved_params: Vec::new(),
         }
     }
 
@@ -43,6 +49,12 @@ impl Case {
         let fail = |expr: String| expr;
         let field_access = |path: &[String]| format!("c.settings.{}", path.join("."));
         let field_kind = |_: &[String]| FieldKind::StringLike;
+        let param_access = |name: &str| {
+            self.resolved_params
+                .iter()
+                .find(|(n, _, _)| *n == name)
+                .map(|(_, field, kind)| (field.to_string(), *kind))
+        };
         let mut refs = Vec::new();
         let call = OpCall {
             wire: &self.wire,
@@ -56,7 +68,14 @@ impl Case {
             retry_expr: self.retry_expr.clone(),
             timeout_expr: self.timeout_expr.clone(),
         };
-        let body = op_call(&call, &fail, &field_access, &field_kind, &mut refs);
+        let body = op_call(
+            &call,
+            &fail,
+            &field_access,
+            &field_kind,
+            &param_access,
+            &mut refs,
+        );
         crate::codegen::test_support::rendered(&[Decl::raw_with(body, refs)], &GoRules::default())
     }
 }
@@ -286,6 +305,93 @@ fn a_param_member_reference_in_a_path_template_reads_off_the_record() {
     ]);
     let out = case.text();
     assert!(out.contains("transport.PathPart(record[\"id\"])"));
+}
+
+// ── A resolvable param member reads straight off the typed input, and the
+//    record disappears entirely when nothing else in the operation needs it.
+
+#[test]
+fn a_resolved_param_member_in_a_path_template_reads_the_typed_field() {
+    let mut case = Case::new(base_wire());
+    case.wire.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["id".into()]),
+    ]);
+    case.resolved_params = vec![("id", "ID", FieldKind::StringLike)];
+    let out = case.text();
+    assert!(out.contains("transport.PathPart(input.ID)"));
+    assert!(!out.contains("record"));
+    assert!(!out.contains("EncodeRecord"));
+}
+
+#[test]
+fn a_resolved_branded_param_member_flattens_before_pathpart() {
+    let mut case = Case::new(base_wire());
+    case.wire.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["kind".into()]),
+    ]);
+    case.resolved_params = vec![("kind", "Kind", FieldKind::Branded)];
+    let out = case.text();
+    assert!(out.contains("transport.PathPart(string(input.Kind))"));
+}
+
+#[test]
+fn a_resolved_param_member_in_a_header_value_skips_formatscalar_when_stringlike() {
+    let mut case = Case::new(base_wire());
+    case.wire.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Id".into())],
+        WireValue::Param(vec!["id".into()]),
+    )];
+    case.resolved_params = vec![("id", "ID", FieldKind::StringLike)];
+    let out = case.text();
+    assert!(out.contains("transport.SetHeader(headers, \"X-Id\", input.ID)"));
+    assert!(!out.contains("record"));
+}
+
+#[test]
+fn a_resolved_other_kind_param_member_still_formats() {
+    let mut case = Case::new(base_wire());
+    case.wire.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Amount".into())],
+        WireValue::Param(vec!["amount".into()]),
+    )];
+    case.resolved_params = vec![("amount", "Amount", FieldKind::Other)];
+    let out = case.text();
+    assert!(out.contains("transport.FormatScalar(input.Amount)"));
+}
+
+#[test]
+fn a_resolved_param_member_in_a_query_value_reads_the_typed_field() {
+    let mut case = Case::new(base_wire());
+    case.wire.body = None;
+    case.wire.query = vec![(
+        vec![TemplatePart::Lit("tag".into())],
+        WireValue::Param(vec!["tag".into()]),
+    )];
+    case.resolved_params = vec![("tag", "Tag", FieldKind::StringLike)];
+    let out = case.text();
+    assert!(out.contains("transport.AppendQuery(query, \"tag\", input.Tag)"));
+    assert!(!out.contains("record"));
+}
+
+#[test]
+fn one_unresolved_member_still_needs_the_record_even_when_another_resolves() {
+    let mut case = Case::new(base_wire());
+    case.wire.body = None;
+    case.wire.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["id".into()]),
+    ]);
+    case.wire.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Other".into())],
+        WireValue::Param(vec!["other".into()]),
+    )];
+    case.resolved_params = vec![("id", "ID", FieldKind::StringLike)];
+    let out = case.text();
+    assert!(out.contains("record, err := record.EncodeRecord(input)"));
+    assert!(out.contains("transport.PathPart(input.ID)"));
+    assert!(out.contains("transport.FormatScalar(record[\"other\"])"));
 }
 
 #[test]

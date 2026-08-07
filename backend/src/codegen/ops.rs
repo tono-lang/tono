@@ -12,7 +12,7 @@ use crate::codegen::casing::{transform, CasingConfig};
 use crate::codegen::conventions::{doc_of, rename_of, type_ident_from_id};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::tree::{ClientDecl, Decl, Field, Method, TypeExpr};
-use crate::ir::{Model, Module, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{Member, Model, Module, Shape, ShapeKind, Trait, Tref};
 
 /// Whether an operation performs I/O and therefore waits. How the wait lowers
 /// (suspension vs blocking) is a per-language concern; the classification is
@@ -323,6 +323,24 @@ pub fn op_io(op: &Shape) -> (Option<&Tref>, Option<&Tref>) {
 pub fn wire_binding(op: &Shape) -> Option<&crate::ir::WireBinding> {
     match &op.kind {
         ShapeKind::Operation { wire, .. } => wire.as_deref(),
+        _ => None,
+    }
+}
+
+/// The member a `WireValue::Param`/`TemplatePart::Param` segment names: the
+/// op's declared parameter type, resolved to a same-module structure, then
+/// the one member matching `seg`. `None` when the parameter type is not a
+/// same-module structure (a cross-module reference the target does not chase
+/// here) or has no such member; the caller falls back to the decoded record
+/// in that case. The typechecker only ever resolves a param reference one
+/// segment deep, so `seg` is always the whole path.
+pub fn param_member<'a>(module: &'a Module, input: Option<&Tref>, seg: &str) -> Option<&'a Member> {
+    let Tref::Ref { id, .. } = input? else {
+        return None;
+    };
+    let shape = shape_by_id(module, id)?;
+    match &shape.kind {
+        ShapeKind::Structure { members, .. } => members.iter().find(|m| m.name == seg),
         _ => None,
     }
 }
