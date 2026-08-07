@@ -31,7 +31,7 @@ pub fn well_known_decls() -> Vec<Decl> {
             })
         })
         .collect();
-    decls.extend(crate::codegen::targets::typescript::entry::transport::http_support_decls());
+    decls.extend(crate::codegen::targets::typescript::entry::transport_decls::http_support_decls());
     decls
 }
 
@@ -103,7 +103,7 @@ pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
         ("env", entry::env_helpers()),
         ("duration", entry::duration_helpers()),
         ("casing", entry::casing_helpers()),
-        ("http", entry::transport::internal_helpers()),
+        ("http", entry::transport_decls::internal_helpers()),
     ]
 }
 

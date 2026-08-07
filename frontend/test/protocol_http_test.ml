@@ -328,6 +328,23 @@ let body_ctor_nested_ctor_rejected () =
         op post(input: req): req @http(method: \"post\", path: \"/x\") \
         @body(note_body { title: inner { x: .input.title } })")
 
+let body_ctor_field_input_placeholder_rejected () =
+  Alcotest.(check bool)
+    "a ctor field value rejects the legacy {name} input placeholder" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        struct note_body { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(note_body { title: \"{title}\" })")
+
+let body_two_positional_args_rejected () =
+  Alcotest.(check bool)
+    "@body takes exactly one argument" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(.input, .input)")
+
 let body_bare_literal_rejected () =
   Alcotest.(check bool)
     "@body takes a reference or a ctor, not a bare literal" true
@@ -387,6 +404,10 @@ let () =
             body_ctor_known_field_ok;
           Alcotest.test_case "ctor nested ctor rejected" `Quick
             body_ctor_nested_ctor_rejected;
+          Alcotest.test_case "ctor field input placeholder rejected" `Quick
+            body_ctor_field_input_placeholder_rejected;
+          Alcotest.test_case "two positional args rejected" `Quick
+            body_two_positional_args_rejected;
           Alcotest.test_case "bare literal rejected" `Quick
             body_bare_literal_rejected;
           Alcotest.test_case "duplicate body rejected" `Quick

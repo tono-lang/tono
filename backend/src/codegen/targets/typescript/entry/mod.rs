@@ -731,6 +731,7 @@ mod surface;
 #[cfg(test)]
 mod tests;
 pub(crate) mod transport;
+pub(crate) mod transport_decls;
 pub(crate) mod vector_tests;
 
 use checks::{access, config_error, field_path_expr, presence_guard, timeout_field_name};

@@ -60,6 +60,17 @@ let ref_missing_name () =
 
 let struct_body_junk () = has_error "junk in struct body" "struct s { => :: }"
 
+let ctor_field_missing_name () =
+  has_error "ctor field missing a name" "struct s { a: string @x(y { : .a }) }"
+
+let ctor_missing_closing_brace () =
+  has_error "ctor missing closing brace" "struct s { a: string @x(y { z: .a ) }"
+
+let ctor_empty_fields_parses () =
+  Alcotest.(check bool)
+    "an empty ctor body parses" false
+    (parse_errors "struct s { a: string @x(y {}) }")
+
 let kv_ref_value_parses () =
   Alcotest.(check bool)
     "k: .a.b parses as a kv ref" false
@@ -657,6 +668,12 @@ let () =
           Alcotest.test_case "ref missing name" `Quick ref_missing_name;
           Alcotest.test_case "struct body junk" `Quick struct_body_junk;
           Alcotest.test_case "kv ref value" `Quick kv_ref_value_parses;
+          Alcotest.test_case "ctor field missing name" `Quick
+            ctor_field_missing_name;
+          Alcotest.test_case "ctor missing closing brace" `Quick
+            ctor_missing_closing_brace;
+          Alcotest.test_case "ctor empty fields parses" `Quick
+            ctor_empty_fields_parses;
         ] );
       ( "fmt",
         [
