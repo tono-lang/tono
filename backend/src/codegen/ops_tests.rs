@@ -39,6 +39,26 @@ fn error_shape(id: &str, traits: Vec<Trait>) -> Shape {
     }
 }
 
+/// An error shape with a status and an `@errorCode(path, value)`, for the
+/// generation-time gate tests.
+fn coded_error_shape(id: &str, status: i64, path: &str, value: &str) -> Shape {
+    error_shape(
+        id,
+        vec![
+            trait_of("status", json!([status])),
+            trait_of("errorCode", json!([path, value])),
+        ],
+    )
+}
+
+/// A single-module model wrapping `shapes` and `op`, for `validate_error_codes`.
+fn model_of(shapes: Vec<Shape>, op: Shape) -> crate::ir::Model {
+    crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module(shapes, vec![op])],
+    }
+}
+
 fn module(shapes: Vec<Shape>, operations: Vec<Shape>) -> Module {
     Module {
         tests: vec![],
@@ -367,25 +387,10 @@ fn a_malformed_error_code_resolves_to_no_code() {
 #[test]
 fn duplicate_status_and_code_is_rejected_at_generation() {
     let shapes = vec![
-        error_shape(
-            "m#a",
-            vec![
-                trait_of("status", json!([400])),
-                trait_of("errorCode", json!(["code", "bad"])),
-            ],
-        ),
-        error_shape(
-            "m#b",
-            vec![
-                trait_of("status", json!([400])),
-                trait_of("errorCode", json!(["code", "bad"])),
-            ],
-        ),
+        coded_error_shape("m#a", 400, "code", "bad"),
+        coded_error_shape("m#b", 400, "code", "bad"),
     ];
-    let m = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module(shapes, vec![op(vec![], vec!["m#a", "m#b"])])],
-    };
+    let m = model_of(shapes, op(vec![], vec!["m#a", "m#b"]));
     let err = validate_error_codes(&m).unwrap_err();
     assert!(err.contains("m#a") && err.contains("m#b"), "{err}");
 }
@@ -393,24 +398,9 @@ fn duplicate_status_and_code_is_rejected_at_generation() {
 #[test]
 fn same_status_different_paths_is_allowed_at_generation() {
     let shapes = vec![
-        error_shape(
-            "m#a",
-            vec![
-                trait_of("status", json!([400])),
-                trait_of("errorCode", json!(["code", "bad"])),
-            ],
-        ),
-        error_shape(
-            "m#b",
-            vec![
-                trait_of("status", json!([400])),
-                trait_of("errorCode", json!(["error.type", "bad"])),
-            ],
-        ),
+        coded_error_shape("m#a", 400, "code", "bad"),
+        coded_error_shape("m#b", 400, "error.type", "bad"),
     ];
-    let m = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module(shapes, vec![op(vec![], vec!["m#a", "m#b"])])],
-    };
+    let m = model_of(shapes, op(vec![], vec!["m#a", "m#b"]));
     assert!(validate_error_codes(&m).is_ok());
 }
