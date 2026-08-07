@@ -415,6 +415,32 @@ let valid_code_forms_accepted () =
     (has "TC0068"
        "op post(): void @http(method: \"post\", path: \"/x\", code: [200, 207])")
 
+(* ── @query/@header value type diagnostics ─────────────────────────────── *)
+
+let query_map_value_rejected () =
+  Alcotest.(check bool)
+    "@query value cannot be a map" true
+    (has "TC0021"
+       "struct req { tags: map[string]string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @query(\"tags\", .input.tags)")
+
+let header_list_value_rejected () =
+  Alcotest.(check bool)
+    "@header value cannot be a list" true
+    (has "TC0021"
+       "struct req { tags: []string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @header(\"X-Tags\", .input.tags)")
+
+let query_scalar_value_ok () =
+  Alcotest.(check bool)
+    "@query value is fine when scalar" false
+    (has "TC0021"
+       "struct req { limit: i32 }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @query(\"limit\", .input.limit)")
+
 let () =
   Alcotest.run "protocol_http"
     [
@@ -468,5 +494,14 @@ let () =
             non_int_code_scalar_rejected;
           Alcotest.test_case "valid code forms accepted" `Quick
             valid_code_forms_accepted;
+        ] );
+      ( "http_kv_value_types",
+        [
+          Alcotest.test_case "query map value rejected" `Quick
+            query_map_value_rejected;
+          Alcotest.test_case "header list value rejected" `Quick
+            header_list_value_rejected;
+          Alcotest.test_case "query scalar value ok" `Quick
+            query_scalar_value_ok;
         ] );
     ]

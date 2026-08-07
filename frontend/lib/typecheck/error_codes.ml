@@ -25,10 +25,14 @@ let error_code_invalid = "TC0016"
 let error_discrimination_ambiguous = "TC0017"
 let async_takes_no_arguments = "TC0018"
 
-(* TC0019-22 are intentionally unused: they covered the per-member HTTP
-   binding traits (@httpLabel/@httpQuery/@httpHeader/@httpPayload), retired
-   in favor of point-of-use declaration (@query/@header/@body); see
-   [protocol_trait_invalid] for the checks that replaced them. *)
+(* TC0019, TC0020, TC0022 are intentionally unused: they covered the
+   per-member HTTP binding traits (@httpLabel/@httpPayload), retired in
+   favor of point-of-use declaration (@query/@header/@body); see
+   [protocol_trait_invalid] for the checks that replaced them. TC0021 stays
+   live: a map or list value still has no defined query/header
+   serialization, and now guards the @query/@header call-site grammar
+   instead of the retired @httpQuery/@httpHeader member traits. *)
+let http_map_binding = "TC0021"
 
 (* Module system: a qualified reference names a module not brought into scope by
    an import; a reference resolves to a shape that is not [pub] in its module; the

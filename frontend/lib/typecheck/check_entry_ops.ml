@@ -53,11 +53,21 @@ let crlf_diags ~what span (parts : Ir.template_part list) : Diagnostic.t list =
       | _ -> None)
     parts
 
+(* A map or list value has no defined query-string/header serialization: this
+   is the one type constraint @header/@query values carry (everything else in
+   [check_kv_shape] is pure surface shape). *)
+let rec is_map_or_list_type : Ast.ty -> bool = function
+  | Ast.TMap _ | Ast.TList _ -> true
+  | Ast.TNullable (t, _) -> is_map_or_list_type t
+  | _ -> false
+
 (* The shared grammar of a @header/@query key or value: a string (literal or
    template, real placeholders resolved elsewhere by [op_refs]) or a pure
    reference. The legacy [{name}] input placeholder is excluded: that
-   convention only exists in the @http path. *)
-let check_kv_shape ~trait_name ~key_what ~value_what (tr : Ast.trait) :
+   convention only exists in the @http path. [resolve] types a value
+   reference's segs, when resolvable, to reject a map/list value. *)
+let check_kv_shape ~trait_name ~key_what ~value_what
+    ~(resolve : string list -> Ast.ty option) (tr : Ast.trait) :
     Diagnostic.t list =
   match tr.Ast.targs with
   | [ key; value ] -> (
@@ -90,7 +100,16 @@ let check_kv_shape ~trait_name ~key_what ~value_what (tr : Ast.trait) :
       | Ast.AString v ->
           let parts, diags = template_of ~span:tr.tspan v in
           diags @ crlf_diags ~what:value_what tr.tspan parts
-      | Ast.ARef _ -> []
+      | Ast.ARef r -> (
+          match resolve r.segs with
+          | Some ty when is_map_or_list_type ty ->
+              [
+                err Error_codes.http_map_binding r.ref_span
+                  "%s references '%s', a map or list; a map or list value has \
+                   no defined query/header serialization"
+                  value_what (path_str r.segs);
+              ]
+          | _ -> [])
       | _ ->
           [
             err Error_codes.protocol_trait_invalid tr.tspan
@@ -107,19 +126,19 @@ let check_kv_shape ~trait_name ~key_what ~value_what (tr : Ast.trait) :
 
 (* Shape rules of @header, independent of any field scope, so loose ops obey
    them too. *)
-let check_header_shapes (op : Ast.decl) : Diagnostic.t list =
+let check_header_shapes ~resolve (op : Ast.decl) : Diagnostic.t list =
   List.concat_map
     (check_kv_shape ~trait_name:"header"
        ~key_what:"a @header key takes {.field} references"
-       ~value_what:"a @header value")
+       ~value_what:"a @header value" ~resolve)
     (traits_named "header" op.Ast.dtraits)
 
 (* Shape rules of @query, mirroring @header. *)
-let check_query_shapes (op : Ast.decl) : Diagnostic.t list =
+let check_query_shapes ~resolve (op : Ast.decl) : Diagnostic.t list =
   List.concat_map
     (check_kv_shape ~trait_name:"query"
        ~key_what:"a @query key takes {.field} references"
-       ~value_what:"a @query value")
+       ~value_what:"a @query value" ~resolve)
     (traits_named "query" op.Ast.dtraits)
 
 (* @http(code:) is well-formed only as an int or a non-empty list of ints.
@@ -270,8 +289,13 @@ let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
    ever name entry fields) — belongs to an entry. *)
 let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
   let pname, pty = op_param op in
-  let is_param_ref segs =
-    Option.is_some (Entry_scope.resolve_param ctx pname pty segs)
+  let resolve_param segs = Entry_scope.resolve_param ctx pname pty segs in
+  let is_param_ref segs = Option.is_some (resolve_param segs) in
+  let resolve segs =
+    match resolve_param segs with
+    | None -> None
+    | Some (Entry_scope.Whole ty) -> Some ty
+    | Some (Entry_scope.Member m) -> Some m.Ast.mtype
   in
   let entry_only what span =
     err Error_codes.protocol_trait_invalid span
@@ -326,7 +350,9 @@ let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
             (traits_named name op.dtraits))
         [ "header"; "query"; "body" ]
   in
-  protocol_http_diags @ check_header_shapes op @ check_query_shapes op
+  protocol_http_diags
+  @ check_header_shapes ~resolve op
+  @ check_query_shapes ~resolve op
   @ check_body_shapes ctx op @ check_code op @ ref_diags @ endpoint_diags
   @ timeout_retry_diags
 
@@ -365,6 +391,13 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     Diagnostic.t list =
   let pname, pty = op_param op in
   let resolve segs = Entry_scope.resolve_ref ctx fields ~pname ~pty segs in
+  let resolve_ty segs =
+    match resolve segs with
+    | None -> None
+    | Some (Entry_scope.RField m) -> Some m.Ast.mtype
+    | Some (Entry_scope.RParam (Entry_scope.Whole ty)) -> Some ty
+    | Some (Entry_scope.RParam (Entry_scope.Member m)) -> Some m.Ast.mtype
+  in
   (* A same-named entry field silently changes what `.name` means inside this
      op (parameter, not field). Not an error (ordinary lexical shadowing),
      but the only spot where one ref syntax has two possible resolutions. *)
@@ -479,5 +512,7 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
   in
   check_protocol_positions op
   @ shadow_diags @ ref_diags @ http_diags @ path_diags @ timeout_diags
-  @ retry_diags @ check_header_shapes op @ check_query_shapes op
+  @ retry_diags
+  @ check_header_shapes ~resolve:resolve_ty op
+  @ check_query_shapes ~resolve:resolve_ty op
   @ check_body_shapes ctx op @ check_code op
