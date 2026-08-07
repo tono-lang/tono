@@ -1,19 +1,18 @@
 //! The inline HTTP transport: per-operation TypeScript built directly from a
-//! `WireBinding`, plus the small set of shared declarations every operation's
-//! generated call draws on. The generated SDK carries its own transport and
-//! imports nothing for it.
+//! `WireBinding`. The generated SDK carries its own transport and imports
+//! nothing for it; the shared declaration text the emitted calls draw on
+//! lives in [`super::transport_decls`].
 //!
-//! Poda by use happens at two granularities: `internal_helpers()`'s
-//! declarations are pruned SDK-wide by the usual root-group mechanism (an SDK
-//! with no `@retry` anywhere drops the backoff helpers entirely), while the
-//! retry loop and the timeout wrapping are inlined directly into `op_call`'s
-//! own text, gated on `wire.retry`/`wire.timeout`, so a single operation with
+//! Poda by use happens at two granularities: the shared declarations are
+//! pruned SDK-wide by the usual root-group mechanism (an SDK with no
+//! `@retry` anywhere drops the backoff helpers entirely), while the retry
+//! loop and the timeout wrapping are inlined directly into `op_call`'s own
+//! text, gated on `wire.retry`/`wire.timeout`, so a single operation with
 //! neither carries no trace of either in its own generated method.
 
 use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
 use crate::codegen::symbol::Symbol;
-use crate::codegen::tree::Decl;
-use crate::ir::{TemplatePart, WireBinding, WirePart, WireResponsePart, WireValue};
+use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
 
 use super::support_symbol;
 
@@ -120,6 +119,50 @@ fn wire_value_expr(
             Some(name) => format!("formatScalar(record[{}])", js_str(name)),
         },
         WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
+        // Only ever emitted for @body; never a header/query/uri value.
+        WireValue::Object(_) => {
+            format!(
+                "JSON.stringify({})",
+                wire_value_native_expr(v, field_expr, input_expr)
+            )
+        }
+    }
+}
+
+/// A `WireValue` rendered as a native TypeScript expression (not stringified):
+/// the @body ctor mapper's field value, or nested inside one. Unlike
+/// [`wire_value_expr`], this keeps the value's own shape so `JSON.stringify`
+/// encodes it the same way it would encode the field directly.
+fn wire_value_native_expr(
+    v: &WireValue,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> String {
+    match v {
+        WireValue::Lit(json) => match json.as_str() {
+            Some(s) => js_str(s),
+            None => json.to_string(),
+        },
+        WireValue::Field(path) => field_expr(path),
+        WireValue::Param(segs) => match segs.first() {
+            None => input_expr.to_string(),
+            Some(name) => format!("record[{}]", js_str(name)),
+        },
+        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
+        WireValue::Object(fields) => {
+            let entries = fields
+                .iter()
+                .map(|(name, value)| {
+                    format!(
+                        "{}: {}",
+                        js_str(name),
+                        wire_value_native_expr(value, field_expr, input_expr)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {entries} }}")
+        }
     }
 }
 
@@ -177,74 +220,46 @@ fn declared_header_lines(
         .collect()
 }
 
-/// One `setHeader(...)` call per input member bound to a header position.
-fn per_call_header_lines(wire: &WireBinding, indent_str: &str) -> String {
-    wire.bindings
+/// One `appendQuery(...)` call per declared `@query` entry.
+fn query_lines(
+    wire: &WireBinding,
+    indent_str: &str,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> String {
+    wire.query
         .iter()
-        .filter_map(|(name, part)| match part {
-            WirePart::Header { name: header_name } => Some(format!(
-                "{indent_str}setHeader(headers, {}, formatScalar(record[{}]));\n",
-                js_str(header_name),
-                js_str(name)
-            )),
-            _ => None,
+        .map(|(key, value)| {
+            format!(
+                "{indent_str}appendQuery(qs, {}, {});\n",
+                template_expr(key, field_expr, input_expr),
+                wire_value_native_expr(value, field_expr, input_expr)
+            )
         })
         .collect()
 }
 
-/// One `appendQuery(...)` call per input member bound to the query string.
-fn query_lines(wire: &WireBinding, indent_str: &str) -> String {
-    wire.bindings
-        .iter()
-        .filter_map(|(name, part)| match part {
-            WirePart::Query { name: query_name } => Some(format!(
-                "{indent_str}appendQuery(qs, {}, record[{}]);\n",
-                js_str(query_name),
-                js_str(name)
-            )),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The request body: a `Payload`-kind member wins outright (mirrors the
-/// runtime's current early-return semantics), otherwise a compile-time-known
-/// object literal of the `Body`-kind members. `None` when the operation sends
-/// no body at all.
-fn body_expr(wire: &WireBinding, input_expr: &str) -> Option<String> {
-    if let Some((name, _)) = wire
-        .bindings
-        .iter()
-        .find(|(_, p)| matches!(p, WirePart::Payload))
-    {
-        return Some(format!("JSON.stringify(record[{}])", js_str(name)));
-    }
-    let fields: Vec<&String> = wire
-        .bindings
-        .iter()
-        .filter(|(_, p)| matches!(p, WirePart::Body))
-        .map(|(name, _)| name)
-        .collect();
-    if fields.is_empty() {
-        return None;
-    }
-    // Every binding is a Body member (no Label/Query/Header/Payload carved any
-    // out): the encoded input already *is* exactly the body, so stringifying
-    // it directly is both simpler and, unlike re-listing by canonical name,
-    // correct even when a member's `encode` wire key differs from its
-    // canonical name (`@wire`) — `bindings` is keyed canonically, but the
-    // encoded input's own keys already follow whatever `encode` actually
-    // wrote. `needs_record` agrees this case needs no `record` alias, so
-    // this reads the raw encoded input instead of indexing through one.
-    if fields.len() == wire.bindings.len() {
+/// The request body, or `None` when the operation sends no body: `wire.body`
+/// says exactly what the body is, never inferred from what the input leaves
+/// undeclared. The whole-parameter form stringifies the typed input directly
+/// (correct even under `@wire` renames, and matching `needs_record`'s
+/// decision that this case needs no `record` alias); every other form (one
+/// member, an entry-field reference, a template, or the @body ctor mapper)
+/// builds the native value first, so `JSON.stringify` encodes it the same
+/// way it would encode the field directly.
+fn body_expr(
+    wire: &WireBinding,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> Option<String> {
+    let body = wire.body.as_ref()?;
+    if matches!(body, WireValue::Param(segs) if segs.is_empty()) {
         return Some(format!("JSON.stringify({input_expr})"));
     }
-    let object = fields
-        .iter()
-        .map(|name| format!("{}: record[{}]", js_str(name), js_str(name)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(format!("JSON.stringify({{ {object} }})"))
+    Some(format!(
+        "JSON.stringify({})",
+        wire_value_native_expr(body, field_expr, input_expr)
+    ))
 }
 
 /// The TypeScript spelling of the shared [`success_test_expr`] rule.
@@ -315,7 +330,7 @@ fn url_lines(
          {indent_str}const url = {} + {}{tail};\n",
         endpoint_expr(wire, field_expr, input_expr),
         uri_expr(wire, field_expr, input_expr),
-        q = query_lines(wire, indent_str),
+        q = query_lines(wire, indent_str, field_expr, input_expr),
         tail = " + (qs.toString() ? `?${qs.toString()}` : \"\")",
     )
 }
@@ -383,7 +398,7 @@ pub(super) fn op_call(
 
     let has_retry = wire.retry.is_some();
     let has_timeout = wire.timeout.is_some();
-    let body = body_expr(wire, input_expr);
+    let body = body_expr(wire, field_expr, input_expr);
     let transport_throw = throw(format!("new {transport_error}(cause)"));
 
     let mut out = String::new();
@@ -398,7 +413,6 @@ pub(super) fn op_call(
     out.push_str(
         "    for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);\n",
     );
-    out.push_str(&per_call_header_lines(wire, "    "));
     let body_field = match &body {
         Some(_) => "body".to_string(),
         None => "body: undefined".to_string(),
@@ -514,279 +528,6 @@ pub(super) fn op_call(
         out.push_str(&attempt);
     }
     out
-}
-
-/// The public, bespoke-facing transport types (`Group::root_support()`): the
-/// request/response shapes a bound `before_request`/`after_response` hook
-/// type-checks against, plus the construction-time `ClientOptions`/`Hooks`.
-pub(crate) fn http_support_decls() -> Vec<Decl> {
-    vec![
-        Decl::raw_providing(
-            "HttpResponse",
-            "// HttpResponse is the response the runtime reads before classifying it.\n\
-             // An after_response hook may return a mutated copy.\n\
-             export interface HttpResponse {\n  status: number;\n  headers: Record<string, string>;\n  body: string;\n}",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "HttpRequest",
-            "// HttpRequest is the request the runtime builds before sending it. A\n\
-             // before_request hook receives this and may return a mutated copy (set an\n\
-             // auth header, sign the body).\n\
-             export interface HttpRequest {\n  method: string;\n  url: string;\n  headers: Record<string, string>;\n  body: string | undefined;\n}",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "HttpTransport",
-            "// HttpTransport adapts any HTTP stack by mapping HttpRequest/HttpResponse,\n\
-             // without emulating fetch. One call is one attempt: the generated client\n\
-             // owns retry, so a transport with internal retries does not combine with\n\
-             // it.\n\
-             export type HttpTransport = (req: HttpRequest, signal?: AbortSignal) => Promise<HttpResponse>;",
-            vec![support_symbol("HttpRequest"), support_symbol("HttpResponse")],
-        ),
-        Decl::raw_providing(
-            "ClientOptions",
-            "// ClientOptions is what the caller supplies once, shared across every\n\
-             // operation. Exactly one transport slot may be set: fetch (native) or\n\
-             // transport (canonical); setting both is a construction error. No slot\n\
-             // ships its own auth; a bespoke hook sets an auth header through headers.\n\
-             export interface ClientOptions {\n  readonly fetch?: typeof fetch;\n  readonly transport?: HttpTransport;\n  readonly headers?: Readonly<Record<string, string>>;\n}",
-            vec![support_symbol("HttpTransport")],
-        ),
-        Decl::raw_providing(
-            "Hooks",
-            "// Hooks are the lifecycle slots the generated client invokes around the\n\
-             // transport. A hook that throws propagates raw; the generated wrapper is\n\
-             // what turns it into a ContractError.\n\
-             export interface Hooks {\n  readonly before_request?: (req: HttpRequest) => HttpRequest | Promise<HttpRequest>;\n  readonly after_response?: (res: HttpResponse) => HttpResponse | Promise<HttpResponse>;\n}",
-            vec![support_symbol("HttpRequest"), support_symbol("HttpResponse")],
-        ),
-    ]
-}
-
-/// One HTTP dispatch function: `httpSend` and `httpSendWithTimeout` share the
-/// same leading `(options: ClientOptions, request: HttpRequest, ...)` shape
-/// and the same three-type refs list, so both are built through this one
-/// place rather than as two near-identical `Decl::raw_providing` calls.
-fn http_dispatch_fn(name: &str, doc: &str, extra_params: &str, body: &str) -> Decl {
-    Decl::raw_providing(
-        name,
-        format!(
-            "{doc}\n\
-             export async function {name}(\n\
-             \x20 options: ClientOptions,\n\
-             \x20 request: HttpRequest,\n\
-             {extra_params}\
-             ): Promise<HttpResponse> {{\n\
-             {body}\n\
-             }}"
-        ),
-        vec![
-            support_symbol("ClientOptions"),
-            support_symbol("HttpRequest"),
-            support_symbol("HttpResponse"),
-        ],
-    )
-}
-
-/// The internal transport helpers (`Group::root("http")`), pruned SDK-wide by
-/// usage exactly like the `duration`/`casing` groups: an SDK with no
-/// `@retry` anywhere never carries the backoff helpers.
-pub(crate) fn internal_helpers() -> Vec<Decl> {
-    vec![
-        Decl::raw_providing(
-            "formatScalar",
-            "// formatScalar renders a value the way the wire expects it in a path,\n\
-             // query, or header position: strings verbatim, everything else as JSON.\n\
-             export function formatScalar(value: unknown): string {\n\
-             \x20 if (typeof value === \"string\") return value;\n\
-             \x20 try {\n\
-             \x20   return JSON.stringify(value) ?? \"\";\n\
-             \x20 } catch {\n\
-             \x20   return \"\";\n\
-             \x20 }\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "pathPart",
-            "// pathPart renders a path segment: an absent value substitutes empty\n\
-             // rather than the literal \"undefined\"/\"null\".\n\
-             export function pathPart(value: unknown): string {\n\
-             \x20 return value === undefined || value === null ? \"\" : encodeURIComponent(formatScalar(value));\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "setHeader",
-            "// setHeader overrides across casings: header names are case-insensitive,\n\
-             // so a bespoke \"authorization\" replaces a declared \"Authorization\" rather\n\
-             // than riding beside it.\n\
-             export function setHeader(headers: Record<string, string>, name: string, value: string): void {\n\
-             \x20 const lower = name.toLowerCase();\n\
-             \x20 for (const key of Object.keys(headers)) {\n\
-             \x20   if (key.toLowerCase() === lower) delete headers[key];\n\
-             \x20 }\n\
-             \x20 headers[name] = value;\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "hasHeader",
-            "export function hasHeader(headers: Record<string, string>, name: string): boolean {\n\
-             \x20 const lower = name.toLowerCase();\n\
-             \x20 return Object.keys(headers).some((key) => key.toLowerCase() === lower);\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "headerRecord",
-            "// headerRecord collects a Headers object into a plain record so a hook can\n\
-             // read and rewrite it without a live Headers instance.\n\
-             export function headerRecord(headers: Headers): Record<string, string> {\n\
-             \x20 const record: Record<string, string> = {};\n\
-             \x20 headers.forEach((value, key) => {\n\
-             \x20   record[key] = value;\n\
-             \x20 });\n\
-             \x20 return record;\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "appendQuery",
-            "// appendQuery serializes as a repeated entry per element for a list, a\n\
-             // single entry otherwise; a null/absent value is omitted.\n\
-             export function appendQuery(qs: URLSearchParams, name: string, value: unknown): void {\n\
-             \x20 if (value === undefined || value === null) return;\n\
-             \x20 if (Array.isArray(value)) {\n\
-             \x20   for (const element of value) qs.append(name, String(element));\n\
-             \x20 } else {\n\
-             \x20   qs.append(name, String(value));\n\
-             \x20 }\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "parseJsonObject",
-            "// parseJsonObject parses a response body for response-bound member\n\
-             // folding; a non-object or unparsable body leaves the bound fields to\n\
-             // stand on their own.\n\
-             export function parseJsonObject(body: string): Record<string, unknown> {\n\
-             \x20 if (body === \"\") return {};\n\
-             \x20 try {\n\
-             \x20   const parsed: unknown = JSON.parse(body);\n\
-             \x20   return parsed !== null && typeof parsed === \"object\" ? (parsed as Record<string, unknown>) : {};\n\
-             \x20 } catch {\n\
-             \x20   return {};\n\
-             \x20 }\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "assertExclusiveTransport",
-            "// assertExclusiveTransport rejects setting both transport slots: the\n\
-             // caller must pick the native slot (fetch) or the canonical one\n\
-             // (transport), not both.\n\
-             export function assertExclusiveTransport(options: ClientOptions): void {\n\
-             \x20 if (options.fetch && options.transport) {\n\
-             \x20   throw new Error(\n\
-             \x20     \"ClientOptions.fetch and ClientOptions.transport are mutually exclusive: set the native slot or the canonical slot, not both\",\n\
-             \x20   );\n\
-             \x20 }\n\
-             }",
-            vec![support_symbol("ClientOptions")],
-        ),
-        http_dispatch_fn(
-            "httpSend",
-            "// httpSend performs one attempt: the canonical transport when set,\n\
-             // otherwise fetch.",
-            "\x20 signal: AbortSignal | undefined,\n",
-            "\x20 if (options.transport) return options.transport(request, signal);\n\
-             \x20 const transport = options.fetch ?? fetch;\n\
-             \x20 const response = await transport(request.url, {\n\
-             \x20   method: request.method,\n\
-             \x20   headers: request.headers,\n\
-             \x20   body: request.body,\n\
-             \x20   signal,\n\
-             \x20 });\n\
-             \x20 const text = await response.text();\n\
-             \x20 return { status: response.status, headers: headerRecord(response.headers), body: text };",
-        ),
-        http_dispatch_fn(
-            "httpSendWithTimeout",
-            "// httpSendWithTimeout bounds one attempt: the timeout aborts the signal\n\
-             // (so a cooperating transport cancels its work) and rejects the attempt\n\
-             // regardless, so a transport that ignores the signal still times out.",
-            "\x20 timeoutMs: number,\n",
-            "\x20 if (timeoutMs <= 0) return httpSend(options, request, undefined);\n\
-             \x20 const controller = new AbortController();\n\
-             \x20 let timer: ReturnType<typeof setTimeout> | undefined;\n\
-             \x20 const expiry = new Promise<never>((_, reject) => {\n\
-             \x20   timer = setTimeout(() => {\n\
-             \x20     const cause = new Error(`attempt timed out after ${timeoutMs}ms`);\n\
-             \x20     controller.abort(cause);\n\
-             \x20     reject(cause);\n\
-             \x20   }, timeoutMs);\n\
-             \x20 });\n\
-             \x20 const call = httpSend(options, request, controller.signal);\n\
-             \x20 try {\n\
-             \x20   const raced = Promise.race([call, expiry]);\n\
-             \x20   call.catch(() => {});\n\
-             \x20   return await raced;\n\
-             \x20 } finally {\n\
-             \x20   clearTimeout(timer);\n\
-             \x20 }",
-        ),
-        Decl::raw_providing(
-            "backoffDelayMs",
-            "// backoffDelayMs is exponential with full jitter: the constants are part\n\
-             // of the cross-runtime parity contract and must match every other target.\n\
-             export function backoffDelayMs(attempt: number, random: number): number {\n\
-             \x20 return random * Math.min(2000, 100 * 2 ** attempt);\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "resolveMaxRetries",
-            "// resolveMaxRetries clamps the operation's @retry field: a non-finite\n\
-             // value or one below one both mean zero retries; a fractional value\n\
-             // floors. bigint (an i64/u64-typed @retry field) narrows to a number\n\
-             // first, the same conversion every other numeric ref narrows through.\n\
-             export function resolveMaxRetries(value: number | bigint): number {\n\
-             \x20 const n = typeof value === \"bigint\" ? Number(value) : value;\n\
-             \x20 return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;\n\
-             }",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "timingSeam",
-            "// timingSeam is the sleep/random behind the retry loop's backoff, as a\n\
-             // mutable object rather than fixed functions: an ES module import\n\
-             // binding is read-only, so a plain `export function` could never be\n\
-             // substituted from outside its own file, but a property of an\n\
-             // exported object can. Internal to the package (this group is\n\
-             // excluded from package.json's exports map), so only code shipped in\n\
-             // the same SDK, never a consumer, can reach or override it. Math.random\n\
-             // seeds only this jitter, never anything security-sensitive (no token,\n\
-             // no session id, no cryptographic use), so a predictable PRNG default\n\
-             // is fine.\n\
-             export const timingSeam: { sleep: (ms: number) => Promise<void>; random: () => number } = {\n\
-             \x20 sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),\n\
-             \x20 random: () => Math.random(), // NOSONAR: jitter timing only, not a cryptographic use\n\
-             };",
-            Vec::new(),
-        ),
-        Decl::raw_providing(
-            "retryDelay",
-            "// retryDelay waits out one attempt's exponential-backoff delay before a\n\
-             // retried call.\n\
-             export async function retryDelay(attempt: number): Promise<void> {\n\
-             \x20 await timingSeam.sleep(backoffDelayMs(attempt, timingSeam.random()));\n\
-             }",
-            Vec::new(),
-        ),
-    ]
 }
 
 #[cfg(test)]

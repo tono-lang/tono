@@ -7,9 +7,7 @@ fn base_wire() -> WireBinding {
     WireBinding {
         method: "POST".into(),
         uri: WireValue::Template(vec![TemplatePart::Lit("/charges".into())]),
-        bindings: [("amount".to_string(), WirePart::Body)]
-            .into_iter()
-            .collect(),
+        body: Some(WireValue::Param(vec![])),
         response_bindings: Default::default(),
         success: Vec::new(),
         endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
@@ -133,14 +131,13 @@ fn a_labeled_path_reads_the_record_and_url_encodes() {
         TemplatePart::Lit("/things/".into()),
         TemplatePart::Input("id".into()),
     ]);
-    case.wire.bindings = [("id".to_string(), WirePart::Label)].into_iter().collect();
+    case.wire.body = None;
     let out = case.text();
     assert!(out.contains("record, err := record.EncodeRecord(input)"));
     assert!(out.contains(
         "requestURL := c.settings.endpoint + \"/things/\" + transport.PathPart(record[\"id\"])"
     ));
-    // Every binding left the body, so no body is sent and no content-type
-    // defaults in.
+    // No @body declared, so no body is sent and no content-type defaults in.
     assert!(!out.contains("json.Marshal"));
     assert!(!out.contains("content-type"));
 }
@@ -148,27 +145,29 @@ fn a_labeled_path_reads_the_record_and_url_encodes() {
 #[test]
 fn a_query_binding_collects_entries_in_order_and_folds_the_tail() {
     let mut case = Case::new(base_wire());
-    case.wire.bindings = [
-        ("tag".to_string(), WirePart::Query { name: "tag".into() }),
-        ("amount".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
+    case.wire.query = vec![(
+        vec![TemplatePart::Lit("tag".into())],
+        WireValue::Param(vec!["tag".into()]),
+    )];
+    case.wire.body = Some(WireValue::Object(vec![(
+        "amount".to_string(),
+        WireValue::Param(vec!["amount".into()]),
+    )]));
     let out = case.text();
     assert!(out.contains("var query []string"));
     assert!(out.contains("query = transport.AppendQuery(query, \"tag\", record[\"tag\"])"));
     assert!(out.contains("+ transport.QueryString(query)"));
-    // A mixed body assembles just the body members, in member order.
-    assert!(out.contains("body, err := transport.EncodeBody(record, \"amount\")"));
-    assert!(out.contains("if body != nil && !transport.HasHeader(headers, \"content-type\")"));
+    // The @body ctor mapper builds an object of just its declared field.
+    assert!(
+        out.contains("body, err := json.Marshal(map[string]any{\"amount\": record[\"amount\"]})")
+    );
+    assert!(out.contains("if !transport.HasHeader(headers, \"content-type\")"));
 }
 
 #[test]
-fn a_payload_member_is_the_whole_body_and_absence_sends_none() {
+fn a_param_member_body_is_the_whole_body_read_raw_off_the_record() {
     let mut case = Case::new(base_wire());
-    case.wire.bindings = [("data".to_string(), WirePart::Payload)]
-        .into_iter()
-        .collect();
+    case.wire.body = Some(WireValue::Param(vec!["data".into()]));
     let out = case.text();
     assert!(out.contains("if v, ok := record[\"data\"]; ok {"));
     assert!(out.contains("encoded, err := json.Marshal(v)"));
@@ -176,23 +175,12 @@ fn a_payload_member_is_the_whole_body_and_absence_sends_none() {
 }
 
 #[test]
-fn headers_layer_declared_then_base_then_per_call() {
+fn headers_layer_declared_then_base() {
     let mut case = Case::new(base_wire());
     case.wire.request_headers = vec![(
         vec![TemplatePart::Lit("X-API-Key".into())],
         WireValue::Field(vec!["api_key".into()]),
     )];
-    case.wire.bindings = [
-        (
-            "trace".to_string(),
-            WirePart::Header {
-                name: "X-Trace".into(),
-            },
-        ),
-        ("amount".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
     let out = case.text();
     let declared = out
         .find("transport.SetHeader(headers, \"X-API-Key\", c.settings.api_key)")
@@ -200,11 +188,7 @@ fn headers_layer_declared_then_base_then_per_call() {
     let base = out
         .find("for name, value := range c.settings.Headers {")
         .expect("base header layer");
-    let per_call = out
-        .find("if v, ok := record[\"trace\"]; ok && v != nil {")
-        .expect("per-call header guard");
-    assert!(declared < base && base < per_call);
-    assert!(out.contains("transport.SetHeader(headers, \"X-Trace\", transport.FormatScalar(v))"));
+    assert!(declared < base);
 }
 
 #[test]

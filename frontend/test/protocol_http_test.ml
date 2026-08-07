@@ -10,21 +10,16 @@ let member ?(traits = []) ?(target = Ir.Prim Ir.String) name : Ir.member =
 let structure id members : Ir.shape =
   { Ir.id; kind = Ir.Structure { params = []; members }; traits = [] }
 
-let op ?(traits = []) ?input ?output ?(errors = []) id : Ir.shape =
+let op ?(traits = []) ?pname ?input ?output ?(errors = []) id : Ir.shape =
   {
     Ir.id;
     kind =
-      Ir.Operation { input; input_name = None; output; errors; wire = None };
+      Ir.Operation { input; input_name = pname; output; errors; wire = None };
     traits;
   }
 
-(* A stable rendering of a descriptor, doubling as the snapshot format. *)
-let show_part : Protocol_http.part -> string = function
-  | Label -> "label"
-  | Query n -> Printf.sprintf "query(%s)" n
-  | Header n -> Printf.sprintf "header(%s)" n
-  | Body -> "body"
-  | Payload -> "payload"
+let field p : Ir.json =
+  `Assoc [ ("field", `List (List.map (fun s -> `String s) p)) ]
 
 let show_response_part : Protocol_http.response_part -> string = function
   | Response_header n -> Printf.sprintf "header(%s)" n
@@ -45,14 +40,24 @@ and show_value_expr : Protocol_http.value_expr -> string = function
   | Protocol_http.Vlit (`String s) -> s
   | Protocol_http.Vlit _ -> "<lit>"
   | Protocol_http.Vfield p -> Printf.sprintf ".%s" (String.concat "." p)
+  | Protocol_http.Vparam [] -> ".param"
   | Protocol_http.Vparam p -> Printf.sprintf ".param.%s" (String.concat "." p)
   | Protocol_http.Vtemplate parts ->
       String.concat "" (List.map show_template_part parts)
+  | Protocol_http.Vctor fields ->
+      let shown =
+        List.map
+          (fun (n, v) -> Printf.sprintf "%s:%s" n (show_value_expr v))
+          fields
+      in
+      Printf.sprintf "{%s}" (String.concat "," shown)
+
+let show_kv (parts, v) =
+  Printf.sprintf "%s=%s"
+    (String.concat "" (List.map show_template_part parts))
+    (show_value_expr v)
 
 let show_desc (d : Protocol_http.resolution) : string =
-  let bindings =
-    List.map (fun (n, p) -> Printf.sprintf "%s=%s" n (show_part p)) d.bindings
-  in
   let rbindings =
     List.map
       (fun (n, p) -> Printf.sprintf "%s<-%s" n (show_response_part p))
@@ -65,7 +70,9 @@ let show_desc (d : Protocol_http.resolution) : string =
     [
       d.http_method;
       show_value_expr d.uri;
-      String.concat "," bindings;
+      String.concat "," (List.map show_kv d.query);
+      String.concat "," (List.map show_kv d.request_headers);
+      (match d.body with None -> "-" | Some v -> show_value_expr v);
       String.concat "," rbindings;
       String.concat "," success;
     ]
@@ -74,18 +81,8 @@ let show_desc (d : Protocol_http.resolution) : string =
 let lookup shapes id = List.find_opt (fun (s : Ir.shape) -> s.id = id) shapes
 let resolve shapes o = Option.get (Protocol_http.resolve_op (lookup shapes) o)
 
-(* Every part variant plus the two response parts, in one operation. *)
-let all_parts () =
-  let req =
-    structure "req"
-      [
-        member "id" ~traits:[ trait "httpLabel" `Null ];
-        member "limit" ~traits:[ trait "httpQuery" (`List [ `String "limit" ]) ];
-        member "auth"
-          ~traits:[ trait "httpHeader" (`List [ `String "Authorization" ]) ];
-        member "note";
-      ]
-  in
+(* @query/@header/@body all declared at the op, plus the two response parts. *)
+let resolve_full () =
   let resp =
     structure "resp"
       [
@@ -95,25 +92,26 @@ let all_parts () =
       ]
   in
   let o =
-    op "get_thing"
+    op "get_thing" ~pname:"ref"
       ~traits:
         [
           trait "http"
             (`Assoc
                [ ("method", `String "get"); ("path", `String "/things/{id}") ]);
+          trait "query" (`List [ `String "limit"; field [ "ref"; "limit" ] ]);
+          trait "header"
+            (`List [ `String "Authorization"; field [ "ref"; "auth" ] ]);
         ]
-      ~input:(Ir.Ref ("req", []))
       ~output:(Ir.Ref ("resp", []))
   in
-  let d = resolve [ req; resp ] o in
+  let d = resolve [ resp ] o in
   Alcotest.(check string)
     "descriptor"
-    "GET|/things/{id}|id=label,limit=query(limit),auth=header(Authorization),note=body|trace<-header(X-Trace),code<-statusCode|"
+    "GET|/things/{id}|limit=.param.limit|Authorization=.param.auth|-|trace<-header(X-Trace),code<-statusCode|"
     (show_desc d)
 
-(* An unmarked input defaults to body; no @http(code:) leaves success empty
-   (every emitter falls back to the 2xx-range convention). *)
-let body_default () =
+(* No @body means no body: it is never inferred from the input's shape. *)
+let no_body_by_default () =
   let req = structure "req" [ member "a"; member "b" ] in
   let o =
     op "make"
@@ -126,27 +124,66 @@ let body_default () =
       ~output:(Ir.Ref ("req", []))
   in
   Alcotest.(check string)
-    "body default, no declared success code" "POST|/x|a=body,b=body||"
+    "no body, no declared success code" "POST|/x|||-||"
     (show_desc (resolve [ req ] o))
 
-(* An explicit @httpPayload member occupies the whole body. *)
-let payload_whole_body () =
-  let req =
-    structure "req" [ member "raw" ~traits:[ trait "httpPayload" `Null ] ]
-  in
+(* @body(.param) sends the whole parameter as the body. *)
+let body_whole_param () =
   let o =
-    op "put"
+    op "make" ~pname:"input"
+      ~traits:
+        [
+          trait "http"
+            (`Assoc [ ("method", `String "POST"); ("path", `String "/x") ]);
+          trait "body" (`List [ field [ "input" ] ]);
+        ]
+  in
+  Alcotest.(check string)
+    "whole param" "POST|/x|||.param||"
+    (show_desc (resolve [] o))
+
+(* @body(.param.member) sends one member as the whole body. *)
+let body_one_member () =
+  let o =
+    op "put" ~pname:"input"
       ~traits:
         [
           trait "http"
             (`Assoc [ ("method", `String "PUT"); ("path", `String "/x") ]);
+          trait "body" (`List [ field [ "input"; "raw" ] ]);
         ]
-      ~input:(Ir.Ref ("req", []))
   in
-  (* No output type and no declared success code either. *)
   Alcotest.(check string)
-    "payload" "PUT|/x|raw=payload||"
-    (show_desc (resolve [ req ] o))
+    "one member" "PUT|/x|||.param.raw||"
+    (show_desc (resolve [] o))
+
+(* @body's ctor mapper resolves each field to its own reference. *)
+let body_ctor () =
+  let o =
+    op "put" ~pname:"input"
+      ~traits:
+        [
+          trait "http"
+            (`Assoc [ ("method", `String "PUT"); ("path", `String "/x") ]);
+          trait "body"
+            (`List
+               [
+                 `Assoc
+                   [
+                     ("ctor", `String "note_body");
+                     ( "fields",
+                       `Assoc
+                         [
+                           ("title", field [ "input"; "title" ]);
+                           ("content", field [ "input"; "content" ]);
+                         ] );
+                   ];
+               ]);
+        ]
+  in
+  Alcotest.(check string)
+    "ctor mapper" "PUT|/x|||{title:.param.title,content:.param.content}||"
+    (show_desc (resolve [] o))
 
 (* A success code override rides @http(code:). *)
 let success_code_override () =
@@ -164,7 +201,9 @@ let success_code_override () =
         ]
       ~output:(Ir.Ref ("thing", []))
   in
-  Alcotest.(check string) "201" "POST|/x|||201:thing" (show_desc (resolve [] o))
+  Alcotest.(check string)
+    "201" "POST|/x|||-||201:thing"
+    (show_desc (resolve [] o))
 
 (* A list of success codes rides @http(code: [...]) too. *)
 let success_code_list () =
@@ -183,30 +222,8 @@ let success_code_list () =
       ~output:(Ir.Ref ("thing", []))
   in
   Alcotest.(check string)
-    "200,207" "POST|/x|||200:thing,207:thing"
+    "200,207" "POST|/x|||-||200:thing,207:thing"
     (show_desc (resolve [] o))
-
-(* A bare @httpQuery/@httpHeader binds under the member's own name. *)
-let bare_bindings () =
-  let req =
-    structure "req"
-      [
-        member "q" ~traits:[ trait "httpQuery" `Null ];
-        member "h" ~traits:[ trait "httpHeader" `Null ];
-      ]
-  in
-  let o =
-    op "act"
-      ~traits:
-        [
-          trait "http"
-            (`Assoc [ ("method", `String "get"); ("path", `String "/x") ]);
-        ]
-      ~input:(Ir.Ref ("req", []))
-  in
-  Alcotest.(check string)
-    "bare names" "GET|/x|q=query(q),h=header(h)||"
-    (show_desc (resolve [ req ] o))
 
 (* An operation with no @http trait carries no descriptor. *)
 let no_http_no_descriptor () =
@@ -248,7 +265,7 @@ let module_attaches_wire () =
       Alcotest.(check string) "method" "POST" wb.Ir.wb_method
   | _ -> Alcotest.fail "op has no wire binding"
 
-(* ── Check_http negatives (spans, via source) ──────────────────────────── *)
+(* ── @body shape diagnostics (spans, via source) ───────────────────────── *)
 
 let codes src =
   let file, _ = Parser.parse src in
@@ -259,156 +276,216 @@ let codes src =
 
 let has code src = List.mem code (codes src)
 
-let label_matches_ok () =
+let body_whole_param_ok () =
   Alcotest.(check bool)
-    "label matches placeholder" false
-    (has "TC0019"
-       "struct req { id: string @httpLabel }\n\
-        op get(req): req @http(method: \"get\", path: \"/x/{id}\")")
+    "whole param body is fine" false
+    (has "TC0044"
+       "struct req { a: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(.input)")
 
-let placeholder_without_label () =
+let body_member_ok () =
   Alcotest.(check bool)
-    "unmatched placeholder" true
-    (has "TC0019"
-       "struct req { other: string }\n\
-        op get(req): req @http(method: \"get\", path: \"/x/{id}\")")
+    "one member as body is fine" false
+    (has "TC0044"
+       "struct req { blob: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(.input.blob)")
 
-let label_without_placeholder () =
+let body_ctor_unknown_shape () =
   Alcotest.(check bool)
-    "unmatched label" true
-    (has "TC0019"
-       "struct req { id: string @httpLabel }\n\
-        op get(req): req @http(method: \"get\", path: \"/x\")")
+    "unknown ctor shape name" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(note_body { title: .input.title })")
 
-let payload_with_body_conflicts () =
+let body_ctor_unknown_field () =
   Alcotest.(check bool)
-    "payload/body conflict" true
-    (has "TC0020"
-       "struct req { raw: string @httpPayload, extra: string }\n\
-        op put(req): req @http(method: \"put\", path: \"/x\")")
+    "unknown ctor field name" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        struct note_body { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(note_body { headline: .input.title })")
 
-let two_payloads () =
+let body_ctor_known_field_ok () =
   Alcotest.(check bool)
-    "second payload" true
-    (has "TC0020"
-       "struct req { a: string @httpPayload, b: string @httpPayload }\n\
-        op put(req): req @http(method: \"put\", path: \"/x\")")
+    "known ctor field is fine" false
+    (has "TC0044"
+       "struct req { title: string }\n\
+        struct note_body { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(note_body { title: .input.title })")
 
-let map_in_query_rejected () =
+let body_ctor_nested_ctor_rejected () =
   Alcotest.(check bool)
-    "map in query" true
-    (has "TC0021"
-       "struct req { m: map[string]string @httpQuery(\"m\") }\n\
-        op get(req): req @http(method: \"get\", path: \"/x\")")
+    "a ctor field cannot nest another ctor" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        struct inner { x: string }\n\
+        struct note_body { title: inner }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(note_body { title: inner { x: .input.title } })")
 
-let map_in_header_rejected () =
+let body_ctor_field_input_placeholder_rejected () =
   Alcotest.(check bool)
-    "map in header" true
-    (has "TC0021"
-       "struct req { m: map[string]string @httpHeader(\"M\") }\n\
-        op get(req): req @http(method: \"get\", path: \"/x\")")
+    "a ctor field value rejects the legacy {name} input placeholder" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        struct note_body { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(note_body { title: \"{title}\" })")
 
-(* A nullable map member still counts as a map for the query/header ban. *)
-let nullable_map_in_query_rejected () =
+let body_two_positional_args_rejected () =
   Alcotest.(check bool)
-    "nullable map in query" true
-    (has "TC0021"
-       "struct req { m: map[string]string? @httpQuery(\"m\") }\n\
-        op get(req): req @http(method: \"get\", path: \"/x\")")
+    "@body takes exactly one argument" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(.input, .input)")
 
-(* A nullable @httpLabel member is rejected: a path parameter is always present. *)
-let nullable_label_rejected () =
+let body_bare_literal_rejected () =
   Alcotest.(check bool)
-    "nullable label" true
-    (has "TC0022"
-       "struct req { id: string? @httpLabel }\n\
-        op get(req): req @http(method: \"get\", path: \"/x/{id}\")")
+    "@body takes a reference or a ctor, not a bare literal" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(\"raw\")")
 
-(* A placeholder with no struct input to match against is still unmatched. *)
-let placeholder_without_struct_input () =
+let duplicate_body_rejected () =
   Alcotest.(check bool)
-    "unmatched placeholder, primitive input" true
-    (has "TC0019"
-       "op get(string): string @http(method: \"get\", path: \"/x/{id}\")")
+    "at most one @body" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(.input) @body(.input)")
 
-(* An empty code: list is malformed, not "no code declared". *)
+let body_requires_http () =
+  Alcotest.(check bool)
+    "@body without @http" true
+    (has "TC0044"
+       "struct req { title: string }\nop post(input: req): req @body(.input)")
+
+(* A GET with no @body sends no body: nothing infers one from the input. *)
+let no_body_when_undeclared () =
+  Alcotest.(check bool)
+    "no @body, no diagnostic" false
+    (has "TC0044"
+       "struct req { title: string }\n\
+        op get(input: req): req @http(method: \"get\", path: \"/x\")")
+
+let body_ctor_duplicate_field_rejected () =
+  Alcotest.(check bool)
+    "a ctor cannot map the same field twice" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        struct note_body { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(note_body { title: .input.title, title: .input.title })")
+
+(* ── @http(code:) shape diagnostics ────────────────────────────────────── *)
+
 let empty_code_list_rejected () =
   Alcotest.(check bool)
-    "empty code list" true
+    "@http(code: []) is rejected" true
     (has "TC0068"
-       "struct req { }\n\
-        op post(req): req @http(method: \"post\", path: \"/x\", code: [])")
+       "op post(): void @http(method: \"post\", path: \"/x\", code: [])")
 
-(* A code: list with a non-int element is malformed the same way. *)
 let non_int_code_element_rejected () =
   Alcotest.(check bool)
-    "non-int code element" true
+    "@http(code: [200, \"x\"]) is rejected" true
     (has "TC0068"
-       "struct req { }\n\
-        op post(req): req @http(method: \"post\", path: \"/x\", code: [200, \
+       "op post(): void @http(method: \"post\", path: \"/x\", code: [200, \
         \"x\"])")
 
-(* A non-int scalar code: is malformed too. *)
 let non_int_code_scalar_rejected () =
   Alcotest.(check bool)
-    "non-int code scalar" true
+    "@http(code: \"x\") is rejected" true
     (has "TC0068"
-       "struct req { }\n\
-        op post(req): req @http(method: \"post\", path: \"/x\", code: \"x\")")
+       "op post(): void @http(method: \"post\", path: \"/x\", code: \"x\")")
 
 let valid_code_forms_accepted () =
   Alcotest.(check bool)
-    "int and int-list code are both fine" false
+    "@http(code: 201) is fine" false
     (has "TC0068"
-       "struct req { }\n\
-        op post(req): req @http(method: \"post\", path: \"/x\", code: [200, \
-        207])")
+       "op post(): void @http(method: \"post\", path: \"/x\", code: 201)");
+  Alcotest.(check bool)
+    "@http(code: [200, 207]) is fine" false
+    (has "TC0068"
+       "op post(): void @http(method: \"post\", path: \"/x\", code: [200, 207])")
 
-let no_http_no_binding_checks () =
-  Alcotest.(check (list string))
-    "no http, no binding diagnostics" []
-    (List.filter
-       (fun c -> c = "TC0019" || c = "TC0020" || c = "TC0021")
-       (codes
-          "struct req { m: map[string]string @httpQuery(\"m\") }\n\
-           op get(req): req"))
+(* ── @query/@header value type diagnostics ─────────────────────────────── *)
+
+let query_map_value_rejected () =
+  Alcotest.(check bool)
+    "@query value cannot be a map" true
+    (has "TC0021"
+       "struct req { tags: map[string]string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @query(\"tags\", .input.tags)")
+
+let header_list_value_rejected () =
+  Alcotest.(check bool)
+    "@header value cannot be a list" true
+    (has "TC0021"
+       "struct req { tags: []string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @header(\"X-Tags\", .input.tags)")
+
+let query_scalar_value_ok () =
+  Alcotest.(check bool)
+    "@query value is fine when scalar" false
+    (has "TC0021"
+       "struct req { limit: i32 }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @query(\"limit\", .input.limit)")
 
 let () =
   Alcotest.run "protocol_http"
     [
       ( "resolve",
         [
-          Alcotest.test_case "all parts" `Quick all_parts;
-          Alcotest.test_case "body default" `Quick body_default;
-          Alcotest.test_case "payload whole body" `Quick payload_whole_body;
+          Alcotest.test_case "resolve full" `Quick resolve_full;
+          Alcotest.test_case "no body by default" `Quick no_body_by_default;
+          Alcotest.test_case "body whole param" `Quick body_whole_param;
+          Alcotest.test_case "body one member" `Quick body_one_member;
+          Alcotest.test_case "body ctor" `Quick body_ctor;
           Alcotest.test_case "success code override" `Quick
             success_code_override;
           Alcotest.test_case "success code list" `Quick success_code_list;
-          Alcotest.test_case "bare bindings" `Quick bare_bindings;
           Alcotest.test_case "no http no descriptor" `Quick
             no_http_no_descriptor;
           Alcotest.test_case "non-operation is none" `Quick
             non_operation_is_none;
           Alcotest.test_case "module attaches wire" `Quick module_attaches_wire;
         ] );
-      ( "check_http",
+      ( "body_shapes",
         [
-          Alcotest.test_case "label matches ok" `Quick label_matches_ok;
-          Alcotest.test_case "placeholder without label" `Quick
-            placeholder_without_label;
-          Alcotest.test_case "label without placeholder" `Quick
-            label_without_placeholder;
-          Alcotest.test_case "payload/body conflict" `Quick
-            payload_with_body_conflicts;
-          Alcotest.test_case "two payloads" `Quick two_payloads;
-          Alcotest.test_case "map in query" `Quick map_in_query_rejected;
-          Alcotest.test_case "map in header" `Quick map_in_header_rejected;
-          Alcotest.test_case "nullable map in query" `Quick
-            nullable_map_in_query_rejected;
-          Alcotest.test_case "nullable label rejected" `Quick
-            nullable_label_rejected;
-          Alcotest.test_case "placeholder without struct input" `Quick
-            placeholder_without_struct_input;
+          Alcotest.test_case "whole param body ok" `Quick body_whole_param_ok;
+          Alcotest.test_case "member body ok" `Quick body_member_ok;
+          Alcotest.test_case "ctor unknown shape" `Quick body_ctor_unknown_shape;
+          Alcotest.test_case "ctor unknown field" `Quick body_ctor_unknown_field;
+          Alcotest.test_case "ctor known field ok" `Quick
+            body_ctor_known_field_ok;
+          Alcotest.test_case "ctor nested ctor rejected" `Quick
+            body_ctor_nested_ctor_rejected;
+          Alcotest.test_case "ctor field input placeholder rejected" `Quick
+            body_ctor_field_input_placeholder_rejected;
+          Alcotest.test_case "two positional args rejected" `Quick
+            body_two_positional_args_rejected;
+          Alcotest.test_case "bare literal rejected" `Quick
+            body_bare_literal_rejected;
+          Alcotest.test_case "duplicate body rejected" `Quick
+            duplicate_body_rejected;
+          Alcotest.test_case "body requires http" `Quick body_requires_http;
+          Alcotest.test_case "no body when undeclared" `Quick
+            no_body_when_undeclared;
+          Alcotest.test_case "ctor duplicate field rejected" `Quick
+            body_ctor_duplicate_field_rejected;
+        ] );
+      ( "http_code_shapes",
+        [
           Alcotest.test_case "empty code list rejected" `Quick
             empty_code_list_rejected;
           Alcotest.test_case "non-int code element rejected" `Quick
@@ -417,7 +494,14 @@ let () =
             non_int_code_scalar_rejected;
           Alcotest.test_case "valid code forms accepted" `Quick
             valid_code_forms_accepted;
-          Alcotest.test_case "no http no checks" `Quick
-            no_http_no_binding_checks;
+        ] );
+      ( "http_kv_value_types",
+        [
+          Alcotest.test_case "query map value rejected" `Quick
+            query_map_value_rejected;
+          Alcotest.test_case "header list value rejected" `Quick
+            header_list_value_rejected;
+          Alcotest.test_case "query scalar value ok" `Quick
+            query_scalar_value_ok;
         ] );
     ]

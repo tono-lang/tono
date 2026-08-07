@@ -19,6 +19,14 @@ type trait_arg =
   | ARef of ref_path
   | AKv of string * trait_arg
   | AList of trait_arg list
+  | ACtor of ctor_arg
+
+and ctor_arg = {
+  ctor_name : string;
+  ctor_name_span : Span.span;
+  ctor_fields : (string * Span.span * trait_arg) list;
+  ctor_span : Span.span;
+}
 
 type trait = { tname : string; targs : trait_arg list; tspan : Span.span }
 

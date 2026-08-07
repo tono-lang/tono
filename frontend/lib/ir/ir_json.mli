@@ -30,8 +30,6 @@ val encode_entry_field : Ir.entry_field -> Ir.json
 val decode_entry_field : Ir.json -> (Ir.entry_field, string) result
 val encode_test : Ir.test_decl -> Ir.json
 val decode_test : Ir.json -> (Ir.test_decl, string) result
-val encode_wire_part : Ir.wire_part -> Ir.json
-val decode_wire_part : Ir.json -> (Ir.wire_part, string) result
 val encode_wire_response_part : Ir.wire_response_part -> Ir.json
 
 val decode_wire_response_part :

@@ -1,8 +1,6 @@
 (* JSON codec for the resolved wire binding. External callers go through
    [Ir_json], which folds this into the operation shape kind. *)
 
-val encode_wire_part : Ir.wire_part -> Ir.json
-val decode_wire_part : Ir.json -> (Ir.wire_part, string) result
 val encode_wire_response_part : Ir.wire_response_part -> Ir.json
 
 val decode_wire_response_part :

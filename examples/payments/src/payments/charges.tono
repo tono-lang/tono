@@ -45,9 +45,10 @@ pub struct client {
   timeout: duration @with @default("10s")
   max_retries: i32 @with @default(2)
 
-  op create_charge(charge): charge
+  op create_charge(input: charge): charge
     @http(method: "POST", path: "/charges", endpoint: .endpoint, code: 201)
     @header("X-API-Key", .api_key)
+    @body(.input)
     @timeout(.timeout)
     @retry(.max_retries)
     @errors(card_declined, not_found)

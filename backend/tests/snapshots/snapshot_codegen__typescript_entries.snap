@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 193
+assertion_line: 189
 expression: "render_sdk(entries_module(), TargetKind::TypeScript, None)"
 ---
 // ==== typescript/env.ts ====
@@ -532,7 +532,7 @@ export class Client {
     const headers: Record<string, string> = {};
     setHeader(headers, "X-Client-Name", formatScalar(this.settings.clientName));
     for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);
-    const body = JSON.stringify({ "body": record["body"] });
+    const body = JSON.stringify(record["body"]);
     if (!hasHeader(headers, "content-type")) headers["content-type"] = "application/json";
     const timeoutMs = this.timeoutMs;
     const maxRetries = resolveMaxRetries(this.settings.maxRetries);

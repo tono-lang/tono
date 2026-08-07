@@ -144,12 +144,10 @@ fn typed_wire() -> crate::ir::WireBinding {
             TemplatePart::Lit("/notes/".into()),
             TemplatePart::Input("id".into()),
         ]),
-        bindings: [
-            ("id".to_string(), crate::ir::WirePart::Label),
-            ("body".to_string(), crate::ir::WirePart::Body),
-        ]
-        .into_iter()
-        .collect(),
+        body: Some(WireValue::Object(vec![(
+            "body".to_string(),
+            WireValue::Param(vec!["body".into()]),
+        )])),
         response_bindings: Default::default(),
         success: vec![200],
         endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
@@ -197,8 +195,8 @@ fn the_method_assembles_the_request_and_maps_the_outcome_onto_the_taxonomy() {
     // typed settings directly.
     assert!(serde.contains("transport.SetHeader(headers, \"X-API-Key\", c.settings.APIKey)"));
     assert!(serde.contains("for name, value := range c.settings.Headers {"));
-    // A mixed body assembles just the body-bound members.
-    assert!(serde.contains("body, err := transport.EncodeBody(record, \"body\")"));
+    // The @body ctor mapper builds an object of just its declared fields.
+    assert!(serde.contains("body, err := json.Marshal(map[string]any{\"body\": record[\"body\"]})"));
     assert!(serde.contains(
         "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));
@@ -231,12 +229,7 @@ fn the_method_assembles_the_request_and_maps_the_outcome_onto_the_taxonomy() {
 fn an_operation_with_no_retry_or_timeout_declares_neither() {
     let mut wire = typed_wire();
     wire.uri = WireValue::Template(vec![TemplatePart::Lit("/notes".into())]);
-    wire.bindings = [
-        ("id".to_string(), crate::ir::WirePart::Body),
-        ("body".to_string(), crate::ir::WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
+    wire.body = Some(WireValue::Param(vec![]));
     wire.request_headers = Vec::new();
     wire.retry = None;
     wire.timeout = None;

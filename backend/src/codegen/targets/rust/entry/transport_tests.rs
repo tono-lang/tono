@@ -14,7 +14,7 @@ fn wire() -> WireBinding {
     WireBinding {
         method: "GET".into(),
         uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
-        bindings: Default::default(),
+        body: None,
         response_bindings: Default::default(),
         success: Vec::new(),
         endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
@@ -204,76 +204,68 @@ fn a_param_reference_in_a_header_key_reads_off_the_record() {
 }
 
 #[test]
-fn body_lines_are_none_with_no_body_bound_members() {
-    let mut w = wire();
-    w.bindings = [("id".to_string(), WirePart::Label)].into_iter().collect();
-    assert_eq!(body_lines(&w, true), None);
+fn body_lines_are_none_with_no_body_declared() {
+    let w = wire();
+    assert_eq!(with_ctx(|ctx| body_lines(&w, ctx)), None);
 }
 
 #[test]
-fn body_lines_serialize_the_typed_input_directly_when_every_member_is_body() {
+fn body_lines_serialize_the_typed_input_directly_for_the_whole_param() {
     let mut w = wire();
-    w.bindings = [
-        ("amount".to_string(), WirePart::Body),
-        ("note".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
-    let lines = body_lines(&w, true).unwrap();
+    w.body = Some(WireValue::Param(vec![]));
+    let lines = with_ctx(|ctx| body_lines(&w, ctx)).unwrap();
     assert!(lines.contains("serde_json::to_string(&input)"));
     assert!(!lines.contains("record"));
 }
 
 #[test]
-fn body_lines_collect_only_the_body_members_when_mixed_with_other_kinds() {
+fn body_lines_build_the_ctor_mapper_object_when_body_is_an_object() {
     let mut w = wire();
-    w.bindings = [
-        ("id".to_string(), WirePart::Label),
-        ("amount".to_string(), WirePart::Body),
-        ("note".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
-    let lines = body_lines(&w, true).unwrap();
-    assert!(lines.contains("for name in [\"amount\", \"note\"]"));
-    assert!(lines.contains("body_members.insert(name.to_string(), v.clone())"));
+    w.body = Some(WireValue::Object(vec![
+        (
+            "amount".to_string(),
+            WireValue::Param(vec!["amount".into()]),
+        ),
+        ("note".to_string(), WireValue::Param(vec!["note".into()])),
+    ]));
+    let lines = with_ctx(|ctx| body_lines(&w, ctx)).unwrap();
+    assert!(lines.contains("m.insert(\"amount\".to_string(), record.get(\"amount\")"));
+    assert!(lines.contains("m.insert(\"note\".to_string(), record.get(\"note\")"));
+    assert!(lines.contains("serde_json::Value::Object(m)"));
 }
 
 #[test]
-fn body_lines_prefer_the_payload_member_over_any_body_members() {
+fn body_lines_read_one_member_raw_for_a_param_member_body() {
     let mut w = wire();
-    w.bindings = [
-        ("envelope".to_string(), WirePart::Payload),
-        ("extra".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
+    w.body = Some(WireValue::Param(vec!["envelope".into()]));
     assert_eq!(
-        body_lines(&w, true).as_deref(),
-        Some("let body = record.get(\"envelope\").map(|v| v.to_string());\n")
+        with_ctx(|ctx| body_lines(&w, ctx)),
+        Some("let body = record.get(\"envelope\").map(|v| v.to_string());\n".to_string())
     );
 }
 
 #[test]
-fn needs_record_is_false_when_every_binding_is_a_body_member() {
+fn needs_record_is_false_with_no_body_and_true_for_a_query() {
     let mut w = wire();
-    w.bindings = [("amount".to_string(), WirePart::Body)]
-        .into_iter()
-        .collect();
     assert!(!needs_record(&w));
-    w.bindings
-        .insert("tag".to_string(), WirePart::Query { name: "tag".into() });
+    w.query = vec![(
+        vec![TemplatePart::Lit("tag".into())],
+        WireValue::Param(vec!["tags".into()]),
+    )];
     assert!(needs_record(&w));
 }
 
 #[test]
-fn query_lines_append_each_query_bound_member_and_fold_conditionally() {
+fn query_lines_append_each_declared_query_and_fold_conditionally() {
     let mut w = wire();
-    w.bindings = [("tags".to_string(), WirePart::Query { name: "tag".into() })]
-        .into_iter()
-        .collect();
-    let lines = query_lines(&w);
-    assert!(lines.contains("append_query(&mut query, \"tag\", record.get(\"tags\"));"));
+    w.query = vec![(
+        vec![TemplatePart::Lit("tag".into())],
+        WireValue::Param(vec!["tags".into()]),
+    )];
+    let lines = with_ctx(|ctx| query_lines(&w, ctx));
+    assert!(lines.contains(
+        "append_query(&mut query, \"tag\", Some(&record.get(\"tags\").cloned().unwrap_or(serde_json::Value::Null)));"
+    ));
     assert!(lines.contains("if !query.is_empty()"));
 }
 
@@ -288,27 +280,6 @@ fn declared_header_lines_render_a_literal_key_with_a_field_value() {
         with_ctx(|ctx| declared_header_lines(&w, ctx)),
         "set_header(&mut headers, \"X-Client\", self.settings.api_key.clone());\n"
     );
-}
-
-#[test]
-fn per_call_header_lines_skip_an_absent_or_null_member_at_runtime() {
-    let mut w = wire();
-    w.bindings = [
-        ("id".to_string(), WirePart::Label),
-        (
-            "token".to_string(),
-            WirePart::Header {
-                name: "X-Api-Token".into(),
-            },
-        ),
-    ]
-    .into_iter()
-    .collect();
-    let lines = per_call_header_lines(&w);
-    assert!(lines.contains("if let Some(v) = record.get(\"token\")"));
-    assert!(lines.contains("if !v.is_null()"));
-    assert!(lines.contains("set_header(&mut headers, \"X-Api-Token\", format_scalar(v));"));
-    assert!(!lines.contains("\"id\""));
 }
 
 #[test]

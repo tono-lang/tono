@@ -36,7 +36,7 @@ fn wire_op(id: &str) -> Shape {
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),
                 uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
-                bindings: Default::default(),
+                body: None,
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: Some(WireValue::Field(vec!["endpoint".into()])),

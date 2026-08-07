@@ -3,7 +3,7 @@ use crate::codegen::targets::rust::rust_casing;
 use crate::codegen::test_support::{
     bare_entry_field, error_shape, member, push_entry_field, structure,
 };
-use crate::ir::{EnvName, ExtKind, Extension, Source, WireBinding, WirePart, WireValue};
+use crate::ir::{EnvName, ExtKind, Extension, Source, WireBinding, WireValue};
 
 fn text(module: &Module) -> String {
     entry_text(module, &rust_casing())
@@ -128,7 +128,7 @@ pub(super) fn simple_entry_module() -> Module {
             wire: Some(Box::new(WireBinding {
                 method: "POST".into(),
                 uri: WireValue::Template(vec![crate::ir::TemplatePart::Lit("/charges".into())]),
-                bindings: [("id".to_string(), WirePart::Body)].into_iter().collect(),
+                body: Some(WireValue::Param(vec![])),
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
@@ -331,7 +331,7 @@ fn a_multi_entry_module_prefixes_settings_descriptors_and_discriminators() {
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),
                 uri: WireValue::Template(vec![crate::ir::TemplatePart::Lit("/ping".into())]),
-                bindings: Default::default(),
+                body: None,
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: Some(WireValue::Field(vec!["token".into()])),

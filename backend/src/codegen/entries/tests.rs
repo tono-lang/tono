@@ -548,7 +548,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             wire: Some(Box::new(crate::ir::WireBinding {
                 method: "GET".into(),
                 uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
-                bindings: Default::default(),
+                body: None,
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: None,
@@ -709,7 +709,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
             wire: Some(Box::new(crate::ir::WireBinding {
                 method: "GET".into(),
                 uri: WireValue::Template(vec![crate::ir::TemplatePart::Lit("/ping".into())]),
-                bindings: Default::default(),
+                body: None,
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: None,

@@ -74,7 +74,7 @@ ext impl ping {
 }
 
 struct note {
-  id: string @httpLabel
+  id: string
   body: string
 }
 
@@ -215,8 +215,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_12 () =
-  Alcotest.(check int) "wire version" 12 Ir_json.current_ir_version
+let version_is_13 () =
+  Alcotest.(check int) "wire version" 13 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -286,11 +286,11 @@ let loose_descriptor_has_no_entry_fields () =
     && wb.Ir.wb_request_headers = [])
 
 (* A second, dedicated snippet (kept separate from [canonical_client] so its
-   many other tests stay untouched): query/payload input bindings and
-   header/status-code response bindings, which [canonical_client] never
-   exercises. Covers [Protocol_http.to_ir_binding]'s full match surface
-   together with [descriptor_carries_refs]'s label/header/endpoint/timeout/
-   retry coverage above. *)
+   many other tests stay untouched): a named param, a @query/@header pair,
+   a @body ctor mapper, and header/status-code response bindings, which
+   [canonical_client] never exercises. Covers [Protocol_http.to_ir_binding]'s
+   full match surface together with [descriptor_carries_refs]'s
+   endpoint/timeout/retry coverage above. *)
 let wire_probe_client =
   {|
 struct probe_body {
@@ -298,10 +298,10 @@ struct probe_body {
 }
 
 struct probe_input {
-  id: string @httpLabel
-  filter: string @httpQuery("q")
-  x_key: string @httpHeader("X-Key")
-  body: probe_body @httpPayload
+  id: string
+  filter: string
+  x_key: string
+  note: string
 }
 
 struct probe_output {
@@ -314,10 +314,13 @@ pub struct probe_client {
   api_key: string @arg
   endpoint: string @env("ENDPOINT")
 
-  op probe(probe_input): probe_output
-    @http(method: "POST", path: "/probe/{id}", endpoint: .endpoint)
+  op probe(input: probe_input): probe_output
+    @http(method: "POST", path: "/probe/{.input.id}", endpoint: .endpoint)
+    @query("q", .input.filter)
+    @header("X-Key", .input.x_key)
     @header("X-Client", .api_key)
     @header("X-Combo", "v-{.api_key}")
+    @body(probe_body { note: .input.note })
 }
 |}
 
@@ -331,29 +334,26 @@ let wire_field_covers_query_payload_and_response_bindings () =
       | Ir.Operation { wire = Some w; _ } ->
           Alcotest.(check string) "method" "POST" w.wb_method;
           Alcotest.(check (list string))
-            "uri keeps the label placeholder" [ "/probe/"; "{id}" ]
+            "uri carries the param placeholder" [ "/probe/"; ".param.id" ]
             (match w.wb_uri with
             | Ir.Wire_template parts ->
                 List.filter_map
                   (function
                     | Ir.Tpl_lit s -> Some s
-                    | Ir.Tpl_input n -> Some (Printf.sprintf "{%s}" n)
-                    | Ir.Tpl_field _ | Ir.Tpl_param _ -> None)
+                    | Ir.Tpl_param p ->
+                        Some (Printf.sprintf ".param.%s" (String.concat "." p))
+                    | Ir.Tpl_input _ | Ir.Tpl_field _ -> None)
                   parts
             | _ -> []);
-          let binding name = List.assoc_opt name w.wb_bindings in
           Alcotest.(check bool)
-            "id is a label" true
-            (binding "id" = Some Ir.Wire_label);
+            "one declared query, a param member ref" true
+            (match w.wb_query with
+            | [ (_, Ir.Wire_param [ "filter" ]) ] -> true
+            | _ -> false);
           Alcotest.(check bool)
-            "filter is a named query" true
-            (binding "filter" = Some (Ir.Wire_query "q"));
-          Alcotest.(check bool)
-            "x_key is a named header" true
-            (binding "x_key" = Some (Ir.Wire_header "X-Key"));
-          Alcotest.(check bool)
-            "body is the whole payload" true
-            (binding "body" = Some Ir.Wire_payload);
+            "body is the ctor's mapped field" true
+            (w.wb_body
+            = Some (Ir.Wire_object [ ("note", Ir.Wire_param [ "note" ]) ]));
           let response_binding name =
             List.assoc_opt name w.wb_response_bindings
           in
@@ -373,9 +373,10 @@ let wire_field_covers_query_payload_and_response_bindings () =
           Alcotest.(check bool) "no timeout ref" true (w.wb_timeout = None);
           Alcotest.(check bool) "no retry ref" true (w.wb_retry = None);
           Alcotest.(check bool)
-            "two declared headers: a field ref and a template" true
+            "three declared headers: a param ref, a field ref, a template" true
             (match w.wb_request_headers with
             | [
+             (_, Ir.Wire_param [ "x_key" ]);
              (_, Ir.Wire_field [ "api_key" ]);
              ( _,
                Ir.Wire_template [ Ir.Tpl_lit "v-"; Ir.Tpl_field [ "api_key" ] ]
@@ -548,7 +549,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 12" `Quick version_is_12;
+          Alcotest.test_case "version 13" `Quick version_is_13;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",

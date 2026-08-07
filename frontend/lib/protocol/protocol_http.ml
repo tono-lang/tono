@@ -1,6 +1,5 @@
 (* The HTTP Protocol resolver. See the interface for the seam it sits in. *)
 
-type part = Label | Query of string | Header of string | Body | Payload
 type response_part = Response_header of string | Response_status_code
 
 type value_expr =
@@ -9,16 +8,20 @@ type value_expr =
   | Vparam of string list
     (* segments into the op's declared parameter; [] is the whole value *)
   | Vtemplate of Ir.template_part list
+  | Vctor of (string * value_expr) list
+(* @body's ctor mapper: field name -> value, resolved down to lit/field/
+       param/template positions (the struct name itself carries no wire
+       meaning; only the target's own field-to-wire-key encoding does) *)
 
 type resolution = {
   http_method : string;
   uri : value_expr;
-  bindings : (string * part) list;
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list;
   endpoint : value_expr option;
   request_headers : (Ir.template_part list * value_expr) list;
   query : (Ir.template_part list * value_expr) list;
+  body : value_expr option;
   timeout : string list option;
   retry : string list option;
 }
@@ -109,17 +112,29 @@ let rewrite_param_template (pname : string option)
       | other -> other)
     parts
 
-let value_expr_of ?(pname : string option) (j : Ir.json) : value_expr =
+(* A ctor mapper the frontend lowered as {"ctor": name, "fields": {...}}
+   (Lower.json_of_arg's [ACtor] case). The struct name itself carries no
+   wire meaning at this layer; only the field name -> value mapping does. *)
+let ctor_fields (v : Ir.json) : (string * Ir.json) list option =
+  match v with
+  | `Assoc [ ("ctor", `String _); ("fields", `Assoc kvs) ] -> Some kvs
+  | _ -> None
+
+let rec value_expr_of ?(pname : string option) (j : Ir.json) : value_expr =
   match field_path j with
   | Some p -> (
       match rewrite_param_path pname p with
       | `Field segs -> Vfield segs
       | `Param segs -> Vparam segs)
   | None -> (
-      match j with
-      | `String s when has_placeholder s ->
-          Vtemplate (rewrite_param_template pname (template_of s))
-      | other -> Vlit other)
+      match ctor_fields j with
+      | Some kvs ->
+          Vctor (List.map (fun (n, v) -> (n, value_expr_of ?pname v)) kvs)
+      | None -> (
+          match j with
+          | `String s when has_placeholder s ->
+              Vtemplate (rewrite_param_template pname (template_of s))
+          | other -> Vlit other))
 
 (* ── Binding assignment ────────────────────────────────────────────────── *)
 
@@ -127,16 +142,6 @@ let value_expr_of ?(pname : string option) (j : Ir.json) : value_expr =
    member name when the annotation is written bare. *)
 let bound_name (member_name : string) (t : Ir.trait) : string =
   Option.value ~default:member_name (string_arg t.value)
-
-let part_of_member (m : Ir.member) : part =
-  if has_trait "httpPayload" m.traits then Payload
-  else
-    match trait_by "httpQuery" m.traits with
-    | Some t -> Query (bound_name m.name t)
-    | None -> (
-        match trait_by "httpHeader" m.traits with
-        | Some t -> Header (bound_name m.name t)
-        | None -> if has_trait "httpLabel" m.traits then Label else Body)
 
 let response_part_of_member (m : Ir.member) : response_part option =
   if has_trait "httpResponseCode" m.traits then Some Response_status_code
@@ -174,11 +179,7 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
       let http_method = String.uppercase_ascii (str "method" "GET") in
       let uri = value "path" ~default:(Vlit (`String "/")) in
       let codes = Option.bind (obj_field "code" http.value) int_list_arg in
-      let bindings =
-        List.map
-          (fun (m : Ir.member) -> (m.name, part_of_member m))
-          (members_of lookup input)
-      in
+      ignore input;
       let response_bindings =
         List.filter_map
           (fun (m : Ir.member) ->
@@ -214,6 +215,11 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
       in
       let request_headers = kv_traits "header" in
       let query = kv_traits "query" in
+      let body =
+        match trait_by "body" op.traits with
+        | Some { value = `List [ v ]; _ } -> Some (value_expr_of ?pname v)
+        | _ -> None
+      in
       let single_ref id =
         match trait_by id op.traits with
         | Some { value = `List [ v ]; _ } -> field_path v
@@ -225,12 +231,12 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
         {
           http_method;
           uri;
-          bindings;
           response_bindings;
           success;
           endpoint;
           request_headers;
           query;
+          body;
           timeout;
           retry;
         }
@@ -238,22 +244,17 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
 
 (* ── Resolved wire binding (the typed IR field) ────────────────────────── *)
 
-let to_wire_part : part -> Ir.wire_part = function
-  | Label -> Ir.Wire_label
-  | Query n -> Ir.Wire_query n
-  | Header n -> Ir.Wire_header n
-  | Body -> Ir.Wire_body
-  | Payload -> Ir.Wire_payload
-
 let to_wire_response_part : response_part -> Ir.wire_response_part = function
   | Response_header n -> Ir.Wire_response_header n
   | Response_status_code -> Ir.Wire_response_status_code
 
-let to_wire_value : value_expr -> Ir.wire_value = function
+let rec to_wire_value : value_expr -> Ir.wire_value = function
   | Vlit j -> Ir.Wire_lit j
   | Vfield p -> Ir.Wire_field p
   | Vparam p -> Ir.Wire_param p
   | Vtemplate t -> Ir.Wire_template t
+  | Vctor fields ->
+      Ir.Wire_object (List.map (fun (n, v) -> (n, to_wire_value v)) fields)
 
 (* The typed IR value for [Ir.wire_binding]: the resolution minus the dead
    weight (the errors array duplicates the operation's own [errors] field and
@@ -266,7 +267,7 @@ let to_ir_binding (d : resolution) : Ir.wire_binding =
   {
     Ir.wb_method = d.http_method;
     wb_uri = to_wire_value d.uri;
-    wb_bindings = List.map (fun (n, p) -> (n, to_wire_part p)) d.bindings;
+    wb_body = Option.map to_wire_value d.body;
     wb_response_bindings =
       List.map (fun (n, p) -> (n, to_wire_response_part p)) d.response_bindings;
     wb_success = List.map fst d.success;

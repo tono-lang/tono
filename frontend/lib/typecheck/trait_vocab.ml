@@ -26,20 +26,13 @@ let members = [ "required"; "default" ]
 let sources = [ "arg"; "with"; "env" ]
 let entry_fields = [ "format"; "bind"; "entries" ]
 
-(* The HTTP protocol binding: the operation's endpoint and how each member maps
-   onto the request (Check_http, Protocol_http). *)
-let http =
-  [
-    "http";
-    "httpLabel";
-    "httpQuery";
-    "httpHeader";
-    "httpPayload";
-    "httpResponseCode";
-  ]
+(* The HTTP protocol binding: the operation's endpoint, and how each output
+   member is read from the response (Protocol_http). The request side is
+   declared entirely at the point of use now (Entry_scope.protocol_trait_names). *)
+let http = [ "http"; "httpResponseCode" ]
 
 (* Per-request protocol knobs an entry supplies (Entry_scope.protocol_trait_names). *)
-let protocol = [ "header"; "timeout"; "retry" ]
+let protocol = [ "header"; "query"; "body"; "timeout"; "retry" ]
 
 (* Operations and the error taxonomy they raise (Check_operations, Ops). *)
 let operations = [ "async"; "errors"; "errorCode"; "status"; "retryable" ]

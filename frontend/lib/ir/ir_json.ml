@@ -46,8 +46,13 @@
    wire_value (literal, entry/param reference, or template) instead of a bare
    template/path, template_part/wire_value gained a "param" variant for a
    reference into the op's own parameter, and wire_binding gained "query"
-   (mirrors "request_headers") for the new op-level @query trait. *)
-let current_ir_version = 12
+   (mirrors "request_headers") for the new op-level @query trait.
+   v13 removed the per-member HTTP binding traits (httpLabel/httpQuery/
+   httpHeader/httpPayload) and the "bindings" map they resolved into:
+   wire_binding gained "body" (a wire_value, absent when the operation sends
+   none), and wire_value gained an "object" variant (named fields, each a
+   wire_value) for the new @body ctor-mapper form. *)
+let current_ir_version = 13
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -80,8 +85,6 @@ let encode_entry_field = Ir_json_entry.encode_entry_field
 let decode_entry_field = Ir_json_entry.decode_entry_field
 let encode_test = Ir_json_tests.encode_test
 let decode_test = Ir_json_tests.decode_test
-let encode_wire_part = Ir_json_wire.encode_wire_part
-let decode_wire_part = Ir_json_wire.decode_wire_part
 let encode_wire_response_part = Ir_json_wire.encode_wire_response_part
 let decode_wire_response_part = Ir_json_wire.decode_wire_response_part
 let encode_wire_value = Ir_json_wire.encode_wire_value

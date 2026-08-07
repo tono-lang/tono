@@ -22,10 +22,9 @@ val error_status_missing : string
 val error_code_invalid : string
 val error_discrimination_ambiguous : string
 val async_takes_no_arguments : string
-val http_label_unmatched : string
-val http_payload_conflict : string
+
+(* TC0019, TC0020, TC0022 are intentionally unused (see error_codes.ml). *)
 val http_map_binding : string
-val http_label_nullable : string
 
 (* Module system: unknown import qualifier, non-[pub] reference, a cycle in the
    module import graph (which must be a DAG), and two imports colliding on one

@@ -17,9 +17,7 @@ use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
 use crate::codegen::entries::EntryModel;
 use crate::codegen::extensions::BoundExtension;
 use crate::codegen::symbol::Symbol;
-use crate::ir::{
-    Module, Prim, TemplatePart, Tref, WireBinding, WirePart, WireResponsePart, WireValue,
-};
+use crate::ir::{Module, Prim, TemplatePart, Tref, WireBinding, WireResponsePart, WireValue};
 
 use super::use_path;
 
@@ -187,6 +185,8 @@ fn wire_value_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
                 format!("{expr}.to_string()")
             }
         }
+        // Only ever emitted for @body; never a header/query/uri value.
+        WireValue::Object(_) => format!("{}.to_string()", wire_value_json_expr(v, fields)),
     }
 }
 
@@ -273,35 +273,23 @@ fn declared_header_lines(wire: &WireBinding, fields: &FieldCtx<'_>) -> String {
         .collect()
 }
 
-/// One guarded `set_header(...)` per input member bound to a header position:
-/// an absent or null member sends no header, the same omission rule the
-/// query and body positions follow.
-fn per_call_header_lines(wire: &WireBinding) -> String {
-    wire.bindings
-        .iter()
-        .filter_map(|(name, part)| match part {
-            WirePart::Header { name: header_name } => Some(format!(
-                "if let Some(v) = record.get({member}) {{\n    if !v.is_null() {{\n        set_header(&mut headers, {header}, format_scalar(v));\n    }}\n}}\n",
-                member = rust_str(name),
-                header = rust_str(header_name),
-            )),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The query assembly: one `append_query(...)` per query-bound member, folded
-/// into `url` only when anything landed.
-fn query_lines(wire: &WireBinding) -> String {
+/// The query assembly: one `append_query(...)` per declared `@query` entry
+/// (the same shared helper a query-bound record member used, now driven by
+/// the key/value the trait declared instead of a member classification),
+/// folded into `url` only when anything landed.
+fn query_lines(wire: &WireBinding, fields: &FieldCtx<'_>) -> String {
     let mut out = String::from("let mut query: Vec<String> = Vec::new();\n");
-    for (name, part) in &wire.bindings {
-        if let WirePart::Query { name: query_name } = part {
-            out.push_str(&format!(
-                "append_query(&mut query, {}, record.get({}));\n",
-                rust_str(query_name),
-                rust_str(name)
-            ));
-        }
+    for (key, value) in &wire.query {
+        let key_expr = template_expr(key, fields);
+        let key_ref = if key_expr.starts_with('"') {
+            key_expr
+        } else {
+            format!("&{key_expr}")
+        };
+        out.push_str(&format!(
+            "append_query(&mut query, {key_ref}, Some(&{}));\n",
+            wire_value_json_expr(value, fields)
+        ));
     }
     out.push_str(
         "if !query.is_empty() {\n    url.push('?');\n    url.push_str(&query.join(\"&\"));\n}\n",
@@ -309,47 +297,84 @@ fn query_lines(wire: &WireBinding) -> String {
     out
 }
 
-/// The request body statement, or `None` when the operation sends no body. A
-/// `Payload`-kind member wins outright; when every binding is a `Body` member
-/// the typed input serializes directly (its serde impls already spell the
-/// wire keys); a mixed binding re-collects the body members off the record.
-fn body_lines(wire: &WireBinding, has_input: bool) -> Option<String> {
-    if let Some((name, _)) = wire
-        .bindings
-        .iter()
-        .find(|(_, p)| matches!(p, WirePart::Payload))
-    {
-        return Some(format!(
-            "let body = record.get({}).map(|v| v.to_string());\n",
-            rust_str(name)
-        ));
+/// A `WireValue` position rendered as a `serde_json::Value`-producing
+/// expression: a body ctor field, or nested inside one.
+fn wire_value_json_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
+    match v {
+        WireValue::Lit(json) => format!(
+            "serde_json::from_str({}).unwrap_or(serde_json::Value::Null)",
+            rust_str(&json.to_string())
+        ),
+        WireValue::Field(path) => format!(
+            "serde_json::to_value(&{}).unwrap_or(serde_json::Value::Null)",
+            fields.access(path)
+        ),
+        WireValue::Param(segs) => match segs.first() {
+            None => "serde_json::to_value(&input).unwrap_or(serde_json::Value::Null)".to_string(),
+            Some(name) => format!(
+                "record.get({}).cloned().unwrap_or(serde_json::Value::Null)",
+                rust_str(name)
+            ),
+        },
+        WireValue::Template(parts) => {
+            let expr = template_expr(parts, fields);
+            let owned = if expr.starts_with("format!") {
+                expr
+            } else {
+                format!("{expr}.to_string()")
+            };
+            format!("serde_json::Value::String({owned})")
+        }
+        WireValue::Object(entries) => {
+            let inserts: String = entries
+                .iter()
+                .map(|(k, val)| {
+                    format!(
+                        "m.insert({}.to_string(), {});\n",
+                        rust_str(k),
+                        wire_value_json_expr(val, fields)
+                    )
+                })
+                .collect();
+            format!(
+                "{{\n{}    serde_json::Value::Object(m)\n}}",
+                super::indent(
+                    &format!("let mut m = serde_json::Map::new();\n{inserts}"),
+                    1
+                )
+            )
+        }
     }
-    let fields: Vec<&String> = wire
-        .bindings
-        .iter()
-        .filter(|(_, p)| matches!(p, WirePart::Body))
-        .map(|(name, _)| name)
-        .collect();
-    if fields.is_empty() || !has_input {
-        return None;
-    }
-    if fields.len() == wire.bindings.len() {
-        return Some(format!(
+}
+
+/// The request body statement, or `None` when the operation sends no body:
+/// `wire.body` says exactly what the body is, never inferred from what the
+/// input leaves undeclared. The whole-parameter form serializes the typed
+/// input directly (its serde impl already spells the wire keys, `@wire`
+/// renames included); a single member reads it raw off the record, absent
+/// when the member itself is; every other form (an entry-field reference, a
+/// template, or the @body ctor mapper) builds the body value explicitly.
+fn body_lines(wire: &WireBinding, fields: &FieldCtx<'_>) -> Option<String> {
+    let body = wire.body.as_ref()?;
+    match body {
+        WireValue::Param(segs) if segs.is_empty() => Some(format!(
             "let body = Some(serde_json::to_string(&input).map_err(|e| {})?);\n",
             encode_failure("e")
-        ));
+        )),
+        WireValue::Param(segs) => {
+            let name = segs
+                .first()
+                .expect("a @body param reference resolves zero or one segment deep");
+            Some(format!(
+                "let body = record.get({}).map(|v| v.to_string());\n",
+                rust_str(name)
+            ))
+        }
+        other => Some(format!(
+            "let body = Some({}.to_string());\n",
+            wire_value_json_expr(other, fields)
+        )),
     }
-    let mut out = String::from("let mut body_members = serde_json::Map::new();\n");
-    out.push_str(&format!(
-        "for name in [{}] {{\n    if let Some(v) = record.get(name) {{\n        body_members.insert(name.to_string(), v.clone());\n    }}\n}}\n",
-        fields
-            .iter()
-            .map(|f| rust_str(f))
-            .collect::<Vec<_>>()
-            .join(", ")
-    ));
-    out.push_str("let body = Some(serde_json::Value::Object(body_members).to_string());\n");
-    Some(out)
 }
 
 /// The failure a failed input serialization maps to: a Config problem with
@@ -458,7 +483,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     let wire = call.wire;
     let has_retry = wire.retry.is_some();
     let query = has_query(wire);
-    let body = body_lines(wire, call.has_input);
+    let body = body_lines(wire, fields);
 
     refs.push(super::support_symbol("HttpRequest"));
     let mut out = String::new();
@@ -477,7 +502,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     }
     out.push_str(&url_line(wire, query, fields));
     if query {
-        out.push_str(&query_lines(wire));
+        out.push_str(&query_lines(wire, fields));
         refs.push(super::shared_symbol("append_query"));
     }
     out.push_str(
@@ -488,16 +513,14 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     out.push_str(
         "for (k, v) in &self.options.headers {\n    set_header(&mut headers, k, v.clone());\n}\n",
     );
-    let per_call_headers = per_call_header_lines(wire);
-    if !per_call_headers.is_empty() {
-        refs.push(super::shared_symbol("format_scalar"));
-        out.push_str(&per_call_headers);
-    }
     if out.contains("path_part(") {
         refs.push(super::shared_symbol("path_part"));
     }
     if out.contains("percent_path(") {
         refs.push(super::shared_symbol("percent_path"));
+    }
+    if out.contains("format_scalar(") {
+        refs.push(super::shared_symbol("format_scalar"));
     }
     let body_field = match &body {
         Some(lines) => {

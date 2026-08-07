@@ -50,7 +50,13 @@ pub use crate::ir_tests_model::*;
 /// gained a `Param` variant for a reference into the op's own parameter, and
 /// `WireBinding` gained `query` (mirrors `request_headers`) for the new
 /// op-level `@query` trait.
-pub const TONO_IR_VERSION: u32 = 12;
+/// v13 removed the per-member HTTP binding traits (@httpLabel/@httpQuery/
+/// @httpHeader/@httpPayload) and `WirePart`/`WireBinding::bindings`, the map
+/// they resolved into: `WireBinding` gained `body` (a `WireValue`, absent
+/// when the operation sends none), and `WireValue` gained an `Object`
+/// variant (named fields, each a `WireValue`) for the new @body ctor-mapper
+/// form.
+pub const TONO_IR_VERSION: u32 = 13;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -368,20 +374,6 @@ pub struct EntryField {
     pub traits: Vec<Trait>,
 }
 
-/// Where an input member travels in the HTTP request. The resolved
-/// counterpart of the wire_descriptor blob's part encoding: same wire shape
-/// (`{"kind":"label"}`, `{"kind":"query","name":"x"}`, ...), now a typed IR
-/// field instead of opaque JSON a Target could only forward.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum WirePart {
-    Label,
-    Query { name: String },
-    Header { name: String },
-    Body,
-    Payload,
-}
-
 /// Where an output member is read from in the HTTP response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -395,8 +387,9 @@ pub enum WireResponsePart {
 
 /// A value position in a protocol trait: a literal, an entry-field
 /// reference, an op-parameter reference (segments into the op's declared
-/// parameter, empty for the whole value), or a template mixing literal runs
-/// with entry-field/op-parameter placeholders.
+/// parameter, empty for the whole value), a template mixing literal runs
+/// with entry-field/op-parameter placeholders, or an object (the @body
+/// ctor mapper: named fields, each itself a `WireValue`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WireValue {
@@ -404,20 +397,23 @@ pub enum WireValue {
     Field(Vec<String>),
     Param(Vec<String>),
     Template(Vec<TemplatePart>),
+    Object(Vec<(String, WireValue)>),
 }
 
 /// The resolved HTTP binding a Protocol pass computes once and a Target
 /// reads directly: the typed counterpart of the wire_descriptor blob. Absent
-/// (`None`) for an operation with no `@http` trait. `bindings`/
-/// `response_bindings` are keyed by member name (unique by construction),
-/// matching the map convention already used for `Extension::bindings`.
+/// (`None`) for an operation with no `@http` trait. `response_bindings` is
+/// keyed by member name (unique by construction), matching the map
+/// convention already used for `Extension::bindings`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WireBinding {
     pub method: String,
     #[serde(default = "WireBinding::default_uri")]
     pub uri: WireValue,
-    #[serde(default)]
-    pub bindings: BTreeMap<String, WirePart>,
+    /// The request body, absent when the operation sends none (never
+    /// inferred from what the input leaves unmarked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<WireValue>,
     #[serde(default)]
     pub response_bindings: BTreeMap<String, WireResponsePart>,
     /// The declared success statuses. Empty when the operation left `code:`

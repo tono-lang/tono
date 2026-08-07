@@ -102,6 +102,18 @@ let rec json_of_arg : Ast.trait_arg -> Ir.json = function
       `Assoc [ ("field", `List (List.map (fun s -> `String s) r.Ast.segs)) ]
   | Ast.AKv (k, v) -> `Assoc [ (k, json_of_arg v) ]
   | Ast.AList xs -> `List (List.map json_of_arg xs)
+  | Ast.ACtor c ->
+      (* Kept structured (not folded through the generic AKv/field encoding)
+         so the Protocol resolver can tell a ctor mapper apart from an
+         ordinary keyword argument without re-parsing anything. *)
+      `Assoc
+        [
+          ("ctor", `String c.Ast.ctor_name);
+          ( "fields",
+            `Assoc
+              (List.map (fun (n, _, v) -> (n, json_of_arg v)) c.Ast.ctor_fields)
+          );
+        ]
 
 (* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
    -> {"method":"get","path":"/x"}); any positional arg keeps the uniform array
