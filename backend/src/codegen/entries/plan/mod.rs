@@ -430,12 +430,18 @@ pub trait Emitter {
     ) -> String;
 
     // --- the whole-construct bodies that already differ per target. A
-    //     guaranteed chain shares its algorithm across every target (a
-    //     set-flag sequence: each source only assigns when no earlier one
-    //     already has, `@default` closes it under the same guard), but each
-    //     leaf statement's own spelling (the `let`/`if`, the flag's casing)
-    //     stays per-target, so the method itself is not shared. Each
-    //     returns already-spelled statements the builders wrap into the tree. ---
+    //     guaranteed chain shares its algorithm across every target: an
+    //     if/else-if cascade ending in `@default`, so a lower-priority
+    //     source's condition (and its failure mode, for a fallible `@env`
+    //     parse) is only ever reached once every higher-priority source has
+    //     already missed. A set-flag sequence would look uniform too, but it
+    //     evaluates every source regardless of priority and only gates the
+    //     final assignment, which would fail construction on a malformed but
+    //     shadowed `@env` value that the cascade never even reaches; that
+    //     correctness gap is why this is a cascade, not a flag. Each leaf
+    //     statement's own spelling stays per-target, so the method itself is
+    //     not shared. Each returns already-spelled statements the builders
+    //     wrap into the tree. ---
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String;
     /// The `@format` assignment itself (`dest = cast(part + part + ..)` with the
     /// `@str::*` pipeline folded in); the deferral guard around it is shared.

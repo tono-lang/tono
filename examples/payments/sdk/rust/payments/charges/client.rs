@@ -78,34 +78,19 @@ impl ClientBuilder {
             headers: std::collections::HashMap::new(),
         };
         s.api_key = self.api_key;
-        let mut endpoint_set = false;
-        if !endpoint_set {
-            if let Some(v) = read_env("PAYMENTS_ENDPOINT") {
-                s.endpoint = v;
-                endpoint_set = true;
-            }
-        }
-        if !endpoint_set {
+        if let Some(v) = read_env("PAYMENTS_ENDPOINT") {
+            s.endpoint = v;
+        } else {
             s.endpoint = "https://api.payments.example.com".to_string();
         }
-        let mut timeout_set = false;
-        if !timeout_set {
-            if let Some(v) = self.timeout.clone() {
-                s.timeout = v;
-                timeout_set = true;
-            }
-        }
-        if !timeout_set {
+        if let Some(v) = self.timeout.clone() {
+            s.timeout = v;
+        } else {
             s.timeout = Duration("10s".to_string());
         }
-        let mut max_retries_set = false;
-        if !max_retries_set {
-            if let Some(v) = self.max_retries {
-                s.max_retries = v;
-                max_retries_set = true;
-            }
-        }
-        if !max_retries_set {
+        if let Some(v) = self.max_retries {
+            s.max_retries = v;
+        } else {
             s.max_retries = 2;
         }
         let mut violations: Vec<Violation> = Vec::new();

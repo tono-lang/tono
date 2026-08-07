@@ -84,30 +84,19 @@ func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...Cl
 	}
 	s := Settings{Headers: map[string]string{}}
 	s.APIKey = apiKey
-	endpointSet := false
-	if !endpointSet {
-		if v, ok := os.LookupEnv("PAYMENTS_ENDPOINT"); ok && v != "" {
-			s.Endpoint = v
-			endpointSet = true
-		}
-	}
-	if !endpointSet {
+	if v, ok := os.LookupEnv("PAYMENTS_ENDPOINT"); ok && v != "" {
+		s.Endpoint = v
+	} else {
 		s.Endpoint = "https://api.payments.example.com"
 	}
-	timeoutSet := false
-	if !timeoutSet && w.timeout != nil {
+	if w.timeout != nil {
 		s.Timeout = *w.timeout
-		timeoutSet = true
-	}
-	if !timeoutSet {
+	} else {
 		s.Timeout = support.Duration("10s")
 	}
-	maxRetriesSet := false
-	if !maxRetriesSet && w.maxRetries != nil {
+	if w.maxRetries != nil {
 		s.MaxRetries = *w.maxRetries
-		maxRetriesSet = true
-	}
-	if !maxRetriesSet {
+	} else {
 		s.MaxRetries = int32(2)
 	}
 	violations := []Violation{}

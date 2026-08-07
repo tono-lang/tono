@@ -293,39 +293,46 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    /// A guaranteed chain, spelled with a set-flag so every env variable is
-    /// read exactly once and `@default` closes the chain, matching every
-    /// other target's spelling (see [`Emitter::chain_guaranteed`]). Relative
-    /// to column zero.
+    /// A guaranteed chain as an if/else-if cascade ending in `@default`: each
+    /// source's own `else` only runs when every higher-priority one already
+    /// missed, so a lower-priority source is never even evaluated (its parse
+    /// never runs, its failure mode never fires) once an earlier one wins.
+    /// That short-circuiting is why this stays a cascade rather than a
+    /// set-flag sequence: a flag would still let every source run and only
+    /// gate the final assignment, so a malformed but shadowed `@env` value
+    /// would fail construction it does not fail today. Relative to column
+    /// zero.
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String {
-        // A chain that is just the default needs no flag.
-        if let [Source::Default(v)] = field.sources.as_slice() {
-            return format!("{dest} = {}", literal(&field.target, v));
-        }
-        let flag = format!("{}Set", camel(&field.name));
-        let mut out = format!("{flag} := false");
+        let mut out = String::new();
+        let mut first = true;
         for source in &field.sources {
             match source {
                 Source::With => {
                     out.push_str(&format!(
-                        "\nif !{flag} && w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{flag} = true\n}}",
+                        "{}if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n}}",
+                        if first { "" } else { " else " },
                         carrier = camel(&field.name),
                     ));
+                    first = false;
                 }
                 Source::Env(name) => {
                     let lookup = self.env_lookup(name);
                     let label = self.env_label(name);
                     let parse = self.env_parse(field, dest, &label);
                     out.push_str(&format!(
-                        "\nif !{flag} {{\n\tif v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t\t{flag} = true\n\t}}\n}}",
-                        parse = plan::nest("\t", &parse, 2),
+                        "{}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n}}",
+                        if first { "" } else { " else " },
+                        parse = plan::nest("\t", &parse, 1),
                     ));
+                    first = false;
                 }
                 Source::Default(v) => {
-                    out.push_str(&format!(
-                        "\nif !{flag} {{\n\t{dest} = {}\n}}",
-                        literal(&field.target, v),
-                    ));
+                    let lit = literal(&field.target, v);
+                    if first {
+                        out.push_str(&format!("{dest} = {lit}"));
+                    } else {
+                        out.push_str(&format!(" else {{\n\t{dest} = {lit}\n}}"));
+                    }
                     return out;
                 }
                 Source::Arg => {}

@@ -451,7 +451,7 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
 }
 
 #[test]
-fn a_guaranteed_chain_reads_each_env_variable_once() {
+fn a_guaranteed_chain_is_an_if_else_cascade_ending_in_default() {
     let mut module = with_descriptors(fixture_module());
     push_entry_field(
         &mut module,
@@ -465,9 +465,17 @@ fn a_guaranteed_chain_reads_each_env_variable_once() {
         ),
     );
     let out = text(&module);
+    // `readEnv` is called exactly once (bound to `const v`), since a
+    // repeated call wouldn't narrow the same way under tsc; the default
+    // sits in the nested `else`, so it's never reached once the env wins.
+    // No set-flag: matches Go/Rust's if/else-if cascade.
     assert_eq!(out.matches("readEnv(\"MY_REGION\")").count(), 1);
-    assert!(out.contains("let myRegionSet = false;"));
-    assert!(out.contains("if (!myRegionSet) {"));
+    assert!(out.contains("const v = readEnv(\"MY_REGION\");"));
+    assert!(out.contains("if (v !== undefined) {"));
+    assert!(out.contains("s.myRegion = v;"));
+    assert!(out.contains("} else {"));
+    assert!(out.contains("s.myRegion = \"us\";"));
+    assert!(!out.contains("Set = false;"));
 }
 
 #[test]

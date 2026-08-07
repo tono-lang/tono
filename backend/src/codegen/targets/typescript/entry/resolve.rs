@@ -152,6 +152,33 @@ impl Resolver<'_, '_> {
             literal,
         )
     }
+
+    fn chain_guaranteed_from(&mut self, field: &EntryField, dest: &str, idx: usize) -> String {
+        match field.sources.get(idx) {
+            None => String::new(),
+            Some(Source::Arg) => self.chain_guaranteed_from(field, dest, idx + 1),
+            Some(Source::With) => {
+                let acc = self.with_access(field);
+                let rest = self.chain_guaranteed_from(field, dest, idx + 1);
+                format!(
+                    "if ({acc} !== undefined) {{\n  {dest} = {acc};\n}} else {{\n{}\n}}",
+                    plan::nest("  ", &rest, 1),
+                )
+            }
+            Some(Source::Env(name)) => {
+                let lookup = self.env_lookup(name);
+                let label = self.env_label(name);
+                let parse = self.env_parse(field, dest, &label);
+                let rest = self.chain_guaranteed_from(field, dest, idx + 1);
+                format!(
+                    "const v = {lookup};\nif (v !== undefined) {{\n{parse}\n}} else {{\n{rest}\n}}",
+                    parse = plan::nest("  ", &parse, 1),
+                    rest = plan::nest("  ", &rest, 1),
+                )
+            }
+            Some(Source::Default(v)) => format!("{dest} = {};", literal(&field.target, v)),
+        }
+    }
 }
 
 impl Emitter for Resolver<'_, '_> {
@@ -285,43 +312,22 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    /// A guaranteed chain, spelled with a set-flag so every env variable is read
-    /// exactly once and `@default` closes the chain. Relative to column zero.
+    /// A guaranteed chain matching Go/Rust's if/else-if cascade: each
+    /// source's `else` only runs once every higher-priority source already
+    /// missed, so a lower-priority `@env` is never even parsed (its failure
+    /// mode never fires) while an earlier source still wins. A `@with`
+    /// source stays flat (`config.field` narrows across the condition and
+    /// the body: the same simple property read, no intervening call), but an
+    /// `@env` source nests: TypeScript does not narrow `readEnv(...)` a
+    /// second call the way it narrows a variable, so `const v = readEnv(...)`
+    /// has to sit inside the `else` its own condition opens, not read
+    /// `readEnv` again to reuse the outer flat-chain shape. A set-flag
+    /// sequence was the other way to avoid a second call, but it evaluates
+    /// every source regardless of priority and only gates the final
+    /// assignment, so a malformed but shadowed `@env` value would fail
+    /// construction it does not fail today. Relative to column zero.
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String {
-        // A chain that is just the default needs no flag.
-        if let [Source::Default(v)] = field.sources.as_slice() {
-            return format!("{dest} = {};", literal(&field.target, v));
-        }
-        let flag = camel(&format!("{}_set", field.name));
-        let mut out = format!("let {flag} = false;");
-        for source in &field.sources {
-            match source {
-                Source::With => {
-                    let acc = self.with_access(field);
-                    out.push_str(&format!(
-                        "\nif (!{flag} && {acc} !== undefined) {{\n  {dest} = {acc};\n  {flag} = true;\n}}"
-                    ));
-                }
-                Source::Env(name) => {
-                    let lookup = self.env_lookup(name);
-                    let label = self.env_label(name);
-                    let parse = self.env_parse(field, dest, &label);
-                    out.push_str(&format!(
-                        "\nif (!{flag}) {{\n  const v = {lookup};\n  if (v !== undefined) {{\n{parse}\n    {flag} = true;\n  }}\n}}",
-                        parse = plan::nest("  ", &parse, 2),
-                    ));
-                }
-                Source::Default(v) => {
-                    out.push_str(&format!(
-                        "\nif (!{flag}) {{\n  {dest} = {};\n}}",
-                        literal(&field.target, v),
-                    ));
-                    return out;
-                }
-                Source::Arg => {}
-            }
-        }
-        out
+        self.chain_guaranteed_from(field, dest, 0)
     }
 
     fn switch_header(&self, subject: &str) -> String {

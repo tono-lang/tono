@@ -81,31 +81,20 @@ export class Client {
       headers: {},
     };
     s.apiKey = apiKey;
-    let endpointSet = false;
-    if (!endpointSet) {
-      const v = readEnv("PAYMENTS_ENDPOINT");
-      if (v !== undefined) {
-        s.endpoint = v;
-        endpointSet = true;
-      }
-    }
-    if (!endpointSet) {
+    const v = readEnv("PAYMENTS_ENDPOINT");
+    if (v !== undefined) {
+      s.endpoint = v;
+    } else {
       s.endpoint = "https://api.payments.example.com";
     }
-    let timeoutSet = false;
-    if (!timeoutSet && config.timeout !== undefined) {
+    if (config.timeout !== undefined) {
       s.timeout = config.timeout;
-      timeoutSet = true;
-    }
-    if (!timeoutSet) {
+    } else {
       s.timeout = "10s" as Duration;
     }
-    let maxRetriesSet = false;
-    if (!maxRetriesSet && config.maxRetries !== undefined) {
+    if (config.maxRetries !== undefined) {
       s.maxRetries = config.maxRetries;
-      maxRetriesSet = true;
-    }
-    if (!maxRetriesSet) {
+    } else {
       s.maxRetries = 2;
     }
     const violations: Violation[] = [];
