@@ -56,7 +56,7 @@ fn error_shape() -> Shape {
             },
             Trait {
                 id: "errorCode".into(),
-                value: serde_json::json!(["overloaded"]),
+                value: serde_json::json!(["code", "overloaded"]),
             },
         ],
     }

@@ -203,6 +203,8 @@ impl Client {
 }
 
 pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {
+    // A body that fails to decode falls straight to the fallback, which
+    // carries the raw body as APIError.
     let value: serde_json::Value = match serde_json::from_str(body) {
         Ok(value) => value,
         Err(_) => {
@@ -212,8 +214,7 @@ pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {
             }))
         }
     };
-    let code = value.get("code").and_then(|v| v.as_str());
-    if status == 402 && code == Some("card_declined") {
+    if status == 402 && value.pointer("/code").and_then(|v| v.as_str()) == Some("card_declined") {
         if let Ok(data) = serde_json::from_value::<CardDeclined>(value.clone()) {
             return TonoError::Api(APIFailure::CardDeclined(data));
         }

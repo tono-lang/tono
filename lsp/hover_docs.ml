@@ -65,9 +65,9 @@ let trait_registry : (string * trait_info) list =
     ( "errorCode",
       {
         ti_doc =
-          "The value matched against the payload's code field to select this \
-           error shape.";
-        ti_keys = [ ("value", "string") ];
+          "The dotted path to probe in the response body, and the value it \
+           must equal, to select this error shape when its status is shared.";
+        ti_keys = [ ("path", "string"); ("value", "string") ];
       } );
     ( "errors",
       {

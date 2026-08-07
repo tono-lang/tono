@@ -173,7 +173,9 @@ pub fn trait_of(id: &str, value: serde_json::Value) -> Trait {
 }
 
 /// An error shape carrying its discrimination traits: the HTTP status, an
-/// optional body code, and retryability.
+/// optional body discriminator value read at the conventional `"code"` path,
+/// and retryability. [`error_shape_at`] takes an explicit path for tests that
+/// need one.
 pub fn error_shape(
     id: &str,
     members: Vec<Member>,
@@ -181,14 +183,26 @@ pub fn error_shape(
     code: Option<&str>,
     retryable: bool,
 ) -> Shape {
+    error_shape_at(id, members, status, code.map(|c| ("code", c)), retryable)
+}
+
+/// [`error_shape`] with an explicit `@errorCode` path instead of the
+/// conventional `"code"`.
+pub fn error_shape_at(
+    id: &str,
+    members: Vec<Member>,
+    status: i64,
+    code: Option<(&str, &str)>,
+    retryable: bool,
+) -> Shape {
     let mut shape = structure(id, members);
     shape
         .traits
         .push(trait_of("status", serde_json::json!([status])));
-    if let Some(code) = code {
+    if let Some((path, value)) = code {
         shape
             .traits
-            .push(trait_of("errorCode", serde_json::json!([code])));
+            .push(trait_of("errorCode", serde_json::json!([path, value])));
     }
     if retryable {
         shape

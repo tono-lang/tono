@@ -44,7 +44,7 @@ pub struct note {
   body: string
 }
 
-@status(529) @errorCode("overloaded")
+@status(529) @errorCode("code", "overloaded")
 pub struct overloaded {
   message: string
 }
@@ -351,7 +351,7 @@ let binding_cases =
 let ambiguous_shape () =
   let src =
     {|
-@status(500) @errorCode("boom")
+@status(500) @errorCode("code", "boom")
 pub struct boom { message: string }
 pub struct client {
   endpoint: string @env("EP") @default("https://x")

@@ -1,5 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
+assertion_line: 55
 expression: "render_sdk(matrix_module(), TargetKind::TypeScript, None)"
 ---
 // ==== typescript/number.ts ====
@@ -281,13 +282,14 @@ export function decodeRateLimited(raw: any): RateLimited {
 export function decodeCreateChargeError(status: number, body: string): TonoError {
   let parsed: any;
   try {
+    // A body that fails to parse falls straight to the fallback, which
+    // carries the raw body as APIError.
     parsed = JSON.parse(body);
   } catch {
     return new APIError(status, body);
   }
-  const code = typeof parsed === "object" && parsed !== null ? parsed["code"] : undefined;
   try {
-    if (status === STATUS_PAYMENT_DECLINED && code === CODE_PAYMENT_DECLINED) {
+    if (status === STATUS_PAYMENT_DECLINED && parsed?.["code"] === CODE_PAYMENT_DECLINED) {
       return new PaymentDeclinedError(decodePaymentDeclined(parsed), body);
     }
     if (status === STATUS_RATE_LIMITED) {

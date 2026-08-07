@@ -117,8 +117,9 @@ fn declared_error_const_decls(err: &DeclaredError) -> Vec<Decl> {
     ))];
     if let Some(code) = &err.code {
         decls.push(Decl::raw(format!(
-            "export const {} = {code:?};",
-            code_const_name(err)
+            "export const {} = {:?};",
+            code_const_name(err),
+            code.value
         )));
     }
     decls
@@ -339,6 +340,18 @@ fn string_param(name: &str) -> Field {
     }
 }
 
+/// The TypeScript expression reading a declared error's discriminator off the
+/// parsed body: `parsed?.["error"]?.["type"]` for `["error", "type"]`. Optional
+/// chaining means a body missing that path evaluates to `undefined` rather
+/// than throwing, falling through to the fallback like any other mismatch.
+fn probe_accessor(path: &[String]) -> String {
+    let mut expr = "parsed".to_string();
+    for seg in path {
+        expr.push_str(&format!("?.[{seg:?}]"));
+    }
+    expr
+}
+
 fn discriminator_fn_body(
     fn_name: &str,
     ordered: &[DeclaredError],
@@ -348,14 +361,12 @@ fn discriminator_fn_body(
     let fallback = format!("new {}(status, body)", n.api);
     let mut body = String::new();
     body.push_str("  let parsed: any;\n");
+    // The comment rides into the generated code: a body that fails to parse
+    // here never reaches a guard below, so it falls straight to the generic
+    // ApiError carrying the raw body.
     body.push_str(&format!(
-        "  try {{\n    parsed = JSON.parse(body);\n  }} catch {{\n    return {fallback};\n  }}\n"
+        "  try {{\n    // A body that fails to parse falls straight to the fallback, which\n    // carries the raw body as APIError.\n    parsed = JSON.parse(body);\n  }} catch {{\n    return {fallback};\n  }}\n"
     ));
-    if ordered.iter().any(|e| e.code.is_some()) {
-        body.push_str(
-            "  const code = typeof parsed === \"object\" && parsed !== null ? parsed[\"code\"] : undefined;\n",
-        );
-    }
     body.push_str("  try {\n");
     let mut refs: Vec<Symbol> = vec![
         module_symbol(&n.root, module),
@@ -375,10 +386,11 @@ fn discriminator_fn_body(
             "0".to_string()
         };
         let guard = match &err.code {
-            Some(_) => {
+            Some(code) => {
                 let code_name = code_const_name(err);
                 refs.push(module_symbol(&code_name, module));
-                format!("status === {status_expr} && code === {code_name}")
+                let accessor = probe_accessor(&code.path);
+                format!("status === {status_expr} && {accessor} === {code_name}")
             }
             None => format!("status === {status_expr}"),
         };
@@ -598,7 +610,7 @@ mod tests {
         // The coded entry consults the body's code field; the codeless one
         // matches on status alone; anything else is the concrete fallback.
         assert!(out.contains(
-            "if (status === STATUS_PAYMENT_DECLINED && code === CODE_PAYMENT_DECLINED) {"
+            "if (status === STATUS_PAYMENT_DECLINED && parsed?.[\"code\"] === CODE_PAYMENT_DECLINED) {"
         ));
         assert!(
             out.contains("return new PaymentDeclinedError(decodePaymentDeclined(parsed), body);")
@@ -627,7 +639,9 @@ mod tests {
             vec!["m#generic_bad", "m#coded_bad"],
         )];
         let out = rendered(&serde_decls(&module), &TsRules);
-        let coded_at = out.find("code === CODE_CODED_BAD").expect("coded guard");
+        let coded_at = out
+            .find("parsed?.[\"code\"] === CODE_CODED_BAD")
+            .expect("coded guard");
         let catch_all_at = out
             .find("if (status === STATUS_GENERIC_BAD) {")
             .expect("catch-all guard");

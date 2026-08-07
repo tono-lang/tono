@@ -9,12 +9,12 @@
 //! emits, the methods added here (`Error`, `Retryable`) are what make it an
 //! error value.
 
-use crate::codegen::casing::CasingConfig;
+use crate::codegen::casing::{transform, CasingConfig};
 use crate::codegen::ops::{
     self, error_names, error_type_name, module_declared_errors, DeclaredError, ErrorNames,
 };
-use crate::codegen::symbol::Symbol;
-use crate::codegen::targets::go::types::{type_expr_of, LANG};
+use crate::codegen::symbol::{Symbol, SymbolKind};
+use crate::codegen::targets::go::types::{go_casing, type_expr_of, LANG};
 use crate::codegen::taxonomy::TaxonomyLiveness;
 use crate::codegen::tree::Decl;
 use crate::ir::{Module, Shape};
@@ -90,13 +90,16 @@ pub fn violation_decl() -> Decl {
 /// The wire message of a declared error: its body code when declared, else its
 /// canonical snake name.
 fn declared_message(err: &DeclaredError) -> String {
-    err.code.clone().unwrap_or_else(|| {
-        err.shape_id
-            .rsplit('#')
-            .next()
-            .unwrap_or(&err.shape_id)
-            .to_string()
-    })
+    err.code
+        .as_ref()
+        .map(|c| c.value.clone())
+        .unwrap_or_else(|| {
+            err.shape_id
+                .rsplit('#')
+                .next()
+                .unwrap_or(&err.shape_id)
+                .to_string()
+        })
 }
 
 /// The `Validation` category a validator returns: the error struct carrying its
@@ -273,7 +276,8 @@ fn declared_error_const_decl(err: &DeclaredError) -> Option<Decl> {
     let status = err.status?;
     Some(match &err.code {
         Some(code) => Decl::raw(format!(
-            "const status{ty} = {status}\nconst code{ty} = {code:?}"
+            "const status{ty} = {status}\nconst code{ty} = {:?}",
+            code.value
         )),
         None => Decl::raw(format!("const status{ty} = {status}")),
     })
@@ -285,6 +289,68 @@ fn status_const(ty: &str) -> String {
 
 fn code_const(ty: &str) -> String {
     format!("code{ty}")
+}
+
+/// One node of the probe's nested-struct shape, built by merging every
+/// declared error's `@errorCode` path so a shared prefix (two errors probing
+/// under `"error"`) becomes one nested struct instead of two. Children keep
+/// insertion order so the emitted struct is deterministic and reads in the
+/// order the errors were declared.
+#[derive(Default)]
+struct ProbeNode {
+    children: Vec<(String, ProbeNode)>,
+}
+
+impl ProbeNode {
+    fn insert(&mut self, path: &[String]) {
+        let Some((head, rest)) = path.split_first() else {
+            return;
+        };
+        match self.children.iter_mut().find(|(seg, _)| seg == head) {
+            Some((_, child)) => child.insert(rest),
+            None => {
+                let mut child = ProbeNode::default();
+                child.insert(rest);
+                self.children.push((head.clone(), child));
+            }
+        }
+    }
+}
+
+/// The Go field name a JSON path segment becomes: exported PascalCase so
+/// `encoding/json` can see it.
+fn probe_field_name(segment: &str) -> String {
+    transform(segment, SymbolKind::Field, &go_casing(), None)
+}
+
+/// Render the probe struct's body (the lines between `struct {` and `}`) at
+/// the given indent depth. A leaf segment becomes a `string` field; a segment
+/// that is itself a path prefix becomes a nested anonymous struct.
+fn render_probe_node(node: &ProbeNode, depth: usize) -> String {
+    let indent = "\t".repeat(depth);
+    let mut out = String::new();
+    for (seg, child) in &node.children {
+        let field = probe_field_name(seg);
+        if child.children.is_empty() {
+            out.push_str(&format!("{indent}{field} string `json:{seg:?}`\n"));
+        } else {
+            out.push_str(&format!("{indent}{field} struct {{\n"));
+            out.push_str(&render_probe_node(child, depth + 1));
+            out.push_str(&format!("{indent}}} `json:{seg:?}`\n"));
+        }
+    }
+    out
+}
+
+/// The Go expression reading a declared error's discriminator off the probe:
+/// `probe.Error.Type` for `["error", "type"]`.
+fn probe_accessor(path: &[String]) -> String {
+    let mut expr = "probe".to_string();
+    for seg in path {
+        expr.push('.');
+        expr.push_str(&probe_field_name(seg));
+    }
+    expr
 }
 
 /// One discrimination function: `(status, raw body) -> error`. The mapping
@@ -337,10 +403,19 @@ fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorName
     body.push_str(&format!(
         "func {fn_name}(status int, body []byte) error {{\n"
     ));
-    if ordered.iter().any(|e| e.code.is_some()) {
-        body.push_str(
-            "\tvar probe struct {\n\t\tCode string `json:\"code\"`\n\t}\n\t_ = json.Unmarshal(body, &probe)\n",
-        );
+    let coded: Vec<&DeclaredError> = ordered.iter().filter(|e| e.code.is_some()).collect();
+    if !coded.is_empty() {
+        let mut root = ProbeNode::default();
+        for err in &coded {
+            root.insert(&err.code.as_ref().unwrap().path);
+        }
+        // The comment rides into the generated code: a body that fails to
+        // unmarshal here leaves the probe zeroed, so no guard below matches
+        // and the fallback carries the raw body as the generic ApiError.
+        body.push_str(&format!(
+            "\tvar probe struct {{\n{}\t}}\n\t// A body that fails to unmarshal leaves probe zeroed: no guard below\n\t// matches, and the fallback carries the raw body as APIError.\n\t_ = json.Unmarshal(body, &probe)\n",
+            render_probe_node(&root, 2)
+        ));
     }
     for err in ordered {
         let ty = error_type_name(err);
@@ -353,8 +428,9 @@ fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorName
             "0".to_string()
         };
         let guard = match &err.code {
-            Some(_) => format!(
-                "status == {status_expr} && probe.Code == {code_expr}",
+            Some(code) => format!(
+                "status == {status_expr} && {accessor} == {code_expr}",
+                accessor = probe_accessor(&code.path),
                 code_expr = code_const(&ty)
             ),
             None => format!("status == {status_expr}"),
@@ -461,5 +537,38 @@ mod tests {
         let out = rendered(&serde_decls(&module), &GoRules::default());
         assert!(!out.contains("probe"));
         assert!(out.contains("if status == statusSlowDown {"));
+    }
+
+    #[test]
+    fn shared_path_prefixes_merge_into_one_nested_struct() {
+        use crate::codegen::test_support::error_shape_at;
+        let mut module = error_demo_module();
+        module.shapes.push(error_shape_at(
+            "m#invalid_type",
+            vec![],
+            400,
+            Some(("error.type", "invalid")),
+            false,
+        ));
+        module.shapes.push(error_shape_at(
+            "m#invalid_code",
+            vec![],
+            400,
+            Some(("error.code", "bad")),
+            false,
+        ));
+        module.operations = vec![operation(
+            "m#fetch",
+            vec![],
+            vec!["m#invalid_type", "m#invalid_code"],
+        )];
+        let out = rendered(&serde_decls(&module), &GoRules::default());
+        // A shared "error" prefix collapses into one nested struct, not two
+        // separate top-level "Error" fields.
+        assert_eq!(out.matches("Error struct {").count(), 1);
+        assert!(out.contains("\t\tError struct {\n"));
+        assert!(out.contains("\t\t\tType string `json:\"type\"`\n"));
+        assert!(out.contains("\t\t\tCode string `json:\"code\"`\n"));
+        assert!(out.contains("\t\t} `json:\"error\"`\n"));
     }
 }

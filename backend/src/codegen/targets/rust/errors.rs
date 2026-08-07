@@ -316,7 +316,11 @@ pub fn outcome_discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) 
     );
     for err in ordered.iter().filter(|e| e.code.is_some()) {
         let data = error_type_name(err);
-        let declared_code = err.code.as_deref().unwrap_or_default();
+        let declared_code = err
+            .code
+            .as_ref()
+            .map(|c| c.value.as_str())
+            .unwrap_or_default();
         // A declared match whose body does not decode falls through to the
         // fallback so a new field or a changed shape never breaks the caller.
         body.push_str(&format!(
@@ -334,6 +338,16 @@ pub fn outcome_discriminator_fn_named(fn_name: &str, ordered: &[DeclaredError]) 
     Decl::raw(body)
 }
 
+/// The JSON Pointer (RFC 6901) for a declared error's discriminator path:
+/// `["error", "type"]` becomes `/error/type`. A segment's own `~` and `/` are
+/// escaped per the pointer syntax, though neither appears in a canonical
+/// snake_case path in practice.
+fn json_pointer(path: &[String]) -> String {
+    path.iter()
+        .map(|seg| format!("/{}", seg.replace('~', "~0").replace('/', "~1")))
+        .collect()
+}
+
 fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorNames) -> Decl {
     let fallback = format!(
         "{root}::Api({failure}::Undeclared({api} {{ status, body: body.to_string() }}))",
@@ -346,17 +360,21 @@ fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorName
         "pub fn {fn_name}(status: u16, body: &str) -> {} {{\n",
         n.root
     ));
+    // The comment rides into the generated code: a body that fails to decode
+    // here never reaches a guard below, so it falls straight to the generic
+    // fallback carrying the raw body.
     body.push_str(&format!(
-        "    let value: serde_json::Value = match serde_json::from_str(body) {{\n        Ok(value) => value,\n        Err(_) => return {fallback},\n    }};\n"
+        "    // A body that fails to decode falls straight to the fallback, which\n    // carries the raw body as APIError.\n    let value: serde_json::Value = match serde_json::from_str(body) {{\n        Ok(value) => value,\n        Err(_) => return {fallback},\n    }};\n"
     ));
-    if ordered.iter().any(|e| e.code.is_some()) {
-        body.push_str("    let code = value.get(\"code\").and_then(|v| v.as_str());\n");
-    }
     for err in ordered {
         let data = error_type_name(err);
         let status = err.status.unwrap_or(0);
         let guard = match &err.code {
-            Some(code) => format!("status == {status} && code == Some(\"{code}\")"),
+            Some(code) => format!(
+                "status == {status} && value.pointer({pointer:?}).and_then(|v| v.as_str()) == Some({value:?})",
+                pointer = json_pointer(&code.path),
+                value = code.value,
+            ),
             None => format!("status == {status}"),
         };
         // A declared match whose body does not decode falls through to the
@@ -374,6 +392,7 @@ fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorName
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::ops::ErrorCode;
     use crate::codegen::targets::rust::types::rust_casing;
     use crate::codegen::targets::rust::RustRules;
     use crate::codegen::test_support::{error_demo_module, operation, rendered};
@@ -414,7 +433,10 @@ mod tests {
             DeclaredError {
                 shape_id: "m#quota_exceeded".into(),
                 status: Some(429),
-                code: Some("quota_exceeded".into()),
+                code: Some(ErrorCode {
+                    path: vec!["code".into()],
+                    value: "quota_exceeded".into(),
+                }),
                 retryable: false,
             },
             // A declared error with no code can never be selected here
@@ -489,7 +511,9 @@ mod tests {
         let out = rendered(&serde_decls(&error_demo_module()), &RustRules::default());
         assert!(out
             .contains("pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {"));
-        assert!(out.contains("if status == 402 && code == Some(\"payment_declined\") {"));
+        assert!(out.contains(
+            "if status == 402 && value.pointer(\"/code\").and_then(|v| v.as_str()) == Some(\"payment_declined\") {"
+        ));
         assert!(out.contains("serde_json::from_value::<PaymentDeclined>(value.clone())"));
         assert!(out.contains("return TonoError::Api(APIFailure::PaymentDeclined(data));"));
         assert!(out.contains("if status == 429 {"));

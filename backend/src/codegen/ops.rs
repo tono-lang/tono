@@ -12,7 +12,7 @@ use crate::codegen::casing::{transform, CasingConfig};
 use crate::codegen::conventions::{doc_of, rename_of, type_ident_from_id};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::tree::{ClientDecl, Decl, Field, Method, TypeExpr};
-use crate::ir::{Module, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{Model, Module, Shape, ShapeKind, Trait, Tref};
 
 /// Whether an operation performs I/O and therefore waits. How the wait lowers
 /// (suspension vs blocking) is a per-language concern; the classification is
@@ -46,16 +46,32 @@ fn int_arg(t: &Trait) -> Option<i64> {
     }
 }
 
-/// Read a trait's single string argument, with the same tolerance as
-/// [`int_arg`].
-fn string_arg(t: &Trait) -> Option<String> {
-    match &t.value {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(items) => {
-            items.first().and_then(|v| v.as_str()).map(str::to_string)
-        }
-        _ => None,
+/// A declared error's body discriminator: the dotted path to probe in the
+/// response body (split into segments; `"error.type"` becomes
+/// `["error", "type"]`) and the value that path must equal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorCode {
+    pub path: Vec<String>,
+    pub value: String,
+}
+
+/// Read `@errorCode`'s two positional arguments (path, value). The frontend
+/// always emits exactly two; a malformed hand-authored array (wrong arity, or
+/// an empty path) resolves to no code, the same way a missing trait does.
+fn path_and_value_arg(t: &Trait) -> Option<ErrorCode> {
+    let items = t.value.as_array()?;
+    let [path, value] = items.as_slice() else {
+        return None;
+    };
+    let path = path.as_str()?;
+    let value = value.as_str()?;
+    if path.is_empty() {
+        return None;
     }
+    Some(ErrorCode {
+        path: path.split('.').map(str::to_string).collect(),
+        value: value.to_string(),
+    })
 }
 
 /// The effect of an operation: an explicit `@async` trait is authoritative;
@@ -80,9 +96,9 @@ pub struct DeclaredError {
     /// would have rejected; such an error still becomes a type but never
     /// enters the discrimination map.
     pub status: Option<i64>,
-    /// The body discriminator value from `@errorCode("...")`, matched against
-    /// the response body's `code` field when several errors share a status.
-    pub code: Option<String>,
+    /// The body discriminator from `@errorCode(path, value)`, matched against
+    /// the response body at that path when several errors share a status.
+    pub code: Option<ErrorCode>,
     /// Whether the error carries `@retryable`.
     pub retryable: bool,
 }
@@ -91,7 +107,7 @@ fn declared_error(shape: &Shape) -> DeclaredError {
     DeclaredError {
         shape_id: shape.id.clone(),
         status: find_trait(&shape.traits, "status").and_then(int_arg),
-        code: find_trait(&shape.traits, "errorCode").and_then(string_arg),
+        code: find_trait(&shape.traits, "errorCode").and_then(path_and_value_arg),
         retryable: has_trait(&shape.traits, "retryable"),
     }
 }
@@ -356,6 +372,51 @@ pub fn client_decl(
     })
 }
 
+/// Reject an operation whose declared errors cannot be told apart: two errors
+/// sharing a status and the same coded discriminator (same path, same value)
+/// collide silently at runtime, since the generated guard for one is
+/// identical to the other's. A codeless error is that status's catch-all by
+/// rule, not by declaration order, so it never collides with a coded sibling.
+/// Returns the first offense, naming both shapes.
+pub fn validate_error_codes(model: &Model) -> Result<(), String> {
+    for module in &model.modules {
+        let nested = module.shapes.iter().flat_map(|s| match &s.kind {
+            ShapeKind::Entry { operations, .. } => operations.as_slice(),
+            _ => &[],
+        });
+        for op in module.operations.iter().chain(nested) {
+            let errors = declared_errors(op, module);
+            let mut seen: Vec<(i64, &[String], &str, &str)> = Vec::new();
+            for err in &errors {
+                let (Some(status), Some(code)) = (err.status, &err.code) else {
+                    continue;
+                };
+                if let Some((_, _, _, first_id)) = seen.iter().find(|(s, p, v, _)| {
+                    *s == status && *p == code.path.as_slice() && *v == code.value
+                }) {
+                    return Err(format!(
+                        "module {}: operation {} cannot discriminate between errors {} and {}: \
+                         both use status {status} with @errorCode(\"{}\", \"{}\")",
+                        module.name,
+                        op.id.rsplit('#').next().unwrap_or(&op.id),
+                        first_id,
+                        err.shape_id,
+                        code.path.join("."),
+                        code.value,
+                    ));
+                }
+                seen.push((
+                    status,
+                    code.path.as_slice(),
+                    code.value.as_str(),
+                    &err.shape_id,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Build one discrimination declaration per operation that declares errors,
 /// handing the target's builder the errors already in discrimination order
 /// (coded entries before a codeless catch-all on the same status).
@@ -372,343 +433,5 @@ pub fn discriminator_decls(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ir::{Shape, ShapeKind};
-    use serde_json::json;
-
-    fn trait_of(id: &str, value: serde_json::Value) -> Trait {
-        Trait {
-            id: id.into(),
-            value,
-        }
-    }
-
-    fn op(traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
-        Shape {
-            id: "m#do_thing".into(),
-            kind: ShapeKind::Operation {
-                input: None,
-                output: None,
-                errors: errors
-                    .into_iter()
-                    .map(|id| Tref::Ref {
-                        id: id.into(),
-                        args: vec![],
-                    })
-                    .collect(),
-                wire: None,
-            },
-            traits,
-        }
-    }
-
-    fn error_shape(id: &str, traits: Vec<Trait>) -> Shape {
-        Shape {
-            id: id.into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![],
-            },
-            traits,
-        }
-    }
-
-    fn module(shapes: Vec<Shape>, operations: Vec<Shape>) -> Module {
-        Module {
-            tests: vec![],
-            name: "m".into(),
-            shapes,
-            operations,
-            extensions: vec![],
-        }
-    }
-
-    #[test]
-    fn a_declared_error_never_used_as_data_is_error_only() {
-        let m = module(
-            vec![error_shape("m#not_found", vec![])],
-            vec![op(vec![], vec!["m#not_found"])],
-        );
-        let error_only = error_only_shapes(&m);
-        assert!(error_only.contains("m#not_found"));
-    }
-
-    #[test]
-    fn a_declared_error_also_used_as_an_operation_input_is_not_error_only() {
-        let mut input_op = op(vec![], vec!["m#retry_hint"]);
-        input_op.kind = ShapeKind::Operation {
-            input: Some(Tref::Ref {
-                id: "m#retry_hint".into(),
-                args: vec![],
-            }),
-            output: None,
-            errors: vec![Tref::Ref {
-                id: "m#retry_hint".into(),
-                args: vec![],
-            }],
-            wire: None,
-        };
-        let m = module(vec![error_shape("m#retry_hint", vec![])], vec![input_op]);
-        assert!(error_only_shapes(&m).is_empty());
-    }
-
-    #[test]
-    fn a_declared_error_also_used_as_a_member_type_is_not_error_only() {
-        let holder = Shape {
-            id: "m#holder".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![crate::codegen::test_support::member(
-                    "cause",
-                    Tref::Ref {
-                        id: "m#not_found".into(),
-                        args: vec![],
-                    },
-                    true,
-                )],
-            },
-            traits: vec![],
-        };
-        let m = module(
-            vec![error_shape("m#not_found", vec![]), holder],
-            vec![op(vec![], vec!["m#not_found"])],
-        );
-        assert!(error_only_shapes(&m).is_empty());
-    }
-
-    fn entry_field(name: &str, target_id: &str) -> crate::ir::EntryField {
-        crate::ir::EntryField {
-            name: name.into(),
-            target: Tref::Ref {
-                id: target_id.into(),
-                args: vec![],
-            },
-            sources: vec![],
-            format: None,
-            transforms: vec![],
-            select: None,
-            binds: vec![],
-            constraints: vec![],
-            traits: vec![],
-        }
-    }
-
-    #[test]
-    fn a_declared_error_also_used_as_a_nested_entry_ops_input_is_not_error_only() {
-        let mut nested_op = op(vec![], vec!["m#not_found"]);
-        nested_op.id = "m#client.do_thing".into();
-        nested_op.kind = ShapeKind::Operation {
-            input: Some(Tref::Ref {
-                id: "m#not_found".into(),
-                args: vec![],
-            }),
-            output: None,
-            errors: vec![Tref::Ref {
-                id: "m#not_found".into(),
-                args: vec![],
-            }],
-            wire: None,
-        };
-        let entry = Shape {
-            id: "m#client".into(),
-            kind: ShapeKind::Entry {
-                fields: vec![],
-                operations: vec![nested_op],
-            },
-            traits: vec![],
-        };
-        let m = module(vec![error_shape("m#not_found", vec![]), entry], vec![]);
-        assert!(error_only_shapes(&m).is_empty());
-    }
-
-    #[test]
-    fn a_declared_error_also_used_as_an_entry_or_config_fields_target_is_not_error_only() {
-        let wire_op = |errors: Vec<&str>| {
-            let mut o = op(vec![], errors);
-            o.id = "m#client.ping".into();
-            o
-        };
-        let entry = Shape {
-            id: "m#client".into(),
-            kind: ShapeKind::Entry {
-                fields: vec![entry_field("hint", "m#not_found")],
-                operations: vec![wire_op(vec!["m#not_found"])],
-            },
-            traits: vec![],
-        };
-        let m = module(vec![error_shape("m#not_found", vec![]), entry], vec![]);
-        assert!(error_only_shapes(&m).is_empty());
-
-        let cfg = Shape {
-            id: "m#conf".into(),
-            kind: ShapeKind::Config {
-                fields: vec![entry_field("hint", "m#slow_down")],
-            },
-            traits: vec![],
-        };
-        let entry2 = Shape {
-            id: "m#client2".into(),
-            kind: ShapeKind::Entry {
-                fields: vec![],
-                operations: vec![wire_op(vec!["m#slow_down"])],
-            },
-            traits: vec![],
-        };
-        let m2 = module(
-            vec![error_shape("m#slow_down", vec![]), cfg, entry2],
-            vec![],
-        );
-        assert!(error_only_shapes(&m2).is_empty());
-    }
-
-    #[test]
-    fn the_async_trait_is_authoritative_and_transport_infers_async() {
-        // Explicit @async, with or without a transport, is async.
-        assert_eq!(
-            effect_of(&op(vec![trait_of("async", json!(null))], vec![])),
-            Effect::Async
-        );
-        // A transport binding alone infers async.
-        assert_eq!(
-            effect_of(&op(
-                vec![trait_of("http", json!({"method": "POST"}))],
-                vec![]
-            )),
-            Effect::Async
-        );
-        // A purely local operation is sync.
-        assert_eq!(effect_of(&op(vec![], vec![])), Effect::Sync);
-        // The namespaced spelling counts too.
-        assert_eq!(
-            effect_of(&op(vec![trait_of("async", json!(null))], vec![])),
-            Effect::Async
-        );
-    }
-
-    #[test]
-    fn declared_errors_resolve_status_code_and_retryable() {
-        let module = module(
-            vec![
-                error_shape(
-                    "m#payment_declined",
-                    vec![
-                        trait_of("status", json!([402])),
-                        trait_of("errorCode", json!(["payment_declined"])),
-                        trait_of("retryable", json!(null)),
-                    ],
-                ),
-                error_shape("m#rate_limited", vec![trait_of("status", json!(429))]),
-            ],
-            vec![],
-        );
-        let op = op(vec![], vec!["m#payment_declined", "m#rate_limited"]);
-        let errors = declared_errors(&op, &module);
-        assert_eq!(
-            errors,
-            vec![
-                DeclaredError {
-                    shape_id: "m#payment_declined".into(),
-                    status: Some(402),
-                    code: Some("payment_declined".into()),
-                    retryable: true,
-                },
-                DeclaredError {
-                    shape_id: "m#rate_limited".into(),
-                    status: Some(429),
-                    code: None,
-                    retryable: false,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn unresolved_and_repeated_references_are_skipped() {
-        let module = module(
-            vec![error_shape(
-                "m#not_found",
-                vec![trait_of("status", json!([404]))],
-            )],
-            vec![],
-        );
-        let op = op(vec![], vec!["m#not_found", "m#nope", "m#not_found"]);
-        let errors = declared_errors(&op, &module);
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].shape_id, "m#not_found");
-    }
-
-    #[test]
-    fn module_errors_are_the_union_in_first_appearance_order() {
-        let shapes = vec![
-            error_shape("m#a", vec![trait_of("status", json!([400]))]),
-            error_shape("m#b", vec![trait_of("status", json!([404]))]),
-        ];
-        let op_one = op(vec![], vec!["m#b", "m#a"]);
-        let op_two = op(vec![], vec!["m#a"]);
-        let module = module(shapes, vec![op_one, op_two]);
-        let ids: Vec<String> = module_declared_errors(&module)
-            .into_iter()
-            .map(|e| e.shape_id)
-            .collect();
-        assert_eq!(ids, vec!["m#b".to_string(), "m#a".to_string()]);
-    }
-
-    #[test]
-    fn the_discriminator_driver_skips_operations_with_no_declared_errors() {
-        let shapes = vec![error_shape("m#nf", vec![trait_of("status", json!([404]))])];
-        let with_errors = op(vec![], vec!["m#nf"]);
-        let without = op(vec![], vec![]);
-        let module = module(shapes, vec![without, with_errors]);
-        let decls = discriminator_decls(&module, |_, ordered| {
-            crate::codegen::tree::Decl::raw(format!("{} entries", ordered.len()))
-        });
-        // Only the error-declaring operation gets a declaration.
-        assert_eq!(decls.len(), 1);
-    }
-
-    #[test]
-    fn discrimination_tries_coded_entries_before_the_codeless_catch_all() {
-        let shapes = vec![
-            error_shape("m#generic_bad", vec![trait_of("status", json!([400]))]),
-            error_shape(
-                "m#coded_bad",
-                vec![
-                    trait_of("status", json!([400])),
-                    trait_of("errorCode", json!(["specific"])),
-                ],
-            ),
-            // A shape the frontend would have rejected: no status. It never
-            // enters the discrimination map.
-            error_shape("m#no_status", vec![]),
-        ];
-        let op = op(vec![], vec!["m#generic_bad", "m#coded_bad", "m#no_status"]);
-        let module = module(shapes, vec![]);
-        let ordered: Vec<String> = discrimination_order(&op, &module)
-            .into_iter()
-            .map(|e| e.shape_id)
-            .collect();
-        assert_eq!(
-            ordered,
-            vec!["m#coded_bad".to_string(), "m#generic_bad".to_string()]
-        );
-    }
-
-    #[test]
-    fn error_code_reads_a_bare_string_argument() {
-        // The frontend wraps a positional argument in a one-element array, but a
-        // bare string is accepted for hand-authored input; both resolve the code.
-        let module = module(
-            vec![error_shape(
-                "m#declined",
-                vec![
-                    trait_of("status", json!([402])),
-                    trait_of("errorCode", json!("declined")),
-                ],
-            )],
-            vec![],
-        );
-        let errors = declared_errors(&op(vec![], vec!["m#declined"]), &module);
-        assert_eq!(errors[0].code, Some("declined".into()));
-    }
-}
+#[path = "ops_tests.rs"]
+mod tests;

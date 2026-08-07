@@ -36,7 +36,11 @@ pub use crate::ir_tests_model::*;
 /// v9 removed the wire_descriptor trait blob the frontend attached alongside
 /// the typed `wire` field for backward compatibility; `wire` is the only
 /// representation now.
-pub const TONO_IR_VERSION: u32 = 9;
+/// v10 gave `@errorCode` a mandatory first argument: the dotted path to probe
+/// in the error body, ahead of the discriminator value. The trait's IR value
+/// is still a plain array of trait args, so the shape is unchanged; only its
+/// arity is.
+pub const TONO_IR_VERSION: u32 = 10;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

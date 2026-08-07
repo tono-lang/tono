@@ -1,5 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
+assertion_line: 50
 expression: "render_sdk(matrix_module(), TargetKind::Go, None)"
 ---
 // ==== go/models/types.go ====
@@ -273,6 +274,8 @@ func DecodeCreateChargeError(status int, body []byte) error {
 	var probe struct {
 		Code string `json:"code"`
 	}
+	// A body that fails to unmarshal leaves probe zeroed: no guard below
+	// matches, and the fallback carries the raw body as APIError.
 	_ = json.Unmarshal(body, &probe)
 	if status == statusPaymentDeclined && probe.Code == codePaymentDeclined {
 		var data PaymentDeclined

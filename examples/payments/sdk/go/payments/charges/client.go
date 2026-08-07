@@ -173,6 +173,8 @@ func DecodeCreateChargeError(status int, body []byte) error {
 	var probe struct {
 		Code string `json:"code"`
 	}
+	// A body that fails to unmarshal leaves probe zeroed: no guard below
+	// matches, and the fallback carries the raw body as APIError.
 	_ = json.Unmarshal(body, &probe)
 	if status == statusCardDeclined && probe.Code == codeCardDeclined {
 		var data CardDeclined

@@ -218,7 +218,7 @@ pub fn declared_error(
     if let Some(code) = code {
         shape.traits.push(Trait {
             id: "core#errorCode".into(),
-            value: serde_json::json!([code]),
+            value: serde_json::json!(["code", code]),
         });
     }
     if retryable {

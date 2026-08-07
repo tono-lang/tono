@@ -145,19 +145,20 @@ let declared_error_bad_status () =
        "@status(\"x\") struct not_found { msg: string }\n\
         @errors(not_found) op o(): i64")
 
-(* A well-formed @errorCode string rides along with no diagnostic. *)
+(* A well-formed @errorCode path and value ride along with no diagnostic. *)
 let declared_error_code_ok () =
   Alcotest.(check (list string))
-    "status plus string errorCode" []
+    "status plus path and value errorCode" []
     (codes
-       "@status(402) @errorCode(\"declined\") struct declined { m: string }\n\
+       "@status(402) @errorCode(\"code\", \"declined\") struct declined { m: \
+        string }\n\
         @errors(declined) op o(): i64")
 
 let declared_error_code_invalid () =
   Alcotest.(check (list string))
-    "@errorCode with an int argument" [ "TC0016" ]
+    "@errorCode with a single argument" [ "TC0016" ]
     (codes
-       "@status(402) @errorCode(42) struct declined { m: string }\n\
+       "@status(402) @errorCode(\"declined\") struct declined { m: string }\n\
         @errors(declined) op o(): i64")
 
 (* Two declared errors sharing a status with no code cannot be told apart. *)
@@ -174,16 +175,26 @@ let discrimination_by_code_ok () =
   Alcotest.(check (list string))
     "shared status split by codes" []
     (codes
-       "@status(400) @errorCode(\"a\") struct bad_a { m: string }\n\
-        @status(400) @errorCode(\"b\") struct bad_b { m: string }\n\
+       "@status(400) @errorCode(\"code\", \"a\") struct bad_a { m: string }\n\
+        @status(400) @errorCode(\"code\", \"b\") struct bad_b { m: string }\n\
         @errors(bad_a, bad_b) op o(): i64")
 
 let discrimination_ambiguous_same_code () =
   Alcotest.(check (list string))
     "shared status and shared code" [ "TC0017" ]
     (codes
-       "@status(400) @errorCode(\"a\") struct bad_a { m: string }\n\
-        @status(400) @errorCode(\"a\") struct bad_b { m: string }\n\
+       "@status(400) @errorCode(\"code\", \"a\") struct bad_a { m: string }\n\
+        @status(400) @errorCode(\"code\", \"a\") struct bad_b { m: string }\n\
+        @errors(bad_a, bad_b) op o(): i64")
+
+(* Same status, different paths: legal but warned. *)
+let discrimination_diverging_paths_warns () =
+  Alcotest.(check (list string))
+    "shared status, divergent paths" [ "TC0067" ]
+    (codes
+       "@status(400) @errorCode(\"code\", \"a\") struct bad_a { m: string }\n\
+        @status(400) @errorCode(\"error.type\", \"a\") struct bad_b { m: \
+        string }\n\
         @errors(bad_a, bad_b) op o(): i64")
 
 (* Listing the same error twice is collapsed, not reported as ambiguous. *)
@@ -626,6 +637,8 @@ let () =
             discrimination_by_code_ok;
           Alcotest.test_case "ambiguous same code" `Quick
             discrimination_ambiguous_same_code;
+          Alcotest.test_case "diverging paths warns" `Quick
+            discrimination_diverging_paths_warns;
           Alcotest.test_case "repeated name collapses" `Quick
             repeated_error_name_not_ambiguous;
           Alcotest.test_case "ambiguity per op" `Quick

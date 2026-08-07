@@ -26,7 +26,7 @@ struct page[t] {
 
 @doc("The card issuer declined the charge.")
 @status(402)
-@errorCode("card_declined")
+@errorCode("code", "card_declined")
 @retryable
 struct card_declined {
   message: string

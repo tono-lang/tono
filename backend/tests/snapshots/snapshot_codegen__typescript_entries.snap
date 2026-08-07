@@ -1,5 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
+assertion_line: 193
 expression: "render_sdk(entries_module(), TargetKind::TypeScript, None)"
 ---
 // ==== typescript/env.ts ====
@@ -568,13 +569,14 @@ export class Client {
 export function decodeSaveNoteError(status: number, body: string): TonoError {
   let parsed: any;
   try {
+    // A body that fails to parse falls straight to the fallback, which
+    // carries the raw body as APIError.
     parsed = JSON.parse(body);
   } catch {
     return new APIError(status, body);
   }
-  const code = typeof parsed === "object" && parsed !== null ? parsed["code"] : undefined;
   try {
-    if (status === STATUS_OVERLOADED && code === CODE_OVERLOADED) {
+    if (status === STATUS_OVERLOADED && parsed?.["code"] === CODE_OVERLOADED) {
       return new OverloadedError(decodeOverloaded(parsed), body);
     }
   } catch {}

@@ -117,3 +117,8 @@ let test_shape_ambiguous = "TC0063"
 let test_import_missing = "TC0064"
 let tono_root_reserved = "TC0065"
 let test_binding_duplicate = "TC0066"
+
+(* Two declared errors of one operation share a status but read their
+   @errorCode from different paths. Legal (each guard probes its own
+   location), but unusual enough to flag. *)
+let error_code_paths_diverge = "TC0067"

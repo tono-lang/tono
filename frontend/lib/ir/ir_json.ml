@@ -33,8 +33,12 @@
    backward compatibility).
    v9 removed the wire_descriptor trait blob the frontend attached alongside
    the typed "wire" field for backward compatibility; "wire" is the only
-   representation now. *)
-let current_ir_version = 9
+   representation now.
+   v10 gave @errorCode a mandatory first argument: the dotted path to probe in
+   the error body, ahead of the discriminator value. The trait's IR value is
+   still a plain array of trait args, so the shape is unchanged; only its
+   arity is. *)
+let current_ir_version = 10
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
