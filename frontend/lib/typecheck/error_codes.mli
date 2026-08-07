@@ -23,8 +23,11 @@ val error_code_invalid : string
 val error_discrimination_ambiguous : string
 val async_takes_no_arguments : string
 
-(* TC0019, TC0020, TC0022 are intentionally unused (see error_codes.ml). *)
+(* TC0019, TC0020 are intentionally unused (see error_codes.ml). *)
 val http_map_binding : string
+
+(* A nullable value interpolated into an @http path (see error_codes.ml). *)
+val http_path_nullable_ref : string
 
 (* Module system: unknown import qualifier, non-[pub] reference, a cycle in the
    module import graph (which must be a DAG), and two imports colliding on one

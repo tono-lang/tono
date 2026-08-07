@@ -267,6 +267,38 @@ let check_body_shapes ctx (op : Ast.decl) : Diagnostic.t list =
   in
   arity_diags @ shape_diags
 
+(* The refs an @http path arg interpolates: a pure reference (the whole path
+   is that value's string form), or the {.field} placeholders inside a
+   template. A template placeholder carries no span of its own (see
+   [Template.parse]), so it reports against the arg's own span. *)
+let path_refs (arg : Ast.trait_arg) span : (string list * Span.span) list =
+  match arg with
+  | Ast.ARef r -> [ (r.Ast.segs, r.ref_span) ]
+  | Ast.AString s ->
+      let parts, _ = template_of ~span s in
+      List.filter_map
+        (function Ir.Tpl_field p -> Some (p, span) | _ -> None)
+        parts
+  | _ -> []
+
+(* TC0022: a nullable value interpolated into an @http path would collapse its
+   placeholder to nothing at call time, leaving a hole in the URL (e.g.
+   "/notes/{.ref.id}" with a null id becomes "/notes/"). [resolve] types the
+   ref, when resolvable; an unresolvable ref is already reported elsewhere. *)
+let check_path_presence ~(resolve : string list -> Ast.ty option)
+    (arg : Ast.trait_arg) span : Diagnostic.t list =
+  List.filter_map
+    (fun (segs, ref_span) ->
+      match resolve segs with
+      | Some (Ast.TNullable _) ->
+          Some
+            (err Error_codes.http_path_nullable_ref ref_span
+               "'%s' is nullable and cannot be interpolated into an @http \
+                path; an absent value would leave the placeholder empty"
+               (path_str segs))
+      | _ -> None)
+    (path_refs arg span)
+
 (* Protocol checks shared by every op: @header/@query/@timeout/@retry require
    @http (a purely local operation has no protocol surface). *)
 let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
@@ -350,11 +382,19 @@ let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
             (traits_named name op.dtraits))
         [ "header"; "query"; "body" ]
   in
+  let path_diags =
+    match find_trait "http" op.dtraits with
+    | Some { targs; tspan; _ } -> (
+        match kv_arg "path" targs with
+        | Some v -> check_path_presence ~resolve v tspan
+        | None -> [])
+    | None -> []
+  in
   protocol_http_diags
   @ check_header_shapes ~resolve op
   @ check_query_shapes ~resolve op
   @ check_body_shapes ctx op @ check_code op @ ref_diags @ endpoint_diags
-  @ timeout_retry_diags
+  @ timeout_retry_diags @ path_diags
 
 (* A value position (path, endpoint) that accepts the unified grammar:
    literal, template, or pure reference. Resolution of the refs a template or
@@ -506,7 +546,9 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     match find_trait "http" op.dtraits with
     | Some { targs; tspan; _ } -> (
         match kv_arg "path" targs with
-        | Some v -> value_position_diags ~allow_input:true v tspan
+        | Some v ->
+            value_position_diags ~allow_input:true v tspan
+            @ check_path_presence ~resolve:resolve_ty v tspan
         | None -> [])
     | None -> []
   in

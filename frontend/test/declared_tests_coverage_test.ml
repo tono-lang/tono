@@ -62,13 +62,13 @@ pub struct boom { message: string }
 pub struct vclient {
   endpoint: string @env("EP") @default("https://x")
 
-  op get(person_ref): person
-    @http(method: "GET", path: "/p/{key}", endpoint: .endpoint)
+  op get(person_ref: person_ref): person
+    @http(method: "GET", path: "/p/{.person_ref.key}", endpoint: .endpoint)
 
-  op put(person): person @errors(boom)
+  op put(person: person): person @errors(boom)
 
-  op word(person_ref): string
-    @http(method: "GET", path: "/w/{key}", endpoint: .endpoint)
+  op word(person_ref: person_ref): string
+    @http(method: "GET", path: "/w/{.person_ref.key}", endpoint: .endpoint)
 
   op tag(): color
     @http(method: "GET", path: "/t", endpoint: .endpoint)

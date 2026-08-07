@@ -394,10 +394,10 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
     dkind = Ast.DEnum { cases };
   }
 
-(* op ::= "op" name "(" (name ":")? type? ")" ( ":" type )? op_trait*  — the
-   parameter name is optional (the legacy unnamed form still parses), the
-   output type is optional, and errors are carried by a trailing
-   "@errors(...)" trait. *)
+(* op ::= "op" name "(" (name ":" type)? ")" ( ":" type )? op_trait*  — the
+   parameter, when present, must name itself (".param" needs a name to give
+   its reference provenance); the output type is optional, and errors are
+   carried by a trailing "@errors(...)" trait. *)
 let parse_op st ~pub ~dtraits : Ast.decl =
   ignore (P.advance st);
   (* 'op' *)
@@ -420,7 +420,12 @@ let parse_op st ~pub ~dtraits : Ast.decl =
         ignore (P.advance st);
         (* ':' *)
         Some n
-    | _ -> None
+    | Token.RParen, _ -> None
+    | _ ->
+        P.error st (P.peek st).span
+          "operation parameter must be named, e.g. 'op foo(note_ref: NoteRef)' \
+           instead of 'op foo(NoteRef)'";
+        None
   in
   let input =
     match (P.peek st).kind with

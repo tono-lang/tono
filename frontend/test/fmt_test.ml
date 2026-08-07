@@ -20,7 +20,7 @@ enum currency { usd eur }
 enum http_code { ok = 200, error = 500 }
 @discriminator("kind") union source[t] { card(card) @doc("plastic"), bank(bank_account), page(page[t]) }
 struct empty {}
-op create_charge(charge): charge @errors(not_found, conflict) @http(method: "post")
+op create_charge(charge: charge): charge @errors(not_found, conflict) @http(method: "post")
 op ping()
 |}
   in
@@ -53,7 +53,7 @@ union source[t] {
 
 struct empty {}
 
-op create_charge(charge): charge
+op create_charge(charge: charge): charge
   @errors(not_found, conflict)
   @http(method: "post")
 
@@ -69,7 +69,7 @@ let idempotent () =
 @doc("payments") pub struct charge { id: uuid, note: string? }
 enum currency { usd, eur }
 union source { card(card), bank(bank_account) }
-op create_charge(charge): charge @errors(not_found)
+op create_charge(charge: charge): charge @errors(not_found)
 |}
   in
   let once = fmt src in
@@ -93,7 +93,7 @@ struct bank_account { iban: string }
 union source { card(card), bank(bank_account) }
 struct page[t] { items: []t, next: string? }
 @status(404) struct not_found { message: string }
-op create_charge(charge): charge @errors(not_found)
+op create_charge(charge: charge): charge @errors(not_found)
 |}
   in
   let m1, d1 = Tono_frontend.compile ~module_name:"payments" src in
@@ -168,7 +168,7 @@ pub struct client { client_name: string @arg @str::trim
     2 => .endpoint_v2
     _ => @env("FALLBACK") @default("https://x") }
   conf: settings @bind(api_key, .client_key)
-  op fetch(note_ref): note @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+  op fetch(note_ref: note_ref): note @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
     @header("Authorization", .creds.token) @timeout(.timeout) @errors(not_found)
   op ping() }
 |}
@@ -194,7 +194,7 @@ pub struct client {
   }
   conf: settings @bind(api_key, .client_key)
 
-  op fetch(note_ref): note
+  op fetch(note_ref: note_ref): note
     @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
     @header("Authorization", .creds.token)
     @timeout(.timeout)
@@ -218,12 +218,12 @@ struct note { id: string }
 pub struct client {
   api_key: string @arg
   endpoint: string @env("ENDPOINT") @default("https://x")
-  op fetch(note_ref): note
+  op fetch(note_ref: note_ref): note
     @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
     @header("X-Api-Key", .api_key)
     @errors(not_found)
 
-  op store(note): note
+  op store(note: note): note
     @errors(not_found)
 }
 ext impl client.store raw { go: "ext/go/n.go#Store" }

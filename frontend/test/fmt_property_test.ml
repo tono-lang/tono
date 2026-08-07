@@ -331,12 +331,13 @@ let gen_variant =
 let gen_opt_ty = G.oneof [ G.return None; G.map Option.some gen_ty ]
 
 (* An op in an entry body takes neither "pub" nor traits above it: the grammar
-   gives it only the signature and its trailing traits. *)
-let gen_opt_pname = G.oneof [ G.return None; G.map Option.some gen_lname ]
+   gives it only the signature and its trailing traits. A present input always
+   carries a name; only a parameterless op has no name. *)
+let gen_pname = gen_lname
 
 let gen_entry_op =
   let+ name = gen_lname
-  and+ pname = gen_opt_pname
+  and+ pname = gen_pname
   and+ input = gen_opt_ty
   and+ output = gen_opt_ty
   and+ traits = gen_traits in
@@ -346,7 +347,8 @@ let gen_entry_op =
     pub = false;
     dtraits = traits;
     dkind =
-      Ast.DOp { pname = (if input = None then None else pname); input; output };
+      Ast.DOp
+        { pname = (if input = None then None else Some pname); input; output };
   }
 
 let gen_ext_kind =
@@ -371,10 +373,11 @@ let gen_kind =
       (let+ params = gen_params
        and+ variants = G.list_size (G.int_range 0 3) gen_variant in
        Ast.DUnion { params; variants });
-      (let+ pname = gen_opt_pname
+      (let+ pname = gen_pname
        and+ input = gen_opt_ty
        and+ output = gen_opt_ty in
-       Ast.DOp { pname = (if input = None then None else pname); input; output });
+       Ast.DOp
+         { pname = (if input = None then None else Some pname); input; output });
       (let+ ekind = gen_ext_kind
        and+ raw = G.bool
        and+ esig =

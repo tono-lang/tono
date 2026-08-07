@@ -99,7 +99,7 @@ struct page[t] { items: []t, next: string? }
 
 @status(404) struct not_found { message: string }
 
-op create_charge(charge): charge @errors(not_found) @async
+op create_charge(charge: charge): charge @errors(not_found) @async
 |}
   in
   let m, ds = Tono_frontend.compile ~module_name:"payments" src in
@@ -160,7 +160,7 @@ struct note {
 pub struct client {
   ep: string @env("EP")
 
-  op save_note(note): note
+  op save_note(note: note): note
 }
 |}
   in
