@@ -429,9 +429,12 @@ pub trait Emitter {
         err: &str,
     ) -> String;
 
-    // --- the whole-construct bodies that already differ per target (a
-    //     guaranteed chain diverges algorithmically: Go emits an if/else-if
-    //     cascade, TypeScript a set-flag sequence, so neither is shared). Each
+    // --- the whole-construct bodies that already differ per target. A
+    //     guaranteed chain shares its algorithm across every target (a
+    //     set-flag sequence: each source only assigns when no earlier one
+    //     already has, `@default` closes it under the same guard), but each
+    //     leaf statement's own spelling (the `let`/`if`, the flag's casing)
+    //     stays per-target, so the method itself is not shared. Each
     //     returns already-spelled statements the builders wrap into the tree. ---
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String;
     /// The `@format` assignment itself (`dest = cast(part + part + ..)` with the

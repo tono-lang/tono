@@ -61,10 +61,12 @@ fn the_construction_surface_is_new_options_settings_and_the_mock_interface() {
 fn the_resolution_follows_the_declared_chains() {
     let module = fixture_module();
     let serde = entry_text(&module);
-    // @arg lands positionally; @with falls back to @default.
+    // @arg lands positionally; @with falls back to @default, spelled with a
+    // set-flag (matching every other target's guaranteed-chain spelling).
     assert!(serde.contains("s.APIKey = apiKey"));
-    assert!(serde.contains("if w.clientName != nil {"));
-    assert!(serde.contains("s.ClientName = \"demo\""));
+    assert!(serde.contains("clientNameSet := false"));
+    assert!(serde.contains("if !clientNameSet && w.clientName != nil {"));
+    assert!(serde.contains("if !clientNameSet {\n\t\ts.ClientName = \"demo\""));
     // @format with @str transforms.
     assert!(serde.contains("s.ClientKey = casing.StrUpperSnake(strings.TrimSpace(s.ClientName))"));
     assert!(serde.contains("s.EndpointEnv = \"ENDPOINT_\" + s.ClientKey + \"_V2\""));

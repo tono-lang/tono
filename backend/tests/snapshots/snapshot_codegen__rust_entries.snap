@@ -497,16 +497,26 @@ impl ClientBuilder {
             headers: std::collections::HashMap::new(),
         };
             s.api_key = self.api_key;
-            if let Some(v) = self.client_name.clone() {
-                s.client_name = v;
-            } else {
+            let mut client_name_set = false;
+            if !client_name_set {
+                if let Some(v) = self.client_name.clone() {
+                    s.client_name = v;
+                    client_name_set = true;
+                }
+            }
+            if !client_name_set {
                 s.client_name = "demo".to_string();
             }
             s.client_key = str_upper_snake((format!("{}", s.client_name)).trim().to_string());
             s.endpoint_env = format!("ENDPOINT_{}_V2", s.client_key);
-            if let Some(v) = read_env("ENDPOINT_VERSION") {
-                s.endpoint_version = v;
-            } else {
+            let mut endpoint_version_set = false;
+            if !endpoint_version_set {
+                if let Some(v) = read_env("ENDPOINT_VERSION") {
+                    s.endpoint_version = v;
+                    endpoint_version_set = true;
+                }
+            }
+            if !endpoint_version_set {
                 s.endpoint_version = "v2".to_string();
             }
             let mut endpoint_v1_err: Option<ConfigError> = None;
@@ -543,22 +553,37 @@ impl ClientBuilder {
                 }
             }
             }
-            if let Some(v) = self.timeout.clone() {
-                s.timeout = v;
-            } else {
+            let mut timeout_set = false;
+            if !timeout_set {
+                if let Some(v) = self.timeout.clone() {
+                    s.timeout = v;
+                    timeout_set = true;
+                }
+            }
+            if !timeout_set {
                 s.timeout = Duration("10s".to_string());
             }
-            if let Some(v) = self.max_retries {
-                s.max_retries = v;
-            } else {
+            let mut max_retries_set = false;
+            if !max_retries_set {
+                if let Some(v) = self.max_retries {
+                    s.max_retries = v;
+                    max_retries_set = true;
+                }
+            }
+            if !max_retries_set {
                 s.max_retries = 3;
             }
             {
                 let mut composed = Conf { api_key: String::new(), region: String::new(), };
                 composed.api_key = (s.api_key).clone();
-                if let Some(v) = read_env("REGION") {
-                    composed.region = v;
-                } else {
+                let mut region_set = false;
+                if !region_set {
+                    if let Some(v) = read_env("REGION") {
+                        composed.region = v;
+                        region_set = true;
+                    }
+                }
+                if !region_set {
                     composed.region = "us".to_string();
                 }
                 s.settings = composed;

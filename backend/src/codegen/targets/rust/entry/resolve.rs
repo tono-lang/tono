@@ -428,39 +428,39 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    /// A guaranteed chain as an if/else-if cascade ending in `@default`,
-    /// relative to column zero.
+    /// A guaranteed chain, spelled with a set-flag so every env variable is
+    /// read exactly once and `@default` closes the chain, matching every
+    /// other target's spelling (see [`Emitter::chain_guaranteed`]). Relative
+    /// to column zero.
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String {
-        let mut out = String::new();
-        let mut first = true;
+        // A chain that is just the default needs no flag.
+        if let [Source::Default(v)] = field.sources.as_slice() {
+            return format!("{dest} = {};", literal(&field.target, v, self.module));
+        }
+        let flag = format!("{}_set", field.name);
+        let mut out = format!("let mut {flag} = false;");
         for source in &field.sources {
             match source {
                 Source::With => {
                     let acc = self.arg_take(field);
                     out.push_str(&format!(
-                        "{}if let Some(v) = {acc} {{\n    {dest} = v;\n}}",
-                        if first { "" } else { " else " },
+                        "\nif !{flag} {{\n    if let Some(v) = {acc} {{\n        {dest} = v;\n        {flag} = true;\n    }}\n}}",
                     ));
-                    first = false;
                 }
                 Source::Env(name) => {
                     let lookup = self.env_lookup(name);
                     let label = self.env_label(name);
                     let parse = self.env_parse(field, dest, &label);
                     out.push_str(&format!(
-                        "{}if let Some(v) = {lookup} {{\n{parse}\n}}",
-                        if first { "" } else { " else " },
-                        parse = indent(&parse, 1),
+                        "\nif !{flag} {{\n    if let Some(v) = {lookup} {{\n{parse}\n        {flag} = true;\n    }}\n}}",
+                        parse = indent(&parse, 2),
                     ));
-                    first = false;
                 }
                 Source::Default(v) => {
-                    let lit = literal(&field.target, v, self.module);
-                    if first {
-                        out.push_str(&format!("{dest} = {lit};"));
-                    } else {
-                        out.push_str(&format!(" else {{\n    {dest} = {lit};\n}}"));
-                    }
+                    out.push_str(&format!(
+                        "\nif !{flag} {{\n    {dest} = {};\n}}",
+                        literal(&field.target, v, self.module),
+                    ));
                     return out;
                 }
                 Source::Arg => {}

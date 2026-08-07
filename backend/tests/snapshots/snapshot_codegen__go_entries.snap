@@ -496,16 +496,24 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	}
 	s := Settings{Headers: map[string]string{}}
 	s.APIKey = apiKey
-	if w.clientName != nil {
+	clientNameSet := false
+	if !clientNameSet && w.clientName != nil {
 		s.ClientName = *w.clientName
-	} else {
+		clientNameSet = true
+	}
+	if !clientNameSet {
 		s.ClientName = "demo"
 	}
 	s.ClientKey = casing.StrUpperSnake(strings.TrimSpace(s.ClientName))
 	s.EndpointEnv = "ENDPOINT_" + s.ClientKey + "_V2"
-	if v, ok := os.LookupEnv("ENDPOINT_VERSION"); ok && v != "" {
-		s.EndpointVersion = v
-	} else {
+	endpointVersionSet := false
+	if !endpointVersionSet {
+		if v, ok := os.LookupEnv("ENDPOINT_VERSION"); ok && v != "" {
+			s.EndpointVersion = v
+			endpointVersionSet = true
+		}
+	}
+	if !endpointVersionSet {
 		s.EndpointVersion = "v2"
 	}
 	var endpointV1Err error
@@ -539,22 +547,33 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 			s.Endpoint = s.EndpointV2
 		}
 	}
-	if w.timeout != nil {
+	timeoutSet := false
+	if !timeoutSet && w.timeout != nil {
 		s.Timeout = *w.timeout
-	} else {
+		timeoutSet = true
+	}
+	if !timeoutSet {
 		s.Timeout = support.Duration("10s")
 	}
-	if w.maxRetries != nil {
+	maxRetriesSet := false
+	if !maxRetriesSet && w.maxRetries != nil {
 		s.MaxRetries = *w.maxRetries
-	} else {
+		maxRetriesSet = true
+	}
+	if !maxRetriesSet {
 		s.MaxRetries = int32(3)
 	}
 	{
 		var composed conf
 		composed.APIKey = s.APIKey
-		if v, ok := os.LookupEnv("REGION"); ok && v != "" {
-			composed.Region = v
-		} else {
+		regionSet := false
+		if !regionSet {
+			if v, ok := os.LookupEnv("REGION"); ok && v != "" {
+				composed.Region = v
+				regionSet = true
+			}
+		}
+		if !regionSet {
 			composed.Region = "us"
 		}
 		s.Settings = composed

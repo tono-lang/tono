@@ -293,39 +293,39 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    /// A guaranteed chain as an if/else cascade ending in `@default`, relative
+    /// A guaranteed chain, spelled with a set-flag so every env variable is
+    /// read exactly once and `@default` closes the chain, matching every
+    /// other target's spelling (see [`Emitter::chain_guaranteed`]). Relative
     /// to column zero.
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String {
-        let mut out = String::new();
-        let mut first = true;
+        // A chain that is just the default needs no flag.
+        if let [Source::Default(v)] = field.sources.as_slice() {
+            return format!("{dest} = {}", literal(&field.target, v));
+        }
+        let flag = format!("{}Set", camel(&field.name));
+        let mut out = format!("{flag} := false");
         for source in &field.sources {
             match source {
                 Source::With => {
                     out.push_str(&format!(
-                        "{}if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n}}",
-                        if first { "" } else { " else " },
+                        "\nif !{flag} && w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{flag} = true\n}}",
                         carrier = camel(&field.name),
                     ));
-                    first = false;
                 }
                 Source::Env(name) => {
                     let lookup = self.env_lookup(name);
                     let label = self.env_label(name);
                     let parse = self.env_parse(field, dest, &label);
                     out.push_str(&format!(
-                        "{}if v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n}}",
-                        if first { "" } else { " else " },
-                        parse = plan::nest("\t", &parse, 1),
+                        "\nif !{flag} {{\n\tif v, ok := {lookup}; ok && v != \"\" {{\n{parse}\n\t\t{flag} = true\n\t}}\n}}",
+                        parse = plan::nest("\t", &parse, 2),
                     ));
-                    first = false;
                 }
                 Source::Default(v) => {
-                    let lit = literal(&field.target, v);
-                    if first {
-                        out.push_str(&format!("{dest} = {lit}"));
-                    } else {
-                        out.push_str(&format!(" else {{\n\t{dest} = {lit}\n}}"));
-                    }
+                    out.push_str(&format!(
+                        "\nif !{flag} {{\n\t{dest} = {}\n}}",
+                        literal(&field.target, v),
+                    ));
                     return out;
                 }
                 Source::Arg => {}
