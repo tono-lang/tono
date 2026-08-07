@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 10, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 11, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **10**.
+The current version is **11**.
 
 ## Modules
 
@@ -249,7 +249,10 @@ compatibility).
 - `success` is the list of status codes the operation succeeds on. Unlike the
   legacy blob's `success`, there is no type reference alongside the status:
   the output type is always the operation's own declared `output`, and every
-  runtime already discarded the blob's ref on decode.
+  runtime already discarded the blob's ref on decode. Empty (v11+) means the
+  operation left `code:` unset: every emitter falls back to the 2xx-range
+  convention. A non-empty list (from `code: <int>` or `code: [<int>, ...]`)
+  means an exact match against exactly those statuses, even ones inside 2xx.
 - `endpoint`, `timeout`, and `retry` are entry-scoped: present only on an
   operation nested in an entry body, `null`/absent for a loose operation.
   Each is the plain entry-field path the `@http(endpoint:)`/`@timeout`/

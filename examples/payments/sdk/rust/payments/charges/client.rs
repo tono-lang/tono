@@ -188,7 +188,7 @@ impl Client {
                         return Err(TonoError::Transport(TransportError { cause }));
                     }
                 };
-            if outcome.status >= 200 && outcome.status < 300 {
+            if outcome.status == 201 {
                 return decode_charge(&outcome.body);
             }
             let err = decode_create_charge_error(outcome.status, &outcome.body);

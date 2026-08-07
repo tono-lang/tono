@@ -29,23 +29,16 @@ fn stub_field_expr(path: &[String]) -> String {
     format!("this.settings.{}", path.join("."))
 }
 
+// The range-vs-exact-match logic itself is proven once, target-agnostically,
+// by `success_test_expr`'s own tests in `codegen::entries::wire`; this only
+// pins the TypeScript field/operator wiring (`response.status`, `===`).
 #[test]
-fn success_expr_defaults_to_the_2xx_range_alone() {
-    assert_eq!(
-        success_expr(&wire()),
-        "response.status >= 200 && response.status < 300"
-    );
-}
-
-#[test]
-fn success_expr_ors_in_only_the_out_of_range_declared_codes() {
+fn success_expr_spells_the_typescript_field_and_operator() {
     let mut w = wire();
-    w.success = vec![200, 404, 202];
-    // 200 and 202 are already covered by the range check; only 404 needs its
-    // own arm, and in declaration order.
+    w.success = vec![200, 404];
     assert_eq!(
         success_expr(&w),
-        "response.status >= 200 && response.status < 300 || response.status === 404"
+        "response.status === 200 || response.status === 404"
     );
 }
 

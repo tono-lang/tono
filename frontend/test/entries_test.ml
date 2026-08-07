@@ -215,8 +215,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_10 () =
-  Alcotest.(check int) "wire version" 10 Ir_json.current_ir_version
+let version_is_11 () =
+  Alcotest.(check int) "wire version" 11 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -361,7 +361,8 @@ let wire_field_covers_query_payload_and_response_bindings () =
             "code is the response status code" true
             (response_binding "code" = Some Ir.Wire_response_status_code);
           Alcotest.(check bool)
-            "single success code" true (w.wb_success = [ 200 ]);
+            "no declared success code, default convention applies" true
+            (w.wb_success = []);
           Alcotest.(check bool)
             "endpoint ref" true
             (w.wb_endpoint = Some [ "endpoint" ]);
@@ -543,7 +544,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 10" `Quick version_is_10;
+          Alcotest.test_case "version 11" `Quick version_is_11;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",

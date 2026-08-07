@@ -148,6 +148,7 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 		Headers: headers,
 		Body:    body,
 		Timeout: c.timeoutDuration,
+		Success: []int{201},
 		Timing:  c.timing,
 		Retry: transport.Retry{Max: int(c.settings.MaxRetries), When: func(status int, body string) bool {
 			if re, ok := DecodeCreateChargeError(status, []byte(body)).(interface{ Retryable() bool }); ok {
@@ -159,7 +160,7 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	if outcome.Cause != nil {
 		return zero, &TransportError{Cause: outcome.Cause}
 	}
-	if outcome.Status >= 200 && outcome.Status < 300 {
+	if outcome.Status == 201 {
 		out, path, ok := DecodeCharge([]byte(outcome.Body))
 		if !ok {
 			return zero, &DecodeError{Path: path, Expected: "Charge", Raw: outcome.Body}

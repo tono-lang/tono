@@ -37,8 +37,11 @@
    v10 gave @errorCode a mandatory first argument: the dotted path to probe in
    the error body, ahead of the discriminator value. The trait's IR value is
    still a plain array of trait args, so the shape is unchanged; only its
-   arity is. *)
-let current_ir_version = 10
+   arity is.
+   v11 changed the meaning of the wire binding's "success": empty now means
+   no @http(code:) was declared (the 2xx-range convention applies), where
+   every prior version always populated it with at least the default 200. *)
+let current_ir_version = 11
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

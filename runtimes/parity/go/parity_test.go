@@ -148,6 +148,8 @@ func callOp(t *testing.T, c *Client, op string) (Thing, error) {
 		return c.RetryingWithTimeout(context.Background(), Thing{})
 	case "timeout_only":
 		return c.TimeoutOnly(context.Background(), Thing{})
+	case "strict_success":
+		return c.StrictSuccess(context.Background(), Thing{})
 	default:
 		t.Fatalf("unknown parity op %q", op)
 		return Thing{}, nil

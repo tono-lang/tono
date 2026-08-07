@@ -25,6 +25,7 @@ let erase_ref (r : Ast.ref_path) = { r with Ast.ref_span = dspan }
 let rec erase_arg = function
   | Ast.ARef r -> Ast.ARef (erase_ref r)
   | Ast.AKv (k, v) -> Ast.AKv (k, erase_arg v)
+  | Ast.AList xs -> Ast.AList (List.map erase_arg xs)
   | (Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _) as a -> a
 
 let erase_trait (t : Ast.trait) =
@@ -221,6 +222,9 @@ let gen_arg =
       gen_scalar;
       (let+ k = gen_lname and+ v = gen_scalar in
        Ast.AKv (k, v));
+      (let+ k = gen_lname
+       and+ ns = G.list_size (G.int_range 1 3) (G.int_range 0 999) in
+       Ast.AKv (k, Ast.AList (List.map (fun n -> Ast.AInt n) ns)));
     ]
 
 let gen_trait =

@@ -549,7 +549,7 @@ export class Client {
         throw new TransportError(cause);
       }
       const outcome = response;
-      if (response.status >= 200 && response.status < 300) {
+      if (response.status === 200) {
         try {
           return parseNote(outcome.body);
         } catch (path) {

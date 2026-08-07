@@ -122,3 +122,9 @@ let test_binding_duplicate = "TC0066"
    @errorCode from different paths. Legal (each guard probes its own
    location), but unusual enough to flag. *)
 let error_code_paths_diverge = "TC0067"
+
+(* @http(code:) is an int or a non-empty list of ints; anything else (an empty
+   list, a non-int element, a non-int scalar) would otherwise fall silently
+   into the "no code declared" default instead of the exact match the author
+   wrote. *)
+let http_code_invalid = "TC0068"

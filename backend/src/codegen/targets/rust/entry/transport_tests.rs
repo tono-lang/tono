@@ -77,21 +77,16 @@ fn with_ctx<R>(f: impl FnOnce(&FieldCtx<'_>) -> R) -> R {
     f(&ctx)
 }
 
+// The range-vs-exact-match logic itself is proven once, target-agnostically,
+// by `success_test_expr`'s own tests in `codegen::entries::wire`; this only
+// pins the Rust field/operator wiring (`outcome.status`, `==`).
 #[test]
-fn success_expr_defaults_to_the_2xx_range_alone() {
-    assert_eq!(
-        success_expr(&wire()),
-        "outcome.status >= 200 && outcome.status < 300"
-    );
-}
-
-#[test]
-fn success_expr_ors_in_only_the_out_of_range_declared_codes() {
+fn success_expr_spells_the_rust_field_and_operator() {
     let mut w = wire();
-    w.success = vec![200, 404, 202];
+    w.success = vec![200, 404];
     assert_eq!(
         success_expr(&w),
-        "outcome.status >= 200 && outcome.status < 300 || outcome.status == 404"
+        "outcome.status == 200 || outcome.status == 404"
     );
 }
 
@@ -235,7 +230,7 @@ fn per_call_header_lines_skip_an_absent_or_null_member_at_runtime() {
 }
 
 #[test]
-fn response_fold_lines_fold_only_on_the_success_path_with_declared_codes() {
+fn response_fold_lines_fold_only_on_the_exact_declared_success_path() {
     let mut w = wire();
     w.success = vec![200, 404];
     w.response_bindings = [
@@ -250,11 +245,9 @@ fn response_fold_lines_fold_only_on_the_success_path_with_declared_codes() {
     .into_iter()
     .collect();
     let lines = response_fold_lines(&w);
-    // The fold's own success test matches the classification below it,
-    // including a declared non-2xx code, spelled against `response`.
-    assert!(lines.contains(
-        "if response.status >= 200 && response.status < 300 || response.status == 404 {"
-    ));
+    // The fold's own success test matches the classification below it: an
+    // exact match against the declared codes, spelled against `response`.
+    assert!(lines.contains("if response.status == 200 || response.status == 404 {"));
     assert!(lines.contains(
         "object.insert(\"code\".to_string(), serde_json::Value::from(response.status));"
     ));

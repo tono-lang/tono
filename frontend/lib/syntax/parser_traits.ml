@@ -31,8 +31,9 @@ let parse_ref_path st : Ast.ref_path =
   let segs, last = more [ first ] fspan in
   { Ast.segs; ref_span = Span.merge d0.span last }
 
-(* A scalar trait-argument value (the part after "key:"). *)
-let parse_trait_value st : Ast.trait_arg =
+(* A trait-argument value (the part after "key:"): a scalar, or a
+   "[" v ("," v)* "]" list literal, e.g. @http(code: [200, 207]). *)
+let rec parse_trait_value st : Ast.trait_arg =
   let t = P.peek st in
   match t.kind with
   | Token.Str s ->
@@ -48,9 +49,30 @@ let parse_trait_value st : Ast.trait_arg =
       ignore (P.advance st);
       Ast.AName n
   | Token.Dot -> Ast.ARef (parse_ref_path st)
+  | Token.LBracket -> parse_trait_list_value st
   | _ ->
       P.error st t.span "expected a value after ':'";
       Ast.AName ""
+
+and parse_trait_list_value st : Ast.trait_arg =
+  ignore (P.advance st);
+  (* '[' *)
+  match (P.peek st).kind with
+  | Token.RBracket ->
+      ignore (P.advance st);
+      Ast.AList []
+  | _ ->
+      let first = parse_trait_value st in
+      let rec more acc =
+        match (P.peek st).kind with
+        | Token.Comma ->
+            ignore (P.advance st);
+            more (parse_trait_value st :: acc)
+        | _ -> List.rev acc
+      in
+      let values = more [ first ] in
+      ignore (P.expect st Token.RBracket "']' to close a list value");
+      Ast.AList values
 
 let parse_trait_arg st : Ast.trait_arg =
   let t = P.peek st in

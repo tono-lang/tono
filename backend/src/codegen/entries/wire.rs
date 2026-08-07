@@ -24,15 +24,22 @@ pub fn has_query(wire: &WireBinding) -> bool {
         .any(|p| matches!(p, WirePart::Query { .. }))
 }
 
-/// The declared success statuses outside the 2xx range, in declaration
-/// order: any 2xx succeeds even when not literally declared (the rule every
-/// target shares), so only these need their own arm in an emitted success
-/// test.
-pub fn extra_success_codes(wire: &WireBinding) -> impl Iterator<Item = i64> + '_ {
-    wire.success
-        .iter()
-        .copied()
-        .filter(|code| !(200..300).contains(code))
+/// The success test text, common to every target: the 2xx-range convention
+/// when the operation left `code:` unset (`wire.success` empty), otherwise an
+/// exact match against exactly the declared statuses, joined by `||`. `field`
+/// is the target's own status-code expression (e.g. `outcome.status`,
+/// `outcome.Status`, `response.status`) and `eq` its equality operator (`==`
+/// or `===`); this is the only thing that varies target to target.
+pub fn success_test_expr(wire: &WireBinding, field: &str, eq: &str) -> String {
+    if wire.success.is_empty() {
+        format!("{field} >= 200 && {field} < 300")
+    } else {
+        wire.success
+            .iter()
+            .map(|code| format!("{field} {eq} {code}"))
+            .collect::<Vec<_>>()
+            .join(" || ")
+    }
 }
 
 #[cfg(test)]
@@ -77,9 +84,40 @@ mod tests {
     }
 
     #[test]
-    fn extra_success_codes_keep_only_the_out_of_range_declarations_in_order() {
+    fn success_test_expr_defaults_to_the_2xx_range_alone() {
+        assert_eq!(
+            success_test_expr(&wire(), "outcome.status", "=="),
+            "outcome.status >= 200 && outcome.status < 300"
+        );
+    }
+
+    #[test]
+    fn success_test_expr_is_an_exact_match_against_declared_codes_only() {
         let mut w = wire();
-        w.success = vec![200, 404, 202, 302];
-        assert_eq!(extra_success_codes(&w).collect::<Vec<_>>(), vec![404, 302]);
+        w.success = vec![200, 404, 202];
+        assert_eq!(
+            success_test_expr(&w, "outcome.status", "=="),
+            "outcome.status == 200 || outcome.status == 404 || outcome.status == 202"
+        );
+    }
+
+    #[test]
+    fn success_test_expr_is_exact_for_a_single_declared_code_inside_2xx() {
+        let mut w = wire();
+        w.success = vec![201];
+        assert_eq!(
+            success_test_expr(&w, "outcome.status", "=="),
+            "outcome.status == 201"
+        );
+    }
+
+    #[test]
+    fn success_test_expr_spells_the_field_and_operator_verbatim() {
+        let mut w = wire();
+        w.success = vec![207];
+        assert_eq!(
+            success_test_expr(&w, "response.status", "==="),
+            "response.status === 207"
+        );
     }
 }

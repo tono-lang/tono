@@ -40,7 +40,10 @@ pub use crate::ir_tests_model::*;
 /// in the error body, ahead of the discriminator value. The trait's IR value
 /// is still a plain array of trait args, so the shape is unchanged; only its
 /// arity is.
-pub const TONO_IR_VERSION: u32 = 10;
+/// v11 changed the meaning of `WireBinding::success`: empty now means no
+/// `code:` was declared (the 2xx-range convention applies), where every
+/// prior version always populated it with at least the default `[200]`.
+pub const TONO_IR_VERSION: u32 = 11;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -404,6 +407,9 @@ pub struct WireBinding {
     pub bindings: BTreeMap<String, WirePart>,
     #[serde(default)]
     pub response_bindings: BTreeMap<String, WireResponsePart>,
+    /// The declared success statuses. Empty when the operation left `code:`
+    /// unset: the 2xx-range convention applies. Non-empty means an exact
+    /// match against these statuses only, whether or not they fall in 2xx.
     #[serde(default)]
     pub success: Vec<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

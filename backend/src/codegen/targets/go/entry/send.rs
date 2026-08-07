@@ -150,9 +150,10 @@ fn request_decl(u: &Usage) -> Decl {
             "\t// Retry is the operation's declared retry policy; the zero value never\n\
              \t// retries.\n\
              \tRetry Retry\n\
-             \t// Success lists the operation's declared success statuses outside the\n\
-             \t// 2xx range (any 2xx always counts), so the retry loop never retries a\n\
-             \t// response the operation treats as a success.\n\
+             \t// Success lists the operation's declared success statuses; empty means\n\
+             \t// no code was declared, so any 2xx counts instead. Either way, the\n\
+             \t// retry loop never retries a response the operation treats as a\n\
+             \t// success.\n\
              \tSuccess []int\n\
              \t// Timing is the clock behind the retry backoff; the zero value uses the\n\
              \t// real clock and jitter.\n\
@@ -218,11 +219,11 @@ fn retry_decls() -> Vec<Decl> {
         ),
         (
             "isSuccess",
-            "// isSuccess: any 2xx is a success even when its exact code was not the one\n\
-             // declared (a server may answer 200 where 201 was declared); a declared\n\
-             // success code outside the 2xx range still counts.\n\
+            "// isSuccess: no declared statuses means any 2xx is a success; otherwise\n\
+             // only an exact match against the declared statuses counts, even ones\n\
+             // inside the 2xx range.\n\
              func isSuccess(status int, declared []int) bool {\n\
-             \tif status >= 200 && status < 300 {\n\t\treturn true\n\t}\n\
+             \tif len(declared) == 0 {\n\t\treturn status >= 200 && status < 300\n\t}\n\
              \tfor _, s := range declared {\n\t\tif s == status {\n\t\t\treturn true\n\t\t}\n\t}\n\
              \treturn false\n\
              }",

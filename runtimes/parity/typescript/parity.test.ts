@@ -23,7 +23,7 @@ import { APIError, Duration, HttpRequest, HttpResponse, HttpTransport, Thing, Tr
 import { timingSeam } from "./http";
 import vectorsJson from "./vectors.json";
 
-type ParityOp = "retrying" | "retrying_with_timeout" | "timeout_only";
+type ParityOp = "retrying" | "retrying_with_timeout" | "timeout_only" | "strict_success";
 
 interface ParityStep {
   kind: "response" | "transport_failure" | "hang";
@@ -99,6 +99,8 @@ function callOp(client: Client, op: ParityOp): Promise<Thing> {
       return client.retryingWithTimeout({});
     case "timeout_only":
       return client.timeoutOnly({});
+    case "strict_success":
+      return client.strictSuccess({});
   }
 }
 
