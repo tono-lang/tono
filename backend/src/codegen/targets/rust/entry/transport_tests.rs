@@ -259,9 +259,7 @@ fn response_fold_lines_fold_only_on_the_exact_declared_success_path() {
     let lines = response_fold_lines(&w);
     // The fold's own success test matches the classification below it: an
     // exact match against the declared codes, spelled against `response`.
-    assert!(
-        lines.contains("if response.status == 200 || response.status == 404 {")
-    );
+    assert!(lines.contains("if response.status == 200 || response.status == 404 {"));
     assert!(lines.contains(
         "object.insert(\"code\".to_string(), serde_json::Value::from(response.status));"
     ));
