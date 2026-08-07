@@ -10,7 +10,7 @@
 //! own text, gated on `wire.retry`/`wire.timeout`, so a single operation with
 //! neither carries no trace of either in its own generated method.
 
-use crate::codegen::entries::wire::{has_query, needs_record};
+use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{TemplatePart, WireBinding, WirePart, WireResponsePart, WireValue};
@@ -198,22 +198,13 @@ fn body_expr(wire: &WireBinding, input_expr: &str) -> Option<String> {
     Some(format!("JSON.stringify({{ {object} }})"))
 }
 
-/// `response.status >= 200 && response.status < 300` when the operation left
-/// `code:` unset (`wire.success` empty), otherwise an exact match against
-/// exactly the declared statuses, joined by `||`.
+/// The TypeScript spelling of the shared [`success_test_expr`] rule.
 /// The `record` alias decision is shared too ([`needs_record`]): when every
 /// bound member is a `Body` member, `body_expr`'s whole-body branch reads the
 /// encoded input directly, so the alias (and its `as unknown as
 /// Record<string, unknown>` cast) would be dead weight on the request.
 fn success_expr(wire: &WireBinding) -> String {
-    if wire.success.is_empty() {
-        return "response.status >= 200 && response.status < 300".to_string();
-    }
-    wire.success
-        .iter()
-        .map(|code| format!("response.status === {code}"))
-        .collect::<Vec<_>>()
-        .join(" || ")
+    success_test_expr(wire, "response.status", "===")
 }
 
 /// The `outcome.body` expression: `response.body` verbatim when nothing folds

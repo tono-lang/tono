@@ -13,7 +13,7 @@
 //! neither carries no trace of either in its own generated method.
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::entries::wire::{has_query, needs_record};
+use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
 use crate::codegen::entries::EntryModel;
 use crate::codegen::extensions::BoundExtension;
 use crate::codegen::symbol::Symbol;
@@ -302,18 +302,9 @@ fn encode_failure(cause: &str) -> String {
     )
 }
 
-/// `outcome.status >= 200 && outcome.status < 300` when the operation left
-/// `code:` unset (`wire.success` empty), otherwise an exact match against
-/// exactly the declared statuses, joined by `||`.
+/// The Rust spelling of the shared [`success_test_expr`] rule.
 fn success_expr(wire: &WireBinding) -> String {
-    if wire.success.is_empty() {
-        return "outcome.status >= 200 && outcome.status < 300".to_string();
-    }
-    wire.success
-        .iter()
-        .map(|code| format!("outcome.status == {code}"))
-        .collect::<Vec<_>>()
-        .join(" || ")
+    success_test_expr(wire, "outcome.status", "==")
 }
 
 /// The lines folding the response-bound members (a header value, the status
