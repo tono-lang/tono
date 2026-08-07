@@ -57,6 +57,7 @@ let list_charges : Ir.model =
         Ir.Operation
           {
             input = None;
+            input_name = None;
             output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
             errors = [];
             wire = None;
@@ -282,6 +283,7 @@ let service_api : Ir.model =
         Ir.Operation
           {
             input = Some (ref_ "payments#ListChargesRequest" []);
+            input_name = None;
             output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
             errors = [ ref_ "payments#NotFound" [] ];
             wire = None;
@@ -410,6 +412,7 @@ let entries_client : Ir.model =
         Ir.Operation
           {
             input = Some (ref_ "notes#note" []);
+            input_name = None;
             output = Some (ref_ "notes#note" []);
             errors = [ ref_ "notes#overloaded" [] ];
             wire = None;
@@ -575,6 +578,7 @@ let bespoke_impl : Ir.model =
         Ir.Operation
           {
             input = Some (ref_ input []);
+            input_name = None;
             output = Some (ref_ output []);
             errors = [ ref_ "notes#overloaded" [] ];
             wire = None;
@@ -712,6 +716,7 @@ let resolved_wire : Ir.model =
         Ir.Operation
           {
             input = Some (ref_ "payments#Charge" []);
+            input_name = None;
             output = Some (ref_ "payments#Charge" []);
             errors = [];
             wire =
@@ -719,12 +724,13 @@ let resolved_wire : Ir.model =
                 {
                   Ir.wb_method = "GET";
                   wb_uri =
-                    [
-                      Ir.Tpl_lit "/charges/";
-                      Ir.Tpl_input "id";
-                      Ir.Tpl_lit "/";
-                      Ir.Tpl_field [ "endpoint_suffix" ];
-                    ];
+                    Ir.Wire_template
+                      [
+                        Ir.Tpl_lit "/charges/";
+                        Ir.Tpl_input "id";
+                        Ir.Tpl_lit "/";
+                        Ir.Tpl_field [ "endpoint_suffix" ];
+                      ];
                   wb_bindings =
                     [
                       ("id", Ir.Wire_label);
@@ -742,7 +748,7 @@ let resolved_wire : Ir.model =
                      singleton: this fixture exercises the JSON shape space,
                      not a realistic resolver output. *)
                   wb_success = [ 200; 202 ];
-                  wb_endpoint = Some [ "endpoint" ];
+                  wb_endpoint = Some (Ir.Wire_field [ "endpoint" ]);
                   wb_request_headers =
                     [
                       ( [ Ir.Tpl_lit "X-Client" ],
@@ -751,6 +757,10 @@ let resolved_wire : Ir.model =
                       ( [ Ir.Tpl_lit "X-Combo" ],
                         Ir.Wire_template
                           [ Ir.Tpl_lit "v-"; Ir.Tpl_field [ "client_name" ] ] );
+                    ];
+                  wb_query =
+                    [
+                      ([ Ir.Tpl_lit "limit" ], Ir.Wire_field [ "default_limit" ]);
                     ];
                   wb_timeout = Some [ "timeout" ];
                   wb_retry = Some [ "settings"; "max_retries" ];

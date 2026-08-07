@@ -8,7 +8,7 @@ use crate::codegen::target::RenderRules;
 use crate::codegen::tree::Decl;
 use crate::ir::{
     Constraint, EnumBacking, EnumValue, Member, Module, Prim, Shape, ShapeKind, Trait, Tref,
-    WireBinding,
+    WireBinding, WireValue,
 };
 
 /// A minimal wire binding: just enough to mark an operation as wire-bound for
@@ -18,12 +18,13 @@ use crate::ir::{
 pub fn wire_binding(method: &str) -> Box<WireBinding> {
     Box::new(WireBinding {
         method: method.into(),
-        uri: vec![],
+        uri: WireValue::Template(vec![]),
         bindings: Default::default(),
         response_bindings: Default::default(),
         success: vec![],
         endpoint: None,
         request_headers: vec![],
+        query: vec![],
         timeout: None,
         retry: None,
     })
@@ -222,6 +223,7 @@ pub fn operation(id: &str, traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
     Shape {
         id: id.into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: Some(reference("m#charge_input")),
             output: Some(reference("m#charge")),
             errors: errors.into_iter().map(reference).collect(),

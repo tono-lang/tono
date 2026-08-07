@@ -215,8 +215,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_11 () =
-  Alcotest.(check int) "wire version" 11 Ir_json.current_ir_version
+let version_is_12 () =
+  Alcotest.(check int) "wire version" 12 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -245,7 +245,7 @@ let descriptor_carries_refs () =
       in
       Alcotest.(check bool)
         "endpoint ref" true
-        (wb.Ir.wb_endpoint = Some [ "endpoint" ]);
+        (wb.Ir.wb_endpoint = Some (Ir.Wire_field [ "endpoint" ]));
       Alcotest.(check bool)
         "timeout is a plain entry-field ref" true
         (wb.Ir.wb_timeout = Some [ "timeout" ]);
@@ -262,7 +262,8 @@ let descriptor_carries_refs () =
         | _ -> false);
       Alcotest.(check bool)
         "uri keeps both placeholder scopes as typed parts" true
-        (wb.Ir.wb_uri = [ Ir.Tpl_lit "/notes/"; Ir.Tpl_input "id" ])
+        (wb.Ir.wb_uri
+        = Ir.Wire_template [ Ir.Tpl_lit "/notes/"; Ir.Tpl_input "id" ])
   | _ -> Alcotest.fail "client is not an entry"
 
 let loose_descriptor_has_no_entry_fields () =
@@ -331,12 +332,15 @@ let wire_field_covers_query_payload_and_response_bindings () =
           Alcotest.(check string) "method" "POST" w.wb_method;
           Alcotest.(check (list string))
             "uri keeps the label placeholder" [ "/probe/"; "{id}" ]
-            (List.filter_map
-               (function
-                 | Ir.Tpl_lit s -> Some s
-                 | Ir.Tpl_input n -> Some (Printf.sprintf "{%s}" n)
-                 | Ir.Tpl_field _ -> None)
-               w.wb_uri);
+            (match w.wb_uri with
+            | Ir.Wire_template parts ->
+                List.filter_map
+                  (function
+                    | Ir.Tpl_lit s -> Some s
+                    | Ir.Tpl_input n -> Some (Printf.sprintf "{%s}" n)
+                    | Ir.Tpl_field _ | Ir.Tpl_param _ -> None)
+                  parts
+            | _ -> []);
           let binding name = List.assoc_opt name w.wb_bindings in
           Alcotest.(check bool)
             "id is a label" true
@@ -365,7 +369,7 @@ let wire_field_covers_query_payload_and_response_bindings () =
             (w.wb_success = []);
           Alcotest.(check bool)
             "endpoint ref" true
-            (w.wb_endpoint = Some [ "endpoint" ]);
+            (w.wb_endpoint = Some (Ir.Wire_field [ "endpoint" ]));
           Alcotest.(check bool) "no timeout ref" true (w.wb_timeout = None);
           Alcotest.(check bool) "no retry ref" true (w.wb_retry = None);
           Alcotest.(check bool)
@@ -544,7 +548,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 11" `Quick version_is_11;
+          Alcotest.test_case "version 12" `Quick version_is_12;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",

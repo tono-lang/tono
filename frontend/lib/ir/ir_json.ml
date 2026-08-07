@@ -40,8 +40,14 @@
    arity is.
    v11 changed the meaning of the wire binding's "success": empty now means
    no @http(code:) was declared (the 2xx-range convention applies), where
-   every prior version always populated it with at least the default 200. *)
-let current_ir_version = 11
+   every prior version always populated it with at least the default 200.
+   v12 named the op parameter ("input_name", absent for the legacy unnamed
+   form) and unified the request-value grammar: "uri"/"endpoint" became a
+   wire_value (literal, entry/param reference, or template) instead of a bare
+   template/path, template_part/wire_value gained a "param" variant for a
+   reference into the op's own parameter, and wire_binding gained "query"
+   (mirrors "request_headers") for the new op-level @query trait. *)
+let current_ir_version = 12
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -121,7 +127,7 @@ let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("kind", `String "service");
         ("operations", `List (List.map (fun s -> `String s) operations));
       ]
-  | Operation { input; output; errors; wire } -> (
+  | Operation { input; input_name; output; errors; wire } -> (
       let opt = function None -> `Null | Some t -> encode_tref t in
       [
         ("kind", `String "operation");
@@ -129,6 +135,9 @@ let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("output", opt output);
         ("errors", `List (List.map encode_tref errors));
       ]
+      @ (match input_name with
+        | None -> []
+        | Some n -> [ ("input_name", `String n) ])
       @
       match wire with
       | None -> []
@@ -259,6 +268,13 @@ let rec decode_shape_kind kvs =
       Ok (Ir.Service { operations })
   | "operation" ->
       let* input = decode_tref_opt (get "input") in
+      let* input_name =
+        match get "input_name" with
+        | None -> Ok None
+        | Some v ->
+            let* s = as_string v in
+            Ok (Some s)
+      in
       let* output = decode_tref_opt (get "output") in
       let* errors =
         match get "errors" with
@@ -268,7 +284,7 @@ let rec decode_shape_kind kvs =
             map_result decode_tref xs
       in
       let* wire = decode_wire_binding_opt (get "wire") in
-      Ok (Ir.Operation { input; output; errors; wire })
+      Ok (Ir.Operation { input; input_name; output; errors; wire })
   | "entry" ->
       let* fields = decode_fields (get "fields") in
       let* operations =

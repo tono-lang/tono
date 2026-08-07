@@ -384,8 +384,10 @@ let op_error_entry_rejected () =
   expect "entry as a declared error" [ "TC0015"; "TC0034" ]
     (entry "" ^ "op x(): r @errors(c)")
 
-let endpoint_literal_rejected () =
-  expect "literal endpoint" [ "TC0043" ]
+(* The unified request-value grammar accepts a literal endpoint (no
+   placeholders needed: the author wrote the whole thing). *)
+let endpoint_literal_accepted () =
+  expect "literal endpoint" []
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
      \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: \"https://x\")\n\
@@ -396,6 +398,21 @@ let endpoint_non_string_rejected () =
     ("pub struct c {\n\
      \  ep: i32 @env(\"EP\")\n\
      \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep)\n\
+      }\n" ^ wire)
+
+let op_param_shadows_entry_field_warns () =
+  expect "op param shadows entry field" [ "TC0048" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(ep: string): r @http(method: \"GET\", path: \"/\", endpoint: .ep)\n\
+      }\n" ^ wire)
+
+let op_param_distinct_name_no_warning () =
+  expect "op param with a distinct name" []
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(input: string): r @http(method: \"GET\", path: \"/\", endpoint: \
+      .ep)\n\
       }\n" ^ wire)
 
 let timeout_wrong_type_rejected () =
@@ -599,7 +616,14 @@ let resolver_tolerates_value_template () =
     {
       id = "m#c.o";
       kind =
-        Ir.Operation { input = None; output = None; errors = []; wire = None };
+        Ir.Operation
+          {
+            input = None;
+            input_name = None;
+            output = None;
+            errors = [];
+            wire = None;
+          };
       traits =
         [
           { Ir.trait_id = "http"; value = `Assoc [ ("method", `String "GET") ] };
@@ -707,9 +731,13 @@ let () =
         ] );
       ( "protocol-positions",
         [
-          Alcotest.test_case "literal endpoint" `Quick endpoint_literal_rejected;
+          Alcotest.test_case "literal endpoint" `Quick endpoint_literal_accepted;
           Alcotest.test_case "non-string endpoint" `Quick
             endpoint_non_string_rejected;
+          Alcotest.test_case "op param shadows entry field" `Quick
+            op_param_shadows_entry_field_warns;
+          Alcotest.test_case "op param with a distinct name" `Quick
+            op_param_distinct_name_no_warning;
           Alcotest.test_case "timeout wrong type" `Quick
             timeout_wrong_type_rejected;
           Alcotest.test_case "retry wrong type" `Quick retry_wrong_type_rejected;

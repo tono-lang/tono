@@ -10,7 +10,7 @@
 
 use insta::assert_snapshot;
 use tono_backend::codegen::{casing_for, generate_target, CodegenConfig, TargetKind};
-use tono_backend::ir::{Model, Module};
+use tono_backend::ir::{Model, Module, WireValue};
 
 mod common;
 use common::matrix_module;
@@ -145,10 +145,10 @@ fn entries_module() -> tono_backend::ir::Module {
                 if let tono_backend::ir::ShapeKind::Operation { wire, .. } = &mut op.kind {
                     *wire = Some(Box::new(tono_backend::ir::WireBinding {
                         method: "POST".into(),
-                        uri: vec![
+                        uri: WireValue::Template(vec![
                             tono_backend::ir::TemplatePart::Lit("/notes/".into()),
                             tono_backend::ir::TemplatePart::Input("id".into()),
-                        ],
+                        ]),
                         bindings: [
                             ("id".to_string(), tono_backend::ir::WirePart::Label),
                             ("body".to_string(), tono_backend::ir::WirePart::Body),
@@ -157,11 +157,12 @@ fn entries_module() -> tono_backend::ir::Module {
                         .collect(),
                         response_bindings: Default::default(),
                         success: vec![200],
-                        endpoint: Some(vec!["endpoint".into()]),
+                        endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
                         request_headers: vec![(
                             vec![tono_backend::ir::TemplatePart::Lit("X-Client-Name".into())],
                             tono_backend::ir::WireValue::Field(vec!["client_name".into()]),
                         )],
+                        query: vec![],
                         timeout: Some(vec!["timeout".into()]),
                         retry: Some(vec!["max_retries".into()]),
                     }));

@@ -3,18 +3,51 @@
 //! the binding alone, so the decision lives once here and each target
 //! spells only its own syntax over the answer.
 
-use crate::ir::{TemplatePart, WireBinding, WirePart};
+use crate::ir::{TemplatePart, WireBinding, WirePart, WireValue};
+
+// A param reference with no further segments reads the whole typed input
+// value directly (a new capability the named-parameter form adds); one with
+// a segment reads a member of the input struct, exactly like the legacy
+// `{name}` placeholder does (an op has exactly one parameter, so "member of
+// the parameter" and "member of the input" are the same decoded record).
+fn part_reads_record(part: &TemplatePart) -> bool {
+    match part {
+        TemplatePart::Input(_) => true,
+        TemplatePart::Param(segs) => !segs.is_empty(),
+        TemplatePart::Lit(_) | TemplatePart::Field(_) => false,
+    }
+}
+
+fn template_reads_record(parts: &[TemplatePart]) -> bool {
+    parts.iter().any(part_reads_record)
+}
+
+fn value_reads_record(value: &WireValue) -> bool {
+    match value {
+        WireValue::Param(segs) => !segs.is_empty(),
+        WireValue::Template(parts) => template_reads_record(parts),
+        WireValue::Lit(_) | WireValue::Field(_) => false,
+    }
+}
 
 /// Whether the operation reads any input member individually off a decoded
-/// record (a label, query, header, payload, or partial-body position); a
-/// whole-body operation serializes the typed/encoded input directly instead.
+/// record (a label, query, header, payload, or partial-body position, or an
+/// op-parameter member reference in the uri/endpoint/header/query
+/// positions); a whole-body operation serializes the typed/encoded input
+/// directly instead.
 pub fn needs_record(wire: &WireBinding) -> bool {
-    let uri_reads_record = wire
-        .uri
-        .iter()
-        .any(|part| matches!(part, TemplatePart::Input(_)));
+    let uri_reads_record = value_reads_record(&wire.uri);
+    let endpoint_reads_record = wire.endpoint.as_ref().is_some_and(value_reads_record);
+    let kv_reads_record = |kv: &[(Vec<TemplatePart>, WireValue)]| {
+        kv.iter()
+            .any(|(k, v)| template_reads_record(k) || value_reads_record(v))
+    };
     let any_non_body_binding = wire.bindings.values().any(|p| !matches!(p, WirePart::Body));
-    uri_reads_record || any_non_body_binding
+    uri_reads_record
+        || endpoint_reads_record
+        || kv_reads_record(&wire.request_headers)
+        || kv_reads_record(&wire.query)
+        || any_non_body_binding
 }
 
 /// Whether any input member is bound to the query string.
@@ -49,12 +82,13 @@ mod tests {
     fn wire() -> WireBinding {
         WireBinding {
             method: "GET".into(),
-            uri: vec![TemplatePart::Lit("/x".into())],
+            uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
             bindings: Default::default(),
             response_bindings: Default::default(),
             success: Vec::new(),
             endpoint: None,
             request_headers: Vec::new(),
+            query: Vec::new(),
             timeout: None,
             retry: None,
         }
@@ -73,7 +107,7 @@ mod tests {
     #[test]
     fn needs_record_is_true_for_a_uri_input_or_a_non_body_binding() {
         let mut w = wire();
-        w.uri = vec![TemplatePart::Input("id".into())];
+        w.uri = WireValue::Template(vec![TemplatePart::Input("id".into())]);
         assert!(needs_record(&w));
         let mut w = wire();
         w.bindings = [("tag".to_string(), WirePart::Query { name: "tag".into() })]

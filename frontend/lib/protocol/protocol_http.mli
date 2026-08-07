@@ -26,6 +26,8 @@ type response_part = Response_header of string | Response_status_code
 type value_expr =
   | Vlit of Ir.json
   | Vfield of string list
+  | Vparam of string list
+    (* segments into the op's declared parameter; [] is the whole value *)
   | Vtemplate of Ir.template_part list
 
 (* The language-agnostic wire form of one operation, en route to
@@ -35,7 +37,7 @@ type value_expr =
    operation may make. *)
 type resolution = {
   http_method : string;
-  uri : string; (* path template with {name} and {.field} placeholders *)
+  uri : value_expr; (* literal, entry/param reference, or template *)
   bindings : (string * part) list; (* input member -> request part *)
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list; (* status -> output type, if any *)
@@ -44,9 +46,11 @@ type resolution = {
      pair is the single owner of that classification, consumed by the
      runtime's retry loop through a predicate the generated call site builds.
      Duplicating it on the descriptor let the two drift apart. *)
-  endpoint : string list option; (* @http endpoint: entry-field path *)
+  endpoint : value_expr option; (* @http endpoint: literal, ref, or template *)
   request_headers : (Ir.template_part list * value_expr) list;
       (* @header(key, value): key template -> value *)
+  query : (Ir.template_part list * value_expr) list;
+      (* @query(key, value): key template -> value *)
   timeout : string list option;
       (* @timeout(.field): encodes as the runtime's value-source form
          {"ref": "<dotted field path>"} *)

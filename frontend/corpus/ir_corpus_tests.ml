@@ -102,6 +102,7 @@ let declared_tests : Ir.model =
         Ir.Operation
           {
             input = Some (ref_ "github#user_ref" []);
+            input_name = None;
             output = Some (ref_ "github#user" []);
             errors = [];
             wire = None;
@@ -125,6 +126,7 @@ let declared_tests : Ir.model =
         Ir.Operation
           {
             input = Some (ref_ "github#note" []);
+            input_name = None;
             output = Some (ref_ "github#note" []);
             errors = [ ref_ "github#overloaded" [] ];
             wire = None;

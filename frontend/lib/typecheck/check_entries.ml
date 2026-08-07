@@ -305,7 +305,7 @@ let rec boundary_ty ctx (t : Ast.ty) : Diagnostic.t list =
 
 let check_op_boundary ctx (op : Ast.decl) : Diagnostic.t list =
   match op.dkind with
-  | Ast.DOp { input; output } ->
+  | Ast.DOp { pname = _; input; output } ->
       let opt = function Some t -> boundary_ty ctx t | None -> [] in
       let error_diags =
         List.concat_map
@@ -614,6 +614,6 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
                 match v.vpayload with Some t -> boundary_ty ctx t | None -> [])
               variants
       | Ast.DEnum _ -> check_non_struct_sources d
-      | Ast.DOp _ -> check_op_boundary ctx d @ check_loose_op d
+      | Ast.DOp _ -> check_op_boundary ctx d @ check_loose_op ctx d
       | Ast.DExt _ | Ast.DTest _ -> [])
     decls

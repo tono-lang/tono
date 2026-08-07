@@ -6,16 +6,19 @@ type response_part = Response_header of string | Response_status_code
 type value_expr =
   | Vlit of Ir.json
   | Vfield of string list
+  | Vparam of string list
+    (* segments into the op's declared parameter; [] is the whole value *)
   | Vtemplate of Ir.template_part list
 
 type resolution = {
   http_method : string;
-  uri : string;
+  uri : value_expr;
   bindings : (string * part) list;
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list;
-  endpoint : string list option;
+  endpoint : value_expr option;
   request_headers : (Ir.template_part list * value_expr) list;
+  query : (Ir.template_part list * value_expr) list;
   timeout : string list option;
   retry : string list option;
 }
@@ -82,13 +85,40 @@ let has_placeholder (s : string) : bool =
   match template_of s with [] | [ Ir.Tpl_lit _ ] -> false | _ -> true
 
 (* A protocol trait value position: a structured field ref, a template-bearing
-   string, or a plain literal. *)
-let value_expr_of (j : Ir.json) : value_expr =
+   string, or a plain literal. [pname], when the op declares a named
+   parameter, distinguishes an op-parameter reference from an entry-field one:
+   the parser/typechecker don't know the difference (both are ".x" syntax),
+   so this is the one place that rewrites a [Vfield]/[Tpl_field] whose head
+   segment names the parameter into [Vparam]/[Tpl_param] of the remaining
+   segments (the whole parameter when there are none left). An op-param name
+   shadows a same-named entry field, ordinary lexical shadowing. *)
+let rewrite_param_path (pname : string option) (segs : string list) :
+    [ `Field of string list | `Param of string list ] =
+  match (pname, segs) with
+  | Some p, head :: rest when String.equal p head -> `Param rest
+  | _ -> `Field segs
+
+let rewrite_param_template (pname : string option)
+    (parts : Ir.template_part list) : Ir.template_part list =
+  List.map
+    (function
+      | Ir.Tpl_field segs -> (
+          match rewrite_param_path pname segs with
+          | `Field segs -> Ir.Tpl_field segs
+          | `Param segs -> Ir.Tpl_param segs)
+      | other -> other)
+    parts
+
+let value_expr_of ?(pname : string option) (j : Ir.json) : value_expr =
   match field_path j with
-  | Some p -> Vfield p
+  | Some p -> (
+      match rewrite_param_path pname p with
+      | `Field segs -> Vfield segs
+      | `Param segs -> Vparam segs)
   | None -> (
       match j with
-      | `String s when has_placeholder s -> Vtemplate (template_of s)
+      | `String s when has_placeholder s ->
+          Vtemplate (rewrite_param_template pname (template_of s))
       | other -> Vlit other)
 
 (* ── Binding assignment ────────────────────────────────────────────────── *)
@@ -132,12 +162,17 @@ let members_of (lookup : Ir.shape_id -> Ir.shape option) (t : Ir.tref option) :
 let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
     resolution option =
   match (op.kind, trait_by "http" op.traits) with
-  | Ir.Operation { input; output; _ }, Some http ->
+  | Ir.Operation { input; input_name = pname; output; _ }, Some http ->
       let str k default =
         Option.value ~default (Option.bind (obj_field k http.value) string_arg)
       in
+      let value ?default k =
+        match obj_field k http.value with
+        | Some j -> value_expr_of ?pname j
+        | None -> ( match default with Some v -> v | None -> Vlit `Null)
+      in
       let http_method = String.uppercase_ascii (str "method" "GET") in
-      let uri = str "path" "/" in
+      let uri = value "path" ~default:(Vlit (`String "/")) in
       let codes = Option.bind (obj_field "code" http.value) int_list_arg in
       let bindings =
         List.map
@@ -163,16 +198,22 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
          key/value pairs, and the @timeout/@retry field refs. The single
          positional argument of @timeout/@retry arrives as a one-element array
          (the frontend's uniform lowering). *)
-      let endpoint = Option.bind (obj_field "endpoint" http.value) field_path in
-      let request_headers =
+      let endpoint =
+        Option.map (value_expr_of ?pname) (obj_field "endpoint" http.value)
+      in
+      let kv_traits name =
         List.filter_map
           (fun (t : Ir.trait) ->
             match t.value with
-            | `List [ `String key; value ] ->
-                Some (template_of key, value_expr_of value)
+            | `List [ `String key; v ] ->
+                Some
+                  ( rewrite_param_template pname (template_of key),
+                    value_expr_of ?pname v )
             | _ -> None)
-          (traits_all "header" op.traits)
+          (traits_all name op.traits)
       in
+      let request_headers = kv_traits "header" in
+      let query = kv_traits "query" in
       let single_ref id =
         match trait_by id op.traits with
         | Some { value = `List [ v ]; _ } -> field_path v
@@ -189,6 +230,7 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
           success;
           endpoint;
           request_headers;
+          query;
           timeout;
           retry;
         }
@@ -210,6 +252,7 @@ let to_wire_response_part : response_part -> Ir.wire_response_part = function
 let to_wire_value : value_expr -> Ir.wire_value = function
   | Vlit j -> Ir.Wire_lit j
   | Vfield p -> Ir.Wire_field p
+  | Vparam p -> Ir.Wire_param p
   | Vtemplate t -> Ir.Wire_template t
 
 (* The typed IR value for [Ir.wire_binding]: the resolution minus the dead
@@ -222,14 +265,15 @@ let to_wire_value : value_expr -> Ir.wire_value = function
 let to_ir_binding (d : resolution) : Ir.wire_binding =
   {
     Ir.wb_method = d.http_method;
-    wb_uri = template_of d.uri;
+    wb_uri = to_wire_value d.uri;
     wb_bindings = List.map (fun (n, p) -> (n, to_wire_part p)) d.bindings;
     wb_response_bindings =
       List.map (fun (n, p) -> (n, to_wire_response_part p)) d.response_bindings;
     wb_success = List.map fst d.success;
-    wb_endpoint = d.endpoint;
+    wb_endpoint = Option.map to_wire_value d.endpoint;
     wb_request_headers =
       List.map (fun (k, v) -> (k, to_wire_value v)) d.request_headers;
+    wb_query = List.map (fun (k, v) -> (k, to_wire_value v)) d.query;
     wb_timeout = d.timeout;
     wb_retry = d.retry;
   }

@@ -152,7 +152,7 @@ impl Client {
         if let Err(e) = input.validate() {
             return Err(TonoError::Validation(e));
         }
-        let url = format!("{}/charges", self.settings.endpoint);
+        let url = format!("{}{}", self.settings.endpoint, "/charges".to_string());
         let mut headers: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         set_header(&mut headers, "X-API-Key", self.settings.api_key.clone());

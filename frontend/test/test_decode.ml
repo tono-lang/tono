@@ -245,12 +245,13 @@ let wire_binding_suite =
     ok "wire binding full" Ir_json.decode_wire_binding
       {|{
           "method": "POST",
-          "uri": [{"lit": "/charges/"}, {"input": "id"}],
+          "uri": {"template": [{"lit": "/charges/"}, {"input": "id"}]},
           "bindings": {"id": {"kind": "label"}, "q": {"kind": "query", "name": "q"}},
           "response_bindings": {"trace_id": {"kind": "header", "name": "X-Trace-Id"}},
           "success": [200, 202],
-          "endpoint": ["endpoint"],
+          "endpoint": {"field": ["endpoint"]},
           "request_headers": [[[{"lit": "X-Client"}], {"field": ["client_name"]}]],
+          "query": [[[{"lit": "limit"}], {"field": ["default_limit"]}]],
           "timeout": ["timeout"],
           "retry": ["settings", "max_retries"]
         }|};

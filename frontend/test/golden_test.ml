@@ -57,6 +57,7 @@ op origin(): point
               Ir.Operation
                 {
                   input = None;
+                  input_name = None;
                   output = Some (Ir.Ref ("geo#point", []));
                   errors = [];
                   wire = None;

@@ -46,7 +46,11 @@ fn js_str(s: &str) -> String {
 /// needs no template-literal wrapper, and a placeholder resolves either from
 /// the resolved client settings (`Field`, via `field_expr`) or the call's own
 /// record (`Input`).
-fn template_expr(parts: &[TemplatePart], field_expr: &dyn Fn(&[String]) -> String) -> String {
+fn template_expr(
+    parts: &[TemplatePart],
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> String {
     if let [TemplatePart::Lit(s)] = parts {
         return js_str(s);
     }
@@ -73,6 +77,25 @@ fn template_expr(parts: &[TemplatePart], field_expr: &dyn Fn(&[String]) -> Strin
                 out.push_str(&js_str(name));
                 out.push_str("])}");
             }
+            // [] is the whole typed parameter (read as `input_expr` directly,
+            // no record needed); one segment is a member of the input
+            // struct, exactly like the legacy `{name}` placeholder (an op
+            // has exactly one parameter, so "member of the parameter" and
+            // "member of the input" are the same decoded record). Deeper
+            // paths are not reachable: the typechecker only resolves an
+            // op-parameter reference one level deep.
+            TemplatePart::Param(segs) => {
+                out.push_str("${pathPart(");
+                match segs.first() {
+                    None => out.push_str(input_expr),
+                    Some(name) => {
+                        out.push_str("record[");
+                        out.push_str(&js_str(name));
+                        out.push(']');
+                    }
+                }
+                out.push_str(")}");
+            }
         }
     }
     out.push('`');
@@ -81,33 +104,58 @@ fn template_expr(parts: &[TemplatePart], field_expr: &dyn Fn(&[String]) -> Strin
 
 /// A `WireValue` position (a `request_headers` value) rendered the same way a
 /// template is, plus the two scalar forms.
-fn wire_value_expr(v: &WireValue, field_expr: &dyn Fn(&[String]) -> String) -> String {
+fn wire_value_expr(
+    v: &WireValue,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> String {
     match v {
         WireValue::Lit(json) => match json.as_str() {
             Some(s) => js_str(s),
             None => json.to_string(),
         },
         WireValue::Field(path) => format!("formatScalar({})", field_expr(path)),
-        WireValue::Template(parts) => template_expr(parts, field_expr),
+        WireValue::Param(segs) => match segs.first() {
+            None => format!("formatScalar({input_expr})"),
+            Some(name) => format!("formatScalar(record[{}])", js_str(name)),
+        },
+        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
     }
 }
 
-/// The base-URL expression: the typed read of the resolved endpoint field,
-/// concatenated with the URI template by the caller. The frontend rejects an
-/// entry `@http` op that does not name a string endpoint field, and
-/// `validate_entries` re-checks it at generation time (IR can arrive from a
-/// file without ever passing the frontend), so by emission time the binding
-/// always carries an endpoint and the read needs no runtime guard.
-fn endpoint_expr(wire: &WireBinding, field_expr: &dyn Fn(&[String]) -> String) -> String {
-    let path = wire
+/// The base-URL expression: the resolved endpoint value, concatenated with
+/// the URI value by the caller. The frontend rejects an entry `@http` op
+/// that does not name an endpoint, and `validate_entries` re-checks it at
+/// generation time (IR can arrive from a file without ever passing the
+/// frontend), so by emission time the binding always carries one and the
+/// read needs no runtime guard.
+fn endpoint_expr(
+    wire: &WireBinding,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> String {
+    let value = wire
         .endpoint
         .as_ref()
         .expect("validate_entries rejects an entry @http op with no endpoint");
-    field_expr(path)
+    // The common case (a resolved entry-field endpoint) keeps its original
+    // unwrapped spelling; the grammar's other forms (new with this task) go
+    // through the general renderer.
+    match value {
+        WireValue::Field(path) => field_expr(path),
+        other => wire_value_expr(other, field_expr, input_expr),
+    }
 }
 
-fn uri_expr(wire: &WireBinding, field_expr: &dyn Fn(&[String]) -> String) -> String {
-    template_expr(&wire.uri, field_expr)
+fn uri_expr(
+    wire: &WireBinding,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> String {
+    match &wire.uri {
+        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
+        other => wire_value_expr(other, field_expr, input_expr),
+    }
 }
 
 /// One `setHeader(...)` call per declared `request_headers` entry.
@@ -115,14 +163,15 @@ fn declared_header_lines(
     wire: &WireBinding,
     indent_str: &str,
     field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
 ) -> String {
     wire.request_headers
         .iter()
         .map(|(key, value)| {
             format!(
                 "{indent_str}setHeader(headers, {}, {});\n",
-                template_expr(key, field_expr),
-                wire_value_expr(value, field_expr)
+                template_expr(key, field_expr, input_expr),
+                wire_value_expr(value, field_expr, input_expr)
             )
         })
         .collect()
@@ -251,20 +300,21 @@ fn url_lines(
     wire: &WireBinding,
     indent_str: &str,
     field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
 ) -> String {
     if !has_query(wire) {
         return format!(
             "{indent_str}const url = {} + {};\n",
-            endpoint_expr(wire, field_expr),
-            uri_expr(wire, field_expr)
+            endpoint_expr(wire, field_expr, input_expr),
+            uri_expr(wire, field_expr, input_expr)
         );
     }
     format!(
         "{indent_str}const qs = new URLSearchParams();\n\
          {q}\
          {indent_str}const url = {} + {}{tail};\n",
-        endpoint_expr(wire, field_expr),
-        uri_expr(wire, field_expr),
+        endpoint_expr(wire, field_expr, input_expr),
+        uri_expr(wire, field_expr, input_expr),
         q = query_lines(wire, indent_str),
         tail = " + (qs.toString() ? `?${qs.toString()}` : \"\")",
     )
@@ -342,9 +392,9 @@ pub(super) fn op_call(
             "    const record = {input_expr} as unknown as Record<string, unknown>;\n"
         ));
     }
-    out.push_str(&url_lines(wire, "    ", field_expr));
+    out.push_str(&url_lines(wire, "    ", field_expr, input_expr));
     out.push_str("    const headers: Record<string, string> = {};\n");
-    out.push_str(&declared_header_lines(wire, "    ", field_expr));
+    out.push_str(&declared_header_lines(wire, "    ", field_expr, input_expr));
     out.push_str(
         "    for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);\n",
     );

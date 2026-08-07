@@ -103,7 +103,7 @@ let rec resolve_decl ~(qualified : qualified) (tbl : Symtab.t) (d : Ast.decl) :
           | None -> [])
         variants
   | Ast.DEnum _ -> [] (* enum cases are scalar; no type references *)
-  | Ast.DOp { input; output } ->
+  | Ast.DOp { pname = _; input; output } ->
       let opt = function
         | Some t -> resolve_ty ~params:[] ~tbl ~qualified t
         | None -> []

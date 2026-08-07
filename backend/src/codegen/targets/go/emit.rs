@@ -302,10 +302,11 @@ mod tests {
         // error straight through otherwise), so this genuinely never constructs
         // one.
         let mut wire = wire_binding("GET");
-        wire.endpoint = Some(vec!["ep".into()]);
+        wire.endpoint = Some(crate::ir::WireValue::Field(vec!["ep".into()]));
         let op = crate::ir::Shape {
             id: "notes#client.ping".into(),
             kind: ShapeKind::Operation {
+                input_name: None,
                 input: None,
                 output: None,
                 errors: vec![],

@@ -130,11 +130,13 @@ fn kind(config: &CodegenConfig, k: &ShapeKind) -> ShapeKind {
         },
         ShapeKind::Operation {
             input,
+            input_name,
             output,
             errors,
             wire,
         } => ShapeKind::Operation {
             input: input.as_ref().map(|t| tref(config, t)),
+            input_name: input_name.clone(),
             output: output.as_ref().map(|t| tref(config, t)),
             errors: errors.iter().map(|t| tref(config, t)).collect(),
             // Nothing inside a wire binding carries a shape id to rewrite
@@ -311,6 +313,7 @@ mod tests {
                                         id: "payments.api#note".into(),
                                         args: vec![],
                                     }),
+                                    input_name: None,
                                     output: None,
                                     errors: vec![],
                                     wire: None,

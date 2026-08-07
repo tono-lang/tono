@@ -687,11 +687,12 @@ impl<'a> EntryModel<'a> {
             format.iter().all(|part| match part {
                 TemplatePart::Lit(_) => true,
                 TemplatePart::Field(p) => path_guaranteed(p, visiting),
-                // An op-input placeholder cannot appear in a field template
-                // (the frontend rejects it); the emitters render it as an
-                // empty literal, so the same classification keeps the
-                // defensive output consistent (no absence to track).
-                TemplatePart::Input(_) => true,
+                // An op-input or op-parameter placeholder cannot appear in a
+                // field template (the frontend rejects it); the emitters
+                // render it as an empty literal, so the same classification
+                // keeps the defensive output consistent (no absence to
+                // track).
+                TemplatePart::Input(_) | TemplatePart::Param(_) => true,
             })
         } else {
             sources_guaranteed(&field.sources)

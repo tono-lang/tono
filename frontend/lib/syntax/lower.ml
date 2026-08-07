@@ -393,8 +393,8 @@ let take_trait name (traits : Ast.trait list) =
 
 (* Lower an operation's traits and body into an Operation shape under [id].
    Shared by top-level ops and ops nested in an entry body. *)
-let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~input ~output ~pub_trait
-    : Ir.shape =
+let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~pname ~input ~output
+    ~pub_trait : Ir.shape =
   let lower_opt = Option.map (lower_type ~params:[] ~resolve ~diags) in
   (* @errors(A, B) lists the operation's error types by name; repeated
      @errors traits accumulate. A non-name argument has no type to point
@@ -423,6 +423,7 @@ let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~input ~output ~pub_trait
       Ir.Operation
         {
           input = lower_opt input;
+          input_name = pname;
           output = lower_opt output;
           errors;
           wire = None;
@@ -450,10 +451,10 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
           (fun (op : Ast.decl) ->
             check_snake diags op.dname_span "operation name" op.dname;
             match op.dkind with
-            | Ast.DOp { input; output } ->
+            | Ast.DOp { pname; input; output } ->
                 lower_op_shape
                   ~id:(qualify module_name (d.dname ^ "." ^ op.dname))
-                  ~resolve ~diags op ~input ~output ~pub_trait:[]
+                  ~resolve ~diags op ~pname ~input ~output ~pub_trait:[]
             | _ -> assert false)
           ops
       in
@@ -544,10 +545,10 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
         kind = Ir.Enum { backing; values };
         traits = bag d.dtraits;
       }
-  | Ast.DOp { input; output } ->
+  | Ast.DOp { pname; input; output } ->
       lower_op_shape
         ~id:(qualify module_name d.dname)
-        ~resolve ~diags d ~input ~output ~pub_trait
+        ~resolve ~diags d ~pname ~input ~output ~pub_trait
   | Ast.DExt _ | Ast.DTest _ ->
       (* Extensions and tests have no shape; [lower_file] routes extensions to
          [lower_ext] and leaves tests to the typechecker, which lowers them

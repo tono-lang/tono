@@ -623,9 +623,10 @@ pub fn format_pieces(
         match part {
             TemplatePart::Lit(s) => concat.push(format!("{s:?}")),
             TemplatePart::Field(p) => concat.push(field_expr(p)),
-            // An op-input placeholder cannot appear in a field template; the
-            // frontend rejects it. Render empty defensively.
-            TemplatePart::Input(_) => concat.push("\"\"".to_string()),
+            // An op-input or op-parameter placeholder cannot appear in a
+            // field template; the frontend rejects it. Render empty
+            // defensively.
+            TemplatePart::Input(_) | TemplatePart::Param(_) => concat.push("\"\"".to_string()),
         }
     }
     (concat, absent_deps)

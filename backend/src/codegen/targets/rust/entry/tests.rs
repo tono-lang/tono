@@ -49,6 +49,7 @@ fn push_client_op(
         id: format!("m#client.{local}"),
         kind: ShapeKind::Operation {
             input,
+            input_name: None,
             output,
             errors,
             wire: None,
@@ -111,6 +112,7 @@ pub(super) fn simple_entry_module() -> Module {
     let op = Shape {
         id: "m#client.create_charge".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: Some(Tref::Ref {
                 id: "m#charge".into(),
                 args: vec![],
@@ -125,15 +127,16 @@ pub(super) fn simple_entry_module() -> Module {
             }],
             wire: Some(Box::new(WireBinding {
                 method: "POST".into(),
-                uri: vec![crate::ir::TemplatePart::Lit("/charges".into())],
+                uri: WireValue::Template(vec![crate::ir::TemplatePart::Lit("/charges".into())]),
                 bindings: [("id".to_string(), WirePart::Body)].into_iter().collect(),
                 response_bindings: Default::default(),
                 success: vec![200],
-                endpoint: Some(vec!["endpoint".into()]),
+                endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
                 request_headers: vec![(
                     vec![crate::ir::TemplatePart::Lit("X-Client".into())],
                     WireValue::Field(vec!["client_name".into()]),
                 )],
+                query: vec![],
                 timeout: None,
                 retry: None,
             })),
@@ -321,17 +324,19 @@ fn a_multi_entry_module_prefixes_settings_descriptors_and_discriminators() {
     let op2 = Shape {
         id: "m#other.ping".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),
-                uri: vec![crate::ir::TemplatePart::Lit("/ping".into())],
+                uri: WireValue::Template(vec![crate::ir::TemplatePart::Lit("/ping".into())]),
                 bindings: Default::default(),
                 response_bindings: Default::default(),
                 success: vec![200],
-                endpoint: Some(vec!["token".into()]),
+                endpoint: Some(WireValue::Field(vec!["token".into()])),
                 request_headers: vec![],
+                query: vec![],
                 timeout: None,
                 retry: None,
             })),
@@ -632,6 +637,7 @@ fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
                 operations.push(Shape {
                     id: "m#client.local".into(),
                     kind: ShapeKind::Operation {
+                        input_name: None,
                         input: None,
                         output: None,
                         errors: vec![],

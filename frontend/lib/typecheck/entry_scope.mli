@@ -24,6 +24,30 @@ val role_of_name : ctx -> string -> Roles.role
 val resolve_path : ctx -> Ast.member list -> string list -> Ast.member option
 val path_str : string list -> string
 
+(* An op-parameter reference: the whole declared parameter, or one member of
+   a struct-typed parameter (an op has exactly one parameter, so deeper
+   descent is not resolved here — codegen never renders it). *)
+type param_ref = Whole of Ast.ty | Member of Ast.member
+
+val resolve_param :
+  ctx -> string option -> Ast.ty option -> string list -> param_ref option
+
+(* [.name] resolves against what the op declares: its own parameter first
+   (shadowing a same-named entry field), then the entry's fields. *)
+type resolved_ref = RField of Ast.member | RParam of param_ref
+
+val resolve_ref :
+  ctx ->
+  Ast.member list ->
+  pname:string option ->
+  pty:Ast.ty option ->
+  string list ->
+  resolved_ref option
+
+(* An op's declared parameter name and type, [(None, None)] for a non-op decl
+   or the legacy unnamed form. *)
+val op_param : Ast.decl -> string option * Ast.ty option
+
 (* The scalar shapes a match subject can take; [SEnum] carries the case names. *)
 type scalar = SBool | SString | SInt | SEnum of string list | SOther
 

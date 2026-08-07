@@ -142,6 +142,23 @@ fn template_expr(parts: &[TemplatePart], fields: &FieldCtx<'_>) -> String {
                     rust_str(name)
                 ));
             }
+            // [] is the whole typed parameter (read as `input` directly, no
+            // record needed); one segment is a member of the input struct,
+            // exactly like the legacy `{name}` placeholder (an op has
+            // exactly one parameter, so "member of the parameter" and
+            // "member of the input" are the same decoded record). Deeper
+            // paths are not reachable: the typechecker only resolves an
+            // op-parameter reference one level deep.
+            TemplatePart::Param(segs) => {
+                fmt.push_str("{}");
+                args.push(match segs.first() {
+                    None => "input.to_string()".to_string(),
+                    Some(name) => format!(
+                        "format_scalar(record.get({}).unwrap_or(&serde_json::Value::Null))",
+                        rust_str(name)
+                    ),
+                });
+            }
         }
     }
     format!("format!(\"{fmt}\", {})", args.join(", "))
@@ -155,6 +172,13 @@ fn wire_value_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
             None => format!("{}.to_string()", rust_str(&json.to_string())),
         },
         WireValue::Field(path) => fields.string_expr(path),
+        WireValue::Param(segs) => match segs.first() {
+            None => "input.to_string()".to_string(),
+            Some(name) => format!(
+                "format_scalar(record.get({}).unwrap_or(&serde_json::Value::Null)).to_string()",
+                rust_str(name)
+            ),
+        },
         WireValue::Template(parts) => {
             let expr = template_expr(parts, fields);
             if expr.starts_with("format!") {
@@ -166,8 +190,50 @@ fn wire_value_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
     }
 }
 
-/// The URL: the typed read of the resolved endpoint field concatenated with
-/// the URI template. `validate_entries` re-checks at generation time that the
+/// A `path`/`uri` position: a literal or pure reference passes through
+/// unescaped (the author took responsibility for its content by not writing
+/// a template), while a template's placeholders are each percent-encoded as
+/// one path segment.
+fn push_uri_value(
+    value: &WireValue,
+    fields: &FieldCtx<'_>,
+    fmt: &mut String,
+    args: &mut Vec<String>,
+) {
+    match value {
+        WireValue::Template(parts) => {
+            for part in parts {
+                match part {
+                    TemplatePart::Lit(s) => fmt.push_str(&fmt_lit(s)),
+                    TemplatePart::Field(path) => {
+                        fmt.push_str("{}");
+                        args.push(format!("percent_path({})", fields.str_ref_expr(path)));
+                    }
+                    TemplatePart::Input(name) => {
+                        fmt.push_str("{}");
+                        args.push(format!("path_part(record.get({}))", rust_str(name)));
+                    }
+                    TemplatePart::Param(segs) => {
+                        fmt.push_str("{}");
+                        args.push(match segs.first() {
+                            None => "percent_path(&input.to_string())".to_string(),
+                            Some(name) => {
+                                format!("path_part(record.get({}))", rust_str(name))
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        other => {
+            fmt.push_str("{}");
+            args.push(wire_value_expr(other, fields));
+        }
+    }
+}
+
+/// The URL: the typed read of the resolved endpoint value concatenated with
+/// the URI value. `validate_entries` re-checks at generation time that the
 /// binding carries an endpoint, so the read needs no runtime guard.
 fn url_line(wire: &WireBinding, has_query: bool, fields: &FieldCtx<'_>) -> String {
     let endpoint = wire
@@ -175,20 +241,15 @@ fn url_line(wire: &WireBinding, has_query: bool, fields: &FieldCtx<'_>) -> Strin
         .as_ref()
         .expect("validate_entries rejects an entry @http op with no endpoint");
     let mut fmt = String::from("{}");
-    let mut args = vec![fields.display_expr(endpoint)];
-    for part in &wire.uri {
-        match part {
-            TemplatePart::Lit(s) => fmt.push_str(&fmt_lit(s)),
-            TemplatePart::Field(path) => {
-                fmt.push_str("{}");
-                args.push(format!("percent_path({})", fields.str_ref_expr(path)));
-            }
-            TemplatePart::Input(name) => {
-                fmt.push_str("{}");
-                args.push(format!("path_part(record.get({}))", rust_str(name)));
-            }
-        }
-    }
+    // The common case (a resolved entry-field endpoint) keeps its original
+    // `Display`-only spelling; the grammar's other forms (new with this
+    // task) go through the general renderer.
+    let endpoint_expr = match endpoint {
+        WireValue::Field(path) => fields.display_expr(path),
+        other => wire_value_expr(other, fields),
+    };
+    let mut args = vec![endpoint_expr];
+    push_uri_value(&wire.uri, fields, &mut fmt, &mut args);
     let binding = if has_query { "let mut url" } else { "let url" };
     format!("{binding} = format!(\"{fmt}\", {});\n", args.join(", "))
 }

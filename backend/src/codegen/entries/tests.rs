@@ -1,5 +1,5 @@
 use super::*;
-use crate::ir::{EnvName, FieldRef, Select, SelectArm};
+use crate::ir::{EnvName, FieldRef, Select, SelectArm, WireValue};
 use serde_json::json;
 
 fn field(name: &str, sources: Vec<Source>) -> EntryField {
@@ -283,6 +283,7 @@ fn entry_with_op_traits(traits: Vec<(&str, serde_json::Value)>) -> Module {
     let op = Shape {
         id: "m#client.save".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
@@ -439,6 +440,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     let entry_op = Shape {
         id: "m#sdk.save".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
@@ -449,6 +451,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     let loose_op = Shape {
         id: "m#save".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
@@ -475,6 +478,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     let extra_op = Shape {
         id: "m#other".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
@@ -537,17 +541,19 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     let no_endpoint_op = Shape {
         id: "m#sdk.get".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
             wire: Some(Box::new(crate::ir::WireBinding {
                 method: "GET".into(),
-                uri: vec![TemplatePart::Lit("/x".into())],
+                uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
                 bindings: Default::default(),
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: None,
                 request_headers: vec![],
+                query: vec![],
                 timeout: None,
                 retry: None,
             })),
@@ -668,6 +674,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
     let loose_op = Shape {
         id: "m#other".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
@@ -695,17 +702,19 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
     let wire_loose_op = Shape {
         id: "m#ping".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
             wire: Some(Box::new(crate::ir::WireBinding {
                 method: "GET".into(),
-                uri: vec![crate::ir::TemplatePart::Lit("/ping".into())],
+                uri: WireValue::Template(vec![crate::ir::TemplatePart::Lit("/ping".into())]),
                 bindings: Default::default(),
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: None,
                 request_headers: vec![],
+                query: vec![],
                 timeout: None,
                 retry: None,
             })),

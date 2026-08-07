@@ -7,6 +7,7 @@ use crate::codegen::test_support::{
     with_member_select_on_absent_subject, with_structured_sources, with_transformed_chain_field,
 };
 use crate::ir::decode_model;
+use crate::ir::WireValue;
 
 pub(super) fn fixture_module() -> Module {
     let text = include_str!(concat!(
@@ -25,17 +26,18 @@ fn with_descriptors(mut module: Module) -> Module {
                 if let ShapeKind::Operation { wire, .. } = &mut op.kind {
                     *wire = Some(Box::new(WireBinding {
                         method: "POST".into(),
-                        uri: vec![
+                        uri: WireValue::Template(vec![
                             TemplatePart::Lit("/notes/".into()),
                             TemplatePart::Input("id".into()),
-                        ],
+                        ]),
                         bindings: [("id".to_string(), WirePart::Label)].into_iter().collect(),
                         response_bindings: Default::default(),
                         success: vec![200],
                         // The typechecker rejects an entry @http op without an
                         // endpoint, so the fixture always carries one.
-                        endpoint: Some(vec!["endpoint".into()]),
+                        endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
                         request_headers: Vec::new(),
+                        query: vec![],
                         timeout: None,
                         retry: None,
                     }));

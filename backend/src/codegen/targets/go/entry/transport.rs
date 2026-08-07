@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::codegen::entries::wire::success_test_expr;
+use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::symbol_slot;
 use crate::ir::{TemplatePart, WireBinding, WirePart, WireResponsePart, WireValue};
@@ -131,6 +131,25 @@ fn template_expr(
                 };
                 out.push(format!("{helper}(record[{name:?}])"));
             }
+            // [] is the whole typed parameter (read as `input` directly, no
+            // record needed); one segment is a member of the input struct,
+            // exactly like the legacy `{name}` placeholder (an op has
+            // exactly one parameter, so "member of the parameter" and
+            // "member of the input" are the same decoded record). Deeper
+            // paths are not reachable: the typechecker only resolves an
+            // op-parameter reference one level deep.
+            TemplatePart::Param(segs) => {
+                let helper = if escape {
+                    reached.slot("PathPart")
+                } else {
+                    reached.slot("FormatScalar")
+                };
+                let arg = match segs.first() {
+                    None => "input".to_string(),
+                    Some(name) => format!("record[{name:?}]"),
+                };
+                out.push(format!("{helper}({arg})"));
+            }
         }
     }
     out.join(" + ")
@@ -150,40 +169,50 @@ fn wire_value_expr(
             None => format!("{:?}", json.to_string()),
         },
         WireValue::Field(path) => scalar_expr(path, field_access, field_kind, reached),
+        WireValue::Param(segs) => match segs.first() {
+            None => format!("{}(input)", reached.slot("FormatScalar")),
+            Some(name) => format!("{}(record[{name:?}])", reached.slot("FormatScalar")),
+        },
         WireValue::Template(parts) => {
             template_expr(parts, false, field_access, field_kind, reached)
         }
     }
 }
 
-/// The base-URL read: the typed resolved endpoint field. The frontend rejects
-/// an entry `@http` op that does not name a string endpoint field, and
-/// `validate_entries` re-checks it at generation time (IR can arrive from a
-/// file without ever passing the frontend), so by emission time the binding
-/// always carries an endpoint and the read needs no runtime guard.
-fn endpoint_expr(wire: &WireBinding, field_access: &dyn Fn(&[String]) -> String) -> String {
-    let path = wire
+/// A `path`/`uri` position: a literal or pure reference passes through
+/// unescaped (the author took responsibility for its content by not writing
+/// a template), while a template's placeholders are escaped as one path
+/// segment each (`escape: true`).
+fn uri_expr(
+    value: &WireValue,
+    field_access: &dyn Fn(&[String]) -> String,
+    field_kind: &dyn Fn(&[String]) -> FieldKind,
+    reached: &mut Reached,
+) -> String {
+    match value {
+        WireValue::Template(parts) => template_expr(parts, true, field_access, field_kind, reached),
+        other => wire_value_expr(other, field_access, field_kind, reached),
+    }
+}
+
+/// The base-URL read: the resolved endpoint value (an entry field in
+/// practice; the grammar also allows a literal, a template, or an
+/// op-parameter reference). The frontend rejects an entry `@http` op that
+/// does not name an endpoint, and `validate_entries` re-checks it at
+/// generation time (IR can arrive from a file without ever passing the
+/// frontend), so by emission time the binding always carries one and the
+/// read needs no runtime guard.
+fn endpoint_expr(
+    wire: &WireBinding,
+    field_access: &dyn Fn(&[String]) -> String,
+    field_kind: &dyn Fn(&[String]) -> FieldKind,
+    reached: &mut Reached,
+) -> String {
+    let value = wire
         .endpoint
         .as_ref()
         .expect("validate_entries rejects an entry @http op with no endpoint");
-    field_access(path)
-}
-
-fn has_query(wire: &WireBinding) -> bool {
-    wire.bindings
-        .values()
-        .any(|p| matches!(p, WirePart::Query { .. }))
-}
-
-/// Whether the operation reads any input member individually via
-/// `record[name]`: a URI placeholder, or any binding besides a plain `Body`
-/// member (the all-body case marshals the typed input directly).
-fn needs_record(wire: &WireBinding) -> bool {
-    let uri_reads_record = wire
-        .uri
-        .iter()
-        .any(|part| matches!(part, TemplatePart::Input(_)));
-    uri_reads_record || wire.bindings.values().any(|p| !matches!(p, WirePart::Body))
+    wire_value_expr(value, field_access, field_kind, reached)
 }
 
 /// The Go spelling of the shared [`success_test_expr`] rule.
@@ -200,8 +229,8 @@ fn url_lines(
 ) -> String {
     let base = format!(
         "{} + {}",
-        endpoint_expr(wire, field_access),
-        template_expr(&wire.uri, true, field_access, field_kind, reached)
+        endpoint_expr(wire, field_access, field_kind, reached),
+        uri_expr(&wire.uri, field_access, field_kind, reached)
     );
     if !has_query(wire) {
         return format!("\trequestURL := {base}\n");

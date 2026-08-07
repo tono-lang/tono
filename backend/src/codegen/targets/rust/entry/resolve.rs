@@ -543,9 +543,10 @@ impl Emitter for Resolver<'_, '_> {
                     let expr = self.path_read(p);
                     args.push(self.to_string_expr(&expr, &t));
                 }
-                // An op-input placeholder cannot appear in a field template
-                // (the frontend rejects it); render empty defensively.
-                TemplatePart::Input(_) => {}
+                // An op-input or op-parameter placeholder cannot appear in a
+                // field template (the frontend rejects it); render empty
+                // defensively.
+                TemplatePart::Input(_) | TemplatePart::Param(_) => {}
             }
         }
         let concat = if args.is_empty() {

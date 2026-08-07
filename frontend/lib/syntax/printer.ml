@@ -193,12 +193,16 @@ let braced (header : string) (lines : string list) : string =
    trait written above an op would bind to whatever was declared before it. *)
 let print_op ~indent (d : Ast.decl) : string =
   match d.Ast.dkind with
-  | Ast.DOp { input; output } ->
+  | Ast.DOp { pname; input; output } ->
       let pub = if d.Ast.pub then "pub " else "" in
+      let param =
+        match (pname, input) with
+        | Some n, Some t -> n ^ ": " ^ print_ty t
+        | _, Some t -> print_ty t
+        | _, None -> ""
+      in
       let signature =
-        indent ^ pub ^ "op " ^ d.Ast.dname ^ "("
-        ^ (match input with Some t -> print_ty t | None -> "")
-        ^ ")"
+        indent ^ pub ^ "op " ^ d.Ast.dname ^ "(" ^ param ^ ")"
         ^ match output with Some t -> ": " ^ print_ty t | None -> ""
       in
       let traits =

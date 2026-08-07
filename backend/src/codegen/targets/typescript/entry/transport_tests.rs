@@ -11,12 +11,13 @@ use crate::ir::{TemplatePart, WireBinding, WirePart, WireResponsePart, WireValue
 fn wire() -> WireBinding {
     WireBinding {
         method: "GET".into(),
-        uri: vec![TemplatePart::Lit("/x".into())],
+        uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
         bindings: Default::default(),
         response_bindings: Default::default(),
         success: Vec::new(),
         endpoint: None,
         request_headers: Vec::new(),
+        query: vec![],
         timeout: None,
         retry: None,
     }
@@ -45,22 +46,119 @@ fn success_expr_spells_the_typescript_field_and_operator() {
 #[test]
 fn uri_expr_renders_a_pure_literal_without_a_template_wrapper() {
     let w = wire();
-    assert_eq!(uri_expr(&w, &stub_field_expr), "\"/x\"");
+    assert_eq!(uri_expr(&w, &stub_field_expr, "input"), "\"/x\"");
 }
 
 #[test]
 fn uri_expr_mixes_literal_field_and_input_placeholders() {
     let mut w = wire();
-    w.uri = vec![
+    w.uri = WireValue::Template(vec![
         TemplatePart::Lit("/notes/".into()),
         TemplatePart::Input("id".into()),
         TemplatePart::Lit("/".into()),
         TemplatePart::Field(vec!["region".into()]),
-    ];
+    ]);
     assert_eq!(
-        uri_expr(&w, &stub_field_expr),
+        uri_expr(&w, &stub_field_expr, "input"),
         "`/notes/${pathPart(record[\"id\"])}/${pathPart(this.settings.region)}`"
     );
+}
+
+// ── Named op-parameter references (WireValue::Param / TemplatePart::Param) ─
+
+#[test]
+fn a_bare_param_reference_in_a_uri_template_reads_the_whole_input() {
+    let mut w = wire();
+    w.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec![]),
+    ]);
+    assert_eq!(
+        uri_expr(&w, &stub_field_expr, "input"),
+        "`/charges/${pathPart(input)}`"
+    );
+}
+
+#[test]
+fn a_param_member_reference_in_a_uri_template_reads_off_the_record() {
+    let mut w = wire();
+    w.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["id".into()]),
+    ]);
+    assert_eq!(
+        uri_expr(&w, &stub_field_expr, "input"),
+        "`/charges/${pathPart(record[\"id\"])}`"
+    );
+}
+
+#[test]
+fn a_pure_param_reference_in_uri_position_passes_through_unescaped() {
+    let mut w = wire();
+    w.uri = WireValue::Param(vec![]);
+    assert_eq!(
+        uri_expr(&w, &stub_field_expr, "input"),
+        "formatScalar(input)"
+    );
+}
+
+#[test]
+fn a_pure_param_member_reference_in_uri_position_passes_through_unescaped() {
+    let mut w = wire();
+    w.uri = WireValue::Param(vec!["href".into()]);
+    assert_eq!(
+        uri_expr(&w, &stub_field_expr, "input"),
+        "formatScalar(record[\"href\"])"
+    );
+}
+
+#[test]
+fn a_literal_uri_is_a_plain_string() {
+    let mut w = wire();
+    w.uri = WireValue::Lit(serde_json::json!("/fixed"));
+    assert_eq!(uri_expr(&w, &stub_field_expr, "input"), "\"/fixed\"");
+}
+
+#[test]
+fn a_field_endpoint_keeps_its_original_unwrapped_spelling() {
+    let mut w = wire();
+    w.endpoint = Some(WireValue::Field(vec!["endpoint".into()]));
+    assert_eq!(
+        endpoint_expr(&w, &stub_field_expr, "input"),
+        "this.settings.endpoint"
+    );
+}
+
+#[test]
+fn a_param_endpoint_goes_through_the_general_renderer() {
+    let mut w = wire();
+    w.endpoint = Some(WireValue::Param(vec![]));
+    assert_eq!(
+        endpoint_expr(&w, &stub_field_expr, "input"),
+        "formatScalar(input)"
+    );
+}
+
+#[test]
+fn a_param_reference_in_a_header_value_reads_the_whole_input() {
+    let mut w = wire();
+    w.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Id".into())],
+        WireValue::Param(vec![]),
+    )];
+    let out = declared_header_lines(&w, "  ", &stub_field_expr, "input");
+    assert!(out.contains("formatScalar(input)"));
+}
+
+#[test]
+fn a_param_reference_in_a_header_key_reads_off_the_record() {
+    let mut w = wire();
+    w.request_headers = vec![(
+        vec![TemplatePart::Param(vec!["region".into()])],
+        WireValue::Lit(serde_json::json!("v")),
+    )];
+    let out = declared_header_lines(&w, "  ", &stub_field_expr, "input");
+    assert!(out.contains("record[\"region\"]"));
 }
 
 #[test]
@@ -141,7 +239,7 @@ fn needs_record_is_false_when_every_binding_is_a_body_member() {
 #[test]
 fn needs_record_is_true_when_a_label_binding_mixes_with_body_members() {
     let mut w = wire();
-    w.uri = vec![TemplatePart::Input("id".into())];
+    w.uri = WireValue::Template(vec![TemplatePart::Input("id".into())]);
     w.bindings = [
         ("id".to_string(), WirePart::Label),
         ("amount".to_string(), WirePart::Body),
@@ -178,18 +276,18 @@ fn has_query_and_query_lines_agree_on_query_bound_members() {
 #[test]
 #[should_panic(expected = "validate_entries rejects an entry @http op with no endpoint")]
 fn endpoint_expr_with_no_declared_endpoint_is_an_emission_defect() {
-    endpoint_expr(&wire(), &stub_field_expr);
+    endpoint_expr(&wire(), &stub_field_expr, "input");
 }
 
 #[test]
 fn endpoint_expr_reads_the_typed_settings_field_with_no_runtime_guard() {
     let mut w = wire();
-    w.endpoint = Some(vec!["endpoint".into()]);
+    w.endpoint = Some(WireValue::Field(vec!["endpoint".into()]));
     // The frontend guarantees `endpoint:` names a string field, so this
     // needs no `typeof`/`as string` guard and no fallback ternary: the bare
     // typed field access is the whole expression.
     assert_eq!(
-        endpoint_expr(&w, &stub_field_expr),
+        endpoint_expr(&w, &stub_field_expr, "input"),
         "this.settings.endpoint"
     );
 }
@@ -228,7 +326,7 @@ fn declared_header_lines_render_a_literal_key_with_a_field_value() {
         WireValue::Field(vec!["client_name".into()]),
     )];
     assert_eq!(
-        declared_header_lines(&w, "  ", &stub_field_expr),
+        declared_header_lines(&w, "  ", &stub_field_expr, "input"),
         "  setHeader(headers, \"X-Client\", formatScalar(this.settings.client_name));\n"
     );
 }

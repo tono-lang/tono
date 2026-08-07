@@ -14,6 +14,7 @@ fn op(traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
         id: "m#do_thing".into(),
         kind: ShapeKind::Operation {
             input: None,
+            input_name: None,
             output: None,
             errors: errors
                 .into_iter()
@@ -87,6 +88,7 @@ fn a_declared_error_also_used_as_an_operation_input_is_not_error_only() {
             id: "m#retry_hint".into(),
             args: vec![],
         }),
+        input_name: None,
         output: None,
         errors: vec![Tref::Ref {
             id: "m#retry_hint".into(),
@@ -148,6 +150,7 @@ fn a_declared_error_also_used_as_a_nested_entry_ops_input_is_not_error_only() {
             id: "m#not_found".into(),
             args: vec![],
         }),
+        input_name: None,
         output: None,
         errors: vec![Tref::Ref {
             id: "m#not_found".into(),

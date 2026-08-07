@@ -158,6 +158,7 @@ mod tests {
         Shape {
             id: id.into(),
             kind: ShapeKind::Operation {
+                input_name: None,
                 input: None,
                 output: None,
                 errors: vec![],
@@ -171,6 +172,7 @@ mod tests {
         Shape {
             id: id.into(),
             kind: ShapeKind::Operation {
+                input_name: None,
                 input: None,
                 output: None,
                 errors: vec![],
@@ -288,6 +290,7 @@ mod tests {
         let op = Shape {
             id: "m#do_thing".into(),
             kind: ShapeKind::Operation {
+                input_name: None,
                 input: None,
                 output: None,
                 errors: vec![Tref::Ref {
