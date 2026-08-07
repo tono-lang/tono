@@ -138,7 +138,7 @@ fn template_expr(parts: &[TemplatePart], fields: &FieldCtx<'_>) -> String {
             TemplatePart::Input(name) => {
                 fmt.push_str("{}");
                 args.push(format!(
-                    "format_scalar(record.get({}).unwrap_or(&serde_json::Value::Null))",
+                    "format_scalar(record.get({}).map(|v| v.as_ref()))",
                     rust_str(name)
                 ));
             }
@@ -185,7 +185,10 @@ fn url_line(wire: &WireBinding, has_query: bool, fields: &FieldCtx<'_>) -> Strin
             }
             TemplatePart::Input(name) => {
                 fmt.push_str("{}");
-                args.push(format!("path_part(record.get({}))", rust_str(name)));
+                args.push(format!(
+                    "path_part(record.get({}).map(|v| v.as_ref()))",
+                    rust_str(name)
+                ));
             }
         }
     }
@@ -220,7 +223,7 @@ fn per_call_header_lines(wire: &WireBinding) -> String {
         .iter()
         .filter_map(|(name, part)| match part {
             WirePart::Header { name: header_name } => Some(format!(
-                "if let Some(v) = record.get({member}) {{\n    if !v.is_null() {{\n        set_header(&mut headers, {header}, format_scalar(v));\n    }}\n}}\n",
+                "if let Some(v) = record.get({member}) {{\n    if v.get() != \"null\" {{\n        set_header(&mut headers, {header}, format_scalar(Some(v.as_ref())));\n    }}\n}}\n",
                 member = rust_str(name),
                 header = rust_str(header_name),
             )),
@@ -236,7 +239,7 @@ fn query_lines(wire: &WireBinding) -> String {
     for (name, part) in &wire.bindings {
         if let WirePart::Query { name: query_name } = part {
             out.push_str(&format!(
-                "append_query(&mut query, {}, record.get({}));\n",
+                "append_query(&mut query, {}, record.get({}).map(|v| v.as_ref()));\n",
                 rust_str(query_name),
                 rust_str(name)
             ));
@@ -258,8 +261,10 @@ fn body_lines(wire: &WireBinding, has_input: bool) -> Option<String> {
         .iter()
         .find(|(_, p)| matches!(p, WirePart::Payload))
     {
+        // The record already holds the member's raw JSON bytes, so the whole
+        // body is a copy, not a re-encode.
         return Some(format!(
-            "let body = record.get({}).map(|v| v.to_string());\n",
+            "let body = record.get({}).map(|v| v.get().to_string());\n",
             rust_str(name)
         ));
     }
@@ -278,17 +283,12 @@ fn body_lines(wire: &WireBinding, has_input: bool) -> Option<String> {
             encode_failure("e")
         ));
     }
-    let mut out = String::from("let mut body_members = serde_json::Map::new();\n");
-    out.push_str(&format!(
-        "for name in [{}] {{\n    if let Some(v) = record.get(name) {{\n        body_members.insert(name.to_string(), v.clone());\n    }}\n}}\n",
-        fields
-            .iter()
-            .map(|f| rust_str(f))
-            .collect::<Vec<_>>()
-            .join(", ")
-    ));
-    out.push_str("let body = Some(serde_json::Value::Object(body_members).to_string());\n");
-    Some(out)
+    let members = fields
+        .iter()
+        .map(|f| rust_str(f))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("let body = encode_body(&record, &[{members}]);\n"))
 }
 
 /// The failure a failed input serialization maps to: a Config problem with
@@ -415,8 +415,9 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         out.push_str("let _ = &input;\n");
     }
     if call.has_input && needs_record(wire) {
+        refs.push(super::shared_symbol("encode_record"));
         out.push_str(&format!(
-            "let record = serde_json::to_value(&input).map_err(|e| {})?;\n",
+            "let record = encode_record(&input).map_err(|e| {})?;\n",
             encode_failure("e")
         ));
     }
@@ -447,8 +448,15 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     let body_field = match &body {
         Some(lines) => {
             out.push_str(lines);
-            let is_none_check = lines.starts_with("let body = record.get(");
-            let guard = if is_none_check {
+            // The payload and mixed-body cases both produce an `Option<String>`
+            // (a member can be absent from the record); the whole-body case
+            // always has one, so it needs no guard.
+            let is_option_body = lines.starts_with("let body = record.get(")
+                || lines.starts_with("let body = encode_body(");
+            if lines.starts_with("let body = encode_body(") {
+                refs.push(super::shared_symbol("encode_body"));
+            }
+            let guard = if is_option_body {
                 "body.is_some() && "
             } else {
                 ""

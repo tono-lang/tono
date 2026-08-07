@@ -189,14 +189,14 @@ fn the_method_assembles_the_request_and_maps_the_outcome_onto_the_taxonomy() {
     assert!(!serde.contains("MustDescriptor"));
     assert!(serde.contains("record, err := record.EncodeRecord(input)"));
     assert!(serde.contains(
-        "requestURL := c.settings.Endpoint + \"/notes/\" + transport.PathPart(record[\"id\"])"
+        "requestURL := c.settings.Endpoint + \"/notes/\" + transport.PathPartRaw(record[\"id\"])"
     ));
     // Headers layer declared, then base, and the declared value reads the
     // typed settings directly.
     assert!(serde.contains("transport.SetHeader(headers, \"X-API-Key\", c.settings.APIKey)"));
     assert!(serde.contains("for name, value := range c.settings.Headers {"));
     // A mixed body assembles just the body-bound members.
-    assert!(serde.contains("body, err := transport.EncodeBody(record, \"body\")"));
+    assert!(serde.contains("body := transport.EncodeBody(record, \"body\")"));
     assert!(serde.contains(
         "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));

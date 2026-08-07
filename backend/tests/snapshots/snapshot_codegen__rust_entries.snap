@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 193
+assertion_line: 177
 expression: "render_sdk(entries_module(), TargetKind::Rust, None)"
 ---
 // ==== rust/env.rs ====
@@ -94,25 +94,26 @@ pub fn str_upper_snake(s: String) -> String {
 
 use crate::support::{BoxFuture, ClientOptions, HttpError, HttpRequest, HttpResponse};
 
-/// Renders a decoded JSON value the way the wire expects it in a path,
-/// query, or header position. An integral float must not print a
-/// trailing `.0`, and a 64-bit integer already rides as a string.
-pub fn format_scalar(v: &serde_json::Value) -> String {
-    match v {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i.to_string()
-            } else if let Some(u) = n.as_u64() {
-                u.to_string()
-            } else {
-                n.as_f64().map(|f| f.to_string()).unwrap_or_default()
-            }
-        }
-        serde_json::Value::Null => String::new(),
-        other => other.to_string(),
+/// Renders a record member's raw JSON value the way the wire expects it
+/// in a path, query, or header position: a JSON string unquoted,
+/// anything else verbatim, so a wide integer or a formatting-sensitive
+/// float keeps the exact spelling its own encoder gave it. An absent
+/// or null value renders empty.
+pub fn format_scalar(v: Option<&serde_json::value::RawValue>) -> String {
+    let Some(v) = v else { return String::new() };
+    let text = v.get();
+    if text == "null" {
+        return String::new();
     }
+    if let Some(inner) = text.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        // The common case (no escape sequence) slices the quotes off
+        // directly; only a string carrying an escape pays for the decoder.
+        if !inner.contains('\\') {
+            return inner.to_string();
+        }
+        return serde_json::from_str::<String>(text).unwrap_or_default();
+    }
+    text.to_string()
 }
 
 /// Percent-encode with the shared safe set (unreserved characters
@@ -137,11 +138,8 @@ pub fn percent_path(s: &str) -> String {
 
 /// A path segment read off the input record: an absent or null value
 /// substitutes empty rather than a literal "null".
-pub fn path_part(v: Option<&serde_json::Value>) -> String {
-    match v {
-        Some(v) if !v.is_null() => percent_path(&format_scalar(v)),
-        _ => String::new(),
-    }
+pub fn path_part(v: Option<&serde_json::value::RawValue>) -> String {
+    percent_path(&format_scalar(v))
 }
 
 /// Overrides across casings: header names are case-insensitive, so a
@@ -157,6 +155,47 @@ pub fn set_header(headers: &mut std::collections::HashMap<String, String>, name:
 /// second "content-type".
 pub fn has_header(headers: &std::collections::HashMap<String, String>, name: &str) -> bool {
     headers.keys().any(|k| k.eq_ignore_ascii_case(name))
+}
+
+/// Encodes a typed input into the wire record the request positions
+/// bind from: one encode pass, then a split by member name. Each
+/// member is held as its own raw JSON bytes, so a request position
+/// reads a value with the exact spelling and precision its own
+/// encoder gave it, without decoding it into a generic tree.
+pub fn encode_record<T: serde::Serialize>(
+    v: &T,
+) -> Result<std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>, serde_json::Error> {
+    serde_json::from_str(&serde_json::to_string(v)?)
+}
+
+/// Assembles the body-bound members into a JSON object by
+/// concatenating their raw bytes, in the given member order: no
+/// member is ever decoded and re-encoded, so a value reaches the wire
+/// with the exact spelling and precision its own encoder gave it. A
+/// member that is present but null still lands in the object as
+/// null; only absence omits it. `None` when no member is present.
+pub fn encode_body(
+    record: &std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>,
+    members: &[&str],
+) -> Option<String> {
+    let mut fields = String::new();
+    for member in members {
+        let Some(raw) = record.get(*member) else { continue };
+        if fields.is_empty() {
+            fields.push('{');
+        } else {
+            fields.push(',');
+        }
+        // Serializing a string cannot fail, so the key carries no error path.
+        fields.push_str(&serde_json::to_string(member).unwrap_or_default());
+        fields.push(':');
+        fields.push_str(raw.get());
+    }
+    if fields.is_empty() {
+        return None;
+    }
+    fields.push('}');
+    Some(fields)
 }
 
 /// Exponential backoff with full jitter: the constants are part of the
@@ -422,7 +461,7 @@ pub(crate) fn decode_note(body: &str) -> Result<Note, TonoError> {
 use crate::casing::str_upper_snake;
 use crate::duration::parse_duration_ms;
 use crate::env::read_env;
-use crate::http::{RandomFn, SleepFn, backoff_delay_ms, check_transport, default_random, default_sleep, has_header, http_send_with_timeout, path_part, resolve_max_retries, set_header};
+use crate::http::{RandomFn, SleepFn, backoff_delay_ms, check_transport, default_random, default_sleep, encode_body, encode_record, has_header, http_send_with_timeout, path_part, resolve_max_retries, set_header};
 use crate::support::{ClientOptions, Duration, HttpRequest, HttpTransport};
 
 use crate::notes::types::*;
@@ -639,21 +678,15 @@ impl Client {
         ClientBuilder { api_key, client_name: None, timeout: None, max_retries: None }
     }
     pub async fn save_note(&self, input: Note) -> Result<Note, TonoError> {
-        let record = serde_json::to_value(&input).map_err(|e| TonoError::Config(ConfigError { message: format!("input serialization: {e}") }))?;
-        let url = format!("{}/notes/{}", self.settings.endpoint, path_part(record.get("id")));
+        let record = encode_record(&input).map_err(|e| TonoError::Config(ConfigError { message: format!("input serialization: {e}") }))?;
+        let url = format!("{}/notes/{}", self.settings.endpoint, path_part(record.get("id").map(|v| v.as_ref())));
         let mut headers: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         set_header(&mut headers, "X-Client-Name", self.settings.client_name.clone());
         for (k, v) in &self.options.headers {
             set_header(&mut headers, k, v.clone());
         }
-        let mut body_members = serde_json::Map::new();
-        for name in ["body"] {
-            if let Some(v) = record.get(name) {
-                body_members.insert(name.to_string(), v.clone());
-            }
-        }
-        let body = Some(serde_json::Value::Object(body_members).to_string());
-        if !has_header(&headers, "content-type") {
+        let body = encode_body(&record, &["body"]);
+        if body.is_some() && !has_header(&headers, "content-type") {
             headers.insert("content-type".to_string(), "application/json".to_string());
         }
         let max_retries = resolve_max_retries(self.settings.max_retries as i64);

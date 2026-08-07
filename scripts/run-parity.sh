@@ -99,7 +99,7 @@ default = ["reqwest"]
 reqwest = ["dep:reqwest"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 [workspace]
