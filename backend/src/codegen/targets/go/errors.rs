@@ -409,11 +409,11 @@ fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorName
         for err in &coded {
             root.insert(&err.code.as_ref().unwrap().path);
         }
-        // The body's JSON is the wire contract: a body that fails to unmarshal
-        // here leaves the probe zeroed, so no guard below matches and the
-        // fallback carries the raw body as the generic ApiError.
+        // The comment rides into the generated code: a body that fails to
+        // unmarshal here leaves the probe zeroed, so no guard below matches
+        // and the fallback carries the raw body as the generic ApiError.
         body.push_str(&format!(
-            "\tvar probe struct {{\n{}\t}}\n\t_ = json.Unmarshal(body, &probe)\n",
+            "\tvar probe struct {{\n{}\t}}\n\t// A body that fails to unmarshal leaves probe zeroed: no guard below\n\t// matches, and the fallback carries the raw body as APIError.\n\t_ = json.Unmarshal(body, &probe)\n",
             render_probe_node(&root, 2)
         ));
     }

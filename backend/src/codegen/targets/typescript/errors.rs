@@ -361,11 +361,11 @@ fn discriminator_fn_body(
     let fallback = format!("new {}(status, body)", n.api);
     let mut body = String::new();
     body.push_str("  let parsed: any;\n");
-    // The body's JSON is the wire contract: a body that fails to parse here
-    // never reaches a guard below, so it falls straight to the generic
+    // The comment rides into the generated code: a body that fails to parse
+    // here never reaches a guard below, so it falls straight to the generic
     // ApiError carrying the raw body.
     body.push_str(&format!(
-        "  try {{\n    parsed = JSON.parse(body);\n  }} catch {{\n    return {fallback};\n  }}\n"
+        "  try {{\n    // A body that fails to parse falls straight to the fallback, which\n    // carries the raw body as APIError.\n    parsed = JSON.parse(body);\n  }} catch {{\n    return {fallback};\n  }}\n"
     ));
     body.push_str("  try {\n");
     let mut refs: Vec<Symbol> = vec![

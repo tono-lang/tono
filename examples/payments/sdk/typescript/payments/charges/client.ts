@@ -209,6 +209,8 @@ export function decodeCreateChargeError(
 ): TonoError {
   let parsed: any;
   try {
+    // A body that fails to parse falls straight to the fallback, which
+    // carries the raw body as APIError.
     parsed = JSON.parse(body);
   } catch {
     return new APIError(status, body);

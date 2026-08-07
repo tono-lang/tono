@@ -360,11 +360,11 @@ fn discriminator_fn_body(fn_name: &str, ordered: &[DeclaredError], n: &ErrorName
         "pub fn {fn_name}(status: u16, body: &str) -> {} {{\n",
         n.root
     ));
-    // The body's JSON is the wire contract: a body that fails to decode here
-    // never reaches a guard below, so it falls straight to the generic
+    // The comment rides into the generated code: a body that fails to decode
+    // here never reaches a guard below, so it falls straight to the generic
     // fallback carrying the raw body.
     body.push_str(&format!(
-        "    let value: serde_json::Value = match serde_json::from_str(body) {{\n        Ok(value) => value,\n        Err(_) => return {fallback},\n    }};\n"
+        "    // A body that fails to decode falls straight to the fallback, which\n    // carries the raw body as APIError.\n    let value: serde_json::Value = match serde_json::from_str(body) {{\n        Ok(value) => value,\n        Err(_) => return {fallback},\n    }};\n"
     ));
     for err in ordered {
         let data = error_type_name(err);

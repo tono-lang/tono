@@ -1,5 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
+assertion_line: 185
 expression: "render_sdk(entries_module(), TargetKind::Go, Some(\"example.com/sdk\"))"
 ---
 // ==== go/internal/transport/transport.go ====
@@ -702,6 +703,8 @@ func DecodeSaveNoteError(status int, body []byte) error {
 	var probe struct {
 		Code string `json:"code"`
 	}
+	// A body that fails to unmarshal leaves probe zeroed: no guard below
+	// matches, and the fallback carries the raw body as APIError.
 	_ = json.Unmarshal(body, &probe)
 	if status == statusOverloaded && probe.Code == codeOverloaded {
 		var data Overloaded

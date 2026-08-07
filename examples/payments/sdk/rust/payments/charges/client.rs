@@ -203,6 +203,8 @@ impl Client {
 }
 
 pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {
+    // A body that fails to decode falls straight to the fallback, which
+    // carries the raw body as APIError.
     let value: serde_json::Value = match serde_json::from_str(body) {
         Ok(value) => value,
         Err(_) => {
