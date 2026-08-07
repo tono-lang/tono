@@ -12,7 +12,7 @@ use crate::codegen::casing::{transform, CasingConfig};
 use crate::codegen::conventions::{doc_of, rename_of, type_ident_from_id};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::tree::{ClientDecl, Decl, Field, Method, TypeExpr};
-use crate::ir::{Module, Shape, ShapeKind, Trait, Tref};
+use crate::ir::{Model, Module, Shape, ShapeKind, Trait, Tref};
 
 /// Whether an operation performs I/O and therefore waits. How the wait lowers
 /// (suspension vs blocking) is a per-language concern; the classification is
@@ -46,16 +46,32 @@ fn int_arg(t: &Trait) -> Option<i64> {
     }
 }
 
-/// Read a trait's single string argument, with the same tolerance as
-/// [`int_arg`].
-fn string_arg(t: &Trait) -> Option<String> {
-    match &t.value {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(items) => {
-            items.first().and_then(|v| v.as_str()).map(str::to_string)
-        }
-        _ => None,
+/// A declared error's body discriminator: the dotted path to probe in the
+/// response body (split into segments; `"error.type"` becomes
+/// `["error", "type"]`) and the value that path must equal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorCode {
+    pub path: Vec<String>,
+    pub value: String,
+}
+
+/// Read `@errorCode`'s two positional arguments (path, value). The frontend
+/// always emits exactly two; a malformed hand-authored array (wrong arity, or
+/// an empty path) resolves to no code, the same way a missing trait does.
+fn path_and_value_arg(t: &Trait) -> Option<ErrorCode> {
+    let items = t.value.as_array()?;
+    let [path, value] = items.as_slice() else {
+        return None;
+    };
+    let path = path.as_str()?;
+    let value = value.as_str()?;
+    if path.is_empty() {
+        return None;
     }
+    Some(ErrorCode {
+        path: path.split('.').map(str::to_string).collect(),
+        value: value.to_string(),
+    })
 }
 
 /// The effect of an operation: an explicit `@async` trait is authoritative;
@@ -80,9 +96,9 @@ pub struct DeclaredError {
     /// would have rejected; such an error still becomes a type but never
     /// enters the discrimination map.
     pub status: Option<i64>,
-    /// The body discriminator value from `@errorCode("...")`, matched against
-    /// the response body's `code` field when several errors share a status.
-    pub code: Option<String>,
+    /// The body discriminator from `@errorCode(path, value)`, matched against
+    /// the response body at that path when several errors share a status.
+    pub code: Option<ErrorCode>,
     /// Whether the error carries `@retryable`.
     pub retryable: bool,
 }
@@ -91,7 +107,7 @@ fn declared_error(shape: &Shape) -> DeclaredError {
     DeclaredError {
         shape_id: shape.id.clone(),
         status: find_trait(&shape.traits, "status").and_then(int_arg),
-        code: find_trait(&shape.traits, "errorCode").and_then(string_arg),
+        code: find_trait(&shape.traits, "errorCode").and_then(path_and_value_arg),
         retryable: has_trait(&shape.traits, "retryable"),
     }
 }
@@ -356,6 +372,51 @@ pub fn client_decl(
     })
 }
 
+/// Reject an operation whose declared errors cannot be told apart: two errors
+/// sharing a status and the same coded discriminator (same path, same value)
+/// collide silently at runtime, since the generated guard for one is
+/// identical to the other's. A codeless error is that status's catch-all by
+/// rule, not by declaration order, so it never collides with a coded sibling.
+/// Returns the first offense, naming both shapes.
+pub fn validate_error_codes(model: &Model) -> Result<(), String> {
+    for module in &model.modules {
+        let nested = module.shapes.iter().flat_map(|s| match &s.kind {
+            ShapeKind::Entry { operations, .. } => operations.as_slice(),
+            _ => &[],
+        });
+        for op in module.operations.iter().chain(nested) {
+            let errors = declared_errors(op, module);
+            let mut seen: Vec<(i64, &[String], &str, &str)> = Vec::new();
+            for err in &errors {
+                let (Some(status), Some(code)) = (err.status, &err.code) else {
+                    continue;
+                };
+                if let Some((_, _, _, first_id)) = seen.iter().find(|(s, p, v, _)| {
+                    *s == status && *p == code.path.as_slice() && *v == code.value
+                }) {
+                    return Err(format!(
+                        "module {}: operation {} cannot discriminate between errors {} and {}: \
+                         both use status {status} with @errorCode(\"{}\", \"{}\")",
+                        module.name,
+                        op.id.rsplit('#').next().unwrap_or(&op.id),
+                        first_id,
+                        err.shape_id,
+                        code.path.join("."),
+                        code.value,
+                    ));
+                }
+                seen.push((
+                    status,
+                    code.path.as_slice(),
+                    code.value.as_str(),
+                    &err.shape_id,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Build one discrimination declaration per operation that declares errors,
 /// handing the target's builder the errors already in discrimination order
 /// (coded entries before a codeless catch-all on the same status).
@@ -594,7 +655,7 @@ mod tests {
                     "m#payment_declined",
                     vec![
                         trait_of("status", json!([402])),
-                        trait_of("errorCode", json!(["payment_declined"])),
+                        trait_of("errorCode", json!(["code", "payment_declined"])),
                         trait_of("retryable", json!(null)),
                     ],
                 ),
@@ -610,7 +671,10 @@ mod tests {
                 DeclaredError {
                     shape_id: "m#payment_declined".into(),
                     status: Some(402),
-                    code: Some("payment_declined".into()),
+                    code: Some(ErrorCode {
+                        path: vec!["code".into()],
+                        value: "payment_declined".into(),
+                    }),
                     retryable: true,
                 },
                 DeclaredError {
@@ -675,7 +739,7 @@ mod tests {
                 "m#coded_bad",
                 vec![
                     trait_of("status", json!([400])),
-                    trait_of("errorCode", json!(["specific"])),
+                    trait_of("errorCode", json!(["code", "specific"])),
                 ],
             ),
             // A shape the frontend would have rejected: no status. It never
@@ -695,20 +759,95 @@ mod tests {
     }
 
     #[test]
-    fn error_code_reads_a_bare_string_argument() {
-        // The frontend wraps a positional argument in a one-element array, but a
-        // bare string is accepted for hand-authored input; both resolve the code.
+    fn error_code_splits_a_dotted_path_into_segments() {
         let module = module(
             vec![error_shape(
-                "m#declined",
+                "m#invalid_request",
                 vec![
-                    trait_of("status", json!([402])),
-                    trait_of("errorCode", json!("declined")),
+                    trait_of("status", json!([400])),
+                    trait_of("errorCode", json!(["error.type", "invalid"])),
                 ],
             )],
             vec![],
         );
-        let errors = declared_errors(&op(vec![], vec!["m#declined"]), &module);
-        assert_eq!(errors[0].code, Some("declined".into()));
+        let errors = declared_errors(&op(vec![], vec!["m#invalid_request"]), &module);
+        assert_eq!(
+            errors[0].code,
+            Some(ErrorCode {
+                path: vec!["error".into(), "type".into()],
+                value: "invalid".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_malformed_error_code_resolves_to_no_code() {
+        // Wrong arity or a non-string element: no code, the same as an absent
+        // trait, rather than a panic on hand-authored IR.
+        for value in [json!(["declined"]), json!("declined"), json!([1, "x"])] {
+            let module = module(
+                vec![error_shape(
+                    "m#declined",
+                    vec![
+                        trait_of("status", json!([402])),
+                        trait_of("errorCode", value),
+                    ],
+                )],
+                vec![],
+            );
+            let errors = declared_errors(&op(vec![], vec!["m#declined"]), &module);
+            assert_eq!(errors[0].code, None);
+        }
+    }
+
+    #[test]
+    fn duplicate_status_and_code_is_rejected_at_generation() {
+        let shapes = vec![
+            error_shape(
+                "m#a",
+                vec![
+                    trait_of("status", json!([400])),
+                    trait_of("errorCode", json!(["code", "bad"])),
+                ],
+            ),
+            error_shape(
+                "m#b",
+                vec![
+                    trait_of("status", json!([400])),
+                    trait_of("errorCode", json!(["code", "bad"])),
+                ],
+            ),
+        ];
+        let m = crate::ir::Model {
+            tono_ir_version: crate::ir::TONO_IR_VERSION,
+            modules: vec![module(shapes, vec![op(vec![], vec!["m#a", "m#b"])])],
+        };
+        let err = validate_error_codes(&m).unwrap_err();
+        assert!(err.contains("m#a") && err.contains("m#b"), "{err}");
+    }
+
+    #[test]
+    fn same_status_different_paths_is_allowed_at_generation() {
+        let shapes = vec![
+            error_shape(
+                "m#a",
+                vec![
+                    trait_of("status", json!([400])),
+                    trait_of("errorCode", json!(["code", "bad"])),
+                ],
+            ),
+            error_shape(
+                "m#b",
+                vec![
+                    trait_of("status", json!([400])),
+                    trait_of("errorCode", json!(["error.type", "bad"])),
+                ],
+            ),
+        ];
+        let m = crate::ir::Model {
+            tono_ir_version: crate::ir::TONO_IR_VERSION,
+            modules: vec![module(shapes, vec![op(vec![], vec!["m#a", "m#b"])])],
+        };
+        assert!(validate_error_codes(&m).is_ok());
     }
 }

@@ -18,7 +18,7 @@ pub struct note_ref {
 
 @doc("The store is shedding load; the call is safe to retry.")
 @status(529)
-@errorCode("overloaded")
+@errorCode("code", "overloaded")
 @retryable
 pub struct overloaded {
   message: string

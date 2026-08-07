@@ -124,7 +124,8 @@ let raw_error_with_code_clean () =
        \  op save(note): note @errors(busy)\n\
         }\n\
         struct note { id: string }\n\
-        @status(529) @errorCode(\"busy\") struct busy { message: string }\n\
+        @status(529) @errorCode(\"code\", \"busy\") struct busy { message: \
+        string }\n\
         ext impl save raw { go: \"ext/go/s.go#Save\" }")
 
 (* The typed form returns declared errors as typed values, so it never

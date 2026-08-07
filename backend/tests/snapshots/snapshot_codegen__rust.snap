@@ -335,8 +335,7 @@ pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {
         Ok(value) => value,
         Err(_) => return TonoError::Api(APIFailure::Undeclared(APIError { status, body: body.to_string() })),
     };
-    let code = value.get("code").and_then(|v| v.as_str());
-    if status == 402 && code == Some("payment_declined") {
+    if status == 402 && value.pointer("/code").and_then(|v| v.as_str()) == Some("payment_declined") {
         if let Ok(data) = serde_json::from_value::<PaymentDeclined>(value.clone()) {
             return TonoError::Api(APIFailure::PaymentDeclined(data));
         }

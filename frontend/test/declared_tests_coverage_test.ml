@@ -56,7 +56,7 @@ pub struct person {
 
 pub struct person_ref { key: string @httpLabel }
 
-@status(500) @errorCode("boom")
+@status(500) @errorCode("code", "boom")
 pub struct boom { message: string }
 
 pub struct vclient {
@@ -318,7 +318,7 @@ let value_mismatch_cases =
 let ambiguous_stub_answer () =
   let src =
     {|
-@status(500) @errorCode("kapow")
+@status(500) @errorCode("code", "kapow")
 pub struct kapow { message: string }
 pub struct amb {
   endpoint: string @env("EP2") @default("https://x")

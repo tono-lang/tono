@@ -95,8 +95,8 @@ let duplicate_doc_on_decl_rejected () =
 
 let repeatable_traits_stay_legal () =
   expect "repeated env and errors stay legal" []
-    ("@status(500) @errorCode(\"a\") struct e1 { m: string }\n\
-      @status(501) @errorCode(\"b\") struct e2 { m: string }\n"
+    ("@status(500) @errorCode(\"code\", \"a\") struct e1 { m: string }\n\
+      @status(501) @errorCode(\"code\", \"b\") struct e2 { m: string }\n"
     ^ entry
         "  k: string @env(\"A\") @env(\"B\") @default(\"x\")\n\
         \  op p(): r @http(method: \"GET\", path: \"/p\", endpoint: .ep) \

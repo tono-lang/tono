@@ -531,7 +531,7 @@ let entries_client : Ir.model =
       traits =
         [
           trait "status" (`List [ `Int 529 ]);
-          trait "errorCode" (`List [ `String "overloaded" ]);
+          trait "errorCode" (`List [ `String "code"; `String "overloaded" ]);
           trait "retryable" `Null;
         ];
     }
@@ -657,7 +657,7 @@ let bespoke_impl : Ir.model =
       traits =
         [
           trait "status" (`List [ `Int 529 ]);
-          trait "errorCode" (`List [ `String "overloaded" ]);
+          trait "errorCode" (`List [ `String "code"; `String "overloaded" ]);
           trait "retryable" `Null;
         ];
     }

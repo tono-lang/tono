@@ -376,6 +376,7 @@ fn raw_answer_body(ctx: &TestCtx<'_>, answer: &StubAnswer) -> String {
             let op = ctx.test.op.expect("an impl stub rides a call");
             let code = declared_tests::declared_error_by_shape(op, ctx.module, &error.shape)
                 .and_then(|e| e.code)
+                .map(|c| c.value)
                 .unwrap_or_default();
             format!(
                 "  return {{ success: false, code: {}, body: {} }};\n",

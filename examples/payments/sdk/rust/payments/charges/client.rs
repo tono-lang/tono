@@ -212,8 +212,7 @@ pub fn decode_create_charge_error(status: u16, body: &str) -> TonoError {
             }))
         }
     };
-    let code = value.get("code").and_then(|v| v.as_str());
-    if status == 402 && code == Some("card_declined") {
+    if status == 402 && value.pointer("/code").and_then(|v| v.as_str()) == Some("card_declined") {
         if let Ok(data) = serde_json::from_value::<CardDeclined>(value.clone()) {
             return TonoError::Api(APIFailure::CardDeclined(data));
         }

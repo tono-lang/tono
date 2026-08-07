@@ -11,7 +11,7 @@ struct thing_ref {
 
 @doc("A retryable rate-limit error, discriminated by code.")
 @status(429)
-@errorCode("overloaded")
+@errorCode("code", "overloaded")
 @retryable
 struct overloaded {
   message: string?
@@ -19,7 +19,7 @@ struct overloaded {
 
 @doc("A non-retryable rate-limit error sharing status 429 with `overloaded`, discriminated by a different code.")
 @status(429)
-@errorCode("quota_exceeded")
+@errorCode("code", "quota_exceeded")
 struct quota_exceeded {
   message: string?
 }
@@ -32,7 +32,7 @@ struct not_found {
 
 @doc("A retryable upstream error, discriminated by code.")
 @status(502)
-@errorCode("bad_gateway")
+@errorCode("code", "bad_gateway")
 @retryable
 struct bad_gateway {
   message: string?

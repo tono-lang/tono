@@ -214,7 +214,7 @@ let entry_ir_equivalent () =
     {|
 struct note_ref { id: string @httpLabel }
 struct note { id: string }
-@status(404) @errorCode("not_found") struct not_found { message: string }
+@status(404) @errorCode("code", "not_found") struct not_found { message: string }
 pub struct client {
   api_key: string @arg
   endpoint: string @env("ENDPOINT") @default("https://x")

@@ -91,7 +91,7 @@ let declared_tests : Ir.model =
       traits =
         [
           trait "status" (`List [ `Int 529 ]);
-          trait "errorCode" (`List [ `String "overloaded" ]);
+          trait "errorCode" (`List [ `String "code"; `String "overloaded" ]);
         ];
     }
   in

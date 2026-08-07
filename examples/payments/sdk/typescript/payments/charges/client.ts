@@ -213,10 +213,11 @@ export function decodeCreateChargeError(
   } catch {
     return new APIError(status, body);
   }
-  const code =
-    typeof parsed === "object" && parsed !== null ? parsed["code"] : undefined;
   try {
-    if (status === STATUS_CARD_DECLINED && code === CODE_CARD_DECLINED) {
+    if (
+      status === STATUS_CARD_DECLINED &&
+      parsed?.["code"] === CODE_CARD_DECLINED
+    ) {
       return new CardDeclinedError(decodeCardDeclined(parsed), body);
     }
     if (status === STATUS_NOT_FOUND) {
