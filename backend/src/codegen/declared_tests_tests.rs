@@ -3,13 +3,14 @@ use std::collections::BTreeMap;
 use super::*;
 use crate::ir::{
     AnswerError, Empty, ExtKind, Extension, HttpAnswer, Prim, ShapePattern, TaxonomyPattern,
-    TemplatePart, Trait, Tref, WireBinding,
+    TemplatePart, Trait, Tref, WireBinding, WireValue,
 };
 
 fn op(id: &str, traits: Vec<Trait>, errors: Vec<Tref>) -> Shape {
     Shape {
         id: id.into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: Some(Tref::Prim(Prim::String)),
             output: Some(Tref::Prim(Prim::String)),
             errors,
@@ -23,17 +24,19 @@ fn http_op(id: &str) -> Shape {
     Shape {
         id: id.into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: Some(Tref::Prim(Prim::String)),
             output: Some(Tref::Prim(Prim::String)),
             errors: vec![],
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),
-                uri: vec![TemplatePart::Lit("/x".into())],
+                uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
                 bindings: Default::default(),
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: None,
                 request_headers: vec![],
+                query: vec![],
                 timeout: None,
                 retry: None,
             })),

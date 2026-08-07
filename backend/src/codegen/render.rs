@@ -707,6 +707,7 @@ mod tests {
         let op = Shape {
             id: "billing#create_invoice".into(),
             kind: ShapeKind::Operation {
+                input_name: None,
                 input: None,
                 output: None,
                 errors: vec![],

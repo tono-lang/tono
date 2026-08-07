@@ -188,6 +188,7 @@ pub fn entries_matrix_module() -> Module {
     let op_full = Shape {
         id: "m#api.fetch_note".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: Some(Tref::Ref {
                 id: "m#note".into(),
                 args: vec![],
@@ -199,18 +200,19 @@ pub fn entries_matrix_module() -> Module {
             errors: vec![],
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),
-                uri: vec![
+                uri: WireValue::Template(vec![
                     TemplatePart::Lit("/x/".into()),
                     TemplatePart::Field(vec!["naming".into()]),
-                ],
+                ]),
                 bindings: Default::default(),
                 response_bindings: Default::default(),
                 success: vec![200],
-                endpoint: Some(vec!["naming".into()]),
+                endpoint: Some(WireValue::Field(vec!["naming".into()])),
                 request_headers: vec![(
                     vec![TemplatePart::Lit("X-K".into())],
                     WireValue::Field(vec!["derived".into()]),
                 )],
+                query: vec![],
                 timeout: Some(vec!["wait".into()]),
                 retry: Some(vec!["tiny".into()]),
             })),
@@ -241,12 +243,13 @@ pub fn entries_matrix_module() -> Module {
     fn bare_wire() -> WireBinding {
         WireBinding {
             method: "GET".into(),
-            uri: vec![TemplatePart::Lit("/x".into())],
+            uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
             bindings: Default::default(),
             response_bindings: Default::default(),
             success: vec![200],
-            endpoint: Some(vec!["naming".into()]),
+            endpoint: Some(WireValue::Field(vec!["naming".into()])),
             request_headers: Vec::new(),
+            query: vec![],
             timeout: None,
             retry: None,
         }
@@ -254,6 +257,7 @@ pub fn entries_matrix_module() -> Module {
     let op_bare = Shape {
         id: "m#api.ping".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
@@ -264,6 +268,7 @@ pub fn entries_matrix_module() -> Module {
     let op_prim = Shape {
         id: "m#api.count".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: Some(Tref::Prim(Prim::I32)),
             errors: vec![],
@@ -274,6 +279,7 @@ pub fn entries_matrix_module() -> Module {
     let op_stub = Shape {
         id: "m#api.local".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: Some(Tref::Ref {
                 id: "m#note".into(),
                 args: vec![],

@@ -186,6 +186,7 @@ pub fn create_charge_operation() -> Shape {
     Shape {
         id: "models#create_charge".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: Some(reference("models#Account")),
             output: Some(reference("models#Account")),
             errors: vec![

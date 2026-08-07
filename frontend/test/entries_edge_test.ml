@@ -384,8 +384,10 @@ let op_error_entry_rejected () =
   expect "entry as a declared error" [ "TC0015"; "TC0034" ]
     (entry "" ^ "op x(): r @errors(c)")
 
-let endpoint_literal_rejected () =
-  expect "literal endpoint" [ "TC0043" ]
+(* The unified request-value grammar accepts a literal endpoint (no
+   placeholders needed: the author wrote the whole thing). *)
+let endpoint_literal_accepted () =
+  expect "literal endpoint" []
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
      \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: \"https://x\")\n\
@@ -599,7 +601,14 @@ let resolver_tolerates_value_template () =
     {
       id = "m#c.o";
       kind =
-        Ir.Operation { input = None; output = None; errors = []; wire = None };
+        Ir.Operation
+          {
+            input = None;
+            input_name = None;
+            output = None;
+            errors = [];
+            wire = None;
+          };
       traits =
         [
           { Ir.trait_id = "http"; value = `Assoc [ ("method", `String "GET") ] };
@@ -707,7 +716,7 @@ let () =
         ] );
       ( "protocol-positions",
         [
-          Alcotest.test_case "literal endpoint" `Quick endpoint_literal_rejected;
+          Alcotest.test_case "literal endpoint" `Quick endpoint_literal_accepted;
           Alcotest.test_case "non-string endpoint" `Quick
             endpoint_non_string_rejected;
           Alcotest.test_case "timeout wrong type" `Quick

@@ -376,15 +376,20 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
         // traits (@http, @timeout, @retry, ...) that this same function
         // already diffs elsewhere, so comparing it too would double-report
         // the same break under a different name.
+        // input_name is deliberately excluded: the wire never carries the
+        // parameter's own name, only its type/shape, so renaming it alone is
+        // not a wire break.
         (
             ShapeKind::Operation {
                 input: bi,
+                input_name: _,
                 output: bo,
                 errors: be,
                 wire: _,
             },
             ShapeKind::Operation {
                 input: ci,
+                input_name: _,
                 output: co,
                 errors: ce,
                 wire: _,

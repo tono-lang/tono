@@ -78,6 +78,9 @@ and shape_kind =
   | Service of { operations : shape_id list }
   | Operation of {
       input : tref option;
+      input_name : string option;
+          (* the declared parameter name; [None] for the unnamed legacy form,
+             where [.input] has no user-given name to resolve *)
       output : tref option;
       errors : tref list;
       wire : wire_binding option;
@@ -105,11 +108,15 @@ and source = Arg | With | Env of env_name | Default of json
 and env_name = Env_name of string | Env_field of string list
 
 (* One piece of a parsed template: a literal run, an entry-field placeholder
-   ({.x} or {.x.y}), or an operation-input member placeholder ({id}, valid only
-   in protocol trait positions such as @http path). *)
+   ({.x} or {.x.y}), an operation-parameter placeholder ({.x} whose head
+   resolves to the op's declared parameter name instead of an entry field;
+   the segments after the head, [] for the whole parameter), or the legacy
+   operation-input member placeholder ({id}, valid only in protocol trait
+   positions such as @http path). *)
 and template_part =
   | Tpl_lit of string
   | Tpl_field of string list
+  | Tpl_param of string list
   | Tpl_input of string
 
 (* The resolved HTTP binding a Protocol pass computes once and a Target reads
@@ -131,20 +138,26 @@ and wire_response_part =
 and wire_value =
   | Wire_lit of json
   | Wire_field of string list
+  | Wire_param of string list
+    (* segments into the op's declared parameter; [] is the whole value *)
   | Wire_template of template_part list
 
 and wire_binding = {
   wb_method : string;
-  wb_uri : template_part list;
-      (* path template, {name} and {.field} placeholders parsed *)
+  wb_uri : wire_value;
+      (* literal, entry/param reference, or template; {name}/{.field}
+         placeholders parsed inside a template *)
   wb_bindings : (string * wire_part) list;
       (* input member name -> request part *)
   wb_response_bindings : (string * wire_response_part) list;
   wb_success : int list;
       (* status codes; the output type is always the op's own output *)
-  wb_endpoint : string list option; (* @http endpoint: entry-field path *)
+  wb_endpoint : wire_value option;
+      (* @http endpoint: literal, ref, or template *)
   wb_request_headers : (template_part list * wire_value) list;
       (* @header(key, value): key template -> value *)
+  wb_query : (template_part list * wire_value) list;
+      (* @query(key, value): key template -> value *)
   wb_timeout : string list option;
       (* @timeout(.field): the entry-field path, unresolved *)
   wb_retry : string list option;

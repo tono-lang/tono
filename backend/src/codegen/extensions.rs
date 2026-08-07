@@ -269,6 +269,7 @@ mod tests {
             id: op_id.into(),
             kind: crate::ir::ShapeKind::Operation {
                 input: None,
+                input_name: None,
                 output: None,
                 errors: vec![],
                 wire: None,

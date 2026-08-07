@@ -141,8 +141,10 @@ let duplicate_entry_op_rejected () =
      \  op o(): r @http(method: \"GET\", path: \"/b\", endpoint: .ep)\n\
       }\n" ^ wire)
 
-let header_value_template_rejected () =
-  expect "template in a header value" [ "TC0044" ]
+(* The unified request-value grammar accepts a template in a header value
+   (key and value share one grammar). *)
+let header_value_template_accepted () =
+  expect "template in a header value" []
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
      \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
@@ -342,7 +344,7 @@ let () =
           Alcotest.test_case "duplicate entry op" `Quick
             duplicate_entry_op_rejected;
           Alcotest.test_case "header value template" `Quick
-            header_value_template_rejected;
+            header_value_template_accepted;
           Alcotest.test_case "header key input placeholder" `Quick
             header_key_input_placeholder_rejected;
           Alcotest.test_case "unterminated path placeholder" `Quick

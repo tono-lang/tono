@@ -8,6 +8,7 @@ use crate::codegen::test_support::{
     with_transformed_chain_field,
 };
 use crate::ir::decode_model;
+use crate::ir::WireValue;
 
 /// The canonical entry fixture (config, every source kind, derivation,
 /// selection, composition, protocol refs), decoded off the shared schema
@@ -139,10 +140,10 @@ fn a_multi_entry_module_prefixes_the_colliding_companions() {
 fn typed_wire() -> crate::ir::WireBinding {
     crate::ir::WireBinding {
         method: "POST".into(),
-        uri: vec![
+        uri: WireValue::Template(vec![
             TemplatePart::Lit("/notes/".into()),
             TemplatePart::Input("id".into()),
-        ],
+        ]),
         bindings: [
             ("id".to_string(), crate::ir::WirePart::Label),
             ("body".to_string(), crate::ir::WirePart::Body),
@@ -151,11 +152,12 @@ fn typed_wire() -> crate::ir::WireBinding {
         .collect(),
         response_bindings: Default::default(),
         success: vec![200],
-        endpoint: Some(vec!["endpoint".into()]),
+        endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
         request_headers: vec![(
             vec![TemplatePart::Lit("X-API-Key".into())],
             crate::ir::WireValue::Field(vec!["api_key".into()]),
         )],
+        query: vec![],
         timeout: Some(vec!["timeout".into()]),
         retry: Some(vec!["max_retries".into()]),
     }
@@ -228,7 +230,7 @@ fn the_method_assembles_the_request_and_maps_the_outcome_onto_the_taxonomy() {
 #[test]
 fn an_operation_with_no_retry_or_timeout_declares_neither() {
     let mut wire = typed_wire();
-    wire.uri = vec![TemplatePart::Lit("/notes".into())];
+    wire.uri = WireValue::Template(vec![TemplatePart::Lit("/notes".into())]);
     wire.bindings = [
         ("id".to_string(), crate::ir::WirePart::Body),
         ("body".to_string(), crate::ir::WirePart::Body),

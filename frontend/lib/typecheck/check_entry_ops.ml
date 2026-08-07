@@ -1,10 +1,12 @@
 (* Operation-position rules of the entry model: protocol traits require
    @http, an entry @http op names its endpoint as a reachable string-field
-   ref, @timeout/@retry are typed refs, @header keys/values obey the surface
-   (templated keys, literal-or-ref values), and template strings in protocol
-   positions parse with their real span so an unterminated "{" is diagnosed.
-   A loose operation has no field scope: refs, endpoint:, and @timeout/@retry
-   belong to an entry. *)
+   ref, @timeout/@retry are typed refs, @header/@query keys and values share
+   one grammar (literal, template, or pure reference), and template strings
+   in protocol positions parse with their real span so an unterminated "{"
+   is diagnosed. A loose operation has no entry-field scope, but it can still
+   reference its own declared parameter: only entry-field refs (and
+   endpoint:/@timeout/@retry, which only ever name entry fields) require an
+   entry. *)
 
 let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 
@@ -20,11 +22,14 @@ let kv_arg key (args : Ast.trait_arg list) : Ast.trait_arg option =
     args
 
 let base_ty = Entry_scope.base_ty
-let resolve_path = Entry_scope.resolve_path
 let path_str = Entry_scope.path_str
 let scalar_of_ty = Entry_scope.scalar_of_ty
-let protocol_trait_names = Entry_scope.protocol_trait_names
 let op_refs = Entry_scope.op_refs
+let op_param = Entry_scope.op_param
+
+(* @query joins @header/@timeout/@retry as a protocol trait requiring @http;
+   its key/value refs ride the same [op_refs] collection. *)
+let protocol_trait_names = "query" :: Entry_scope.protocol_trait_names
 
 (* Template strings in protocol positions parse here with their real span,
    so an unterminated "{" is diagnosed instead of silently going literal. *)
@@ -33,70 +38,93 @@ let template_of ~span str =
   let parts = Template.parse ~diags:d ~span str in
   (parts, List.rev !d)
 
-(* Shape rules of @header, independent of any field scope, so loose ops obey
-   them too: a string key without input placeholders, and a value that is a
-   literal string (no template; derive a @format field instead) or a field
-   reference. A non-string literal has no defined stringification. *)
-let check_header_shapes (op : Ast.decl) : Diagnostic.t list =
-  List.concat_map
-    (fun (tr : Ast.trait) ->
-      match tr.Ast.targs with
-      | [ key; value ] -> (
-          (match key with
-            | Ast.AString k ->
-                let parts, diags = template_of ~span:tr.tspan k in
-                diags
-                @
-                (* Input members vary per call; only the @http path carries
-                   that scope. A header key resolves at construction. *)
-                if
-                  List.exists
-                    (function Ir.Tpl_input _ -> true | _ -> false)
-                    parts
-                then
-                  [
-                    err Error_codes.protocol_trait_invalid tr.tspan
-                      "input placeholders ({name}) are only available in the \
-                       @http path; a @header key takes {.field} references";
-                  ]
-                else []
-            | _ ->
-                [
-                  err Error_codes.protocol_trait_invalid tr.tspan
-                    "@header expects a string key (a literal, possibly with \
-                     {.field} placeholders)";
-                ])
-          @
-          match value with
-          | Ast.AString v -> (
-              let parts, diags = template_of ~span:tr.tspan v in
-              diags
-              @
-              match parts with
-              | [] | [ Ir.Tpl_lit _ ] -> []
-              | _ ->
-                  [
-                    err Error_codes.protocol_trait_invalid tr.tspan
-                      "a template in a @header value is not supported; derive \
-                       it with @format on a field and reference the field";
-                  ])
-          | Ast.ARef _ -> []
-          | _ ->
+let has_crlf s = String.exists (function '\r' | '\n' -> true | _ -> false) s
+
+(* CR/LF in a header/query key or value is the one position a raw value does
+   real damage in (request smuggling via an injected line); every other
+   literal run in a protocol position is free-form. *)
+let crlf_diags ~what span (parts : Ir.template_part list) : Diagnostic.t list =
+  List.filter_map
+    (function
+      | Ir.Tpl_lit s when has_crlf s ->
+          Some
+            (err Error_codes.protocol_trait_invalid span
+               "%s must not contain a carriage return or line feed" what)
+      | _ -> None)
+    parts
+
+(* The shared grammar of a @header/@query key or value: a string (literal or
+   template, real placeholders resolved elsewhere by [op_refs]) or a pure
+   reference. The legacy [{name}] input placeholder is excluded: that
+   convention only exists in the @http path. *)
+let check_kv_shape ~trait_name ~key_what ~value_what (tr : Ast.trait) :
+    Diagnostic.t list =
+  match tr.Ast.targs with
+  | [ key; value ] -> (
+      (match key with
+        | Ast.AString k ->
+            let parts, diags = template_of ~span:tr.tspan k in
+            diags
+            @ crlf_diags ~what:key_what tr.tspan parts
+            @
+            if
+              List.exists (function Ir.Tpl_input _ -> true | _ -> false) parts
+            then
               [
                 err Error_codes.protocol_trait_invalid tr.tspan
-                  "@header expects a string literal or a field reference as \
-                   its value";
-              ])
+                  "input placeholders ({name}) are only available in the @http \
+                   path; %s"
+                  key_what;
+              ]
+            else []
+        | Ast.ARef _ -> []
+        | _ ->
+            [
+              err Error_codes.protocol_trait_invalid tr.tspan
+                "@%s expects a string key (a literal or {.field} template) or \
+                 a field reference"
+                trait_name;
+            ])
+      @
+      match value with
+      | Ast.AString v ->
+          let parts, diags = template_of ~span:tr.tspan v in
+          diags @ crlf_diags ~what:value_what tr.tspan parts
+      | Ast.ARef _ -> []
       | _ ->
           [
             err Error_codes.protocol_trait_invalid tr.tspan
-              "@header expects a key and a value, e.g. @header(\"X-Name\", \
-               .field)";
+              "@%s expects a string literal/template or a field reference as \
+               its value"
+              trait_name;
           ])
+  | _ ->
+      [
+        err Error_codes.protocol_trait_invalid tr.tspan
+          "@%s expects a key and a value, e.g. @%s(\"X-Name\", .field)"
+          trait_name trait_name;
+      ]
+
+(* Shape rules of @header, independent of any field scope, so loose ops obey
+   them too. *)
+let check_header_shapes (op : Ast.decl) : Diagnostic.t list =
+  List.concat_map
+    (check_kv_shape ~trait_name:"header"
+       ~key_what:"a @header key takes {.field} references"
+       ~value_what:"a @header value")
     (traits_named "header" op.Ast.dtraits)
 
-(* Protocol checks shared by every op: @header/@timeout/@retry require @http
-   (a purely local operation has no protocol surface). *)
+(* Shape rules of @query, mirroring @header (the op-level query trait; the
+   member-level @httpQuery binding is unaffected). *)
+let check_query_shapes (op : Ast.decl) : Diagnostic.t list =
+  List.concat_map
+    (check_kv_shape ~trait_name:"query"
+       ~key_what:"a @query key takes {.field} references"
+       ~value_what:"a @query value")
+    (traits_named "query" op.Ast.dtraits)
+
+(* Protocol checks shared by every op: @header/@query/@timeout/@retry require
+   @http (a purely local operation has no protocol surface). *)
 let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
   if Option.is_some (find_trait "http" op.dtraits) then []
   else
@@ -110,24 +138,36 @@ let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
         else None)
       op.Ast.dtraits
 
-(* A loose (non-entry) operation has no field scope: any field reference in a
-   protocol trait, any endpoint:, and @timeout/@retry (which only take field
-   references by definition) belong to an entry. *)
-let check_loose_op (op : Ast.decl) : Diagnostic.t list =
+(* A loose (non-entry) operation has no entry-field scope, but it can still
+   reference its own declared parameter (zero or one segment deep, matching
+   what codegen renders): a ref that resolves as a param reference is legal;
+   anything else — an entry-field ref, endpoint:, @timeout/@retry (which only
+   ever name entry fields) — belongs to an entry. *)
+let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
+  let pname, pty = op_param op in
+  let is_param_ref segs =
+    Option.is_some (Entry_scope.resolve_param ctx pname pty segs)
+  in
   let entry_only what span =
     err Error_codes.protocol_trait_invalid span
       "%s is only available on an operation declared in an entry body" what
   in
   let ref_diags =
-    List.map
+    List.filter_map
       (fun ((segs : string list), span) ->
-        entry_only (Printf.sprintf "field reference '%s'" (path_str segs)) span)
+        if is_param_ref segs then None
+        else
+          Some
+            (entry_only
+               (Printf.sprintf "field reference '%s'" (path_str segs))
+               span))
       (op_refs op)
   in
   let endpoint_diags =
     match find_trait "http" op.dtraits with
     | Some tr when Option.is_some (kv_arg "endpoint" tr.targs) -> (
         match kv_arg "endpoint" tr.targs with
+        | Some (Ast.ARef r) when is_param_ref r.segs -> []
         | Some (Ast.ARef _) -> [] (* already reported as a field reference *)
         | _ -> [ entry_only "endpoint:" tr.tspan ])
     | _ -> []
@@ -140,27 +180,64 @@ let check_loose_op (op : Ast.decl) : Diagnostic.t list =
         List.filter_map
           (fun (tr : Ast.trait) ->
             match tr.Ast.targs with
+            | [ Ast.ARef r ] when is_param_ref r.segs -> None
             | [ Ast.ARef _ ] -> None (* already reported as a field reference *)
             | _ -> Some (entry_only ("@" ^ name) tr.tspan))
           (traits_named name op.dtraits))
       [ "timeout"; "retry" ]
   in
-  (* @header still requires @http; @timeout/@retry are covered above. *)
-  let header_http_diags =
+  (* @header/@query still require @http; @timeout/@retry are covered above. *)
+  let protocol_http_diags =
     if Option.is_some (find_trait "http" op.dtraits) then []
     else
-      List.map
-        (fun (tr : Ast.trait) ->
-          err Error_codes.protocol_trait_invalid tr.tspan
-            "@header is a protocol trait and requires @http on the operation")
-        (traits_named "header" op.dtraits)
+      List.concat_map
+        (fun name ->
+          List.map
+            (fun (tr : Ast.trait) ->
+              err Error_codes.protocol_trait_invalid tr.tspan
+                "@%s is a protocol trait and requires @http on the operation"
+                name)
+            (traits_named name op.dtraits))
+        [ "header"; "query" ]
   in
-  header_http_diags @ check_header_shapes op @ ref_diags @ endpoint_diags
-  @ timeout_retry_diags
+  protocol_http_diags @ check_header_shapes op @ check_query_shapes op
+  @ ref_diags @ endpoint_diags @ timeout_retry_diags
+
+(* A value position (path, endpoint) that accepts the unified grammar:
+   literal, template, or pure reference. Resolution of the refs a template or
+   a pure reference carries is handled generically by [op_refs]/the caller's
+   [ref_diags]; this only validates the position's own shape (template
+   parses, no [{name}] input placeholder outside @http path — path is the one
+   position that keeps it). *)
+let value_position_diags ~allow_input (arg : Ast.trait_arg) span :
+    Diagnostic.t list =
+  match arg with
+  | Ast.AString s ->
+      let parts, diags = template_of ~span s in
+      diags
+      @
+      if allow_input then []
+      else
+        List.filter_map
+          (function
+            | Ir.Tpl_input _ ->
+                Some
+                  (err Error_codes.protocol_trait_invalid span
+                     "input placeholders ({name}) are only available in the \
+                      @http path")
+            | _ -> None)
+          parts
+  | Ast.ARef _ -> []
+  | _ ->
+      [
+        err Error_codes.protocol_trait_invalid span
+          "expected a string literal/template or a field reference";
+      ]
 
 let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     Diagnostic.t list =
-  let resolve segs = resolve_path ctx fields segs in
+  let pname, pty = op_param op in
+  let resolve segs = Entry_scope.resolve_ref ctx fields ~pname ~pty segs in
   let ref_diags =
     List.filter_map
       (fun (segs, span) ->
@@ -185,7 +262,16 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
             ]
         | Some (Ast.ARef r) -> (
             match resolve r.segs with
-            | Some m when scalar_of_ty ctx m.mtype = Entry_scope.SString -> []
+            | Some (Entry_scope.RField m)
+              when scalar_of_ty ctx m.mtype = Entry_scope.SString ->
+                []
+            | Some
+                (Entry_scope.RParam
+                   (Entry_scope.Whole (Ast.TPrim ("string", _)))) ->
+                []
+            | Some (Entry_scope.RParam (Entry_scope.Member m))
+              when scalar_of_ty ctx m.mtype = Entry_scope.SString ->
+                []
             | Some _ ->
                 [
                   err Error_codes.entry_endpoint_missing r.ref_span
@@ -193,10 +279,13 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
                     (path_str r.segs);
                 ]
             | None -> [] (* unknown ref already reported above *))
+        | Some (Ast.AString _ as v) ->
+            value_position_diags ~allow_input:false v http.tspan
         | Some _ ->
             [
               err Error_codes.entry_endpoint_missing http.tspan
-                "endpoint: takes a field reference (.field), not a literal";
+                "endpoint: takes a literal, a template, or a field reference, \
+                 not a bare literal of another kind";
             ])
   in
   let typed_ref name want scalar_desc =
@@ -206,13 +295,18 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
         | [ Ast.ARef r ] -> (
             match resolve r.segs with
             | None -> [] (* already reported *)
-            | Some m ->
+            | Some (Entry_scope.RField m) ->
                 if want ctx m.mtype then []
                 else
                   [
                     err Error_codes.protocol_trait_invalid r.ref_span
                       "@%s must reference a %s field" name scalar_desc;
-                  ])
+                  ]
+            | Some (Entry_scope.RParam _) ->
+                [
+                  err Error_codes.protocol_trait_invalid r.ref_span
+                    "@%s must reference an entry field" name;
+                ])
         | _ ->
             [
               err Error_codes.protocol_trait_invalid tr.tspan
@@ -231,14 +325,14 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
       (fun ctx t -> scalar_of_ty ctx t = Entry_scope.SInt)
       "integer"
   in
-  let path_template_diags =
+  let path_diags =
     match find_trait "http" op.dtraits with
     | Some { targs; tspan; _ } -> (
         match kv_arg "path" targs with
-        | Some (Ast.AString p) -> snd (template_of ~span:tspan p)
-        | _ -> [])
+        | Some v -> value_position_diags ~allow_input:true v tspan
+        | None -> [])
     | None -> []
   in
   check_protocol_positions op
-  @ ref_diags @ http_diags @ path_template_diags @ timeout_diags @ retry_diags
-  @ check_header_shapes op
+  @ ref_diags @ http_diags @ path_diags @ timeout_diags @ retry_diags
+  @ check_header_shapes op @ check_query_shapes op

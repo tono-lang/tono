@@ -1,6 +1,6 @@
 use super::*;
 use crate::codegen::targets::go::GoRules;
-use crate::ir::{Shape, ShapeKind, WireBinding};
+use crate::ir::{Shape, ShapeKind, WireBinding, WireValue};
 
 fn package_text(usage: &Usage) -> String {
     crate::codegen::test_support::rendered(&internal_helpers(usage), &GoRules::default())
@@ -89,18 +89,20 @@ fn the_dispatch_prefers_the_canonical_transport_and_lowercases_headers() {
 fn entry_module(retry: bool, timeout: bool) -> crate::ir::Module {
     let wire = WireBinding {
         method: "POST".into(),
-        uri: vec![crate::ir::TemplatePart::Lit("/x".into())],
+        uri: WireValue::Template(vec![crate::ir::TemplatePart::Lit("/x".into())]),
         bindings: Default::default(),
         response_bindings: Default::default(),
         success: vec![200],
-        endpoint: Some(vec!["endpoint".into()]),
+        endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
         request_headers: Vec::new(),
+        query: vec![],
         timeout: timeout.then(|| vec!["timeout".into()]),
         retry: retry.then(|| vec!["max_retries".into()]),
     };
     let op = Shape {
         id: "m#client.call".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],

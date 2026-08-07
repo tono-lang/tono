@@ -5,7 +5,7 @@ use super::*;
 use crate::codegen::layout::check_layout;
 use crate::codegen::test_support::{member, structure, union_shape, wire_binding};
 use crate::ir::{
-    EntryField, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref, WireBinding,
+    EntryField, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref, WireBinding, WireValue,
 };
 use std::path::PathBuf;
 
@@ -219,6 +219,7 @@ fn ops_model() -> Model {
     model.modules[0].operations = vec![Shape {
         id: "payments#get_charge".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: Some(Tref::Ref {
                 id: "payments#Charge".into(),
@@ -669,6 +670,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                             operations: vec![Shape {
                                 id: "payments.charges#client.create".into(),
                                 kind: ShapeKind::Operation {
+                                    input_name: None,
                                     input: Some(Tref::Ref {
                                         id: "payments.charges#charge".into(),
                                         args: vec![],
@@ -679,9 +681,11 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                                     }),
                                     errors: vec![],
                                     wire: Some(Box::new(WireBinding {
-                                        uri: vec![TemplatePart::Lit("/charges".into())],
+                                        uri: WireValue::Template(vec![TemplatePart::Lit(
+                                            "/charges".into(),
+                                        )]),
                                         success: vec![200],
-                                        endpoint: Some(vec!["ep".into()]),
+                                        endpoint: Some(WireValue::Field(vec!["ep".into()])),
                                         ..*wire_binding("POST")
                                     })),
                                 },

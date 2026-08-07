@@ -9,6 +9,7 @@
 use tono_backend::compat::{diff, Category};
 use tono_backend::ir::{
     EntryField, ExtKind, Extension, Prim, Shape, ShapeKind, TemplatePart, Tref, WireBinding,
+    WireValue,
 };
 
 fn model(shapes: Vec<Shape>, extensions: Vec<Extension>) -> tono_backend::ir::Model {
@@ -28,17 +29,19 @@ fn wire_op(id: &str) -> Shape {
     Shape {
         id: id.into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),
-                uri: vec![TemplatePart::Lit("/x".into())],
+                uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
                 bindings: Default::default(),
                 response_bindings: Default::default(),
                 success: vec![200],
-                endpoint: Some(vec!["endpoint".into()]),
+                endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
                 request_headers: vec![],
+                query: vec![],
                 timeout: None,
                 retry: None,
             })),

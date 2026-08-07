@@ -1,19 +1,20 @@
 use super::*;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::tree::Decl;
-use crate::ir::WireBinding;
+use crate::ir::{WireBinding, WireValue};
 
 fn base_wire() -> WireBinding {
     WireBinding {
         method: "POST".into(),
-        uri: vec![TemplatePart::Lit("/charges".into())],
+        uri: WireValue::Template(vec![TemplatePart::Lit("/charges".into())]),
         bindings: [("amount".to_string(), WirePart::Body)]
             .into_iter()
             .collect(),
         response_bindings: Default::default(),
         success: Vec::new(),
-        endpoint: Some(vec!["endpoint".into()]),
+        endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
         request_headers: Vec::new(),
+        query: vec![],
         timeout: None,
         retry: None,
     }
@@ -128,10 +129,10 @@ fn a_bound_module_hook_rides_the_request() {
 #[test]
 fn a_labeled_path_reads_the_record_and_url_encodes() {
     let mut case = Case::new(base_wire());
-    case.wire.uri = vec![
+    case.wire.uri = WireValue::Template(vec![
         TemplatePart::Lit("/things/".into()),
         TemplatePart::Input("id".into()),
-    ];
+    ]);
     case.wire.bindings = [("id".to_string(), WirePart::Label)].into_iter().collect();
     let out = case.text();
     assert!(out.contains("record, err := record.EncodeRecord(input)"));
@@ -277,4 +278,75 @@ fn a_missing_endpoint_is_an_emission_defect_behind_the_validator() {
     let mut case = Case::new(base_wire());
     case.wire.endpoint = None;
     case.text();
+}
+
+// ── Named op-parameter references (WireValue::Param / TemplatePart::Param) ─
+
+#[test]
+fn a_bare_param_reference_in_a_path_template_reads_the_whole_input() {
+    let mut case = Case::new(base_wire());
+    case.wire.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec![]),
+    ]);
+    let out = case.text();
+    assert!(out.contains("transport.PathPart(input)"));
+}
+
+#[test]
+fn a_param_member_reference_in_a_path_template_reads_off_the_record() {
+    let mut case = Case::new(base_wire());
+    case.wire.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["id".into()]),
+    ]);
+    let out = case.text();
+    assert!(out.contains("transport.PathPart(record[\"id\"])"));
+}
+
+#[test]
+fn a_pure_param_reference_in_path_position_passes_through_unescaped() {
+    let mut case = Case::new(base_wire());
+    case.wire.uri = WireValue::Param(vec![]);
+    let out = case.text();
+    assert!(out.contains("transport.FormatScalar(input)"));
+    assert!(!out.contains("PathPart"));
+}
+
+#[test]
+fn a_pure_param_member_reference_in_path_position_passes_through_unescaped() {
+    let mut case = Case::new(base_wire());
+    case.wire.uri = WireValue::Param(vec!["href".into()]);
+    let out = case.text();
+    assert!(out.contains("transport.FormatScalar(record[\"href\"])"));
+}
+
+#[test]
+fn a_literal_uri_is_a_plain_string() {
+    let mut case = Case::new(base_wire());
+    case.wire.uri = WireValue::Lit(serde_json::json!("/fixed"));
+    let out = case.text();
+    assert!(out.contains("\"/fixed\""));
+}
+
+#[test]
+fn a_param_reference_in_a_header_value_reads_the_whole_input() {
+    let mut case = Case::new(base_wire());
+    case.wire.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Id".into())],
+        WireValue::Param(vec![]),
+    )];
+    let out = case.text();
+    assert!(out.contains("transport.FormatScalar(input)"));
+}
+
+#[test]
+fn a_param_reference_in_a_header_key_reads_off_the_record() {
+    let mut case = Case::new(base_wire());
+    case.wire.request_headers = vec![(
+        vec![TemplatePart::Param(vec!["region".into()])],
+        WireValue::Lit(serde_json::json!("v")),
+    )];
+    let out = case.text();
+    assert!(out.contains("transport.FormatScalar(record[\"region\"])"));
 }

@@ -75,6 +75,7 @@ and shape_kind =
   | Service of { operations : shape_id list }
   | Operation of {
       input : tref option;
+      input_name : string option;
       output : tref option;
       errors : tref list;
           (* tref so an operation can apply a generic directly *)
@@ -94,11 +95,14 @@ and shape = { id : shape_id; kind : shape_kind; traits : trait list }
 and source = Arg | With | Env of env_name | Default of json
 and env_name = Env_name of string | Env_field of string list
 
-(* A parsed template: literal runs, entry-field placeholders ({.x}), and
-   operation-input member placeholders ({id}, protocol trait positions only). *)
+(* A parsed template: literal runs, entry-field placeholders ({.x}),
+   operation-parameter placeholders ({.x} whose head resolves to the op's
+   declared parameter name), and the legacy operation-input member
+   placeholders ({id}, protocol trait positions only). *)
 and template_part =
   | Tpl_lit of string
   | Tpl_field of string list
+  | Tpl_param of string list
   | Tpl_input of string
 
 (* The resolved HTTP binding a Protocol pass computes once and a Target reads
@@ -117,16 +121,18 @@ and wire_response_part =
 and wire_value =
   | Wire_lit of json
   | Wire_field of string list
+  | Wire_param of string list
   | Wire_template of template_part list
 
 and wire_binding = {
   wb_method : string;
-  wb_uri : template_part list;
+  wb_uri : wire_value;
   wb_bindings : (string * wire_part) list;
   wb_response_bindings : (string * wire_response_part) list;
   wb_success : int list;
-  wb_endpoint : string list option;
+  wb_endpoint : wire_value option;
   wb_request_headers : (template_part list * wire_value) list;
+  wb_query : (template_part list * wire_value) list;
   wb_timeout : string list option;
   wb_retry : string list option;
 }

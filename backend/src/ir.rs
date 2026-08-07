@@ -43,7 +43,14 @@ pub use crate::ir_tests_model::*;
 /// v11 changed the meaning of `WireBinding::success`: empty now means no
 /// `code:` was declared (the 2xx-range convention applies), where every
 /// prior version always populated it with at least the default `[200]`.
-pub const TONO_IR_VERSION: u32 = 11;
+/// v12 named the op parameter (`Operation::input_name`, absent for the
+/// legacy unnamed form) and unified the request-value grammar: `uri` and
+/// `endpoint` became `WireValue` (literal, entry/param reference, or
+/// template) instead of a bare template/path, `TemplatePart`/`WireValue`
+/// gained a `Param` variant for a reference into the op's own parameter, and
+/// `WireBinding` gained `query` (mirrors `request_headers`) for the new
+/// op-level `@query` trait.
+pub const TONO_IR_VERSION: u32 = 12;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -293,12 +300,16 @@ pub struct FieldRef {
 }
 
 /// One piece of a parsed template: a literal run, an entry-field placeholder
-/// (`{.x}`), or an operation-input member placeholder (`{id}`).
+/// (`{.x}`), an operation-parameter placeholder (`{.x}` whose head segment
+/// names the op's declared parameter instead of an entry field; the
+/// remaining segments index into it, empty for the whole parameter), or the
+/// legacy operation-input member placeholder (`{id}`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TemplatePart {
     Lit(String),
     Field(Vec<String>),
+    Param(Vec<String>),
     Input(String),
 }
 
@@ -383,13 +394,15 @@ pub enum WireResponsePart {
 }
 
 /// A value position in a protocol trait: a literal, an entry-field
-/// reference, or a template mixing literal runs with entry-field
-/// placeholders.
+/// reference, an op-parameter reference (segments into the op's declared
+/// parameter, empty for the whole value), or a template mixing literal runs
+/// with entry-field/op-parameter placeholders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WireValue {
     Lit(Value),
     Field(Vec<String>),
+    Param(Vec<String>),
     Template(Vec<TemplatePart>),
 }
 
@@ -401,8 +414,8 @@ pub enum WireValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WireBinding {
     pub method: String,
-    #[serde(default)]
-    pub uri: Vec<TemplatePart>,
+    #[serde(default = "WireBinding::default_uri")]
+    pub uri: WireValue,
     #[serde(default)]
     pub bindings: BTreeMap<String, WirePart>,
     #[serde(default)]
@@ -413,13 +426,21 @@ pub struct WireBinding {
     #[serde(default)]
     pub success: Vec<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<Vec<String>>,
+    pub endpoint: Option<WireValue>,
     #[serde(default)]
     pub request_headers: Vec<(Vec<TemplatePart>, WireValue)>,
+    #[serde(default)]
+    pub query: Vec<(Vec<TemplatePart>, WireValue)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<Vec<String>>,
+}
+
+impl WireBinding {
+    fn default_uri() -> WireValue {
+        WireValue::Template(Vec::new())
+    }
 }
 
 /// Shape kind, internally tagged by `kind` and flattened next to a shape's
@@ -455,6 +476,10 @@ pub enum ShapeKind {
     },
     Operation {
         input: Option<Tref>,
+        // The declared parameter name; absent for the legacy unnamed form,
+        // where `.input` has no user-given name to resolve.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_name: Option<String>,
         output: Option<Tref>,
         #[serde(default)]
         errors: Vec<Tref>,

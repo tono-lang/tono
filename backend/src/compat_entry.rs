@@ -245,12 +245,14 @@ fn diff_entry_ops(id: &str, base: &[Shape], curr: &[Shape], out: &mut Vec<Change
                 if let (
                     ShapeKind::Operation {
                         input: bin,
+                        input_name: _,
                         output: bout,
                         errors: berr,
                         wire: _,
                     },
                     ShapeKind::Operation {
                         input: cin,
+                        input_name: _,
                         output: cout,
                         errors: cerr,
                         wire: _,

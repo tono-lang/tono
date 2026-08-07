@@ -34,6 +34,7 @@ let encode_template_part (p : Ir.template_part) : Ir.json =
   match p with
   | Ir.Tpl_lit s -> `Assoc [ ("lit", `String s) ]
   | Ir.Tpl_field path -> `Assoc [ ("field", encode_path path) ]
+  | Ir.Tpl_param path -> `Assoc [ ("param", encode_path path) ]
   | Ir.Tpl_input name -> `Assoc [ ("input", `String name) ]
 
 let encode_arm_value (v : Ir.arm_value) : Ir.json =
@@ -109,10 +110,13 @@ let decode_template_part j =
   | [ ("field", v) ] ->
       let* p = decode_path v in
       Ok (Ir.Tpl_field p)
+  | [ ("param", v) ] ->
+      let* p = decode_path v in
+      Ok (Ir.Tpl_param p)
   | [ ("input", v) ] ->
       let* s = as_string v in
       Ok (Ir.Tpl_input s)
-  | _ -> err "template part must be a single lit, field, or input key"
+  | _ -> err "template part must be a single lit, field, param, or input key"
 
 let decode_arm_value j =
   let* kvs = as_assoc j in

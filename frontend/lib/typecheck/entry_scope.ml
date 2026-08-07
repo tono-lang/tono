@@ -57,6 +57,52 @@ let rec resolve_path ctx (fields : Ast.member list) (segs : string list) :
 
 let path_str segs = "." ^ String.concat "." segs
 
+(* ── Op-parameter resolution ──────────────────────────────────────────────
+   An op's named parameter lives in a separate namespace from entry fields
+   (the AST has no member list for it, just a name and a type), so it gets
+   its own resolver rather than reusing [resolve_path]'s [Ast.member list].
+   Codegen only ever renders a parameter reference zero or one segment deep
+   (the whole value, or one member of a struct-typed parameter — an op has
+   exactly one parameter, so "member of the parameter" is the same decoded
+   record the legacy [{name}] placeholder already reads), so resolution caps
+   there too: a deeper path is reported unresolved rather than silently
+   accepted and left unrenderable. *)
+type param_ref = Whole of Ast.ty | Member of Ast.member
+
+let resolve_param ctx (pname : string option) (pty : Ast.ty option)
+    (segs : string list) : param_ref option =
+  match (pname, pty, segs) with
+  | Some p, Some ty, [ head ] when String.equal p head -> Some (Whole ty)
+  | Some p, Some ty, [ head; member ] when String.equal p head -> (
+      match base_ty ty with
+      | Ast.TName (n, [], _) -> (
+          match struct_members ctx n with
+          | Some ms ->
+              Option.map
+                (fun m -> Member m)
+                (List.find_opt
+                   (fun (m : Ast.member) -> String.equal m.mname member)
+                   ms)
+          | None -> None)
+      | _ -> None)
+  | _ -> None
+
+(* [.name] resolves against what the op declares: its own parameter first
+   (an op-param name shadows a same-named entry field, ordinary lexical
+   shadowing), then the entry's fields. *)
+type resolved_ref = RField of Ast.member | RParam of param_ref
+
+let resolve_ref ctx (fields : Ast.member list) ~(pname : string option)
+    ~(pty : Ast.ty option) (segs : string list) : resolved_ref option =
+  match resolve_param ctx pname pty segs with
+  | Some p -> Some (RParam p)
+  | None -> Option.map (fun m -> RField m) (resolve_path ctx fields segs)
+
+let op_param (op : Ast.decl) : string option * Ast.ty option =
+  match op.Ast.dkind with
+  | Ast.DOp { pname; input; _ } -> (pname, input)
+  | _ -> (None, None)
+
 (* ── Scalar classification (match subjects and patterns) ───────────────── *)
 
 type scalar = SBool | SString | SInt | SEnum of string list | SOther

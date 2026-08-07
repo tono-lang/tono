@@ -56,6 +56,7 @@ fn op(id: &str, traits: Vec<Trait>) -> Shape {
     Shape {
         id: id.into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
@@ -383,6 +384,7 @@ fn an_entry_op_signature_change_is_source_breaking() {
         vec![Shape {
             id: "billing#client.save".into(),
             kind: ShapeKind::Operation {
+                input_name: None,
                 input: Some(Tref::Ref {
                     id: "billing#Note".into(),
                     args: vec![],

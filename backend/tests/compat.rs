@@ -152,6 +152,7 @@ fn removed_shape_severity_follows_the_reference_position() {
     let nested_op = Shape {
         id: "billing#client.save".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: Some(Tref::Ref {
                 id: "billing#Note".into(),
                 args: vec![],
@@ -200,6 +201,7 @@ fn unchanged_entry_and_config_produce_no_changes() {
                 vec![Shape {
                     id: "billing#client.save".into(),
                     kind: ShapeKind::Operation {
+                        input_name: None,
                         input: None,
                         output: None,
                         errors: vec![],
@@ -221,6 +223,7 @@ fn removing_an_op_from_an_entry_is_source_breaking() {
     let op = Shape {
         id: "billing#client.save".into(),
         kind: ShapeKind::Operation {
+            input_name: None,
             input: None,
             output: None,
             errors: vec![],
@@ -611,6 +614,7 @@ fn an_operation_signature_change_is_source_breaking() {
             operations: vec![Shape {
                 id: "billing#Create".into(),
                 kind: ShapeKind::Operation {
+                    input_name: None,
                     input: Some(Tref::Ref {
                         id: input.into(),
                         args: vec![],
@@ -686,6 +690,7 @@ fn service_with_op(op_ids: Vec<&str>, keep_op_shape: bool) -> Model {
         vec![Shape {
             id: "billing#Op".into(),
             kind: ShapeKind::Operation {
+                input_name: None,
                 input: None,
                 output: None,
                 errors: vec![],

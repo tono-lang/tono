@@ -11,7 +11,12 @@ let structure id members : Ir.shape =
   { Ir.id; kind = Ir.Structure { params = []; members }; traits = [] }
 
 let op ?(traits = []) ?input ?output ?(errors = []) id : Ir.shape =
-  { Ir.id; kind = Ir.Operation { input; output; errors; wire = None }; traits }
+  {
+    Ir.id;
+    kind =
+      Ir.Operation { input; input_name = None; output; errors; wire = None };
+    traits;
+  }
 
 (* A stable rendering of a descriptor, doubling as the snapshot format. *)
 let show_part : Protocol_http.part -> string = function
@@ -30,6 +35,20 @@ let show_tref = function
   | Some _ -> "?"
   | None -> "-"
 
+let rec show_template_part : Ir.template_part -> string = function
+  | Ir.Tpl_lit s -> s
+  | Ir.Tpl_field p -> Printf.sprintf "{.%s}" (String.concat "." p)
+  | Ir.Tpl_param p -> Printf.sprintf "{.param.%s}" (String.concat "." p)
+  | Ir.Tpl_input n -> Printf.sprintf "{%s}" n
+
+and show_value_expr : Protocol_http.value_expr -> string = function
+  | Protocol_http.Vlit (`String s) -> s
+  | Protocol_http.Vlit _ -> "<lit>"
+  | Protocol_http.Vfield p -> Printf.sprintf ".%s" (String.concat "." p)
+  | Protocol_http.Vparam p -> Printf.sprintf ".param.%s" (String.concat "." p)
+  | Protocol_http.Vtemplate parts ->
+      String.concat "" (List.map show_template_part parts)
+
 let show_desc (d : Protocol_http.resolution) : string =
   let bindings =
     List.map (fun (n, p) -> Printf.sprintf "%s=%s" n (show_part p)) d.bindings
@@ -45,7 +64,7 @@ let show_desc (d : Protocol_http.resolution) : string =
   String.concat "|"
     [
       d.http_method;
-      d.uri;
+      show_value_expr d.uri;
       String.concat "," bindings;
       String.concat "," rbindings;
       String.concat "," success;

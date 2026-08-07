@@ -13,12 +13,13 @@ use crate::ir::{EntryField, Module, Shape, ShapeKind, Source};
 fn wire() -> WireBinding {
     WireBinding {
         method: "GET".into(),
-        uri: vec![TemplatePart::Lit("/x".into())],
+        uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
         bindings: Default::default(),
         response_bindings: Default::default(),
         success: Vec::new(),
-        endpoint: Some(vec!["endpoint".into()]),
+        endpoint: Some(WireValue::Field(vec!["endpoint".into()])),
         request_headers: Vec::new(),
+        query: vec![],
         timeout: None,
         retry: None,
     }
@@ -93,12 +94,12 @@ fn success_expr_spells_the_rust_field_and_operator() {
 #[test]
 fn url_line_reads_the_typed_endpoint_and_percent_encodes_a_field_segment() {
     let mut w = wire();
-    w.uri = vec![
+    w.uri = WireValue::Template(vec![
         TemplatePart::Lit("/notes/".into()),
         TemplatePart::Input("id".into()),
         TemplatePart::Lit("/".into()),
         TemplatePart::Field(vec!["region".into()]),
-    ];
+    ]);
     let line = with_ctx(|ctx| url_line(&w, false, ctx));
     assert_eq!(
         line,
@@ -119,6 +120,87 @@ fn url_line_with_no_declared_endpoint_is_an_emission_defect() {
     let mut w = wire();
     w.endpoint = None;
     with_ctx(|ctx| url_line(&w, false, ctx));
+}
+
+// ── Named op-parameter references (WireValue::Param / TemplatePart::Param) ─
+
+#[test]
+fn a_bare_param_reference_in_a_path_template_reads_the_whole_input() {
+    let mut w = wire();
+    w.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec![]),
+    ]);
+    let line = with_ctx(|ctx| url_line(&w, false, ctx));
+    assert!(line.contains("percent_path(&input.to_string())"));
+}
+
+#[test]
+fn a_param_member_reference_in_a_path_template_reads_off_the_record() {
+    let mut w = wire();
+    w.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["id".into()]),
+    ]);
+    let line = with_ctx(|ctx| url_line(&w, false, ctx));
+    assert!(line.contains("path_part(record.get(\"id\"))"));
+}
+
+#[test]
+fn a_pure_param_reference_in_path_position_passes_through_unescaped() {
+    let mut w = wire();
+    w.uri = WireValue::Param(vec![]);
+    let line = with_ctx(|ctx| url_line(&w, false, ctx));
+    assert!(line.contains("input.to_string()"));
+    assert!(!line.contains("percent_path"));
+}
+
+#[test]
+fn a_pure_param_member_reference_in_path_position_passes_through_unescaped() {
+    let mut w = wire();
+    w.uri = WireValue::Param(vec!["href".into()]);
+    let line = with_ctx(|ctx| url_line(&w, false, ctx));
+    assert!(line.contains(
+        "format_scalar(record.get(\"href\").unwrap_or(&serde_json::Value::Null)).to_string()"
+    ));
+}
+
+#[test]
+fn a_literal_uri_is_a_plain_string() {
+    let mut w = wire();
+    w.uri = WireValue::Lit(serde_json::json!("/fixed"));
+    let line = with_ctx(|ctx| url_line(&w, false, ctx));
+    assert!(line.contains("\"/fixed\".to_string()"));
+}
+
+#[test]
+fn a_non_field_endpoint_goes_through_the_general_renderer() {
+    let mut w = wire();
+    w.endpoint = Some(WireValue::Lit(serde_json::json!("https://example.com")));
+    let line = with_ctx(|ctx| url_line(&w, false, ctx));
+    assert!(line.contains("\"https://example.com\".to_string()"));
+}
+
+#[test]
+fn a_param_reference_in_a_header_value_reads_the_whole_input() {
+    let mut w = wire();
+    w.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Id".into())],
+        WireValue::Param(vec![]),
+    )];
+    let out = with_ctx(|ctx| declared_header_lines(&w, ctx));
+    assert!(out.contains("input.to_string()"));
+}
+
+#[test]
+fn a_param_reference_in_a_header_key_reads_off_the_record() {
+    let mut w = wire();
+    w.request_headers = vec![(
+        vec![TemplatePart::Param(vec!["region".into()])],
+        WireValue::Lit(serde_json::json!("v")),
+    )];
+    let out = with_ctx(|ctx| declared_header_lines(&w, ctx));
+    assert!(out.contains("record.get(\"region\")"));
 }
 
 #[test]

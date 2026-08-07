@@ -185,6 +185,7 @@ fn shape_kind() -> impl Strategy<Value = ShapeKind> {
             // left unfuzzed.
             |(input, output, errors)| ShapeKind::Operation {
                 input,
+                input_name: None,
                 output,
                 errors,
                 wire: None,

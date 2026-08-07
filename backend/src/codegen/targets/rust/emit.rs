@@ -354,11 +354,12 @@ mod tests {
     #[test]
     fn an_entry_with_a_wire_operation_keeps_transport_decode_and_api() {
         let mut wire = wire_binding("GET");
-        wire.endpoint = Some(vec!["ep".into()]);
+        wire.endpoint = Some(crate::ir::WireValue::Field(vec!["ep".into()]));
         let op = crate::ir::Shape {
             id: "notes#client.ping".into(),
             kind: crate::ir::ShapeKind::Operation {
                 input: None,
+                input_name: None,
                 output: None,
                 errors: vec![],
                 wire: Some(wire),

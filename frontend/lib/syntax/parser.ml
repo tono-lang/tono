@@ -394,8 +394,10 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
     dkind = Ast.DEnum { cases };
   }
 
-(* op ::= "op" name "(" type? ")" ( ":" type )? op_trait*  — the output type is
-   optional, and errors are carried by a trailing "@errors(...)" trait. *)
+(* op ::= "op" name "(" (name ":")? type? ")" ( ":" type )? op_trait*  — the
+   parameter name is optional (the legacy unnamed form still parses), the
+   output type is optional, and errors are carried by a trailing
+   "@errors(...)" trait. *)
 let parse_op st ~pub ~dtraits : Ast.decl =
   ignore (P.advance st);
   (* 'op' *)
@@ -410,6 +412,16 @@ let parse_op st ~pub ~dtraits : Ast.decl =
         ""
   in
   ignore (P.expect st Token.LParen "'(' after the operation name");
+  let pname =
+    match ((P.peek st).kind, (P.peek_ahead st 1).kind) with
+    | Token.Ident n, Token.Colon ->
+        ignore (P.advance st);
+        (* param name *)
+        ignore (P.advance st);
+        (* ':' *)
+        Some n
+    | _ -> None
+  in
   let input =
     match (P.peek st).kind with
     | Token.RParen -> None
@@ -431,7 +443,7 @@ let parse_op st ~pub ~dtraits : Ast.decl =
     dname_span = nt.span;
     pub;
     dtraits;
-    dkind = Ast.DOp { input; output };
+    dkind = Ast.DOp { pname; input; output };
   }
 
 (* ── Structs ───────────────────────────────────────────────────────────── *)

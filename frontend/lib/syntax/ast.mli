@@ -162,7 +162,7 @@ type decl_kind =
   | DStruct of { params : string list; members : member list; ops : decl list }
   | DEnum of { cases : enum_case list }
   | DUnion of { params : string list; variants : union_variant list }
-  | DOp of { input : ty option; output : ty option }
+  | DOp of { pname : string option; input : ty option; output : ty option }
   | DExt of {
       ekind : ext_kind;
       ekind_span : Span.span;

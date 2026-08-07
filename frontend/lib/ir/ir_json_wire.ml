@@ -33,6 +33,7 @@ let encode_wire_response_part : Ir.wire_response_part -> Ir.json = function
 let encode_wire_value : Ir.wire_value -> Ir.json = function
   | Ir.Wire_lit j -> `Assoc [ ("lit", j) ]
   | Ir.Wire_field p -> `Assoc [ ("field", encode_path p) ]
+  | Ir.Wire_param p -> `Assoc [ ("param", encode_path p) ]
   | Ir.Wire_template parts ->
       `Assoc [ ("template", `List (List.map encode_template_part parts)) ]
 
@@ -46,16 +47,17 @@ let encode_wire_binding (b : Ir.wire_binding) : Ir.json =
   `Assoc
     ([
        ("method", `String b.wb_method);
-       ("uri", `List (List.map encode_template_part b.wb_uri));
+       ("uri", encode_wire_value b.wb_uri);
        ("bindings", encode_named_assoc encode_wire_part b.wb_bindings);
        ( "response_bindings",
          encode_named_assoc encode_wire_response_part b.wb_response_bindings );
        ("success", `List (List.map (fun s -> `Int s) b.wb_success));
        ("request_headers", `List (List.map request_header b.wb_request_headers));
+       ("query", `List (List.map request_header b.wb_query));
      ]
     @ (match b.wb_endpoint with
       | None -> []
-      | Some p -> [ ("endpoint", encode_path p) ])
+      | Some v -> [ ("endpoint", encode_wire_value v) ])
     @ (match b.wb_timeout with
       | None -> []
       | Some p -> [ ("timeout", encode_path p) ])
@@ -118,11 +120,14 @@ let decode_wire_value j =
   | [ ("field", v) ] ->
       let* p = decode_path v in
       Ok (Ir.Wire_field p)
+  | [ ("param", v) ] ->
+      let* p = decode_path v in
+      Ok (Ir.Wire_param p)
   | [ ("template", v) ] ->
       let* xs = as_list v in
       let* parts = map_result decode_template_part xs in
       Ok (Ir.Wire_template parts)
-  | _ -> err "wire value must be a single lit, field, or template key"
+  | _ -> err "wire value must be a single lit, field, param, or template key"
 
 let decode_named_assoc decode_v j =
   let* kvs = as_assoc j in
@@ -151,10 +156,8 @@ let decode_wire_binding j =
   in
   let* wb_uri =
     match get "uri" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_template_part xs
+    | None -> Ok (Ir.Wire_template [])
+    | Some v -> decode_wire_value v
   in
   let* wb_bindings =
     match get "bindings" with
@@ -180,6 +183,13 @@ let decode_wire_binding j =
         let* xs = as_list v in
         map_result decode_request_header xs
   in
+  let* wb_query =
+    match get "query" with
+    | None -> Ok []
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_request_header xs
+  in
   let opt_path k =
     match get k with
     | None -> Ok None
@@ -187,7 +197,13 @@ let decode_wire_binding j =
         let* p = decode_path v in
         Ok (Some p)
   in
-  let* wb_endpoint = opt_path "endpoint" in
+  let* wb_endpoint =
+    match get "endpoint" with
+    | None -> Ok None
+    | Some v ->
+        let* w = decode_wire_value v in
+        Ok (Some w)
+  in
   let* wb_timeout = opt_path "timeout" in
   let* wb_retry = opt_path "retry" in
   Ok
@@ -199,6 +215,7 @@ let decode_wire_binding j =
        wb_success;
        wb_endpoint;
        wb_request_headers;
+       wb_query;
        wb_timeout;
        wb_retry;
      }
