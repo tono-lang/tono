@@ -37,11 +37,11 @@ pub struct client {
     @header("X-Api-Token", .api_token)
     @errors(overloaded)
 
-  op save_note(note): note
+  op save_note(note: note): note
     @doc("Writes a note through the local store.")
     @errors(overloaded)
 
-  op archive_note(note_ref): note
+  op archive_note(ref: note_ref): note
     @doc("Archives a note through the local store.")
     @errors(overloaded)
 }

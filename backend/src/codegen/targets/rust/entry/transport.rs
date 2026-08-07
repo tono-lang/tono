@@ -13,7 +13,11 @@
 //! neither carries no trace of either in its own generated method.
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
+use crate::codegen::conventions::field_ident;
+use crate::codegen::entries::plan::push_gap;
+use crate::codegen::entries::wire::{
+    body_reads_record, has_query, needs_record, needs_record_for_reads, success_test_expr,
+};
 use crate::codegen::entries::EntryModel;
 use crate::codegen::extensions::BoundExtension;
 use crate::codegen::symbol::Symbol;
@@ -29,6 +33,9 @@ pub(super) struct FieldCtx<'a> {
     pub entry: &'a EntryModel<'a>,
     pub module: &'a Module,
     pub config: &'a CasingConfig,
+    /// The op's own declared parameter type, for resolving a `Param(segs)`
+    /// member through typed field access (see [`FieldCtx::param`]).
+    pub input: Option<&'a Tref>,
 }
 
 impl FieldCtx<'_> {
@@ -86,6 +93,51 @@ impl FieldCtx<'_> {
     pub(super) fn i64_expr(&self, path: &[String]) -> String {
         format!("{} as i64", self.access(path))
     }
+
+    /// A `Param(segs)` member resolved through typed field access: the op's
+    /// own parameter type, chased to a same-module structure and its one
+    /// member matching `seg`. `None` when the parameter type is not a
+    /// same-module structure (a cross-module reference) or has no such
+    /// member; the caller falls back to the decoded record in that case.
+    fn param(&self, seg: &str) -> Option<(String, Tref)> {
+        let member = crate::codegen::ops::param_member(self.module, self.input, seg)?;
+        Some((
+            format!("input.{}", field_ident(member, self.config, super::LANG)),
+            member.target.clone(),
+        ))
+    }
+
+    /// The `Display`-typed form of a resolved param member.
+    fn param_display_expr(&self, seg: &str) -> Option<String> {
+        self.param(seg).map(|(access, _)| access)
+    }
+
+    /// The resolved param member as an owned `String`, mirroring
+    /// [`FieldCtx::string_expr`].
+    fn param_string_expr(&self, seg: &str) -> Option<String> {
+        self.param(seg).map(|(access, ty)| match ty {
+            Tref::Prim(Prim::String | Prim::Uuid) => format!("{access}.clone()"),
+            _ => format!("{access}.to_string()"),
+        })
+    }
+
+    /// The resolved param member as a `&str` argument, mirroring
+    /// [`FieldCtx::str_ref_expr`].
+    fn param_str_ref_expr(&self, seg: &str) -> Option<String> {
+        self.param(seg).map(|(access, ty)| match ty {
+            Tref::Prim(Prim::String | Prim::Uuid) => format!("&{access}"),
+            Tref::Prim(Prim::Timestamp | Prim::Date | Prim::Duration) => format!("&{access}.0"),
+            _ => format!("&{access}.to_string()"),
+        })
+    }
+
+    /// The resolved param member as a `serde_json::Value`-producing
+    /// expression, mirroring the `Field` arm of [`wire_value_json_expr`].
+    fn param_json_expr(&self, seg: &str) -> Option<String> {
+        self.param(seg).map(|(access, _)| {
+            format!("serde_json::to_value(&{access}).unwrap_or(serde_json::Value::Null)")
+        })
+    }
 }
 
 /// A Rust string literal for plain text (the `{s:?}` escaping rules cover
@@ -142,19 +194,22 @@ fn template_expr(parts: &[TemplatePart], fields: &FieldCtx<'_>) -> String {
             }
             // [] is the whole typed parameter (read as `input` directly, no
             // record needed); one segment is a member of the input struct,
-            // exactly like the legacy `{name}` placeholder (an op has
-            // exactly one parameter, so "member of the parameter" and
-            // "member of the input" are the same decoded record). Deeper
-            // paths are not reachable: the typechecker only resolves an
-            // op-parameter reference one level deep.
+            // resolved through typed field access when the target can (see
+            // [`FieldCtx::param_display_expr`]), the legacy decoded-record
+            // read otherwise (an op has exactly one parameter, so "member of
+            // the parameter" and "member of the input" are the same decoded
+            // record). Deeper paths are not reachable: the typechecker only
+            // resolves an op-parameter reference one level deep.
             TemplatePart::Param(segs) => {
                 fmt.push_str("{}");
                 args.push(match segs.first() {
                     None => "input.to_string()".to_string(),
-                    Some(name) => format!(
-                        "format_scalar(record.get({}).unwrap_or(&serde_json::Value::Null))",
-                        rust_str(name)
-                    ),
+                    Some(name) => fields.param_display_expr(name).unwrap_or_else(|| {
+                        format!(
+                            "format_scalar(record.get({}).unwrap_or(&serde_json::Value::Null))",
+                            rust_str(name)
+                        )
+                    }),
                 });
             }
         }
@@ -172,10 +227,12 @@ fn wire_value_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
         WireValue::Field(path) => fields.string_expr(path),
         WireValue::Param(segs) => match segs.first() {
             None => "input.to_string()".to_string(),
-            Some(name) => format!(
-                "format_scalar(record.get({}).unwrap_or(&serde_json::Value::Null)).to_string()",
-                rust_str(name)
-            ),
+            Some(name) => fields.param_string_expr(name).unwrap_or_else(|| {
+                format!(
+                    "format_scalar(record.get({}).unwrap_or(&serde_json::Value::Null)).to_string()",
+                    rust_str(name)
+                )
+            }),
         },
         WireValue::Template(parts) => {
             let expr = template_expr(parts, fields);
@@ -217,9 +274,10 @@ fn push_uri_value(
                         fmt.push_str("{}");
                         args.push(match segs.first() {
                             None => "percent_path(&input.to_string())".to_string(),
-                            Some(name) => {
-                                format!("path_part(record.get({}))", rust_str(name))
-                            }
+                            Some(name) => match fields.param_str_ref_expr(name) {
+                                Some(access) => format!("percent_path({access})"),
+                                None => format!("path_part(record.get({}))", rust_str(name)),
+                            },
                         });
                     }
                 }
@@ -311,10 +369,12 @@ fn wire_value_json_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
         ),
         WireValue::Param(segs) => match segs.first() {
             None => "serde_json::to_value(&input).unwrap_or(serde_json::Value::Null)".to_string(),
-            Some(name) => format!(
-                "record.get({}).cloned().unwrap_or(serde_json::Value::Null)",
-                rust_str(name)
-            ),
+            Some(name) => fields.param_json_expr(name).unwrap_or_else(|| {
+                format!(
+                    "record.get({}).cloned().unwrap_or(serde_json::Value::Null)",
+                    rust_str(name)
+                )
+            }),
         },
         WireValue::Template(parts) => {
             let expr = template_expr(parts, fields);
@@ -487,6 +547,10 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
 
     refs.push(super::support_symbol("HttpRequest"));
     let mut out = String::new();
+    let resolves = |name: &str| fields.param(name).is_some();
+    // Whether the op's own parameter type is touched anywhere: the
+    // structural (never resolution-aware) reachability check, so a resolved
+    // `input.field` read counts exactly like a `record`-indexed one would.
     let reads_input = needs_record(wire) || body.as_deref().is_some_and(|b| b.contains("&input"));
     if call.has_input && !reads_input {
         // An input no request position consumes (an empty struct bound to
@@ -494,17 +558,21 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         // explicit discard keeps the generated method warning-clean.
         out.push_str("let _ = &input;\n");
     }
-    if call.has_input && needs_record(wire) {
+    if call.has_input
+        && (needs_record_for_reads(wire, &resolves) || body_reads_record(wire, &resolves))
+    {
         out.push_str(&format!(
             "let record = serde_json::to_value(&input).map_err(|e| {})?;\n",
             encode_failure("e")
         ));
     }
+    push_gap(&mut out);
     out.push_str(&url_line(wire, query, fields));
     if query {
         out.push_str(&query_lines(wire, fields));
         refs.push(super::shared_symbol("append_query"));
     }
+    push_gap(&mut out);
     out.push_str(
         "let mut headers: std::collections::HashMap<String, String> = std::collections::HashMap::new();\n",
     );
@@ -524,6 +592,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     }
     let body_field = match &body {
         Some(lines) => {
+            push_gap(&mut out);
             out.push_str(lines);
             let is_none_check = lines.starts_with("let body = record.get(");
             let guard = if is_none_check {
@@ -548,6 +617,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         refs.push(super::shared_symbol("resolve_max_retries"));
         refs.push(super::shared_symbol("backoff_delay_ms"));
         let path = wire.retry.as_deref().unwrap_or_default();
+        push_gap(&mut out);
         out.push_str(&format!(
             "let max_retries = resolve_max_retries({});\n",
             fields.i64_expr(path)
@@ -572,6 +642,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         call.before_request,
         refs,
     ));
+    push_gap(&mut attempt);
     let transport_fail = "Err(TonoError::Transport(TransportError { cause }))".to_string();
     let transport_arm = if has_retry {
         format!(
@@ -608,6 +679,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     } else if needs_response_name {
         attempt.push_str("let outcome = response;\n");
     }
+    push_gap(&mut attempt);
     // A one-expression success block returns bare; a multi-statement one
     // (a decode with its own `let`) keeps its block, which the braces lint
     // accepts exactly because it is not a lone expression.
@@ -624,6 +696,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
             call.success_block,
         ));
     }
+    push_gap(&mut attempt);
     if call.has_declared_errors {
         attempt.push_str(&format!(
             "let err = {}(outcome.status, &outcome.body);\n",
@@ -646,6 +719,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         }
     }
 
+    push_gap(&mut out);
     if has_retry {
         out.push_str(&format!("loop {{\n{}}}\n", super::indent(&attempt, 1)));
     } else {

@@ -637,6 +637,7 @@ fn op_method(
         entry,
         module,
         config,
+        input,
     };
     // The already-converted milliseconds field for the op's `@timeout` path,
     // built by the constructor (see `constructor::timeout_conversions`).

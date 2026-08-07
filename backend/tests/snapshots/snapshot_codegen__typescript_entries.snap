@@ -347,28 +347,26 @@ export class Client {
   private readonly timeoutMs: number;
   constructor(apiKey: string, config: ClientConfig = {}) {
     const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, headers: {} };
+
     s.apiKey = apiKey;
-    let clientNameSet = false;
-    if (!clientNameSet && config.clientName !== undefined) {
+
+    if (config.clientName !== undefined) {
       s.clientName = config.clientName;
-      clientNameSet = true;
-    }
-    if (!clientNameSet) {
+    } else {
       s.clientName = "demo";
     }
+
     s.clientKey = strUpperSnake((s.clientName).trim());
+
     s.endpointEnv = "ENDPOINT_" + s.clientKey + "_V2";
-    let endpointVersionSet = false;
-    if (!endpointVersionSet) {
-      const v = readEnv("ENDPOINT_VERSION");
-      if (v !== undefined) {
-        s.endpointVersion = v;
-        endpointVersionSet = true;
-      }
-    }
-    if (!endpointVersionSet) {
+
+    const v = readEnv("ENDPOINT_VERSION");
+    if (v !== undefined) {
+      s.endpointVersion = v;
+    } else {
       s.endpointVersion = "v2";
     }
+
     let endpointV1Err: ConfigError | undefined;
     {
       const v = readEnv("ENDPOINT");
@@ -379,6 +377,7 @@ export class Client {
         endpointV1Err = new ConfigError("env ENDPOINT: empty");
       }
     }
+
     let endpointV2Err: ConfigError | undefined;
     {
       const v = readEnv(s.endpointEnv);
@@ -389,6 +388,7 @@ export class Client {
         endpointV2Err = new ConfigError("env " + s.endpointEnv + ": empty");
       }
     }
+
     let endpointErr: ConfigError | undefined;
     switch (s.endpointVersion) {
     case "v1": {
@@ -412,38 +412,31 @@ export class Client {
       break;
     }
     }
-    let timeoutSet = false;
-    if (!timeoutSet && config.timeout !== undefined) {
+
+    if (config.timeout !== undefined) {
       s.timeout = config.timeout;
-      timeoutSet = true;
-    }
-    if (!timeoutSet) {
+    } else {
       s.timeout = "10s" as Duration;
     }
-    let maxRetriesSet = false;
-    if (!maxRetriesSet && config.maxRetries !== undefined) {
+
+    if (config.maxRetries !== undefined) {
       s.maxRetries = config.maxRetries;
-      maxRetriesSet = true;
-    }
-    if (!maxRetriesSet) {
+    } else {
       s.maxRetries = 3;
     }
+
     {
       const composed = {} as Conf;
       composed.apiKey = s.apiKey;
-      let regionSet = false;
-      if (!regionSet) {
-        const v = readEnv("REGION");
-        if (v !== undefined) {
-          composed.region = v;
-          regionSet = true;
-        }
-      }
-      if (!regionSet) {
+      const v = readEnv("REGION");
+      if (v !== undefined) {
+        composed.region = v;
+      } else {
         composed.region = "us";
       }
       s.settings = composed;
     }
+
     let credsErr: ConfigError | undefined;
     const raw = readEnv("SERVICE_CREDENTIALS");
     if (raw !== undefined) {
@@ -484,6 +477,7 @@ export class Client {
     } else {
       credsErr = new ConfigError("env SERVICE_CREDENTIALS: empty");
     }
+
     let labelsErr: ConfigError | undefined;
     const raw = readEnv("SERVICE_LABELS");
     if (raw !== undefined) {
@@ -506,9 +500,11 @@ export class Client {
     } else {
       labelsErr = new ConfigError("env SERVICE_LABELS: empty");
     }
+
     if (s.endpoint === "") {
       throw new ConfigError("endpoint <- " + (endpointErr ? endpointErr.message : "no value"), endpointErr);
     }
+
     const violations: Violation[] = [];
     if ([...s.apiKey].length < 1) {
       violations.push({ field: "api_key", constraint: "length", message: "api_key length must be >= 1" });
@@ -528,16 +524,23 @@ export class Client {
 
   async saveNote(input: Note): Promise<Note> {
     const record = encodeNote(input) as unknown as Record<string, unknown>;
+
     const url = this.settings.endpoint + `/notes/${pathPart(record["id"])}`;
+
     const headers: Record<string, string> = {};
     setHeader(headers, "X-Client-Name", formatScalar(this.settings.clientName));
     for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);
-    const body = JSON.stringify(record["body"]);
+
+    const body = JSON.stringify(input.body);
     if (!hasHeader(headers, "content-type")) headers["content-type"] = "application/json";
+
     const timeoutMs = this.timeoutMs;
+
     const maxRetries = resolveMaxRetries(this.settings.maxRetries);
+
     for (let attempt = 0; ; attempt++) {
       const request: HttpRequest = { method: "POST", url, headers: { ...headers }, body };
+
       let response: HttpResponse;
       try {
         response = await httpSendWithTimeout(this.options, request, timeoutMs);
@@ -549,6 +552,7 @@ export class Client {
         throw new TransportError(cause);
       }
       const outcome = response;
+
       if (response.status === 200) {
         try {
           return parseNote(outcome.body);
@@ -556,6 +560,7 @@ export class Client {
           throw new DecodeError(path as string, "Note", outcome.body);
         }
       }
+
       const err = decodeSaveNoteError(outcome.status, outcome.body);
       if (attempt < maxRetries && err.retryable()) {
         await retryDelay(attempt);

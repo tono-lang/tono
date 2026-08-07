@@ -334,12 +334,16 @@ fn resolution_body(
             refs,
         };
         let fields = plan::emit_fields(entry, module, &mut r, 1);
-        r.body.push_str(&fields);
+        if !fields.is_empty() {
+            plan::push_gap(r.body);
+            r.body.push_str(&fields);
+        }
     }
 
     if !multi {
         if let Some(b) = hook_binding(bound, "client_init") {
             refs.push(Symbol::imported(b.symbol, use_path(b.module), b.symbol));
+            plan::push_gap(&mut body);
             body.push_str(&format!(
                 "if let Err(e) = {sym}(&mut s) {{\n    return Err(match e.downcast::<TonoError>() {{\n        Ok(declared) => *declared,\n        Err(other) => TonoError::Contract(ContractError {{ contract_name: \"client_init\".to_string(), cause: other }}),\n    }});\n}}\n",
                 sym = b.symbol,
@@ -359,7 +363,10 @@ fn resolution_body(
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 0, &r);
-        r.body.push_str(&text);
+        if !text.is_empty() {
+            plan::push_gap(r.body);
+            r.body.push_str(&text);
+        }
     }
 
     let mut guards = String::new();
@@ -398,6 +405,7 @@ fn resolution_body(
         }
     }
     if !guards.is_empty() {
+        plan::push_gap(&mut body);
         body.push_str(&format!(
             "let mut violations: Vec<Violation> = Vec::new();\n{guards}if !violations.is_empty() {{\n    return Err(TonoError::Validation(ValidationError {{ violations }}));\n}}\n",
         ));

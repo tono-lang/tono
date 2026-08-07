@@ -495,19 +495,25 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		opt(&w)
 	}
 	s := Settings{Headers: map[string]string{}}
+
 	s.APIKey = apiKey
+
 	if w.clientName != nil {
 		s.ClientName = *w.clientName
 	} else {
 		s.ClientName = "demo"
 	}
+
 	s.ClientKey = casing.StrUpperSnake(strings.TrimSpace(s.ClientName))
+
 	s.EndpointEnv = "ENDPOINT_" + s.ClientKey + "_V2"
+
 	if v, ok := os.LookupEnv("ENDPOINT_VERSION"); ok && v != "" {
 		s.EndpointVersion = v
 	} else {
 		s.EndpointVersion = "v2"
 	}
+
 	var endpointV1Err error
 	if v, ok := os.LookupEnv("ENDPOINT"); ok && v != "" {
 		s.EndpointV1 = v
@@ -515,6 +521,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	} else {
 		endpointV1Err = &ConfigError{Message: "env ENDPOINT: empty"}
 	}
+
 	var endpointV2Err error
 	if v, ok := os.LookupEnv(s.EndpointEnv); ok && v != "" {
 		s.EndpointV2 = v
@@ -522,6 +529,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	} else {
 		endpointV2Err = &ConfigError{Message: "env " + s.EndpointEnv + ": empty"}
 	}
+
 	var endpointErr error
 	switch s.EndpointVersion {
 	case "v1":
@@ -539,16 +547,19 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 			s.Endpoint = s.EndpointV2
 		}
 	}
+
 	if w.timeout != nil {
 		s.Timeout = *w.timeout
 	} else {
 		s.Timeout = support.Duration("10s")
 	}
+
 	if w.maxRetries != nil {
 		s.MaxRetries = *w.maxRetries
 	} else {
 		s.MaxRetries = int32(3)
 	}
+
 	{
 		var composed conf
 		composed.APIKey = s.APIKey
@@ -559,6 +570,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		}
 		s.Settings = composed
 	}
+
 	var credsErr error
 	if raw, ok := os.LookupEnv("SERVICE_CREDENTIALS"); ok && raw != "" {
 		var probe map[string]json.RawMessage
@@ -585,6 +597,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	} else {
 		credsErr = &ConfigError{Message: "env SERVICE_CREDENTIALS: empty"}
 	}
+
 	var labelsErr error
 	if raw, ok := os.LookupEnv("SERVICE_LABELS"); ok && raw != "" {
 		if err := json.Unmarshal([]byte(raw), &s.Labels); err != nil {
@@ -594,12 +607,14 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	} else {
 		labelsErr = &ConfigError{Message: "env SERVICE_LABELS: empty"}
 	}
+
 	if s.Endpoint == "" {
 		if endpointErr == nil {
 			return nil, &ConfigError{Message: "endpoint: no value"}
 		}
 		return nil, &ConfigError{Message: "endpoint <- " + endpointErr.Error(), Cause: endpointErr}
 	}
+
 	violations := []Violation{}
 	if len([]rune(s.APIKey)) < 1 {
 		violations = append(violations, Violation{Field: "api_key", Constraint: "length", Message: "api_key length must be >= 1"})
@@ -629,12 +644,15 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	if err != nil {
 		return zero, err
 	}
+
 	requestURL := c.settings.Endpoint + "/notes/" + transport.PathPart(record["id"])
+
 	headers := map[string]string{}
 	transport.SetHeader(headers, "X-Client-Name", c.settings.ClientName)
 	for name, value := range c.settings.Headers {
 		transport.SetHeader(headers, name, value)
 	}
+
 	var body []byte
 	if v, ok := record["body"]; ok {
 		encoded, err := json.Marshal(v)
@@ -646,6 +664,7 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	if body != nil && !transport.HasHeader(headers, "content-type") {
 		headers["content-type"] = "application/json"
 	}
+
 	outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{
 		Method: "POST",
 		URL: requestURL,
@@ -664,6 +683,7 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	if outcome.Cause != nil {
 		return zero, &TransportError{Cause: outcome.Cause}
 	}
+
 	if outcome.Status == 200 {
 		out, path, ok := DecodeNote([]byte(outcome.Body))
 		if !ok {
@@ -671,6 +691,7 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 		}
 		return out, nil
 	}
+
 	return zero, DecodeSaveNoteError(outcome.Status, []byte(outcome.Body))
 }
 

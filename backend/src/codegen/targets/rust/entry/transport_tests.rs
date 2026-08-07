@@ -40,24 +40,54 @@ fn field(name: &str, target: Tref) -> EntryField {
 }
 
 /// A module whose single entry declares the fields the wire fixtures
-/// reference, so a `FieldCtx` can resolve their types.
+/// reference, so a `FieldCtx` can resolve their types. A `charge` structure
+/// (unreferenced by the entry) stands in for an op's parameter type, so the
+/// resolved-param-member tests have a same-module structure to resolve
+/// against.
 fn module() -> Module {
     Module {
         tests: vec![],
         name: "m".into(),
-        shapes: vec![Shape {
-            id: "m#client".into(),
-            kind: ShapeKind::Entry {
-                fields: vec![
-                    field("endpoint", Tref::Prim(Prim::String)),
-                    field("api_key", Tref::Prim(Prim::String)),
-                    field("region", Tref::Prim(Prim::I32)),
-                    field("max_retries", Tref::Prim(Prim::I32)),
-                ],
-                operations: vec![],
+        shapes: vec![
+            Shape {
+                id: "m#client".into(),
+                kind: ShapeKind::Entry {
+                    fields: vec![
+                        field("endpoint", Tref::Prim(Prim::String)),
+                        field("api_key", Tref::Prim(Prim::String)),
+                        field("region", Tref::Prim(Prim::I32)),
+                        field("max_retries", Tref::Prim(Prim::I32)),
+                    ],
+                    operations: vec![],
+                },
+                traits: vec![],
             },
-            traits: vec![],
-        }],
+            Shape {
+                id: "m#charge".into(),
+                kind: ShapeKind::Structure {
+                    params: vec![],
+                    members: vec![
+                        crate::ir::Member {
+                            name: "id".into(),
+                            target: Tref::Prim(Prim::String),
+                            required: true,
+                            default: None,
+                            constraints: vec![],
+                            traits: vec![],
+                        },
+                        crate::ir::Member {
+                            name: "created_at".into(),
+                            target: Tref::Prim(Prim::Timestamp),
+                            required: true,
+                            default: None,
+                            constraints: vec![],
+                            traits: vec![],
+                        },
+                    ],
+                },
+                traits: vec![],
+            },
+        ],
         operations: vec![],
         extensions: vec![],
     }
@@ -65,8 +95,10 @@ fn module() -> Module {
 
 /// Run `f` over a `FieldCtx` built on the fixture module (the ctx borrows
 /// the entry model, which borrows the module, so the whole chain has to live
-/// inside one scope).
-fn with_ctx<R>(f: impl FnOnce(&FieldCtx<'_>) -> R) -> R {
+/// inside one scope). `input`, when set, is the op's own parameter type,
+/// resolving a `Param(segs)` member through [`FieldCtx::param`] against the
+/// fixture's `charge` structure.
+fn with_ctx_and_input<R>(input: Option<Tref>, f: impl FnOnce(&FieldCtx<'_>) -> R) -> R {
     let module = module();
     let entries = module_entries(&module);
     let config = rust_casing();
@@ -74,8 +106,20 @@ fn with_ctx<R>(f: impl FnOnce(&FieldCtx<'_>) -> R) -> R {
         entry: &entries[0],
         module: &module,
         config: &config,
+        input: input.as_ref(),
     };
     f(&ctx)
+}
+
+fn with_ctx<R>(f: impl FnOnce(&FieldCtx<'_>) -> R) -> R {
+    with_ctx_and_input(None, f)
+}
+
+fn charge_ref() -> Tref {
+    Tref::Ref {
+        id: "m#charge".into(),
+        args: vec![],
+    }
 }
 
 // The range-vs-exact-match logic itself is proven once, target-agnostically,
@@ -143,6 +187,71 @@ fn a_param_member_reference_in_a_path_template_reads_off_the_record() {
         TemplatePart::Param(vec!["id".into()]),
     ]);
     let line = with_ctx(|ctx| url_line(&w, false, ctx));
+    assert!(line.contains("path_part(record.get(\"id\"))"));
+}
+
+// ── A resolvable param member reads straight off the typed input, and the
+//    record disappears entirely when nothing else in the operation needs it.
+
+#[test]
+fn a_resolved_param_member_in_a_path_template_reads_the_typed_field() {
+    let mut w = wire();
+    w.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["id".into()]),
+    ]);
+    let line = with_ctx_and_input(Some(charge_ref()), |ctx| url_line(&w, false, ctx));
+    assert!(line.contains("percent_path(&input.id)"));
+    assert!(!line.contains("record"));
+}
+
+#[test]
+fn a_resolved_branded_param_member_unwraps_before_percent_path() {
+    let mut w = wire();
+    w.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["created_at".into()]),
+    ]);
+    let line = with_ctx_and_input(Some(charge_ref()), |ctx| url_line(&w, false, ctx));
+    assert!(line.contains("percent_path(&input.created_at.0)"));
+}
+
+#[test]
+fn a_resolved_param_member_in_a_header_value_reads_the_typed_field() {
+    let mut w = wire();
+    w.request_headers = vec![(
+        vec![TemplatePart::Lit("X-Id".into())],
+        WireValue::Param(vec!["id".into()]),
+    )];
+    let out = with_ctx_and_input(Some(charge_ref()), |ctx| declared_header_lines(&w, ctx));
+    assert!(out.contains("input.id.clone()"));
+    assert!(!out.contains("record"));
+}
+
+#[test]
+fn a_resolved_param_member_in_a_query_value_reads_the_typed_field() {
+    let mut w = wire();
+    w.query = vec![(
+        vec![TemplatePart::Lit("id".into())],
+        WireValue::Param(vec!["id".into()]),
+    )];
+    let out = with_ctx_and_input(Some(charge_ref()), |ctx| query_lines(&w, ctx));
+    assert!(out.contains("serde_json::to_value(&input.id).unwrap_or(serde_json::Value::Null)"));
+    assert!(!out.contains("record"));
+}
+
+#[test]
+fn a_cross_module_param_type_falls_back_to_the_record() {
+    let mut w = wire();
+    w.uri = WireValue::Template(vec![
+        TemplatePart::Lit("/charges/".into()),
+        TemplatePart::Param(vec!["id".into()]),
+    ]);
+    let other_module_ref = Tref::Ref {
+        id: "other#charge".into(),
+        args: vec![],
+    };
+    let line = with_ctx_and_input(Some(other_module_ref), |ctx| url_line(&w, false, ctx));
     assert!(line.contains("path_part(record.get(\"id\"))"));
 }
 

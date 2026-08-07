@@ -75,7 +75,14 @@ pub fn emit_fields(
 ) -> String {
     let mut out = String::new();
     for field in &entry.fields {
-        out.push_str(&render(&build_field(field, entry, module, e), depth, e));
+        let block = render(&build_field(field, entry, module, e), depth, e);
+        if block.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&block);
     }
     out
 }
@@ -429,10 +436,19 @@ pub trait Emitter {
         err: &str,
     ) -> String;
 
-    // --- the whole-construct bodies that already differ per target (a
-    //     guaranteed chain diverges algorithmically: Go emits an if/else-if
-    //     cascade, TypeScript a set-flag sequence, so neither is shared). Each
-    //     returns already-spelled statements the builders wrap into the tree. ---
+    // --- the whole-construct bodies that already differ per target. A
+    //     guaranteed chain shares its algorithm across every target: an
+    //     if/else-if cascade ending in `@default`, so a lower-priority
+    //     source's condition (and its failure mode, for a fallible `@env`
+    //     parse) is only ever reached once every higher-priority source has
+    //     already missed. A set-flag sequence would look uniform too, but it
+    //     evaluates every source regardless of priority and only gates the
+    //     final assignment, which would fail construction on a malformed but
+    //     shadowed `@env` value that the cascade never even reaches; that
+    //     correctness gap is why this is a cascade, not a flag. Each leaf
+    //     statement's own spelling stays per-target, so the method itself is
+    //     not shared. Each returns already-spelled statements the builders
+    //     wrap into the tree. ---
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String;
     /// The `@format` assignment itself (`dest = cast(part + part + ..)` with the
     /// `@str::*` pipeline folded in); the deferral guard around it is shared.
@@ -491,6 +507,16 @@ pub trait Emitter {
         subject_expr: &str,
         guaranteed: bool,
     ) -> Leaf;
+}
+
+/// A blank line between two logical sections of a generated body, skipped when
+/// there is nothing before it yet or a gap is already there: readability over
+/// bare statement soup, without doubling up when a caller composes sections
+/// that already end blank.
+pub fn push_gap(body: &mut String) {
+    if !body.is_empty() && !body.ends_with("\n\n") {
+        body.push('\n');
+    }
 }
 
 /// Render a plan into target source, each statement indented by `depth` units.

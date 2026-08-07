@@ -195,8 +195,11 @@ fn the_method_assembles_the_request_and_maps_the_outcome_onto_the_taxonomy() {
     // typed settings directly.
     assert!(serde.contains("transport.SetHeader(headers, \"X-API-Key\", c.settings.APIKey)"));
     assert!(serde.contains("for name, value := range c.settings.Headers {"));
-    // The @body ctor mapper builds an object of just its declared fields.
-    assert!(serde.contains("body, err := json.Marshal(map[string]any{\"body\": record[\"body\"]})"));
+    // The @body ctor mapper builds an object of just its declared fields; a
+    // same-module param member (here, `note.body`) reads straight off the
+    // typed input rather than the decoded record, even though the record
+    // still exists for the path's own bare `{id}` placeholder.
+    assert!(serde.contains("body, err := json.Marshal(map[string]any{\"body\": input.Body})"));
     assert!(serde.contains(
         "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));

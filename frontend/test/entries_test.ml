@@ -60,7 +60,7 @@ pub struct client {
   max_retries: i32 @with @default(3)
   settings: conf @bind(api_key, .api_key)
 
-  op save_note(note): note
+  op save_note(note: note): note
     @http(method: "POST", path: "/notes/{id}", endpoint: .endpoint)
     @header("X-Client-Name", .client_name)
     @timeout(.timeout)
@@ -96,7 +96,8 @@ let loose_ops_untouched () =
     "plain specs stay clean" []
     (codes
        "struct charge { amount: i64 }\n\
-        op create(charge): charge @http(method: \"POST\", path: \"/c\") @async")
+        op create(charge: charge): charge @http(method: \"POST\", path: \
+        \"/c\") @async")
 
 (* ── Lowering: the IR entry surface ────────────────────────────────────── *)
 
@@ -271,7 +272,7 @@ let loose_descriptor_has_no_entry_fields () =
     Protocol_http.resolve_module
       (compile
          "struct w { x: string }\n\
-          op o(w): w @http(method: \"GET\", path: \"/w\")")
+          op o(w: w): w @http(method: \"GET\", path: \"/w\")")
   in
   let op = List.hd m.operations in
   let wb =
@@ -417,12 +418,12 @@ let source_on_wire_struct_rejected () =
      output is the closed boundary. *)
   Alcotest.(check (list string))
     "config on the wire" [ "TC0034"; "TC0034" ]
-    (codes "struct s { k: string @env(\"K\") }\nop o(s): s")
+    (codes "struct s { k: string @env(\"K\") }\nop o(s: s): s")
 
 let entry_as_op_io_rejected () =
   Alcotest.(check (list string))
     "entry as op input" [ "TC0034" ]
-    (codes (entry "" ^ "op outer(c): r"))
+    (codes (entry "" ^ "op outer(c: c): r"))
 
 let arg_excludes_other_sources () =
   Alcotest.(check (list string))
@@ -512,7 +513,7 @@ let loose_op_ref_rejected () =
     "field ref on a loose op" [ "TC0044" ]
     (codes
        "struct w { x: string }\n\
-        op o(w): w @http(method: \"GET\", path: \"/\", endpoint: .x)")
+        op o(w: w): w @http(method: \"GET\", path: \"/\", endpoint: .x)")
 
 let unknown_transform_rejected () =
   Alcotest.(check (list string))
@@ -523,6 +524,42 @@ let nullable_entry_field_rejected () =
   Alcotest.(check (list string))
     "nullable field" [ "TC0046" ]
     (codes (entry "  k: string? @env(\"K\")"))
+
+(* TASK 2: a nullable value interpolated into an @http path (TC0022) would
+   collapse its placeholder and leave a hole in the URL; this holds for both
+   an entry field and an op parameter member. An entry field can never be
+   nullable itself (TC0046), so the entry-field case reaches through a
+   struct-typed entry field into one of its (plain, unconstrained) members. *)
+let nullable_path_entry_field_rejected () =
+  Alcotest.(check (list string))
+    "nullable entry field in path" [ "TC0022" ]
+    (codes
+       ("struct ref_info { id: string? }\n\
+         pub struct c {\n\
+        \  ep: string @env(\"EP\")\n\
+        \  ref: ref_info @with\n\
+        \  op o(): r @http(method: \"GET\", path: \"/notes/{.ref.id}\", \
+         endpoint: .ep)\n\
+         }\n" ^ wire_struct))
+
+let nullable_path_param_rejected () =
+  Alcotest.(check (list string))
+    "nullable param member in path" [ "TC0022" ]
+    (codes
+       "struct note_ref { id: string? }\n\
+        op o(note_ref: note_ref) @http(method: \"GET\", path: \
+        \"/notes/{.note_ref.id}\")")
+
+let non_nullable_path_accepted () =
+  Alcotest.(check (list string))
+    "non-nullable path ref compiles clean" []
+    (codes
+       ("pub struct c {\n\
+        \  ep: string @env(\"EP\")\n\
+        \  ref_id: string @env(\"ID\")\n\
+        \  op o(): r @http(method: \"GET\", path: \"/notes/{.ref_id}\", \
+         endpoint: .ep)\n\
+         }\n" ^ wire_struct))
 
 let config_with_arg_rejected () =
   Alcotest.(check (list string))
@@ -539,6 +576,8 @@ let () =
           Alcotest.test_case "canonical forms parse and check" `Quick
             canonical_accepted;
           Alcotest.test_case "loose ops untouched" `Quick loose_ops_untouched;
+          Alcotest.test_case "non-nullable path ref" `Quick
+            non_nullable_path_accepted;
         ] );
       ( "lower",
         [
@@ -571,6 +610,10 @@ let () =
           Alcotest.test_case "arg excludes sources" `Quick
             arg_excludes_other_sources;
           Alcotest.test_case "match with sources" `Quick match_with_sources_dead;
+          Alcotest.test_case "nullable path (entry field)" `Quick
+            nullable_path_entry_field_rejected;
+          Alcotest.test_case "nullable path (param)" `Quick
+            nullable_path_param_rejected;
           Alcotest.test_case "bind outside composition" `Quick
             bind_outside_composition_rejected;
           Alcotest.test_case "bind unknown target" `Quick

@@ -143,8 +143,8 @@ let union_variant_needs_payload () =
 let op_full () =
   let shape, ds =
     run Parser.parse_op
-      "op create_charge(create_charge_input): charge @errors(not_found, \
-       rate_limited)"
+      "op create_charge(create_charge_input: create_charge_input): charge \
+       @errors(not_found, rate_limited)"
   in
   Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   match shape.kind with
@@ -174,7 +174,8 @@ let op_no_input () =
   | _ -> Alcotest.fail "expected an operation"
 
 let op_no_output () =
-  let shape, _ = run Parser.parse_op "op fire(event)" in
+  let shape, ds = run Parser.parse_op "op fire(event: event)" in
+  Alcotest.(check int) "no diagnostics" 0 (List.length ds);
   match shape.kind with
   | Ir.Operation { input; output; errors; _ } ->
       Alcotest.(check string)
@@ -182,6 +183,26 @@ let op_no_output () =
       Alcotest.(check string) "no output" "<none>" (tref_opt output);
       Alcotest.(check int) "no errors" 0 (List.length errors)
   | _ -> Alcotest.fail "expected an operation"
+
+(* TASK 1: the legacy unnamed parameter form (a bare type with no name) is
+   rejected, with a diagnostic that shows the named replacement. *)
+let op_unnamed_param_rejected () =
+  let _, ds = run Parser.parse_op "op fetch_note(note_ref): note" in
+  Alcotest.(check bool) "diagnosed" true (List.length ds >= 1);
+  Alcotest.(check bool)
+    "message shows the named form" true
+    (List.exists
+       (fun (d : Diagnostic.t) ->
+         let hay = d.message in
+         let needle = "note_ref: " in
+         let hn = String.length hay and nn = String.length needle in
+         let rec loop i =
+           if i + nn > hn then false
+           else if String.sub hay i nn = needle then true
+           else loop (i + 1)
+         in
+         loop 0)
+       ds)
 
 (* An @errors argument that is not a type name has nothing to refer to. *)
 let op_errors_bad_arg () =
@@ -237,5 +258,7 @@ let () =
           Alcotest.test_case "no output" `Quick op_no_output;
           Alcotest.test_case "errors bad arg" `Quick op_errors_bad_arg;
           Alcotest.test_case "errors accumulate" `Quick op_errors_accumulate;
+          Alcotest.test_case "unnamed param rejected" `Quick
+            op_unnamed_param_rejected;
         ] );
     ]

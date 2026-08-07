@@ -15,7 +15,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
-use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
+use crate::codegen::conventions::{
+    deprecated_of, doc_of, field_ident, rename_of, type_ident_from_id, wire_key,
+};
 use crate::codegen::entries::{companion_name, op_local_name, plan, EntryModel, FieldShape};
 use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_binding};
@@ -324,9 +326,13 @@ fn class_decl(
     // function (a class body wraps it), so the plan renders one indent unit
     // further in to land at the same column as this scaffold's own lines.
     let fields = plan::emit_fields(entry, module, &mut r, 2);
-    r.body.push_str(&fields);
+    if !fields.is_empty() {
+        plan::push_gap(r.body);
+        r.body.push_str(&fields);
+    }
 
     if hook_binding(bound, "client_init").is_some() && !multi {
+        plan::push_gap(&mut body);
         body.push_str("    wrapClientInit(s);\n");
     }
 
@@ -343,7 +349,10 @@ fn class_decl(
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 2, &r);
-        r.body.push_str(&text);
+        if !text.is_empty() {
+            plan::push_gap(r.body);
+            r.body.push_str(&text);
+        }
     }
 
     // Declared validation runs last, over what bespoke left in place.
@@ -409,6 +418,7 @@ fn class_decl(
     if !guards.is_empty() {
         refs.push(module_symbol(&en.violation, module));
         refs.push(module_symbol(&en.validation, module));
+        plan::push_gap(&mut body);
         body.push_str(&format!(
             "    const violations: {violation}[] = [];\n{guards}    if (violations.length > 0) {{\n      throw new {validation}(violations);\n    }}\n",
             violation = en.violation,
@@ -694,6 +704,14 @@ fn op_method(
     // milliseconds) rather than passing through, so it reads the private,
     // already-converted field the constructor built (see class_decl).
     let field_expr = |path: &[String]| field_path_expr(entry, config, path, "this.settings");
+    // A param-member reference resolves the same way, off the op's own
+    // parameter type instead of the entry: a same-module structure member
+    // reads as a typed `input.field`; a cross-module parameter type is not
+    // chased here, so the caller falls back to the decoded record.
+    let param_access = |seg: &str| -> Option<String> {
+        let member = crate::codegen::ops::param_member(module, input, seg)?;
+        Some(format!("input.{}", field_ident(member, config, LANG)))
+    };
     let transport_body = transport::op_call(
         wire,
         &http_method,
@@ -708,6 +726,7 @@ fn op_method(
         after_response_bound,
         &field_expr,
         timeout_field_expr,
+        &param_access,
         refs,
     );
     let doc = doc_of(&op.traits)

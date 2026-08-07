@@ -10,11 +10,24 @@
 //! text, gated on `wire.retry`/`wire.timeout`, so a single operation with
 //! neither carries no trace of either in its own generated method.
 
-use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
+use crate::codegen::entries::plan::push_gap;
+use crate::codegen::entries::wire::{
+    body_reads_record, has_query, needs_record_for_reads, success_test_expr,
+};
 use crate::codegen::symbol::Symbol;
 use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
 
 use super::support_symbol;
+
+/// A resolved param-member access off `input`: the TypeScript property
+/// expression (`input.avatarHint`, `@rename(typescript)` already applied).
+/// `None` when the caller cannot resolve the member through typed field
+/// access (a cross-module parameter type, most commonly), in which case the
+/// position falls back to indexing the decoded record. TypeScript's
+/// `formatScalar`/`pathPart` format every value the same way regardless of
+/// its declared type, so (unlike Go) no separate field-kind classification is
+/// needed here.
+pub(super) type ParamAccess<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// Indent every non-empty line of `text` by `by`, for text built at one
 /// nesting depth that a caller embeds one level deeper (the retry loop wraps
@@ -49,6 +62,7 @@ fn template_expr(
     parts: &[TemplatePart],
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> String {
     if let [TemplatePart::Lit(s)] = parts {
         return js_str(s);
@@ -78,21 +92,15 @@ fn template_expr(
             }
             // [] is the whole typed parameter (read as `input_expr` directly,
             // no record needed); one segment is a member of the input
-            // struct, exactly like the legacy `{name}` placeholder (an op
-            // has exactly one parameter, so "member of the parameter" and
+            // struct, resolved through typed field access when the target
+            // can, the legacy decoded-record read otherwise (an op has
+            // exactly one parameter, so "member of the parameter" and
             // "member of the input" are the same decoded record). Deeper
             // paths are not reachable: the typechecker only resolves an
             // op-parameter reference one level deep.
             TemplatePart::Param(segs) => {
                 out.push_str("${pathPart(");
-                match segs.first() {
-                    None => out.push_str(input_expr),
-                    Some(name) => {
-                        out.push_str("record[");
-                        out.push_str(&js_str(name));
-                        out.push(']');
-                    }
-                }
+                out.push_str(&param_expr(segs, param_access, input_expr));
                 out.push_str(")}");
             }
         }
@@ -101,12 +109,22 @@ fn template_expr(
     out
 }
 
+/// A `Param(segs)` position: the whole parameter, a resolved member's typed
+/// access, or the decoded record when unresolved.
+fn param_expr(segs: &[String], param_access: ParamAccess<'_>, input_expr: &str) -> String {
+    match segs.first() {
+        None => input_expr.to_string(),
+        Some(name) => param_access(name).unwrap_or_else(|| format!("record[{}]", js_str(name))),
+    }
+}
+
 /// A `WireValue` position (a `request_headers` value) rendered the same way a
 /// template is, plus the two scalar forms.
 fn wire_value_expr(
     v: &WireValue,
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> String {
     match v {
         WireValue::Lit(json) => match json.as_str() {
@@ -114,16 +132,16 @@ fn wire_value_expr(
             None => json.to_string(),
         },
         WireValue::Field(path) => format!("formatScalar({})", field_expr(path)),
-        WireValue::Param(segs) => match segs.first() {
-            None => format!("formatScalar({input_expr})"),
-            Some(name) => format!("formatScalar(record[{}])", js_str(name)),
-        },
-        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
+        WireValue::Param(segs) => format!(
+            "formatScalar({})",
+            param_expr(segs, param_access, input_expr)
+        ),
+        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr, param_access),
         // Only ever emitted for @body; never a header/query/uri value.
         WireValue::Object(_) => {
             format!(
                 "JSON.stringify({})",
-                wire_value_native_expr(v, field_expr, input_expr)
+                wire_value_native_expr(v, field_expr, input_expr, param_access)
             )
         }
     }
@@ -137,6 +155,7 @@ fn wire_value_native_expr(
     v: &WireValue,
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> String {
     match v {
         WireValue::Lit(json) => match json.as_str() {
@@ -144,11 +163,8 @@ fn wire_value_native_expr(
             None => json.to_string(),
         },
         WireValue::Field(path) => field_expr(path),
-        WireValue::Param(segs) => match segs.first() {
-            None => input_expr.to_string(),
-            Some(name) => format!("record[{}]", js_str(name)),
-        },
-        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
+        WireValue::Param(segs) => param_expr(segs, param_access, input_expr),
+        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr, param_access),
         WireValue::Object(fields) => {
             let entries = fields
                 .iter()
@@ -156,7 +172,7 @@ fn wire_value_native_expr(
                     format!(
                         "{}: {}",
                         js_str(name),
-                        wire_value_native_expr(value, field_expr, input_expr)
+                        wire_value_native_expr(value, field_expr, input_expr, param_access)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -176,6 +192,7 @@ fn endpoint_expr(
     wire: &WireBinding,
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> String {
     let value = wire
         .endpoint
@@ -186,7 +203,7 @@ fn endpoint_expr(
     // through the general renderer.
     match value {
         WireValue::Field(path) => field_expr(path),
-        other => wire_value_expr(other, field_expr, input_expr),
+        other => wire_value_expr(other, field_expr, input_expr, param_access),
     }
 }
 
@@ -194,10 +211,11 @@ fn uri_expr(
     wire: &WireBinding,
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> String {
     match &wire.uri {
-        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
-        other => wire_value_expr(other, field_expr, input_expr),
+        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr, param_access),
+        other => wire_value_expr(other, field_expr, input_expr, param_access),
     }
 }
 
@@ -207,14 +225,15 @@ fn declared_header_lines(
     indent_str: &str,
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> String {
     wire.request_headers
         .iter()
         .map(|(key, value)| {
             format!(
                 "{indent_str}setHeader(headers, {}, {});\n",
-                template_expr(key, field_expr, input_expr),
-                wire_value_expr(value, field_expr, input_expr)
+                template_expr(key, field_expr, input_expr, param_access),
+                wire_value_expr(value, field_expr, input_expr, param_access)
             )
         })
         .collect()
@@ -226,14 +245,15 @@ fn query_lines(
     indent_str: &str,
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> String {
     wire.query
         .iter()
         .map(|(key, value)| {
             format!(
                 "{indent_str}appendQuery(qs, {}, {});\n",
-                template_expr(key, field_expr, input_expr),
-                wire_value_native_expr(value, field_expr, input_expr)
+                template_expr(key, field_expr, input_expr, param_access),
+                wire_value_native_expr(value, field_expr, input_expr, param_access)
             )
         })
         .collect()
@@ -251,6 +271,7 @@ fn body_expr(
     wire: &WireBinding,
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> Option<String> {
     let body = wire.body.as_ref()?;
     if matches!(body, WireValue::Param(segs) if segs.is_empty()) {
@@ -258,7 +279,7 @@ fn body_expr(
     }
     Some(format!(
         "JSON.stringify({})",
-        wire_value_native_expr(body, field_expr, input_expr)
+        wire_value_native_expr(body, field_expr, input_expr, param_access)
     ))
 }
 
@@ -316,21 +337,22 @@ fn url_lines(
     indent_str: &str,
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
+    param_access: ParamAccess<'_>,
 ) -> String {
     if !has_query(wire) {
         return format!(
             "{indent_str}const url = {} + {};\n",
-            endpoint_expr(wire, field_expr, input_expr),
-            uri_expr(wire, field_expr, input_expr)
+            endpoint_expr(wire, field_expr, input_expr, param_access),
+            uri_expr(wire, field_expr, input_expr, param_access)
         );
     }
     format!(
         "{indent_str}const qs = new URLSearchParams();\n\
          {q}\
          {indent_str}const url = {} + {}{tail};\n",
-        endpoint_expr(wire, field_expr, input_expr),
-        uri_expr(wire, field_expr, input_expr),
-        q = query_lines(wire, indent_str, field_expr, input_expr),
+        endpoint_expr(wire, field_expr, input_expr, param_access),
+        uri_expr(wire, field_expr, input_expr, param_access),
+        q = query_lines(wire, indent_str, field_expr, input_expr, param_access),
         tail = " + (qs.toString() ? `?${qs.toString()}` : \"\")",
     )
 }
@@ -391,6 +413,7 @@ pub(super) fn op_call(
     after_response_bound: bool,
     field_expr: &dyn Fn(&[String]) -> String,
     timeout_field_expr: &dyn Fn(&[String]) -> String,
+    param_access: ParamAccess<'_>,
     refs: &mut Vec<Symbol>,
 ) -> String {
     refs.push(support_symbol("HttpRequest"));
@@ -398,18 +421,33 @@ pub(super) fn op_call(
 
     let has_retry = wire.retry.is_some();
     let has_timeout = wire.timeout.is_some();
-    let body = body_expr(wire, field_expr, input_expr);
+    let body = body_expr(wire, field_expr, input_expr, param_access);
     let transport_throw = throw(format!("new {transport_error}(cause)"));
 
+    let resolves = |name: &str| param_access(name).is_some();
     let mut out = String::new();
-    if needs_record(wire) {
+    if needs_record_for_reads(wire, &resolves) || body_reads_record(wire, &resolves) {
         out.push_str(&format!(
             "    const record = {input_expr} as unknown as Record<string, unknown>;\n"
         ));
     }
-    out.push_str(&url_lines(wire, "    ", field_expr, input_expr));
+    push_gap(&mut out);
+    out.push_str(&url_lines(
+        wire,
+        "    ",
+        field_expr,
+        input_expr,
+        param_access,
+    ));
+    push_gap(&mut out);
     out.push_str("    const headers: Record<string, string> = {};\n");
-    out.push_str(&declared_header_lines(wire, "    ", field_expr, input_expr));
+    out.push_str(&declared_header_lines(
+        wire,
+        "    ",
+        field_expr,
+        input_expr,
+        param_access,
+    ));
     out.push_str(
         "    for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);\n",
     );
@@ -418,6 +456,7 @@ pub(super) fn op_call(
         None => "body: undefined".to_string(),
     };
     if let Some(b) = &body {
+        push_gap(&mut out);
         out.push_str(&format!("    const body = {b};\n"));
         out.push_str(
             "    if (!hasHeader(headers, \"content-type\")) headers[\"content-type\"] = \"application/json\";\n",
@@ -433,6 +472,7 @@ pub(super) fn op_call(
     );
     let send_call = if has_timeout {
         let path = wire.timeout.as_deref().unwrap_or_default();
+        push_gap(&mut out);
         out.push_str(&format!(
             "    const timeoutMs = {};\n",
             timeout_field_expr(path)
@@ -443,6 +483,7 @@ pub(super) fn op_call(
     };
     if has_retry {
         let path = wire.retry.as_deref().unwrap_or_default();
+        push_gap(&mut out);
         out.push_str(&format!(
             "    const maxRetries = resolveMaxRetries({});\n",
             field_expr(path)
@@ -463,6 +504,7 @@ pub(super) fn op_call(
         "before_request",
         "request",
     ));
+    push_gap(&mut attempt);
     attempt.push_str(&format!("{d}let response: HttpResponse;\n"));
     attempt.push_str(&format!("{d}try {{\n"));
     attempt.push_str(&format!("{d}  response = await {send_call};\n"));
@@ -496,6 +538,7 @@ pub(super) fn op_call(
             outcome_body_expr(wire),
         ));
     }
+    push_gap(&mut attempt);
     // The success path is control-flow-terminal (`success_block` always
     // returns or throws), so the error path below it needs no `else`: it is
     // only ever reached once the response missed.
@@ -506,6 +549,7 @@ pub(super) fn op_call(
     ));
     attempt.push('\n');
     attempt.push_str(&format!("{d}}}\n"));
+    push_gap(&mut attempt);
     if has_declared_errors {
         attempt.push_str(&format!(
             "{d}const err = {discriminator}(outcome.status, outcome.body);\n"
@@ -520,6 +564,7 @@ pub(super) fn op_call(
         attempt.push_str(&retry_or_throw(d, false, None, error_line));
     }
 
+    push_gap(&mut out);
     if has_retry {
         out.push_str("    for (let attempt = 0; ; attempt++) {\n");
         out.push_str(&attempt);

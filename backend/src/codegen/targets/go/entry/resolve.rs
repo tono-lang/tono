@@ -293,8 +293,15 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    /// A guaranteed chain as an if/else cascade ending in `@default`, relative
-    /// to column zero.
+    /// A guaranteed chain as an if/else-if cascade ending in `@default`: each
+    /// source's own `else` only runs when every higher-priority one already
+    /// missed, so a lower-priority source is never even evaluated (its parse
+    /// never runs, its failure mode never fires) once an earlier one wins.
+    /// That short-circuiting is why this stays a cascade rather than a
+    /// set-flag sequence: a flag would still let every source run and only
+    /// gate the final assignment, so a malformed but shadowed `@env` value
+    /// would fail construction it does not fail today. Relative to column
+    /// zero.
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String {
         let mut out = String::new();
         let mut first = true;

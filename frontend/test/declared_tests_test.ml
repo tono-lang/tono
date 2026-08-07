@@ -53,10 +53,10 @@ pub struct client {
   api_token: string @arg
   endpoint: string @env("GITHUB_ENDPOINT") @default("https://api.github.com")
 
-  op get_user(user_ref): user
-    @http(method: "GET", path: "/users/{username}", endpoint: .endpoint)
+  op get_user(user_ref: user_ref): user
+    @http(method: "GET", path: "/users/{.user_ref.username}", endpoint: .endpoint)
 
-  op save_note(note): note @errors(overloaded)
+  op save_note(note: note): note @errors(overloaded)
 
   op ping()
     @http(method: "GET", path: "/ping", endpoint: .endpoint)
@@ -215,7 +215,7 @@ pub struct row { n: i64 }
 pub struct row_ref { id: string }
 pub struct client {
   endpoint: string @env("EP") @default("https://x")
-  op get(row_ref): row
+  op get(row_ref: row_ref): row
     @http(method: "GET", path: "/rows/{id}", endpoint: .endpoint)
 }
 test "t" {
@@ -285,7 +285,8 @@ let parser_rejects () =
 (* Outside a test block the contextual words stay ordinary identifiers. *)
 let contextual_words_stay_identifiers () =
   let src =
-    "pub struct stub { expect: string, any: string }\nop expect(stub): stub"
+    "pub struct stub { expect: string, any: string }\n\
+     op expect(stub: stub): stub"
   in
   let _, ds = Parser.parse src in
   Alcotest.(check int) "no parse errors" 0 (List.length (errors_of ds))
@@ -378,8 +379,8 @@ pub struct user { login: string }
 pub struct user_ref { username: string }
 pub struct client {
   endpoint: string @env("EP") @default("https://x")
-  op get_user(user_ref): user
-    @http(method: "GET", path: "/u/{username}", endpoint: .endpoint)
+  op get_user(user_ref: user_ref): user
+    @http(method: "GET", path: "/u/{.user_ref.username}", endpoint: .endpoint)
 }
 test "t" {
   c: client {}
