@@ -591,6 +591,34 @@ let unknown_trait_suggests_the_nearest_name () =
     "suggests @status" true
     (List.exists (contains "did you mean @status") messages)
 
+(* The four retired per-member HTTP binding traits point at their
+   replacement instead of the nearest known name (spelling distance would
+   not connect them to @body/@query/@header). *)
+let retired_http_binding_traits_point_at_replacement () =
+  let hint_of src =
+    List.map (fun (d : Diagnostic.t) -> d.message) (check src)
+  in
+  Alcotest.(check bool)
+    "httpLabel points at the path placeholder"
+    true
+    (List.exists (contains "point of use in @http's path")
+       (hint_of {|struct s { a: string @httpLabel }|}));
+  Alcotest.(check bool)
+    "httpQuery points at @query"
+    true
+    (List.exists (contains "use @query")
+       (hint_of {|struct s { a: string @httpQuery }|}));
+  Alcotest.(check bool)
+    "httpHeader points at @header"
+    true
+    (List.exists (contains "use @header")
+       (hint_of {|struct s { a: string @httpHeader }|}));
+  Alcotest.(check bool)
+    "httpPayload points at @body"
+    true
+    (List.exists (contains "use @body")
+       (hint_of {|struct s { a: string @httpPayload }|}))
+
 let () =
   Alcotest.run "typecheck"
     [
@@ -734,5 +762,7 @@ let () =
             known_traits_are_silent;
           Alcotest.test_case "suggests nearest" `Quick
             unknown_trait_suggests_the_nearest_name;
+          Alcotest.test_case "retired http binding traits" `Quick
+            retired_http_binding_traits_point_at_replacement;
         ] );
     ]
