@@ -26,6 +26,17 @@ let rec erase_arg = function
   | Ast.ARef r -> Ast.ARef (erase_ref r)
   | Ast.AKv (k, v) -> Ast.AKv (k, erase_arg v)
   | Ast.AList xs -> Ast.AList (List.map erase_arg xs)
+  | Ast.ACtor c ->
+      Ast.ACtor
+        {
+          c with
+          Ast.ctor_name_span = dspan;
+          ctor_span = dspan;
+          ctor_fields =
+            List.map
+              (fun (n, _, v) -> (n, dspan, erase_arg v))
+              c.Ast.ctor_fields;
+        }
   | (Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _) as a -> a
 
 let erase_trait (t : Ast.trait) =

@@ -3,7 +3,7 @@
 //! the binding alone, so the decision lives once here and each target
 //! spells only its own syntax over the answer.
 
-use crate::ir::{TemplatePart, WireBinding, WirePart, WireValue};
+use crate::ir::{TemplatePart, WireBinding, WireValue};
 
 // A param reference with no further segments reads the whole typed input
 // value directly (a new capability the named-parameter form adds); one with
@@ -26,15 +26,15 @@ fn value_reads_record(value: &WireValue) -> bool {
     match value {
         WireValue::Param(segs) => !segs.is_empty(),
         WireValue::Template(parts) => template_reads_record(parts),
+        WireValue::Object(fields) => fields.iter().any(|(_, v)| value_reads_record(v)),
         WireValue::Lit(_) | WireValue::Field(_) => false,
     }
 }
 
 /// Whether the operation reads any input member individually off a decoded
-/// record (a label, query, header, payload, or partial-body position, or an
-/// op-parameter member reference in the uri/endpoint/header/query
-/// positions); a whole-body operation serializes the typed/encoded input
-/// directly instead.
+/// record (an op-parameter member reference in the uri/endpoint/header/
+/// query/body positions); a whole-body operation serializes the typed/
+/// encoded input directly instead.
 pub fn needs_record(wire: &WireBinding) -> bool {
     let uri_reads_record = value_reads_record(&wire.uri);
     let endpoint_reads_record = wire.endpoint.as_ref().is_some_and(value_reads_record);
@@ -42,19 +42,17 @@ pub fn needs_record(wire: &WireBinding) -> bool {
         kv.iter()
             .any(|(k, v)| template_reads_record(k) || value_reads_record(v))
     };
-    let any_non_body_binding = wire.bindings.values().any(|p| !matches!(p, WirePart::Body));
+    let body_reads_record = wire.body.as_ref().is_some_and(value_reads_record);
     uri_reads_record
         || endpoint_reads_record
         || kv_reads_record(&wire.request_headers)
         || kv_reads_record(&wire.query)
-        || any_non_body_binding
+        || body_reads_record
 }
 
-/// Whether any input member is bound to the query string.
+/// Whether the operation declares any query-string parameter.
 pub fn has_query(wire: &WireBinding) -> bool {
-    wire.bindings
-        .values()
-        .any(|p| matches!(p, WirePart::Query { .. }))
+    !wire.query.is_empty()
 }
 
 /// The success test text, common to every target: the 2xx-range convention
@@ -83,7 +81,7 @@ mod tests {
         WireBinding {
             method: "GET".into(),
             uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
-            bindings: Default::default(),
+            body: None,
             response_bindings: Default::default(),
             success: Vec::new(),
             endpoint: None,
@@ -95,24 +93,26 @@ mod tests {
     }
 
     #[test]
-    fn needs_record_is_false_with_no_bindings_and_false_for_all_body() {
+    fn needs_record_is_false_with_no_body_and_false_for_a_whole_param_body() {
         let mut w = wire();
         assert!(!needs_record(&w));
-        w.bindings = [("amount".to_string(), WirePart::Body)]
-            .into_iter()
-            .collect();
+        w.body = Some(WireValue::Param(Vec::new()));
         assert!(!needs_record(&w));
     }
 
     #[test]
-    fn needs_record_is_true_for_a_uri_input_or_a_non_body_binding() {
+    fn needs_record_is_true_for_a_uri_input_or_a_param_member_body() {
         let mut w = wire();
         w.uri = WireValue::Template(vec![TemplatePart::Input("id".into())]);
         assert!(needs_record(&w));
         let mut w = wire();
-        w.bindings = [("tag".to_string(), WirePart::Query { name: "tag".into() })]
-            .into_iter()
-            .collect();
+        w.body = Some(WireValue::Param(vec!["amount".to_string()]));
+        assert!(needs_record(&w));
+        let mut w = wire();
+        w.query = vec![(
+            vec![TemplatePart::Lit("tag".into())],
+            WireValue::Param(vec!["tag".to_string()]),
+        )];
         assert!(needs_record(&w));
         assert!(has_query(&w));
     }

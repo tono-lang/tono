@@ -169,25 +169,6 @@ let shape_suite =
 
 (* ── Resolved wire bindings ────────────────────────────────────────────── *)
 
-let wire_part_suite =
-  [
-    fails "wire part not an object" Ir_json.decode_wire_part {|5|};
-    fails "wire part missing kind" Ir_json.decode_wire_part {|{}|};
-    fails "wire part unknown kind" Ir_json.decode_wire_part
-      {|{"kind": "bogus"}|};
-    fails "wire part query missing name" Ir_json.decode_wire_part
-      {|{"kind": "query"}|};
-    fails "wire part header missing name" Ir_json.decode_wire_part
-      {|{"kind": "header"}|};
-    ok "wire part label" Ir_json.decode_wire_part {|{"kind": "label"}|};
-    ok "wire part query" Ir_json.decode_wire_part
-      {|{"kind": "query", "name": "q"}|};
-    ok "wire part header" Ir_json.decode_wire_part
-      {|{"kind": "header", "name": "X-Key"}|};
-    ok "wire part body" Ir_json.decode_wire_part {|{"kind": "body"}|};
-    ok "wire part payload" Ir_json.decode_wire_part {|{"kind": "payload"}|};
-  ]
-
 let wire_response_part_suite =
   [
     fails "wire response part not an object" Ir_json.decode_wire_response_part
@@ -215,6 +196,10 @@ let wire_value_suite =
     ok "wire value field" Ir_json.decode_wire_value {|{"field": ["a", "b"]}|};
     ok "wire value template" Ir_json.decode_wire_value
       {|{"template": [{"lit": "x"}]}|};
+    fails "wire value object bad field" Ir_json.decode_wire_value
+      {|{"object": [["a", 5]]}|};
+    ok "wire value object" Ir_json.decode_wire_value
+      {|{"object": [["a", {"lit": 1}], ["b", {"field": ["x"]}]]}|};
   ]
 
 let wire_binding_suite =
@@ -225,10 +210,8 @@ let wire_binding_suite =
       {|{"method": 5}|};
     fails "wire binding uri not array" Ir_json.decode_wire_binding
       {|{"method": "GET", "uri": 5}|};
-    fails "wire binding bindings not object" Ir_json.decode_wire_binding
-      {|{"method": "GET", "bindings": 5}|};
-    fails "wire binding bindings bad part" Ir_json.decode_wire_binding
-      {|{"method": "GET", "bindings": {"id": {"kind": "bogus"}}}|};
+    fails "wire binding body malformed" Ir_json.decode_wire_binding
+      {|{"method": "GET", "body": 5}|};
     fails "wire binding response_bindings not object"
       Ir_json.decode_wire_binding {|{"method": "GET", "response_bindings": 5}|};
     fails "wire binding success not array" Ir_json.decode_wire_binding
@@ -246,7 +229,7 @@ let wire_binding_suite =
       {|{
           "method": "POST",
           "uri": {"template": [{"lit": "/charges/"}, {"input": "id"}]},
-          "bindings": {"id": {"kind": "label"}, "q": {"kind": "query", "name": "q"}},
+          "body": {"object": [["id", {"param": []}]]},
           "response_bindings": {"trace_id": {"kind": "header", "name": "X-Trace-Id"}},
           "success": [200, 202],
           "endpoint": {"field": ["endpoint"]},
@@ -258,8 +241,7 @@ let wire_binding_suite =
   ]
 
 let wire_suite =
-  wire_part_suite @ wire_response_part_suite @ wire_value_suite
-  @ wire_binding_suite
+  wire_response_part_suite @ wire_value_suite @ wire_binding_suite
 
 let union_discriminator_defaults () =
   match Ir_json.decode_shape (parse {|{"id": "x#U", "kind": "union"}|}) with

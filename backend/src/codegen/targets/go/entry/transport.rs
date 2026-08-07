@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::symbol_slot;
-use crate::ir::{TemplatePart, WireBinding, WirePart, WireResponsePart, WireValue};
+use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
 
 use super::shared_symbol;
 
@@ -176,6 +176,68 @@ fn wire_value_expr(
         WireValue::Template(parts) => {
             template_expr(parts, false, field_access, field_kind, reached)
         }
+        // The frontend only ever emits Object for @body, read through
+        // wire_value_any_expr + json.Marshal (see body_lines), never through
+        // this string-position renderer.
+        WireValue::Object(_) => unreachable!("a wire object never reaches a scalar position"),
+    }
+}
+
+/// A Go literal for a JSON scalar; a compound literal (object/array) is
+/// unreachable here, since it would only arise nested inside a @body ctor's
+/// field value, and the frontend's ctor typecheck only accepts a reference
+/// or a scalar literal/template per field (RFC-0022 §4: zero new expressive
+/// power).
+fn go_json_lit(json: &serde_json::Value) -> String {
+    match json {
+        serde_json::Value::Null => "nil".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => format!("{s:?}"),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            unreachable!("a @body ctor field value is a reference or a scalar literal")
+        }
+    }
+}
+
+/// A `WireValue` rendered as a Go `any` expression: the @body ctor mapper's
+/// field value, or nested inside one. Unlike [`wire_value_expr`] (a string),
+/// this keeps the value's native shape so `json.Marshal` encodes it the same
+/// way it would encode the field directly.
+fn wire_value_any_expr(
+    value: &WireValue,
+    field_access: &dyn Fn(&[String]) -> String,
+    field_kind: &dyn Fn(&[String]) -> FieldKind,
+    reached: &mut Reached,
+) -> String {
+    match value {
+        WireValue::Lit(json) => go_json_lit(json),
+        WireValue::Field(path) => {
+            let access = field_access(path);
+            match field_kind(path) {
+                FieldKind::Branded => format!("string({access})"),
+                _ => access,
+            }
+        }
+        WireValue::Param(segs) => match segs.first() {
+            None => "input".to_string(),
+            Some(name) => format!("record[{name:?}]"),
+        },
+        WireValue::Template(parts) => {
+            template_expr(parts, false, field_access, field_kind, reached)
+        }
+        WireValue::Object(entries) => {
+            let items: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{k:?}: {}",
+                        wire_value_any_expr(v, field_access, field_kind, reached)
+                    )
+                })
+                .collect();
+            format!("map[string]any{{{}}}", items.join(", "))
+        }
     }
 }
 
@@ -220,7 +282,8 @@ fn success_expr(wire: &WireBinding) -> String {
     success_test_expr(wire, "outcome.Status", "==")
 }
 
-/// The URL assembly: the query entries only when a member is query-bound.
+/// The URL assembly: the query entries only when the operation declares a
+/// `@query`.
 fn url_lines(
     wire: &WireBinding,
     field_access: &dyn Fn(&[String]) -> String,
@@ -237,12 +300,12 @@ fn url_lines(
     }
     let mut out = String::from("\tvar query []string\n");
     let append = reached.slot("AppendQuery");
-    for (name, part) in &wire.bindings {
-        if let WirePart::Query { name: query_name } = part {
-            out.push_str(&format!(
-                "\tquery = {append}(query, {query_name:?}, record[{name:?}])\n"
-            ));
-        }
+    for (key, value) in &wire.query {
+        out.push_str(&format!(
+            "\tquery = {append}(query, {}, {})\n",
+            template_expr(key, false, field_access, field_kind, reached),
+            wire_value_any_expr(value, field_access, field_kind, reached),
+        ));
     }
     out.push_str(&format!(
         "\trequestURL := {base} + {}(query)\n",
@@ -251,10 +314,9 @@ fn url_lines(
     out
 }
 
-/// The header assembly, layered the way the runtime layered them: the declared
-/// headers first, the caller's base headers over them, and the input's header
-/// bindings last (the per-call value is the most specific). An absent per-call
-/// member omits its header rather than sending an empty value.
+/// The header assembly, layered the way the runtime layered them: the
+/// declared headers first, then the caller's base headers over them (the
+/// per-call value is the most specific).
 fn header_lines(
     wire: &WireBinding,
     field_access: &dyn Fn(&[String]) -> String,
@@ -273,38 +335,41 @@ fn header_lines(
     out.push_str(&format!(
         "\tfor name, value := range c.settings.Headers {{\n\t\t{set}(headers, name, value)\n\t}}\n"
     ));
-    for (name, part) in &wire.bindings {
-        if let WirePart::Header { name: header_name } = part {
-            let format = reached.slot("FormatScalar");
-            out.push_str(&format!(
-                "\tif v, ok := record[{name:?}]; ok && v != nil {{\n\
-                 \t\t{set}(headers, {header_name:?}, {format}(v))\n\
-                 \t}}\n"
-            ));
-        }
-    }
     out
 }
 
-/// The request body: a `Payload`-kind member wins outright; every binding
-/// being a plain `Body` member marshals the typed input directly (the encoded
-/// input already *is* exactly the body, correct even under `@wire` renames);
-/// a mixed set assembles just the `Body` members. `None` when the operation
-/// sends no body at all. Returns the lines and whether the content-type
-/// default needs the runtime `body != nil` guard (a statically-known body
-/// does not).
+/// The request body, or `None` when the operation sends no body: `wire.body`
+/// says exactly what the body is, never inferred from what the input leaves
+/// undeclared. The whole-parameter form marshals the typed input directly
+/// (correct even under `@wire` renames); a single member marshals it raw off
+/// the record; every other form (an entry-field reference, a template, or
+/// the @body ctor mapper) builds the value explicitly before marshaling it.
+/// Returns the lines and whether the content-type default needs the runtime
+/// `body != nil` guard (a statically-known body does not).
 fn body_lines(
     call: &OpCall<'_>,
+    field_access: &dyn Fn(&[String]) -> String,
+    field_kind: &dyn Fn(&[String]) -> FieldKind,
     fail: &dyn Fn(String) -> String,
     reached: &mut Reached,
 ) -> (String, Option<bool>) {
     let wire = call.wire;
     let ret_zero = call.ret_zero;
-    if let Some((name, _)) = wire
-        .bindings
-        .iter()
-        .find(|(_, p)| matches!(p, WirePart::Payload))
-    {
+    let Some(body) = wire.body.as_ref() else {
+        return (String::new(), None);
+    };
+    if let WireValue::Param(segs) = body {
+        if segs.is_empty() {
+            let text = format!(
+                "\tbody, err := json.Marshal(input)\n\
+                 \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
+                fail_enc = fail("err".to_string()),
+            );
+            return (text, Some(false));
+        }
+        let name = segs
+            .first()
+            .expect("a @body param reference resolves zero or one segment deep");
         let text = format!(
             "\tvar body []byte\n\
              \tif v, ok := record[{name:?}]; ok {{\n\
@@ -316,37 +381,13 @@ fn body_lines(
         );
         return (text, Some(true));
     }
-    let body_members: Vec<&String> = wire
-        .bindings
-        .iter()
-        .filter(|(_, p)| matches!(p, WirePart::Body))
-        .map(|(name, _)| name)
-        .collect();
-    if body_members.is_empty() || !call.has_input {
-        return (String::new(), None);
-    }
-    if body_members.len() == wire.bindings.len() {
-        let text = format!(
-            "\tbody, err := json.Marshal(input)\n\
-             \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
-            fail_enc = fail("err".to_string()),
-        );
-        return (text, Some(false));
-    }
-    let members = body_members
-        .iter()
-        .map(|name| format!("{name:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
     let text = format!(
-        "\tbody, err := {encode}(record, {members})\n\
+        "\tbody, err := json.Marshal({})\n\
          \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
-        encode = reached.slot("EncodeBody"),
+        wire_value_any_expr(body, field_access, field_kind, reached),
         fail_enc = fail("err".to_string()),
     );
-    // EncodeBody yields nil when every member is absent, so the default
-    // content-type keeps the runtime's body-presence guard.
-    (text, Some(true))
+    (text, Some(false))
 }
 
 /// The `Retry` field value: the resolved maximum, plus the `When` predicate
@@ -414,7 +455,8 @@ pub(super) fn op_call(
     }
     out.push_str(&url_lines(wire, field_access, field_kind, &mut reached));
     out.push_str(&header_lines(wire, field_access, field_kind, &mut reached));
-    let (body_text, content_type_guard) = body_lines(call, fail, &mut reached);
+    let (body_text, content_type_guard) =
+        body_lines(call, field_access, field_kind, fail, &mut reached);
     out.push_str(&body_text);
     if body_text.contains("json.Marshal") {
         refs.push(super::import("json", "encoding/json"));

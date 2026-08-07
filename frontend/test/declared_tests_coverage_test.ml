@@ -54,7 +54,7 @@ pub struct person {
   gen: box[string]?
 }
 
-pub struct person_ref { key: string @httpLabel }
+pub struct person_ref { key: string }
 
 @status(500) @errorCode("code", "boom")
 pub struct boom { message: string }

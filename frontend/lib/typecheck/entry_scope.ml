@@ -182,10 +182,11 @@ let member_refs (m : Ast.member) : (string list * Span.span) list =
   member_trait_refs m
   @ match m.mmatch with Some fm -> of_match fm | None -> []
 
-let protocol_trait_names = [ "header"; "timeout"; "retry" ]
+let protocol_trait_names = [ "header"; "query"; "body"; "timeout"; "retry" ]
 
 (* The field references an operation's protocol traits consume: the @http
-   endpoint and path template, @header keys and values, @timeout and @retry. *)
+   endpoint and path template, @header/@query keys and values, @body's
+   reference (or ctor field references), @timeout and @retry. *)
 let op_refs (op : Ast.decl) : (string list * Span.span) list =
   List.concat_map
     (fun (tr : Ast.trait) ->
@@ -200,6 +201,8 @@ let op_refs (op : Ast.decl) : (string list * Span.span) list =
               | Ast.AString s ->
                   List.map (fun p -> (p, tr.Ast.tspan)) (template_refs s)
               | Ast.AKv (_, v) -> refs_of v
+              | Ast.ACtor c ->
+                  List.concat_map (fun (_, _, v) -> refs_of v) c.Ast.ctor_fields
               | _ -> []
             in
             refs_of arg)

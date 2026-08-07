@@ -32,7 +32,8 @@ let parse_ref_path st : Ast.ref_path =
   { Ast.segs; ref_span = Span.merge d0.span last }
 
 (* A trait-argument value (the part after "key:"): a scalar, or a
-   "[" v ("," v)* "]" list literal, e.g. @http(code: [200, 207]). *)
+   "[" v ("," v)* "]" list literal, e.g. @http(code: [200, 207]), or a
+   "name { field: value, ... }" ctor, e.g. @body(note_body { title: .x }). *)
 let rec parse_trait_value st : Ast.trait_arg =
   let t = P.peek st in
   match t.kind with
@@ -45,14 +46,59 @@ let rec parse_trait_value st : Ast.trait_arg =
   | Token.Float f ->
       ignore (P.advance st);
       Ast.AFloat f
-  | Token.Ident n ->
-      ignore (P.advance st);
-      Ast.AName n
+  | Token.Ident n -> (
+      let nt = P.advance st in
+      match (P.peek st).kind with
+      | Token.LBrace -> parse_ctor_arg st n nt.span
+      | _ -> Ast.AName n)
   | Token.Dot -> Ast.ARef (parse_ref_path st)
   | Token.LBracket -> parse_trait_list_value st
   | _ ->
       P.error st t.span "expected a value after ':'";
       Ast.AName ""
+
+(* ctor ::= name "{" ( field ":" value ( "," field ":" value )* )? "}" — the
+   caller has already consumed [name] at [name_span]. *)
+and parse_ctor_arg st (name : string) (name_span : Span.span) : Ast.trait_arg =
+  let lb = P.advance st in
+  (* '{' *)
+  let field () =
+    match (P.peek st).kind with
+    | Token.Ident fname ->
+        let ft = P.advance st in
+        ignore (P.expect st Token.Colon "':' after a ctor field name");
+        (fname, ft.span, parse_trait_value st)
+    | _ ->
+        P.error st (P.peek st).span "expected a field name";
+        ("", (P.peek st).span, Ast.AName "")
+  in
+  let fields =
+    match (P.peek st).kind with
+    | Token.RBrace -> []
+    | _ ->
+        let first = field () in
+        let rec more acc =
+          match (P.peek st).kind with
+          | Token.Comma ->
+              ignore (P.advance st);
+              if (P.peek st).kind = Token.RBrace then List.rev acc
+              else more (field () :: acc)
+          | _ -> List.rev acc
+        in
+        more [ first ]
+  in
+  let rb_span =
+    match P.expect st Token.RBrace "'}' to close a ctor" with
+    | Some t -> t.span
+    | None -> (P.peek st).span
+  in
+  Ast.ACtor
+    {
+      ctor_name = name;
+      ctor_name_span = name_span;
+      ctor_fields = fields;
+      ctor_span = Span.merge lb.span rb_span;
+    }
 
 and parse_trait_list_value st : Ast.trait_arg =
   ignore (P.advance st);
@@ -88,11 +134,12 @@ let parse_trait_arg st : Ast.trait_arg =
       Ast.AFloat f
   | Token.Dot -> Ast.ARef (parse_ref_path st)
   | Token.Ident n -> (
-      ignore (P.advance st);
+      let nt = P.advance st in
       match (P.peek st).kind with
       | Token.Colon ->
           ignore (P.advance st);
           Ast.AKv (n, parse_trait_value st)
+      | Token.LBrace -> parse_ctor_arg st n nt.span
       | _ -> Ast.AName n)
   | _ ->
       P.error st t.span "expected a trait argument";

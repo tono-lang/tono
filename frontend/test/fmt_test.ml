@@ -212,7 +212,7 @@ pub struct client {
 let entry_ir_equivalent () =
   let src =
     {|
-struct note_ref { id: string @httpLabel }
+struct note_ref { id: string }
 struct note { id: string }
 @status(404) @errorCode("code", "not_found") struct not_found { message: string }
 pub struct client {

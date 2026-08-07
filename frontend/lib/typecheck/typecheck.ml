@@ -14,7 +14,6 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
   let enum_diags = Check_enum.check_decls decls in
   let constraint_diags = Check_constraints.check ~decls m in
   let op_diags = Check_operations.check_decls tbl decls in
-  let http_diags = Check_http.check_decls decls in
   let ext_diags = Check_ext.check_decls decls in
   let impl_diags = Check_impl.check_decls decls in
   let entry_diags = Check_entries.check_decls decls in
@@ -28,5 +27,5 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
   ( { m with tests },
     Diagnostic.sort
       (dup_diags @ ref_diags @ member_diags @ enum_diags @ constraint_diags
-     @ op_diags @ http_diags @ ext_diags @ impl_diags @ entry_diags
-     @ repeat_diags @ trait_name_diags @ test_diags) )
+     @ op_diags @ ext_diags @ impl_diags @ entry_diags @ repeat_diags
+     @ trait_name_diags @ test_diags) )

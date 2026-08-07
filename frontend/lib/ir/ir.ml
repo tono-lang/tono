@@ -122,15 +122,8 @@ and template_part =
 (* The resolved HTTP binding a Protocol pass computes once and a Target reads
    directly. Constructors are [Wire_]-prefixed (and record fields
    [wb_]-prefixed) to stay unambiguous next to Protocol_http's own local
-   part/response_part/value_expr types, the intermediate resolution this is
-   built from, and because [method] is an OCaml keyword. *)
-and wire_part =
-  | Wire_label (* path parameter: substitutes {name} in the uri *)
-  | Wire_query of string (* query-string parameter with this name *)
-  | Wire_header of string (* HTTP header with this name *)
-  | Wire_body (* a field inside the JSON request body (default) *)
-  | Wire_payload (* this member is the whole body, no envelope *)
-
+   response_part/value_expr types, the intermediate resolution this is built
+   from, and because [method] is an OCaml keyword. *)
 and wire_response_part =
   | Wire_response_header of string
   | Wire_response_status_code
@@ -141,14 +134,16 @@ and wire_value =
   | Wire_param of string list
     (* segments into the op's declared parameter; [] is the whole value *)
   | Wire_template of template_part list
+  | Wire_object of (string * wire_value) list
+(* a @body ctor mapper: struct-literal field name -> value *)
 
 and wire_binding = {
   wb_method : string;
   wb_uri : wire_value;
       (* literal, entry/param reference, or template; {name}/{.field}
          placeholders parsed inside a template *)
-  wb_bindings : (string * wire_part) list;
-      (* input member name -> request part *)
+  wb_body : wire_value option;
+      (* @body(...): absent means the operation sends no body *)
   wb_response_bindings : (string * wire_response_part) list;
   wb_success : int list;
       (* status codes; the output type is always the op's own output *)

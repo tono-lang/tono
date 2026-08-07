@@ -19,7 +19,7 @@ pub(super) fn fixture_module() -> Module {
 }
 
 fn with_descriptors(mut module: Module) -> Module {
-    use crate::ir::{TemplatePart, WireBinding, WirePart};
+    use crate::ir::{TemplatePart, WireBinding};
     for shape in &mut module.shapes {
         if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
             for op in operations {
@@ -30,7 +30,7 @@ fn with_descriptors(mut module: Module) -> Module {
                             TemplatePart::Lit("/notes/".into()),
                             TemplatePart::Input("id".into()),
                         ]),
-                        bindings: [("id".to_string(), WirePart::Label)].into_iter().collect(),
+                        body: None,
                         response_bindings: Default::default(),
                         success: vec![200],
                         // The typechecker rejects an entry @http op without an

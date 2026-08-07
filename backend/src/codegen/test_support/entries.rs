@@ -204,7 +204,7 @@ pub fn entries_matrix_module() -> Module {
                     TemplatePart::Lit("/x/".into()),
                     TemplatePart::Field(vec!["naming".into()]),
                 ]),
-                bindings: Default::default(),
+                body: None,
                 response_bindings: Default::default(),
                 success: vec![200],
                 endpoint: Some(WireValue::Field(vec!["naming".into()])),
@@ -244,7 +244,7 @@ pub fn entries_matrix_module() -> Module {
         WireBinding {
             method: "GET".into(),
             uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
-            bindings: Default::default(),
+            body: None,
             response_bindings: Default::default(),
             success: vec![200],
             endpoint: Some(WireValue::Field(vec!["naming".into()])),

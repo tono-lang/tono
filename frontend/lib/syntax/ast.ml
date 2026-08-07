@@ -27,6 +27,15 @@ type trait_arg =
   | AKv of string * trait_arg (* key: value, e.g. @range(min: 0) *)
   | AList of
       trait_arg list (* a list literal value, e.g. @http(code: [200, 207]) *)
+  | ACtor of ctor_arg
+(* a struct-literal mapper, e.g. @body(note_body { title: .input.title }) *)
+
+and ctor_arg = {
+  ctor_name : string;
+  ctor_name_span : Span.span;
+  ctor_fields : (string * Span.span * trait_arg) list;
+  ctor_span : Span.span;
+}
 
 type trait = { tname : string; targs : trait_arg list; tspan : Span.span }
 

@@ -90,7 +90,7 @@ fn entry_module(retry: bool, timeout: bool) -> crate::ir::Module {
     let wire = WireBinding {
         method: "POST".into(),
         uri: WireValue::Template(vec![crate::ir::TemplatePart::Lit("/x".into())]),
-        bindings: Default::default(),
+        body: None,
         response_bindings: Default::default(),
         success: vec![200],
         endpoint: Some(WireValue::Field(vec!["endpoint".into()])),

@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 185
+assertion_line: 181
 expression: "render_sdk(entries_module(), TargetKind::Go, Some(\"example.com/sdk\"))"
 ---
 // ==== go/internal/transport/transport.go ====
@@ -273,37 +273,6 @@ func HasHeader(headers map[string]string, name string) bool {
 		}
 	}
 	return false
-}
-
-// EncodeBody assembles the body-bound members into a JSON object, in the
-// given member order. A member that is present but null still lands in the
-// object as null; only absence omits it. Nil when no member is present.
-func EncodeBody(record map[string]any, members ...string) ([]byte, error) {
-	var fields []byte
-	for _, member := range members {
-		v, ok := record[member]
-		if !ok {
-			continue
-		}
-		// Marshalling a string cannot fail, so the key carries no error path.
-		key, _ := json.Marshal(member)
-		value, err := json.Marshal(v)
-		if err != nil {
-			return nil, err
-		}
-		if fields == nil {
-			fields = append(fields, '{')
-		} else {
-			fields = append(fields, ',')
-		}
-		fields = append(fields, key...)
-		fields = append(fields, ':')
-		fields = append(fields, value...)
-	}
-	if fields == nil {
-		return nil, nil
-	}
-	return append(fields, '}'), nil
 }
 
 // ==== go/internal/record/record.go ====
@@ -666,9 +635,13 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	for name, value := range c.settings.Headers {
 		transport.SetHeader(headers, name, value)
 	}
-	body, err := transport.EncodeBody(record, "body")
-	if err != nil {
-		return zero, err
+	var body []byte
+	if v, ok := record["body"]; ok {
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return zero, err
+		}
+		body = encoded
 	}
 	if body != nil && !transport.HasHeader(headers, "content-type") {
 		headers["content-type"] = "application/json"

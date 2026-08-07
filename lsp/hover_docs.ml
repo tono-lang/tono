@@ -113,31 +113,6 @@ let trait_registry : (string * trait_info) list =
            the identifier the generated code exposes.";
         ti_keys = [ ("", "string") ];
       } );
-    ( "httpLabel",
-      {
-        ti_doc =
-          "Binds the member to the matching {placeholder} in the operation's \
-           @http path. A nullable member cannot fill one.";
-        ti_keys = [];
-      } );
-    ( "httpQuery",
-      {
-        ti_doc = "Binds the member to a query string parameter.";
-        ti_keys = [ ("", "string") ];
-      } );
-    ( "httpHeader",
-      {
-        ti_doc = "Binds the member to a request header.";
-        ti_keys = [ ("", "string") ];
-      } );
-    ( "httpPayload",
-      {
-        ti_doc =
-          "The member is the whole request or response body, instead of one \
-           field within it. At most one per operation, and never alongside \
-           unmarked body members.";
-        ti_keys = [];
-      } );
     ( "httpResponseCode",
       {
         ti_doc = "The member receives the response's HTTP status code.";
@@ -200,6 +175,21 @@ let trait_registry : (string * trait_info) list =
           "A request header. Key and value each accept a literal, a field \
            reference, or a template of references.";
         ti_keys = [ ("key", "string | .field"); ("value", "string | .field") ];
+      } );
+    ( "query",
+      {
+        ti_doc =
+          "A query string parameter. Key and value each accept a literal, a \
+           field reference, or a template of references.";
+        ti_keys = [ ("key", "string | .field"); ("value", "string | .field") ];
+      } );
+    ( "body",
+      {
+        ti_doc =
+          "The request body: a reference (the whole parameter, or one of its \
+           members), or a struct-literal ctor mapping declared fields to \
+           references. Absent means the operation sends no body.";
+        ti_keys = [ ("", ".field | name { field: value, ... }") ];
       } );
     ( "timeout",
       {

@@ -697,10 +697,10 @@ let bespoke_impl : Ir.model =
       ];
   }
 
-(* Example: the resolved wire binding (v8) an operation carries directly for
-   a target to read: every part/response-part/value kind, a uri template
-   mixing all three placeholder forms, and the entry-scoped
-   endpoint/timeout/retry refs. *)
+(* Example: the resolved wire binding an operation carries directly for a
+   target to read: every wire_value/response-part kind (including the
+   @body ctor's object form), a uri template mixing all three placeholder
+   forms, and the entry-scoped endpoint/timeout/retry refs. *)
 let resolved_wire : Ir.model =
   let charge : Ir.shape =
     {
@@ -731,14 +731,13 @@ let resolved_wire : Ir.model =
                         Ir.Tpl_lit "/";
                         Ir.Tpl_field [ "endpoint_suffix" ];
                       ];
-                  wb_bindings =
-                    [
-                      ("id", Ir.Wire_label);
-                      ("q", Ir.Wire_query "q");
-                      ("x_key", Ir.Wire_header "X-Key");
-                      ("payload", Ir.Wire_payload);
-                      ("extra", Ir.Wire_body);
-                    ];
+                  wb_body =
+                    Some
+                      (Ir.Wire_object
+                         [
+                           ("id", Ir.Wire_param []);
+                           ("extra", Ir.Wire_field [ "extra" ]);
+                         ]);
                   wb_response_bindings =
                     [
                       ("trace_id", Ir.Wire_response_header "X-Trace-Id");

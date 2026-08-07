@@ -19,7 +19,7 @@ pub fn wire_binding(method: &str) -> Box<WireBinding> {
     Box::new(WireBinding {
         method: method.into(),
         uri: WireValue::Template(vec![]),
-        bindings: Default::default(),
+        body: None,
         response_bindings: Default::default(),
         success: vec![],
         endpoint: None,

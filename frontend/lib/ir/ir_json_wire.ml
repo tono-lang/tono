@@ -16,26 +16,26 @@ let as_int = Ir_json_base.as_int
 let encode_path (segs : string list) : Ir.json =
   `List (List.map (fun s -> `String s) segs)
 
-let encode_wire_part : Ir.wire_part -> Ir.json = function
-  | Ir.Wire_label -> `Assoc [ ("kind", `String "label") ]
-  | Ir.Wire_query name ->
-      `Assoc [ ("kind", `String "query"); ("name", `String name) ]
-  | Ir.Wire_header name ->
-      `Assoc [ ("kind", `String "header"); ("name", `String name) ]
-  | Ir.Wire_body -> `Assoc [ ("kind", `String "body") ]
-  | Ir.Wire_payload -> `Assoc [ ("kind", `String "payload") ]
-
 let encode_wire_response_part : Ir.wire_response_part -> Ir.json = function
   | Ir.Wire_response_header name ->
       `Assoc [ ("kind", `String "header"); ("name", `String name) ]
   | Ir.Wire_response_status_code -> `Assoc [ ("kind", `String "statusCode") ]
 
-let encode_wire_value : Ir.wire_value -> Ir.json = function
+let rec encode_wire_value : Ir.wire_value -> Ir.json = function
   | Ir.Wire_lit j -> `Assoc [ ("lit", j) ]
   | Ir.Wire_field p -> `Assoc [ ("field", encode_path p) ]
   | Ir.Wire_param p -> `Assoc [ ("param", encode_path p) ]
   | Ir.Wire_template parts ->
       `Assoc [ ("template", `List (List.map encode_template_part parts)) ]
+  | Ir.Wire_object fields ->
+      `Assoc
+        [
+          ( "object",
+            `List
+              (List.map
+                 (fun (n, v) -> `List [ `String n; encode_wire_value v ])
+                 fields) );
+        ]
 
 let encode_named_assoc encode_v (xs : (string * 'a) list) : Ir.json =
   `Assoc (List.map (fun (n, v) -> (n, encode_v v)) xs)
@@ -48,13 +48,15 @@ let encode_wire_binding (b : Ir.wire_binding) : Ir.json =
     ([
        ("method", `String b.wb_method);
        ("uri", encode_wire_value b.wb_uri);
-       ("bindings", encode_named_assoc encode_wire_part b.wb_bindings);
        ( "response_bindings",
          encode_named_assoc encode_wire_response_part b.wb_response_bindings );
        ("success", `List (List.map (fun s -> `Int s) b.wb_success));
        ("request_headers", `List (List.map request_header b.wb_request_headers));
        ("query", `List (List.map request_header b.wb_query));
      ]
+    @ (match b.wb_body with
+      | None -> []
+      | Some v -> [ ("body", encode_wire_value v) ])
     @ (match b.wb_endpoint with
       | None -> []
       | Some v -> [ ("endpoint", encode_wire_value v) ])
@@ -71,30 +73,6 @@ let encode_wire_binding (b : Ir.wire_binding) : Ir.json =
 let decode_path j =
   let* xs = as_list j in
   map_result as_string xs
-
-let decode_wire_part j =
-  let* kvs = as_assoc j in
-  let* kind =
-    match List.assoc_opt "kind" kvs with
-    | Some v -> as_string v
-    | None -> err "wire part is missing kind"
-  in
-  let name () =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "wire part %S is missing name" kind
-  in
-  match kind with
-  | "label" -> Ok Ir.Wire_label
-  | "query" ->
-      let* n = name () in
-      Ok (Ir.Wire_query n)
-  | "header" ->
-      let* n = name () in
-      Ok (Ir.Wire_header n)
-  | "body" -> Ok Ir.Wire_body
-  | "payload" -> Ok Ir.Wire_payload
-  | other -> err "unknown wire part kind %S" other
 
 let decode_wire_response_part j =
   let* kvs = as_assoc j in
@@ -113,7 +91,14 @@ let decode_wire_response_part j =
   | "statusCode" -> Ok Ir.Wire_response_status_code
   | other -> err "unknown wire response part kind %S" other
 
-let decode_wire_value j =
+let rec decode_object_field j =
+  match j with
+  | `List [ `String n; v ] ->
+      let* w = decode_wire_value v in
+      Ok (n, w)
+  | _ -> err "wire object field must be a [name, value] pair"
+
+and decode_wire_value j =
   let* kvs = as_assoc j in
   match kvs with
   | [ ("lit", v) ] -> Ok (Ir.Wire_lit v)
@@ -127,7 +112,13 @@ let decode_wire_value j =
       let* xs = as_list v in
       let* parts = map_result decode_template_part xs in
       Ok (Ir.Wire_template parts)
-  | _ -> err "wire value must be a single lit, field, param, or template key"
+  | [ ("object", v) ] ->
+      let* xs = as_list v in
+      let* fields = map_result decode_object_field xs in
+      Ok (Ir.Wire_object fields)
+  | _ ->
+      err
+        "wire value must be a single lit, field, param, template, or object key"
 
 let decode_named_assoc decode_v j =
   let* kvs = as_assoc j in
@@ -158,11 +149,6 @@ let decode_wire_binding j =
     match get "uri" with
     | None -> Ok (Ir.Wire_template [])
     | Some v -> decode_wire_value v
-  in
-  let* wb_bindings =
-    match get "bindings" with
-    | None -> Ok []
-    | Some v -> decode_named_assoc decode_wire_part v
   in
   let* wb_response_bindings =
     match get "response_bindings" with
@@ -204,13 +190,20 @@ let decode_wire_binding j =
         let* w = decode_wire_value v in
         Ok (Some w)
   in
+  let* wb_body =
+    match get "body" with
+    | None -> Ok None
+    | Some v ->
+        let* w = decode_wire_value v in
+        Ok (Some w)
+  in
   let* wb_timeout = opt_path "timeout" in
   let* wb_retry = opt_path "retry" in
   Ok
     ({
        wb_method;
        wb_uri;
-       wb_bindings;
+       wb_body;
        wb_response_bindings;
        wb_success;
        wb_endpoint;

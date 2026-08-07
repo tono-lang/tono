@@ -13,7 +13,7 @@ pub struct note {
 
 @doc("Names a note without carrying its contents.")
 pub struct note_ref {
-  id: string @httpLabel
+  id: string
 }
 
 @doc("The store is shedding load; the call is safe to retry.")
@@ -31,9 +31,9 @@ pub struct client {
 
   // Operation traits trail the signature: a trait written above an op would
   // bind to whatever was declared before it.
-  op fetch_note(note_ref): note
+  op fetch_note(ref: note_ref): note
     @doc("Reads a note from the service.")
-    @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+    @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .endpoint)
     @header("X-Api-Token", .api_token)
     @errors(overloaded)
 

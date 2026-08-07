@@ -13,7 +13,7 @@
 use crate::codegen::entries::wire::{has_query, needs_record, success_test_expr};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
-use crate::ir::{TemplatePart, WireBinding, WirePart, WireResponsePart, WireValue};
+use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
 
 use super::support_symbol;
 
@@ -120,6 +120,50 @@ fn wire_value_expr(
             Some(name) => format!("formatScalar(record[{}])", js_str(name)),
         },
         WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
+        // Only ever emitted for @body; never a header/query/uri value.
+        WireValue::Object(_) => {
+            format!(
+                "JSON.stringify({})",
+                wire_value_native_expr(v, field_expr, input_expr)
+            )
+        }
+    }
+}
+
+/// A `WireValue` rendered as a native TypeScript expression (not stringified):
+/// the @body ctor mapper's field value, or nested inside one. Unlike
+/// [`wire_value_expr`], this keeps the value's own shape so `JSON.stringify`
+/// encodes it the same way it would encode the field directly.
+fn wire_value_native_expr(
+    v: &WireValue,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> String {
+    match v {
+        WireValue::Lit(json) => match json.as_str() {
+            Some(s) => js_str(s),
+            None => json.to_string(),
+        },
+        WireValue::Field(path) => field_expr(path),
+        WireValue::Param(segs) => match segs.first() {
+            None => input_expr.to_string(),
+            Some(name) => format!("record[{}]", js_str(name)),
+        },
+        WireValue::Template(parts) => template_expr(parts, field_expr, input_expr),
+        WireValue::Object(fields) => {
+            let entries = fields
+                .iter()
+                .map(|(name, value)| {
+                    format!(
+                        "{}: {}",
+                        js_str(name),
+                        wire_value_native_expr(value, field_expr, input_expr)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {entries} }}")
+        }
     }
 }
 
@@ -177,74 +221,46 @@ fn declared_header_lines(
         .collect()
 }
 
-/// One `setHeader(...)` call per input member bound to a header position.
-fn per_call_header_lines(wire: &WireBinding, indent_str: &str) -> String {
-    wire.bindings
+/// One `appendQuery(...)` call per declared `@query` entry.
+fn query_lines(
+    wire: &WireBinding,
+    indent_str: &str,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> String {
+    wire.query
         .iter()
-        .filter_map(|(name, part)| match part {
-            WirePart::Header { name: header_name } => Some(format!(
-                "{indent_str}setHeader(headers, {}, formatScalar(record[{}]));\n",
-                js_str(header_name),
-                js_str(name)
-            )),
-            _ => None,
+        .map(|(key, value)| {
+            format!(
+                "{indent_str}appendQuery(qs, {}, {});\n",
+                template_expr(key, field_expr, input_expr),
+                wire_value_native_expr(value, field_expr, input_expr)
+            )
         })
         .collect()
 }
 
-/// One `appendQuery(...)` call per input member bound to the query string.
-fn query_lines(wire: &WireBinding, indent_str: &str) -> String {
-    wire.bindings
-        .iter()
-        .filter_map(|(name, part)| match part {
-            WirePart::Query { name: query_name } => Some(format!(
-                "{indent_str}appendQuery(qs, {}, record[{}]);\n",
-                js_str(query_name),
-                js_str(name)
-            )),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The request body: a `Payload`-kind member wins outright (mirrors the
-/// runtime's current early-return semantics), otherwise a compile-time-known
-/// object literal of the `Body`-kind members. `None` when the operation sends
-/// no body at all.
-fn body_expr(wire: &WireBinding, input_expr: &str) -> Option<String> {
-    if let Some((name, _)) = wire
-        .bindings
-        .iter()
-        .find(|(_, p)| matches!(p, WirePart::Payload))
-    {
-        return Some(format!("JSON.stringify(record[{}])", js_str(name)));
-    }
-    let fields: Vec<&String> = wire
-        .bindings
-        .iter()
-        .filter(|(_, p)| matches!(p, WirePart::Body))
-        .map(|(name, _)| name)
-        .collect();
-    if fields.is_empty() {
-        return None;
-    }
-    // Every binding is a Body member (no Label/Query/Header/Payload carved any
-    // out): the encoded input already *is* exactly the body, so stringifying
-    // it directly is both simpler and, unlike re-listing by canonical name,
-    // correct even when a member's `encode` wire key differs from its
-    // canonical name (`@wire`) — `bindings` is keyed canonically, but the
-    // encoded input's own keys already follow whatever `encode` actually
-    // wrote. `needs_record` agrees this case needs no `record` alias, so
-    // this reads the raw encoded input instead of indexing through one.
-    if fields.len() == wire.bindings.len() {
+/// The request body, or `None` when the operation sends no body: `wire.body`
+/// says exactly what the body is, never inferred from what the input leaves
+/// undeclared. The whole-parameter form stringifies the typed input directly
+/// (correct even under `@wire` renames, and matching `needs_record`'s
+/// decision that this case needs no `record` alias); every other form (one
+/// member, an entry-field reference, a template, or the @body ctor mapper)
+/// builds the native value first, so `JSON.stringify` encodes it the same
+/// way it would encode the field directly.
+fn body_expr(
+    wire: &WireBinding,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+) -> Option<String> {
+    let body = wire.body.as_ref()?;
+    if matches!(body, WireValue::Param(segs) if segs.is_empty()) {
         return Some(format!("JSON.stringify({input_expr})"));
     }
-    let object = fields
-        .iter()
-        .map(|name| format!("{}: record[{}]", js_str(name), js_str(name)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(format!("JSON.stringify({{ {object} }})"))
+    Some(format!(
+        "JSON.stringify({})",
+        wire_value_native_expr(body, field_expr, input_expr)
+    ))
 }
 
 /// The TypeScript spelling of the shared [`success_test_expr`] rule.
@@ -315,7 +331,7 @@ fn url_lines(
          {indent_str}const url = {} + {}{tail};\n",
         endpoint_expr(wire, field_expr, input_expr),
         uri_expr(wire, field_expr, input_expr),
-        q = query_lines(wire, indent_str),
+        q = query_lines(wire, indent_str, field_expr, input_expr),
         tail = " + (qs.toString() ? `?${qs.toString()}` : \"\")",
     )
 }
@@ -383,7 +399,7 @@ pub(super) fn op_call(
 
     let has_retry = wire.retry.is_some();
     let has_timeout = wire.timeout.is_some();
-    let body = body_expr(wire, input_expr);
+    let body = body_expr(wire, field_expr, input_expr);
     let transport_throw = throw(format!("new {transport_error}(cause)"));
 
     let mut out = String::new();
@@ -398,7 +414,6 @@ pub(super) fn op_call(
     out.push_str(
         "    for (const [k, v] of Object.entries(this.options.headers ?? {})) setHeader(headers, k, v);\n",
     );
-    out.push_str(&per_call_header_lines(wire, "    "));
     let body_field = match &body {
         Some(_) => "body".to_string(),
         None => "body: undefined".to_string(),

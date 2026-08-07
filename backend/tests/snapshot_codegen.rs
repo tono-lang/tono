@@ -149,12 +149,7 @@ fn entries_module() -> tono_backend::ir::Module {
                             tono_backend::ir::TemplatePart::Lit("/notes/".into()),
                             tono_backend::ir::TemplatePart::Input("id".into()),
                         ]),
-                        bindings: [
-                            ("id".to_string(), tono_backend::ir::WirePart::Label),
-                            ("body".to_string(), tono_backend::ir::WirePart::Body),
-                        ]
-                        .into_iter()
-                        .collect(),
+                        body: Some(WireValue::Param(vec!["body".into()])),
                         response_bindings: Default::default(),
                         success: vec![200],
                         endpoint: Some(WireValue::Field(vec!["endpoint".into()])),

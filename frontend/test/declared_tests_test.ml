@@ -36,7 +36,7 @@ pub struct user {
 }
 
 pub struct user_ref {
-  username: string @httpLabel
+  username: string
 }
 
 pub struct note {
@@ -212,7 +212,7 @@ let wire_i64 () =
   let src =
     {|
 pub struct row { n: i64 }
-pub struct row_ref { id: string @httpLabel }
+pub struct row_ref { id: string }
 pub struct client {
   endpoint: string @env("EP") @default("https://x")
   op get(row_ref): row
@@ -375,7 +375,7 @@ let import_missing () =
   let src =
     {|
 pub struct user { login: string }
-pub struct user_ref { username: string @httpLabel }
+pub struct user_ref { username: string }
 pub struct client {
   endpoint: string @env("EP") @default("https://x")
   op get_user(user_ref): user

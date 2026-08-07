@@ -8,14 +8,6 @@
    [Check_http] reports malformed bindings at the AST level, where source spans
    still exist. *)
 
-(* Where an input member travels in the HTTP request. *)
-type part =
-  | Label (* path parameter: substitutes {name} in the uri *)
-  | Query of string (* query-string parameter with this name *)
-  | Header of string (* HTTP header with this name *)
-  | Body (* a field inside the JSON request body (default) *)
-  | Payload (* this member is the whole body, no envelope *)
-
 (* Where an output member is read from in the HTTP response. *)
 type response_part = Response_header of string | Response_status_code
 
@@ -29,6 +21,8 @@ type value_expr =
   | Vparam of string list
     (* segments into the op's declared parameter; [] is the whole value *)
   | Vtemplate of Ir.template_part list
+  | Vctor of (string * value_expr) list
+(* @body's ctor mapper: field name -> value *)
 
 (* The language-agnostic wire form of one operation, en route to
    [Ir.wire_binding]. The endpoint, timeout, and retry refs only arise on
@@ -38,7 +32,6 @@ type value_expr =
 type resolution = {
   http_method : string;
   uri : value_expr; (* literal, entry/param reference, or template *)
-  bindings : (string * part) list; (* input member -> request part *)
   response_bindings : (string * response_part) list;
   success : (int * Ir.tref option) list; (* status -> output type, if any *)
   (* Declared errors ((status, shape id, @errorCode, @retryable)) are not
@@ -51,6 +44,8 @@ type resolution = {
       (* @header(key, value): key template -> value *)
   query : (Ir.template_part list * value_expr) list;
       (* @query(key, value): key template -> value *)
+  body : value_expr option;
+      (* @body(...): absent means the operation sends no body *)
   timeout : string list option;
       (* @timeout(.field): encodes as the runtime's value-source form
          {"ref": "<dotted field path>"} *)

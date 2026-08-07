@@ -107,13 +107,6 @@ and template_part =
 
 (* The resolved HTTP binding a Protocol pass computes once and a Target reads
    directly. *)
-and wire_part =
-  | Wire_label
-  | Wire_query of string
-  | Wire_header of string
-  | Wire_body
-  | Wire_payload
-
 and wire_response_part =
   | Wire_response_header of string
   | Wire_response_status_code
@@ -123,11 +116,12 @@ and wire_value =
   | Wire_field of string list
   | Wire_param of string list
   | Wire_template of template_part list
+  | Wire_object of (string * wire_value) list
 
 and wire_binding = {
   wb_method : string;
   wb_uri : wire_value;
-  wb_bindings : (string * wire_part) list;
+  wb_body : wire_value option;
   wb_response_bindings : (string * wire_response_part) list;
   wb_success : int list;
   wb_endpoint : wire_value option;

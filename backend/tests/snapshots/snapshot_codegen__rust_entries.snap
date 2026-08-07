@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 177
+assertion_line: 173
 expression: "render_sdk(entries_module(), TargetKind::Rust, None)"
 ---
 // ==== rust/env.rs ====
@@ -646,14 +646,8 @@ impl Client {
         for (k, v) in &self.options.headers {
             set_header(&mut headers, k, v.clone());
         }
-        let mut body_members = serde_json::Map::new();
-        for name in ["body"] {
-            if let Some(v) = record.get(name) {
-                body_members.insert(name.to_string(), v.clone());
-            }
-        }
-        let body = Some(serde_json::Value::Object(body_members).to_string());
-        if !has_header(&headers, "content-type") {
+        let body = record.get("body").map(|v| v.to_string());
+        if body.is_some() && !has_header(&headers, "content-type") {
             headers.insert("content-type".to_string(), "application/json".to_string());
         }
         let max_retries = resolve_max_retries(self.settings.max_retries as i64);

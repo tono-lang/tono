@@ -6,13 +6,13 @@
 //! at a time.
 
 use super::*;
-use crate::ir::{TemplatePart, WireBinding, WirePart, WireResponsePart, WireValue};
+use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
 
 fn wire() -> WireBinding {
     WireBinding {
         method: "GET".into(),
         uri: WireValue::Template(vec![TemplatePart::Lit("/x".into())]),
-        bindings: Default::default(),
+        body: None,
         response_bindings: Default::default(),
         success: Vec::new(),
         endpoint: None,
@@ -162,113 +162,92 @@ fn a_param_reference_in_a_header_key_reads_off_the_record() {
 }
 
 #[test]
-fn body_expr_is_none_with_no_body_bound_members() {
-    let mut w = wire();
-    w.bindings = [("id".to_string(), WirePart::Label)].into_iter().collect();
-    assert_eq!(body_expr(&w, "record"), None);
+fn body_expr_is_none_with_no_body_declared() {
+    let w = wire();
+    assert_eq!(body_expr(&w, &stub_field_expr, "input"), None);
 }
 
 #[test]
-fn body_expr_lists_only_the_body_members_when_mixed_with_other_kinds() {
+fn body_expr_builds_the_ctor_mapper_object_when_body_is_an_object() {
     let mut w = wire();
-    w.bindings = [
-        ("id".to_string(), WirePart::Label),
-        ("amount".to_string(), WirePart::Body),
-        ("note".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
+    w.body = Some(WireValue::Object(vec![
+        (
+            "amount".to_string(),
+            WireValue::Param(vec!["amount".into()]),
+        ),
+        ("note".to_string(), WireValue::Param(vec!["note".into()])),
+    ]));
     assert_eq!(
-        body_expr(&w, "record").as_deref(),
+        body_expr(&w, &stub_field_expr, "input").as_deref(),
         Some("JSON.stringify({ \"amount\": record[\"amount\"], \"note\": record[\"note\"] })")
     );
 }
 
 #[test]
-fn body_expr_serializes_the_encoded_input_directly_when_every_member_is_body() {
+fn body_expr_serializes_the_encoded_input_directly_for_the_whole_param() {
     let mut w = wire();
-    w.bindings = [
-        ("amount".to_string(), WirePart::Body),
-        ("note".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
-    // No member carved out of `record` (no label/query/header/payload), so
-    // stringifying the encoded input directly is both simpler than and, in
-    // the presence of a `@wire` rename, more correct than re-listing every
-    // field by its canonical name. needs_record agrees this case needs no
-    // `record` alias, so the input expression is used as-is.
+    w.body = Some(WireValue::Param(vec![]));
+    // The whole-parameter form stringifies the input expression directly
+    // (correct even under a `@wire` rename); needs_record agrees this case
+    // needs no `record` alias, so the input expression is used as-is.
     assert_eq!(
-        body_expr(&w, "encodeThing(input)").as_deref(),
+        body_expr(&w, &stub_field_expr, "encodeThing(input)").as_deref(),
         Some("JSON.stringify(encodeThing(input))")
     );
 }
 
 #[test]
-fn body_expr_prefers_the_payload_member_over_any_body_members() {
+fn body_expr_reads_one_member_raw_for_a_param_member_body() {
     let mut w = wire();
-    w.bindings = [
-        ("envelope".to_string(), WirePart::Payload),
-        ("extra".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
+    w.body = Some(WireValue::Param(vec!["envelope".into()]));
     assert_eq!(
-        body_expr(&w, "record").as_deref(),
+        body_expr(&w, &stub_field_expr, "input").as_deref(),
         Some("JSON.stringify(record[\"envelope\"])")
     );
 }
 
 #[test]
-fn needs_record_is_false_with_no_bindings_at_all() {
+fn needs_record_is_false_with_no_body_declared() {
     assert!(!needs_record(&wire()));
 }
 
 #[test]
-fn needs_record_is_false_when_every_binding_is_a_body_member() {
+fn needs_record_is_false_for_a_whole_param_body() {
     let mut w = wire();
-    w.bindings = [
-        ("amount".to_string(), WirePart::Body),
-        ("note".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
+    w.body = Some(WireValue::Param(vec![]));
     assert!(!needs_record(&w));
 }
 
 #[test]
-fn needs_record_is_true_when_a_label_binding_mixes_with_body_members() {
+fn needs_record_is_true_when_a_uri_input_mixes_with_a_param_member_body() {
     let mut w = wire();
     w.uri = WireValue::Template(vec![TemplatePart::Input("id".into())]);
-    w.bindings = [
-        ("id".to_string(), WirePart::Label),
-        ("amount".to_string(), WirePart::Body),
-    ]
-    .into_iter()
-    .collect();
+    w.body = Some(WireValue::Param(vec!["amount".into()]));
     assert!(needs_record(&w));
 }
 
 #[test]
-fn needs_record_is_true_for_a_query_or_header_binding_alone() {
+fn needs_record_is_true_for_a_declared_query_alone() {
     let mut w = wire();
-    w.bindings = [("tag".to_string(), WirePart::Query { name: "tag".into() })]
-        .into_iter()
-        .collect();
+    w.query = vec![(
+        vec![TemplatePart::Lit("tag".into())],
+        WireValue::Param(vec!["tag".into()]),
+    )];
     assert!(needs_record(&w));
 }
 
 #[test]
-fn has_query_and_query_lines_agree_on_query_bound_members() {
+fn has_query_and_query_lines_agree_on_declared_query_entries() {
     let mut w = wire();
     assert!(!has_query(&w));
-    assert_eq!(query_lines(&w, "  "), "");
-    w.bindings = [("tag".to_string(), WirePart::Query { name: "tag".into() })]
-        .into_iter()
-        .collect();
+    assert_eq!(query_lines(&w, "  ", &stub_field_expr, "input"), "");
+    w.query = vec![(
+        vec![TemplatePart::Lit("tag".into())],
+        WireValue::Param(vec!["tag".into()]),
+    )];
     assert!(has_query(&w));
     assert_eq!(
-        query_lines(&w, "  "),
+        query_lines(&w, "  ", &stub_field_expr, "input"),
         "  appendQuery(qs, \"tag\", record[\"tag\"]);\n"
     );
 }
@@ -328,25 +307,5 @@ fn declared_header_lines_render_a_literal_key_with_a_field_value() {
     assert_eq!(
         declared_header_lines(&w, "  ", &stub_field_expr, "input"),
         "  setHeader(headers, \"X-Client\", formatScalar(this.settings.client_name));\n"
-    );
-}
-
-#[test]
-fn per_call_header_lines_render_only_header_bound_members() {
-    let mut w = wire();
-    w.bindings = [
-        ("id".to_string(), WirePart::Label),
-        (
-            "token".to_string(),
-            WirePart::Header {
-                name: "X-Api-Token".into(),
-            },
-        ),
-    ]
-    .into_iter()
-    .collect();
-    assert_eq!(
-        per_call_header_lines(&w, "  "),
-        "  setHeader(headers, \"X-Api-Token\", formatScalar(record[\"token\"]));\n"
     );
 }

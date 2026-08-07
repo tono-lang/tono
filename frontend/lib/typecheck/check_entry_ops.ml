@@ -27,9 +27,9 @@ let scalar_of_ty = Entry_scope.scalar_of_ty
 let op_refs = Entry_scope.op_refs
 let op_param = Entry_scope.op_param
 
-(* @query joins @header/@timeout/@retry as a protocol trait requiring @http;
-   its key/value refs ride the same [op_refs] collection. *)
-let protocol_trait_names = "query" :: Entry_scope.protocol_trait_names
+(* @query/@body join @header/@timeout/@retry as protocol traits requiring
+   @http; their refs ride the same [op_refs] collection. *)
+let protocol_trait_names = Entry_scope.protocol_trait_names
 
 (* Template strings in protocol positions parse here with their real span,
    so an unterminated "{" is diagnosed instead of silently going literal. *)
@@ -114,14 +114,107 @@ let check_header_shapes (op : Ast.decl) : Diagnostic.t list =
        ~value_what:"a @header value")
     (traits_named "header" op.Ast.dtraits)
 
-(* Shape rules of @query, mirroring @header (the op-level query trait; the
-   member-level @httpQuery binding is unaffected). *)
+(* Shape rules of @query, mirroring @header. *)
 let check_query_shapes (op : Ast.decl) : Diagnostic.t list =
   List.concat_map
     (check_kv_shape ~trait_name:"query"
        ~key_what:"a @query key takes {.field} references"
        ~value_what:"a @query value")
     (traits_named "query" op.Ast.dtraits)
+
+(* Shape rules of @body: at most one per operation, and its single argument
+   is either a reference (the whole parameter, or one of its members) or a
+   ctor mapper (a known struct name applied to field: value pairs, each
+   value itself a reference/literal — the same grammar @header/@query values
+   already accept; nesting a second ctor inside a field is not allowed, the
+   same "zero new expressive power" the RFC calls for). *)
+let check_body_field_value ~ctor_name (fname, fspan, (v : Ast.trait_arg)) :
+    Diagnostic.t list =
+  match v with
+  | Ast.ARef _ -> []
+  | Ast.AString s ->
+      let parts, diags = template_of ~span:fspan s in
+      diags
+      @
+      if List.exists (function Ir.Tpl_input _ -> true | _ -> false) parts then
+        [
+          err Error_codes.protocol_trait_invalid fspan
+            "input placeholders ({name}) are only available in the @http path";
+        ]
+      else []
+  | Ast.ACtor _ ->
+      [
+        err Error_codes.protocol_trait_invalid fspan
+          "a ctor field cannot nest another ctor; '%s.%s' takes a reference or \
+           a literal"
+          ctor_name fname;
+      ]
+  | _ ->
+      [
+        err Error_codes.protocol_trait_invalid fspan
+          "a ctor field takes a reference or a literal/template value";
+      ]
+
+let check_body_ctor ctx (c : Ast.ctor_arg) : Diagnostic.t list =
+  match Entry_scope.struct_members ctx c.Ast.ctor_name with
+  | None ->
+      [
+        err Error_codes.protocol_trait_invalid c.Ast.ctor_name_span
+          "'%s' is not a known struct; @body's ctor mapper names a declared \
+           struct"
+          c.Ast.ctor_name;
+      ]
+  | Some members ->
+      List.concat_map
+        (fun ((fname, fspan, _) as field) ->
+          let name_diags =
+            if
+              List.exists
+                (fun (m : Ast.member) -> String.equal m.Ast.mname fname)
+                members
+            then []
+            else
+              [
+                err Error_codes.protocol_trait_invalid fspan
+                  "'%s' has no field '%s'" c.Ast.ctor_name fname;
+              ]
+          in
+          name_diags @ check_body_field_value ~ctor_name:c.Ast.ctor_name field)
+        c.Ast.ctor_fields
+
+let check_body_shapes ctx (op : Ast.decl) : Diagnostic.t list =
+  let bodies = traits_named "body" op.Ast.dtraits in
+  let arity_diags =
+    match bodies with
+    | _ :: (_ :: _ as extra) ->
+        List.map
+          (fun (tr : Ast.trait) ->
+            err Error_codes.protocol_trait_invalid tr.Ast.tspan
+              "at most one @body is allowed per operation")
+          extra
+    | _ -> []
+  in
+  let shape_diags =
+    List.concat_map
+      (fun (tr : Ast.trait) ->
+        match tr.Ast.targs with
+        | [ Ast.ARef _ ] -> []
+        | [ Ast.ACtor c ] -> check_body_ctor ctx c
+        | [ _ ] ->
+            [
+              err Error_codes.protocol_trait_invalid tr.Ast.tspan
+                "@body expects a field reference (e.g. .input or \
+                 .input.member) or a struct-literal mapper (e.g. note_body { \
+                 title: .input.title })";
+            ]
+        | _ ->
+            [
+              err Error_codes.protocol_trait_invalid tr.Ast.tspan
+                "@body expects exactly one argument";
+            ])
+      bodies
+  in
+  arity_diags @ shape_diags
 
 (* Protocol checks shared by every op: @header/@query/@timeout/@retry require
    @http (a purely local operation has no protocol surface). *)
@@ -186,7 +279,8 @@ let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
           (traits_named name op.dtraits))
       [ "timeout"; "retry" ]
   in
-  (* @header/@query still require @http; @timeout/@retry are covered above. *)
+  (* @header/@query/@body still require @http; @timeout/@retry are covered
+     above. *)
   let protocol_http_diags =
     if Option.is_some (find_trait "http" op.dtraits) then []
     else
@@ -198,10 +292,10 @@ let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
                 "@%s is a protocol trait and requires @http on the operation"
                 name)
             (traits_named name op.dtraits))
-        [ "header"; "query" ]
+        [ "header"; "query"; "body" ]
   in
   protocol_http_diags @ check_header_shapes op @ check_query_shapes op
-  @ ref_diags @ endpoint_diags @ timeout_retry_diags
+  @ check_body_shapes ctx op @ ref_diags @ endpoint_diags @ timeout_retry_diags
 
 (* A value position (path, endpoint) that accepts the unified grammar:
    literal, template, or pure reference. Resolution of the refs a template or
@@ -353,3 +447,4 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
   check_protocol_positions op
   @ shadow_diags @ ref_diags @ http_diags @ path_diags @ timeout_diags
   @ retry_diags @ check_header_shapes op @ check_query_shapes op
+  @ check_body_shapes ctx op
