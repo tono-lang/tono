@@ -76,6 +76,10 @@ pub struct client {
     @http(method: "GET", path: "/things/{id}", endpoint: .endpoint)
     @header("Authorization", .auth_header)
     @header("X-Client", .client_name)
+
+  @doc("Declares an exact success status: a response at that status decodes; any other status, including a plain 2xx, falls through to the error path.")
+  op strict_success(thing): thing
+    @http(method: "POST", path: "/x", endpoint: .endpoint, code: 201)
 }
 
 // The two former "endpoint ref and declared headers resolve" vectors collapse

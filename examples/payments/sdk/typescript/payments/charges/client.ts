@@ -186,7 +186,7 @@ export class Client {
         throw new TransportError(cause);
       }
       const outcome = response;
-      if (response.status >= 200 && response.status < 300) {
+      if (response.status === 201) {
         try {
           return parseCharge(outcome.body);
         } catch (path) {

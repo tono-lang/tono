@@ -361,7 +361,8 @@ let wire_field_covers_query_payload_and_response_bindings () =
             "code is the response status code" true
             (response_binding "code" = Some Ir.Wire_response_status_code);
           Alcotest.(check bool)
-            "single success code" true (w.wb_success = [ 200 ]);
+            "no declared success code, default convention applies" true
+            (w.wb_success = []);
           Alcotest.(check bool)
             "endpoint ref" true
             (w.wb_endpoint = Some [ "endpoint" ]);

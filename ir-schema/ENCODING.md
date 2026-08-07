@@ -249,7 +249,10 @@ compatibility).
 - `success` is the list of status codes the operation succeeds on. Unlike the
   legacy blob's `success`, there is no type reference alongside the status:
   the output type is always the operation's own declared `output`, and every
-  runtime already discarded the blob's ref on decode.
+  runtime already discarded the blob's ref on decode. Empty (v10+) means the
+  operation left `code:` unset: every emitter falls back to the 2xx-range
+  convention. A non-empty list (from `code: <int>` or `code: [<int>, ...]`)
+  means an exact match against exactly those statuses, even ones inside 2xx.
 - `endpoint`, `timeout`, and `retry` are entry-scoped: present only on an
   operation nested in an entry body, `null`/absent for a loose operation.
   Each is the plain entry-field path the `@http(endpoint:)`/`@timeout`/

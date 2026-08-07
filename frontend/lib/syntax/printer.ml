@@ -118,6 +118,7 @@ let rec print_trait_arg (a : Ast.trait_arg) : string =
   | Ast.AName n -> n
   | Ast.ARef r -> print_ref r
   | Ast.AKv (k, v) -> k ^ ": " ^ print_trait_arg v
+  | Ast.AList xs -> "[" ^ String.concat ", " (List.map print_trait_arg xs) ^ "]"
 
 let print_trait (t : Ast.trait) : string =
   "@" ^ t.Ast.tname

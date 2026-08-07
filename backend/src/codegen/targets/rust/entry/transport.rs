@@ -13,7 +13,7 @@
 //! neither carries no trace of either in its own generated method.
 
 use crate::codegen::casing::CasingConfig;
-use crate::codegen::entries::wire::{extra_success_codes, has_query, needs_record};
+use crate::codegen::entries::wire::{has_query, needs_record};
 use crate::codegen::entries::EntryModel;
 use crate::codegen::extensions::BoundExtension;
 use crate::codegen::symbol::Symbol;
@@ -302,15 +302,18 @@ fn encode_failure(cause: &str) -> String {
     )
 }
 
-/// `outcome.status >= 200 && ...`, plus one `||` arm per declared success
-/// status outside the 2xx range (the shared [`extra_success_codes`] rule;
-/// this only spells the Rust comparison).
+/// `outcome.status >= 200 && outcome.status < 300` when the operation left
+/// `code:` unset (`wire.success` empty), otherwise an exact match against
+/// exactly the declared statuses, joined by `||`.
 fn success_expr(wire: &WireBinding) -> String {
-    let mut out = String::from("outcome.status >= 200 && outcome.status < 300");
-    for code in extra_success_codes(wire) {
-        out.push_str(&format!(" || outcome.status == {code}"));
+    if wire.success.is_empty() {
+        return "outcome.status >= 200 && outcome.status < 300".to_string();
     }
-    out
+    wire.success
+        .iter()
+        .map(|code| format!("outcome.status == {code}"))
+        .collect::<Vec<_>>()
+        .join(" || ")
 }
 
 /// The lines folding the response-bound members (a header value, the status

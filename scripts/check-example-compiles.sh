@@ -115,8 +115,10 @@ async fn main() {
         let response_body = "{\"id\":\"c1\",\"amount\":\"1000\",\"fee\":\"0\",\"receipt\":\"aGk=\",\"currency\":\"usd\",\
              \"tags\":[],\"metadata\":{},\"created\":\"2024-01-01T00:00:00Z\",\"status\":\"active\",\
              \"method\":{\"kind\":\"card\",\"last4\":\"4242\"}}";
+        // create_charge declares @http(code: 201): the server must answer
+        // exactly that status for the client to decode the body as a success.
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             response_body.len(),
             response_body,
         );

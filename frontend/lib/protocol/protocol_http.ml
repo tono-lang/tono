@@ -44,11 +44,17 @@ let string_arg (v : Ir.json) : string option =
   | `List (`String s :: _) -> Some s
   | _ -> None
 
-let int_arg (v : Ir.json) : int option =
+(* A single int, or every element of a list value if all of them parse as one
+   ([code: 201] and [code: [200, 207]] both resolve here). *)
+let single_int (v : Ir.json) : int option =
+  match v with `Int n -> Some n | `Intlit s -> int_of_string_opt s | _ -> None
+
+let int_list_arg (v : Ir.json) : int list option =
   match v with
-  | `Int n -> Some n
-  | `Intlit s -> int_of_string_opt s
-  | `List (`Int n :: _) -> Some n
+  | `Int _ | `Intlit _ -> Option.map (fun n -> [ n ]) (single_int v)
+  | `List xs ->
+      let ns = List.filter_map single_int xs in
+      if List.length ns = List.length xs && ns <> [] then Some ns else None
   | _ -> None
 
 let obj_field (k : string) (v : Ir.json) : Ir.json option =
@@ -132,10 +138,7 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
       in
       let http_method = String.uppercase_ascii (str "method" "GET") in
       let uri = str "path" "/" in
-      let code =
-        Option.value ~default:200
-          (Option.bind (obj_field "code" http.value) int_arg)
-      in
+      let codes = Option.bind (obj_field "code" http.value) int_list_arg in
       let bindings =
         List.map
           (fun (m : Ir.member) -> (m.name, part_of_member m))
@@ -147,7 +150,15 @@ let resolve_op (lookup : Ir.shape_id -> Ir.shape option) (op : Ir.shape) :
             Option.map (fun p -> (m.name, p)) (response_part_of_member m))
           (members_of lookup output)
       in
-      let success = [ (code, output) ] in
+      (* No [code:] leaves [success] empty: the resolved [wb_success] stays
+         [] and every emitter falls back to the 2xx-range convention. A
+         declared [code:] (single or a list) makes [wb_success] the exact
+         set of statuses that count as success. *)
+      let success =
+        match codes with
+        | Some cs -> List.map (fun c -> (c, output)) cs
+        | None -> []
+      in
       (* Entry-scoped positions: the endpoint ref on @http, op-level @header
          key/value pairs, and the @timeout/@retry field refs. The single
          positional argument of @timeout/@retry arrives as a one-element array

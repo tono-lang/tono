@@ -38,15 +38,20 @@ fn success_expr_defaults_to_the_2xx_range_alone() {
 }
 
 #[test]
-fn success_expr_ors_in_only_the_out_of_range_declared_codes() {
+fn success_expr_is_an_exact_match_against_declared_codes_only() {
     let mut w = wire();
     w.success = vec![200, 404, 202];
-    // 200 and 202 are already covered by the range check; only 404 needs its
-    // own arm, and in declaration order.
     assert_eq!(
         success_expr(&w),
-        "response.status >= 200 && response.status < 300 || response.status === 404"
+        "response.status === 200 || response.status === 404 || response.status === 202"
     );
+}
+
+#[test]
+fn success_expr_is_exact_for_a_single_declared_code_inside_2xx() {
+    let mut w = wire();
+    w.success = vec![201];
+    assert_eq!(success_expr(&w), "response.status === 201");
 }
 
 #[test]

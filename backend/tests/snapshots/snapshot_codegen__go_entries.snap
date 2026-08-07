@@ -37,9 +37,10 @@ type Request struct {
 	// Retry is the operation's declared retry policy; the zero value never
 	// retries.
 	Retry Retry
-	// Success lists the operation's declared success statuses outside the
-	// 2xx range (any 2xx always counts), so the retry loop never retries a
-	// response the operation treats as a success.
+	// Success lists the operation's declared success statuses; empty means
+	// no code was declared, so any 2xx counts instead. Either way, the
+	// retry loop never retries a response the operation treats as a
+	// success.
 	Success []int
 	// Timing is the clock behind the retry backoff; the zero value uses the
 	// real clock and jitter.
@@ -77,12 +78,12 @@ func retryable(o Outcome, req Request) bool {
 	return req.Retry.When(o.Status, o.Body)
 }
 
-// isSuccess: any 2xx is a success even when its exact code was not the one
-// declared (a server may answer 200 where 201 was declared); a declared
-// success code outside the 2xx range still counts.
+// isSuccess: no declared statuses means any 2xx is a success; otherwise
+// only an exact match against the declared statuses counts, even ones
+// inside the 2xx range.
 func isSuccess(status int, declared []int) bool {
-	if status >= 200 && status < 300 {
-		return true
+	if len(declared) == 0 {
+		return status >= 200 && status < 300
 	}
 	for _, s := range declared {
 		if s == status {
@@ -678,6 +679,7 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 		Headers: headers,
 		Body: body,
 		Timeout: c.timeoutDuration,
+		Success: []int{200},
 		Timing: c.timing,
 		Retry: transport.Retry{Max: int(c.settings.MaxRetries), When: func(status int, body string) bool {
 			if re, ok := DecodeSaveNoteError(status, []byte(body)).(interface{ Retryable() bool }); ok {
@@ -689,7 +691,7 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	if outcome.Cause != nil {
 		return zero, &TransportError{Cause: outcome.Cause}
 	}
-	if outcome.Status >= 200 && outcome.Status < 300 {
+	if outcome.Status == 200 {
 		out, path, ok := DecodeNote([]byte(outcome.Body))
 		if !ok {
 			return zero, &DecodeError{Path: path, Expected: "Note", Raw: outcome.Body}

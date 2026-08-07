@@ -89,10 +89,11 @@ let all_parts () =
   let d = resolve [ req; resp ] o in
   Alcotest.(check string)
     "descriptor"
-    "GET|/things/{id}|id=label,limit=query(limit),auth=header(Authorization),note=body|trace<-header(X-Trace),code<-statusCode|200:resp"
+    "GET|/things/{id}|id=label,limit=query(limit),auth=header(Authorization),note=body|trace<-header(X-Trace),code<-statusCode|"
     (show_desc d)
 
-(* An unmarked input defaults to body; success status defaults to 200. *)
+(* An unmarked input defaults to body; no @http(code:) leaves success empty
+   (every emitter falls back to the 2xx-range convention). *)
 let body_default () =
   let req = structure "req" [ member "a"; member "b" ] in
   let o =
@@ -106,7 +107,7 @@ let body_default () =
       ~output:(Ir.Ref ("req", []))
   in
   Alcotest.(check string)
-    "body default + 200" "POST|/x|a=body,b=body||200:req"
+    "body default, no declared success code" "POST|/x|a=body,b=body||"
     (show_desc (resolve [ req ] o))
 
 (* An explicit @httpPayload member occupies the whole body. *)
@@ -123,9 +124,9 @@ let payload_whole_body () =
         ]
       ~input:(Ir.Ref ("req", []))
   in
-  (* No output type, but 200 is still the declared success status (no body). *)
+  (* No output type and no declared success code either. *)
   Alcotest.(check string)
-    "payload" "PUT|/x|raw=payload||200:-"
+    "payload" "PUT|/x|raw=payload||"
     (show_desc (resolve [ req ] o))
 
 (* A success code override rides @http(code:). *)
@@ -146,6 +147,26 @@ let success_code_override () =
   in
   Alcotest.(check string) "201" "POST|/x|||201:thing" (show_desc (resolve [] o))
 
+(* A list of success codes rides @http(code: [...]) too. *)
+let success_code_list () =
+  let o =
+    op "bulk_create"
+      ~traits:
+        [
+          trait "http"
+            (`Assoc
+               [
+                 ("method", `String "POST");
+                 ("path", `String "/x");
+                 ("code", `List [ `Int 200; `Int 207 ]);
+               ]);
+        ]
+      ~output:(Ir.Ref ("thing", []))
+  in
+  Alcotest.(check string) "200,207"
+    "POST|/x|||200:thing,207:thing"
+    (show_desc (resolve [] o))
+
 (* A bare @httpQuery/@httpHeader binds under the member's own name. *)
 let bare_bindings () =
   let req =
@@ -165,7 +186,7 @@ let bare_bindings () =
       ~input:(Ir.Ref ("req", []))
   in
   Alcotest.(check string)
-    "bare names" "GET|/x|q=query(q),h=header(h)||200:-"
+    "bare names" "GET|/x|q=query(q),h=header(h)||"
     (show_desc (resolve [ req ] o))
 
 (* An operation with no @http trait carries no descriptor. *)
@@ -310,6 +331,7 @@ let () =
           Alcotest.test_case "payload whole body" `Quick payload_whole_body;
           Alcotest.test_case "success code override" `Quick
             success_code_override;
+          Alcotest.test_case "success code list" `Quick success_code_list;
           Alcotest.test_case "bare bindings" `Quick bare_bindings;
           Alcotest.test_case "no http no descriptor" `Quick
             no_http_no_descriptor;

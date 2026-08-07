@@ -18,6 +18,7 @@ type trait_arg =
   | AName of string
   | ARef of ref_path
   | AKv of string * trait_arg
+  | AList of trait_arg list
 
 type trait = { tname : string; targs : trait_arg list; tspan : Span.span }
 

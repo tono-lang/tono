@@ -11,7 +11,7 @@ fn base_wire() -> WireBinding {
             .into_iter()
             .collect(),
         response_bindings: Default::default(),
-        success: vec![200],
+        success: Vec::new(),
         endpoint: Some(vec!["endpoint".into()]),
         request_headers: Vec::new(),
         timeout: None,
@@ -234,24 +234,22 @@ fn response_bindings_fold_only_on_the_success_path() {
 }
 
 #[test]
-fn a_declared_out_of_range_success_status_extends_both_checks() {
+fn declared_success_codes_make_both_checks_exact() {
     let mut case = Case::new(base_wire());
     case.wire.success = vec![200, 409];
     case.wire.retry = Some(vec!["max_retries".into()]);
     case.retry_expr = Some("int(c.settings.MaxRetries)".into());
     let out = case.text();
-    assert!(
-        out.contains("if outcome.Status >= 200 && outcome.Status < 300 || outcome.Status == 409 {")
-    );
-    assert!(out.contains("Success: []int{409},"));
+    assert!(out.contains("if outcome.Status == 200 || outcome.Status == 409 {"));
+    assert!(out.contains("Success: []int{200, 409},"));
 }
 
 #[test]
-fn without_retry_the_extra_success_list_stays_out() {
+fn without_retry_the_success_list_stays_out() {
     let mut case = Case::new(base_wire());
     case.wire.success = vec![200, 409];
     let out = case.text();
-    assert!(out.contains("|| outcome.Status == 409"));
+    assert!(out.contains("outcome.Status == 200 || outcome.Status == 409"));
     assert!(!out.contains("Success:"));
 }
 

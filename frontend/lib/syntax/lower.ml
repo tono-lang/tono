@@ -101,6 +101,7 @@ let rec json_of_arg : Ast.trait_arg -> Ir.json = function
          Protocol resolver (and the backend) never re-parse ".a.b" strings. *)
       `Assoc [ ("field", `List (List.map (fun s -> `String s) r.Ast.segs)) ]
   | Ast.AKv (k, v) -> `Assoc [ (k, json_of_arg v) ]
+  | Ast.AList xs -> `List (List.map json_of_arg xs)
 
 (* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
    -> {"method":"get","path":"/x"}); any positional arg keeps the uniform array

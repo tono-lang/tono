@@ -185,27 +185,18 @@ fn needs_record(wire: &WireBinding) -> bool {
     uri_reads_record || wire.bindings.values().any(|p| !matches!(p, WirePart::Body))
 }
 
-/// `outcome.Status >= 200 && outcome.Status < 300`, plus one `||` arm per
-/// declared success status outside the 2xx range: any 2xx succeeds even when
-/// not literally declared.
+/// `outcome.Status >= 200 && outcome.Status < 300` when the operation left
+/// `code:` unset (`wire.success` empty), otherwise an exact match against
+/// exactly the declared statuses, joined by `||`.
 fn success_expr(wire: &WireBinding) -> String {
-    let mut out = String::from("outcome.Status >= 200 && outcome.Status < 300");
-    for code in &wire.success {
-        if !(200..300).contains(code) {
-            out.push_str(&format!(" || outcome.Status == {code}"));
-        }
+    if wire.success.is_empty() {
+        return "outcome.Status >= 200 && outcome.Status < 300".to_string();
     }
-    out
-}
-
-/// The declared success statuses outside the 2xx range, for the retry loop's
-/// own success classification (`Request.Success`).
-fn extra_success_codes(wire: &WireBinding) -> Vec<i64> {
     wire.success
         .iter()
-        .copied()
-        .filter(|code| !(200..300).contains(code))
-        .collect()
+        .map(|code| format!("outcome.Status == {code}"))
+        .collect::<Vec<_>>()
+        .join(" || ")
 }
 
 /// The URL assembly: the query entries only when a member is query-bound.
@@ -430,9 +421,9 @@ pub(super) fn op_call(
     if let Some(timeout) = &call.timeout_expr {
         fields.push(("Timeout", timeout.clone()));
     }
-    let extra_success = extra_success_codes(wire);
-    if call.retry_expr.is_some() && !extra_success.is_empty() {
-        let list = extra_success
+    if call.retry_expr.is_some() && !wire.success.is_empty() {
+        let list = wire
+            .success
             .iter()
             .map(|code| code.to_string())
             .collect::<Vec<_>>()

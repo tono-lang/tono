@@ -24,17 +24,6 @@ pub fn has_query(wire: &WireBinding) -> bool {
         .any(|p| matches!(p, WirePart::Query { .. }))
 }
 
-/// The declared success statuses outside the 2xx range, in declaration
-/// order: any 2xx succeeds even when not literally declared (the rule every
-/// target shares), so only these need their own arm in an emitted success
-/// test.
-pub fn extra_success_codes(wire: &WireBinding) -> impl Iterator<Item = i64> + '_ {
-    wire.success
-        .iter()
-        .copied()
-        .filter(|code| !(200..300).contains(code))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,12 +63,5 @@ mod tests {
             .collect();
         assert!(needs_record(&w));
         assert!(has_query(&w));
-    }
-
-    #[test]
-    fn extra_success_codes_keep_only_the_out_of_range_declarations_in_order() {
-        let mut w = wire();
-        w.success = vec![200, 404, 202, 302];
-        assert_eq!(extra_success_codes(&w).collect::<Vec<_>>(), vec![404, 302]);
     }
 }

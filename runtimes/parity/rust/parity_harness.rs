@@ -150,6 +150,7 @@ async fn run_vector(vector: ParityVector) {
         "retrying" => client.retrying(Thing {}).await,
         "retrying_with_timeout" => client.retrying_with_timeout(Thing {}).await,
         "timeout_only" => client.timeout_only(Thing {}).await,
+        "strict_success" => client.strict_success(Thing {}).await,
         other => panic!("{name}: unknown parity op {other}"),
     };
 

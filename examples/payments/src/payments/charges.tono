@@ -46,7 +46,7 @@ pub struct client {
   max_retries: i32 @with @default(2)
 
   op create_charge(charge): charge
-    @http(method: "POST", path: "/charges", endpoint: .endpoint)
+    @http(method: "POST", path: "/charges", endpoint: .endpoint, code: 201)
     @header("X-API-Key", .api_key)
     @timeout(.timeout)
     @retry(.max_retries)
