@@ -163,8 +163,8 @@ let success_code_list () =
         ]
       ~output:(Ir.Ref ("thing", []))
   in
-  Alcotest.(check string) "200,207"
-    "POST|/x|||200:thing,207:thing"
+  Alcotest.(check string)
+    "200,207" "POST|/x|||200:thing,207:thing"
     (show_desc (resolve [] o))
 
 (* A bare @httpQuery/@httpHeader binds under the member's own name. *)

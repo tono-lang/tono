@@ -25,7 +25,8 @@ type trait_arg =
   | AName of string (* an identifier argument: a type/name ref or HTTP method *)
   | ARef of ref_path (* a field reference argument, e.g. @env(.endpoint_env) *)
   | AKv of string * trait_arg (* key: value, e.g. @range(min: 0) *)
-  | AList of trait_arg list (* a list literal value, e.g. @http(code: [200, 207]) *)
+  | AList of
+      trait_arg list (* a list literal value, e.g. @http(code: [200, 207]) *)
 
 type trait = { tname : string; targs : trait_arg list; tspan : Span.span }
 
