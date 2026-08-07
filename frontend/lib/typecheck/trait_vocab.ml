@@ -70,7 +70,8 @@ let levenshtein (a : string) (b : string) : int =
    lookup would misfire, so they get a direct pointer to what replaced them. *)
 let legacy_http_binding (name : string) : string option =
   match name with
-  | "httpLabel" -> Some "a reference at the placeholder's point of use in @http's path"
+  | "httpLabel" ->
+      Some "a reference at the placeholder's point of use in @http's path"
   | "httpQuery" -> Some "@query at the point of use"
   | "httpHeader" -> Some "@header at the point of use"
   | "httpPayload" -> Some "@body"

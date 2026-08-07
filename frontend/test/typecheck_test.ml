@@ -599,23 +599,20 @@ let retired_http_binding_traits_point_at_replacement () =
     List.map (fun (d : Diagnostic.t) -> d.message) (check src)
   in
   Alcotest.(check bool)
-    "httpLabel points at the path placeholder"
-    true
-    (List.exists (contains "point of use in @http's path")
+    "httpLabel points at the path placeholder" true
+    (List.exists
+       (contains "point of use in @http's path")
        (hint_of {|struct s { a: string @httpLabel }|}));
   Alcotest.(check bool)
-    "httpQuery points at @query"
-    true
+    "httpQuery points at @query" true
     (List.exists (contains "use @query")
        (hint_of {|struct s { a: string @httpQuery }|}));
   Alcotest.(check bool)
-    "httpHeader points at @header"
-    true
+    "httpHeader points at @header" true
     (List.exists (contains "use @header")
        (hint_of {|struct s { a: string @httpHeader }|}));
   Alcotest.(check bool)
-    "httpPayload points at @body"
-    true
+    "httpPayload points at @body" true
     (List.exists (contains "use @body")
        (hint_of {|struct s { a: string @httpPayload }|}))
 
