@@ -87,6 +87,41 @@ pub(super) fn assembly_decls() -> Vec<Decl> {
             vec![import("url", "net/url")],
         ),
         (
+            "FormatRaw",
+            "// FormatRaw renders a record member's raw JSON value the way the wire\n\
+             // expects it in a path, query, or header position: a JSON string\n\
+             // unquoted, anything else verbatim, so a wide integer or a\n\
+             // formatting-sensitive float keeps the exact spelling its own encoder\n\
+             // gave it. An absent or null value renders empty.\n\
+             func FormatRaw(raw json.RawMessage) string {\n\
+             \tif len(raw) == 0 || string(raw) == \"null\" {\n\t\treturn \"\"\n\t}\n\
+             \tif raw[0] == '\"' {\n\
+             \t\t// The common case (no escape sequence) slices the quotes off\n\
+             \t\t// directly; only a string carrying an escape pays for the decoder.\n\
+             \t\tinner := raw[1 : len(raw)-1]\n\
+             \t\tif bytes.IndexByte(inner, '\\\\') == -1 {\n\t\t\treturn string(inner)\n\t\t}\n\
+             \t\tvar s string\n\
+             \t\tif err := json.Unmarshal(raw, &s); err != nil {\n\t\t\treturn \"\"\n\t\t}\n\
+             \t\treturn s\n\
+             \t}\n\
+             \treturn string(raw)\n\
+             }",
+            vec![
+                import("json", "encoding/json"),
+                import("bytes", "bytes"),
+            ],
+        ),
+        (
+            "PathPartRaw",
+            "// PathPartRaw renders a record member's raw JSON value into a path\n\
+             // segment: an absent or null value substitutes empty rather than a\n\
+             // literal \"null\".\n\
+             func PathPartRaw(raw json.RawMessage) string {\n\
+             \treturn url.PathEscape(FormatRaw(raw))\n\
+             }",
+            vec![import("url", "net/url")],
+        ),
+        (
             "SetHeader",
             "// SetHeader overrides across casings: header names are case-insensitive,\n\
              // so a bespoke \"authorization\" replaces a declared \"Authorization\" rather\n\
@@ -114,21 +149,26 @@ pub(super) fn assembly_decls() -> Vec<Decl> {
         ),
         (
             "AppendQuery",
-            "// AppendQuery serializes a query value as a repeated entry per element for\n\
-             // a list, a single entry otherwise; a nil (absent) value is omitted, the\n\
-             // body's nullable-omit rule applied to the request line.\n\
-             func AppendQuery(entries []string, name string, value any) []string {\n\
-             \tif value == nil {\n\t\treturn entries\n\t}\n\
-             \tadd := func(v any) []string {\n\
-             \t\treturn append(entries, url.QueryEscape(name)+\"=\"+url.QueryEscape(FormatScalar(v)))\n\
+            "// AppendQuery serializes a record member's raw JSON value as a repeated\n\
+             // entry per element for a list, a single entry otherwise; an absent or\n\
+             // null value is omitted, the body's nullable-omit rule applied to the\n\
+             // request line. A malformed array binds as a single entry rather than\n\
+             // failing the request line.\n\
+             func AppendQuery(entries []string, name string, raw json.RawMessage) []string {\n\
+             \tif len(raw) == 0 || string(raw) == \"null\" {\n\t\treturn entries\n\t}\n\
+             \tadd := func(v json.RawMessage) []string {\n\
+             \t\treturn append(entries, url.QueryEscape(name)+\"=\"+url.QueryEscape(FormatRaw(v)))\n\
              \t}\n\
-             \tif list, ok := value.([]any); ok {\n\
-             \t\tfor _, element := range list {\n\t\t\tentries = add(element)\n\t\t}\n\
-             \t\treturn entries\n\
+             \tif raw[0] == '[' {\n\
+             \t\tvar elements []json.RawMessage\n\
+             \t\tif err := json.Unmarshal(raw, &elements); err == nil {\n\
+             \t\t\tfor _, element := range elements {\n\t\t\t\tentries = add(element)\n\t\t\t}\n\
+             \t\t\treturn entries\n\
+             \t\t}\n\
              \t}\n\
-             \treturn add(value)\n\
+             \treturn add(raw)\n\
              }",
-            vec![import("url", "net/url")],
+            vec![import("url", "net/url"), import("json", "encoding/json")],
         ),
         (
             "QueryString",
@@ -142,25 +182,26 @@ pub(super) fn assembly_decls() -> Vec<Decl> {
         ),
         (
             "EncodeBody",
-            "// EncodeBody assembles the body-bound members into a JSON object, in the\n\
-             // given member order. A member that is present but null still lands in the\n\
-             // object as null; only absence omits it. Nil when no member is present.\n\
-             func EncodeBody(record map[string]any, members ...string) ([]byte, error) {\n\
+            "// EncodeBody assembles the body-bound members into a JSON object by\n\
+             // concatenating their raw bytes, in the given member order: no member is\n\
+             // ever decoded and re-encoded, so a value reaches the wire with the exact\n\
+             // spelling and precision its own encoder gave it. A member that is\n\
+             // present but null still lands in the object as null; only absence omits\n\
+             // it. Nil when no member is present.\n\
+             func EncodeBody(record map[string]json.RawMessage, members ...string) []byte {\n\
              \tvar fields []byte\n\
              \tfor _, member := range members {\n\
-             \t\tv, ok := record[member]\n\
+             \t\traw, ok := record[member]\n\
              \t\tif !ok {\n\t\t\tcontinue\n\t\t}\n\
              \t\t// Marshalling a string cannot fail, so the key carries no error path.\n\
              \t\tkey, _ := json.Marshal(member)\n\
-             \t\tvalue, err := json.Marshal(v)\n\
-             \t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\
              \t\tif fields == nil {\n\t\t\tfields = append(fields, '{')\n\t\t} else {\n\t\t\tfields = append(fields, ',')\n\t\t}\n\
              \t\tfields = append(fields, key...)\n\
              \t\tfields = append(fields, ':')\n\
-             \t\tfields = append(fields, value...)\n\
+             \t\tfields = append(fields, raw...)\n\
              \t}\n\
-             \tif fields == nil {\n\t\treturn nil, nil\n\t}\n\
-             \treturn append(fields, '}'), nil\n\
+             \tif fields == nil {\n\t\treturn nil\n\t}\n\
+             \treturn append(fields, '}')\n\
              }",
             vec![import("json", "encoding/json")],
         ),
@@ -169,13 +210,15 @@ pub(super) fn assembly_decls() -> Vec<Decl> {
             "// FoldResponse folds the response-bound members (a header value, or the\n\
              // status code) into the decoded body so the generated decoder sees them as\n\
              // ordinary fields. Applied on the success path only; a non-object or empty\n\
-             // body leaves the bound fields to stand on their own.\n\
-             func FoldResponse(body string, bound map[string]any) string {\n\
-             \tobject := map[string]any{}\n\
+             // body leaves the bound fields to stand on their own. The body's own\n\
+             // members are held raw and re-emitted verbatim, so folding a status or\n\
+             // header in never rewrites a number the server sent.\n\
+             func FoldResponse(body string, bound map[string]json.RawMessage) string {\n\
+             \tobject := map[string]json.RawMessage{}\n\
              \t_ = json.Unmarshal([]byte(body), &object)\n\
              \tfor member, value := range bound {\n\t\tobject[member] = value\n\t}\n\
-             \t// Every value came off decoded JSON, an int status, or a header string,\n\
-             \t// so re-marshalling cannot fail.\n\
+             \t// Every value in the object is raw JSON already, so re-marshalling\n\
+             \t// cannot fail.\n\
              \tfolded, _ := json.Marshal(object)\n\
              \treturn string(folded)\n\
              }",
@@ -183,14 +226,17 @@ pub(super) fn assembly_decls() -> Vec<Decl> {
         ),
         (
             "HeaderValue",
-            "// HeaderValue reads a response header for a response-bound member: nil\n\
-             // (the member decodes as absent) when the header is missing. Response\n\
+            "// HeaderValue reads a response header for a response-bound member as a raw\n\
+             // JSON string: nil (encodes as null) when the header is missing. Response\n\
              // header keys are lowercased.\n\
-             func HeaderValue(headers map[string]string, name string) any {\n\
-             \tif value, ok := headers[name]; ok {\n\t\treturn value\n\t}\n\
-             \treturn nil\n\
+             func HeaderValue(headers map[string]string, name string) json.RawMessage {\n\
+             \tvalue, ok := headers[name]\n\
+             \tif !ok {\n\t\treturn nil\n\t}\n\
+             \t// Marshalling a string cannot fail.\n\
+             \tencoded, _ := json.Marshal(value)\n\
+             \treturn encoded\n\
              }",
-            Vec::new(),
+            vec![import("json", "encoding/json")],
         ),
     ])
 }

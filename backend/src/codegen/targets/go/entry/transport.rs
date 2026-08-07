@@ -124,9 +124,9 @@ fn template_expr(
             }
             TemplatePart::Input(name) => {
                 let helper = if escape {
-                    reached.slot("PathPart")
+                    reached.slot("PathPartRaw")
                 } else {
-                    reached.slot("FormatScalar")
+                    reached.slot("FormatRaw")
                 };
                 out.push(format!("{helper}(record[{name:?}])"));
             }
@@ -263,9 +263,9 @@ fn header_lines(
     ));
     for (name, part) in &wire.bindings {
         if let WirePart::Header { name: header_name } = part {
-            let format = reached.slot("FormatScalar");
+            let format = reached.slot("FormatRaw");
             out.push_str(&format!(
-                "\tif v, ok := record[{name:?}]; ok && v != nil {{\n\
+                "\tif v, ok := record[{name:?}]; ok && string(v) != \"null\" {{\n\
                  \t\t{set}(headers, {header_name:?}, {format}(v))\n\
                  \t}}\n"
             ));
@@ -293,14 +293,13 @@ fn body_lines(
         .iter()
         .find(|(_, p)| matches!(p, WirePart::Payload))
     {
+        // The record already holds the member's raw JSON bytes, so the whole
+        // body is a slice, not a re-encode.
         let text = format!(
             "\tvar body []byte\n\
              \tif v, ok := record[{name:?}]; ok {{\n\
-             \t\tencoded, err := json.Marshal(v)\n\
-             \t\tif err != nil {{\n\t\t\treturn {ret_zero}{fail_enc}\n\t\t}}\n\
-             \t\tbody = encoded\n\
-             \t}}\n",
-            fail_enc = fail("err".to_string()),
+             \t\tbody = v\n\
+             \t}}\n"
         );
         return (text, Some(true));
     }
@@ -327,10 +326,8 @@ fn body_lines(
         .collect::<Vec<_>>()
         .join(", ");
     let text = format!(
-        "\tbody, err := {encode}(record, {members})\n\
-         \tif err != nil {{\n\t\treturn {ret_zero}{fail_enc}\n\t}}\n",
+        "\tbody := {encode}(record, {members})\n",
         encode = reached.slot("EncodeBody"),
-        fail_enc = fail("err".to_string()),
     );
     // EncodeBody yields nil when every member is absent, so the default
     // content-type keeps the runtime's body-presence guard.
@@ -358,13 +355,17 @@ fn retry_field(call: &OpCall<'_>, reached: &mut Reached) -> Option<String> {
     }
 }
 
-/// The `map[string]any` literal folding the response-bound members in.
+/// The `map[string]json.RawMessage` literal folding the response-bound
+/// members in: raw JSON so folding a status or header into the response body
+/// never rewrites one of the body's own numbers.
 fn fold_map_expr(wire: &WireBinding, reached: &mut Reached) -> String {
     let entries = wire
         .response_bindings
         .iter()
         .map(|(member, part)| match part {
-            WireResponsePart::StatusCode => format!("{member:?}: outcome.Status"),
+            WireResponsePart::StatusCode => {
+                format!("{member:?}: json.RawMessage(strconv.Itoa(outcome.Status))")
+            }
             WireResponsePart::Header { name } => format!(
                 "{member:?}: {}(outcome.Headers, {:?})",
                 reached.slot("HeaderValue"),
@@ -373,7 +374,7 @@ fn fold_map_expr(wire: &WireBinding, reached: &mut Reached) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    format!("map[string]any{{{entries}}}")
+    format!("map[string]json.RawMessage{{{entries}}}")
 }
 
 /// One operation's transport call: everything between the input validation and
@@ -483,6 +484,16 @@ pub(super) fn op_call(
             reached.slot("FoldResponse"),
             fold_map_expr(wire, &mut reached),
         ));
+        // fold_map_expr spells json.RawMessage (and strconv.Itoa for a
+        // statusCode binding) directly into this method's own text.
+        refs.push(super::import("json", "encoding/json"));
+        if wire
+            .response_bindings
+            .values()
+            .any(|p| matches!(p, WireResponsePart::StatusCode))
+        {
+            refs.push(super::import("strconv", "strconv"));
+        }
     }
     out.push_str(&indent(call.success_block));
     out.push_str("\t}\n");

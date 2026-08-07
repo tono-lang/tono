@@ -102,7 +102,7 @@ fn scaffold_rust(files: &[GeneratedFile], scratch: &Path) -> io::Result<CheckPla
          reqwest = [\"dep:reqwest\"]\n\
          [dependencies]\n\
          serde = { version = \"1\", features = [\"derive\"] }\n\
-         serde_json = \"1\"\n\
+         serde_json = { version = \"1\", features = [\"raw_value\"] }\n\
          reqwest = { version = \"0.12\", default-features = false, features = [\"rustls-tls\"], optional = true }\n\
          tokio = { version = \"1\", features = [\"time\"] }\n\
          [workspace]\n",

@@ -107,7 +107,7 @@ fn url_line_reads_the_typed_endpoint_and_percent_encodes_a_field_segment() {
     let line = with_ctx(|ctx| url_line(&w, false, ctx));
     assert_eq!(
         line,
-        "let url = format!(\"{}/notes/{}/{}\", self.settings.endpoint, path_part(record.get(\"id\")), percent_path(&self.settings.region.to_string()));\n"
+        "let url = format!(\"{}/notes/{}/{}\", self.settings.endpoint, path_part(record.get(\"id\").map(|v| v.as_ref())), percent_path(&self.settings.region.to_string()));\n"
     );
 }
 
@@ -158,8 +158,7 @@ fn body_lines_collect_only_the_body_members_when_mixed_with_other_kinds() {
     .into_iter()
     .collect();
     let lines = body_lines(&w, true).unwrap();
-    assert!(lines.contains("for name in [\"amount\", \"note\"]"));
-    assert!(lines.contains("body_members.insert(name.to_string(), v.clone())"));
+    assert!(lines.contains("let body = encode_body(&record, &[\"amount\", \"note\"]);"));
 }
 
 #[test]
@@ -173,7 +172,7 @@ fn body_lines_prefer_the_payload_member_over_any_body_members() {
     .collect();
     assert_eq!(
         body_lines(&w, true).as_deref(),
-        Some("let body = record.get(\"envelope\").map(|v| v.to_string());\n")
+        Some("let body = record.get(\"envelope\").map(|v| v.get().to_string());\n")
     );
 }
 
@@ -196,7 +195,8 @@ fn query_lines_append_each_query_bound_member_and_fold_conditionally() {
         .into_iter()
         .collect();
     let lines = query_lines(&w);
-    assert!(lines.contains("append_query(&mut query, \"tag\", record.get(\"tags\"));"));
+    assert!(lines
+        .contains("append_query(&mut query, \"tag\", record.get(\"tags\").map(|v| v.as_ref()));"));
     assert!(lines.contains("if !query.is_empty()"));
 }
 
@@ -229,8 +229,9 @@ fn per_call_header_lines_skip_an_absent_or_null_member_at_runtime() {
     .collect();
     let lines = per_call_header_lines(&w);
     assert!(lines.contains("if let Some(v) = record.get(\"token\")"));
-    assert!(lines.contains("if !v.is_null()"));
-    assert!(lines.contains("set_header(&mut headers, \"X-Api-Token\", format_scalar(v));"));
+    assert!(lines.contains("if v.get() != \"null\""));
+    assert!(lines
+        .contains("set_header(&mut headers, \"X-Api-Token\", format_scalar(Some(v.as_ref())));"));
     assert!(!lines.contains("\"id\""));
 }
 

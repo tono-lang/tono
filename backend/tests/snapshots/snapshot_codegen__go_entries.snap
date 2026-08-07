@@ -1,5 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
+assertion_line: 185
 expression: "render_sdk(entries_module(), TargetKind::Go, Some(\"example.com/sdk\"))"
 ---
 // ==== go/internal/transport/transport.go ====
@@ -16,7 +17,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -216,37 +216,36 @@ func dispatch(ctx context.Context, native *http.Client, canonical support.HTTPTr
 	return support.HTTPResponse{Status: httpRes.StatusCode, Headers: headers, Body: string(data)}, nil
 }
 
-// FormatScalar renders a value the way the wire expects it in a path,
-// query, or header position. Decoded JSON numbers arrive as float64; an
-// integral one must not print a trailing ".0".
-func FormatScalar(v any) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case bool:
-		return strconv.FormatBool(x)
-	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64)
-	case int:
-		return strconv.Itoa(x)
-	case int64:
-		return strconv.FormatInt(x, 10)
-	default:
-		b, err := json.Marshal(v)
-		if err != nil {
-			return ""
-		}
-		return string(b)
-	}
-}
-
-// PathPart renders a path segment: an absent value substitutes empty
-// rather than a literal "null".
-func PathPart(v any) string {
-	if v == nil {
+// FormatRaw renders a record member's raw JSON value the way the wire
+// expects it in a path, query, or header position: a JSON string
+// unquoted, anything else verbatim, so a wide integer or a
+// formatting-sensitive float keeps the exact spelling its own encoder
+// gave it. An absent or null value renders empty.
+func FormatRaw(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
-	return url.PathEscape(FormatScalar(v))
+	if raw[0] == '"' {
+		// The common case (no escape sequence) slices the quotes off
+		// directly; only a string carrying an escape pays for the decoder.
+		inner := raw[1 : len(raw)-1]
+		if bytes.IndexByte(inner, '\\') == -1 {
+			return string(inner)
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return ""
+		}
+		return s
+	}
+	return string(raw)
+}
+
+// PathPartRaw renders a record member's raw JSON value into a path
+// segment: an absent or null value substitutes empty rather than a
+// literal "null".
+func PathPartRaw(raw json.RawMessage) string {
+	return url.PathEscape(FormatRaw(raw))
 }
 
 // SetHeader overrides across casings: header names are case-insensitive,
@@ -273,22 +272,21 @@ func HasHeader(headers map[string]string, name string) bool {
 	return false
 }
 
-// EncodeBody assembles the body-bound members into a JSON object, in the
-// given member order. A member that is present but null still lands in the
-// object as null; only absence omits it. Nil when no member is present.
-func EncodeBody(record map[string]any, members ...string) ([]byte, error) {
+// EncodeBody assembles the body-bound members into a JSON object by
+// concatenating their raw bytes, in the given member order: no member is
+// ever decoded and re-encoded, so a value reaches the wire with the exact
+// spelling and precision its own encoder gave it. A member that is
+// present but null still lands in the object as null; only absence omits
+// it. Nil when no member is present.
+func EncodeBody(record map[string]json.RawMessage, members ...string) []byte {
 	var fields []byte
 	for _, member := range members {
-		v, ok := record[member]
+		raw, ok := record[member]
 		if !ok {
 			continue
 		}
 		// Marshalling a string cannot fail, so the key carries no error path.
 		key, _ := json.Marshal(member)
-		value, err := json.Marshal(v)
-		if err != nil {
-			return nil, err
-		}
 		if fields == nil {
 			fields = append(fields, '{')
 		} else {
@@ -296,12 +294,12 @@ func EncodeBody(record map[string]any, members ...string) ([]byte, error) {
 		}
 		fields = append(fields, key...)
 		fields = append(fields, ':')
-		fields = append(fields, value...)
+		fields = append(fields, raw...)
 	}
 	if fields == nil {
-		return nil, nil
+		return nil
 	}
-	return append(fields, '}'), nil
+	return append(fields, '}')
 }
 
 // ==== go/internal/record/record.go ====
@@ -311,17 +309,19 @@ package record
 import "encoding/json"
 
 // EncodeRecord turns a typed input into the wire record the request
-// positions bind from, through the type's own JSON tags.
-func EncodeRecord(v any) (map[string]any, error) {
+// positions bind from, through the type's own JSON tags. The input is
+// encoded once; the split that follows only slices that encoding up by
+// member name, never decoding a member's own value.
+func EncodeRecord(v any) (map[string]json.RawMessage, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(b, &record); err != nil {
 		return nil, err
 	}
-	return m, nil
+	return record, nil
 }
 
 // ==== go/internal/casing/casing.go ====
@@ -658,16 +658,13 @@ func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {
 	if err != nil {
 		return zero, err
 	}
-	requestURL := c.settings.Endpoint + "/notes/" + transport.PathPart(record["id"])
+	requestURL := c.settings.Endpoint + "/notes/" + transport.PathPartRaw(record["id"])
 	headers := map[string]string{}
 	transport.SetHeader(headers, "X-Client-Name", c.settings.ClientName)
 	for name, value := range c.settings.Headers {
 		transport.SetHeader(headers, name, value)
 	}
-	body, err := transport.EncodeBody(record, "body")
-	if err != nil {
-		return zero, err
-	}
+	body := transport.EncodeBody(record, "body")
 	if body != nil && !transport.HasHeader(headers, "content-type") {
 		headers["content-type"] = "application/json"
 	}

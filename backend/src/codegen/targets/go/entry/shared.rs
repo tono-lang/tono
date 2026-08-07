@@ -58,18 +58,23 @@ pub(super) fn shared_slot(name: &str) -> String {
 }
 
 /// Turning a typed input into the wire record the request positions read
-/// individual members from.
+/// individual members from. The input is encoded once; the split that
+/// follows only slices that encoding up by member name (never decoding a
+/// member's own value), so a value reaches the wire with the exact spelling
+/// and precision its own encoder gave it.
 fn record_decl() -> Decl {
     Decl::raw_providing(
         "EncodeRecord",
         "// EncodeRecord turns a typed input into the wire record the request\n\
-         // positions bind from, through the type's own JSON tags.\n\
-         func EncodeRecord(v any) (map[string]any, error) {\n\
+         // positions bind from, through the type's own JSON tags. The input is\n\
+         // encoded once; the split that follows only slices that encoding up by\n\
+         // member name, never decoding a member's own value.\n\
+         func EncodeRecord(v any) (map[string]json.RawMessage, error) {\n\
          \tb, err := json.Marshal(v)\n\
          \tif err != nil {\n\t\treturn nil, err\n\t}\n\
-         \tvar m map[string]any\n\
-         \tif err := json.Unmarshal(b, &m); err != nil {\n\t\treturn nil, err\n\t}\n\
-         \treturn m, nil\n\
+         \tvar record map[string]json.RawMessage\n\
+         \tif err := json.Unmarshal(b, &record); err != nil {\n\t\treturn nil, err\n\t}\n\
+         \treturn record, nil\n\
          }"
         .to_string(),
         vec![import("json", "encoding/json")],

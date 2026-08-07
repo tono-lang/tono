@@ -136,7 +136,7 @@ fn a_labeled_path_reads_the_record_and_url_encodes() {
     let out = case.text();
     assert!(out.contains("record, err := record.EncodeRecord(input)"));
     assert!(out.contains(
-        "requestURL := c.settings.endpoint + \"/things/\" + transport.PathPart(record[\"id\"])"
+        "requestURL := c.settings.endpoint + \"/things/\" + transport.PathPartRaw(record[\"id\"])"
     ));
     // Every binding left the body, so no body is sent and no content-type
     // defaults in.
@@ -158,7 +158,7 @@ fn a_query_binding_collects_entries_in_order_and_folds_the_tail() {
     assert!(out.contains("query = transport.AppendQuery(query, \"tag\", record[\"tag\"])"));
     assert!(out.contains("+ transport.QueryString(query)"));
     // A mixed body assembles just the body members, in member order.
-    assert!(out.contains("body, err := transport.EncodeBody(record, \"amount\")"));
+    assert!(out.contains("body := transport.EncodeBody(record, \"amount\")"));
     assert!(out.contains("if body != nil && !transport.HasHeader(headers, \"content-type\")"));
 }
 
@@ -169,8 +169,10 @@ fn a_payload_member_is_the_whole_body_and_absence_sends_none() {
         .into_iter()
         .collect();
     let out = case.text();
+    // The record already holds the member's raw bytes: no re-encode.
     assert!(out.contains("if v, ok := record[\"data\"]; ok {"));
-    assert!(out.contains("encoded, err := json.Marshal(v)"));
+    assert!(out.contains("body = v"));
+    assert!(!out.contains("json.Marshal(v)"));
     assert!(out.contains("if body != nil && !transport.HasHeader(headers, \"content-type\")"));
 }
 
@@ -200,10 +202,10 @@ fn headers_layer_declared_then_base_then_per_call() {
         .find("for name, value := range c.settings.Headers {")
         .expect("base header layer");
     let per_call = out
-        .find("if v, ok := record[\"trace\"]; ok && v != nil {")
+        .find("if v, ok := record[\"trace\"]; ok && string(v) != \"null\" {")
         .expect("per-call header guard");
     assert!(declared < base && base < per_call);
-    assert!(out.contains("transport.SetHeader(headers, \"X-Trace\", transport.FormatScalar(v))"));
+    assert!(out.contains("transport.SetHeader(headers, \"X-Trace\", transport.FormatRaw(v))"));
 }
 
 #[test]
@@ -222,7 +224,7 @@ fn response_bindings_fold_only_on_the_success_path() {
     .collect();
     let out = case.text();
     assert!(out.contains(
-        "folded := transport.FoldResponse(outcome.Body, map[string]any{\"code\": outcome.Status, \"trace\": transport.HeaderValue(outcome.Headers, \"x-trace\")})"
+        "folded := transport.FoldResponse(outcome.Body, map[string]json.RawMessage{\"code\": json.RawMessage(strconv.Itoa(outcome.Status)), \"trace\": transport.HeaderValue(outcome.Headers, \"x-trace\")})"
     ));
     // The fold sits inside the success check; the error path reads the raw
     // outcome.

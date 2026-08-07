@@ -87,25 +87,26 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
     let mut decls: Vec<Decl> = [
         (
             "format_scalar",
-            "/// Renders a decoded JSON value the way the wire expects it in a path,\n\
-             /// query, or header position. An integral float must not print a\n\
-             /// trailing `.0`, and a 64-bit integer already rides as a string.\n\
-             pub fn format_scalar(v: &serde_json::Value) -> String {\n\
-             \x20   match v {\n\
-             \x20       serde_json::Value::String(s) => s.clone(),\n\
-             \x20       serde_json::Value::Bool(b) => b.to_string(),\n\
-             \x20       serde_json::Value::Number(n) => {\n\
-             \x20           if let Some(i) = n.as_i64() {\n\
-             \x20               i.to_string()\n\
-             \x20           } else if let Some(u) = n.as_u64() {\n\
-             \x20               u.to_string()\n\
-             \x20           } else {\n\
-             \x20               n.as_f64().map(|f| f.to_string()).unwrap_or_default()\n\
-             \x20           }\n\
-             \x20       }\n\
-             \x20       serde_json::Value::Null => String::new(),\n\
-             \x20       other => other.to_string(),\n\
+            "/// Renders a record member's raw JSON value the way the wire expects it\n\
+             /// in a path, query, or header position: a JSON string unquoted,\n\
+             /// anything else verbatim, so a wide integer or a formatting-sensitive\n\
+             /// float keeps the exact spelling its own encoder gave it. An absent\n\
+             /// or null value renders empty.\n\
+             pub fn format_scalar(v: Option<&serde_json::value::RawValue>) -> String {\n\
+             \x20   let Some(v) = v else { return String::new() };\n\
+             \x20   let text = v.get();\n\
+             \x20   if text == \"null\" {\n\
+             \x20       return String::new();\n\
              \x20   }\n\
+             \x20   if let Some(inner) = text.strip_prefix('\"').and_then(|s| s.strip_suffix('\"')) {\n\
+             \x20       // The common case (no escape sequence) slices the quotes off\n\
+             \x20       // directly; only a string carrying an escape pays for the decoder.\n\
+             \x20       if !inner.contains('\\\\') {\n\
+             \x20           return inner.to_string();\n\
+             \x20       }\n\
+             \x20       return serde_json::from_str::<String>(text).unwrap_or_default();\n\
+             \x20   }\n\
+             \x20   text.to_string()\n\
              }",
         ),
         (
@@ -134,11 +135,8 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
             "path_part",
             "/// A path segment read off the input record: an absent or null value\n\
              /// substitutes empty rather than a literal \"null\".\n\
-             pub fn path_part(v: Option<&serde_json::Value>) -> String {\n\
-             \x20   match v {\n\
-             \x20       Some(v) if !v.is_null() => percent_path(&format_scalar(v)),\n\
-             \x20       _ => String::new(),\n\
-             \x20   }\n\
+             pub fn path_part(v: Option<&serde_json::value::RawValue>) -> String {\n\
+             \x20   percent_path(&format_scalar(v))\n\
              }",
         ),
         (
@@ -162,24 +160,29 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
         ),
         (
             "append_query",
-            "/// Serializes a query value as a repeated entry per element for a list,\n\
-             /// a single entry otherwise; a null or absent value is omitted (the\n\
-             /// body's nullable-omit rule, applied to the request line).\n\
-             pub fn append_query(query: &mut Vec<String>, name: &str, value: Option<&serde_json::Value>) {\n\
+            "/// Serializes a record member's raw JSON value as a repeated entry per\n\
+             /// element for a list, a single entry otherwise; an absent or null\n\
+             /// value is omitted (the body's nullable-omit rule, applied to the\n\
+             /// request line). A malformed array binds as a single entry rather\n\
+             /// than failing the request line.\n\
+             pub fn append_query(query: &mut Vec<String>, name: &str, value: Option<&serde_json::value::RawValue>) {\n\
              \x20   let Some(value) = value else { return };\n\
-             \x20   if value.is_null() {\n\
+             \x20   let text = value.get();\n\
+             \x20   if text == \"null\" {\n\
              \x20       return;\n\
              \x20   }\n\
-             \x20   let mut push = |v: &serde_json::Value| {\n\
-             \x20       query.push(format!(\"{}={}\", percent_encode(name), percent_encode(&format_scalar(v))));\n\
+             \x20   let mut push = |v: &serde_json::value::RawValue| {\n\
+             \x20       query.push(format!(\"{}={}\", percent_encode(name), percent_encode(&format_scalar(Some(v)))));\n\
              \x20   };\n\
-             \x20   if let Some(list) = value.as_array() {\n\
-             \x20       for element in list {\n\
-             \x20           push(element);\n\
+             \x20   if text.starts_with('[') {\n\
+             \x20       if let Ok(elements) = serde_json::from_str::<Vec<Box<serde_json::value::RawValue>>>(text) {\n\
+             \x20           for element in &elements {\n\
+             \x20               push(element);\n\
+             \x20           }\n\
+             \x20           return;\n\
              \x20       }\n\
-             \x20   } else {\n\
-             \x20       push(value);\n\
              \x20   }\n\
+             \x20   push(value);\n\
              }",
         ),
         (
@@ -189,6 +192,51 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
              /// their own.\n\
              pub fn parse_json_object(body: &str) -> serde_json::Map<String, serde_json::Value> {\n\
              \x20   serde_json::from_str(body).unwrap_or_default()\n\
+             }",
+        ),
+        (
+            "encode_record",
+            "/// Encodes a typed input into the wire record the request positions\n\
+             /// bind from: one encode pass, then a split by member name. Each\n\
+             /// member is held as its own raw JSON bytes, so a request position\n\
+             /// reads a value with the exact spelling and precision its own\n\
+             /// encoder gave it, without decoding it into a generic tree.\n\
+             pub fn encode_record<T: serde::Serialize>(\n\
+             \x20   v: &T,\n\
+             ) -> Result<std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>, serde_json::Error> {\n\
+             \x20   serde_json::from_str(&serde_json::to_string(v)?)\n\
+             }",
+        ),
+        (
+            "encode_body",
+            "/// Assembles the body-bound members into a JSON object by\n\
+             /// concatenating their raw bytes, in the given member order: no\n\
+             /// member is ever decoded and re-encoded, so a value reaches the wire\n\
+             /// with the exact spelling and precision its own encoder gave it. A\n\
+             /// member that is present but null still lands in the object as\n\
+             /// null; only absence omits it. `None` when no member is present.\n\
+             pub fn encode_body(\n\
+             \x20   record: &std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>,\n\
+             \x20   members: &[&str],\n\
+             ) -> Option<String> {\n\
+             \x20   let mut fields = String::new();\n\
+             \x20   for member in members {\n\
+             \x20       let Some(raw) = record.get(*member) else { continue };\n\
+             \x20       if fields.is_empty() {\n\
+             \x20           fields.push('{');\n\
+             \x20       } else {\n\
+             \x20           fields.push(',');\n\
+             \x20       }\n\
+             \x20       // Serializing a string cannot fail, so the key carries no error path.\n\
+             \x20       fields.push_str(&serde_json::to_string(member).unwrap_or_default());\n\
+             \x20       fields.push(':');\n\
+             \x20       fields.push_str(raw.get());\n\
+             \x20   }\n\
+             \x20   if fields.is_empty() {\n\
+             \x20       return None;\n\
+             \x20   }\n\
+             \x20   fields.push('}');\n\
+             \x20   Some(fields)\n\
              }",
         ),
         (
