@@ -1,7 +1,7 @@
 (* HTTP binding validation. The Protocol resolver ([Protocol_http]) materializes
    an operation's HTTP annotations into a wire descriptor but assumes they are
    well-formed; the malformed cases are reported here, at the AST level, where
-   source spans still exist (the IR carries none). Four failures:
+   source spans still exist (the IR carries none). Five failures:
 
    - a {placeholder} in the @http path with no matching @httpLabel member, or an
      @httpLabel member with no matching placeholder (TC0019);
@@ -10,7 +10,9 @@
    - a map-typed member bound to the query string or a header, which has no
      defined multi-value serialization (TC0021);
    - a nullable @httpLabel member, which could leave its {placeholder} empty
-     (TC0022).
+     (TC0022);
+   - a malformed @http(code:): not an int and not a non-empty list of ints
+     (TC0068).
 
    Only operations carrying @http are checked; a purely local operation has no
    HTTP surface. *)
@@ -171,9 +173,33 @@ let check_maps (members : Ast.member list) : Diagnostic.t list =
       else None)
     members
 
+(* @http(code:) is well-formed only as an int or a non-empty list of ints.
+   Anything else (an empty list, a non-int element, a non-int scalar) would
+   otherwise fall silently into the resolver's "no code declared" default
+   instead of the exact match the author wrote. *)
+let check_code (op : Ast.decl) : Diagnostic.t list =
+  let is_int = function Ast.AInt _ -> true | _ -> false in
+  match find_trait "http" op.dtraits with
+  | None -> []
+  | Some { targs; tspan; _ } -> (
+      match
+        List.find_map
+          (function Ast.AKv ("code", v) -> Some v | _ -> None)
+          targs
+      with
+      | None -> []
+      | Some (Ast.AInt _) -> []
+      | Some (Ast.AList xs) when xs <> [] && List.for_all is_int xs -> []
+      | Some _ ->
+          [
+            err Error_codes.http_code_invalid tspan
+              "@http(code:) must be an int or a non-empty list of ints, e.g. \
+               'code: 201' or 'code: [200, 207]'";
+          ])
+
 let check_op (decls : Ast.decl list) (op : Ast.decl) : Diagnostic.t list =
   match http_path op with
-  | None -> []
+  | None -> check_code op
   | Some path ->
       let members = input_members decls op in
       (* A ".x" placeholder references an entry field, resolved at construction
@@ -183,7 +209,8 @@ let check_op (decls : Ast.decl list) (op : Ast.decl) : Diagnostic.t list =
           (fun p -> not (String.length p > 0 && p.[0] = '.'))
           (placeholders path)
       in
-      check_labels op members input_placeholders
+      check_code op
+      @ check_labels op members input_placeholders
       @ check_label_presence members
       @ check_payload members @ check_maps members
 

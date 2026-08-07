@@ -312,6 +312,39 @@ let placeholder_without_struct_input () =
     (has "TC0019"
        "op get(string): string @http(method: \"get\", path: \"/x/{id}\")")
 
+(* An empty code: list is malformed, not "no code declared". *)
+let empty_code_list_rejected () =
+  Alcotest.(check bool)
+    "empty code list" true
+    (has "TC0068"
+       "struct req { }\n\
+        op post(req): req @http(method: \"post\", path: \"/x\", code: [])")
+
+(* A code: list with a non-int element is malformed the same way. *)
+let non_int_code_element_rejected () =
+  Alcotest.(check bool)
+    "non-int code element" true
+    (has "TC0068"
+       "struct req { }\n\
+        op post(req): req @http(method: \"post\", path: \"/x\", code: [200, \
+        \"x\"])")
+
+(* A non-int scalar code: is malformed too. *)
+let non_int_code_scalar_rejected () =
+  Alcotest.(check bool)
+    "non-int code scalar" true
+    (has "TC0068"
+       "struct req { }\n\
+        op post(req): req @http(method: \"post\", path: \"/x\", code: \"x\")")
+
+let valid_code_forms_accepted () =
+  Alcotest.(check bool)
+    "int and int-list code are both fine" false
+    (has "TC0068"
+       "struct req { }\n\
+        op post(req): req @http(method: \"post\", path: \"/x\", code: [200, \
+        207])")
+
 let no_http_no_binding_checks () =
   Alcotest.(check (list string))
     "no http, no binding diagnostics" []
@@ -357,6 +390,14 @@ let () =
             nullable_label_rejected;
           Alcotest.test_case "placeholder without struct input" `Quick
             placeholder_without_struct_input;
+          Alcotest.test_case "empty code list rejected" `Quick
+            empty_code_list_rejected;
+          Alcotest.test_case "non-int code element rejected" `Quick
+            non_int_code_element_rejected;
+          Alcotest.test_case "non-int code scalar rejected" `Quick
+            non_int_code_scalar_rejected;
+          Alcotest.test_case "valid code forms accepted" `Quick
+            valid_code_forms_accepted;
           Alcotest.test_case "no http no checks" `Quick
             no_http_no_binding_checks;
         ] );

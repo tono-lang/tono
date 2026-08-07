@@ -98,3 +98,5 @@ val test_binding_duplicate : string
 (* Two declared errors of one operation share a status but read their
    @errorCode from different paths (see error_codes.ml for the rule). *)
 val error_code_paths_diverge : string
+
+val http_code_invalid : string
