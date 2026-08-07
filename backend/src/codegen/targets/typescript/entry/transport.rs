@@ -10,6 +10,7 @@
 //! text, gated on `wire.retry`/`wire.timeout`, so a single operation with
 //! neither carries no trace of either in its own generated method.
 
+use crate::codegen::entries::plan::push_gap;
 use crate::codegen::entries::wire::{
     body_reads_record, has_query, needs_record_for_reads, success_test_expr,
 };
@@ -430,6 +431,7 @@ pub(super) fn op_call(
             "    const record = {input_expr} as unknown as Record<string, unknown>;\n"
         ));
     }
+    push_gap(&mut out);
     out.push_str(&url_lines(
         wire,
         "    ",
@@ -437,6 +439,7 @@ pub(super) fn op_call(
         input_expr,
         param_access,
     ));
+    push_gap(&mut out);
     out.push_str("    const headers: Record<string, string> = {};\n");
     out.push_str(&declared_header_lines(
         wire,
@@ -453,6 +456,7 @@ pub(super) fn op_call(
         None => "body: undefined".to_string(),
     };
     if let Some(b) = &body {
+        push_gap(&mut out);
         out.push_str(&format!("    const body = {b};\n"));
         out.push_str(
             "    if (!hasHeader(headers, \"content-type\")) headers[\"content-type\"] = \"application/json\";\n",
@@ -468,6 +472,7 @@ pub(super) fn op_call(
     );
     let send_call = if has_timeout {
         let path = wire.timeout.as_deref().unwrap_or_default();
+        push_gap(&mut out);
         out.push_str(&format!(
             "    const timeoutMs = {};\n",
             timeout_field_expr(path)
@@ -478,6 +483,7 @@ pub(super) fn op_call(
     };
     if has_retry {
         let path = wire.retry.as_deref().unwrap_or_default();
+        push_gap(&mut out);
         out.push_str(&format!(
             "    const maxRetries = resolveMaxRetries({});\n",
             field_expr(path)
@@ -498,6 +504,7 @@ pub(super) fn op_call(
         "before_request",
         "request",
     ));
+    push_gap(&mut attempt);
     attempt.push_str(&format!("{d}let response: HttpResponse;\n"));
     attempt.push_str(&format!("{d}try {{\n"));
     attempt.push_str(&format!("{d}  response = await {send_call};\n"));
@@ -531,6 +538,7 @@ pub(super) fn op_call(
             outcome_body_expr(wire),
         ));
     }
+    push_gap(&mut attempt);
     // The success path is control-flow-terminal (`success_block` always
     // returns or throws), so the error path below it needs no `else`: it is
     // only ever reached once the response missed.
@@ -541,6 +549,7 @@ pub(super) fn op_call(
     ));
     attempt.push('\n');
     attempt.push_str(&format!("{d}}}\n"));
+    push_gap(&mut attempt);
     if has_declared_errors {
         attempt.push_str(&format!(
             "{d}const err = {discriminator}(outcome.status, outcome.body);\n"
@@ -555,6 +564,7 @@ pub(super) fn op_call(
         attempt.push_str(&retry_or_throw(d, false, None, error_line));
     }
 
+    push_gap(&mut out);
     if has_retry {
         out.push_str("    for (let attempt = 0; ; attempt++) {\n");
         out.push_str(&attempt);

@@ -80,23 +80,28 @@ export class Client {
       maxRetries: 0,
       headers: {},
     };
+
     s.apiKey = apiKey;
+
     const v = readEnv("PAYMENTS_ENDPOINT");
     if (v !== undefined) {
       s.endpoint = v;
     } else {
       s.endpoint = "https://api.payments.example.com";
     }
+
     if (config.timeout !== undefined) {
       s.timeout = config.timeout;
     } else {
       s.timeout = "10s" as Duration;
     }
+
     if (config.maxRetries !== undefined) {
       s.maxRetries = config.maxRetries;
     } else {
       s.maxRetries = 2;
     }
+
     const violations: Violation[] = [];
     if ([...s.apiKey].length < 1) {
       violations.push({
@@ -148,15 +153,20 @@ export class Client {
       throw invalid;
     }
     const url = this.settings.endpoint + "/charges";
+
     const headers: Record<string, string> = {};
     setHeader(headers, "X-API-Key", formatScalar(this.settings.apiKey));
     for (const [k, v] of Object.entries(this.options.headers ?? {}))
       setHeader(headers, k, v);
+
     const body = JSON.stringify(encodeCharge(input));
     if (!hasHeader(headers, "content-type"))
       headers["content-type"] = "application/json";
+
     const timeoutMs = this.timeoutMs;
+
     const maxRetries = resolveMaxRetries(this.settings.maxRetries);
+
     for (let attempt = 0; ; attempt++) {
       const request: HttpRequest = {
         method: "POST",
@@ -164,6 +174,7 @@ export class Client {
         headers: { ...headers },
         body,
       };
+
       let response: HttpResponse;
       try {
         response = await httpSendWithTimeout(this.options, request, timeoutMs);
@@ -175,6 +186,7 @@ export class Client {
         throw new TransportError(cause);
       }
       const outcome = response;
+
       if (response.status === 201) {
         try {
           return parseCharge(outcome.body);
@@ -182,6 +194,7 @@ export class Client {
           throw new DecodeError(path as string, "Charge", outcome.body);
         }
       }
+
       const err = decodeCreateChargeError(outcome.status, outcome.body);
       if (attempt < maxRetries && err.retryable()) {
         await retryDelay(attempt);

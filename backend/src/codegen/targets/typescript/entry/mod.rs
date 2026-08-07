@@ -326,9 +326,13 @@ fn class_decl(
     // function (a class body wraps it), so the plan renders one indent unit
     // further in to land at the same column as this scaffold's own lines.
     let fields = plan::emit_fields(entry, module, &mut r, 2);
-    r.body.push_str(&fields);
+    if !fields.is_empty() {
+        plan::push_gap(r.body);
+        r.body.push_str(&fields);
+    }
 
     if hook_binding(bound, "client_init").is_some() && !multi {
+        plan::push_gap(&mut body);
         body.push_str("    wrapClientInit(s);\n");
     }
 
@@ -345,7 +349,10 @@ fn class_decl(
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 2, &r);
-        r.body.push_str(&text);
+        if !text.is_empty() {
+            plan::push_gap(r.body);
+            r.body.push_str(&text);
+        }
     }
 
     // Declared validation runs last, over what bespoke left in place.
@@ -411,6 +418,7 @@ fn class_decl(
     if !guards.is_empty() {
         refs.push(module_symbol(&en.violation, module));
         refs.push(module_symbol(&en.validation, module));
+        plan::push_gap(&mut body);
         body.push_str(&format!(
             "    const violations: {violation}[] = [];\n{guards}    if (violations.length > 0) {{\n      throw new {validation}(violations);\n    }}\n",
             violation = en.violation,

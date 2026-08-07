@@ -14,6 +14,7 @@
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::conventions::field_ident;
+use crate::codegen::entries::plan::push_gap;
 use crate::codegen::entries::wire::{
     body_reads_record, has_query, needs_record, needs_record_for_reads, success_test_expr,
 };
@@ -565,11 +566,13 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
             encode_failure("e")
         ));
     }
+    push_gap(&mut out);
     out.push_str(&url_line(wire, query, fields));
     if query {
         out.push_str(&query_lines(wire, fields));
         refs.push(super::shared_symbol("append_query"));
     }
+    push_gap(&mut out);
     out.push_str(
         "let mut headers: std::collections::HashMap<String, String> = std::collections::HashMap::new();\n",
     );
@@ -589,6 +592,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     }
     let body_field = match &body {
         Some(lines) => {
+            push_gap(&mut out);
             out.push_str(lines);
             let is_none_check = lines.starts_with("let body = record.get(");
             let guard = if is_none_check {
@@ -613,6 +617,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         refs.push(super::shared_symbol("resolve_max_retries"));
         refs.push(super::shared_symbol("backoff_delay_ms"));
         let path = wire.retry.as_deref().unwrap_or_default();
+        push_gap(&mut out);
         out.push_str(&format!(
             "let max_retries = resolve_max_retries({});\n",
             fields.i64_expr(path)
@@ -637,6 +642,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         call.before_request,
         refs,
     ));
+    push_gap(&mut attempt);
     let transport_fail = "Err(TonoError::Transport(TransportError { cause }))".to_string();
     let transport_arm = if has_retry {
         format!(
@@ -673,6 +679,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     } else if needs_response_name {
         attempt.push_str("let outcome = response;\n");
     }
+    push_gap(&mut attempt);
     // A one-expression success block returns bare; a multi-statement one
     // (a decode with its own `let`) keeps its block, which the braces lint
     // accepts exactly because it is not a lone expression.
@@ -689,6 +696,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
             call.success_block,
         ));
     }
+    push_gap(&mut attempt);
     if call.has_declared_errors {
         attempt.push_str(&format!(
             "let err = {}(outcome.status, &outcome.body);\n",
@@ -711,6 +719,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         }
     }
 
+    push_gap(&mut out);
     if has_retry {
         out.push_str(&format!("loop {{\n{}}}\n", super::indent(&attempt, 1)));
     } else {

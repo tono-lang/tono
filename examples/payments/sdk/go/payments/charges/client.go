@@ -83,22 +83,27 @@ func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...Cl
 		opt(&w)
 	}
 	s := Settings{Headers: map[string]string{}}
+
 	s.APIKey = apiKey
+
 	if v, ok := os.LookupEnv("PAYMENTS_ENDPOINT"); ok && v != "" {
 		s.Endpoint = v
 	} else {
 		s.Endpoint = "https://api.payments.example.com"
 	}
+
 	if w.timeout != nil {
 		s.Timeout = *w.timeout
 	} else {
 		s.Timeout = support.Duration("10s")
 	}
+
 	if w.maxRetries != nil {
 		s.MaxRetries = *w.maxRetries
 	} else {
 		s.MaxRetries = int32(2)
 	}
+
 	violations := []Violation{}
 	if len([]rune(s.APIKey)) < 1 {
 		violations = append(violations, Violation{Field: "api_key", Constraint: "length", Message: "api_key length must be >= 1"})
@@ -130,11 +135,13 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 		return zero, invalid
 	}
 	requestURL := c.settings.Endpoint + "/charges"
+
 	headers := map[string]string{}
 	transport.SetHeader(headers, "X-API-Key", c.settings.APIKey)
 	for name, value := range c.settings.Headers {
 		transport.SetHeader(headers, name, value)
 	}
+
 	body, err := json.Marshal(input)
 	if err != nil {
 		return zero, err
@@ -142,6 +149,7 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	if !transport.HasHeader(headers, "content-type") {
 		headers["content-type"] = "application/json"
 	}
+
 	outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{
 		Method:  "POST",
 		URL:     requestURL,
@@ -160,6 +168,7 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	if outcome.Cause != nil {
 		return zero, &TransportError{Cause: outcome.Cause}
 	}
+
 	if outcome.Status == 201 {
 		out, path, ok := DecodeCharge([]byte(outcome.Body))
 		if !ok {
@@ -167,6 +176,7 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 		}
 		return out, nil
 	}
+
 	return zero, DecodeCreateChargeError(outcome.Status, []byte(outcome.Body))
 }
 

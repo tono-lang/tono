@@ -75,7 +75,14 @@ pub fn emit_fields(
 ) -> String {
     let mut out = String::new();
     for field in &entry.fields {
-        out.push_str(&render(&build_field(field, entry, module, e), depth, e));
+        let block = render(&build_field(field, entry, module, e), depth, e);
+        if block.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&block);
     }
     out
 }
@@ -500,6 +507,16 @@ pub trait Emitter {
         subject_expr: &str,
         guaranteed: bool,
     ) -> Leaf;
+}
+
+/// A blank line between two logical sections of a generated body, skipped when
+/// there is nothing before it yet or a gap is already there: readability over
+/// bare statement soup, without doubling up when a caller composes sections
+/// that already end blank.
+pub fn push_gap(body: &mut String) {
+    if !body.is_empty() && !body.ends_with("\n\n") {
+        body.push('\n');
+    }
 }
 
 /// Render a plan into target source, each statement indented by `depth` units.

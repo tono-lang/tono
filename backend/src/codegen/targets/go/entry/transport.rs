@@ -12,6 +12,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::codegen::entries::plan::push_gap;
 use crate::codegen::entries::wire::{
     body_reads_record, has_query, needs_record_for_reads, success_test_expr,
 };
@@ -545,6 +546,7 @@ pub(super) fn op_call(
             fail_enc = fail("err".to_string()),
         ));
     }
+    push_gap(&mut out);
     out.push_str(&url_lines(
         wire,
         field_access,
@@ -552,6 +554,7 @@ pub(super) fn op_call(
         param_access,
         &mut reached,
     ));
+    push_gap(&mut out);
     out.push_str(&header_lines(
         wire,
         field_access,
@@ -567,7 +570,10 @@ pub(super) fn op_call(
         fail,
         &mut reached,
     );
-    out.push_str(&body_text);
+    if !body_text.is_empty() {
+        push_gap(&mut out);
+        out.push_str(&body_text);
+    }
     if body_text.contains("json.Marshal") {
         refs.push(super::import("json", "encoding/json"));
     }
@@ -626,6 +632,7 @@ pub(super) fn op_call(
     } else {
         String::new()
     };
+    push_gap(&mut out);
     out.push_str(&format!(
         "\toutcome := {send}(ctx, c.settings.HTTPClient, c.settings.Transport, {request}{{\n\
          {field_lines}\
@@ -640,6 +647,7 @@ pub(super) fn op_call(
         )),
     ));
 
+    push_gap(&mut out);
     out.push_str(&format!("\tif {} {{\n", success_expr(wire)));
     if !wire.response_bindings.is_empty() {
         out.push_str(&format!(
@@ -657,6 +665,7 @@ pub(super) fn op_call(
             api = call.api_error
         ),
     };
+    push_gap(&mut out);
     out.push_str(&format!("\treturn {ret_zero}{}\n", fail(error_expr)));
 
     for name in reached.0 {

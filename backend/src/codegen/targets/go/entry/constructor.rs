@@ -5,6 +5,7 @@
 use super::resolve::config_errorf;
 use super::*;
 use crate::codegen::entries::plan;
+use plan::push_gap;
 
 /// The generated constructor. The body follows the declared order exactly:
 /// sources resolve top-down, `client_init` runs over the result (bespoke
@@ -79,10 +80,14 @@ pub(super) fn new_decl(
         body: &mut body,
     };
     let fields = plan::emit_fields(entry, module, &mut r, 1);
-    r.body.push_str(&fields);
+    if !fields.is_empty() {
+        push_gap(r.body);
+        r.body.push_str(&fields);
+    }
 
     // client_init runs over the resolved Settings; bespoke wins.
     if hook_binding(bound, "client_init").is_some() && !multi {
+        push_gap(&mut body);
         body.push_str(&format!(
             "\tif err := {}(&s); err != nil {{\n\t\treturn nil, err\n\t}}\n",
             hook_wrapper_name("client_init")
@@ -106,7 +111,10 @@ pub(super) fn new_decl(
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 1, &r);
-        r.body.push_str(&text);
+        if !text.is_empty() {
+            push_gap(r.body);
+            r.body.push_str(&text);
+        }
     }
 
     // Declared validation runs last, over what bespoke left in place.
@@ -164,6 +172,7 @@ pub(super) fn new_decl(
         }
     }
     if !guards.is_empty() {
+        push_gap(&mut body);
         body.push_str(&format!(
             "\tviolations := []{violation}{{}}\n{guards}\tif len(violations) > 0 {{\n\t\treturn nil, &{validation}{{Violations: violations}}\n\t}}\n",
             violation = en.violation,
