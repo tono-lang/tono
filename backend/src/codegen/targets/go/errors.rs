@@ -538,4 +538,37 @@ mod tests {
         assert!(!out.contains("probe"));
         assert!(out.contains("if status == statusSlowDown {"));
     }
+
+    #[test]
+    fn shared_path_prefixes_merge_into_one_nested_struct() {
+        use crate::codegen::test_support::error_shape_at;
+        let mut module = error_demo_module();
+        module.shapes.push(error_shape_at(
+            "m#invalid_type",
+            vec![],
+            400,
+            Some(("error.type", "invalid")),
+            false,
+        ));
+        module.shapes.push(error_shape_at(
+            "m#invalid_code",
+            vec![],
+            400,
+            Some(("error.code", "bad")),
+            false,
+        ));
+        module.operations = vec![operation(
+            "m#fetch",
+            vec![],
+            vec!["m#invalid_type", "m#invalid_code"],
+        )];
+        let out = rendered(&serde_decls(&module), &GoRules::default());
+        // A shared "error" prefix collapses into one nested struct, not two
+        // separate top-level "Error" fields.
+        assert_eq!(out.matches("Error struct {").count(), 1);
+        assert!(out.contains("\t\tError struct {\n"));
+        assert!(out.contains("\t\t\tType string `json:\"type\"`\n"));
+        assert!(out.contains("\t\t\tCode string `json:\"code\"`\n"));
+        assert!(out.contains("\t\t} `json:\"error\"`\n"));
+    }
 }

@@ -404,3 +404,30 @@ fn same_status_different_paths_is_allowed_at_generation() {
     let m = model_of(shapes, op(vec![], vec!["m#a", "m#b"]));
     assert!(validate_error_codes(&m).is_ok());
 }
+
+/// The gate walks an entry's nested operations too, not just a module's loose
+/// ones: a collision declared only on an entry operation must still be caught.
+#[test]
+fn duplicate_status_and_code_on_a_nested_entry_op_is_rejected_at_generation() {
+    let mut nested_op = op(vec![], vec!["m#a", "m#b"]);
+    nested_op.id = "m#client.do_thing".into();
+    let entry = Shape {
+        id: "m#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![],
+            operations: vec![nested_op],
+        },
+        traits: vec![],
+    };
+    let shapes = vec![
+        coded_error_shape("m#a", 400, "code", "bad"),
+        coded_error_shape("m#b", 400, "code", "bad"),
+        entry,
+    ];
+    let m = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module(shapes, vec![])],
+    };
+    let err = validate_error_codes(&m).unwrap_err();
+    assert!(err.contains("m#a") && err.contains("m#b"), "{err}");
+}
