@@ -375,6 +375,46 @@ let no_body_when_undeclared () =
        "struct req { title: string }\n\
         op get(input: req): req @http(method: \"get\", path: \"/x\")")
 
+let body_ctor_duplicate_field_rejected () =
+  Alcotest.(check bool)
+    "a ctor cannot map the same field twice" true
+    (has "TC0044"
+       "struct req { title: string }\n\
+        struct note_body { title: string }\n\
+        op post(input: req): req @http(method: \"post\", path: \"/x\") \
+        @body(note_body { title: .input.title, title: .input.title })")
+
+(* ── @http(code:) shape diagnostics ────────────────────────────────────── *)
+
+let empty_code_list_rejected () =
+  Alcotest.(check bool)
+    "@http(code: []) is rejected" true
+    (has "TC0068"
+       "op post(): void @http(method: \"post\", path: \"/x\", code: [])")
+
+let non_int_code_element_rejected () =
+  Alcotest.(check bool)
+    "@http(code: [200, \"x\"]) is rejected" true
+    (has "TC0068"
+       "op post(): void @http(method: \"post\", path: \"/x\", code: [200, \
+        \"x\"])")
+
+let non_int_code_scalar_rejected () =
+  Alcotest.(check bool)
+    "@http(code: \"x\") is rejected" true
+    (has "TC0068"
+       "op post(): void @http(method: \"post\", path: \"/x\", code: \"x\")")
+
+let valid_code_forms_accepted () =
+  Alcotest.(check bool)
+    "@http(code: 201) is fine" false
+    (has "TC0068"
+       "op post(): void @http(method: \"post\", path: \"/x\", code: 201)");
+  Alcotest.(check bool)
+    "@http(code: [200, 207]) is fine" false
+    (has "TC0068"
+       "op post(): void @http(method: \"post\", path: \"/x\", code: [200, 207])")
+
 let () =
   Alcotest.run "protocol_http"
     [
@@ -415,5 +455,18 @@ let () =
           Alcotest.test_case "body requires http" `Quick body_requires_http;
           Alcotest.test_case "no body when undeclared" `Quick
             no_body_when_undeclared;
+          Alcotest.test_case "ctor duplicate field rejected" `Quick
+            body_ctor_duplicate_field_rejected;
+        ] );
+      ( "http_code_shapes",
+        [
+          Alcotest.test_case "empty code list rejected" `Quick
+            empty_code_list_rejected;
+          Alcotest.test_case "non-int code element rejected" `Quick
+            non_int_code_element_rejected;
+          Alcotest.test_case "non-int code scalar rejected" `Quick
+            non_int_code_scalar_rejected;
+          Alcotest.test_case "valid code forms accepted" `Quick
+            valid_code_forms_accepted;
         ] );
     ]

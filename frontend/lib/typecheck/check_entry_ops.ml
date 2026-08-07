@@ -122,6 +122,26 @@ let check_query_shapes (op : Ast.decl) : Diagnostic.t list =
        ~value_what:"a @query value")
     (traits_named "query" op.Ast.dtraits)
 
+(* @http(code:) is well-formed only as an int or a non-empty list of ints.
+   Anything else (an empty list, a non-int element, a non-int scalar) would
+   otherwise fall silently into the resolver's "no code declared" default
+   instead of the exact match the author wrote. *)
+let check_code (op : Ast.decl) : Diagnostic.t list =
+  let is_int = function Ast.AInt _ -> true | _ -> false in
+  match find_trait "http" op.dtraits with
+  | None -> []
+  | Some { targs; tspan; _ } -> (
+      match kv_arg "code" targs with
+      | None -> []
+      | Some (Ast.AInt _) -> []
+      | Some (Ast.AList xs) when xs <> [] && List.for_all is_int xs -> []
+      | Some _ ->
+          [
+            err Error_codes.http_code_invalid tspan
+              "@http(code:) must be an int or a non-empty list of ints, e.g. \
+               'code: 201' or 'code: [200, 207]'";
+          ])
+
 (* Shape rules of @body: at most one per operation, and its single argument
    is either a reference (the whole parameter, or one of its members) or a
    ctor mapper (a known struct name applied to field: value pairs, each
@@ -165,6 +185,7 @@ let check_body_ctor ctx (c : Ast.ctor_arg) : Diagnostic.t list =
           c.Ast.ctor_name;
       ]
   | Some members ->
+      let seen = Hashtbl.create 8 in
       List.concat_map
         (fun ((fname, fspan, _) as field) ->
           let name_diags =
@@ -179,7 +200,18 @@ let check_body_ctor ctx (c : Ast.ctor_arg) : Diagnostic.t list =
                   "'%s' has no field '%s'" c.Ast.ctor_name fname;
               ]
           in
-          name_diags @ check_body_field_value ~ctor_name:c.Ast.ctor_name field)
+          let dup_diags =
+            if Hashtbl.mem seen fname then
+              [
+                err Error_codes.protocol_trait_invalid fspan
+                  "'%s' is mapped more than once in this ctor" fname;
+              ]
+            else (
+              Hashtbl.add seen fname ();
+              [])
+          in
+          name_diags @ dup_diags
+          @ check_body_field_value ~ctor_name:c.Ast.ctor_name field)
         c.Ast.ctor_fields
 
 let check_body_shapes ctx (op : Ast.decl) : Diagnostic.t list =
@@ -295,7 +327,8 @@ let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
         [ "header"; "query"; "body" ]
   in
   protocol_http_diags @ check_header_shapes op @ check_query_shapes op
-  @ check_body_shapes ctx op @ ref_diags @ endpoint_diags @ timeout_retry_diags
+  @ check_body_shapes ctx op @ check_code op @ ref_diags @ endpoint_diags
+  @ timeout_retry_diags
 
 (* A value position (path, endpoint) that accepts the unified grammar:
    literal, template, or pure reference. Resolution of the refs a template or
@@ -447,4 +480,4 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
   check_protocol_positions op
   @ shadow_diags @ ref_diags @ http_diags @ path_diags @ timeout_diags
   @ retry_diags @ check_header_shapes op @ check_query_shapes op
-  @ check_body_shapes ctx op
+  @ check_body_shapes ctx op @ check_code op
