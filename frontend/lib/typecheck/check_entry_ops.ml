@@ -238,6 +238,23 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     Diagnostic.t list =
   let pname, pty = op_param op in
   let resolve segs = Entry_scope.resolve_ref ctx fields ~pname ~pty segs in
+  (* A same-named entry field silently changes what `.name` means inside this
+     op (parameter, not field). Not an error (ordinary lexical shadowing),
+     but the only spot where one ref syntax has two possible resolutions. *)
+  let shadow_diags =
+    match pname with
+    | Some p
+      when List.exists (fun (m : Ast.member) -> String.equal m.mname p) fields
+      ->
+        [
+          Diagnostic.warning ~code:Error_codes.param_shadows_field op.dname_span
+            (Printf.sprintf
+               "operation parameter '%s' shadows an entry field of the same \
+                name; '.%s' refers to the parameter here"
+               p p);
+        ]
+    | _ -> []
+  in
   let ref_diags =
     List.filter_map
       (fun (segs, span) ->
@@ -334,5 +351,5 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     | None -> []
   in
   check_protocol_positions op
-  @ ref_diags @ http_diags @ path_diags @ timeout_diags @ retry_diags
-  @ check_header_shapes op @ check_query_shapes op
+  @ shadow_diags @ ref_diags @ http_diags @ path_diags @ timeout_diags
+  @ retry_diags @ check_header_shapes op @ check_query_shapes op

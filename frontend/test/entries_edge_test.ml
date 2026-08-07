@@ -400,6 +400,21 @@ let endpoint_non_string_rejected () =
      \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep)\n\
       }\n" ^ wire)
 
+let op_param_shadows_entry_field_warns () =
+  expect "op param shadows entry field" [ "TC0048" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(ep: string): r @http(method: \"GET\", path: \"/\", endpoint: .ep)\n\
+      }\n" ^ wire)
+
+let op_param_distinct_name_no_warning () =
+  expect "op param with a distinct name" []
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(input: string): r @http(method: \"GET\", path: \"/\", endpoint: \
+      .ep)\n\
+      }\n" ^ wire)
+
 let timeout_wrong_type_rejected () =
   expect "string timeout field" [ "TC0044" ]
     (entry ""
@@ -719,6 +734,10 @@ let () =
           Alcotest.test_case "literal endpoint" `Quick endpoint_literal_accepted;
           Alcotest.test_case "non-string endpoint" `Quick
             endpoint_non_string_rejected;
+          Alcotest.test_case "op param shadows entry field" `Quick
+            op_param_shadows_entry_field_warns;
+          Alcotest.test_case "op param with a distinct name" `Quick
+            op_param_distinct_name_no_warning;
           Alcotest.test_case "timeout wrong type" `Quick
             timeout_wrong_type_rejected;
           Alcotest.test_case "retry wrong type" `Quick retry_wrong_type_rejected;

@@ -63,6 +63,7 @@ val protocol_trait_invalid : string
 val transform_unknown : string
 val entry_shape_invalid : string
 val duplicate_trait : string
+val param_shadows_field : string
 
 (* Bespoke operation implementations: an impl naming no implementable operation
    or an ambiguous one, an operation implemented twice or not at all, and the raw

@@ -73,6 +73,10 @@ let entry_shape_invalid = "TC0046"
    declaration or member; usually the trailing-trait absorption footgun. *)
 let duplicate_trait = "TC0047"
 
+(* An op's named parameter has the same name as an entry field, so a `.name`
+   ref in that op now resolves to the parameter instead of the field. *)
+let param_shadows_field = "TC0048"
+
 (* Bespoke operation implementations. An "ext impl" names the operation it
    implements, so the name must reach exactly one operation an entry declares:
    none is an orphan, a loose one gets no generated body, and several is an
