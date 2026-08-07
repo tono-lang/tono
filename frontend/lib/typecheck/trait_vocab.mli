@@ -14,3 +14,7 @@ val is_namespaced : string -> bool
 
 (* The nearest known trait to a name, when one is close enough to suggest. *)
 val nearest : string -> string option
+
+(* Where a retired per-member HTTP binding trait's replacement lives, for the
+   four names spelling distance would not connect to it. *)
+val legacy_http_binding : string -> string option

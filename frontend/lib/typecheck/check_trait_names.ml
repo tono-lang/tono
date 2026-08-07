@@ -19,9 +19,12 @@ let unknown (traits : Ast.trait list) : Diagnostic.t list =
       then None
       else
         let hint =
-          match Trait_vocab.nearest tr.tname with
-          | Some near -> Printf.sprintf "; did you mean @%s?" near
-          | None -> ""
+          match Trait_vocab.legacy_http_binding tr.tname with
+          | Some replacement -> Printf.sprintf "; use %s instead" replacement
+          | None -> (
+              match Trait_vocab.nearest tr.tname with
+              | Some near -> Printf.sprintf "; did you mean @%s?" near
+              | None -> "")
         in
         Some
           (warn Error_codes.unknown_trait tr.tspan

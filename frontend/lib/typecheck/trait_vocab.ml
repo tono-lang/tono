@@ -65,6 +65,18 @@ let levenshtein (a : string) (b : string) : int =
   done;
   prev.(lb)
 
+(* The four per-member HTTP binding traits retired alongside the request-side
+   rewrite: close enough in spelling to each other that a generic nearest-name
+   lookup would misfire, so they get a direct pointer to what replaced them. *)
+let legacy_http_binding (name : string) : string option =
+  match name with
+  | "httpLabel" ->
+      Some "a reference at the placeholder's point of use in @http's path"
+  | "httpQuery" -> Some "@query at the point of use"
+  | "httpHeader" -> Some "@header at the point of use"
+  | "httpPayload" -> Some "@body"
+  | _ -> None
+
 (* The nearest known trait, when one is near enough to be worth naming. The
    bound scales with the word: a third of its length (at least one edit) keeps
    "@statusx" pointing at @status without pairing every short unknown name with an
