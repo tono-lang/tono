@@ -27,9 +27,10 @@ pub(super) fn new_decl(
     helpers: &mut Helpers,
     multi: bool,
     test_seam: bool,
-) -> Decl {
+) -> Vec<Decl> {
     let en = error_names();
     let mut refs = Vec::new();
+    let mut resolve_fns: Vec<Decl> = Vec::new();
     // Every declared field's type can surface in the body as a zero value, a
     // default cast or a parse, all of them opaque text, so the references are
     // declared once here rather than at each spelling.
@@ -78,6 +79,8 @@ pub(super) fn new_decl(
         helpers,
         refs: &mut refs,
         body: &mut body,
+        resolve_fns: &mut resolve_fns,
+        multi,
     };
     let fields = plan::emit_fields(entry, module, &mut r, 1);
     if !fields.is_empty() {
@@ -108,6 +111,8 @@ pub(super) fn new_decl(
             helpers,
             refs: &mut refs,
             body: &mut body,
+            resolve_fns: &mut resolve_fns,
+            multi,
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 1, &r);
@@ -318,7 +323,8 @@ pub(super) fn new_decl(
             params = params.join(", "),
         )
     };
-    Decl::raw_with(text, refs)
+    resolve_fns.push(Decl::raw_with(text, refs));
+    resolve_fns
 }
 
 /// The unexported name of the constructor variant carrying the transport seam:

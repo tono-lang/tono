@@ -486,6 +486,40 @@ type ClientAPI interface {
 
 var _ ClientAPI = (*Client)(nil)
 
+// resolveSettingClientName resolves the client_name construction value.
+func resolveSettingClientName(with *string) string {
+	if with != nil {
+		return *with
+	}
+	return "demo"
+}
+
+// resolveSettingEndpointVersion resolves the endpoint_version construction value.
+func resolveSettingEndpointVersion() string {
+	if v, ok := os.LookupEnv("ENDPOINT_VERSION"); ok && v != "" {
+		var parsed string
+		parsed = v
+		return parsed
+	}
+	return "v2"
+}
+
+// resolveSettingTimeout resolves the timeout construction value.
+func resolveSettingTimeout(with *support.Duration) support.Duration {
+	if with != nil {
+		return *with
+	}
+	return support.Duration("10s")
+}
+
+// resolveSettingMaxRetries resolves the max_retries construction value.
+func resolveSettingMaxRetries(with *int32) int32 {
+	if with != nil {
+		return *with
+	}
+	return int32(3)
+}
+
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, client_init on top (bespoke wins),
 // then the declared validation.
@@ -498,21 +532,13 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 
 	s.APIKey = apiKey
 
-	if w.clientName != nil {
-		s.ClientName = *w.clientName
-	} else {
-		s.ClientName = "demo"
-	}
+	s.ClientName = resolveSettingClientName(w.clientName)
 
 	s.ClientKey = casing.StrUpperSnake(strings.TrimSpace(s.ClientName))
 
 	s.EndpointEnv = "ENDPOINT_" + s.ClientKey + "_V2"
 
-	if v, ok := os.LookupEnv("ENDPOINT_VERSION"); ok && v != "" {
-		s.EndpointVersion = v
-	} else {
-		s.EndpointVersion = "v2"
-	}
+	s.EndpointVersion = resolveSettingEndpointVersion()
 
 	var endpointV1Err error
 	if v, ok := os.LookupEnv("ENDPOINT"); ok && v != "" {
@@ -548,17 +574,9 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		}
 	}
 
-	if w.timeout != nil {
-		s.Timeout = *w.timeout
-	} else {
-		s.Timeout = support.Duration("10s")
-	}
+	s.Timeout = resolveSettingTimeout(w.timeout)
 
-	if w.maxRetries != nil {
-		s.MaxRetries = *w.maxRetries
-	} else {
-		s.MaxRetries = int32(3)
-	}
+	s.MaxRetries = resolveSettingMaxRetries(w.maxRetries)
 
 	{
 		var composed conf

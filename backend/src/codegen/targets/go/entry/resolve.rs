@@ -11,6 +11,11 @@ use crate::codegen::entries::plan::{self, Cond, Emitter, Leaf};
 
 /// The Go resolution emitter: holds the entry model and collects imports as the
 /// plan is built. `body` receives the rendered plan for each field.
+/// `resolve_fns` collects each top-level field's standalone resolver function
+/// (see [`Emitter::resolve_fn_call`]); the caller flushes it into the entry's
+/// own decls once every field is built. `multi` names those functions with
+/// the entry's own prefix in a multi-entry module, matching every other
+/// per-entry companion.
 pub(super) struct Resolver<'a, 'b> {
     pub(super) entry: &'a EntryModel<'a>,
     pub(super) module: &'a Module,
@@ -18,11 +23,32 @@ pub(super) struct Resolver<'a, 'b> {
     pub(super) helpers: &'b mut Helpers,
     pub(super) refs: &'b mut Vec<Symbol>,
     pub(super) body: &'b mut String,
+    pub(super) resolve_fns: &'b mut Vec<Decl>,
+    pub(super) multi: bool,
 }
 
 impl Resolver<'_, '_> {
     fn import(&mut self, name: &str, module: &str) {
         self.refs.push(import(name, module));
+    }
+
+    /// The name of a top-level field's standalone resolver function,
+    /// entry-prefixed only in a multi-entry module (matching every other
+    /// per-entry companion name, e.g. `Names::new_fn`).
+    fn resolve_fn_name(&self, field: &EntryField) -> String {
+        // "Setting" disambiguates from the shared per-op helpers named after
+        // a field-shaped concept directly (`resolveMaxRetries`,
+        // `resolveTimeoutMs`): a field named `max_retries` would otherwise
+        // collide with the unrelated retry-count helper.
+        if self.multi {
+            format!(
+                "resolveSetting{}{}",
+                pascal(self.entry.name),
+                pascal(&field.name)
+            )
+        } else {
+            format!("resolveSetting{}", pascal(&field.name))
+        }
     }
 
     /// [`as_string`] plus the fmt import its non-string spelling needs.
@@ -339,6 +365,68 @@ impl Emitter for Resolver<'_, '_> {
             }
         }
         out
+    }
+
+    /// A top-level guaranteed field's chain as a standalone function: each
+    /// source is an unconditional early-return guard in priority order, so
+    /// there is no `else` to spell at all (a later guard is simply never
+    /// reached once an earlier one returns) and no set-flag either. `@with`
+    /// reads off a function parameter, not the constructor's own `w` carrier,
+    /// so the function has no free variable tying it to one call site. Every
+    /// import a leaf spelling pulls in (`self.import`, via `env_parse`) lands
+    /// on this function's own declaration, not the constructor's, since it is
+    /// the only place the import is actually used.
+    fn resolve_fn_call(&mut self, field: &EntryField, dest: &str) -> String {
+        let name = self.resolve_fn_name(field);
+        let has_with = field.sources.iter().any(|s| matches!(s, Source::With));
+        let ty = go_type(&field.target);
+        let before = self.refs.len();
+        // The field's own type symbol is normally pushed once, up front, by
+        // the constructor's own `push_type_symbols` sweep over every declared
+        // field; that predates this function's own `before` mark, so it has
+        // to be pushed again here for the split-off below to actually catch
+        // it and land it on this decl instead of the constructor's.
+        push_type_symbols(&field.target, self.refs);
+        let mut body = String::new();
+        for source in &field.sources {
+            match source {
+                Source::With => {
+                    body.push_str("\tif with != nil {\n\t\treturn *with\n\t}\n");
+                }
+                Source::Env(name) => {
+                    let lookup = self.env_lookup(name);
+                    let label = self.env_label(name);
+                    let parse = self.env_parse(field, "parsed", &label);
+                    body.push_str(&format!(
+                        "\tif v, ok := {lookup}; ok && v != \"\" {{\n\t\tvar parsed {ty}\n{parse}\n\t\treturn parsed\n\t}}\n",
+                        parse = plan::nest("\t\t", &parse, 1),
+                    ));
+                }
+                Source::Default(v) => {
+                    body.push_str(&format!("\treturn {}\n", literal(&field.target, v)));
+                }
+                Source::Arg => {}
+            }
+        }
+        let fn_refs: Vec<Symbol> = self.refs.split_off(before);
+        let param = if has_with {
+            format!("with *{ty}")
+        } else {
+            String::new()
+        };
+        self.resolve_fns.push(Decl::raw_with(
+            format!(
+                "// {name} resolves the {field} construction value.\nfunc {name}({param}) {ty} {{\n{body}}}",
+                field = field.name,
+            ),
+            fn_refs,
+        ));
+        let arg = if has_with {
+            format!("w.{}", camel(&field.name))
+        } else {
+            String::new()
+        };
+        format!("{dest} = {name}({arg})")
     }
 
     fn switch_header(&self, subject: &str) -> String {

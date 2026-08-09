@@ -63,6 +63,28 @@ export interface ClientConfig {
   maxRetries?: number;
 }
 
+function resolveSettingEndpoint(): string {
+  {
+    const v = readEnv("PAYMENTS_ENDPOINT");
+    if (v !== undefined) {
+      let parsed: string;
+      parsed = v;
+      return parsed;
+    }
+  }
+  return "https://api.payments.example.com";
+}
+
+function resolveSettingTimeout(withValue: Duration | undefined): Duration {
+  if (withValue !== undefined) return withValue;
+  return "10s" as Duration;
+}
+
+function resolveSettingMaxRetries(withValue: number | undefined): number {
+  if (withValue !== undefined) return withValue;
+  return 2;
+}
+
 // The payments SDK entry: the construction surface and its operations.
 // Client is the generated SDK client the client entry declares. The
 // constructor takes the @arg values positionally and the @with values as a
@@ -83,24 +105,11 @@ export class Client {
 
     s.apiKey = apiKey;
 
-    const v = readEnv("PAYMENTS_ENDPOINT");
-    if (v !== undefined) {
-      s.endpoint = v;
-    } else {
-      s.endpoint = "https://api.payments.example.com";
-    }
+    s.endpoint = resolveSettingEndpoint();
 
-    if (config.timeout !== undefined) {
-      s.timeout = config.timeout;
-    } else {
-      s.timeout = "10s" as Duration;
-    }
+    s.timeout = resolveSettingTimeout(config.timeout);
 
-    if (config.maxRetries !== undefined) {
-      s.maxRetries = config.maxRetries;
-    } else {
-      s.maxRetries = 2;
-    }
+    s.maxRetries = resolveSettingMaxRetries(config.maxRetries);
 
     const violations: Violation[] = [];
     if ([...s.apiKey].length < 1) {

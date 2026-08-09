@@ -234,7 +234,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         let mut own = vec![settings_interface(entry, &n, config, module)];
         own.extend(config_object_interface(entry, &n, config, module));
         own.extend(impl_op::seam_decls(entry, &n, module, &bound, has_tests));
-        own.push(class_decl(
+        own.extend(class_decl(
             entry,
             &n,
             module,
@@ -265,8 +265,9 @@ fn class_decl(
     helpers: &mut Helpers,
     multi: bool,
     has_tests: bool,
-) -> Decl {
+) -> Vec<Decl> {
     let en = error_names();
+    let mut resolve_fns: Vec<Decl> = Vec::new();
     let mut refs = vec![
         support_symbol("ClientOptions"),
         module_symbol(&en.transport, module),
@@ -321,6 +322,8 @@ fn class_decl(
         config,
         helpers,
         body: &mut body,
+        resolve_fns: &mut resolve_fns,
+        multi,
     };
     // The constructor is nested one level deeper here than in Go's flat
     // function (a class body wraps it), so the plan renders one indent unit
@@ -346,6 +349,8 @@ fn class_decl(
             config,
             helpers,
             body: &mut body,
+            resolve_fns: &mut resolve_fns,
+            multi,
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 2, &r);
@@ -595,7 +600,8 @@ fn class_decl(
     if text.contains(&format!("new {}(", en.config)) {
         refs.push(module_symbol(&en.config, module));
     }
-    Decl::raw_with(text, refs)
+    resolve_fns.push(Decl::raw_with(text, refs));
+    resolve_fns
 }
 
 /// One operation method: builds the request from the resolved wire binding,

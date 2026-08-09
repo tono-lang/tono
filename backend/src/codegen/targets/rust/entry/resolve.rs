@@ -37,6 +37,13 @@ pub(super) struct Resolver<'a, 'b> {
     pub(super) arg_prefix: &'static str,
     pub(super) body: &'b mut String,
     pub(super) refs: &'b mut Vec<Symbol>,
+    /// Each top-level field's standalone resolver function (see
+    /// [`Emitter::resolve_fn_call`]), collected here and flushed into the
+    /// entry's own decls once every field is built.
+    pub(super) resolve_fns: &'b mut Vec<Decl>,
+    /// Entry-prefixes a resolver function's name in a multi-entry module,
+    /// matching every other per-entry companion.
+    pub(super) multi: bool,
 }
 
 /// An expression casting a Rust `String` into the field's target type. Only
@@ -93,6 +100,21 @@ impl Resolver<'_, '_> {
             self.arg_prefix,
             arg_snake(&field.name, &field.traits, self.lang())
         )
+    }
+
+    /// The name of a top-level field's standalone resolver function,
+    /// entry-prefixed only in a multi-entry module (matching every other
+    /// per-entry companion name).
+    fn resolve_fn_name(&self, field: &EntryField) -> String {
+        // "setting" disambiguates from the shared per-op helpers named after
+        // a field-shaped concept directly (`resolve_max_retries`): a field
+        // named `max_retries` would otherwise collide with the unrelated
+        // retry-count helper.
+        if self.multi {
+            format!("resolve_setting_{}_{}", snake(self.entry.name), field.name)
+        } else {
+            format!("resolve_setting_{}", field.name)
+        }
     }
 
     /// The `@with` accessor as an owned `Option`: a `Copy`-typed option
@@ -473,6 +495,70 @@ impl Emitter for Resolver<'_, '_> {
             }
         }
         out
+    }
+
+    /// A top-level guaranteed field's chain as a standalone function: each
+    /// source is an unconditional early-return guard in priority order, so
+    /// there is no `else` to spell (a later guard is simply never reached
+    /// once an earlier one returns) and no set-flag either. `@with` reads off
+    /// a function parameter, not the builder's own field, so the function has
+    /// no free variable tying it to one call site. Every import a leaf
+    /// spelling pulls in (`env_parse`, via `self.refs`) lands on this
+    /// function's own declaration, not the constructor's, since it is the
+    /// only place the import is actually used.
+    fn resolve_fn_call(&mut self, field: &EntryField, dest: &str) -> String {
+        let name = self.resolve_fn_name(field);
+        let has_with = field.sources.iter().any(|s| matches!(s, Source::With));
+        let ty = rust_type(&field.target);
+        let before = self.refs.len();
+        let mut body = String::new();
+        for source in &field.sources {
+            match source {
+                Source::With => {
+                    body.push_str("if let Some(v) = with {\n    return v;\n}\n");
+                }
+                Source::Env(name) => {
+                    let lookup = self.env_lookup(name);
+                    let label = self.env_label(name);
+                    let parse = self.env_parse(field, "parsed", &label);
+                    body.push_str(&format!(
+                        "if let Some(v) = {lookup} {{\n    let parsed: {ty};\n{parse}\n    return parsed;\n}}\n",
+                        parse = indent(&parse, 1),
+                    ));
+                }
+                Source::Default(v) => {
+                    body.push_str(&format!("{}\n", literal(&field.target, v, self.module)));
+                }
+                Source::Arg => {}
+            }
+        }
+        let fn_refs: Vec<Symbol> = self.refs.split_off(before);
+        let param = if has_with {
+            format!("with: Option<{ty}>")
+        } else {
+            String::new()
+        };
+        let decl = Decl::raw_with(
+            format!(
+                "/// Resolves the {field} construction value.\nfn {name}({param}) -> {ty} {{\n{body}}}",
+                field = field.name,
+                body = indent(&body, 1),
+            ),
+            fn_refs,
+        );
+        // `resolution_body` runs twice per entry (the builder's `self.`-prefixed
+        // reads and the plain `new`'s bare ones), but only one of the two ever
+        // makes it into the file; both share the same `resolve_fns` sink, so
+        // the identical second declaration is dropped rather than duplicated.
+        if !self.resolve_fns.contains(&decl) {
+            self.resolve_fns.push(decl);
+        }
+        let arg = if has_with {
+            self.arg_take(field)
+        } else {
+            String::new()
+        };
+        format!("{dest} = {name}({arg});")
     }
 
     /// The whole match reduces to a comparison of the Display-stringified

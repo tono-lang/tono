@@ -140,7 +140,9 @@ fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
     ));
     // The override lands after source resolution and right before the
     // options freeze, so the test transport wins over anything bespoke set.
-    let resolved = text.find("s.client_name = v;").expect("source resolution");
+    let resolved = text
+        .find("s.client_name = resolve_setting_client_name(")
+        .expect("source resolution");
     let over = text
         .find("if let Some(t) = transport {")
         .expect("transport override");

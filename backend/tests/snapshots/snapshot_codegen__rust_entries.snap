@@ -464,6 +464,40 @@ pub struct Client {
     pub(crate) random: RandomFn,
 }
 
+/// Resolves the client_name construction value.
+fn resolve_setting_client_name(with: Option<String>) -> String {
+    if let Some(v) = with {
+        return v;
+    }
+    "demo".to_string()
+}
+
+/// Resolves the endpoint_version construction value.
+fn resolve_setting_endpoint_version() -> String {
+    if let Some(v) = read_env("ENDPOINT_VERSION") {
+        let parsed: String;
+        parsed = v;
+        return parsed;
+    }
+    "v2".to_string()
+}
+
+/// Resolves the timeout construction value.
+fn resolve_setting_timeout(with: Option<Duration>) -> Duration {
+    if let Some(v) = with {
+        return v;
+    }
+    Duration("10s".to_string())
+}
+
+/// Resolves the max_retries construction value.
+fn resolve_setting_max_retries(with: Option<i32>) -> i32 {
+    if let Some(v) = with {
+        return v;
+    }
+    3
+}
+
 pub struct ClientBuilder {
     api_key: String,
     client_name: Option<String>,
@@ -497,18 +531,10 @@ impl ClientBuilder {
             headers: std::collections::HashMap::new(),
         };
             s.api_key = self.api_key;
-            if let Some(v) = self.client_name.clone() {
-                s.client_name = v;
-            } else {
-                s.client_name = "demo".to_string();
-            }
+            s.client_name = resolve_setting_client_name(self.client_name.clone());
             s.client_key = str_upper_snake((format!("{}", s.client_name)).trim().to_string());
             s.endpoint_env = format!("ENDPOINT_{}_V2", s.client_key);
-            if let Some(v) = read_env("ENDPOINT_VERSION") {
-                s.endpoint_version = v;
-            } else {
-                s.endpoint_version = "v2".to_string();
-            }
+            s.endpoint_version = resolve_setting_endpoint_version();
             let mut endpoint_v1_err: Option<ConfigError> = None;
             if let Some(v) = read_env("ENDPOINT") {
                 s.endpoint_v1 = v;
@@ -543,16 +569,8 @@ impl ClientBuilder {
                 }
             }
             }
-            if let Some(v) = self.timeout.clone() {
-                s.timeout = v;
-            } else {
-                s.timeout = Duration("10s".to_string());
-            }
-            if let Some(v) = self.max_retries {
-                s.max_retries = v;
-            } else {
-                s.max_retries = 3;
-            }
+            s.timeout = resolve_setting_timeout(self.timeout.clone());
+            s.max_retries = resolve_setting_max_retries(self.max_retries);
             {
                 let mut composed = Conf { api_key: String::new(), region: String::new(), };
                 composed.api_key = (s.api_key).clone();

@@ -61,10 +61,13 @@ fn the_construction_surface_is_new_options_settings_and_the_mock_interface() {
 fn the_resolution_follows_the_declared_chains() {
     let module = fixture_module();
     let serde = entry_text(&module);
-    // @arg lands positionally; @with falls back to @default.
+    // @arg lands positionally; @with falls back to @default through a
+    // standalone resolver function.
     assert!(serde.contains("s.APIKey = apiKey"));
-    assert!(serde.contains("if w.clientName != nil {"));
-    assert!(serde.contains("s.ClientName = \"demo\""));
+    assert!(serde.contains("func resolveSettingClientName(with *string) string {"));
+    assert!(serde.contains("if with != nil {"));
+    assert!(serde.contains("return \"demo\""));
+    assert!(serde.contains("s.ClientName = resolveSettingClientName(w.clientName)"));
     // @format with @str transforms.
     assert!(serde.contains("s.ClientKey = casing.StrUpperSnake(strings.TrimSpace(s.ClientName))"));
     assert!(serde.contains("s.EndpointEnv = \"ENDPOINT_\" + s.ClientKey + \"_V2\""));
@@ -131,6 +134,10 @@ fn a_multi_entry_module_prefixes_the_colliding_companions() {
         serde.contains("func NewClient(apiKey string, opts ...ClientOption) (*Client, error) {")
     );
     assert!(serde.contains("func NewAdmin(apiKey string, opts ...AdminOption) (*Admin, error) {"));
+    // A standalone resolver function is entry-prefixed too, so the two
+    // entries' identically-named fields don't collide.
+    assert!(serde.contains("func resolveSettingClientClientName(with *string) string {"));
+    assert!(serde.contains("func resolveSettingAdminClientName(with *string) string {"));
 }
 
 /// The full typed wire binding the fixture ops carry under test: a labeled
@@ -647,8 +654,10 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(serde.contains("strconv.ParseFloat(v, 64)"));
     assert!(serde.contains("time.ParseDuration(v)"));
     assert!(serde.contains("case \"true\", \"1\":"));
-    // An enum field is a branded string: cast at the boundary.
-    assert!(serde.contains("s.Mode = Mode(v)"));
+    // An enum field is a branded string: cast at the boundary, inside its own
+    // standalone resolver function.
+    assert!(serde.contains("parsed = Mode(v)"));
+    assert!(serde.contains("s.Mode = resolveSettingMode()"));
     // Guaranteed and error-tracked dynamic env names both spell one balanced run.
     assert!(serde.contains("os.LookupEnv(s.SureName)"));
     assert!(serde.contains(

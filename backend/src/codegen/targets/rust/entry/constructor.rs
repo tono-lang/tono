@@ -74,6 +74,7 @@ pub(super) fn construction_decls(
 ) -> Vec<Decl> {
     let mut decls = Vec::new();
     let mut refs = vec![];
+    let mut resolve_fns: Vec<Decl> = Vec::new();
     let with_fields = entry.with_fields();
     let args = entry.args();
     let timeouts = timeout_fields(entry);
@@ -121,11 +122,32 @@ pub(super) fn construction_decls(
         test_seam,
     };
     let body = resolution_body(
-        entry, n, module, config, bound, helpers, multi, "self.", &ctx, &mut refs,
+        entry,
+        n,
+        module,
+        config,
+        bound,
+        helpers,
+        multi,
+        "self.",
+        &ctx,
+        &mut refs,
+        &mut resolve_fns,
     );
     let plain_body = resolution_body(
-        entry, n, module, config, bound, helpers, multi, "", &ctx, &mut refs,
+        entry,
+        n,
+        module,
+        config,
+        bound,
+        helpers,
+        multi,
+        "",
+        &ctx,
+        &mut refs,
+        &mut resolve_fns,
     );
+    decls.extend(resolve_fns);
 
     if with_fields.is_empty() {
         // No @with fields: a builder would have nothing to configure, so the
@@ -303,6 +325,7 @@ fn resolution_body(
     arg_prefix: &'static str,
     ctx: &BodyCtx<'_>,
     refs: &mut Vec<Symbol>,
+    resolve_fns: &mut Vec<Decl>,
 ) -> String {
     let mut body = String::new();
 
@@ -332,6 +355,8 @@ fn resolution_body(
             arg_prefix,
             body: &mut body,
             refs,
+            resolve_fns,
+            multi,
         };
         let fields = plan::emit_fields(entry, module, &mut r, 1);
         if !fields.is_empty() {
@@ -360,6 +385,8 @@ fn resolution_body(
             arg_prefix,
             body: &mut body,
             refs,
+            resolve_fns,
+            multi,
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 0, &r);
