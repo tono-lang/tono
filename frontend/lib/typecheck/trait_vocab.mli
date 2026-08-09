@@ -3,6 +3,18 @@
    Namespaced traits such as @str::trim keep their own catalogs and are
    excluded here. *)
 
+(* The groups themselves, exposed so a position checker can classify a decl
+   trait by who reads it without a second hand-written list of names (see
+   check_trait_positions.ml). *)
+val constraints : string list
+val members : string list
+val sources : string list
+val entry_fields : string list
+val http : string list
+val protocol : string list
+val operations : string list
+val surface : string list
+
 (* Every known bare trait name. Editors render their vocabulary from this, so
    the compiler and the completion list cannot drift. *)
 val known : string list

@@ -102,3 +102,7 @@ val test_binding_duplicate : string
    @errorCode from different paths (see error_codes.ml for the rule). *)
 val error_code_paths_diverge : string
 val http_code_invalid : string
+
+(* A known trait written where nothing reads it (see error_codes.ml for the
+   rule). *)
+val trait_position_invalid : string

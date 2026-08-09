@@ -10,7 +10,11 @@ let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 let find_trait name (traits : Ast.trait list) : Ast.trait option =
   List.find_opt (fun (t : Ast.trait) -> String.equal t.tname name) traits
 
-let source_names = [ "arg"; "with"; "env"; "default" ]
+(* [Trait_vocab.sources] plus [default]: a member with no @arg/@with/@env
+   still resolves from its default, so the default counts as a source here
+   even though it lives in [Trait_vocab.members] (it also governs plain wire
+   members, which have no scope to resolve against). *)
+let source_names = Trait_vocab.sources @ [ "default" ]
 
 let source_traits (m : Ast.member) : Ast.trait list =
   List.filter
@@ -182,7 +186,7 @@ let member_refs (m : Ast.member) : (string list * Span.span) list =
   member_trait_refs m
   @ match m.mmatch with Some fm -> of_match fm | None -> []
 
-let protocol_trait_names = [ "header"; "query"; "body"; "timeout"; "retry" ]
+let protocol_trait_names = Trait_vocab.protocol
 
 (* The field references an operation's protocol traits consume: the @http
    endpoint and path template, @header/@query keys and values, @body's

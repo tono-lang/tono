@@ -616,6 +616,94 @@ let retired_http_binding_traits_point_at_replacement () =
     (List.exists (contains "use @body")
        (hint_of {|struct s { a: string @httpPayload }|}))
 
+(* ── Trait position (TC0069) ───────────────────────────────────────────── *)
+
+(* Filtered to TC0069 for the same reason [unknown_codes] is: the snippets may
+   raise unrelated diagnostics, and the claim here is only about position. *)
+let position_codes src = List.filter (fun c -> c = "TC0069") (codes src)
+
+(* A member-only trait written as the shape's own trait is a real name that
+   nothing reads there: the constraint checker only ever walks a lowered
+   member's constraints, so it never sees a decl-level @range. *)
+let member_only_trait_on_a_decl_is_reported () =
+  Alcotest.(check (list string))
+    "@range on the struct itself" [ "TC0069" ]
+    (codes {|@range(min: 0) struct s { a: i64 }|});
+  Alcotest.(check (list string))
+    "@required on the struct itself" [ "TC0069" ]
+    (codes {|@required struct s { a: i64 }|});
+  Alcotest.(check (list string))
+    "@arg on the struct itself" [ "TC0069" ]
+    (position_codes {|@arg struct s { a: string @arg }|});
+  Alcotest.(check (list string))
+    "@format on the struct itself" [ "TC0069" ]
+    (position_codes {|@format("{x}") struct s { a: string @arg }|})
+
+(* An op-only trait written on a plain struct or union is dropped the same
+   way: the HTTP binding and the per-request protocol knobs read an op's own
+   traits, never a struct's. (The error taxonomy is exempt: @status/@errorCode
+   are legal on a declared error shape, not just an op; see
+   check_trait_positions.ml.) *)
+let op_only_trait_on_a_non_op_is_reported () =
+  Alcotest.(check (list string))
+    "@http on a union" [ "TC0069" ]
+    (codes {|@http(method: "get", path: "/x") union u { bare }|});
+  Alcotest.(check (list string))
+    "@timeout on an enum" [ "TC0069" ]
+    (codes {|@timeout(1000) enum e { x, y }|})
+
+let op_traits_on_an_op_are_silent () =
+  Alcotest.(check (list string))
+    "http surface on an op" []
+    (position_codes
+       {|@http(method: "get", path: "/x/{id}") @async @retryable @errors([])
+         op o(): i64|});
+  Alcotest.(check (list string))
+    "protocol knobs on an entry op" []
+    (position_codes
+       {|struct s {
+           op fetch(): i64 @http(method: "get", path: "/x") @timeout(1000) @retry(3)
+         }|})
+
+let surface_traits_are_always_silent () =
+  Alcotest.(check (list string))
+    "doc, deprecated, rename, wire, discriminator on every decl kind" []
+    (position_codes
+       {|@doc("d") @deprecated @wire("s") struct s { a: i64 }
+         @doc("u") @discriminator("kind") union un { bare }
+         @doc("e") enum e { x, y }
+         @doc("o") @rename("go") op o(): i64|})
+
+(* ── Vocabulary drift ──────────────────────────────────────────────────── *)
+
+(* [Check_trait_repeats.non_repeatable] classifies repeatability, a property
+   the groups in [Trait_vocab] don't carry, so it stays its own hand-written
+   list. This does not gate it against drift outright, but it does catch the
+   half that would otherwise fail silently: a name here that fell out of the
+   vocabulary (renamed or retired) would still compile, just stop meaning
+   anything. *)
+let non_repeatable_is_a_subset_of_the_vocabulary () =
+  let unknown =
+    List.filter
+      (fun name -> not (Trait_vocab.is_known name))
+      Check_trait_repeats.non_repeatable
+  in
+  Alcotest.(check (list string)) "every non-repeatable name is known" [] unknown
+
+(* [Trait_vocab.known] is the concatenation of its groups; a name copy-pasted
+   into two groups would silently double up in [known] without breaking
+   anything at the point of the mistake, and [Check_trait_positions] would
+   then apply the wrong position rule to it. *)
+let known_has_no_duplicate_membership () =
+  let seen = Hashtbl.create 32 in
+  let dups = ref [] in
+  List.iter
+    (fun name ->
+      if Hashtbl.mem seen name then dups := name :: !dups
+      else Hashtbl.add seen name ())
+    Trait_vocab.known;
+  Alcotest.(check (list string)) "no trait in two groups" [] !dups
+
 let () =
   Alcotest.run "typecheck"
     [
@@ -761,5 +849,23 @@ let () =
             unknown_trait_suggests_the_nearest_name;
           Alcotest.test_case "retired http binding traits" `Quick
             retired_http_binding_traits_point_at_replacement;
+        ] );
+      ( "trait-position",
+        [
+          Alcotest.test_case "member-only trait on a decl" `Quick
+            member_only_trait_on_a_decl_is_reported;
+          Alcotest.test_case "op-only trait on a non-op" `Quick
+            op_only_trait_on_a_non_op_is_reported;
+          Alcotest.test_case "op traits on an op are silent" `Quick
+            op_traits_on_an_op_are_silent;
+          Alcotest.test_case "surface traits always silent" `Quick
+            surface_traits_are_always_silent;
+        ] );
+      ( "vocabulary-drift",
+        [
+          Alcotest.test_case "non-repeatable names are known" `Quick
+            non_repeatable_is_a_subset_of_the_vocabulary;
+          Alcotest.test_case "no trait in two groups" `Quick
+            known_has_no_duplicate_membership;
         ] );
     ]

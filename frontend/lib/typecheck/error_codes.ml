@@ -143,3 +143,10 @@ let error_code_paths_diverge = "TC0067"
    into the "no code declared" default instead of the exact match the author
    wrote. *)
 let http_code_invalid = "TC0068"
+
+(* A known trait written where nothing reads it: a member-scoped trait
+   (@range, @required, @arg, @format, ...) on a decl's own shape-level
+   traits, or an op-scoped trait (@http, @header, @async, ...) on a decl that
+   is not an op. The name is real, so [unknown_trait] stays silent; the value
+   is still dropped with nothing to say so. *)
+let trait_position_invalid = "TC0069"

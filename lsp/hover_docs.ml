@@ -14,9 +14,12 @@ module Entry_scope = Tono_frontend.Entry_scope
 
 (* The trait contracts surfaced on hover, offered after `@`, and expanded by
    signature help: one table, three consumers, so the documented keys can
-   never drift between them. The frontend has no central trait registry (each
-   checker pattern-matches its own keys); keep entries in step with the
-   checkers that read them (check_http, check_constraints, protocol_http). *)
+   never drift between them. The frontend's central trait registry,
+   [Trait_vocab.known], names the bare traits the compiler acts on but carries
+   no prose, so this table cannot be derived from it outright; a test
+   ([trait_docs_cover_the_compiler_vocabulary]) instead checks the two stay in
+   step, in both directions. Keep entries in step with the checkers that read
+   them (check_http, check_constraints, protocol_http). *)
 type trait_info = { ti_doc : string; ti_keys : (string * string) list }
 
 let trait_registry : (string * trait_info) list =
