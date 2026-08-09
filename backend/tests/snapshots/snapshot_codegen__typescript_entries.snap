@@ -337,6 +337,33 @@ export interface ClientConfig {
   maxRetries?: number;
 }
 
+function resolveSettingClientName(withValue: string | undefined): string {
+if (withValue !== undefined) return withValue;
+return "demo";
+}
+
+function resolveSettingEndpointVersion(): string {
+{
+  const v = readEnv("ENDPOINT_VERSION");
+  if (v !== undefined) {
+    let parsed: string;
+    parsed = v;
+    return parsed;
+  }
+}
+return "v2";
+}
+
+function resolveSettingTimeout(withValue: Duration | undefined): Duration {
+if (withValue !== undefined) return withValue;
+return "10s" as Duration;
+}
+
+function resolveSettingMaxRetries(withValue: number | undefined): number {
+if (withValue !== undefined) return withValue;
+return 3;
+}
+
 // Client is the generated SDK client the client entry declares. The
 // constructor takes the @arg values positionally and the @with values as a
 // config object; construction resolves the declared sources, runs the
@@ -350,22 +377,13 @@ export class Client {
 
     s.apiKey = apiKey;
 
-    if (config.clientName !== undefined) {
-      s.clientName = config.clientName;
-    } else {
-      s.clientName = "demo";
-    }
+    s.clientName = resolveSettingClientName(config.clientName);
 
     s.clientKey = strUpperSnake((s.clientName).trim());
 
     s.endpointEnv = "ENDPOINT_" + s.clientKey + "_V2";
 
-    const v = readEnv("ENDPOINT_VERSION");
-    if (v !== undefined) {
-      s.endpointVersion = v;
-    } else {
-      s.endpointVersion = "v2";
-    }
+    s.endpointVersion = resolveSettingEndpointVersion();
 
     let endpointV1Err: ConfigError | undefined;
     {
@@ -413,17 +431,9 @@ export class Client {
     }
     }
 
-    if (config.timeout !== undefined) {
-      s.timeout = config.timeout;
-    } else {
-      s.timeout = "10s" as Duration;
-    }
+    s.timeout = resolveSettingTimeout(config.timeout);
 
-    if (config.maxRetries !== undefined) {
-      s.maxRetries = config.maxRetries;
-    } else {
-      s.maxRetries = 3;
-    }
+    s.maxRetries = resolveSettingMaxRetries(config.maxRetries);
 
     {
       const composed = {} as Conf;

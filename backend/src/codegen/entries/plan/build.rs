@@ -8,7 +8,9 @@
 
 use super::super::{EntryModel, FieldShape};
 use super::{arm_sources, format_absent_deps, string_like, Emitter, Leaf, Stmt};
-use crate::ir::{ArmValue, EntryField, Module, Prim, Select, Shape, ShapeKind, Source, Tref};
+use crate::ir::{
+    ArmValue, EntryField, EnvName, Module, Prim, Select, Shape, ShapeKind, Source, Tref,
+};
 
 fn has_arg(field: &EntryField) -> bool {
     field.sources.iter().any(|s| matches!(s, Source::Arg))
@@ -232,7 +234,11 @@ fn build_format(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, des
 /// sharing the sequential-fallback shape.
 fn build_chain(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, dest: &str) -> Stmt {
     if entry.is_guaranteed(field) {
-        Stmt::Leaf(Leaf(e.chain_guaranteed(field, dest)))
+        if extraction_blocked(field) {
+            Stmt::Leaf(Leaf(e.chain_guaranteed(field, dest)))
+        } else {
+            Stmt::Leaf(Leaf(e.resolve_fn_call(field, dest)))
+        }
     } else {
         let err = field.name.clone();
         seq(vec![
@@ -240,6 +246,47 @@ fn build_chain(field: &EntryField, entry: &EntryModel, e: &mut dyn Emitter, dest
             chain_sequential(field, e, dest, &err),
         ])
     }
+}
+
+/// Whether an `@env` source of this field blocks extraction into a
+/// standalone resolver function: a name derived from a sibling field
+/// (`EnvName::Field`) reads that sibling's already-resolved value, which a
+/// standalone function has no access to without a second parameter; a
+/// fallible parse (see [`env_parse_may_fail`]) fails through a "return the
+/// error" statement built for the constructor's own `(value, error)`/
+/// `Result<Self, _>` return shape, which does not fit a function returning a
+/// bare value. Both stay on the inline cascade every target already emits
+/// correctly.
+fn extraction_blocked(field: &EntryField) -> bool {
+    field.sources.iter().any(|s| match s {
+        Source::Env(EnvName::Field(_)) => true,
+        Source::Env(_) => env_parse_may_fail(&field.target),
+        _ => false,
+    })
+}
+
+/// Whether a target type's `@env` parse (see each target's own `env_parse`)
+/// can fail: every target shares the same fallible set (a typed parse with a
+/// range or format to reject) and the same infallible catch-all (a plain
+/// string-shaped cast, never rejected).
+fn env_parse_may_fail(t: &Tref) -> bool {
+    matches!(
+        t,
+        Tref::Prim(
+            Prim::Bool
+                | Prim::I8
+                | Prim::I16
+                | Prim::I32
+                | Prim::I64
+                | Prim::U8
+                | Prim::U16
+                | Prim::U32
+                | Prim::U64
+                | Prim::Float
+                | Prim::Bytes
+                | Prim::Duration
+        )
+    )
 }
 
 /// A non-guaranteed chain: each source is a "still absent?" step. The first

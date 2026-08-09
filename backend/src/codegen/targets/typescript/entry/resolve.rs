@@ -14,12 +14,18 @@ use crate::codegen::entries::plan::{self, Cond, Emitter, Leaf};
 
 /// The TypeScript resolution emitter: holds the entry model and flags the
 /// shared helpers the leaves use. `body` receives the rendered plan per field.
+/// `resolve_fns` collects each top-level field's standalone resolver function
+/// (see [`Emitter::resolve_fn_call`]); the caller flushes it into the entry's
+/// own decls once every field is built. `multi` names those functions with
+/// the entry's own prefix in a multi-entry module.
 pub(super) struct Resolver<'a, 'b> {
     pub(super) entry: &'a EntryModel<'a>,
     pub(super) module: &'a Module,
     pub(super) config: &'a CasingConfig,
     pub(super) helpers: &'b mut Helpers,
     pub(super) body: &'b mut String,
+    pub(super) resolve_fns: &'b mut Vec<Decl>,
+    pub(super) multi: bool,
 }
 
 impl Resolver<'_, '_> {
@@ -32,6 +38,25 @@ impl Resolver<'_, '_> {
                 self.config
             )
         )
+    }
+
+    /// The name of a top-level field's standalone resolver function,
+    /// entry-prefixed only in a multi-entry module (matching every other
+    /// per-entry companion name).
+    fn resolve_fn_name(&self, field: &EntryField) -> String {
+        // "Setting" disambiguates from the shared per-op helpers named after
+        // a field-shaped concept directly (`resolveMaxRetries`,
+        // `resolveTimeoutMs`): a field named `max_retries` would otherwise
+        // collide with the unrelated retry-count helper.
+        if self.multi {
+            format!(
+                "resolveSetting{}{}",
+                pascal(self.entry.name),
+                pascal(&field.name)
+            )
+        } else {
+            format!("resolveSetting{}", pascal(&field.name))
+        }
     }
 
     /// Parse a raw env string `v` into the destination, by the declared type; a
@@ -328,6 +353,57 @@ impl Emitter for Resolver<'_, '_> {
     /// construction it does not fail today. Relative to column zero.
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String {
         self.chain_guaranteed_from(field, dest, 0)
+    }
+
+    /// A top-level guaranteed field's chain as a standalone function: each
+    /// source is an unconditional early-return guard in priority order, so
+    /// there is no `else` to spell (a later guard is simply never reached
+    /// once an earlier one returns) and no set-flag either. This also
+    /// sidesteps the narrowing limitation `chain_guaranteed_from` works around
+    /// for TypeScript's inline `@env` nesting: `readEnv` is bound to a
+    /// `const` and returned immediately, never read a second time. `@with`
+    /// reads off a function parameter, not the constructor's `config`
+    /// argument, so the function has no free variable tying it to one call
+    /// site.
+    fn resolve_fn_call(&mut self, field: &EntryField, dest: &str) -> String {
+        let name = self.resolve_fn_name(field);
+        let has_with = field.sources.iter().any(|s| matches!(s, Source::With));
+        let ty = ts_type(&field.target);
+        let mut body = String::new();
+        for source in &field.sources {
+            match source {
+                Source::With => {
+                    body.push_str("if (withValue !== undefined) return withValue;\n");
+                }
+                Source::Env(name) => {
+                    let lookup = self.env_lookup(name);
+                    let label = self.env_label(name);
+                    let parse = self.env_parse(field, "parsed", &label);
+                    body.push_str(&format!(
+                        "{{\n  const v = {lookup};\n  if (v !== undefined) {{\n    let parsed: {ty};\n{parse}\n    return parsed;\n  }}\n}}\n",
+                        parse = plan::nest("  ", &parse, 2),
+                    ));
+                }
+                Source::Default(v) => {
+                    body.push_str(&format!("return {};\n", literal(&field.target, v)));
+                }
+                Source::Arg => {}
+            }
+        }
+        let param = if has_with {
+            format!("withValue: {ty} | undefined")
+        } else {
+            String::new()
+        };
+        self.resolve_fns.push(Decl::raw(format!(
+            "function {name}({param}): {ty} {{\n{body}}}",
+        )));
+        let arg = if has_with {
+            self.with_access(field)
+        } else {
+            String::new()
+        };
+        format!("{dest} = {name}({arg});")
     }
 
     fn switch_header(&self, subject: &str) -> String {

@@ -450,6 +450,18 @@ pub trait Emitter {
     //     not shared. Each returns already-spelled statements the builders
     //     wrap into the tree. ---
     fn chain_guaranteed(&mut self, field: &EntryField, dest: &str) -> String;
+    /// A top-level guaranteed field's chain, spelled as a call to a standalone
+    /// private resolver function instead of [`Emitter::chain_guaranteed`]'s
+    /// inline cascade (still used by a config member or a match arm, where no
+    /// standalone function is worth naming). Returns the call-site assignment
+    /// (`dest = resolveField(..)`); the function declaration itself is a side
+    /// effect, collected wherever the implementor stashes it (each target's
+    /// `Resolver` owns a sink the entry's `emit` flushes into sibling decls
+    /// once every field is built). Only reached from [`build::build_chain`],
+    /// which excludes an `@env` name that reads a sibling field: that
+    /// dependency would have to become a second parameter, which is out of
+    /// scope for now, so the field stays on `chain_guaranteed`'s inline path.
+    fn resolve_fn_call(&mut self, field: &EntryField, dest: &str) -> String;
     /// The `@format` assignment itself (`dest = cast(part + part + ..)` with the
     /// `@str::*` pipeline folded in); the deferral guard around it is shared.
     fn format_assign(&mut self, field: &EntryField, dest: &str) -> String;

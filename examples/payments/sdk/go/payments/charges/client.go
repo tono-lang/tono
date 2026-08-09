@@ -67,6 +67,32 @@ type ClientAPI interface {
 
 var _ ClientAPI = (*Client)(nil)
 
+// resolveSettingEndpoint resolves the endpoint construction value.
+func resolveSettingEndpoint() string {
+	if v, ok := os.LookupEnv("PAYMENTS_ENDPOINT"); ok && v != "" {
+		var parsed string
+		parsed = v
+		return parsed
+	}
+	return "https://api.payments.example.com"
+}
+
+// resolveSettingTimeout resolves the timeout construction value.
+func resolveSettingTimeout(with *support.Duration) support.Duration {
+	if with != nil {
+		return *with
+	}
+	return support.Duration("10s")
+}
+
+// resolveSettingMaxRetries resolves the max_retries construction value.
+func resolveSettingMaxRetries(with *int32) int32 {
+	if with != nil {
+		return *with
+	}
+	return int32(2)
+}
+
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, client_init on top (bespoke wins),
 // then the declared validation.
@@ -86,23 +112,11 @@ func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...Cl
 
 	s.APIKey = apiKey
 
-	if v, ok := os.LookupEnv("PAYMENTS_ENDPOINT"); ok && v != "" {
-		s.Endpoint = v
-	} else {
-		s.Endpoint = "https://api.payments.example.com"
-	}
+	s.Endpoint = resolveSettingEndpoint()
 
-	if w.timeout != nil {
-		s.Timeout = *w.timeout
-	} else {
-		s.Timeout = support.Duration("10s")
-	}
+	s.Timeout = resolveSettingTimeout(w.timeout)
 
-	if w.maxRetries != nil {
-		s.MaxRetries = *w.maxRetries
-	} else {
-		s.MaxRetries = int32(2)
-	}
+	s.MaxRetries = resolveSettingMaxRetries(w.maxRetries)
 
 	violations := []Violation{}
 	if len([]rune(s.APIKey)) < 1 {

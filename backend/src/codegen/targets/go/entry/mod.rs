@@ -282,7 +282,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         let n = names(entry, multi);
         // The constructor comes right after the type (ADR-0031).
         let mut decls = surface::entry_type_decls(entry, &n, module, config, multi, &bound);
-        decls.push(new_decl(
+        decls.extend(new_decl(
             entry,
             &n,
             module,

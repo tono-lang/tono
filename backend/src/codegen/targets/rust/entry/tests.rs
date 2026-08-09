@@ -187,6 +187,11 @@ fn a_single_entry_with_arg_env_default_and_an_http_op_builds() {
     assert!(!out.contains("struct ClientBuilder"));
     assert!(out.contains("s.api_key = api_key;"));
     assert!(out.contains("read_env(\"CLIENT_NAME\")"));
+    // `resolution_body` runs once for the plain `new` and once for a builder
+    // variant that never ships (no @with fields here), both sharing the same
+    // `resolve_fns` sink; the standalone resolver function must still land
+    // exactly once in the file, not duplicated.
+    assert_eq!(out.matches("fn resolve_setting_client_name(").count(), 1);
     // The op is async (it carries a protocol binding) and its transport is
     // inline: the URL reads the typed endpoint field, the declared header
     // reads its typed field, the whole-body input serializes directly, and a
@@ -704,8 +709,10 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(out.contains("\"true\" | \"1\" => { s.flag = true; }"));
     assert!(out.contains("if parse_duration_ms(&v).is_err() {"));
     // An enum field is a branded type: cast at the boundary (Unknown catches
-    // an undeclared wire value).
-    assert!(out.contains("s.mode = Mode::Unknown(v);"));
+    // an undeclared wire value), inside its own standalone resolver function
+    // (an infallible parse, so it needs no error propagation).
+    assert!(out.contains("parsed = Mode::Unknown(v);"));
+    assert!(out.contains("s.mode = resolve_setting_mode();"));
     // Guaranteed and error-tracked dynamic env names both spell one balanced run.
     assert!(out.contains("read_env(&s.naming)"));
     assert!(out.contains(

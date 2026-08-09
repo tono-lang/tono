@@ -118,7 +118,12 @@ fn the_resolution_mirrors_the_go_spelling() {
     let module = with_descriptors(fixture_module());
     let out = text(&module);
     assert!(out.contains("s.apiKey = apiKey;"));
-    assert!(out.contains("s.clientName = \"demo\";"));
+    assert!(
+        out.contains("function resolveSettingClientName(withValue: string | undefined): string {")
+    );
+    assert!(out.contains("if (withValue !== undefined) return withValue;"));
+    assert!(out.contains("return \"demo\";"));
+    assert!(out.contains("s.clientName = resolveSettingClientName(config.clientName);"));
     assert!(out.contains("s.clientKey = strUpperSnake((s.clientName).trim());"));
     assert!(out.contains("switch (s.endpointVersion) {"));
     assert!(out.contains("case \"v1\": {"));
@@ -453,14 +458,20 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
 #[test]
 fn a_guaranteed_chain_is_an_if_else_cascade_ending_in_default() {
     let mut module = with_descriptors(fixture_module());
+    // A bool target keeps this field on the inline cascade (a fallible parse
+    // cannot extract into a standalone function returning a bare value; see
+    // `plan::build::env_parse_may_fail`), which is exactly what this test
+    // means to exercise: the nested, read-once shape `chain_guaranteed_from`
+    // still spells for every field the standalone-function path does not
+    // reach.
     push_entry_field(
         &mut module,
         bare_entry_field(
-            "my_region",
-            Tref::Prim(Prim::String),
+            "my_flag",
+            Tref::Prim(Prim::Bool),
             vec![
-                Source::Env(EnvName::Name("MY_REGION".into())),
-                Source::Default(serde_json::json!("us")),
+                Source::Env(EnvName::Name("MY_FLAG".into())),
+                Source::Default(serde_json::json!(false)),
             ],
         ),
     );
@@ -469,12 +480,12 @@ fn a_guaranteed_chain_is_an_if_else_cascade_ending_in_default() {
     // repeated call wouldn't narrow the same way under tsc; the default
     // sits in the nested `else`, so it's never reached once the env wins.
     // No set-flag: matches Go/Rust's if/else-if cascade.
-    assert_eq!(out.matches("readEnv(\"MY_REGION\")").count(), 1);
-    assert!(out.contains("const v = readEnv(\"MY_REGION\");"));
+    assert_eq!(out.matches("readEnv(\"MY_FLAG\")").count(), 1);
+    assert!(out.contains("const v = readEnv(\"MY_FLAG\");"));
     assert!(out.contains("if (v !== undefined) {"));
-    assert!(out.contains("s.myRegion = v;"));
+    assert!(out.contains("s.myFlag = true;"));
     assert!(out.contains("} else {"));
-    assert!(out.contains("s.myRegion = \"us\";"));
+    assert!(out.contains("s.myFlag = false;"));
     assert!(!out.contains("Set = false;"));
 }
 
@@ -504,8 +515,10 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(out.contains("Number.isFinite(n)"));
     assert!(out.contains("durationToMs(v)"));
     assert!(out.contains("v === \"true\" || v === \"1\""));
-    // An enum field is a branded string, cast at the boundary.
-    assert!(out.contains("s.mode = v as Mode;"));
+    // An enum field is a branded string, cast at the boundary, inside its
+    // own standalone resolver function (an infallible parse).
+    assert!(out.contains("parsed = v as Mode;"));
+    assert!(out.contains("s.mode = resolveSettingMode();"));
     // Guaranteed and error-tracked dynamic env names.
     assert!(out.contains("readEnv(s.sureName)"));
     assert!(

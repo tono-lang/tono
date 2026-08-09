@@ -38,6 +38,32 @@ pub struct Client {
     pub(crate) random: RandomFn,
 }
 
+/// Resolves the endpoint construction value.
+fn resolve_setting_endpoint() -> String {
+    if let Some(v) = read_env("PAYMENTS_ENDPOINT") {
+        let parsed: String;
+        parsed = v;
+        return parsed;
+    }
+    "https://api.payments.example.com".to_string()
+}
+
+/// Resolves the timeout construction value.
+fn resolve_setting_timeout(with: Option<Duration>) -> Duration {
+    if let Some(v) = with {
+        return v;
+    }
+    Duration("10s".to_string())
+}
+
+/// Resolves the max_retries construction value.
+fn resolve_setting_max_retries(with: Option<i32>) -> i32 {
+    if let Some(v) = with {
+        return v;
+    }
+    2
+}
+
 pub struct ClientBuilder {
     api_key: String,
     timeout: Option<Duration>,
@@ -78,21 +104,9 @@ impl ClientBuilder {
             headers: std::collections::HashMap::new(),
         };
         s.api_key = self.api_key;
-        if let Some(v) = read_env("PAYMENTS_ENDPOINT") {
-            s.endpoint = v;
-        } else {
-            s.endpoint = "https://api.payments.example.com".to_string();
-        }
-        if let Some(v) = self.timeout.clone() {
-            s.timeout = v;
-        } else {
-            s.timeout = Duration("10s".to_string());
-        }
-        if let Some(v) = self.max_retries {
-            s.max_retries = v;
-        } else {
-            s.max_retries = 2;
-        }
+        s.endpoint = resolve_setting_endpoint();
+        s.timeout = resolve_setting_timeout(self.timeout.clone());
+        s.max_retries = resolve_setting_max_retries(self.max_retries);
         let mut violations: Vec<Violation> = Vec::new();
         if s.api_key.chars().count() < 1 {
             violations.push(Violation {
