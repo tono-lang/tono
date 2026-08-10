@@ -143,3 +143,15 @@ let error_code_paths_diverge = "TC0067"
    into the "no code declared" default instead of the exact match the author
    wrote. *)
 let http_code_invalid = "TC0068"
+
+(* A known trait written where nothing reads it: a member-scoped trait
+   (@range, @required, @arg, @format, @httpResponseCode, ...) on a shape, op,
+   union variant, or enum case, or an op-scoped trait (@http, @header,
+   @retry, ...) anywhere but an op. The name is real, so [unknown_trait]
+   stays silent; the value is still dropped with nothing to say so. The
+   op traits and the error taxonomy grouped in [Trait_vocab.operations]
+   (@async, @errorCode, @status, ...) are out of scope: @errorCode/@status are
+   legal on a declared error shape as well as an op, and the group has no
+   single position to check the rest of its members against, so this rule
+   does not cover it. *)
+let trait_position_invalid = "TC0069"

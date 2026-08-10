@@ -19,6 +19,7 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
   let entry_diags = Check_entries.check_decls decls in
   let repeat_diags = Check_trait_repeats.check_decls decls in
   let trait_name_diags = Check_trait_names.check_decls decls in
+  let trait_position_diags = Check_trait_positions.check_decls decls in
   (* Declared tests are checked and lowered together: their wire encoding is
      type-driven, so the tests land on the module here rather than in [Lower]. *)
   let tests, test_diags =
@@ -28,4 +29,4 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
     Diagnostic.sort
       (dup_diags @ ref_diags @ member_diags @ enum_diags @ constraint_diags
      @ op_diags @ ext_diags @ impl_diags @ entry_diags @ repeat_diags
-     @ trait_name_diags @ test_diags) )
+     @ trait_name_diags @ trait_position_diags @ test_diags) )

@@ -26,10 +26,15 @@ let members = [ "required"; "default" ]
 let sources = [ "arg"; "with"; "env" ]
 let entry_fields = [ "format"; "bind"; "entries" ]
 
-(* The HTTP protocol binding: the operation's endpoint, and how each output
-   member is read from the response (Protocol_http). The request side is
-   declared entirely at the point of use now (Entry_scope.protocol_trait_names). *)
-let http = [ "http"; "httpResponseCode" ]
+(* The HTTP protocol binding: the operation's endpoint (Protocol_http), read
+   off the op itself. *)
+let http_op = [ "http" ]
+
+(* How one output member is read from the response (Protocol_http): unlike
+   [http_op], this reads a member's own traits, not the op's, so it belongs
+   with the other member-scoped names wherever position is being judged
+   rather than with [http_op]. *)
+let http_member = [ "httpResponseCode" ]
 
 (* Per-request protocol knobs an entry supplies (Entry_scope.protocol_trait_names). *)
 let protocol = [ "header"; "query"; "body"; "timeout"; "retry" ]
@@ -42,8 +47,8 @@ let operations = [ "async"; "errors"; "errorCode"; "status"; "retryable" ]
 let surface = [ "doc"; "deprecated"; "rename"; "wire"; "discriminator" ]
 
 let known =
-  constraints @ members @ sources @ entry_fields @ http @ protocol @ operations
-  @ surface
+  constraints @ members @ sources @ entry_fields @ http_op @ http_member
+  @ protocol @ operations @ surface
 
 let is_known (name : string) : bool = List.mem name known
 

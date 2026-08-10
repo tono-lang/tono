@@ -3,6 +3,22 @@
    Namespaced traits such as @str::trim keep their own catalogs and are
    excluded here. *)
 
+(* The groups themselves, exposed so a position checker can classify a trait
+   by where it is legal without a second hand-written list of names (see
+   check_trait_positions.ml). Grouped by who reads them, which is a
+   different axis from where they may be written: [http_op] and
+   [http_member] split what was one reader-group ([http]) into the op-scoped
+   name and the member-scoped one, since @http and @httpResponseCode read
+   different positions. [operations] and [surface] carry no position rule of
+   their own (see check_trait_positions.ml) and so are not exposed. *)
+val constraints : string list
+val members : string list
+val sources : string list
+val entry_fields : string list
+val http_op : string list
+val http_member : string list
+val protocol : string list
+
 (* Every known bare trait name. Editors render their vocabulary from this, so
    the compiler and the completion list cannot drift. *)
 val known : string list
