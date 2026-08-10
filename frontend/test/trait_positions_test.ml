@@ -98,8 +98,10 @@ let surface_traits_are_always_silent () =
 
 (* A union variant or an enum case reads neither group: check_constraints and
    check_member only ever walk a struct's members, so both are silent
-   sinks the same way a plain struct's own traits used to be. *)
-let member_only_trait_on_a_variant_or_case_is_reported () =
+   sinks the same way a plain struct's own traits used to be. Covers an
+   op-only name (@timeout) and a member-only one (@required) to show the
+   variant/case rule rejects both, not just one. *)
+let neither_group_is_legal_on_a_variant_or_case () =
   Alcotest.(check (list string))
     "@timeout on a union variant" [ "TC0069" ]
     (position_codes {|union u { bare(i64) @timeout(1000) }|});
@@ -108,7 +110,7 @@ let member_only_trait_on_a_variant_or_case_is_reported () =
     (position_codes {|enum e { x @required, y }|})
 
 (* @arg and @bind on a union variant or enum case are already reported by
-   check_entries.ml (TC0043/TC0046) with a message that names the
+   check_entries.ml (TC0035/TC0042) with a message that names the
    construction-boundary rule directly; TC0069 stays quiet rather than
    pile a second, less specific diagnostic onto the same trait. *)
 let variant_and_case_exempt_traits_are_not_double_reported () =
@@ -130,6 +132,35 @@ let position_groups_are_disjoint () =
       Check_trait_positions.member_only
   in
   Alcotest.(check (list string)) "no trait in both position groups" [] overlap
+
+(* Disjointness (above) guards against a name landing in both position
+   groups; this guards the opposite gap, a name landing in neither. Every
+   trait in [Trait_vocab.known] must either carry a position rule
+   ([member_only] or [op_only]) or be one of the two groups TC0069
+   deliberately does not cover (@doc-style surface traits, legal
+   everywhere, and the error taxonomy, which has no single position; see
+   check_trait_positions.ml). The exempt names are spelled out here rather
+   than pulled from [Trait_vocab.operations]/[.surface]: a trait added to
+   [Trait_vocab] under a new or existing group and forgotten here fails
+   loud instead of silently falling through TC0069 the way
+   @httpResponseCode once did. *)
+let known_traits_have_a_position_or_are_explicitly_exempt () =
+  let covered =
+    Check_trait_positions.member_only @ Check_trait_positions.op_only
+  in
+  let exempt =
+    (* Trait_vocab.operations: no single position to check. *)
+    [ "async"; "errors"; "errorCode"; "status"; "retryable" ]
+    (* Trait_vocab.surface: legal on every decl kind. *)
+    @ [ "doc"; "deprecated"; "rename"; "wire"; "discriminator" ]
+  in
+  let unaccounted =
+    List.filter
+      (fun n -> (not (List.mem n covered)) && not (List.mem n exempt))
+      Trait_vocab.known
+  in
+  Alcotest.(check (list string))
+    "every known trait has a position rule or is listed exempt" [] unaccounted
 
 (* [Check_trait_repeats.non_repeatable] classifies repeatability, a property
    the groups in [Trait_vocab] don't carry, so it stays its own hand-written
@@ -176,8 +207,8 @@ let () =
             op_traits_on_an_op_are_silent;
           Alcotest.test_case "surface traits always silent" `Quick
             surface_traits_are_always_silent;
-          Alcotest.test_case "member-only trait on a variant or case" `Quick
-            member_only_trait_on_a_variant_or_case_is_reported;
+          Alcotest.test_case "neither group is legal on a variant or case"
+            `Quick neither_group_is_legal_on_a_variant_or_case;
           Alcotest.test_case "variant/case exempt traits not double-reported"
             `Quick variant_and_case_exempt_traits_are_not_double_reported;
         ] );
@@ -185,6 +216,8 @@ let () =
         [
           Alcotest.test_case "position groups are disjoint" `Quick
             position_groups_are_disjoint;
+          Alcotest.test_case "known traits have a position or are exempt" `Quick
+            known_traits_have_a_position_or_are_explicitly_exempt;
           Alcotest.test_case "non-repeatable names are known" `Quick
             non_repeatable_is_a_subset_of_the_vocabulary;
           Alcotest.test_case "no trait in two groups" `Quick

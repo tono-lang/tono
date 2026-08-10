@@ -35,7 +35,7 @@ let member_only =
 let op_only = Trait_vocab.http_op @ Trait_vocab.protocol
 
 (* Already diagnosed with a more specific message in check_entries.ml: a
-   construction source (TC0043) or @bind (TC0046) on a union variant or enum
+   construction source (TC0035) or @bind (TC0042) on a union variant or enum
    case. Skipped here so the same trait doesn't collect a second, less
    specific diagnostic. *)
 let variant_or_case_exempt = Trait_vocab.sources @ [ "bind" ]
