@@ -637,7 +637,34 @@ let member_only_trait_on_a_decl_is_reported () =
     (position_codes {|@arg struct s { a: string @arg }|});
   Alcotest.(check (list string))
     "@format on the struct itself" [ "TC0069" ]
-    (position_codes {|@format("{x}") struct s { a: string @arg }|})
+    (position_codes {|@format("{x}") struct s { a: string @arg }|});
+  (* @httpResponseCode reads a member's own traits (Protocol_http), not the
+     op's: it belongs to the same reader-group as @http ([Trait_vocab.http]
+     before the split) but the opposite position. *)
+  Alcotest.(check (list string))
+    "@httpResponseCode on the struct itself" [ "TC0069" ]
+    (position_codes {|@httpResponseCode struct s { a: i64 }|});
+  Alcotest.(check (list string))
+    "@httpResponseCode on an op" [ "TC0069" ]
+    (position_codes {|@httpResponseCode op o(): i64|})
+
+(* An op-scoped trait written on a member is dropped the same way a
+   member-scoped one on a shape is: the traversal used to stop at a decl's
+   own traits, so this was silent even though nothing consumes @http off a
+   member either. *)
+let op_only_trait_on_a_member_is_reported () =
+  Alcotest.(check (list string))
+    "@http on a member" [ "TC0069" ]
+    (position_codes {|struct s { a: i64 @http(method: "get", path: "/x") }|});
+  Alcotest.(check (list string))
+    "@retry on a member" [ "TC0069" ]
+    (position_codes {|struct s { a: i64 @retry(3) }|})
+
+(* @httpResponseCode is legal exactly where it is read: on a member. *)
+let http_response_code_on_a_member_is_silent () =
+  Alcotest.(check (list string))
+    "@httpResponseCode on a member" []
+    (position_codes {|struct s { a: i64 @httpResponseCode }|})
 
 (* An op-only trait written on a plain struct or union is dropped the same
    way: the HTTP binding and the per-request protocol knobs read an op's own
@@ -673,6 +700,41 @@ let surface_traits_are_always_silent () =
          @doc("u") @discriminator("kind") union un { bare }
          @doc("e") enum e { x, y }
          @doc("o") @rename("go") op o(): i64|})
+
+(* A union variant or an enum case reads neither group: check_constraints and
+   check_member only ever walk a struct's members, so both are silent
+   sinks the same way a plain struct's own traits used to be. *)
+let member_only_trait_on_a_variant_or_case_is_reported () =
+  Alcotest.(check (list string))
+    "@timeout on a union variant" [ "TC0069" ]
+    (position_codes {|union u { bare(i64) @timeout(1000) }|});
+  Alcotest.(check (list string))
+    "@required on an enum case" [ "TC0069" ]
+    (position_codes {|enum e { x @required, y }|})
+
+(* @arg and @bind on a union variant or enum case are already reported by
+   check_entries.ml (TC0043/TC0046) with a message that names the
+   construction-boundary rule directly; TC0069 stays quiet rather than
+   pile a second, less specific diagnostic onto the same trait. *)
+let variant_and_case_exempt_traits_are_not_double_reported () =
+  Alcotest.(check (list string))
+    "@arg on a union variant" []
+    (position_codes {|union u { bare(i64) @arg }|});
+  Alcotest.(check (list string))
+    "@bind on an enum case" []
+    (position_codes {|enum e { x @bind("b"), y }|})
+
+(* [Check_trait_positions.member_only] and [.op_only] must never share a
+   name: a trait in both would make [illegal_at]'s answer depend on which
+   branch happens to run first, silently misclassifying it the way
+   @httpResponseCode was before the [http] group was split by position. *)
+let position_groups_are_disjoint () =
+  let overlap =
+    List.filter
+      (fun n -> List.mem n Check_trait_positions.op_only)
+      Check_trait_positions.member_only
+  in
+  Alcotest.(check (list string)) "no trait in both position groups" [] overlap
 
 (* ── Vocabulary drift ──────────────────────────────────────────────────── *)
 
@@ -854,12 +916,20 @@ let () =
         [
           Alcotest.test_case "member-only trait on a decl" `Quick
             member_only_trait_on_a_decl_is_reported;
+          Alcotest.test_case "op-only trait on a member" `Quick
+            op_only_trait_on_a_member_is_reported;
+          Alcotest.test_case "httpResponseCode on a member is silent" `Quick
+            http_response_code_on_a_member_is_silent;
           Alcotest.test_case "op-only trait on a non-op" `Quick
             op_only_trait_on_a_non_op_is_reported;
           Alcotest.test_case "op traits on an op are silent" `Quick
             op_traits_on_an_op_are_silent;
           Alcotest.test_case "surface traits always silent" `Quick
             surface_traits_are_always_silent;
+          Alcotest.test_case "member-only trait on a variant or case" `Quick
+            member_only_trait_on_a_variant_or_case_is_reported;
+          Alcotest.test_case "variant/case exempt traits not double-reported"
+            `Quick variant_and_case_exempt_traits_are_not_double_reported;
         ] );
       ( "vocabulary-drift",
         [
@@ -867,5 +937,7 @@ let () =
             non_repeatable_is_a_subset_of_the_vocabulary;
           Alcotest.test_case "no trait in two groups" `Quick
             known_has_no_duplicate_membership;
+          Alcotest.test_case "position groups are disjoint" `Quick
+            position_groups_are_disjoint;
         ] );
     ]

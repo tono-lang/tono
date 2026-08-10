@@ -145,8 +145,11 @@ let error_code_paths_diverge = "TC0067"
 let http_code_invalid = "TC0068"
 
 (* A known trait written where nothing reads it: a member-scoped trait
-   (@range, @required, @arg, @format, ...) on a decl's own shape-level
-   traits, or an op-scoped trait (@http, @header, @async, ...) on a decl that
-   is not an op. The name is real, so [unknown_trait] stays silent; the value
-   is still dropped with nothing to say so. *)
+   (@range, @required, @arg, @format, @httpResponseCode, ...) on a shape, op,
+   union variant, or enum case, or an op-scoped trait (@http, @header,
+   @retry, ...) anywhere but an op. The name is real, so [unknown_trait]
+   stays silent; the value is still dropped with nothing to say so. The
+   error taxonomy (@async, @errorCode, @status, ...) is out of scope: it is
+   legal on a declared error shape as well as an op, so this rule does not
+   cover it. *)
 let trait_position_invalid = "TC0069"
