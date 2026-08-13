@@ -11,6 +11,7 @@
   extern_parse_error_test
   extern_test
   extern_ir_decode_test
+  extern_typecheck_test
   decl_test
   file_test
   golden_test
