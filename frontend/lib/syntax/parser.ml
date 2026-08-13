@@ -464,7 +464,21 @@ let parse_decl st : Ast.decl option =
          without consuming it for the legacy path, which advances "ext"
          itself. *)
       match (P.peek_ahead st 1).kind with
-      | Token.Ident ("hook" | "contract" | "constraint" | "impl") ->
+      | Token.Ident (("hook" | "contract" | "constraint" | "impl") as kind) ->
+          (* The legacy grammar always requires a name after the kind word
+             (ext <kind> <name> ...); a '{' immediately after it can only be
+             a mistyped legacy form, never a valid one. Name the collision
+             once, up front, instead of letting legacy parsing cascade into
+             several confusing "expected an extension name"-shaped errors
+             while it recovers from a body it was never going to match. *)
+          (match (P.peek_ahead st 2).kind with
+          | Token.LBrace ->
+              P.error st (P.peek_ahead st 1).span
+                (Printf.sprintf
+                   "'%s' is a reserved ext-kind word here, not a library name: \
+                    a library cannot currently be named '%s'"
+                   kind kind)
+          | _ -> ());
           Some (parse_ext st ~pub ~dtraits)
       | Token.Ident n ->
           ignore (P.advance st);

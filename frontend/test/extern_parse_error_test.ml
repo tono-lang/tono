@@ -8,25 +8,44 @@ open Tono_frontend
 let file_diags src = snd (Parser.parse src)
 let nonempty name ds = Alcotest.(check bool) name true (List.length ds >= 1)
 
+let contains ~sub s =
+  let n = String.length sub and m = String.length s in
+  let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
+  n = 0 || go 0
+
+let has_message ~sub ds =
+  List.exists (fun (d : Diagnostic.t) -> contains ~sub d.message) ds
+
+(* Representative cases assert the actual diagnostic message, not just that
+   one exists: a regression that fires the wrong diagnostic at the right
+   spot would otherwise still pass every other case in this file. *)
 let missing_call_line () =
-  nonempty "language block without 'call:'"
-    (file_diags
-       {|ext mylib {
+  let ds =
+    file_diags
+      {|ext mylib {
          go: "example.com/mylib"
          extern load(): string {
            go { yields: (x: string) }
          }
-       }|})
+       }|}
+  in
+  Alcotest.(check bool)
+    "names the missing 'call:' line" true
+    (has_message ~sub:"requires a 'call:' line" ds)
 
 let empty_yields () =
-  nonempty "empty 'yields: ()'"
-    (file_diags
-       {|ext mylib {
+  let ds =
+    file_diags
+      {|ext mylib {
          go: "example.com/mylib"
          extern load(): string {
            go { call: "Load"() yields: () }
          }
-       }|})
+       }|}
+  in
+  Alcotest.(check bool)
+    "names the empty yields list" true
+    (has_message ~sub:"must name at least one binding" ds)
 
 let returns_missing_type () =
   nonempty "'returns:' with no type before '{'"
@@ -69,6 +88,46 @@ let error_as_ordinary_field_name () =
       }|}
   in
   Alcotest.(check int) "no diagnostics" 0 (List.length ds)
+
+(* A foreign struct or opaque type literally named 'error' would collide
+   with the yields-position sentinel (it could be declared but never
+   referenced); rejected at the declaration site itself. *)
+let struct_named_error () =
+  let ds =
+    file_diags
+      {|ext mylib {
+        go: "example.com/mylib"
+        struct error { message: string }
+      }|}
+  in
+  Alcotest.(check bool)
+    "names the collision" true
+    (has_message ~sub:"cannot be named 'error'" ds)
+
+let opaque_type_named_error () =
+  let ds =
+    file_diags
+      {|ext mylib {
+        go: "example.com/mylib"
+        type error { extern send(): string { go { call: "Send"() } } }
+      }|}
+  in
+  Alcotest.(check bool)
+    "names the collision" true
+    (has_message ~sub:"cannot be named 'error'" ds)
+
+(* A library named after one of the legacy ext-kind words (hook/contract/
+   constraint/impl) still dispatches to the legacy grammar (a documented
+   limitation: the legacy form always requires a name after the kind word,
+   so this can never be a valid legacy declaration either way), but now
+   names the collision once up front instead of only surfacing whatever
+   cascading errors legacy parsing produces while failing to match a body
+   it was never going to recognize. *)
+let library_named_like_legacy_kind () =
+  let ds = file_diags {|ext hook { ts: "example.com/mylib" }|} in
+  Alcotest.(check bool)
+    "names the reserved-word collision" true
+    (has_message ~sub:"is a reserved ext-kind word here" ds)
 
 let bad_lang_identifier () =
   nonempty "non-identifier language token"
@@ -325,6 +384,10 @@ let () =
           Alcotest.test_case "as returns type" `Quick error_as_returns_type;
           Alcotest.test_case "as ordinary field name" `Quick
             error_as_ordinary_field_name;
+          Alcotest.test_case "as a foreign struct name" `Quick
+            struct_named_error;
+          Alcotest.test_case "as an opaque type name" `Quick
+            opaque_type_named_error;
         ] );
       ( "lang path",
         [
@@ -383,5 +446,7 @@ let () =
         [
           Alcotest.test_case "hook vs library name" `Quick
             kind_dispatch_disambiguation;
+          Alcotest.test_case "library named like a legacy kind word" `Quick
+            library_named_like_legacy_kind;
         ] );
     ]

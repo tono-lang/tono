@@ -10,11 +10,7 @@ module P = Parser_state
 (* [error] is reserved as a yields-position sentinel only; used as an
    ordinary type elsewhere (an extern's return type, a [returns:] type) is a
    syntax error with a span. Everywhere else in the grammar (an ordinary
-   field/param type) [error] still parses as a plain type name, unchanged.
-   Known limitation: a foreign struct or opaque type literally named [error]
-   parses and lowers fine, but can never be referenced from these two
-   reserved positions -- resolving that collision belongs to the typecheck
-   pass that already owns name resolution for this grammar, not the parser. *)
+   field/param type) [error] still parses as a plain type name, unchanged. *)
 let parse_type_no_error ~parse_type st ~(ctx : string) : Ast.ty =
   (match (P.peek st).kind with
   | Token.Ident "error" ->
@@ -23,6 +19,23 @@ let parse_type_no_error ~parse_type st ~(ctx : string) : Ast.ty =
            "'error' is reserved for a yields position; not valid as %s" ctx)
   | _ -> ());
   parse_type st
+
+(* A foreign struct or opaque type named [error] would collide with the
+   yields-position sentinel: it could be declared but never referenced from
+   an extern's return type or a [returns:] type (both go through
+   [parse_type_no_error] above), and a [yields:] entry naming it would be
+   read as the sentinel instead of a reference to the shape. Reject the name
+   at the declaration site instead, purely syntactic (no cross-referencing),
+   so the collision is a clear error up front rather than a shape that
+   quietly can never be used. *)
+let check_not_error_name st (kind : string) (name : string) (span : Span.span) :
+    unit =
+  if String.equal name "error" then
+    P.error st span
+      (Printf.sprintf
+         "'error' is reserved for a yields position; a %s cannot be named \
+          'error'"
+         kind)
 
 (* lang_path ::= lang ":" string *)
 let parse_lang_path st : Ast.lang_path =
@@ -79,6 +92,7 @@ let parse_foreign_struct ~parse_type st : Ast.foreign_struct =
         P.error st nt.span "expected a struct name";
         ""
   in
+  check_not_error_name st "foreign struct" name nt.span;
   ignore (P.expect st Token.LBrace "'{' to open the struct body");
   let rec fields acc =
     match (P.peek st).kind with
@@ -438,6 +452,7 @@ let parse_opaque_type ~parse_type ~parse_type_no_error st : Ast.opaque_type =
         P.error st nt.span "expected a type name";
         ""
   in
+  check_not_error_name st "opaque type" name nt.span;
   ignore (P.expect st Token.LBrace "'{' to open the type body");
   let rec methods acc =
     match (P.peek st).kind with
