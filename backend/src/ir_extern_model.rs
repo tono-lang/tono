@@ -339,14 +339,20 @@ mod tests {
 
     #[test]
     fn call_arg_rejects_a_stray_sibling_key() {
-        assert!(serde_json::from_str::<CallArg>(r#"{"param":"a","extra":1}"#).is_err());
-        assert!(serde_json::from_str::<CallArg>(r#"{"field":["a"],"extra":1}"#).is_err());
-        assert!(serde_json::from_str::<CallArg>(r#"{"lit":1,"extra":1}"#).is_err());
-        assert!(serde_json::from_str::<CallArg>(r#"{"list":[],"extra":1}"#).is_err());
-        assert!(
-            serde_json::from_str::<CallArg>(r#"{"call":{"ns":"n","fn":"f"},"extra":1}"#).is_err()
-        );
-        assert!(serde_json::from_str::<CallArg>(r#"{"ctor":"c","fields":{},"extra":1}"#).is_err());
+        let variants_with_a_stray_key = [
+            r#"{"param":"a","extra":1}"#,
+            r#"{"field":["a"],"extra":1}"#,
+            r#"{"lit":1,"extra":1}"#,
+            r#"{"list":[],"extra":1}"#,
+            r#"{"call":{"ns":"n","fn":"f"},"extra":1}"#,
+            r#"{"ctor":"c","fields":{},"extra":1}"#,
+        ];
+        for json in variants_with_a_stray_key {
+            assert!(
+                serde_json::from_str::<CallArg>(json).is_err(),
+                "expected a stray sibling key to be rejected: {json}"
+            );
+        }
     }
 
     #[test]

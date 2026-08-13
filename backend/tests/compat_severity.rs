@@ -6,6 +6,13 @@ use std::collections::BTreeMap;
 use tono_backend::compat::{diff, Category, Change, Config, Report, Severity};
 use tono_backend::ir::{Member, Model, Module, Prim, Shape, ShapeKind, Tref};
 
+mod common;
+use common::structure;
+
+fn member(name: &str, target: Tref, required: bool) -> Member {
+    common::member(name, target, required, vec![])
+}
+
 fn model(shapes: Vec<Shape>) -> Model {
     Model {
         tono_ir_version: 3,
@@ -17,28 +24,6 @@ fn model(shapes: Vec<Shape>) -> Model {
             shapes,
             operations: vec![],
         }],
-    }
-}
-
-fn member(name: &str, target: Tref, required: bool) -> Member {
-    Member {
-        name: name.into(),
-        target,
-        required,
-        default: None,
-        constraints: vec![],
-        traits: vec![],
-    }
-}
-
-fn structure(id: &str, members: Vec<Member>) -> Shape {
-    Shape {
-        id: id.into(),
-        kind: ShapeKind::Structure {
-            params: vec![],
-            members,
-        },
-        traits: vec![],
     }
 }
 
@@ -81,17 +66,9 @@ fn service_with_op(op_ids: Vec<&str>, keep_op_shape: bool) -> Model {
     } else {
         vec![]
     };
-    Model {
-        tono_ir_version: 3,
-        modules: vec![Module {
-            tests: vec![],
-            name: "billing".into(),
-            extensions: vec![],
-            ext_libs: vec![],
-            shapes: vec![service],
-            operations,
-        }],
-    }
+    let mut m = model(vec![service]);
+    m.modules[0].operations = operations;
+    m
 }
 
 #[test]
