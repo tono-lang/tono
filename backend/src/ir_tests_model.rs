@@ -282,7 +282,10 @@ mod tests {
         let decoded: RequestPattern = serde_json::from_str(json).unwrap();
         assert!(decoded.open);
         assert_eq!(decoded.fields.len(), 1);
-        let headers = decoded.headers.as_ref().expect("headers must be folded out of fields");
+        let headers = decoded
+            .headers
+            .as_ref()
+            .expect("headers must be folded out of fields");
         assert!(headers.contains_key("Authorization"));
 
         let reencoded = serde_json::to_string(&decoded).unwrap();
@@ -296,7 +299,8 @@ mod tests {
 
     #[test]
     fn request_pattern_without_headers_omits_the_key() {
-        let decoded: RequestPattern = serde_json::from_str(r#"{"fields":{"path":{"eq":"/x"}}}"#).unwrap();
+        let decoded: RequestPattern =
+            serde_json::from_str(r#"{"fields":{"path":{"eq":"/x"}}}"#).unwrap();
         assert!(decoded.headers.is_none());
         let reencoded = serde_json::to_string(&decoded).unwrap();
         assert!(!reencoded.contains("headers"));
@@ -315,8 +319,6 @@ mod tests {
     #[test]
     fn request_pattern_rejects_non_object_fields_and_headers() {
         assert!(serde_json::from_str::<RequestPattern>(r#"{"fields":1}"#).is_err());
-        assert!(
-            serde_json::from_str::<RequestPattern>(r#"{"fields":{"headers":1}}"#).is_err()
-        );
+        assert!(serde_json::from_str::<RequestPattern>(r#"{"fields":{"headers":1}}"#).is_err());
     }
 }

@@ -343,7 +343,9 @@ mod tests {
         assert!(serde_json::from_str::<CallArg>(r#"{"field":["a"],"extra":1}"#).is_err());
         assert!(serde_json::from_str::<CallArg>(r#"{"lit":1,"extra":1}"#).is_err());
         assert!(serde_json::from_str::<CallArg>(r#"{"list":[],"extra":1}"#).is_err());
-        assert!(serde_json::from_str::<CallArg>(r#"{"call":{"ns":"n","fn":"f"},"extra":1}"#).is_err());
+        assert!(
+            serde_json::from_str::<CallArg>(r#"{"call":{"ns":"n","fn":"f"},"extra":1}"#).is_err()
+        );
         assert!(serde_json::from_str::<CallArg>(r#"{"ctor":"c","fields":{},"extra":1}"#).is_err());
     }
 

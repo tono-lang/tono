@@ -238,7 +238,13 @@ mod tests {
 
     #[test]
     fn kind_name_covers_every_variant() {
-        assert_eq!(kind_name(&ShapeKind::Structure { params: vec![], members: vec![] }), "structure");
+        assert_eq!(
+            kind_name(&ShapeKind::Structure {
+                params: vec![],
+                members: vec![]
+            }),
+            "structure"
+        );
         assert_eq!(
             kind_name(&ShapeKind::Union {
                 params: vec![],
@@ -254,7 +260,10 @@ mod tests {
             }),
             "enum"
         );
-        assert_eq!(kind_name(&ShapeKind::Service { operations: vec![] }), "service");
+        assert_eq!(
+            kind_name(&ShapeKind::Service { operations: vec![] }),
+            "service"
+        );
         assert_eq!(
             kind_name(&ShapeKind::Operation {
                 input: None,
@@ -293,7 +302,10 @@ mod tests {
             "range"
         );
         assert_eq!(
-            constraint_name(&Constraint::Length { min: None, max: None }),
+            constraint_name(&Constraint::Length {
+                min: None,
+                max: None
+            }),
             "length"
         );
         assert_eq!(constraint_name(&Constraint::Pattern("x".into())), "pattern");
@@ -305,12 +317,24 @@ mod tests {
     #[test]
     fn tightened_length_pattern_multipleof_and_mismatch() {
         assert!(tightened(
-            &Constraint::Length { min: None, max: None },
-            &Constraint::Length { min: Some(1), max: None }
+            &Constraint::Length {
+                min: None,
+                max: None
+            },
+            &Constraint::Length {
+                min: Some(1),
+                max: None
+            }
         ));
         assert!(!tightened(
-            &Constraint::Length { min: Some(1), max: None },
-            &Constraint::Length { min: Some(1), max: None }
+            &Constraint::Length {
+                min: Some(1),
+                max: None
+            },
+            &Constraint::Length {
+                min: Some(1),
+                max: None
+            }
         ));
         assert!(tightened(
             &Constraint::Pattern("a".into()),
@@ -320,8 +344,14 @@ mod tests {
             &Constraint::Pattern("a".into()),
             &Constraint::Pattern("a".into())
         ));
-        assert!(tightened(&Constraint::MultipleOf(2.0), &Constraint::MultipleOf(3.0)));
-        assert!(!tightened(&Constraint::MultipleOf(2.0), &Constraint::MultipleOf(2.0)));
+        assert!(tightened(
+            &Constraint::MultipleOf(2.0),
+            &Constraint::MultipleOf(3.0)
+        ));
+        assert!(!tightened(
+            &Constraint::MultipleOf(2.0),
+            &Constraint::MultipleOf(2.0)
+        ));
         // mismatched variants fall to the catch-all `_ => false`.
         assert!(!tightened(
             &Constraint::Pattern("a".into()),
@@ -352,7 +382,10 @@ mod tests {
         let x = Tref::Prim(Prim::Bool);
         let y = Tref::Prim(Prim::String);
         assert!(same_set(&[x.clone(), y.clone()], &[y.clone(), x.clone()]));
-        assert!(!same_set(&[x.clone(), x.clone(), y.clone()], &[x.clone(), y.clone(), y.clone()]));
+        assert!(!same_set(
+            &[x.clone(), x.clone(), y.clone()],
+            &[x.clone(), y.clone(), y.clone()]
+        ));
         assert!(!same_set(std::slice::from_ref(&x), &[x.clone(), y]));
     }
 
@@ -361,7 +394,10 @@ mod tests {
     #[test]
     fn references_on_wire_covers_every_shape_kind() {
         let target = "p#Money";
-        let refs = Tref::Ref { id: target.into(), args: vec![] };
+        let refs = Tref::Ref {
+            id: target.into(),
+            args: vec![],
+        };
 
         let structure = structure("s#S", vec![member("amount", refs.clone())]);
         assert!(references_on_wire(&structure, target));
@@ -467,13 +503,19 @@ mod tests {
     #[test]
     fn tref_references_covers_every_variant() {
         let target = "p#Money";
-        let hit = Tref::Ref { id: target.into(), args: vec![] };
+        let hit = Tref::Ref {
+            id: target.into(),
+            args: vec![],
+        };
         let miss = Tref::Prim(Prim::Bool);
 
         assert!(tref_references(&hit, target));
         assert!(!tref_references(&miss, target));
         assert!(tref_references(&Tref::List(Box::new(hit.clone())), target));
-        assert!(!tref_references(&Tref::List(Box::new(miss.clone())), target));
+        assert!(!tref_references(
+            &Tref::List(Box::new(miss.clone())),
+            target
+        ));
         assert!(tref_references(
             &Tref::Map(Box::new(miss.clone()), Box::new(hit.clone())),
             target
