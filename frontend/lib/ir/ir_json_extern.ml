@@ -35,7 +35,9 @@ let encode_foreign_struct (s : Ir.foreign_struct) : Ir.json =
 let encode_yields_pos (y : Ir.yields_pos) : Ir.json =
   `Assoc
     ([ ("name", `String y.yp_name) ]
-    @ (match y.yp_type with None -> [] | Some t -> [ ("type", encode_tref t) ])
+    @ (match y.yp_type with
+      | None -> []
+      | Some t -> [ ("type", encode_tref t) ])
     @ if y.yp_is_error then [ ("is_error", `Bool true) ] else [])
 
 let encode_returns_value (v : Ir.returns_value) : Ir.json =
@@ -44,7 +46,10 @@ let encode_returns_value (v : Ir.returns_value) : Ir.json =
   | Ir.Rv_select s -> `Assoc [ ("select", encode_select s) ]
 
 let encode_returns_field (f : Ir.returns_field) : Ir.json =
-  `Assoc [ ("name", `String f.rvf_name); ("value", encode_returns_value f.rvf_value) ]
+  `Assoc
+    [
+      ("name", `String f.rvf_name); ("value", encode_returns_value f.rvf_value);
+    ]
 
 let encode_returns_lit (r : Ir.returns_lit) : Ir.json =
   `Assoc
@@ -166,7 +171,9 @@ let decode_yields_pos j =
     | None -> Ok false
     | Some v -> Ir_json_base.as_bool v
   in
-  Ok ({ Ir.yp_name = name; yp_type = ty; yp_is_error = is_error } : Ir.yields_pos)
+  Ok
+    ({ Ir.yp_name = name; yp_type = ty; yp_is_error = is_error }
+      : Ir.yields_pos)
 
 let decode_returns_value j =
   let* kvs = as_assoc j in
@@ -228,7 +235,9 @@ let decode_extern_lang j =
   let* kvs = as_assoc j in
   let get k = List.assoc_opt k kvs in
   let* lang =
-    match get "lang" with Some v -> as_string v | None -> err "language block is missing lang"
+    match get "lang" with
+    | Some v -> as_string v
+    | None -> err "language block is missing lang"
   in
   let* symbol =
     match get "symbol" with
@@ -314,7 +323,9 @@ let rec decode_extern_decl j =
         let* xs = as_list v in
         map_result decode_extern_lang xs
   in
-  Ok ({ Ir.x_name = name; x_params = params; x_return = ret; x_langs = langs } : Ir.extern_decl)
+  Ok
+    ({ Ir.x_name = name; x_params = params; x_return = ret; x_langs = langs }
+      : Ir.extern_decl)
 
 and decode_opaque_type j =
   let* kvs = as_assoc j in
@@ -351,5 +362,11 @@ let decode_ext_lib j =
   let* types = list_of "types" decode_opaque_type in
   let* externs = list_of "externs" decode_extern_decl in
   Ok
-    ({ Ir.xl_name = name; xl_langs = langs; xl_structs = structs; xl_types = types; xl_externs = externs }
+    ({
+       Ir.xl_name = name;
+       xl_langs = langs;
+       xl_structs = structs;
+       xl_types = types;
+       xl_externs = externs;
+     }
       : Ir.ext_lib)

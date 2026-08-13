@@ -438,7 +438,8 @@ let decode_module j =
         let* xs = as_list v in
         map_result decode_test xs
   in
-  Ok ({ mod_name; shapes; operations; extensions; ext_libs; tests } : Ir.module_)
+  Ok
+    ({ mod_name; shapes; operations; extensions; ext_libs; tests } : Ir.module_)
 
 let decode_model j =
   let* kvs = as_assoc j in

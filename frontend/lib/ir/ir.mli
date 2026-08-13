@@ -204,12 +204,15 @@ type extension = {
 }
 
 (* FFI library declarations: ext <name> { ... } (see ir.ml for commentary). *)
-type yields_pos = { yp_name : string; yp_type : tref option; yp_is_error : bool }
+type yields_pos = {
+  yp_name : string;
+  yp_type : tref option;
+  yp_is_error : bool;
+}
 
 type returns_value = Rv_ref of string list | Rv_select of select
 type returns_field = { rvf_name : string; rvf_value : returns_value }
 type returns_lit = { rvl_type : tref; rvl_fields : returns_field list }
-
 type error_binding = { erb_sentinel : string; erb_type : string }
 
 type extern_lang = {

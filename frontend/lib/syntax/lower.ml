@@ -121,7 +121,9 @@ let rec json_of_arg : Ast.trait_arg -> Ir.json = function
          the call structured for later resolution. *)
       `Assoc
         [
-          ("call", `Assoc [ ("ns", `String ce.Ast.ce_ns); ("fn", `String ce.Ast.ce_fn) ]);
+          ( "call",
+            `Assoc
+              [ ("ns", `String ce.Ast.ce_ns); ("fn", `String ce.Ast.ce_fn) ] );
           ("args", `List (List.map json_of_call_arg ce.Ast.ce_args));
         ]
 
@@ -643,8 +645,7 @@ let lower_ext ~resolve ~diags (d : Ast.decl) : Ir.extension =
 (* The [ext <name> { ... }] library block lowers in [Lower_extern] (which
    also owns the shared extern-call lowering above); [lower_type]/
    [lower_select] are threaded in to avoid a dependency cycle. *)
-let lower_ext_lib =
-  Lower_extern.lower_ext_lib ~lower_type ~lower_select
+let lower_ext_lib = Lower_extern.lower_ext_lib ~lower_type ~lower_select
 
 (* Lower a whole file into a module: operations land in [operations], extensions
    in [extensions], every other shape in [shapes], preserving declaration order.

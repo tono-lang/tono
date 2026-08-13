@@ -152,7 +152,8 @@ let index_resolves () =
             mod_name = "payments";
             shapes = [ s ];
             operations = [ op ];
-            extensions = []; ext_libs = [];
+            extensions = [];
+            ext_libs = [];
             tests = [];
           };
         ];

@@ -29,7 +29,10 @@ and ctor_arg = {
   ctor_span : Span.span;
 }
 
-and call_arg = CaParam of string * Span.span | CaRef of ref_path | CaCtor of ctor_arg
+and call_arg =
+  | CaParam of string * Span.span
+  | CaRef of ref_path
+  | CaCtor of ctor_arg
 
 and call_expr = {
   ce_ns : string;
@@ -96,9 +99,17 @@ type ext_binding = { lang : string; lang_span : Span.span; target : string }
 type ext_sig = { esig_in : ty; esig_out : ty }
 
 (* FFI library blocks: ext <name> { ... } (see ast.ml for shape commentary). *)
-type lang_path = { lp_lang : string; lp_lang_span : Span.span; lp_path : string }
+type lang_path = {
+  lp_lang : string;
+  lp_lang_span : Span.span;
+  lp_path : string;
+}
 
-type foreign_field = { ff_name : string; ff_name_span : Span.span; ff_type : ty }
+type foreign_field = {
+  ff_name : string;
+  ff_name_span : Span.span;
+  ff_type : ty;
+}
 
 type foreign_struct = {
   fs_name : string;
@@ -108,7 +119,12 @@ type foreign_struct = {
 }
 
 type yields_ty = YType of ty | YError of Span.span
-type yields_pos = { yp_name : string; yp_name_span : Span.span; yp_ty : yields_ty }
+
+type yields_pos = {
+  yp_name : string;
+  yp_name_span : Span.span;
+  yp_ty : yields_ty;
+}
 
 type returns_value = RvRef of ref_path | RvMatch of field_match
 
@@ -156,10 +172,10 @@ type extern_decl = {
 }
 
 type opaque_type = {
-  ot_name : string;
-  ot_name_span : Span.span;
-  ot_methods : extern_decl list;
-  ot_span : Span.span;
+  opq_name : string;
+  opq_name_span : Span.span;
+  opq_methods : extern_decl list;
+  opq_span : Span.span;
 }
 
 type ext_lib_body = {

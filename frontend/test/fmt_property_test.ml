@@ -178,9 +178,9 @@ let erase_extern_decl (e : Ast.extern_decl) =
 let erase_opaque_type (t : Ast.opaque_type) =
   {
     t with
-    Ast.ot_name_span = dspan;
-    ot_methods = List.map erase_extern_decl t.Ast.ot_methods;
-    ot_span = dspan;
+    Ast.opq_name_span = dspan;
+    opq_methods = List.map erase_extern_decl t.Ast.opq_methods;
+    opq_span = dspan;
   }
 
 let erase_ext_lib_body (b : Ast.ext_lib_body) : Ast.ext_lib_body =
@@ -418,7 +418,12 @@ let gen_ctor_arg =
       (let+ fname = gen_lname and+ v = gen_scalar in
        (fname, dspan, v))
   in
-  { Ast.ctor_name = name; ctor_name_span = dspan; ctor_fields = fields; ctor_span = dspan }
+  {
+    Ast.ctor_name = name;
+    ctor_name_span = dspan;
+    ctor_fields = fields;
+    ctor_span = dspan;
+  }
 
 let gen_call_arg =
   G.oneof
@@ -435,7 +440,13 @@ let gen_call_expr =
   let+ ns = gen_tname
   and+ fn = gen_lname
   and+ args = G.list_size (G.int_range 0 2) gen_call_arg in
-  { Ast.ce_ns = ns; ce_fn = fn; ce_head_span = dspan; ce_args = args; ce_span = dspan }
+  {
+    Ast.ce_ns = ns;
+    ce_fn = fn;
+    ce_head_span = dspan;
+    ce_args = args;
+    ce_span = dspan;
+  }
 
 let gen_member_value =
   G.oneof
@@ -518,10 +529,20 @@ let gen_foreign_field =
 let gen_foreign_struct =
   let+ name = gen_tname
   and+ fields = G.list_size (G.int_range 0 2) gen_foreign_field in
-  { Ast.fs_name = name; fs_name_span = dspan; fs_fields = fields; fs_span = dspan }
+  {
+    Ast.fs_name = name;
+    fs_name_span = dspan;
+    fs_fields = fields;
+    fs_span = dspan;
+  }
 
 let gen_yields_ty =
-  G.oneof [ (let+ t = gen_ty in Ast.YType t); G.return (Ast.YError dspan) ]
+  G.oneof
+    [
+      (let+ t = gen_ty in
+       Ast.YType t);
+      G.return (Ast.YError dspan);
+    ]
 
 let gen_yields_pos =
   let+ name = gen_lname and+ ty = gen_yields_ty in
@@ -529,7 +550,12 @@ let gen_yields_pos =
 
 let gen_returns_value =
   G.oneof
-    [ (let+ r = gen_ref in Ast.RvRef r); (let+ fm = gen_match in Ast.RvMatch fm) ]
+    [
+      (let+ r = gen_ref in
+       Ast.RvRef r);
+      (let+ fm = gen_match in
+       Ast.RvMatch fm);
+    ]
 
 let gen_returns_field =
   let+ name = gen_lname and+ v = gen_returns_value in
@@ -561,7 +587,12 @@ let gen_extern_lang_body =
          Some ys);
       ]
   and+ returns =
-    G.oneof [ G.return None; (let+ r = gen_returns_lit in Some r) ]
+    G.oneof
+      [
+        G.return None;
+        (let+ r = gen_returns_lit in
+         Some r);
+      ]
   and+ errors = G.list_size (G.int_range 0 2) gen_error_map_entry in
   {
     Ast.elb_lang = lang;
@@ -596,7 +627,12 @@ let gen_extern_decl =
 let gen_opaque_type =
   let+ name = gen_tname
   and+ methods = G.list_size (G.int_range 0 1) gen_extern_decl in
-  { Ast.ot_name = name; ot_name_span = dspan; ot_methods = methods; ot_span = dspan }
+  {
+    Ast.opq_name = name;
+    opq_name_span = dspan;
+    opq_methods = methods;
+    opq_span = dspan;
+  }
 
 let gen_ext_lib_body =
   let+ langs = G.list_size (G.int_range 0 2) gen_lang_path

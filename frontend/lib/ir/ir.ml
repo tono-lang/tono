@@ -254,14 +254,17 @@ type extension = {
 
 (* One [yields:] position; [yp_type] is [None] only for the reserved [error]
    sentinel ([yp_is_error]), never for an ordinary omitted type. *)
-type yields_pos = { yp_name : string; yp_type : tref option; yp_is_error : bool }
+type yields_pos = {
+  yp_name : string;
+  yp_type : tref option;
+  yp_is_error : bool;
+}
 
 (* A [returns:] field value: a bare ref into a yields-bound name, or a match
    over one -- the same shape a member's own [= match] selection uses. *)
 type returns_value = Rv_ref of string list | Rv_select of select
 type returns_field = { rvf_name : string; rvf_value : returns_value }
 type returns_lit = { rvl_type : tref; rvl_fields : returns_field list }
-
 type error_binding = { erb_sentinel : string; erb_type : string }
 
 (* One per-language block inside an [extern]'s body. *)

@@ -344,7 +344,8 @@ let print_test_item (i : Ast.test_item) : string =
 
 (* header + a braced body at [indent], "{}" when empty; [lines] are already
    fully prefixed with their own indent by the caller (mirrors [braced]). *)
-let braced_at ~(indent : string) (header : string) (lines : string list) : string =
+let braced_at ~(indent : string) (header : string) (lines : string list) :
+    string =
   match lines with
   | [] -> indent ^ header ^ " {}"
   | ls -> indent ^ header ^ " {\n" ^ String.concat "\n" ls ^ "\n" ^ indent ^ "}"
@@ -367,7 +368,8 @@ let print_yields ~indent (ys : Ast.yields_pos list) : string =
   indent ^ "yields: ("
   ^ String.concat ", "
       (List.map
-         (fun (y : Ast.yields_pos) -> y.yp_name ^ ": " ^ print_yields_ty y.yp_ty)
+         (fun (y : Ast.yields_pos) ->
+           y.yp_name ^ ": " ^ print_yields_ty y.yp_ty)
          ys)
   ^ ")"
 
@@ -398,9 +400,13 @@ let print_call ~indent (symbol : string) (args : Ast.call_arg list) : string =
 
 let print_extern_lang_body ~indent (b : Ast.extern_lang_body) : string =
   let inner = indent ^ "  " in
-  let call_line = [ print_call ~indent:inner b.Ast.elb_call_symbol b.elb_call_args ] in
+  let call_line =
+    [ print_call ~indent:inner b.Ast.elb_call_symbol b.elb_call_args ]
+  in
   let yields_line =
-    match b.Ast.elb_yields with Some ys -> [ print_yields ~indent:inner ys ] | None -> []
+    match b.Ast.elb_yields with
+    | Some ys -> [ print_yields ~indent:inner ys ]
+    | None -> []
   in
   let returns_lines =
     match b.Ast.elb_returns with
@@ -408,9 +414,11 @@ let print_extern_lang_body ~indent (b : Ast.extern_lang_body) : string =
     | None -> []
   in
   let errors_lines =
-    if b.Ast.elb_errors = [] then [] else [ print_errors ~indent:inner b.elb_errors ]
+    if b.Ast.elb_errors = [] then []
+    else [ print_errors ~indent:inner b.elb_errors ]
   in
-  braced_at ~indent b.Ast.elb_lang (call_line @ yields_line @ returns_lines @ errors_lines)
+  braced_at ~indent b.Ast.elb_lang
+    (call_line @ yields_line @ returns_lines @ errors_lines)
 
 let print_extern ~indent (e : Ast.extern_decl) : string =
   let inner = indent ^ "  " in
@@ -420,14 +428,16 @@ let print_extern ~indent (e : Ast.extern_decl) : string =
          (fun (p : Ast.extern_param) -> p.ep_name ^ ": " ^ print_ty p.ep_type)
          e.Ast.ed_params)
   in
-  let header = "extern " ^ e.Ast.ed_name ^ "(" ^ params ^ "): " ^ print_ty e.ed_return in
-  braced_at ~indent header (List.map (print_extern_lang_body ~indent:inner) e.Ast.ed_langs)
+  let header =
+    "extern " ^ e.Ast.ed_name ^ "(" ^ params ^ "): " ^ print_ty e.ed_return
+  in
+  braced_at ~indent header
+    (List.map (print_extern_lang_body ~indent:inner) e.Ast.ed_langs)
 
 let print_opaque_type ~indent (t : Ast.opaque_type) : string =
   let inner = indent ^ "  " in
-  braced_at ~indent
-    ("type " ^ t.Ast.ot_name)
-    (List.map (print_extern ~indent:inner) t.Ast.ot_methods)
+  braced_at ~indent ("type " ^ t.Ast.opq_name)
+    (List.map (print_extern ~indent:inner) t.Ast.opq_methods)
 
 (* Sections (lang paths, structs, opaque types, free externs) are separated
    by a blank line whenever a later section is non-empty; whitespace is
@@ -511,7 +521,9 @@ let print_decl (d : Ast.decl) : string =
               (pub ^ "ext " ^ kw ^ " " ^ d.Ast.dname ^ raw ^ signature)
               lines
         | Ast.DExtLib { body; _ } ->
-            braced (pub ^ "ext " ^ d.Ast.dname) (print_ext_lib_body ~indent:"  " body)
+            braced
+              (pub ^ "ext " ^ d.Ast.dname)
+              (print_ext_lib_body ~indent:"  " body)
         | Ast.DTest { titems } ->
             braced
               ("test " ^ string_literal d.Ast.dname)

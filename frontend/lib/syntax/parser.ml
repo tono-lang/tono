@@ -473,7 +473,8 @@ let parse_decl st : Ast.decl option =
           (* library name *)
           Some
             (Parser_extern.parse_ext_lib ~parse_type
-               ~parse_type_no_error:(Parser_extern.parse_type_no_error ~parse_type)
+               ~parse_type_no_error:
+                 (Parser_extern.parse_type_no_error ~parse_type)
                st ~pub ~dtraits ~name:n ~name_span:nt.span)
       | _ ->
           P.error st (P.peek_ahead st 1).span

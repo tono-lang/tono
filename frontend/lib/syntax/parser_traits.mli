@@ -6,8 +6,7 @@ val parse_ref_path : Parser_state.t -> Ast.ref_path
 
 (* ctor ::= name "{" (field ":" value, comma-separated)? "}"  -- the caller
    has already consumed [name] at [name_span]. Always returns [Ast.ACtor]. *)
-val parse_ctor_arg :
-  Parser_state.t -> string -> Span.span -> Ast.trait_arg
+val parse_ctor_arg : Parser_state.t -> string -> Span.span -> Ast.trait_arg
 
 (* trait ::= "@" name ("::" name)* ("(" arg ("," arg)* ")")? *)
 val parse_trait : Parser_state.t -> Ast.trait

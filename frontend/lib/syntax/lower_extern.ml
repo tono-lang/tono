@@ -49,16 +49,21 @@ let lower_lang_path (lp : Ast.lang_path) : Ir.lang_path =
 
 let lower_foreign_field ~lower_type ~resolve ~diags (f : Ast.foreign_field) :
     Ir.foreign_field =
-  { Ir.fgf_name = f.ff_name; fgf_type = lower_type ~params:[] ~resolve ~diags f.ff_type }
+  {
+    Ir.fgf_name = f.ff_name;
+    fgf_type = lower_type ~params:[] ~resolve ~diags f.ff_type;
+  }
 
 let lower_foreign_struct ~lower_type ~resolve ~diags (s : Ast.foreign_struct) :
     Ir.foreign_struct =
   {
     Ir.fgs_name = s.fs_name;
-    fgs_fields = List.map (lower_foreign_field ~lower_type ~resolve ~diags) s.fs_fields;
+    fgs_fields =
+      List.map (lower_foreign_field ~lower_type ~resolve ~diags) s.fs_fields;
   }
 
-let lower_yields_pos ~lower_type ~resolve ~diags (y : Ast.yields_pos) : Ir.yields_pos =
+let lower_yields_pos ~lower_type ~resolve ~diags (y : Ast.yields_pos) :
+    Ir.yields_pos =
   match y.yp_ty with
   | Ast.YType t ->
       {
@@ -66,15 +71,16 @@ let lower_yields_pos ~lower_type ~resolve ~diags (y : Ast.yields_pos) : Ir.yield
         yp_type = Some (lower_type ~params:[] ~resolve ~diags t);
         yp_is_error = false;
       }
-  | Ast.YError _ -> { Ir.yp_name = y.yp_name; yp_type = None; yp_is_error = true }
+  | Ast.YError _ ->
+      { Ir.yp_name = y.yp_name; yp_type = None; yp_is_error = true }
 
-let lower_returns_value ~lower_select ~diags : Ast.returns_value -> Ir.returns_value =
-  function
+let lower_returns_value ~lower_select ~diags :
+    Ast.returns_value -> Ir.returns_value = function
   | Ast.RvRef r -> Ir.Rv_ref r.segs
   | Ast.RvMatch fm -> Ir.Rv_select (lower_select ~diags fm)
 
-let lower_returns ~lower_type ~lower_select ~resolve ~diags (r : Ast.returns_lit) :
-    Ir.returns_lit =
+let lower_returns ~lower_type ~lower_select ~resolve ~diags
+    (r : Ast.returns_lit) : Ir.returns_lit =
   {
     Ir.rvl_type = lower_type ~params:[] ~resolve ~diags r.rl_type;
     rvl_fields =
@@ -100,38 +106,60 @@ let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags
       (match b.elb_yields with
       | None -> []
       | Some ys -> List.map (lower_yields_pos ~lower_type ~resolve ~diags) ys);
-    el_returns = Option.map (lower_returns ~lower_type ~lower_select ~resolve ~diags) b.elb_returns;
+    el_returns =
+      Option.map
+        (lower_returns ~lower_type ~lower_select ~resolve ~diags)
+        b.elb_returns;
     el_errors = List.map lower_error_binding b.elb_errors;
   }
 
-let rec lower_extern ~lower_type ~lower_select ~resolve ~diags (e : Ast.extern_decl) :
-    Ir.extern_decl =
+let rec lower_extern ~lower_type ~lower_select ~resolve ~diags
+    (e : Ast.extern_decl) : Ir.extern_decl =
   {
     Ir.x_name = e.ed_name;
     x_params =
       List.map
         (fun (p : Ast.extern_param) ->
-          { Ir.xp_name = p.ep_name; xp_type = lower_type ~params:[] ~resolve ~diags p.ep_type })
+          {
+            Ir.xp_name = p.ep_name;
+            xp_type = lower_type ~params:[] ~resolve ~diags p.ep_type;
+          })
         e.ed_params;
     x_return = lower_type ~params:[] ~resolve ~diags e.ed_return;
-    x_langs = List.map (lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags) e.ed_langs;
+    x_langs =
+      List.map
+        (lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags)
+        e.ed_langs;
   }
 
-and lower_opaque_type ~lower_type ~lower_select ~resolve ~diags (t : Ast.opaque_type) :
-    Ir.opaque_type =
+and lower_opaque_type ~lower_type ~lower_select ~resolve ~diags
+    (t : Ast.opaque_type) : Ir.opaque_type =
   {
-    Ir.opq_name = t.ot_name;
-    opq_methods = List.map (lower_extern ~lower_type ~lower_select ~resolve ~diags) t.ot_methods;
+    Ir.opq_name = t.opq_name;
+    opq_methods =
+      List.map
+        (lower_extern ~lower_type ~lower_select ~resolve ~diags)
+        t.opq_methods;
   }
 
-let lower_ext_lib ~lower_type ~lower_select ~resolve ~diags (d : Ast.decl) : Ir.ext_lib =
+let lower_ext_lib ~lower_type ~lower_select ~resolve ~diags (d : Ast.decl) :
+    Ir.ext_lib =
   match d.dkind with
   | Ast.DExtLib { body; _ } ->
       {
         Ir.xl_name = d.dname;
         xl_langs = List.map lower_lang_path body.elib_langs;
-        xl_structs = List.map (lower_foreign_struct ~lower_type ~resolve ~diags) body.elib_structs;
-        xl_types = List.map (lower_opaque_type ~lower_type ~lower_select ~resolve ~diags) body.elib_types;
-        xl_externs = List.map (lower_extern ~lower_type ~lower_select ~resolve ~diags) body.elib_externs;
+        xl_structs =
+          List.map
+            (lower_foreign_struct ~lower_type ~resolve ~diags)
+            body.elib_structs;
+        xl_types =
+          List.map
+            (lower_opaque_type ~lower_type ~lower_select ~resolve ~diags)
+            body.elib_types;
+        xl_externs =
+          List.map
+            (lower_extern ~lower_type ~lower_select ~resolve ~diags)
+            body.elib_externs;
       }
   | _ -> assert false

@@ -94,7 +94,8 @@ let parse_foreign_struct ~parse_type st : Ast.foreign_struct =
     Ast.fs_name = name;
     fs_name_span = nt.span;
     fs_fields = flds;
-    fs_span = Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
+    fs_span =
+      Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
   }
 
 (* yields ::= "yields" ":" "(" (name ":" (type | "error"), ",")+ ")" *)
@@ -122,7 +123,11 @@ let parse_yields ~parse_type st : Ast.yields_pos list =
           ""
     in
     ignore (P.expect st Token.Colon "':' after a yields name");
-    { Ast.yp_name = name; yp_name_span = nt.span; yp_ty = parse_yields_ty ~parse_type st }
+    {
+      Ast.yp_name = name;
+      yp_name_span = nt.span;
+      yp_ty = parse_yields_ty ~parse_type st;
+    }
   in
   let positions =
     match (P.peek st).kind with
@@ -167,7 +172,12 @@ let parse_returns_field st : Ast.returns_field =
   in
   ignore (P.expect st Token.Colon "':' after a returns field name");
   let value = parse_returns_value st in
-  { Ast.rf_name = name; rf_name_span = nt.span; rf_value = value; rf_span = nt.span }
+  {
+    Ast.rf_name = name;
+    rf_name_span = nt.span;
+    rf_value = value;
+    rf_span = nt.span;
+  }
 
 (* returns ::= "returns" ":" type "{" (field ",")* "}" *)
 let parse_returns ~parse_type_no_error st : Ast.returns_lit =
@@ -193,7 +203,8 @@ let parse_returns ~parse_type_no_error st : Ast.returns_lit =
   {
     Ast.rl_type = ty;
     rl_fields = flds;
-    rl_span = Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
+    rl_span =
+      Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
   }
 
 (* errors ::= "errors" ":" "{" (string "=>" name, ",")* "}" *)
@@ -267,7 +278,8 @@ let parse_call_line st : string * Span.span * Ast.call_arg list =
 
 (* lang_block ::= lang "{" ("call:" | "yields:" | "returns:" | "errors:")* "}"
    -- "call:" is required; its absence is diagnosed but the rest still parses. *)
-let parse_extern_lang_body ~parse_type ~parse_type_no_error st : Ast.extern_lang_body =
+let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
+    Ast.extern_lang_body =
   let langt = P.peek st in
   let lang =
     match langt.kind with
@@ -324,7 +336,9 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st : Ast.extern_lang
     elb_yields = !yields;
     elb_returns = !returns;
     elb_errors = !errors;
-    elb_span = Span.merge langt.span (match close with Some t -> t.span | None -> langt.span);
+    elb_span =
+      Span.merge langt.span
+        (match close with Some t -> t.span | None -> langt.span);
   }
 
 (* extern_param ::= name ":" type *)
@@ -400,7 +414,8 @@ let parse_extern ~parse_type ~parse_type_no_error st : Ast.extern_decl =
     ed_params = params;
     ed_return = ret;
     ed_langs = ls;
-    ed_span = Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
+    ed_span =
+      Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
   }
 
 (* type ::= "type" name "{" extern+ "}"  -- an opaque foreign handle; "type"
@@ -426,17 +441,19 @@ let parse_opaque_type ~parse_type ~parse_type_no_error st : Ast.opaque_type =
     | Token.Ident "extern" ->
         methods (parse_extern ~parse_type ~parse_type_no_error st :: acc)
     | _ ->
-        P.error st (P.peek st).span "a type body may only contain 'extern' methods";
+        P.error st (P.peek st).span
+          "a type body may only contain 'extern' methods";
         ignore (P.advance st);
         methods acc
   in
   let ms = methods [] in
   let close = P.expect st Token.RBrace "'}' to close the type body" in
   {
-    Ast.ot_name = name;
-    ot_name_span = nt.span;
-    ot_methods = ms;
-    ot_span = Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
+    Ast.opq_name = name;
+    opq_name_span = nt.span;
+    opq_methods = ms;
+    opq_span =
+      Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
   }
 
 (* ext_lib_body ::= (lang_path | struct | type | extern)* *)
@@ -487,5 +504,14 @@ let parse_ext_lib ~parse_type ~parse_type_no_error st ~pub ~dtraits ~name
   ignore (P.expect st Token.LBrace "'{' to open the ext body");
   let body = parse_ext_lib_body ~parse_type ~parse_type_no_error st in
   let close = P.expect st Token.RBrace "'}' to close the ext body" in
-  let span = Span.merge name_span (match close with Some t -> t.span | None -> name_span) in
-  { Ast.dname = name; dname_span = name_span; pub; dtraits; dkind = Ast.DExtLib { body; span } }
+  let span =
+    Span.merge name_span
+      (match close with Some t -> t.span | None -> name_span)
+  in
+  {
+    Ast.dname = name;
+    dname_span = name_span;
+    pub;
+    dtraits;
+    dkind = Ast.DExtLib { body; span };
+  }

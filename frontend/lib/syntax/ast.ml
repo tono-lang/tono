@@ -42,7 +42,10 @@ and ctor_arg = {
 (* One argument to a call expression (see [call_expr]): the caller's own
    parameter by name, a field-reference path, or a struct-literal mapper —
    the same shape [ctor_arg] already gives [@body(name { field: value })]. *)
-and call_arg = CaParam of string * Span.span | CaRef of ref_path | CaCtor of ctor_arg
+and call_arg =
+  | CaParam of string * Span.span
+  | CaRef of ref_path
+  | CaCtor of ctor_arg
 
 (* "ns.fn(args)": a call into an [extern] declared in the [ext] block named
    [ce_ns]. Shared by three surface positions: a member's [= ns.fn(...)]
@@ -138,11 +141,19 @@ type ext_sig = { esig_in : ty; esig_out : ty }
    each other yet (that is a later task; see [Lower.lower_ext_lib]). *)
 
 (* "lang: "module/path"" — one per-language module path. *)
-type lang_path = { lp_lang : string; lp_lang_span : Span.span; lp_path : string }
+type lang_path = {
+  lp_lang : string;
+  lp_lang_span : Span.span;
+  lp_path : string;
+}
 
 (* A field of a foreign struct, named and cased exactly as the foreign side
    spells it (PascalCase for Go, etc. — never normalized). *)
-type foreign_field = { ff_name : string; ff_name_span : Span.span; ff_type : ty }
+type foreign_field = {
+  ff_name : string;
+  ff_name_span : Span.span;
+  ff_type : ty;
+}
 
 (* [struct go_config { Host: string, ... }] inside an [ext] block: a foreign
    shape, never a top-level [DStruct] and never role-classified. *)
@@ -157,7 +168,11 @@ type foreign_struct = {
    [error] sentinel — valid only here, nowhere else in the grammar. *)
 type yields_ty = YType of ty | YError of Span.span
 
-type yields_pos = { yp_name : string; yp_name_span : Span.span; yp_ty : yields_ty }
+type yields_pos = {
+  yp_name : string;
+  yp_name_span : Span.span;
+  yp_ty : yields_ty;
+}
 
 (* One field of a [returns: Type { field: value, ... }] literal: a bare ref
    into a [yields:]-bound name, or a match over one. *)
@@ -215,10 +230,10 @@ type extern_decl = {
 (* [type name { extern ... }] — an opaque foreign handle whose only members
    are extern methods; never serializes, never crosses the wire. *)
 type opaque_type = {
-  ot_name : string;
-  ot_name_span : Span.span;
-  ot_methods : extern_decl list;
-  ot_span : Span.span;
+  opq_name : string;
+  opq_name_span : Span.span;
+  opq_methods : extern_decl list;
+  opq_span : Span.span;
 }
 
 (* The body of [ext name { ... }]. *)

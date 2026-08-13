@@ -95,6 +95,7 @@ let rec check_decl (d : Ast.decl) : Diagnostic.t list =
           (fun (c : Ast.enum_case) -> flag ~site:Case c.Ast.ctraits)
           cases
   | Ast.DExt _ -> flag ~site:Shape d.dtraits
+  | Ast.DExtLib _ -> flag ~site:Shape d.dtraits
   | Ast.DTest _ -> []
 
 let check_decls (decls : Ast.decl list) : Diagnostic.t list =
