@@ -65,7 +65,14 @@ pub use crate::ir_tests_model::*;
 /// field's `call` key (alongside the existing `select`) carries a field's
 /// `= ns.fn(args)` extern-call source, and `CallArg` gained `lit`/`list`/
 /// `call` variants for ctor-field values.
-pub const TONO_IR_VERSION: u32 = 14;
+/// v15 added an operation's optional `impl_call` (`OpImplCall`): a third
+/// implementation source (RFC-0023's own `impl .field.method(args)` op
+/// body), alongside a protocol's `wire` and a legacy `impl` extension. It
+/// reuses the `lit` `CallArg` variant v14 introduced for ctor-field values,
+/// now also reachable as a bare call argument -- no wire-shape change
+/// there, only a new use site (`CallArg`'s codec already accepted `lit` at
+/// any position). Surface-and-IR only; no codegen consumes `impl_call` yet.
+pub const TONO_IR_VERSION: u32 = 15;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -451,6 +458,21 @@ impl WireBinding {
     }
 }
 
+/// An op's own `impl .field.method(args)` body (RFC-0023): a call into an
+/// entry field's declared opaque-handle method. Mirrors `EntryCall` with
+/// `recv: Vec<String>` (a field path) in place of `ns` (a bare `ext`
+/// namespace), since the receiver is an entry field, not an extern
+/// namespace. Resolving the receiver/method against a declared handle is a
+/// typechecker concern on the frontend side; this only carries the call
+/// structured. Not yet consumed by any backend target.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpImplCall {
+    pub recv: Vec<String>,
+    pub method: String,
+    #[serde(default)]
+    pub args: Vec<CallArg>,
+}
+
 /// Shape kind, internally tagged by `kind` and flattened next to a shape's
 /// `id` and `traits`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -496,6 +518,11 @@ pub enum ShapeKind {
         // for every non-Operation variant too (clippy::large_enum_variant).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire: Option<Box<WireBinding>>,
+        /// The op's own `impl .field.method(args)` body (RFC-0023): a third
+        /// implementation source alongside `wire` and a legacy `impl`
+        /// extension. Not yet consumed by any backend target.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        impl_call: Option<OpImplCall>,
     },
     /// A struct with ops in its body: the SDK construction surface plus its
     /// methods; never a wire type.

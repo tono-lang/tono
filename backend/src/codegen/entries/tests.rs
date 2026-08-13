@@ -290,6 +290,7 @@ fn entry_with_op_traits(traits: Vec<(&str, serde_json::Value)>) -> Module {
             output: None,
             errors: vec![],
             wire: None,
+            impl_call: None,
         },
         traits: traits
             .into_iter()
@@ -448,6 +449,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             output: None,
             errors: vec![],
             wire: None,
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -459,6 +461,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             output: None,
             errors: vec![],
             wire: None,
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -486,6 +489,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             output: None,
             errors: vec![],
             wire: None,
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -560,6 +564,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
                 timeout: None,
                 retry: None,
             })),
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -683,6 +688,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
             output: None,
             errors: vec![],
             wire: None,
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -723,6 +729,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
                 timeout: None,
                 retry: None,
             })),
+            impl_call: None,
         },
         traits: vec![],
     };

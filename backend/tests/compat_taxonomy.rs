@@ -46,6 +46,7 @@ fn wire_op(id: &str) -> Shape {
                 timeout: None,
                 retry: None,
             })),
+            impl_call: None,
         },
         traits: vec![],
     }

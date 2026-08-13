@@ -160,6 +160,7 @@ fn removed_shape_severity_follows_the_reference_position() {
             output: None,
             errors: vec![],
             wire: None,
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -206,6 +207,7 @@ fn unchanged_entry_and_config_produce_no_changes() {
                         output: None,
                         errors: vec![],
                         wire: None,
+                        impl_call: None,
                     },
                     traits: vec![],
                 }],
@@ -228,6 +230,7 @@ fn removing_an_op_from_an_entry_is_source_breaking() {
             output: None,
             errors: vec![],
             wire: None,
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -623,6 +626,7 @@ fn an_operation_signature_change_is_source_breaking() {
                     output: None,
                     errors: vec![],
                     wire: None,
+                    impl_call: None,
                 },
                 traits: vec![],
             }],

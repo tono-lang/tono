@@ -24,6 +24,7 @@ fn op(traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
                 })
                 .collect(),
             wire: None,
+            impl_call: None,
         },
         traits,
     }
@@ -96,6 +97,7 @@ fn a_declared_error_also_used_as_an_operation_input_is_not_error_only() {
             args: vec![],
         }],
         wire: None,
+        impl_call: None,
     };
     let m = module(vec![error_shape("m#retry_hint", vec![])], vec![input_op]);
     assert!(error_only_shapes(&m).is_empty());
@@ -159,6 +161,7 @@ fn a_declared_error_also_used_as_a_nested_entry_ops_input_is_not_error_only() {
             args: vec![],
         }],
         wire: None,
+        impl_call: None,
     };
     let entry = Shape {
         id: "m#client".into(),

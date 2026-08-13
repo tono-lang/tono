@@ -232,6 +232,7 @@ fn ops_model() -> Model {
                 args: vec![],
             }],
             wire: None,
+            impl_call: None,
         },
         traits: vec![crate::ir::Trait {
             id: "async".into(),
@@ -697,6 +698,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                                         endpoint: Some(WireValue::Field(vec!["ep".into()])),
                                         ..*wire_binding("POST")
                                     })),
+                                    impl_call: None,
                                 },
                                 traits: vec![],
                             }],

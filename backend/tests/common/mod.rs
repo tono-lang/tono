@@ -195,6 +195,7 @@ pub fn create_charge_operation() -> Shape {
                 reference("models#rate_limited"),
             ],
             wire: None,
+            impl_call: None,
         },
         traits: vec![Trait {
             id: "core#http".into(),

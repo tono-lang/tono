@@ -217,6 +217,7 @@ pub fn entries_matrix_module() -> Module {
                 timeout: Some(vec!["wait".into()]),
                 retry: Some(vec!["tiny".into()]),
             })),
+            impl_call: None,
         },
         traits: vec![
             Trait {
@@ -263,6 +264,7 @@ pub fn entries_matrix_module() -> Module {
             output: None,
             errors: vec![],
             wire: Some(Box::new(bare_wire())),
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -274,6 +276,7 @@ pub fn entries_matrix_module() -> Module {
             output: Some(Tref::Prim(Prim::I32)),
             errors: vec![],
             wire: Some(Box::new(bare_wire())),
+            impl_call: None,
         },
         traits: vec![],
     };
@@ -288,6 +291,7 @@ pub fn entries_matrix_module() -> Module {
             output: Some(Tref::Prim(Prim::String)),
             errors: vec![],
             wire: None,
+            impl_call: None,
         },
         traits: vec![],
     };
