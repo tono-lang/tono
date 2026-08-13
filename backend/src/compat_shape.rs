@@ -171,25 +171,22 @@ pub(crate) fn tref_references(t: &Tref, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Member, Prim};
+    use crate::codegen::test_support::{member as member_with_required, structure};
+    use crate::ir::Prim;
 
-    fn member(name: &str, target: Tref) -> Member {
-        Member {
-            name: name.into(),
-            target,
-            required: true,
-            default: None,
-            constraints: vec![],
-            traits: vec![],
-        }
+    fn member(name: &str, target: Tref) -> crate::ir::Member {
+        member_with_required(name, target, true)
     }
 
-    fn structure(id: &str, members: Vec<Member>) -> Shape {
+    fn operation(id: &str, input: Option<Tref>, output: Option<Tref>, errors: Vec<Tref>) -> Shape {
         Shape {
             id: id.into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members,
+            kind: ShapeKind::Operation {
+                input,
+                input_name: None,
+                output,
+                errors,
+                wire: None,
             },
             traits: vec![],
         }
@@ -413,56 +410,16 @@ mod tests {
         };
         assert!(references_on_wire(&union, target));
 
-        let op_input = Shape {
-            id: "o#in".into(),
-            kind: ShapeKind::Operation {
-                input: Some(refs.clone()),
-                input_name: None,
-                output: None,
-                errors: vec![],
-                wire: None,
-            },
-            traits: vec![],
-        };
+        let op_input = operation("o#in", Some(refs.clone()), None, vec![]);
         assert!(references_on_wire(&op_input, target));
 
-        let op_output = Shape {
-            id: "o#out".into(),
-            kind: ShapeKind::Operation {
-                input: None,
-                input_name: None,
-                output: Some(refs.clone()),
-                errors: vec![],
-                wire: None,
-            },
-            traits: vec![],
-        };
+        let op_output = operation("o#out", None, Some(refs.clone()), vec![]);
         assert!(references_on_wire(&op_output, target));
 
-        let op_error = Shape {
-            id: "o#err".into(),
-            kind: ShapeKind::Operation {
-                input: None,
-                input_name: None,
-                output: None,
-                errors: vec![refs.clone()],
-                wire: None,
-            },
-            traits: vec![],
-        };
+        let op_error = operation("o#err", None, None, vec![refs.clone()]);
         assert!(references_on_wire(&op_error, target));
 
-        let op_none = Shape {
-            id: "o#none".into(),
-            kind: ShapeKind::Operation {
-                input: None,
-                input_name: None,
-                output: None,
-                errors: vec![],
-                wire: None,
-            },
-            traits: vec![],
-        };
+        let op_none = operation("o#none", None, None, vec![]);
         assert!(!references_on_wire(&op_none, target));
 
         let entry = Shape {
