@@ -8,6 +8,7 @@
   struct_test
   core_test
   parse_error_test
+  extern_parse_error_test
   decl_test
   file_test
   golden_test

@@ -10,7 +10,11 @@ module P = Parser_state
 (* [error] is reserved as a yields-position sentinel only; used as an
    ordinary type elsewhere (an extern's return type, a [returns:] type) is a
    syntax error with a span. Everywhere else in the grammar (an ordinary
-   field/param type) [error] still parses as a plain type name, unchanged. *)
+   field/param type) [error] still parses as a plain type name, unchanged.
+   Known limitation: a foreign struct or opaque type literally named [error]
+   parses and lowers fine, but can never be referenced from these two
+   reserved positions -- resolving that collision belongs to the typecheck
+   pass that already owns name resolution for this grammar, not the parser. *)
 let parse_type_no_error ~parse_type st ~(ctx : string) : Ast.ty =
   (match (P.peek st).kind with
   | Token.Ident "error" ->
