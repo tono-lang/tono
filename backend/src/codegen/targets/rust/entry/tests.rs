@@ -54,6 +54,7 @@ fn push_client_op(
             output,
             errors,
             wire: None,
+            impl_call: None,
         },
         traits: vec![],
     });
@@ -141,6 +142,7 @@ pub(super) fn simple_entry_module() -> Module {
                 timeout: None,
                 retry: None,
             })),
+            impl_call: None,
         },
         traits: vec![Trait {
             id: "http".into(),
@@ -346,6 +348,7 @@ fn a_multi_entry_module_prefixes_settings_descriptors_and_discriminators() {
                 timeout: None,
                 retry: None,
             })),
+            impl_call: None,
         },
         traits: vec![Trait {
             id: "http".into(),
@@ -648,6 +651,7 @@ fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
                         output: None,
                         errors: vec![],
                         wire: None,
+                        impl_call: None,
                     },
                     traits: vec![],
                 });
