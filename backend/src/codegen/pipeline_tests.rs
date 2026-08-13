@@ -48,6 +48,7 @@ fn union_model() -> Model {
             ],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         }],
     }
 }
@@ -64,6 +65,7 @@ fn demo_model() -> Model {
             )],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         }],
     }
 }
@@ -346,6 +348,7 @@ fn sub_package_model() -> Model {
                 )],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             },
             Module {
                 tests: vec![],
@@ -363,6 +366,7 @@ fn sub_package_model() -> Model {
                 )],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             },
         ],
     }
@@ -523,6 +527,7 @@ fn go_modules_sharing_a_last_segment_are_rejected() {
                 )],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             },
             Module {
                 tests: vec![],
@@ -533,6 +538,7 @@ fn go_modules_sharing_a_last_segment_are_rejected() {
                 )],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             },
         ],
     };
@@ -569,6 +575,7 @@ fn bare_entry_model() -> Model {
             }],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         }],
     }
 }
@@ -641,6 +648,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                 )],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             },
             Module {
                 tests: vec![],
@@ -663,6 +671,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                                 format: None,
                                 transforms: vec![],
                                 select: None,
+                                call: None,
                                 binds: vec![],
                                 constraints: vec![],
                                 traits: vec![],
@@ -697,6 +706,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                 ],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             },
         ],
     };

@@ -19,7 +19,9 @@ let check_member (m : Ast.member) : Diagnostic.t list =
 let check_decl (d : Ast.decl) : Diagnostic.t list =
   match d.dkind with
   | Ast.DStruct { members; _ } -> List.concat_map check_member members
-  | Ast.DEnum _ | Ast.DUnion _ | Ast.DOp _ | Ast.DExt _ | Ast.DTest _ -> []
+  | Ast.DEnum _ | Ast.DUnion _ | Ast.DOp _ | Ast.DExt _ | Ast.DExtLib _
+  | Ast.DTest _ ->
+      []
 
 let check_decls (decls : Ast.decl list) : Diagnostic.t list =
   List.concat_map check_decl decls

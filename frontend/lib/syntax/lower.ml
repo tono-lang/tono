@@ -114,6 +114,24 @@ let rec json_of_arg : Ast.trait_arg -> Ir.json = function
               (List.map (fun (n, _, v) -> (n, json_of_arg v)) c.Ast.ctor_fields)
           );
         ]
+  | Ast.ACall ce ->
+      (* An extern call inside a trait argument, e.g.
+         @header("Authorization", companyauth.sign(.request)). Resolving [ns]
+         against a declared [ext] block is out of scope here; this only keeps
+         the call structured for later resolution. *)
+      `Assoc
+        [
+          ( "call",
+            `Assoc
+              [ ("ns", `String ce.Ast.ce_ns); ("fn", `String ce.Ast.ce_fn) ] );
+          ("args", `List (List.map json_of_call_arg ce.Ast.ce_args));
+        ]
+
+and json_of_call_arg : Ast.call_arg -> Ir.json = function
+  | Ast.CaParam (n, _) -> `Assoc [ ("param", `String n) ]
+  | Ast.CaRef r ->
+      `Assoc [ ("field", `List (List.map (fun s -> `String s) r.Ast.segs)) ]
+  | Ast.CaCtor c -> json_of_arg (Ast.ACtor c)
 
 (* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
    -> {"method":"get","path":"/x"}); any positional arg keeps the uniform array
@@ -300,6 +318,10 @@ let lower_select ~diags (fm : Ast.field_match) : Ir.select =
         fm.arms;
   }
 
+(* Extern call lowering lives in [Lower_extern] (shared with the ext/extern
+   library block); aliased locally. *)
+let lower_call_expr = Lower_extern.lower_call_expr
+
 let lower_entry_field ~resolve ~diags (m : Ast.member) : Ir.entry_field =
   check_snake diags m.mname_span "member name" m.mname;
   (* Nullability on an entry/config field is a typecheck error (optionality
@@ -352,7 +374,14 @@ let lower_entry_field ~resolve ~diags (m : Ast.member) : Ir.entry_field =
     ef_sources = !sources;
     ef_format = !format;
     ef_transforms = !transforms;
-    ef_select = Option.map (lower_select ~diags) m.mmatch;
+    ef_select =
+      (match m.mvalue with
+      | Some (Ast.MMatch fm) -> Some (lower_select ~diags fm)
+      | Some (Ast.MCall _) | None -> None);
+    ef_call =
+      (match m.mvalue with
+      | Some (Ast.MCall ce) -> Some (lower_call_expr ce)
+      | Some (Ast.MMatch _) | None -> None);
     ef_binds = !binds;
     ef_constraints = !constraints;
     ef_traits = !bag;
@@ -561,10 +590,11 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
       lower_op_shape
         ~id:(qualify module_name d.dname)
         ~resolve ~diags d ~pname ~input ~output ~pub_trait
-  | Ast.DExt _ | Ast.DTest _ ->
-      (* Extensions and tests have no shape; [lower_file] routes extensions to
-         [lower_ext] and leaves tests to the typechecker, which lowers them
-         with full type information. *)
+  | Ast.DExt _ | Ast.DExtLib _ | Ast.DTest _ ->
+      (* Extensions, ext libs, and tests have no shape; [lower_file] routes
+         extensions to [lower_ext], ext libs to [lower_ext_lib], and leaves
+         tests to the typechecker, which lowers them with full type
+         information. *)
       assert false
 
 let default_resolver ~module_name : ref_resolver =
@@ -612,6 +642,11 @@ let lower_ext ~resolve ~diags (d : Ast.decl) : Ir.extension =
       }
   | _ -> assert false
 
+(* The [ext <name> { ... }] library block lowers in [Lower_extern] (which
+   also owns the shared extern-call lowering above); [lower_type]/
+   [lower_select] are threaded in to avoid a dependency cycle. *)
+let lower_ext_lib = Lower_extern.lower_ext_lib ~lower_type ~lower_select
+
 (* Lower a whole file into a module: operations land in [operations], extensions
    in [extensions], every other shape in [shapes], preserving declaration order.
    Shape ids and references are namespaced through [resolve]; the default (used
@@ -626,10 +661,13 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
   let shapes_rev = ref [] in
   let ops_rev = ref [] in
   let exts_rev = ref [] in
+  let ext_libs_rev = ref [] in
   List.iter
     (fun (d : Ast.decl) ->
       match d.dkind with
       | Ast.DExt _ -> exts_rev := lower_ext ~resolve ~diags d :: !exts_rev
+      | Ast.DExtLib _ ->
+          ext_libs_rev := lower_ext_lib ~resolve ~diags d :: !ext_libs_rev
       (* Tests lower during typecheck (their wire encoding is type-driven);
          they carry no shape and their names are free strings. *)
       | Ast.DTest _ -> ()
@@ -645,6 +683,7 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
     shapes = List.rev !shapes_rev;
     operations = List.rev !ops_rev;
     extensions = List.rev !exts_rev;
+    ext_libs = List.rev !ext_libs_rev;
     tests = [];
   }
 

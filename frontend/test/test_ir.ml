@@ -153,6 +153,7 @@ let index_resolves () =
             shapes = [ s ];
             operations = [ op ];
             extensions = [];
+            ext_libs = [];
             tests = [];
           };
         ];
@@ -601,6 +602,7 @@ let sample_model : Ir.model =
             ];
           operations = [ operation_shape ];
           extensions = [ hook_ext; contract_ext; constraint_ext ];
+          ext_libs = [];
           tests = [];
         };
       ];

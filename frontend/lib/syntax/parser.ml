@@ -102,95 +102,16 @@ and parse_type_list st =
 (* ── Traits ────────────────────────────────────────────────────────────── *)
 
 (* Trait and reference parsing lives in [Parser_traits]; aliased locally. *)
-let parse_ref_path = Parser_traits.parse_ref_path
 let parse_trait = Parser_traits.parse_trait
 let parse_trailing_traits = Parser_traits.parse_trailing_traits
 
 (* ── Members ───────────────────────────────────────────────────────────── *)
 
-(* match ::= "match" ref "{" (pattern "=>" value)* "}"  — the selection table of
-   an entry/config field. Patterns are literals (or "_"); a value is a field
-   reference, a literal, or a stack of source traits resolved in place. *)
-let parse_field_match st : Ast.field_match =
-  let kw = P.advance st in
-  (* 'match' *)
-  let subject =
-    match (P.peek st).kind with
-    | Token.Dot -> parse_ref_path st
-    | _ ->
-        P.error st (P.peek st).span
-          "expected a field reference (.name) as the match subject";
-        { Ast.segs = []; ref_span = (P.peek st).span }
-  in
-  ignore (P.expect st Token.LBrace "'{' to open the match body");
-  let parse_pattern () =
-    let t = P.peek st in
-    match t.kind with
-    | Token.Str s ->
-        ignore (P.advance st);
-        (Ast.PString s, t.span)
-    | Token.Int n ->
-        ignore (P.advance st);
-        (Ast.PInt n, t.span)
-    | Token.Ident "_" ->
-        ignore (P.advance st);
-        (Ast.PWildcard, t.span)
-    | Token.Ident n ->
-        ignore (P.advance st);
-        (Ast.PName n, t.span)
-    | _ ->
-        P.error st t.span "expected a literal pattern or '_' in the match body";
-        ignore (P.advance st);
-        (Ast.PWildcard, t.span)
-  in
-  let parse_value () =
-    let t = P.peek st in
-    match t.kind with
-    | Token.Dot ->
-        let r = parse_ref_path st in
-        (Ast.AVRef r, r.ref_span)
-    | Token.Str s ->
-        ignore (P.advance st);
-        (Ast.AVString s, t.span)
-    | Token.Int n ->
-        ignore (P.advance st);
-        (Ast.AVInt n, t.span)
-    | Token.Ident n ->
-        ignore (P.advance st);
-        (Ast.AVName n, t.span)
-    | Token.At ->
-        let traits = parse_trailing_traits st in
-        let last =
-          match List.rev traits with
-          | (tr : Ast.trait) :: _ -> tr.tspan
-          | [] -> t.span
-        in
-        (Ast.AVSources traits, Span.merge t.span last)
-    | _ ->
-        P.error st t.span
-          "expected a field reference, a literal, or value sources after '=>'";
-        ignore (P.advance st);
-        (Ast.AVName "", t.span)
-  in
-  let rec arms acc =
-    match (P.peek st).kind with
-    | Token.RBrace | Token.Eof -> List.rev acc
-    | Token.Comma ->
-        ignore (P.advance st);
-        arms acc
-    | _ ->
-        let pat, pat_span = parse_pattern () in
-        ignore
-          (P.expect st Token.FatArrow "'=>' between the pattern and its value");
-        let value, value_span = parse_value () in
-        arms ({ Ast.pat; pat_span; value; value_span } :: acc)
-  in
-  let arms = arms [] in
-  let close = P.expect st Token.RBrace "'}' to close the match body" in
-  let finish = match close with Some c -> c.span | None -> kw.span in
-  { Ast.subject; arms; match_span = Span.merge kw.span finish }
+(* Selection-table (match) parsing lives in [Parser_traits] so [Parser_extern]
+   can reuse it for a [returns:] field value; aliased locally. *)
+let parse_field_match = Parser_traits.parse_field_match
 
-(* member ::= name ":" type ("=" match)? trait* *)
+(* member ::= name ":" type ("=" (match | call_expr))? trait* *)
 let parse_member st : Ast.member =
   let nt = P.peek st in
   let name =
@@ -204,16 +125,26 @@ let parse_member st : Ast.member =
   in
   ignore (P.expect st Token.Colon "':' after member name");
   let ty = parse_type st in
-  let mmatch =
+  let mvalue =
     match (P.peek st).kind with
     | Token.Eq -> (
         ignore (P.advance st);
         match (P.peek st).kind with
-        | Token.Ident "match" -> Some (parse_field_match st)
+        | Token.Ident "match" -> Some (Ast.MMatch (parse_field_match st))
+        | Token.Ident ns -> (
+            match (P.peek_ahead st 1).kind with
+            | Token.Dot ->
+                let nst = P.advance st in
+                Some
+                  (Ast.MCall
+                     (Parser_traits.parse_call_expr st ~ns ~ns_span:nst.span))
+            | _ ->
+                P.error st (P.peek st).span
+                  "expected 'match' or a 'namespace.fn(...)' call after '='";
+                None)
         | _ ->
             P.error st (P.peek st).span
-              "expected 'match' after '='; selection is the only field \
-               expression";
+              "expected 'match' or a 'namespace.fn(...)' call after '='";
             None)
     | _ -> None
   in
@@ -222,7 +153,7 @@ let parse_member st : Ast.member =
     Ast.mname = name;
     mname_span = nt.span;
     mtype = ty;
-    mmatch;
+    mvalue;
     mtraits = traits;
   }
 
@@ -306,6 +237,7 @@ let parse_union st ~pub ~dtraits : Ast.decl =
         P.error st nt.span "expected a union name";
         ""
   in
+  Parser_extern.check_not_error_name st "union" name nt.span;
   let params = parse_generics st in
   (* traits after the name (e.g. @discriminator) join the shape-level traits *)
   let dtraits = dtraits @ parse_trailing_traits st in
@@ -381,6 +313,7 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
         P.error st nt.span "expected an enum name";
         ""
   in
+  Parser_extern.check_not_error_name st "enum" name nt.span;
   (* an enum carries no positional trait after its name (every enum is open;
      shape-level traits like @doc are leading, handled by parse_decl) *)
   ignore (P.expect st Token.LBrace "'{' to open the enum body");
@@ -488,6 +421,7 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
         P.error st nt.span "expected a struct name";
         ""
   in
+  Parser_extern.check_not_error_name st "struct" name nt.span;
   let params = parse_generics st in
   ignore (P.expect st Token.LBrace "'{' to open the struct body");
   let members, ops = parse_struct_items st in
@@ -502,137 +436,33 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
 
 (* ── Extensions ────────────────────────────────────────────────────────── *)
 
-(* The kind word after "ext": hook | contract | constraint | impl. An
-   unrecognized word is diagnosed and defaults to a hook so the rest of the body
-   still parses. *)
-let parse_ext_kind st : Ast.ext_kind * Span.span =
-  let t = P.peek st in
-  match t.kind with
-  | Token.Ident "hook" ->
-      ignore (P.advance st);
-      (Ast.EHook, t.span)
-  | Token.Ident "contract" ->
-      ignore (P.advance st);
-      (Ast.EContract, t.span)
-  | Token.Ident "constraint" ->
-      ignore (P.advance st);
-      (Ast.EConstraint, t.span)
-  | Token.Ident "impl" ->
-      ignore (P.advance st);
-      (Ast.EImpl, t.span)
-  | _ ->
-      P.error st t.span
-        "expected an extension kind: 'hook', 'contract', 'constraint', or \
-         'impl'";
-      (Ast.EHook, t.span)
+(* The legacy [ext hook|contract|constraint|impl] grammar lives in
+   [Parser_ext]; the new [ext <name> { ... }] library-block grammar lives in
+   [Parser_extern]. *)
+let parse_ext = Parser_ext.parse_ext ~parse_type
 
-(* signature ::= "(" type ")" "->" type *)
-let parse_ext_sig st : Ast.ext_sig =
-  ignore (P.advance st);
-  (* '(' *)
-  let input = parse_type st in
-  ignore (P.expect st Token.RParen "')' to close the signature input");
-  ignore (P.expect st Token.Arrow "'->' between the signature input and output");
-  let output = parse_type st in
-  { Ast.esig_in = input; esig_out = output }
-
-(* ext_body ::= ( lang ":" string | "conformance" ":" string )*  — a language
-   tag binds to a "file#symbol" reference; the reserved key "conformance" binds
-   the conformance vector reference. *)
-let parse_ext_body st : Ast.ext_binding list * string option =
-  let rec go bindings conformance =
-    let t = P.peek st in
-    match t.kind with
-    | Token.RBrace | Token.Eof -> (List.rev bindings, conformance)
-    | Token.Comma ->
-        ignore (P.advance st);
-        go bindings conformance
-    | Token.Ident key ->
-        ignore (P.advance st);
-        ignore (P.expect st Token.Colon "':' after an extension body key");
-        let value =
-          match (P.peek st).kind with
-          | Token.Str s ->
-              ignore (P.advance st);
-              s
-          | _ ->
-              P.error st (P.peek st).span
-                "expected a \"file#symbol\" string in the extension body";
-              ""
-        in
-        if key = "conformance" then go bindings (Some value)
-        else
-          go
-            ({ Ast.lang = key; lang_span = t.span; target = value } :: bindings)
-            conformance
-    | _ ->
-        P.error st t.span
-          (Printf.sprintf "unexpected %s in the extension body"
-             (Token.describe t.kind));
-        ignore (P.advance st);
-        go bindings conformance
-  in
-  go [] None
-
-(* An impl names the operation it implements. The bare operation name is the
-   normal form; "entry.op" disambiguates when two entries in one module declare
-   the same operation name. Only an impl reads the dotted form: for the other
-   kinds the name is a slot or a contract name, which is a single segment. *)
-let parse_ext_name st ekind : string * Span.span =
-  let nt = P.peek st in
-  let head =
-    match nt.kind with
-    | Token.Ident n ->
-        ignore (P.advance st);
-        n
-    | _ ->
-        P.error st nt.span "expected an extension name";
-        ""
-  in
-  match (ekind, (P.peek st).kind) with
-  | Ast.EImpl, Token.Dot -> (
-      ignore (P.advance st);
+(* Consumes a brace-balanced block, assuming the current token is its opening
+   '{'. Used to recover from a body that was never going to parse (a reserved
+   ext-kind word used as a library name): skipping straight to the matching
+   '}' avoids re-entering a parser that would otherwise cascade through the
+   mismatched body one confusing diagnostic at a time. *)
+let skip_balanced_braces st : unit =
+  ignore (P.expect st Token.LBrace "'{' to open the block");
+  let rec go depth =
+    if depth = 0 || P.at_eof st then ()
+    else
       match (P.peek st).kind with
-      | Token.Ident n ->
+      | Token.LBrace ->
           ignore (P.advance st);
-          (head ^ "." ^ n, nt.span)
+          go (depth + 1)
+      | Token.RBrace ->
+          ignore (P.advance st);
+          go (depth - 1)
       | _ ->
-          P.error st (P.peek st).span
-            "expected an operation name after '.' in \"entry.op\"";
-          (head, nt.span))
-  | _ -> (head, nt.span)
-
-(* ext ::= "ext" ext_kind name "raw"? signature? "{" ext_body "}"  — "raw" is
-   consumed for every kind so a misplaced one is a typecheck diagnostic pointing
-   at the word rather than a confusing parse error. *)
-let parse_ext st ~pub ~dtraits : Ast.decl =
-  ignore (P.advance st);
-  (* 'ext' *)
-  let ekind, ekind_span = parse_ext_kind st in
-  let name, name_span = parse_ext_name st ekind in
-  let eraw =
-    match (P.peek st).kind with
-    | Token.Ident "raw" ->
-        let t = P.peek st in
-        ignore (P.advance st);
-        Some t.span
-    | _ -> None
+          ignore (P.advance st);
+          go depth
   in
-  let esig =
-    match (P.peek st).kind with
-    | Token.LParen -> Some (parse_ext_sig st)
-    | _ -> None
-  in
-  ignore (P.expect st Token.LBrace "'{' to open the extension body");
-  let ebindings, econformance = parse_ext_body st in
-  ignore (P.expect st Token.RBrace "'}' to close the extension body");
-  {
-    Ast.dname = name;
-    dname_span = name_span;
-    pub;
-    dtraits;
-    dkind = Ast.DExt { ekind; ekind_span; esig; eraw; ebindings; econformance };
-  }
+  go 1
 
 (* ── Declarations and files ────────────────────────────────────────────── *)
 
@@ -652,7 +482,50 @@ let parse_decl st : Ast.decl option =
   | Token.KwUnion -> Some (parse_union st ~pub ~dtraits)
   | Token.KwEnum -> Some (parse_enum st ~pub ~dtraits)
   | Token.KwOp -> Some (parse_op st ~pub ~dtraits)
-  | Token.KwExt -> Some (parse_ext st ~pub ~dtraits)
+  | Token.KwExt -> (
+      (* "ext hook|contract|constraint|impl ..." is the legacy grammar
+         (Parser_ext, untouched below); any other identifier after "ext" is
+         the library name of the new "ext <name> { ... }" FFI block
+         (Parser_extern). One token of lookahead beyond "ext" disambiguates
+         without consuming it for the legacy path, which advances "ext"
+         itself. *)
+      match (P.peek_ahead st 1).kind with
+      | Token.Ident (("hook" | "contract" | "constraint" | "impl") as kind) -> (
+          (* The legacy grammar always requires a name after the kind word
+             (ext <kind> <name> ...); a '{' immediately after it can only be
+             a mistyped legacy form, never a valid one. Name the collision
+             once, up front, then skip straight past the whole malformed
+             body instead of letting legacy parsing re-enter it and cascade
+             into a diagnostic per token while it fails to recover. *)
+          match (P.peek_ahead st 2).kind with
+          | Token.LBrace ->
+              P.error st (P.peek_ahead st 1).span
+                (Printf.sprintf
+                   "'%s' is a reserved ext-kind word here, not a library name: \
+                    a library cannot currently be named '%s'"
+                   kind kind);
+              ignore (P.advance st);
+              (* 'ext' *)
+              ignore (P.advance st);
+              (* kind word *)
+              skip_balanced_braces st;
+              None
+          | _ -> Some (parse_ext st ~pub ~dtraits))
+      | Token.Ident n ->
+          ignore (P.advance st);
+          (* 'ext' *)
+          let nt = P.advance st in
+          (* library name *)
+          Some
+            (Parser_extern.parse_ext_lib ~parse_type
+               ~parse_type_no_error:
+                 (Parser_extern.parse_type_no_error ~parse_type)
+               st ~pub ~dtraits ~name:n ~name_span:nt.span)
+      | _ ->
+          P.error st (P.peek_ahead st 1).span
+            "expected an extension kind or a library name after 'ext'";
+          ignore (P.advance st);
+          None)
   | Token.KwTest ->
       (* A test is neither exported nor decorated: it is not a shape. *)
       if pub then

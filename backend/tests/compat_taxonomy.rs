@@ -21,6 +21,7 @@ fn model(shapes: Vec<Shape>, extensions: Vec<Extension>) -> tono_backend::ir::Mo
             shapes,
             operations: vec![],
             extensions,
+            ext_libs: vec![],
         }],
     }
 }
@@ -61,6 +62,7 @@ fn entry(id: &str, operations: Vec<Shape>) -> Shape {
                 format: None,
                 transforms: vec![],
                 select: None,
+                call: None,
                 binds: vec![],
                 constraints: vec![],
                 traits: vec![],

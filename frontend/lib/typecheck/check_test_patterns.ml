@@ -16,7 +16,7 @@ let vmember name ty : Ast.member =
     Ast.mname = name;
     mname_span = V.dummy_span;
     mtype = ty;
-    mmatch = None;
+    mvalue = None;
     mtraits = [];
   }
 

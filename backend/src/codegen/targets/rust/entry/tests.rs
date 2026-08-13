@@ -23,6 +23,7 @@ fn module_of(shapes: Vec<Shape>) -> Module {
         shapes,
         operations: vec![],
         extensions: vec![],
+        ext_libs: vec![],
         tests: vec![],
     }
 }

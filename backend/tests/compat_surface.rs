@@ -15,6 +15,7 @@ fn model(shapes: Vec<Shape>) -> Model {
             tests: vec![],
             name: "billing".into(),
             extensions: vec![],
+            ext_libs: vec![],
             shapes,
             operations: vec![],
         }],

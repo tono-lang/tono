@@ -79,7 +79,7 @@ let check_source_combinations ~in_config (m : Ast.member) : Diagnostic.t list =
   let arg_diags =
     match find_trait "arg" m.mtraits with
     | Some tr
-      when List.length sources > 1 || Option.is_some m.mmatch || has "format" ->
+      when List.length sources > 1 || Option.is_some m.mvalue || has "format" ->
         [
           dead tr.tspan
             "@arg is explicit and exclusive: the other sources (or match / \
@@ -88,18 +88,26 @@ let check_source_combinations ~in_config (m : Ast.member) : Diagnostic.t list =
     | _ -> []
   in
   let match_diags =
-    match m.mmatch with
-    | Some fm when (not (has "arg")) && (sources <> [] || has "format") ->
+    match m.mvalue with
+    | Some (Ast.MMatch fm)
+      when (not (has "arg")) && (sources <> [] || has "format") ->
         [
           dead fm.match_span
             "a match is the field's only value; declare sources on the fields \
              its arms reference instead";
         ]
+    | Some (Ast.MCall ce)
+      when (not (has "arg")) && (sources <> [] || has "format") ->
+        [
+          dead ce.ce_span
+            "an extern call is the field's only value; declare sources on \
+             other fields instead";
+        ]
     | _ -> []
   in
   let format_diags =
     match find_trait "format" m.mtraits with
-    | Some tr when (not (has "arg")) && Option.is_none m.mmatch && sources <> []
+    | Some tr when (not (has "arg")) && Option.is_none m.mvalue && sources <> []
       ->
         [
           dead tr.tspan
@@ -383,11 +391,16 @@ let check_member_boundary ctx ~(container : Roles.role) (m : Ast.member) :
    loses a match, and @format/@str::* would ride the bag with no consumer,
    while the source reads as if they fire. *)
 let check_wire_member_metadata (m : Ast.member) : Diagnostic.t list =
-  (match m.mmatch with
-    | Some fm ->
+  (match m.mvalue with
+    | Some (Ast.MMatch fm) ->
         [
           err Error_codes.source_position_invalid fm.match_span
             "a match selection only lives on entry/config fields";
+        ]
+    | Some (Ast.MCall ce) ->
+        [
+          err Error_codes.source_position_invalid ce.ce_span
+            "an extern call only lives on entry/config fields";
         ]
     | None -> [])
   @ List.filter_map
@@ -431,9 +444,11 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
         @ check_member_boundary ctx ~container:Roles.Entry m
         @ unresolved_ref_diags
         @
-        match m.mmatch with
-        | Some fm -> check_match ctx members m fm
-        | None -> [])
+        match m.mvalue with
+        | Some (Ast.MMatch fm) -> check_match ctx members m fm
+        (* An extern call's projection is checked against its ext block's
+           declared signature; that resolution is deferred (out of scope). *)
+        | Some (Ast.MCall _) | None -> [])
       members
   in
   let cycle_diags = check_cycles ctx members in
@@ -581,9 +596,9 @@ let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
                  type is a config"))
         @ unresolved_ref_diags @ sourceless
         @
-        match m.mmatch with
-        | Some fm -> check_match ctx members m fm
-        | None -> [])
+        match m.mvalue with
+        | Some (Ast.MMatch fm) -> check_match ctx members m fm
+        | Some (Ast.MCall _) | None -> [])
       members
   in
   check_generics d params "config" @ check_cycles ctx members @ field_diags
@@ -615,5 +630,5 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
               variants
       | Ast.DEnum _ -> check_non_struct_sources d
       | Ast.DOp _ -> check_op_boundary ctx d @ check_loose_op ctx d
-      | Ast.DExt _ | Ast.DTest _ -> [])
+      | Ast.DExt _ | Ast.DExtLib _ | Ast.DTest _ -> [])
     decls

@@ -497,6 +497,7 @@ fn a_module_without_entries_emits_nothing() {
         shapes: vec![],
         operations: vec![],
         extensions: vec![],
+        ext_libs: vec![],
     };
     let emission = emit(&module, &ts_casing());
     assert!(emission.shared.is_empty() && emission.per_entry.is_empty());

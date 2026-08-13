@@ -21,23 +21,38 @@ let rec erase_ty = function
 
 let erase_ref (r : Ast.ref_path) = { r with Ast.ref_span = dspan }
 
-(* A trait argument can carry a reference, which carries a span of its own. *)
+(* A trait argument can carry a reference or a call expression, both of which
+   carry spans of their own; a call argument's own ctor field values are the
+   same trait-argument grammar, so the two groups are mutually recursive. *)
 let rec erase_arg = function
   | Ast.ARef r -> Ast.ARef (erase_ref r)
   | Ast.AKv (k, v) -> Ast.AKv (k, erase_arg v)
   | Ast.AList xs -> Ast.AList (List.map erase_arg xs)
-  | Ast.ACtor c ->
-      Ast.ACtor
-        {
-          c with
-          Ast.ctor_name_span = dspan;
-          ctor_span = dspan;
-          ctor_fields =
-            List.map
-              (fun (n, _, v) -> (n, dspan, erase_arg v))
-              c.Ast.ctor_fields;
-        }
+  | Ast.ACtor c -> Ast.ACtor (erase_ctor c)
+  | Ast.ACall ce -> Ast.ACall (erase_call_expr ce)
   | (Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _) as a -> a
+
+and erase_ctor (c : Ast.ctor_arg) : Ast.ctor_arg =
+  {
+    c with
+    Ast.ctor_name_span = dspan;
+    ctor_span = dspan;
+    ctor_fields =
+      List.map (fun (n, _, v) -> (n, dspan, erase_arg v)) c.Ast.ctor_fields;
+  }
+
+and erase_call_arg = function
+  | Ast.CaParam (n, _) -> Ast.CaParam (n, dspan)
+  | Ast.CaRef r -> Ast.CaRef (erase_ref r)
+  | Ast.CaCtor c -> Ast.CaCtor (erase_ctor c)
+
+and erase_call_expr (ce : Ast.call_expr) : Ast.call_expr =
+  {
+    ce with
+    Ast.ce_head_span = dspan;
+    ce_args = List.map erase_call_arg ce.Ast.ce_args;
+    ce_span = dspan;
+  }
 
 let erase_trait (t : Ast.trait) =
   { t with Ast.tspan = dspan; targs = List.map erase_arg t.Ast.targs }
@@ -63,12 +78,16 @@ let erase_match (fm : Ast.field_match) =
     match_span = dspan;
   }
 
+let erase_member_value = function
+  | Ast.MMatch fm -> Ast.MMatch (erase_match fm)
+  | Ast.MCall ce -> Ast.MCall (erase_call_expr ce)
+
 let erase_member (m : Ast.member) =
   {
     m with
     Ast.mname_span = dspan;
     mtype = erase_ty m.Ast.mtype;
-    mmatch = Option.map erase_match m.Ast.mmatch;
+    mvalue = Option.map erase_member_value m.Ast.mvalue;
     mtraits = List.map erase_trait m.Ast.mtraits;
   }
 
@@ -85,6 +104,91 @@ let erase_variant (v : Ast.union_variant) =
     Ast.vname_span = dspan;
     vpayload = Option.map erase_ty v.Ast.vpayload;
     vtraits = List.map erase_trait v.Ast.vtraits;
+  }
+
+(* ── FFI library blocks: ext <name> { ... } ──────────────────────────────── *)
+
+let erase_lang_path (lp : Ast.lang_path) = { lp with Ast.lp_lang_span = dspan }
+
+let erase_foreign_field (f : Ast.foreign_field) =
+  { f with Ast.ff_name_span = dspan; ff_type = erase_ty f.Ast.ff_type }
+
+let erase_foreign_struct (s : Ast.foreign_struct) =
+  {
+    s with
+    Ast.fs_name_span = dspan;
+    fs_fields = List.map erase_foreign_field s.Ast.fs_fields;
+    fs_span = dspan;
+  }
+
+let erase_yields_ty = function
+  | Ast.YType t -> Ast.YType (erase_ty t)
+  | Ast.YError _ -> Ast.YError dspan
+
+let erase_yields_pos (y : Ast.yields_pos) =
+  { y with Ast.yp_name_span = dspan; yp_ty = erase_yields_ty y.Ast.yp_ty }
+
+let erase_returns_value = function
+  | Ast.RvRef r -> Ast.RvRef (erase_ref r)
+  | Ast.RvMatch fm -> Ast.RvMatch (erase_match fm)
+
+let erase_returns_field (f : Ast.returns_field) =
+  {
+    f with
+    Ast.rf_name_span = dspan;
+    rf_value = erase_returns_value f.Ast.rf_value;
+    rf_span = dspan;
+  }
+
+let erase_returns_lit (r : Ast.returns_lit) =
+  {
+    Ast.rl_type = erase_ty r.Ast.rl_type;
+    rl_fields = List.map erase_returns_field r.Ast.rl_fields;
+    rl_span = dspan;
+  }
+
+let erase_error_map_entry (e : Ast.error_map_entry) =
+  { e with Ast.em_sentinel_span = dspan; em_type_span = dspan }
+
+let erase_extern_lang_body (b : Ast.extern_lang_body) =
+  {
+    b with
+    Ast.elb_lang_span = dspan;
+    elb_call_symbol_span = dspan;
+    elb_call_args = List.map erase_call_arg b.Ast.elb_call_args;
+    elb_yields = Option.map (List.map erase_yields_pos) b.Ast.elb_yields;
+    elb_returns = Option.map erase_returns_lit b.Ast.elb_returns;
+    elb_errors = List.map erase_error_map_entry b.Ast.elb_errors;
+    elb_span = dspan;
+  }
+
+let erase_extern_param (p : Ast.extern_param) =
+  { p with Ast.ep_name_span = dspan; ep_type = erase_ty p.Ast.ep_type }
+
+let erase_extern_decl (e : Ast.extern_decl) =
+  {
+    e with
+    Ast.ed_name_span = dspan;
+    ed_params = List.map erase_extern_param e.Ast.ed_params;
+    ed_return = erase_ty e.Ast.ed_return;
+    ed_langs = List.map erase_extern_lang_body e.Ast.ed_langs;
+    ed_span = dspan;
+  }
+
+let erase_opaque_type (t : Ast.opaque_type) =
+  {
+    t with
+    Ast.opq_name_span = dspan;
+    opq_methods = List.map erase_extern_decl t.Ast.opq_methods;
+    opq_span = dspan;
+  }
+
+let erase_ext_lib_body (b : Ast.ext_lib_body) : Ast.ext_lib_body =
+  {
+    Ast.elib_langs = List.map erase_lang_path b.Ast.elib_langs;
+    elib_structs = List.map erase_foreign_struct b.Ast.elib_structs;
+    elib_types = List.map erase_opaque_type b.Ast.elib_types;
+    elib_externs = List.map erase_extern_decl b.Ast.elib_externs;
   }
 
 let rec erase_kind = function
@@ -125,6 +229,8 @@ let rec erase_kind = function
               ebindings;
           econformance;
         }
+  | Ast.DExtLib { body; span = _ } ->
+      Ast.DExtLib { body = erase_ext_lib_body body; span = dspan }
   (* Test blocks are exercised by their own fmt tests; the generator does not
      produce them. *)
   | Ast.DTest _ as k -> k
@@ -303,16 +409,65 @@ let gen_match =
   in
   { Ast.subject; arms; match_span = dspan }
 
+(* ── FFI call expressions: ns.fn(args) ───────────────────────────────────── *)
+
+let gen_ctor_arg =
+  let+ name = gen_tname
+  and+ fields =
+    G.list_size (G.int_range 0 2)
+      (let+ fname = gen_lname and+ v = gen_scalar in
+       (fname, dspan, v))
+  in
+  {
+    Ast.ctor_name = name;
+    ctor_name_span = dspan;
+    ctor_fields = fields;
+    ctor_span = dspan;
+  }
+
+let gen_call_arg =
+  G.oneof
+    [
+      (let+ n = gen_lname in
+       Ast.CaParam (n, dspan));
+      (let+ r = gen_ref in
+       Ast.CaRef r);
+      (let+ c = gen_ctor_arg in
+       Ast.CaCtor c);
+    ]
+
+let gen_call_expr =
+  let+ ns = gen_tname
+  and+ fn = gen_lname
+  and+ args = G.list_size (G.int_range 0 2) gen_call_arg in
+  {
+    Ast.ce_ns = ns;
+    ce_fn = fn;
+    ce_head_span = dspan;
+    ce_args = args;
+    ce_span = dspan;
+  }
+
+let gen_member_value =
+  G.oneof
+    [
+      G.return None;
+      (let+ fm = gen_match in
+       Some (Ast.MMatch fm));
+      (let+ ce = gen_call_expr in
+       Some (Ast.MCall ce));
+    ]
+
 let gen_member =
   let+ name = gen_lname
   and+ ty = gen_ty
-  and+ fm = G.oneof [ G.return None; G.map Option.some gen_match ]
+  and+ mv = gen_member_value
   and+ traits = gen_traits in
   {
     Ast.mname = name;
     mname_span = dspan;
     mtype = ty;
-    mmatch = fm;
+    mvalue = mv;
     mtraits = traits;
   }
 
@@ -361,6 +516,136 @@ let gen_binding =
   and+ target = G.oneof_list [ "ext/ts/a.ts#f"; "ext\\go\\a \"b\".go#F"; "" ] in
   { Ast.lang; lang_span = dspan; target }
 
+(* ── FFI library blocks: ext <name> { ... } ──────────────────────────────── *)
+
+let gen_lang_path =
+  let+ lang = G.oneof_list [ "go"; "ts"; "rust" ] and+ path = gen_string in
+  { Ast.lp_lang = lang; lp_lang_span = dspan; lp_path = path }
+
+let gen_foreign_field =
+  let+ name = gen_tname and+ ty = gen_ty in
+  { Ast.ff_name = name; ff_name_span = dspan; ff_type = ty }
+
+let gen_foreign_struct =
+  let+ name = gen_tname
+  and+ fields = G.list_size (G.int_range 0 2) gen_foreign_field in
+  {
+    Ast.fs_name = name;
+    fs_name_span = dspan;
+    fs_fields = fields;
+    fs_span = dspan;
+  }
+
+let gen_yields_ty =
+  G.oneof
+    [
+      (let+ t = gen_ty in
+       Ast.YType t);
+      G.return (Ast.YError dspan);
+    ]
+
+let gen_yields_pos =
+  let+ name = gen_lname and+ ty = gen_yields_ty in
+  { Ast.yp_name = name; yp_name_span = dspan; yp_ty = ty }
+
+let gen_returns_value =
+  G.oneof
+    [
+      (let+ r = gen_ref in
+       Ast.RvRef r);
+      (let+ fm = gen_match in
+       Ast.RvMatch fm);
+    ]
+
+let gen_returns_field =
+  let+ name = gen_lname and+ v = gen_returns_value in
+  { Ast.rf_name = name; rf_name_span = dspan; rf_value = v; rf_span = dspan }
+
+let gen_returns_lit =
+  let+ ty = gen_ty
+  and+ fields = G.list_size (G.int_range 1 2) gen_returns_field in
+  { Ast.rl_type = ty; rl_fields = fields; rl_span = dspan }
+
+let gen_error_map_entry =
+  let+ sentinel = gen_string and+ ty = gen_tname in
+  {
+    Ast.em_sentinel = sentinel;
+    em_sentinel_span = dspan;
+    em_type = ty;
+    em_type_span = dspan;
+  }
+
+let gen_extern_lang_body =
+  let+ lang = G.oneof_list [ "go"; "ts"; "rust" ]
+  and+ symbol = gen_string
+  and+ args = G.list_size (G.int_range 0 2) gen_call_arg
+  and+ yields =
+    G.oneof
+      [
+        G.return None;
+        (let+ ys = G.list_size (G.int_range 1 2) gen_yields_pos in
+         Some ys);
+      ]
+  and+ returns =
+    G.oneof
+      [
+        G.return None;
+        (let+ r = gen_returns_lit in
+         Some r);
+      ]
+  and+ errors = G.list_size (G.int_range 0 2) gen_error_map_entry in
+  {
+    Ast.elb_lang = lang;
+    elb_lang_span = dspan;
+    elb_call_symbol = symbol;
+    elb_call_symbol_span = dspan;
+    elb_call_args = args;
+    elb_yields = yields;
+    elb_returns = returns;
+    elb_errors = errors;
+    elb_span = dspan;
+  }
+
+let gen_extern_param =
+  let+ name = gen_lname and+ ty = gen_ty in
+  { Ast.ep_name = name; ep_name_span = dspan; ep_type = ty }
+
+let gen_extern_decl =
+  let+ name = gen_lname
+  and+ params = G.list_size (G.int_range 0 2) gen_extern_param
+  and+ ret = gen_ty
+  and+ langs = G.list_size (G.int_range 1 2) gen_extern_lang_body in
+  {
+    Ast.ed_name = name;
+    ed_name_span = dspan;
+    ed_params = params;
+    ed_return = ret;
+    ed_langs = langs;
+    ed_span = dspan;
+  }
+
+let gen_opaque_type =
+  let+ name = gen_tname
+  and+ methods = G.list_size (G.int_range 0 1) gen_extern_decl in
+  {
+    Ast.opq_name = name;
+    opq_name_span = dspan;
+    opq_methods = methods;
+    opq_span = dspan;
+  }
+
+let gen_ext_lib_body =
+  let+ langs = G.list_size (G.int_range 0 2) gen_lang_path
+  and+ structs = G.list_size (G.int_range 0 2) gen_foreign_struct
+  and+ types = G.list_size (G.int_range 0 1) gen_opaque_type
+  and+ externs = G.list_size (G.int_range 0 2) gen_extern_decl in
+  {
+    Ast.elib_langs = langs;
+    elib_structs = structs;
+    elib_types = types;
+    elib_externs = externs;
+  }
+
 let gen_kind =
   G.oneof
     [
@@ -401,6 +686,8 @@ let gen_kind =
            ebindings;
            econformance;
          });
+      (let+ body = gen_ext_lib_body in
+       Ast.DExtLib { body; span = dspan });
     ]
 
 let gen_decl =

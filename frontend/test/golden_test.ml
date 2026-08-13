@@ -66,6 +66,7 @@ op origin(): point
           };
         ];
       extensions = [];
+      ext_libs = [];
       tests = [];
     }
   in

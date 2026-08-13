@@ -27,6 +27,7 @@ let declared_tests : Ir.model =
       ef_format = None;
       ef_transforms = [];
       ef_select = None;
+      ef_call = None;
       ef_binds = [];
       ef_constraints = [];
       ef_traits = [];
@@ -357,6 +358,7 @@ let declared_tests : Ir.model =
           shapes = [ user; user_ref; note; overloaded; client ];
           operations = [];
           extensions = [ save_note_impl ];
+          ext_libs = [];
           tests = [ hermetic; impl_test; live ];
         };
       ];

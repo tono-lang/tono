@@ -173,6 +173,27 @@ and arm_value =
    field being bound, and the entry field path feeding it. *)
 and bind = { bind_field : string; bind_source : string list }
 
+(* One argument to an extern call (see [entry_call]/[extern_lang] below): the
+   caller's own parameter by name, a field-reference path, a struct-literal
+   mapper, a scalar literal, a list, or a nested call -- the last three only
+   arise inside a ctor field's value (e.g. [opts { retries: 3 }]), never as a
+   bare top-level call argument. Shared by a field's own call source, a
+   language block's [call:] line, and a trait-argument call. *)
+and call_arg =
+  | Ca_param of string
+  | Ca_ref of string list
+  | Ca_ctor of call_ctor
+  | Ca_lit of json
+  | Ca_list of call_arg list
+  | Ca_call of entry_call
+
+and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
+
+(* A field's [= ns.fn(args)] value: a call into an [extern] declared in the
+   [ext] block named [ec_ns]. Resolving [ec_ns]/[ec_fn] against a declared
+   extern is deferred (out of scope; see [Ir.ext_lib]). *)
+and entry_call = { ec_ns : string; ec_fn : string; ec_args : call_arg list }
+
 (* One field of an entry or config. Presence is governed by the sources (there
    is no required/default pair: @default is a source, optionality is @with). *)
 and entry_field = {
@@ -182,6 +203,7 @@ and entry_field = {
   ef_format : template_part list option; (* @format derivation *)
   ef_transforms : string list; (* @str::* pipeline, in declared order *)
   ef_select : select option; (* [= match] selection *)
+  ef_call : entry_call option; (* [= ns.fn(args)] extern-call selection *)
   ef_binds : bind list; (* composition bindings; config-typed fields only *)
   ef_constraints : constraint_ list;
   ef_traits : trait list;
@@ -221,6 +243,62 @@ type extension = {
          decodes, instead of the operation's declared output *)
   ext_bindings : binding; (* lang -> "ext/{lang}/...#symbol" *)
   ext_conformance : string option; (* mandatory for a contract at emit time *)
+}
+
+(* ── FFI library declarations: ext <name> { ... } ──────────────────────────
+   The new [ext] form, distinct from [extension] above (hook/contract/
+   constraint/impl). Surface-and-IR only for now: no typecheck resolves an
+   extern's arity/types, an [errors:] sentinel against a declared error shape,
+   or a [returns:] field ref against its [yields:] name. That resolution, and
+   codegen of the call itself, are later passes. *)
+
+(* One [yields:] position; [yp_type] is [None] only for the reserved [error]
+   sentinel ([yp_is_error]), never for an ordinary omitted type. *)
+type yields_pos = {
+  yp_name : string;
+  yp_type : tref option;
+  yp_is_error : bool;
+}
+
+(* A [returns:] field value: a bare ref into a yields-bound name, or a match
+   over one -- the same shape a member's own [= match] selection uses. *)
+type returns_value = Rv_ref of string list | Rv_select of select
+type returns_field = { rvf_name : string; rvf_value : returns_value }
+type returns_lit = { rvl_type : tref; rvl_fields : returns_field list }
+type error_binding = { erb_sentinel : string; erb_type : string }
+
+(* One per-language block inside an [extern]'s body. *)
+type extern_lang = {
+  el_lang : string;
+  el_symbol : string;
+  el_call_args : call_arg list;
+  el_yields : yields_pos list; (* [] when no yields: line *)
+  el_returns : returns_lit option;
+  el_errors : error_binding list;
+}
+
+type extern_param = { xp_name : string; xp_type : tref }
+
+(* A free function inside an [ext] block, or a method inside a [type] opaque
+   handle. *)
+type extern_decl = {
+  x_name : string;
+  x_params : extern_param list;
+  x_return : tref;
+  x_langs : extern_lang list;
+}
+
+type foreign_field = { fgf_name : string; fgf_type : tref }
+type foreign_struct = { fgs_name : string; fgs_fields : foreign_field list }
+type opaque_type = { opq_name : string; opq_methods : extern_decl list }
+type lang_path = { lgp_lang : string; lgp_path : string }
+
+type ext_lib = {
+  xl_name : string;
+  xl_langs : lang_path list;
+  xl_structs : foreign_struct list;
+  xl_types : opaque_type list;
+  xl_externs : extern_decl list; (* free (non-method) externs *)
 }
 
 (* ── Declared tests ────────────────────────────────────────────────────── *)
@@ -328,6 +406,7 @@ type module_ = {
   shapes : shape list;
   operations : shape list;
   extensions : extension list;
+  ext_libs : ext_lib list;
   tests : test_decl list;
 }
 

@@ -143,6 +143,7 @@ mod tests {
             shapes: vec![],
             operations: vec![],
             extensions,
+            ext_libs: vec![],
         }
     }
 

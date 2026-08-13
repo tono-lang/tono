@@ -255,6 +255,7 @@ let module_attaches_wire () =
       shapes = [];
       operations = [ o ];
       extensions = [];
+      ext_libs = [];
       tests = [];
     }
   in

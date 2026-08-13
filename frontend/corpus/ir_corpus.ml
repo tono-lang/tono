@@ -74,6 +74,7 @@ let list_charges : Ir.model =
           shapes = [ page; charge ];
           operations = [ list_charges_op ];
           extensions = [];
+          ext_libs = [];
           tests = [];
         };
       ];
@@ -109,6 +110,7 @@ let nullable_charge : Ir.model =
           shapes = [ charge ];
           operations = [];
           extensions = [];
+          ext_libs = [];
           tests = [];
         };
       ];
@@ -158,6 +160,7 @@ let open_enum_union : Ir.model =
           shapes = [ status; source ];
           operations = [];
           extensions = [];
+          ext_libs = [];
           tests = [];
         };
       ];
@@ -250,6 +253,7 @@ let primitives : Ir.model =
           shapes = [ kitchen_sink; priority ];
           operations = [];
           extensions = [];
+          ext_libs = [];
           tests = [];
         };
       ];
@@ -307,6 +311,7 @@ let service_api : Ir.model =
           shapes = [ request; not_found; service ];
           operations = [ list_charges_op ];
           extensions = [];
+          ext_libs = [];
           tests = [];
         };
       ];
@@ -363,6 +368,7 @@ let extension_model : Ir.model =
           shapes = [];
           operations = [];
           extensions = [ before_request; sign_request; luhn ];
+          ext_libs = [];
           tests = [];
         };
       ];
@@ -382,6 +388,7 @@ let entries_client : Ir.model =
       ef_format = format;
       ef_transforms = transforms;
       ef_select = select;
+      ef_call = None;
       ef_binds = binds;
       ef_constraints = constraints;
       ef_traits = traits;
@@ -548,6 +555,7 @@ let entries_client : Ir.model =
           shapes = [ conf; client; note; overloaded ];
           operations = [];
           extensions = [];
+          ext_libs = [];
           tests = [];
         };
       ];
@@ -566,6 +574,7 @@ let bespoke_impl : Ir.model =
       ef_format = None;
       ef_transforms = [];
       ef_select = None;
+      ef_call = None;
       ef_binds = [];
       ef_constraints = [];
       ef_traits = [];
@@ -692,97 +701,14 @@ let bespoke_impl : Ir.model =
               impl "client.search_notes" ~raw:true
                 ~conformance:(Some "vectors/search_notes.json");
             ];
+          ext_libs = [];
           tests = [];
         };
       ];
   }
 
-(* Example: the resolved wire binding an operation carries directly for a
-   target to read: every wire_value/response-part kind (including the
-   @body ctor's object form), a uri template mixing all three placeholder
-   forms, and the entry-scoped endpoint/timeout/retry refs. *)
-let resolved_wire : Ir.model =
-  let charge : Ir.shape =
-    {
-      id = "payments#Charge";
-      kind = Ir.Structure { params = []; members = [ member "id" string_t ] };
-      traits = [];
-    }
-  in
-  let get_charge : Ir.shape =
-    {
-      id = "payments#client.get_charge";
-      kind =
-        Ir.Operation
-          {
-            input = Some (ref_ "payments#Charge" []);
-            input_name = None;
-            output = Some (ref_ "payments#Charge" []);
-            errors = [];
-            wire =
-              Some
-                {
-                  Ir.wb_method = "GET";
-                  wb_uri =
-                    Ir.Wire_template
-                      [
-                        Ir.Tpl_lit "/charges/";
-                        Ir.Tpl_input "id";
-                        Ir.Tpl_lit "/";
-                        Ir.Tpl_field [ "endpoint_suffix" ];
-                      ];
-                  wb_body =
-                    Some
-                      (Ir.Wire_object
-                         [
-                           ("id", Ir.Wire_param []);
-                           ("extra", Ir.Wire_field [ "extra" ]);
-                         ]);
-                  wb_response_bindings =
-                    [
-                      ("trace_id", Ir.Wire_response_header "X-Trace-Id");
-                      ("status", Ir.Wire_response_status_code);
-                    ];
-                  (* [Protocol_http.to_ir_binding] only ever produces a
-                     singleton: this fixture exercises the JSON shape space,
-                     not a realistic resolver output. *)
-                  wb_success = [ 200; 202 ];
-                  wb_endpoint = Some (Ir.Wire_field [ "endpoint" ]);
-                  wb_request_headers =
-                    [
-                      ( [ Ir.Tpl_lit "X-Client" ],
-                        Ir.Wire_field [ "client_name" ] );
-                      ([ Ir.Tpl_lit "X-Fixed" ], Ir.Wire_lit (`String "v1"));
-                      ( [ Ir.Tpl_lit "X-Combo" ],
-                        Ir.Wire_template
-                          [ Ir.Tpl_lit "v-"; Ir.Tpl_field [ "client_name" ] ] );
-                    ];
-                  wb_query =
-                    [
-                      ([ Ir.Tpl_lit "limit" ], Ir.Wire_field [ "default_limit" ]);
-                    ];
-                  wb_timeout = Some [ "timeout" ];
-                  wb_retry = Some [ "settings"; "max_retries" ];
-                };
-          };
-      traits = [];
-    }
-  in
-  {
-    tono_ir_version = Ir_json.current_ir_version;
-    modules =
-      [
-        {
-          mod_name = "payments";
-          shapes = [ charge ];
-          operations = [ get_charge ];
-          extensions = [];
-          tests = [];
-        };
-      ];
-  }
-
-(* The full corpus, keyed by fixture file name. *)
+(* The full corpus, keyed by fixture file name. [resolved_wire] lives in
+   [Ir_corpus2], split out to keep this file within the size budget. *)
 
 let examples : (string * Ir.model) list =
   [
@@ -795,5 +721,5 @@ let examples : (string * Ir.model) list =
     ("entries_client", entries_client);
     ("bespoke_impl", bespoke_impl);
     ("declared_tests", Ir_corpus_tests.declared_tests);
-    ("resolved_wire", resolved_wire);
+    ("resolved_wire", Ir_corpus2.resolved_wire);
   ]

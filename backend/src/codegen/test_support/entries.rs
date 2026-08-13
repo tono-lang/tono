@@ -27,6 +27,7 @@ pub fn entries_matrix_module() -> Module {
             format: None,
             transforms: vec![],
             select: None,
+            call: None,
             binds: vec![],
             constraints: vec![],
             traits: vec![],
@@ -337,6 +338,7 @@ pub fn entries_matrix_module() -> Module {
         ],
         operations: vec![],
         extensions: vec![],
+        ext_libs: vec![],
     }
 }
 
@@ -361,6 +363,7 @@ pub fn bare_entry_field(
         format: None,
         transforms: vec![],
         select: None,
+        call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],

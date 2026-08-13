@@ -184,7 +184,12 @@ let member_refs (m : Ast.member) : (string list * Span.span) list =
          fm.arms
   in
   member_trait_refs m
-  @ match m.mmatch with Some fm -> of_match fm | None -> []
+  @
+  match m.mvalue with
+  | Some (Ast.MMatch fm) -> of_match fm
+  (* An extern call's own ref args are a DAG-wiring concern, out of scope
+     until the field-source call is resolved against its ext block. *)
+  | Some (Ast.MCall _) | None -> []
 
 let protocol_trait_names = Trait_vocab.protocol
 
@@ -218,7 +223,7 @@ let op_refs (op : Ast.decl) : (string list * Span.span) list =
    match, a format derivation, or being a composed config. *)
 let has_own_source ctx (m : Ast.member) : bool =
   source_traits m <> []
-  || Option.is_some m.mmatch
+  || Option.is_some m.mvalue
   || Option.is_some (find_trait "format" m.mtraits)
   ||
   match base_ty m.mtype with

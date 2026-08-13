@@ -51,8 +51,15 @@
    httpHeader/httpPayload) and the "bindings" map they resolved into:
    wire_binding gained "body" (a wire_value, absent when the operation sends
    none), and wire_value gained an "object" variant (named fields, each a
-   wire_value) for the new @body ctor-mapper form. *)
-let current_ir_version = 13
+   wire_value) for the new @body ctor-mapper form.
+   v14 added the module "ext_libs" table: per-language module paths, foreign
+   struct/opaque-handle declarations, and "extern" declarations with a
+   per-language call/yields/returns/errors binding (surface-and-IR only; no
+   typecheck or codegen consumes it yet). An entry field's "call" key
+   (alongside the existing "select") carries a field's [= ns.fn(args)]
+   extern-call source, and a call argument gained "lit"/"list"/"call"
+   variants for ctor-field values. *)
+let current_ir_version = 14
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -83,6 +90,8 @@ let encode_bind = Ir_json_entry.encode_bind
 let decode_bind = Ir_json_entry.decode_bind
 let encode_entry_field = Ir_json_entry.encode_entry_field
 let decode_entry_field = Ir_json_entry.decode_entry_field
+let encode_ext_lib = Ir_json_extern.encode_ext_lib
+let decode_ext_lib = Ir_json_extern.decode_ext_lib
 let encode_test = Ir_json_tests.encode_test
 let decode_test = Ir_json_tests.decode_test
 let encode_wire_response_part = Ir_json_wire.encode_wire_response_part
@@ -198,6 +207,7 @@ let encode_module (m : Ir.module_) : Ir.json =
       ("shapes", `List (List.map encode_shape m.shapes));
       ("operations", `List (List.map encode_shape m.operations));
       ("extensions", `List (List.map encode_extension m.extensions));
+      ("ext_libs", `List (List.map encode_ext_lib m.ext_libs));
       ("tests", `List (List.map encode_test m.tests));
     ]
 
@@ -414,6 +424,13 @@ let decode_module j =
         let* xs = as_list v in
         map_result decode_extension xs
   in
+  let* ext_libs =
+    match List.assoc_opt "ext_libs" kvs with
+    | None -> Ok []
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_ext_lib xs
+  in
   let* tests =
     match List.assoc_opt "tests" kvs with
     | None -> Ok []
@@ -421,7 +438,8 @@ let decode_module j =
         let* xs = as_list v in
         map_result decode_test xs
   in
-  Ok ({ mod_name; shapes; operations; extensions; tests } : Ir.module_)
+  Ok
+    ({ mod_name; shapes; operations; extensions; ext_libs; tests } : Ir.module_)
 
 let decode_model j =
   let* kvs = as_assoc j in

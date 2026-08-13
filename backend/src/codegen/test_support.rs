@@ -79,6 +79,7 @@ pub fn constrained_module() -> Module {
         )],
         operations: vec![],
         extensions: vec![],
+        ext_libs: vec![],
     }
 }
 
@@ -276,6 +277,7 @@ pub fn error_demo_module() -> Module {
             op
         }],
         extensions: vec![],
+        ext_libs: vec![],
     }
 }
 

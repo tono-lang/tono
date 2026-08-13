@@ -22,6 +22,7 @@ fn model(names: &[&str]) -> Model {
                 shapes: vec![],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             })
             .collect(),
     }
@@ -377,6 +378,7 @@ fn two_entry_model() -> Model {
         format: None,
         transforms: vec![],
         select: None,
+        call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![crate::ir::Trait {
@@ -400,6 +402,7 @@ fn two_entry_model() -> Model {
             shapes: vec![entry("admin"), entry("reader")],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         }],
     }
 }

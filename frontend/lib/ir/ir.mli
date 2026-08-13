@@ -144,6 +144,23 @@ and arm_value =
 (* One @bind(target, .source) at a composition point. *)
 and bind = { bind_field : string; bind_source : string list }
 
+(* One argument to an extern call: the caller's own parameter by name, a
+   field-reference path, a struct-literal mapper, a scalar literal, a list, or
+   a nested call (the last three only arise inside a ctor field's value). *)
+and call_arg =
+  | Ca_param of string
+  | Ca_ref of string list
+  | Ca_ctor of call_ctor
+  | Ca_lit of json
+  | Ca_list of call_arg list
+  | Ca_call of entry_call
+
+and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
+
+(* A field's [= ns.fn(args)] value: a call into an extern declared in the ext
+   block named [ec_ns]. Resolving it against a declared extern is deferred. *)
+and entry_call = { ec_ns : string; ec_fn : string; ec_args : call_arg list }
+
 (* One field of an entry or config; presence is governed by the sources. *)
 and entry_field = {
   ef_name : string;
@@ -152,6 +169,7 @@ and entry_field = {
   ef_format : template_part list option;
   ef_transforms : string list;
   ef_select : select option;
+  ef_call : entry_call option;
   ef_binds : bind list;
   ef_constraints : constraint_ list;
   ef_traits : trait list;
@@ -183,6 +201,49 @@ type extension = {
   ext_raw : bool;
   ext_bindings : binding;
   ext_conformance : string option;
+}
+
+(* FFI library declarations: ext <name> { ... } (see ir.ml for commentary). *)
+type yields_pos = {
+  yp_name : string;
+  yp_type : tref option;
+  yp_is_error : bool;
+}
+
+type returns_value = Rv_ref of string list | Rv_select of select
+type returns_field = { rvf_name : string; rvf_value : returns_value }
+type returns_lit = { rvl_type : tref; rvl_fields : returns_field list }
+type error_binding = { erb_sentinel : string; erb_type : string }
+
+type extern_lang = {
+  el_lang : string;
+  el_symbol : string;
+  el_call_args : call_arg list;
+  el_yields : yields_pos list;
+  el_returns : returns_lit option;
+  el_errors : error_binding list;
+}
+
+type extern_param = { xp_name : string; xp_type : tref }
+
+type extern_decl = {
+  x_name : string;
+  x_params : extern_param list;
+  x_return : tref;
+  x_langs : extern_lang list;
+}
+
+type foreign_field = { fgf_name : string; fgf_type : tref }
+type foreign_struct = { fgs_name : string; fgs_fields : foreign_field list }
+type opaque_type = { opq_name : string; opq_methods : extern_decl list }
+type lang_path = { lgp_lang : string; lgp_path : string }
+
+type ext_lib = {
+  xl_name : string;
+  xl_langs : lang_path list;
+  xl_structs : foreign_struct list;
+  xl_types : opaque_type list;
+  xl_externs : extern_decl list;
 }
 
 (* Declared tests (see ir.ml for the field commentary). *)
@@ -266,6 +327,7 @@ type module_ = {
   shapes : shape list;
   operations : shape list;
   extensions : extension list;
+  ext_libs : ext_lib list;
   tests : test_decl list;
 }
 

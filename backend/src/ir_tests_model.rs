@@ -259,3 +259,66 @@ fn request_pattern_from_value(v: &Value) -> Result<RequestPattern, String> {
 fn field_pattern_from_value(v: &Value) -> Result<FieldPattern, String> {
     serde_json::from_value(v.clone()).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answer_error_defaults_absent_data_to_an_empty_object() {
+        let decoded: AnswerError = serde_json::from_str(r#"{"shape":"notes#not_found"}"#).unwrap();
+        assert_eq!(decoded.data, empty_object());
+    }
+
+    #[test]
+    fn request_pattern_defaults_open_to_false_when_absent() {
+        let decoded: RequestPattern = serde_json::from_str(r#"{"fields":{}}"#).unwrap();
+        assert!(!decoded.open);
+    }
+
+    #[test]
+    fn request_pattern_folds_and_unfolds_headers() {
+        let json = r#"{"open":true,"fields":{"path":{"eq":"/x"},"headers":{"Authorization":{"present":{}}}}}"#;
+        let decoded: RequestPattern = serde_json::from_str(json).unwrap();
+        assert!(decoded.open);
+        assert_eq!(decoded.fields.len(), 1);
+        let headers = decoded
+            .headers
+            .as_ref()
+            .expect("headers must be folded out of fields");
+        assert!(headers.contains_key("Authorization"));
+
+        let reencoded = serde_json::to_string(&decoded).unwrap();
+        let roundtripped: RequestPattern = serde_json::from_str(&reencoded).unwrap();
+        assert_eq!(roundtripped, decoded);
+        assert!(
+            reencoded.contains(r#""headers":{"Authorization""#),
+            "headers must serialize back under the reserved key: {reencoded}"
+        );
+    }
+
+    #[test]
+    fn request_pattern_without_headers_omits_the_key() {
+        let decoded: RequestPattern =
+            serde_json::from_str(r#"{"fields":{"path":{"eq":"/x"}}}"#).unwrap();
+        assert!(decoded.headers.is_none());
+        let reencoded = serde_json::to_string(&decoded).unwrap();
+        assert!(!reencoded.contains("headers"));
+    }
+
+    #[test]
+    fn request_pattern_rejects_a_non_object() {
+        assert!(serde_json::from_str::<RequestPattern>("1").is_err());
+    }
+
+    #[test]
+    fn request_pattern_rejects_a_non_boolean_open() {
+        assert!(serde_json::from_str::<RequestPattern>(r#"{"open":"yes","fields":{}}"#).is_err());
+    }
+
+    #[test]
+    fn request_pattern_rejects_non_object_fields_and_headers() {
+        assert!(serde_json::from_str::<RequestPattern>(r#"{"fields":1}"#).is_err());
+        assert!(serde_json::from_str::<RequestPattern>(r#"{"fields":{"headers":1}}"#).is_err());
+    }
+}

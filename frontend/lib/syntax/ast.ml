@@ -28,13 +28,35 @@ type trait_arg =
   | AList of
       trait_arg list (* a list literal value, e.g. @http(code: [200, 207]) *)
   | ACtor of ctor_arg
-(* a struct-literal mapper, e.g. @body(note_body { title: .input.title }) *)
+    (* a struct-literal mapper, e.g. @body(note_body { title: .input.title }) *)
+  | ACall of call_expr
+(* an extern call, e.g. @header("Authorization", companyauth.sign(.request)) *)
 
 and ctor_arg = {
   ctor_name : string;
   ctor_name_span : Span.span;
   ctor_fields : (string * Span.span * trait_arg) list;
   ctor_span : Span.span;
+}
+
+(* One argument to a call expression (see [call_expr]): the caller's own
+   parameter by name, a field-reference path, or a struct-literal mapper —
+   the same shape [ctor_arg] already gives [@body(name { field: value })]. *)
+and call_arg =
+  | CaParam of string * Span.span
+  | CaRef of ref_path
+  | CaCtor of ctor_arg
+
+(* "ns.fn(args)": a call into an [extern] declared in the [ext] block named
+   [ce_ns]. Shared by three surface positions: a member's [= ns.fn(...)]
+   value, a trait argument (e.g. inside [@header]), and a language block's
+   [call:] line reuses only the argument-list grammar, not this whole node. *)
+and call_expr = {
+  ce_ns : string;
+  ce_fn : string;
+  ce_head_span : Span.span;
+  ce_args : call_arg list;
+  ce_span : Span.span;
 }
 
 type trait = { tname : string; targs : trait_arg list; tspan : Span.span }
@@ -70,11 +92,15 @@ type field_match = {
   match_span : Span.span;
 }
 
+(* A member's [= ...] value: the existing selection table, or an extern call
+   (e.g. [config: app_config = companyconfig.load(.service, .region)]). *)
+type member_value = MMatch of field_match | MCall of call_expr
+
 type member = {
   mname : string;
   mname_span : Span.span;
   mtype : ty;
-  mmatch : field_match option; (* [= match ...] selection, entry/config only *)
+  mvalue : member_value option; (* [= ...], entry/config only *)
   mtraits : trait list;
 }
 
@@ -106,6 +132,117 @@ type ext_binding = { lang : string; lang_span : Span.span; target : string }
 
 (* A contract/constraint signature: (input) -> output. Hooks omit it. *)
 type ext_sig = { esig_in : ty; esig_out : ty }
+
+(* ── FFI library blocks: ext <name> { ... } ──────────────────────────────
+   The new form of [ext], distinct from the legacy hook/contract/constraint/
+   impl kinds above. Declares where a third-party library lives per
+   language, its foreign shapes, and the extern functions/methods that call
+   into it. Surface-and-IR only for now: no typecheck resolves these against
+   each other yet (that is a later task; see [Lower.lower_ext_lib]). *)
+
+(* "lang: "module/path"" — one per-language module path. *)
+type lang_path = {
+  lp_lang : string;
+  lp_lang_span : Span.span;
+  lp_path : string;
+}
+
+(* A field of a foreign struct, named and cased exactly as the foreign side
+   spells it (PascalCase for Go, etc. — never normalized). *)
+type foreign_field = {
+  ff_name : string;
+  ff_name_span : Span.span;
+  ff_type : ty;
+}
+
+(* [struct go_config { Host: string, ... }] inside an [ext] block: a foreign
+   shape, never a top-level [DStruct] and never role-classified. *)
+type foreign_struct = {
+  fs_name : string;
+  fs_name_span : Span.span;
+  fs_fields : foreign_field list;
+  fs_span : Span.span;
+}
+
+(* A [yields:] position's type: an ordinary tono type, or the reserved
+   [error] sentinel — valid only here, nowhere else in the grammar. *)
+type yields_ty = YType of ty | YError of Span.span
+
+type yields_pos = {
+  yp_name : string;
+  yp_name_span : Span.span;
+  yp_ty : yields_ty;
+}
+
+(* One field of a [returns: Type { field: value, ... }] literal: a bare ref
+   into a [yields:]-bound name, or a match over one. *)
+type returns_value = RvRef of ref_path | RvMatch of field_match
+
+type returns_field = {
+  rf_name : string;
+  rf_name_span : Span.span;
+  rf_value : returns_value;
+  rf_span : Span.span;
+}
+
+type returns_lit = {
+  rl_type : ty;
+  rl_fields : returns_field list;
+  rl_span : Span.span;
+}
+
+(* One [errors: { "sentinel" => TypeName }] entry. *)
+type error_map_entry = {
+  em_sentinel : string;
+  em_sentinel_span : Span.span;
+  em_type : string;
+  em_type_span : Span.span;
+}
+
+(* One per-language block inside an [extern]'s body. [call:] is mandatory
+   (its absence is diagnosed, not encoded as an option); the rest are
+   optional lines. *)
+type extern_lang_body = {
+  elb_lang : string;
+  elb_lang_span : Span.span;
+  elb_call_symbol : string;
+  elb_call_symbol_span : Span.span;
+  elb_call_args : call_arg list;
+  elb_yields : yields_pos list option;
+  elb_returns : returns_lit option;
+  elb_errors : error_map_entry list;
+  elb_span : Span.span;
+}
+
+type extern_param = { ep_name : string; ep_name_span : Span.span; ep_type : ty }
+
+(* [extern name(params): type { lang { ... } ... }] — a free function inside
+   an [ext] block, or a method inside a [type] opaque-handle block. *)
+type extern_decl = {
+  ed_name : string;
+  ed_name_span : Span.span;
+  ed_params : extern_param list;
+  ed_return : ty;
+  ed_langs : extern_lang_body list;
+  ed_span : Span.span;
+}
+
+(* [type name { extern ... }] — an opaque foreign handle whose only members
+   are extern methods; never serializes, never crosses the wire. *)
+type opaque_type = {
+  opq_name : string;
+  opq_name_span : Span.span;
+  opq_methods : extern_decl list;
+  opq_span : Span.span;
+}
+
+(* The body of [ext name { ... }]. *)
+type ext_lib_body = {
+  elib_langs : lang_path list;
+  elib_structs : foreign_struct list;
+  elib_types : opaque_type list;
+  elib_externs : extern_decl list; (* free (non-method) externs *)
+}
 
 (* ── Declared tests ────────────────────────────────────────────────────── *)
 
@@ -223,6 +360,7 @@ type decl_kind =
       ebindings : ext_binding list;
       econformance : string option;
     }
+  | DExtLib of { body : ext_lib_body; span : Span.span }
   | DTest of { titems : test_item list }
 (* a declared test block; [dname] is its free-form string name *)
 

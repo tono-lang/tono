@@ -261,6 +261,7 @@ pub fn source_stub(field: &EntryField, sources: Vec<Source>) -> EntryField {
         format: None,
         transforms: vec![],
         select: None,
+        call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],
