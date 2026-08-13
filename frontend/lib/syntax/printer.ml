@@ -119,13 +119,25 @@ let rec print_trait_arg (a : Ast.trait_arg) : string =
   | Ast.ARef r -> print_ref r
   | Ast.AKv (k, v) -> k ^ ": " ^ print_trait_arg v
   | Ast.AList xs -> "[" ^ String.concat ", " (List.map print_trait_arg xs) ^ "]"
-  | Ast.ACtor c ->
-      let fields =
-        List.map
-          (fun (n, _, v) -> n ^ ": " ^ print_trait_arg v)
-          c.Ast.ctor_fields
-      in
-      c.Ast.ctor_name ^ " { " ^ String.concat ", " fields ^ " }"
+  | Ast.ACtor c -> print_ctor_lit c
+  | Ast.ACall ce -> print_call_expr ce
+
+and print_ctor_lit (c : Ast.ctor_arg) : string =
+  let fields =
+    List.map (fun (n, _, v) -> n ^ ": " ^ print_trait_arg v) c.Ast.ctor_fields
+  in
+  c.Ast.ctor_name ^ " { " ^ String.concat ", " fields ^ " }"
+
+and print_call_arg (a : Ast.call_arg) : string =
+  match a with
+  | Ast.CaParam (n, _) -> n
+  | Ast.CaRef r -> print_ref r
+  | Ast.CaCtor c -> print_ctor_lit c
+
+and print_call_expr (ce : Ast.call_expr) : string =
+  ce.Ast.ce_ns ^ "." ^ ce.Ast.ce_fn ^ "("
+  ^ String.concat ", " (List.map print_call_arg ce.Ast.ce_args)
+  ^ ")"
 
 let print_trait (t : Ast.trait) : string =
   "@" ^ t.Ast.tname
@@ -171,8 +183,9 @@ let print_field_match ~indent (m : Ast.field_match) : string =
 
 let print_member (m : Ast.member) : string =
   "  " ^ m.Ast.mname ^ ": " ^ print_ty m.Ast.mtype
-  ^ (match m.Ast.mmatch with
-    | Some fm -> " = " ^ print_field_match ~indent:"  " fm
+  ^ (match m.Ast.mvalue with
+    | Some (Ast.MMatch fm) -> " = " ^ print_field_match ~indent:"  " fm
+    | Some (Ast.MCall ce) -> " = " ^ print_call_expr ce
     | None -> "")
   ^ trailing_traits m.Ast.mtraits
 
@@ -320,6 +333,112 @@ let print_test_item (i : Ast.test_item) : string =
       ^ (if requests then ".requests" else "")
       ^ ": " ^ print_test_pattern pattern
 
+(* ── FFI library blocks: ext <name> { ... } ──────────────────────────────
+   Every nested block threads an explicit [~indent] prefix down to its own
+   lines and children, the same discipline [print_field_match]/[print_op]
+   already use. This is deliberate: reindenting an already-rendered string
+   (splitting on '\n' and prepending) is NOT safe here, because a string
+   literal's own value can itself contain a literal newline (the triple-quote
+   form); blindly reindenting every line would inject whitespace into the
+   middle of that string's content. *)
+
+(* header + a braced body at [indent], "{}" when empty; [lines] are already
+   fully prefixed with their own indent by the caller (mirrors [braced]). *)
+let braced_at ~(indent : string) (header : string) (lines : string list) : string =
+  match lines with
+  | [] -> indent ^ header ^ " {}"
+  | ls -> indent ^ header ^ " {\n" ^ String.concat "\n" ls ^ "\n" ^ indent ^ "}"
+
+let print_lang_path ~indent (lp : Ast.lang_path) : string =
+  indent ^ lp.Ast.lp_lang ^ ": " ^ escaped_string lp.Ast.lp_path
+
+let print_foreign_field ~indent (f : Ast.foreign_field) : string =
+  indent ^ f.Ast.ff_name ^ ": " ^ print_ty f.Ast.ff_type
+
+let print_foreign_struct ~indent (s : Ast.foreign_struct) : string =
+  braced_at ~indent
+    ("struct " ^ s.Ast.fs_name)
+    (List.map (print_foreign_field ~indent:(indent ^ "  ")) s.Ast.fs_fields)
+
+let print_yields_ty (t : Ast.yields_ty) : string =
+  match t with Ast.YType t -> print_ty t | Ast.YError _ -> "error"
+
+let print_yields ~indent (ys : Ast.yields_pos list) : string =
+  indent ^ "yields: ("
+  ^ String.concat ", "
+      (List.map
+         (fun (y : Ast.yields_pos) -> y.yp_name ^ ": " ^ print_yields_ty y.yp_ty)
+         ys)
+  ^ ")"
+
+let print_returns_value ~indent (v : Ast.returns_value) : string =
+  match v with
+  | Ast.RvRef r -> print_ref r
+  | Ast.RvMatch fm -> print_field_match ~indent fm
+
+let print_returns_field ~indent (f : Ast.returns_field) : string =
+  indent ^ f.Ast.rf_name ^ ": " ^ print_returns_value ~indent f.Ast.rf_value
+
+let print_returns ~indent (r : Ast.returns_lit) : string =
+  braced_at ~indent
+    ("returns: " ^ print_ty r.Ast.rl_type)
+    (List.map (print_returns_field ~indent:(indent ^ "  ")) r.Ast.rl_fields)
+
+let print_errors ~indent (es : Ast.error_map_entry list) : string =
+  braced_at ~indent "errors:"
+    (List.map
+       (fun (e : Ast.error_map_entry) ->
+         indent ^ "  " ^ escaped_string e.em_sentinel ^ " => " ^ e.em_type)
+       es)
+
+let print_call ~indent (symbol : string) (args : Ast.call_arg list) : string =
+  indent ^ "call: " ^ escaped_string symbol ^ "("
+  ^ String.concat ", " (List.map print_call_arg args)
+  ^ ")"
+
+let print_extern_lang_body ~indent (b : Ast.extern_lang_body) : string =
+  let inner = indent ^ "  " in
+  let call_line = [ print_call ~indent:inner b.Ast.elb_call_symbol b.elb_call_args ] in
+  let yields_line =
+    match b.Ast.elb_yields with Some ys -> [ print_yields ~indent:inner ys ] | None -> []
+  in
+  let returns_lines =
+    match b.Ast.elb_returns with
+    | Some r -> [ print_returns ~indent:inner r ]
+    | None -> []
+  in
+  let errors_lines =
+    if b.Ast.elb_errors = [] then [] else [ print_errors ~indent:inner b.elb_errors ]
+  in
+  braced_at ~indent b.Ast.elb_lang (call_line @ yields_line @ returns_lines @ errors_lines)
+
+let print_extern ~indent (e : Ast.extern_decl) : string =
+  let inner = indent ^ "  " in
+  let params =
+    String.concat ", "
+      (List.map
+         (fun (p : Ast.extern_param) -> p.ep_name ^ ": " ^ print_ty p.ep_type)
+         e.Ast.ed_params)
+  in
+  let header = "extern " ^ e.Ast.ed_name ^ "(" ^ params ^ "): " ^ print_ty e.ed_return in
+  braced_at ~indent header (List.map (print_extern_lang_body ~indent:inner) e.Ast.ed_langs)
+
+let print_opaque_type ~indent (t : Ast.opaque_type) : string =
+  let inner = indent ^ "  " in
+  braced_at ~indent
+    ("type " ^ t.Ast.ot_name)
+    (List.map (print_extern ~indent:inner) t.Ast.ot_methods)
+
+(* Sections (lang paths, structs, opaque types, free externs) are separated
+   by a blank line whenever a later section is non-empty; whitespace is
+   insignificant to the grammar, so this only needs to be deterministic. *)
+let print_ext_lib_body ~indent (b : Ast.ext_lib_body) : string list =
+  let section lines = if lines = [] then [] else "" :: lines in
+  List.map (print_lang_path ~indent) b.Ast.elib_langs
+  @ section (List.map (print_foreign_struct ~indent) b.elib_structs)
+  @ section (List.map (print_opaque_type ~indent) b.elib_types)
+  @ section (List.map (print_extern ~indent) b.elib_externs)
+
 let print_decl (d : Ast.decl) : string =
   let pub = if d.Ast.pub then "pub " else "" in
   match d.Ast.dkind with
@@ -391,6 +510,8 @@ let print_decl (d : Ast.decl) : string =
             braced
               (pub ^ "ext " ^ kw ^ " " ^ d.Ast.dname ^ raw ^ signature)
               lines
+        | Ast.DExtLib { body; _ } ->
+            braced (pub ^ "ext " ^ d.Ast.dname) (print_ext_lib_body ~indent:"  " body)
         | Ast.DTest { titems } ->
             braced
               ("test " ^ string_literal d.Ast.dname)

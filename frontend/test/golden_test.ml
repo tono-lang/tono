@@ -65,7 +65,7 @@ op origin(): point
             traits = [];
           };
         ];
-      extensions = [];
+      extensions = []; ext_libs = [];
       tests = [];
     }
   in

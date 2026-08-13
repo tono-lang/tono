@@ -51,6 +51,7 @@ let rec check_decl (d : Ast.decl) : Diagnostic.t list =
       unknown d.dtraits
       @ List.concat_map (fun (c : Ast.enum_case) -> unknown c.Ast.ctraits) cases
   | Ast.DExt _ -> unknown d.dtraits
+  | Ast.DExtLib _ -> unknown d.dtraits
   | Ast.DTest _ -> []
 
 let check_decls (decls : Ast.decl list) : Diagnostic.t list =

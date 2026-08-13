@@ -152,7 +152,7 @@ let index_resolves () =
             mod_name = "payments";
             shapes = [ s ];
             operations = [ op ];
-            extensions = [];
+            extensions = []; ext_libs = [];
             tests = [];
           };
         ];
@@ -601,6 +601,7 @@ let sample_model : Ir.model =
             ];
           operations = [ operation_shape ];
           extensions = [ hook_ext; contract_ext; constraint_ext ];
+          ext_libs = [];
           tests = [];
         };
       ];

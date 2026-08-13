@@ -146,7 +146,9 @@ let check_decl (d : Ast.decl) : Diagnostic.t list =
   | Ast.DExt { ekind; ekind_span; esig; eraw; ebindings; _ } ->
       check_kind d ekind ekind_span esig
       @ check_raw ekind eraw @ check_bindings d ebindings
-  | Ast.DStruct _ | Ast.DEnum _ | Ast.DUnion _ | Ast.DOp _ | Ast.DTest _ -> []
+  | Ast.DStruct _ | Ast.DEnum _ | Ast.DUnion _ | Ast.DOp _ | Ast.DExtLib _
+  | Ast.DTest _ ->
+      []
 
 (* Extensions share one namespace (a hook's name is its slot), and they never
    enter the shape symbol table, so a repeated name is diagnosed here rather than

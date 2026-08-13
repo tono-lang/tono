@@ -59,6 +59,34 @@ let encode_bind (b : Ir.bind) : Ir.json =
   `Assoc
     [ ("field", `String b.bind_field); ("source", encode_path b.bind_source) ]
 
+(* An extern call argument, shared by a field's own [= ns.fn(args)] source, an
+   ext block's own [call:]/opaque-method bodies, and a ctor field's value
+   (where [lit]/[list]/[call] can also occur, e.g. [opts { retries: 3 }]). *)
+let rec encode_call_arg (a : Ir.call_arg) : Ir.json =
+  match a with
+  | Ir.Ca_param n -> `Assoc [ ("param", `String n) ]
+  | Ir.Ca_ref p -> `Assoc [ ("field", encode_path p) ]
+  | Ir.Ca_ctor c -> encode_call_ctor c
+  | Ir.Ca_lit v -> `Assoc [ ("lit", v) ]
+  | Ir.Ca_list xs -> `Assoc [ ("list", `List (List.map encode_call_arg xs)) ]
+  | Ir.Ca_call c -> `Assoc [ ("call", encode_entry_call c) ]
+
+and encode_call_ctor (c : Ir.call_ctor) : Ir.json =
+  `Assoc
+    [
+      ("ctor", `String c.cc_name);
+      ( "fields",
+        `Assoc (List.map (fun (n, v) -> (n, encode_call_arg v)) c.cc_fields) );
+    ]
+
+and encode_entry_call (c : Ir.entry_call) : Ir.json =
+  `Assoc
+    [
+      ("ns", `String c.ec_ns);
+      ("fn", `String c.ec_fn);
+      ("args", `List (List.map encode_call_arg c.ec_args));
+    ]
+
 let encode_entry_field (f : Ir.entry_field) : Ir.json =
   `Assoc
     ([
@@ -74,6 +102,9 @@ let encode_entry_field (f : Ir.entry_field) : Ir.json =
     @ (match f.ef_select with
       | None -> []
       | Some s -> [ ("select", encode_select s) ])
+    @ (match f.ef_call with
+      | None -> []
+      | Some c -> [ ("call", encode_entry_call c) ])
     @ [
         ("binds", `List (List.map encode_bind f.ef_binds));
         ("constraints", `List (List.map encode_constraint f.ef_constraints));
@@ -179,6 +210,72 @@ let decode_bind j =
   in
   Ok ({ bind_field = field; bind_source = source } : Ir.bind)
 
+let rec decode_call_arg j =
+  let* kvs = as_assoc j in
+  match kvs with
+  | [ ("param", v) ] ->
+      let* s = as_string v in
+      Ok (Ir.Ca_param s)
+  | [ ("field", v) ] ->
+      let* p = decode_path v in
+      Ok (Ir.Ca_ref p)
+  | [ ("lit", v) ] -> Ok (Ir.Ca_lit v)
+  | [ ("list", v) ] ->
+      let* xs = as_list v in
+      let* items = map_result decode_call_arg xs in
+      Ok (Ir.Ca_list items)
+  | [ ("call", v) ] ->
+      let* c = decode_entry_call v in
+      Ok (Ir.Ca_call c)
+  | ("ctor", _) :: _ | ("fields", _) :: _ ->
+      let* c = decode_call_ctor kvs in
+      Ok (Ir.Ca_ctor c)
+  | _ ->
+      err
+        "call arg must be a single param, field, lit, list, call, or \
+         ctor/fields pair"
+
+and decode_call_ctor kvs =
+  let* name =
+    match List.assoc_opt "ctor" kvs with
+    | Some v -> as_string v
+    | None -> err "call ctor is missing name"
+  in
+  let* fields_j =
+    match List.assoc_opt "fields" kvs with
+    | Some v -> as_assoc v
+    | None -> err "call ctor is missing fields"
+  in
+  let* fields =
+    map_result
+      (fun (n, v) ->
+        let* a = decode_call_arg v in
+        Ok (n, a))
+      fields_j
+  in
+  Ok ({ Ir.cc_name = name; cc_fields = fields } : Ir.call_ctor)
+
+and decode_entry_call j =
+  let* kvs = as_assoc j in
+  let* ns =
+    match List.assoc_opt "ns" kvs with
+    | Some v -> as_string v
+    | None -> err "call is missing ns"
+  in
+  let* fn =
+    match List.assoc_opt "fn" kvs with
+    | Some v -> as_string v
+    | None -> err "call is missing fn"
+  in
+  let* args =
+    match List.assoc_opt "args" kvs with
+    | None -> Ok []
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_call_arg xs
+  in
+  Ok ({ Ir.ec_ns = ns; ec_fn = fn; ec_args = args } : Ir.entry_call)
+
 let decode_entry_field j =
   let* kvs = as_assoc j in
   let get k = List.assoc_opt k kvs in
@@ -223,6 +320,13 @@ let decode_entry_field j =
         let* s = decode_select v in
         Ok (Some s)
   in
+  let* call =
+    match get "call" with
+    | None -> Ok None
+    | Some v ->
+        let* c = decode_entry_call v in
+        Ok (Some c)
+  in
   let* binds =
     match get "binds" with
     | None -> Ok []
@@ -252,6 +356,7 @@ let decode_entry_field j =
        ef_format = format;
        ef_transforms = transforms;
        ef_select = select;
+       ef_call = call;
        ef_binds = binds;
        ef_constraints = constraints;
        ef_traits = traits;

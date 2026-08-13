@@ -48,7 +48,7 @@ let check_enum (cases : Ast.enum_case list) : Diagnostic.t list =
 let check_decl (d : Ast.decl) : Diagnostic.t list =
   match d.dkind with
   | Ast.DEnum { cases } -> check_enum cases
-  | Ast.DStruct _ | Ast.DUnion _ | Ast.DOp _ | Ast.DExt _ | Ast.DTest _ -> []
+  | Ast.DStruct _ | Ast.DUnion _ | Ast.DOp _ | Ast.DExt _ | Ast.DExtLib _ | Ast.DTest _ -> []
 
 let check_decls (decls : Ast.decl list) : Diagnostic.t list =
   List.concat_map check_decl decls

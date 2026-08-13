@@ -115,6 +115,9 @@ let rec resolve_decl ~(qualified : qualified) (tbl : Symtab.t) (d : Ast.decl) :
      user shape in a signature is not flagged either; binding-vs-signature
      validation (which would catch it) is deferred. *)
   | Ast.DExt _ -> []
+  (* An ext lib's foreign structs/externs reference each other and the
+     surrounding module, but that resolution is deferred (out of scope). *)
+  | Ast.DExtLib _ -> []
   (* Test blocks resolve their own names (bindings, entries, ops) in
      [Check_tests], which owns the richer diagnostics. *)
   | Ast.DTest _ -> []

@@ -10,7 +10,7 @@ type t = entry SMap.t
 let arity_of (d : Ast.decl) : int =
   match d.dkind with
   | Ast.DStruct { params; _ } | Ast.DUnion { params; _ } -> List.length params
-  | Ast.DEnum _ | Ast.DOp _ | Ast.DExt _ | Ast.DTest _ -> 0
+  | Ast.DEnum _ | Ast.DOp _ | Ast.DExt _ | Ast.DExtLib _ | Ast.DTest _ -> 0
 
 (* Build the table, reporting a duplicate-shape diagnostic (pointing at the
    redefinition, naming the first definition) for any repeated name. The first
@@ -23,7 +23,7 @@ let build (decls : Ast.decl list) : t * Diagnostic.t list =
       match d.dkind with
       (* Extensions and tests are not shapes: extensions live in their own
          namespace and a test's name is a free string. *)
-      | Ast.DExt _ | Ast.DTest _ -> (tbl, diags)
+      | Ast.DExt _ | Ast.DExtLib _ | Ast.DTest _ -> (tbl, diags)
       | _ -> (
           match SMap.find_opt d.dname tbl with
           | Some prev ->

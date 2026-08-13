@@ -254,7 +254,7 @@ let module_attaches_wire () =
       mod_name = "m";
       shapes = [];
       operations = [ o ];
-      extensions = [];
+      extensions = []; ext_libs = [];
       tests = [];
     }
   in

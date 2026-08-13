@@ -64,6 +64,7 @@ let rec check_decl (d : Ast.decl) : Diagnostic.t list =
       dups d.dtraits
       @ List.concat_map (fun (c : Ast.enum_case) -> dups c.Ast.ctraits) cases
   | Ast.DExt _ -> dups d.dtraits
+  | Ast.DExtLib _ -> dups d.dtraits
   | Ast.DTest _ -> []
 
 let check_decls (decls : Ast.decl list) : Diagnostic.t list =
