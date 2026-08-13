@@ -237,6 +237,7 @@ let parse_union st ~pub ~dtraits : Ast.decl =
         P.error st nt.span "expected a union name";
         ""
   in
+  Parser_extern.check_not_error_name st "union" name nt.span;
   let params = parse_generics st in
   (* traits after the name (e.g. @discriminator) join the shape-level traits *)
   let dtraits = dtraits @ parse_trailing_traits st in
@@ -312,6 +313,7 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
         P.error st nt.span "expected an enum name";
         ""
   in
+  Parser_extern.check_not_error_name st "enum" name nt.span;
   (* an enum carries no positional trait after its name (every enum is open;
      shape-level traits like @doc are leading, handled by parse_decl) *)
   ignore (P.expect st Token.LBrace "'{' to open the enum body");
@@ -419,6 +421,7 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
         P.error st nt.span "expected a struct name";
         ""
   in
+  Parser_extern.check_not_error_name st "struct" name nt.span;
   let params = parse_generics st in
   ignore (P.expect st Token.LBrace "'{' to open the struct body");
   let members, ops = parse_struct_items st in
@@ -437,6 +440,29 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
    [Parser_ext]; the new [ext <name> { ... }] library-block grammar lives in
    [Parser_extern]. *)
 let parse_ext = Parser_ext.parse_ext ~parse_type
+
+(* Consumes a brace-balanced block, assuming the current token is its opening
+   '{'. Used to recover from a body that was never going to parse (a reserved
+   ext-kind word used as a library name): skipping straight to the matching
+   '}' avoids re-entering a parser that would otherwise cascade through the
+   mismatched body one confusing diagnostic at a time. *)
+let skip_balanced_braces st : unit =
+  ignore (P.expect st Token.LBrace "'{' to open the block");
+  let rec go depth =
+    if depth = 0 || P.at_eof st then ()
+    else
+      match (P.peek st).kind with
+      | Token.LBrace ->
+          ignore (P.advance st);
+          go (depth + 1)
+      | Token.RBrace ->
+          ignore (P.advance st);
+          go (depth - 1)
+      | _ ->
+          ignore (P.advance st);
+          go depth
+  in
+  go 1
 
 (* ── Declarations and files ────────────────────────────────────────────── *)
 
@@ -464,22 +490,27 @@ let parse_decl st : Ast.decl option =
          without consuming it for the legacy path, which advances "ext"
          itself. *)
       match (P.peek_ahead st 1).kind with
-      | Token.Ident (("hook" | "contract" | "constraint" | "impl") as kind) ->
+      | Token.Ident (("hook" | "contract" | "constraint" | "impl") as kind) -> (
           (* The legacy grammar always requires a name after the kind word
              (ext <kind> <name> ...); a '{' immediately after it can only be
              a mistyped legacy form, never a valid one. Name the collision
-             once, up front, instead of letting legacy parsing cascade into
-             several confusing "expected an extension name"-shaped errors
-             while it recovers from a body it was never going to match. *)
-          (match (P.peek_ahead st 2).kind with
+             once, up front, then skip straight past the whole malformed
+             body instead of letting legacy parsing re-enter it and cascade
+             into a diagnostic per token while it fails to recover. *)
+          match (P.peek_ahead st 2).kind with
           | Token.LBrace ->
               P.error st (P.peek_ahead st 1).span
                 (Printf.sprintf
                    "'%s' is a reserved ext-kind word here, not a library name: \
                     a library cannot currently be named '%s'"
-                   kind kind)
-          | _ -> ());
-          Some (parse_ext st ~pub ~dtraits)
+                   kind kind);
+              ignore (P.advance st);
+              (* 'ext' *)
+              ignore (P.advance st);
+              (* kind word *)
+              skip_balanced_braces st;
+              None
+          | _ -> Some (parse_ext st ~pub ~dtraits))
       | Token.Ident n ->
           ignore (P.advance st);
           (* 'ext' *)

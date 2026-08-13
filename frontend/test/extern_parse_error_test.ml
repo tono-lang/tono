@@ -117,17 +117,53 @@ let opaque_type_named_error () =
     (has_message ~sub:"cannot be named 'error'" ds)
 
 (* A library named after one of the legacy ext-kind words (hook/contract/
-   constraint/impl) still dispatches to the legacy grammar (a documented
-   limitation: the legacy form always requires a name after the kind word,
-   so this can never be a valid legacy declaration either way), but now
-   names the collision once up front instead of only surfacing whatever
-   cascading errors legacy parsing produces while failing to match a body
-   it was never going to recognize. *)
+   constraint/impl) immediately followed by '{' can never be a valid legacy
+   declaration either way (that grammar always requires a name after the
+   kind word), so this names the collision once up front and skips the
+   whole malformed body rather than re-entering the legacy parser and
+   cascading into a diagnostic per token while it fails to recover. *)
 let library_named_like_legacy_kind () =
   let ds = file_diags {|ext hook { ts: "example.com/mylib" }|} in
   Alcotest.(check bool)
     "names the reserved-word collision" true
     (has_message ~sub:"is a reserved ext-kind word here" ds)
+
+(* The fix for the collision above is a single diagnostic, not a cascade:
+   asserting the exact count guards against the legacy parser being
+   re-entered on the malformed body (which previously produced dozens of
+   "expected an extension name"-shaped errors for one mistake). *)
+let library_named_like_legacy_kind_is_a_single_diagnostic () =
+  let ds =
+    file_diags
+      {|ext impl {
+         call: "Load"()
+         yields: (x: string)
+         returns: { }
+       }|}
+  in
+  Alcotest.(check int) "exactly one diagnostic" 1 (List.length ds)
+
+(* A regular top-level shape (not a foreign struct/opaque type inside an
+   'ext' library) named 'error' would collide the same way: a 'yields:'
+   position naming it can only ever read the reserved sentinel, never a
+   reference to the declared shape. *)
+let top_level_struct_named_error () =
+  let ds = file_diags {|struct error { message: string }|} in
+  Alcotest.(check bool)
+    "names the collision" true
+    (has_message ~sub:"cannot be named 'error'" ds)
+
+let top_level_union_named_error () =
+  let ds = file_diags {|union error { variant(string) }|} in
+  Alcotest.(check bool)
+    "names the collision" true
+    (has_message ~sub:"cannot be named 'error'" ds)
+
+let top_level_enum_named_error () =
+  let ds = file_diags {|enum error { a, b }|} in
+  Alcotest.(check bool)
+    "names the collision" true
+    (has_message ~sub:"cannot be named 'error'" ds)
 
 let bad_lang_identifier () =
   nonempty "non-identifier language token"
@@ -388,6 +424,12 @@ let () =
             struct_named_error;
           Alcotest.test_case "as an opaque type name" `Quick
             opaque_type_named_error;
+          Alcotest.test_case "as a top-level struct name" `Quick
+            top_level_struct_named_error;
+          Alcotest.test_case "as a top-level union name" `Quick
+            top_level_union_named_error;
+          Alcotest.test_case "as a top-level enum name" `Quick
+            top_level_enum_named_error;
         ] );
       ( "lang path",
         [
@@ -448,5 +490,7 @@ let () =
             kind_dispatch_disambiguation;
           Alcotest.test_case "library named like a legacy kind word" `Quick
             library_named_like_legacy_kind;
+          Alcotest.test_case "reserved-word collision is a single diagnostic"
+            `Quick library_named_like_legacy_kind_is_a_single_diagnostic;
         ] );
     ]

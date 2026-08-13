@@ -9,6 +9,15 @@ val parse_type_no_error :
   ctx:string ->
   Ast.ty
 
+(* Diagnoses [name] when it is the reserved 'error' identifier: declaring a
+   shape named 'error' would collide with the yields-position sentinel
+   (see [parse_yields_ty]), since a [yields: (n: error, ...)] entry always
+   reads a bare 'error' as the sentinel, never as a reference to a declared
+   shape of that name. [kind] names the declaration in the message (e.g.
+   "struct", "union", "enum"). No-op when [name] is not "error". *)
+val check_not_error_name :
+  Parser_state.t -> string -> string -> Span.span -> unit
+
 (* Parse the body and close of "ext <name> { ... }"; "ext" and [name] have
    already been consumed by the caller (see [Parser]'s disambiguation at
    "ext <ident>"). *)
