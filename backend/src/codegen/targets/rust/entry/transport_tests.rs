@@ -33,6 +33,7 @@ fn field(name: &str, target: Tref) -> EntryField {
         format: None,
         transforms: vec![],
         select: None,
+        call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],
@@ -90,6 +91,7 @@ fn module() -> Module {
         ],
         operations: vec![],
         extensions: vec![],
+        ext_libs: vec![],
     }
 }
 

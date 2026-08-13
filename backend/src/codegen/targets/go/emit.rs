@@ -286,6 +286,7 @@ mod tests {
             }],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let types = rendered(&groups(&module), TYPES);
         assert!(types.contains("type ConfigError struct {"));
@@ -324,6 +325,7 @@ mod tests {
             format: None,
             transforms: vec![],
             select: None,
+            call: None,
             binds: vec![],
             constraints: vec![],
             traits: vec![],
@@ -341,6 +343,7 @@ mod tests {
             }],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let types = rendered(&groups(&module), TYPES);
         assert!(types.contains("type TransportError struct"));
@@ -365,6 +368,7 @@ mod tests {
             )],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let files = emit_module(
             &module,
@@ -404,6 +408,7 @@ mod tests {
             )],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let files = groups(&module);
         // A pure-types module emits a single file: there is no serialization to hold.
@@ -461,6 +466,7 @@ mod tests {
             ],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let files = groups(&module);
         assert_eq!(files.len(), 2);
@@ -516,6 +522,7 @@ mod tests {
             shapes: vec![structure("models#Doc", vec![counts])],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let files = groups(&module);
         assert_eq!(files.len(), 2);

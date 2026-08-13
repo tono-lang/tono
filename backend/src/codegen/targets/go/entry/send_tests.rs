@@ -123,6 +123,7 @@ fn entry_module(retry: bool, timeout: bool) -> crate::ir::Module {
         }],
         operations: vec![],
         extensions: vec![],
+        ext_libs: vec![],
     }
 }
 

@@ -445,6 +445,7 @@ mod tests {
             }],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let files = groups(&module);
         assert_eq!(files.len(), 2, "TypeScript splits types from serde");
@@ -480,6 +481,7 @@ mod tests {
             shapes: vec![],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let files = groups(&module);
         assert_eq!(files.len(), 1);

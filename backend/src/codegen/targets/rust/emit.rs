@@ -339,6 +339,7 @@ mod tests {
             }],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let types = rendered(&module, TYPES);
         assert!(types.contains("pub enum TonoError"));
@@ -376,6 +377,7 @@ mod tests {
             format: None,
             transforms: vec![],
             select: None,
+            call: None,
             binds: vec![],
             constraints: vec![],
             traits: vec![],
@@ -393,6 +395,7 @@ mod tests {
             }],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let types = rendered(&module, TYPES);
         assert!(types.contains("pub struct TransportError"));
@@ -423,6 +426,7 @@ mod tests {
             )],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         assert_eq!(groups(&module).len(), 1);
 
@@ -480,6 +484,7 @@ mod tests {
             )],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let files = groups(&module);
         // No wide integer, no bytes, no open enum: nothing to serialize beyond derives.
@@ -523,6 +528,7 @@ mod tests {
             ],
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         };
         let types = rendered(&module, TYPES);
         // Cross-module payloads pull their import; the open enum's definition and the
