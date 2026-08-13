@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 11, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 14, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **11**.
+The current version is **14**.
 
 ## Modules
 
@@ -201,12 +201,61 @@ value sources (presence is governed by the sources):
   path; each arm carries a scalar JSON `pattern` (absent = wildcard) and a
   `value` that is one of `{"field": [...]}`, `{"lit": <json>}`, or
   `{"sources": [...]}`.
+- `call` (omitted when absent, v14) is a field's `= ns.fn(args)` extern-call
+  source: `{"ns": <string>, "fn": <string>, "args": [<call_arg>]}`. See
+  "FFI library declarations" below for `call_arg` and the rest of the
+  `ext`/`extern` surface it shares.
 - `binds` are the `@bind(target, .source)` pairs of a composed config field.
 
 A field reference inside an operation trait value is the structured object
 `{"field": ["a", "b"]}` (e.g. `@http`'s `endpoint:`, `@header` values,
 `@timeout`/`@retry`); path templates keep both placeholder scopes verbatim in
 the string (`"/notes/{.x}/{id}"`).
+
+## FFI library declarations (v14)
+
+The module `ext_libs` array is the new `ext <name> { ... }` library-block
+form, distinct from the legacy `extensions` table above (hook/contract/
+constraint/impl). Surface-and-IR only: nothing here is resolved against its
+callers yet (an extern's arity/types, an `errors:` sentinel against a
+declared error shape, a `returns:` field ref against its `yields:` name) --
+that is a later pass. One entry per `ext` block:
+
+```json
+{ "name": "companyconfig",
+  "langs": [ { "lang": "go", "path": "github.com/company/config" },
+             { "lang": "ts", "path": "@company/config" } ],
+  "structs": [ { "name": "go_config",
+                 "fields": [ { "name": "Host", "type": { "prim": "string" } } ] } ],
+  "types": [ { "name": "publisher", "methods": [ /* extern_decl */ ] } ],
+  "externs": [ /* extern_decl */ ] }
+```
+
+- `structs` are foreign shapes declared inside the block, field names/casing
+  kept verbatim (never normalized); never a top-level shape, never role-
+  classified, never crosses the wire.
+- `types` are opaque foreign handles; each `methods` entry is an `extern_decl`
+  (a receiver method, same shape as a free extern).
+- An `extern_decl` is `{"name", "params": [{"name","type"}], "return": <tref>,
+  "langs": [<extern_lang>]}`.
+- An `extern_lang` (one per language block) is
+  `{"lang", "symbol", "call_args": [<call_arg>], "yields"?, "returns"?, "errors"?}`.
+  `yields`/`errors` are omitted when empty; `returns` when absent. A
+  `yields` position is `{"name", "type"?, "is_error"?}` -- `type` is absent
+  and `is_error` is `true` only for the reserved `error` sentinel, never for
+  an ordinary omitted type. `returns` is
+  `{"type": <tref>, "fields": [{"name","value"}]}` where a field's `value` is
+  `{"field": [...]}` (a ref into a `yields`-bound name) or `{"select": <select>}`
+  (a match over one, reusing the same `select` shape as `= match`). An
+  `errors` entry is `{"sentinel", "type"}`.
+- A `call_arg` is a tagged object: `{"param": <string>}` (the extern's own
+  parameter), `{"field": [...]}` (a ref path), `{"ctor": <string>, "fields":
+  {<name>: <call_arg>}}` (a struct-literal mapper), `{"lit": <json>}`,
+  `{"list": [<call_arg>]}`, or `{"call": <entry_call>}` -- the last three
+  only arise inside a ctor field's value (e.g. `opts { retries: 3 }`), never
+  as a bare top-level call argument. `entry_call` is `{"ns", "fn", "args":
+  [<call_arg>]}`, the same shape an entry field's `call` key and a trait
+  argument's own `{"call": <entry_call>}` form both carry.
 
 ## Resolved wire bindings (v8)
 
