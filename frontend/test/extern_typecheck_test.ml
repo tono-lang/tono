@@ -50,6 +50,32 @@ let line_of code src =
   in
   d.span.start.line
 
+(* ── Member grammar: a trait may lead or trail the "=" value ────────────── *)
+
+(* RFC-0023's injectable-handle idiom spells the trait before the value
+   ("field: type @with = ns.fn(args)"); every other member value form in the
+   language spells it after ("field: type = match ... @trait"). Both must
+   parse to the same [mtraits], since nothing else in the checker
+   distinguishes where a trait was written. *)
+let member_traits_of src =
+  let file, pdiags = Parser.parse src in
+  Alcotest.(check int) "parses clean" 0 (List.length pdiags);
+  match file.Ast.decls with
+  | [ { Ast.dkind = Ast.DStruct { members = [ m ]; _ }; _ } ] ->
+      List.map (fun (t : Ast.trait) -> t.Ast.tname) m.Ast.mtraits
+  | _ -> Alcotest.fail "expected exactly one single-member struct"
+
+let leading_and_trailing_trait_order_equivalent () =
+  let leading = "struct s { x: string @with = tono_extern_stub.f(.x) }" in
+  let trailing = "struct s { x: string = tono_extern_stub.f(.x) @with }" in
+  (* Neither example resolves "tono_extern_stub" (there is no such ext
+     block); only the member grammar is under test, so we read [mtraits]
+     straight off the parsed AST rather than through the typechecker. *)
+  Alcotest.(check (list string)) "leading" [ "with" ] (member_traits_of leading);
+  Alcotest.(check (list string))
+    "trailing" [ "with" ]
+    (member_traits_of trailing)
+
 (* ── A clean ext block: baseline for every mutation below ───────────────── *)
 
 let base =
@@ -404,7 +430,7 @@ pub struct ack { accepted: bool }
 
 pub struct client {
   endpoint: string @arg
-  bus: bus.publisher = bus.connect(.endpoint) @with
+  bus: bus.publisher @with = bus.connect(.endpoint)
 
   op fetch(): ack @http(method: "GET", path: "/x", endpoint: .endpoint)
 }
@@ -521,23 +547,19 @@ let lang_block_without_module () =
 
 (* ── The RFC-0023 appendix example compiles clean ────────────────────────── *)
 
-(* A near-verbatim transcription of RFC-0023's own appendix, with three
+(* A near-verbatim transcription of RFC-0023's own appendix, with two
    adjustments unrelated to this task's checker (each called out at its
    exact site below):
    - "overloaded" gains @status (TC0015, a pre-existing rule independent of
      ext/extern);
-   - the "bus" field's @with moves after its call value ("= ns.fn(...) @with"
-     instead of the RFC's own "@with = ns.fn(...)"): the member grammar
-     (parser.ml, "member ::= name ':' type ('=' (match | call_expr))?
-     trait*") only ever parses traits after the value, for every member in
-     the language, not just ext/extern ones -- this is a pre-existing,
-     general grammar rule the RFC's own spelling does not match, not
-     something this task's checker should special-case;
    - "publish"'s implementation binds through the legacy "ext impl" form
      instead of the RFC's own "impl .bus.send(...)" op-body spelling, which
      the grammar does not parse at all yet ("impl" is only recognized after
      "ext"; that construct is DAG/entry-construction wiring, a separate
-     task's scope). *)
+     task's scope).
+   The "bus" field keeps the RFC's own "@with = ns.fn(...)" spelling: the
+   member grammar now accepts a trait on either side of the value (see
+   [parse_member] in parser.ml). *)
 let rfc_appendix =
   {|import tono.http
 
@@ -620,7 +642,7 @@ pub struct client {
   config: app_config = companyconfig.load(.service, .region)
   auth: string @format("Bearer {.config.token}")
 
-  bus: companybus.publisher = companybus.connect(.config.endpoint, .config.token) @with
+  bus: companybus.publisher @with = companybus.connect(.config.endpoint, .config.token)
 
   op fetch(ref: note_ref): note
     @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .config.endpoint)
@@ -643,6 +665,11 @@ let () =
   Alcotest.run "extern_typecheck"
     [
       ("baseline", [ Alcotest.test_case "clean ext block" `Quick clean ]);
+      ( "grammar",
+        [
+          Alcotest.test_case "leading and trailing trait order" `Quick
+            leading_and_trailing_trait_order_equivalent;
+        ] );
       ( "call",
         [
           Alcotest.test_case "unknown call param" `Quick unknown_call_param;

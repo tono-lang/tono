@@ -111,7 +111,15 @@ let parse_trailing_traits = Parser_traits.parse_trailing_traits
    can reuse it for a [returns:] field value; aliased locally. *)
 let parse_field_match = Parser_traits.parse_field_match
 
-(* member ::= name ":" type ("=" (match | call_expr))? trait* *)
+(* member ::= name ":" type trait* ("=" (match | call_expr))? trait*
+   A trait may appear before the value, after it, or split across both (the
+   two lists are concatenated in source order into one [mtraits]): a source
+   marker paired with a call value reads naturally either way ("@with = ns.fn(...)"
+   marks the field injectable before showing its construction fallback;
+   "= ns.fn(...) @with" shows the fallback first), and the two spellings are
+   otherwise indistinguishable once parsed. The printer always emits the
+   trailing spelling; a member written with a leading trait round-trips
+   through [fmt] into that canonical form rather than back to itself. *)
 let parse_member st : Ast.member =
   let nt = P.peek st in
   let name =
@@ -125,6 +133,7 @@ let parse_member st : Ast.member =
   in
   ignore (P.expect st Token.Colon "':' after member name");
   let ty = parse_type st in
+  let leading_traits = parse_trailing_traits st in
   let mvalue =
     match (P.peek st).kind with
     | Token.Eq -> (
@@ -148,13 +157,13 @@ let parse_member st : Ast.member =
             None)
     | _ -> None
   in
-  let traits = parse_trailing_traits st in
+  let trailing_traits = parse_trailing_traits st in
   {
     Ast.mname = name;
     mname_span = nt.span;
     mtype = ty;
     mvalue;
-    mtraits = traits;
+    mtraits = leading_traits @ trailing_traits;
   }
 
 (* generics ::= "[" name ("," name)* "]" *)
