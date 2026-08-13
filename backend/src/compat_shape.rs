@@ -167,3 +167,325 @@ pub(crate) fn tref_references(t: &Tref, target: &str) -> bool {
         Tref::Prim(_) | Tref::Param(_) => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{Member, Prim};
+
+    fn member(name: &str, target: Tref) -> Member {
+        Member {
+            name: name.into(),
+            target,
+            required: true,
+            default: None,
+            constraints: vec![],
+            traits: vec![],
+        }
+    }
+
+    fn structure(id: &str, members: Vec<Member>) -> Shape {
+        Shape {
+            id: id.into(),
+            kind: ShapeKind::Structure {
+                params: vec![],
+                members,
+            },
+            traits: vec![],
+        }
+    }
+
+    // ── render_tref / render_opt ────────────────────────────────────────
+
+    #[test]
+    fn render_tref_covers_every_variant() {
+        assert_eq!(render_tref(&Tref::Prim(Prim::Bool)), "bool");
+        assert_eq!(render_tref(&Tref::Param("T".into())), "T");
+        assert_eq!(
+            render_tref(&Tref::Ref {
+                id: "p#Money".into(),
+                args: vec![]
+            }),
+            "p#Money"
+        );
+        assert_eq!(
+            render_tref(&Tref::Ref {
+                id: "core#Page".into(),
+                args: vec![Tref::Prim(Prim::String)]
+            }),
+            "core#Page<string>"
+        );
+        assert_eq!(
+            render_tref(&Tref::List(Box::new(Tref::Prim(Prim::I32)))),
+            "list<i32>"
+        );
+        assert_eq!(
+            render_tref(&Tref::Map(
+                Box::new(Tref::Prim(Prim::String)),
+                Box::new(Tref::Prim(Prim::Bool))
+            )),
+            "map<string, bool>"
+        );
+    }
+
+    #[test]
+    fn render_opt_covers_both_arms() {
+        assert_eq!(render_opt(&Some(Tref::Prim(Prim::Bool))), "bool");
+        assert_eq!(render_opt(&None), "none");
+    }
+
+    // ── kind_name / backing_name / constraint_name ──────────────────────
+
+    #[test]
+    fn kind_name_covers_every_variant() {
+        assert_eq!(kind_name(&ShapeKind::Structure { params: vec![], members: vec![] }), "structure");
+        assert_eq!(
+            kind_name(&ShapeKind::Union {
+                params: vec![],
+                members: vec![],
+                discriminator: "type".into()
+            }),
+            "union"
+        );
+        assert_eq!(
+            kind_name(&ShapeKind::Enum {
+                backing: EnumBacking::String,
+                values: vec![]
+            }),
+            "enum"
+        );
+        assert_eq!(kind_name(&ShapeKind::Service { operations: vec![] }), "service");
+        assert_eq!(
+            kind_name(&ShapeKind::Operation {
+                input: None,
+                input_name: None,
+                output: None,
+                errors: vec![],
+                wire: None
+            }),
+            "operation"
+        );
+        assert_eq!(
+            kind_name(&ShapeKind::Entry {
+                fields: vec![],
+                operations: vec![]
+            }),
+            "entry"
+        );
+        assert_eq!(kind_name(&ShapeKind::Config { fields: vec![] }), "config");
+    }
+
+    #[test]
+    fn backing_name_covers_both_variants() {
+        assert_eq!(backing_name(&EnumBacking::String), "string");
+        assert_eq!(backing_name(&EnumBacking::Int), "int");
+    }
+
+    #[test]
+    fn constraint_name_covers_every_variant() {
+        assert_eq!(
+            constraint_name(&Constraint::Range {
+                min: None,
+                max: None,
+                excl_min: false,
+                excl_max: false
+            }),
+            "range"
+        );
+        assert_eq!(
+            constraint_name(&Constraint::Length { min: None, max: None }),
+            "length"
+        );
+        assert_eq!(constraint_name(&Constraint::Pattern("x".into())), "pattern");
+        assert_eq!(constraint_name(&Constraint::MultipleOf(2.0)), "multipleOf");
+    }
+
+    // ── tightened / raised / lowered ─────────────────────────────────────
+
+    #[test]
+    fn tightened_length_pattern_multipleof_and_mismatch() {
+        assert!(tightened(
+            &Constraint::Length { min: None, max: None },
+            &Constraint::Length { min: Some(1), max: None }
+        ));
+        assert!(!tightened(
+            &Constraint::Length { min: Some(1), max: None },
+            &Constraint::Length { min: Some(1), max: None }
+        ));
+        assert!(tightened(
+            &Constraint::Pattern("a".into()),
+            &Constraint::Pattern("b".into())
+        ));
+        assert!(!tightened(
+            &Constraint::Pattern("a".into()),
+            &Constraint::Pattern("a".into())
+        ));
+        assert!(tightened(&Constraint::MultipleOf(2.0), &Constraint::MultipleOf(3.0)));
+        assert!(!tightened(&Constraint::MultipleOf(2.0), &Constraint::MultipleOf(2.0)));
+        // mismatched variants fall to the catch-all `_ => false`.
+        assert!(!tightened(
+            &Constraint::Pattern("a".into()),
+            &Constraint::MultipleOf(2.0)
+        ));
+    }
+
+    #[test]
+    fn raised_covers_every_arm() {
+        assert!(!raised(Some(1.0), None));
+        assert!(raised(None, Some(1.0)));
+        assert!(raised(Some(1.0), Some(2.0)));
+        assert!(!raised(Some(2.0), Some(1.0)));
+    }
+
+    #[test]
+    fn lowered_covers_every_arm() {
+        assert!(!lowered(Some(1.0), None));
+        assert!(lowered(None, Some(1.0)));
+        assert!(lowered(Some(2.0), Some(1.0)));
+        assert!(!lowered(Some(1.0), Some(2.0)));
+    }
+
+    // ── same_set ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn same_set_is_order_independent_but_multiplicity_sensitive() {
+        let x = Tref::Prim(Prim::Bool);
+        let y = Tref::Prim(Prim::String);
+        assert!(same_set(&[x.clone(), y.clone()], &[y.clone(), x.clone()]));
+        assert!(!same_set(&[x.clone(), x.clone(), y.clone()], &[x.clone(), y.clone(), y.clone()]));
+        assert!(!same_set(std::slice::from_ref(&x), &[x.clone(), y]));
+    }
+
+    // ── references_on_wire / tref_references ────────────────────────────
+
+    #[test]
+    fn references_on_wire_covers_every_shape_kind() {
+        let target = "p#Money";
+        let refs = Tref::Ref { id: target.into(), args: vec![] };
+
+        let structure = structure("s#S", vec![member("amount", refs.clone())]);
+        assert!(references_on_wire(&structure, target));
+
+        let union = Shape {
+            id: "u#U".into(),
+            kind: ShapeKind::Union {
+                params: vec![],
+                members: vec![member("amount", refs.clone())],
+                discriminator: "type".into(),
+            },
+            traits: vec![],
+        };
+        assert!(references_on_wire(&union, target));
+
+        let op_input = Shape {
+            id: "o#in".into(),
+            kind: ShapeKind::Operation {
+                input: Some(refs.clone()),
+                input_name: None,
+                output: None,
+                errors: vec![],
+                wire: None,
+            },
+            traits: vec![],
+        };
+        assert!(references_on_wire(&op_input, target));
+
+        let op_output = Shape {
+            id: "o#out".into(),
+            kind: ShapeKind::Operation {
+                input: None,
+                input_name: None,
+                output: Some(refs.clone()),
+                errors: vec![],
+                wire: None,
+            },
+            traits: vec![],
+        };
+        assert!(references_on_wire(&op_output, target));
+
+        let op_error = Shape {
+            id: "o#err".into(),
+            kind: ShapeKind::Operation {
+                input: None,
+                input_name: None,
+                output: None,
+                errors: vec![refs.clone()],
+                wire: None,
+            },
+            traits: vec![],
+        };
+        assert!(references_on_wire(&op_error, target));
+
+        let op_none = Shape {
+            id: "o#none".into(),
+            kind: ShapeKind::Operation {
+                input: None,
+                input_name: None,
+                output: None,
+                errors: vec![],
+                wire: None,
+            },
+            traits: vec![],
+        };
+        assert!(!references_on_wire(&op_none, target));
+
+        let entry = Shape {
+            id: "e#E".into(),
+            kind: ShapeKind::Entry {
+                fields: vec![],
+                operations: vec![op_input],
+            },
+            traits: vec![],
+        };
+        assert!(references_on_wire(&entry, target));
+
+        let config = Shape {
+            id: "c#C".into(),
+            kind: ShapeKind::Config { fields: vec![] },
+            traits: vec![],
+        };
+        assert!(!references_on_wire(&config, target));
+
+        let enum_shape = Shape {
+            id: "n#N".into(),
+            kind: ShapeKind::Enum {
+                backing: EnumBacking::String,
+                values: vec![],
+            },
+            traits: vec![],
+        };
+        assert!(!references_on_wire(&enum_shape, target));
+
+        let service = Shape {
+            id: "v#V".into(),
+            kind: ShapeKind::Service { operations: vec![] },
+            traits: vec![],
+        };
+        assert!(!references_on_wire(&service, target));
+    }
+
+    #[test]
+    fn tref_references_covers_every_variant() {
+        let target = "p#Money";
+        let hit = Tref::Ref { id: target.into(), args: vec![] };
+        let miss = Tref::Prim(Prim::Bool);
+
+        assert!(tref_references(&hit, target));
+        assert!(!tref_references(&miss, target));
+        assert!(tref_references(&Tref::List(Box::new(hit.clone())), target));
+        assert!(!tref_references(&Tref::List(Box::new(miss.clone())), target));
+        assert!(tref_references(
+            &Tref::Map(Box::new(miss.clone()), Box::new(hit.clone())),
+            target
+        ));
+        assert!(tref_references(
+            &Tref::Map(Box::new(hit.clone()), Box::new(miss.clone())),
+            target
+        ));
+        assert!(!tref_references(
+            &Tref::Map(Box::new(miss.clone()), Box::new(miss)),
+            target
+        ));
+        assert!(!tref_references(&Tref::Param("T".into()), target));
+    }
+}

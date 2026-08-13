@@ -287,3 +287,95 @@ pub struct ExtLib {
     #[serde(default)]
     pub externs: Vec<ExternDecl>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roundtrip(arg: &CallArg) {
+        let json = serde_json::to_string(arg).unwrap();
+        let back: CallArg = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, arg, "round-trip mismatch for {json}");
+    }
+
+    #[test]
+    fn every_call_arg_variant_roundtrips() {
+        roundtrip(&CallArg::Param("service".into()));
+        roundtrip(&CallArg::Ref(vec!["cfg".into(), "Host".into()]));
+        roundtrip(&CallArg::Lit(serde_json::json!(3)));
+        roundtrip(&CallArg::List(vec![
+            CallArg::Param("a".into()),
+            CallArg::Lit(serde_json::json!("b")),
+        ]));
+        roundtrip(&CallArg::Call(Box::new(EntryCall {
+            ns: "companyauth".into(),
+            func: "sign".into(),
+            args: vec![CallArg::Ref(vec!["request".into()])],
+        })));
+        let mut fields = BTreeMap::new();
+        fields.insert("region".to_string(), CallArg::Param("region".into()));
+        roundtrip(&CallArg::Ctor(CallCtor {
+            name: "ts_opts".into(),
+            fields,
+        }));
+    }
+
+    #[test]
+    fn call_arg_rejects_a_non_object() {
+        assert!(serde_json::from_str::<CallArg>("1").is_err());
+    }
+
+    #[test]
+    fn call_arg_rejects_zero_recognized_keys() {
+        let err = serde_json::from_str::<CallArg>(r#"{"nope":1}"#).unwrap_err();
+        assert!(err.to_string().contains("no recognized variant key"));
+    }
+
+    #[test]
+    fn call_arg_rejects_multiple_recognized_keys() {
+        let err = serde_json::from_str::<CallArg>(r#"{"param":"a","lit":1}"#).unwrap_err();
+        assert!(err.to_string().contains("multiple variant keys"));
+    }
+
+    #[test]
+    fn call_arg_rejects_a_stray_sibling_key() {
+        assert!(serde_json::from_str::<CallArg>(r#"{"param":"a","extra":1}"#).is_err());
+        assert!(serde_json::from_str::<CallArg>(r#"{"field":["a"],"extra":1}"#).is_err());
+        assert!(serde_json::from_str::<CallArg>(r#"{"lit":1,"extra":1}"#).is_err());
+        assert!(serde_json::from_str::<CallArg>(r#"{"list":[],"extra":1}"#).is_err());
+        assert!(serde_json::from_str::<CallArg>(r#"{"call":{"ns":"n","fn":"f"},"extra":1}"#).is_err());
+        assert!(serde_json::from_str::<CallArg>(r#"{"ctor":"c","fields":{},"extra":1}"#).is_err());
+    }
+
+    #[test]
+    fn call_arg_field_rejects_a_non_string_segment() {
+        assert!(serde_json::from_str::<CallArg>(r#"{"field":[1]}"#).is_err());
+    }
+
+    #[test]
+    fn is_false_reports_the_negation() {
+        assert!(is_false(&false));
+        assert!(!is_false(&true));
+    }
+
+    #[test]
+    fn yields_pos_error_sentinel_omits_the_type_and_skips_the_flag_when_false() {
+        let ordinary = YieldsPos {
+            name: "cfg".into(),
+            r#type: Some(Tref::Prim(crate::ir::Prim::String)),
+            is_error: false,
+        };
+        let json = serde_json::to_string(&ordinary).unwrap();
+        assert!(!json.contains("is_error"));
+
+        let sentinel = YieldsPos {
+            name: "e".into(),
+            r#type: None,
+            is_error: true,
+        };
+        let json = serde_json::to_string(&sentinel).unwrap();
+        assert!(json.contains(r#""is_error":true"#));
+        let back: YieldsPos = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, sentinel);
+    }
+}
