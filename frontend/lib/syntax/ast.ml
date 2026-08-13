@@ -39,13 +39,21 @@ and ctor_arg = {
   ctor_span : Span.span;
 }
 
+(* A bare scalar literal argument, e.g. the "notes" in [.bus.send("notes",
+   .payload.body)]: [call_arg]'s own literal case, distinct from
+   [trait_arg]'s (a different grammar position with a different set of
+   argument forms). *)
+and call_lit = LStr of string | LInt of int | LFloat of float
+
 (* One argument to a call expression (see [call_expr]): the caller's own
-   parameter by name, a field-reference path, or a struct-literal mapper —
-   the same shape [ctor_arg] already gives [@body(name { field: value })]. *)
+   parameter by name, a field-reference path, a struct-literal mapper — the
+   same shape [ctor_arg] already gives [@body(name { field: value })] — or a
+   bare literal. *)
 and call_arg =
   | CaParam of string * Span.span
   | CaRef of ref_path
   | CaCtor of ctor_arg
+  | CaLit of call_lit * Span.span
 
 (* "ns.fn(args)": a call into an [extern] declared in the [ext] block named
    [ce_ns]. Shared by three surface positions: a member's [= ns.fn(...)]
@@ -343,13 +351,32 @@ type test_item =
       item_span : Span.span;
     }
 
+(* An op's own "impl .field.method(args)" body (RFC-0023): the receiver names
+   an entry field (a declared opaque handle), the method one of its declared
+   [extern] methods. A third implementation source for an op, alongside a
+   protocol trait (@http) and a legacy "ext impl" binding; the closed-
+   boundary/arity rules against the handle's declared method live in the
+   typechecker, not here. *)
+type op_impl = {
+  oi_recv : ref_path;
+  oi_method : string;
+  oi_method_span : Span.span;
+  oi_args : call_arg list;
+  oi_span : Span.span;
+}
+
 type decl_kind =
   | DStruct of { params : string list; members : member list; ops : decl list }
     (* [ops] are operations declared in the struct body (an "entry"); each is a
        full decl with [dkind = DOp]. A plain data struct has none. *)
   | DEnum of { cases : enum_case list }
   | DUnion of { params : string list; variants : union_variant list }
-  | DOp of { pname : string option; input : ty option; output : ty option }
+  | DOp of {
+      pname : string option;
+      input : ty option;
+      output : ty option;
+      oimpl : op_impl option;
+    }
   | DExt of {
       ekind : ext_kind;
       ekind_span : Span.span;

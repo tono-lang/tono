@@ -336,10 +336,78 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
     dkind = Ast.DEnum { cases };
   }
 
-(* op ::= "op" name "(" (name ":" type)? ")" ( ":" type )? op_trait*  — the
-   parameter, when present, must name itself (".param" needs a name to give
-   its reference provenance); the output type is optional, and errors are
-   carried by a trailing "@errors(...)" trait. *)
+(* op_impl ::= "impl" "." name ("." name)+ "(" call_arg ("," call_arg)* ")"
+   — an op's own bespoke body (RFC-0023): a call into a declared opaque
+   handle's method. "impl" is a contextual keyword here (only recognized
+   right after an op's traits, exactly like "impl" after "ext" in the legacy
+   grammar); a field or parameter genuinely named "impl" is not ambiguous in
+   this position since nothing else can start an op's trailing clause with
+   that identifier. The receiver is every segment but the last (".bus" in
+   ".bus.send(...)"); the last is the method name. At least two segments are
+   required: "impl .send(...)" alone has no receiver to resolve the method
+   against. *)
+let parse_op_impl st : Ast.op_impl option =
+  match (P.peek st).kind with
+  | Token.Ident "impl" -> (
+      let impl_t = P.advance st in
+      let rec segs acc =
+        match (P.peek st).kind with
+        | Token.Dot -> (
+            ignore (P.advance st);
+            match (P.peek st).kind with
+            | Token.Ident n ->
+                let t = P.advance st in
+                segs ((n, t.span) :: acc)
+            | _ ->
+                P.error st (P.peek st).span "expected a field name after '.'";
+                List.rev acc)
+        | _ -> List.rev acc
+      in
+      match segs [] with
+      | [] ->
+          P.error st (P.peek st).span
+            "expected a field reference after 'impl', e.g. 'impl \
+             .bus.send(...)'";
+          None
+      | [ (_, span) ] ->
+          P.error st span
+            "'impl' needs a receiver before the method, e.g. 'impl \
+             .bus.send(...)' rather than 'impl .send(...)'";
+          None
+      | all -> (
+          let recv, (method_, method_span) =
+            match List.rev all with
+            | last :: rest -> (List.rev rest, last)
+            | [] -> assert false
+          in
+          let recv_span =
+            match recv with
+            | (_, first_span) :: _ -> Span.merge first_span method_span
+            | [] -> method_span
+          in
+          match (P.peek st).kind with
+          | Token.LParen ->
+              let args = Parser_traits.parse_call_args st in
+              Some
+                {
+                  Ast.oi_recv =
+                    { Ast.segs = List.map fst recv; ref_span = recv_span };
+                  oi_method = method_;
+                  oi_method_span = method_span;
+                  oi_args = args;
+                  oi_span = Span.merge impl_t.span method_span;
+                }
+          | _ ->
+              P.error st (P.peek st).span
+                "expected '(' after 'impl .field.method'";
+              None))
+  | _ -> None
+
+(* op ::= "op" name "(" (name ":" type)? ")" ( ":" type )? op_trait*
+   ("impl" ...)?  — the parameter, when present, must name itself (".param"
+   needs a name to give its reference provenance); the output type is
+   optional, errors are carried by a trailing "@errors(...)" trait, and the
+   op's own bespoke body (if any) is [parse_op_impl] above. *)
 let parse_op st ~pub ~dtraits : Ast.decl =
   ignore (P.advance st);
   (* 'op' *)
@@ -385,12 +453,13 @@ let parse_op st ~pub ~dtraits : Ast.decl =
   (* Trailing op traits (@http, @errors, @async, ...) join the shape traits;
      lowering lifts @errors into Operation.errors and bags the rest. *)
   let dtraits = dtraits @ parse_trailing_traits st in
+  let oimpl = parse_op_impl st in
   {
     Ast.dname = name;
     dname_span = nt.span;
     pub;
     dtraits;
-    dkind = Ast.DOp { pname; input; output };
+    dkind = Ast.DOp { pname; input; output; oimpl };
   }
 
 (* ── Structs ───────────────────────────────────────────────────────────── *)

@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 14, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 15, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **14**.
+The current version is **15**.
 
 ## Modules
 
@@ -153,7 +153,14 @@ construction kinds (`entry` and `config`, below).
   `errors` as an array of type references. They are type references (not bare
   ids) so an operation can return an applied generic directly. `wire` (the
   resolved HTTP binding, see below) is present only on an operation with an
-  `@http` trait; the key is omitted otherwise.
+  `@http` trait; the key is omitted otherwise. `impl_call` (v15) is present
+  only on an operation with its own `impl .field.method(args)` body
+  (RFC-0023): `{ "recv": ["bus"], "method": "send", "args": [ /* call
+  arguments */ ] }`, where `recv` is the field path and `args` use the same
+  call-argument encoding as an "ext" library's `call:` line (see "FFI
+  library declarations" below). It is a third implementation source
+  alongside `wire` and a legacy `impl` extension; an operation carries at
+  most one of the three. Not yet consumed by any backend target.
 
 ## Entries and configs (v5)
 
@@ -216,10 +223,7 @@ the string (`"/notes/{.x}/{id}"`).
 
 The module `ext_libs` array is the new `ext <name> { ... }` library-block
 form, distinct from the legacy `extensions` table above (hook/contract/
-constraint/impl). Surface-and-IR only: nothing here is resolved against its
-callers yet (an extern's arity/types, an `errors:` sentinel against a
-declared error shape, a `returns:` field ref against its `yields:` name) --
-that is a later pass. One entry per `ext` block:
+constraint/impl). One entry per `ext` block:
 
 ```json
 { "name": "companyconfig",
@@ -250,12 +254,14 @@ that is a later pass. One entry per `ext` block:
   `errors` entry is `{"sentinel", "type"}`.
 - A `call_arg` is a tagged object: `{"param": <string>}` (the extern's own
   parameter), `{"field": [...]}` (a ref path), `{"ctor": <string>, "fields":
-  {<name>: <call_arg>}}` (a struct-literal mapper), `{"lit": <json>}`,
-  `{"list": [<call_arg>]}`, or `{"call": <entry_call>}` -- the last three
-  only arise inside a ctor field's value (e.g. `opts { retries: 3 }`), never
-  as a bare top-level call argument. `entry_call` is `{"ns", "fn", "args":
-  [<call_arg>]}`, the same shape an entry field's `call` key and a trait
-  argument's own `{"call": <entry_call>}` form both carry.
+  {<name>: <call_arg>}}` (a struct-literal mapper), `{"lit": <json>}` (a
+  bare scalar literal, e.g. the `"notes"` in `.bus.send("notes", ...)`; v14
+  only inside a ctor field's value, v15 also as a bare top-level call
+  argument), `{"list": [<call_arg>]}`, or `{"call": <entry_call>}` -- the
+  last two only arise inside a ctor field's value (e.g. `opts { retries:
+  3 }`), never as a bare top-level call argument. `entry_call` is `{"ns",
+  "fn", "args": [<call_arg>]}`, the same shape an entry field's `call` key
+  and a trait argument's own `{"call": <entry_call>}` form both carry.
 
 ## Resolved wire bindings (v8)
 

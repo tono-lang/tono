@@ -337,7 +337,7 @@ let rec boundary_ty ctx (t : Ast.ty) : Diagnostic.t list =
 
 let check_op_boundary ctx (op : Ast.decl) : Diagnostic.t list =
   match op.dkind with
-  | Ast.DOp { pname = _; input; output } ->
+  | Ast.DOp { pname = _; input; output; oimpl = _ } ->
       let opt = function Some t -> boundary_ty ctx t | None -> [] in
       let error_diags =
         List.concat_map

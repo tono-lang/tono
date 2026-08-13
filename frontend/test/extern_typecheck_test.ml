@@ -545,21 +545,19 @@ let lang_block_without_module () =
     "lang block without module" true
     (List.mem "TC0081" (project_codes [ ("a", split_lib_a); ("b", b) ]))
 
+(* The op's own "impl .field.method(args)" body (RFC-0023) has its own test
+   file, [op_impl_test.ml], split out to stay under the file-size cap. *)
+
 (* ── The RFC-0023 appendix example compiles clean ────────────────────────── *)
 
-(* A near-verbatim transcription of RFC-0023's own appendix, with two
-   adjustments unrelated to this task's checker (each called out at its
-   exact site below):
-   - "overloaded" gains @status (TC0015, a pre-existing rule independent of
-     ext/extern);
-   - "publish"'s implementation binds through the legacy "ext impl" form
-     instead of the RFC's own "impl .bus.send(...)" op-body spelling, which
-     the grammar does not parse at all yet ("impl" is only recognized after
-     "ext"; that construct is DAG/entry-construction wiring, a separate
-     task's scope).
-   The "bus" field keeps the RFC's own "@with = ns.fn(...)" spelling: the
-   member grammar now accepts a trait on either side of the value (see
-   [parse_member] in parser.ml). *)
+(* A verbatim transcription of RFC-0023's own appendix, with one adjustment
+   unrelated to this task's checker: "overloaded" gains @status (TC0015, a
+   pre-existing rule independent of ext/extern; the RFC's own appendix text
+   omits it). Both syntax gaps found while building this feature are closed:
+   the member grammar accepts a trait on either side of the "=" value (the
+   "bus" field's own "@with = ns.fn(...)"), and "publish"'s own
+   "impl .bus.send(...)" op body parses and typechecks against "publisher"'s
+   declared "send" method. *)
 let rfc_appendix =
   {|import tono.http
 
@@ -651,9 +649,8 @@ pub struct client {
 
   op publish(payload: note): ack
     @errors(overloaded)
+    impl .bus.send("notes", .payload.body)
 }
-
-ext impl client.publish { go: "ext/go/publish.go#Publish" }
 |}
 
 let rfc_appendix_clean () =

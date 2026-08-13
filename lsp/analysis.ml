@@ -166,7 +166,7 @@ let rec decl_tys (d : Ast.decl) : Ast.ty list =
       List.map (fun m -> m.Ast.mtype) members @ List.concat_map decl_tys ops
   | Ast.DUnion { variants; _ } ->
       List.filter_map (fun v -> v.Ast.vpayload) variants
-  | Ast.DOp { pname = _; input; output } ->
+  | Ast.DOp { pname = _; input; output; oimpl = _ } ->
       List.filter_map Fun.id [ input; output ]
   | Ast.DExt { esig; _ } -> (
       match esig with Some s -> [ s.Ast.esig_in; s.esig_out ] | None -> [])

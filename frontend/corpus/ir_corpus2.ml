@@ -81,6 +81,7 @@ let resolved_wire : Ir.model =
                   wb_timeout = Some [ "timeout" ];
                   wb_retry = Some [ "settings"; "max_retries" ];
                 };
+            impl_call = None;
           };
       traits = [];
     }

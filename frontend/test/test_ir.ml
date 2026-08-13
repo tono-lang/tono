@@ -139,6 +139,7 @@ let index_resolves () =
             output = None;
             errors = [];
             wire = None;
+            impl_call = None;
           };
       traits = [];
     }
@@ -487,6 +488,7 @@ let operation_shape : Ir.shape =
           output = Some page_charge;
           errors = [ Ir.Ref ("payments#NotFound", []) ];
           wire = None;
+          impl_call = None;
         };
     traits = [];
   }

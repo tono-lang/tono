@@ -34,7 +34,7 @@ let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
    arguments can reference this extern's own parameters too). *)
 let rec collect_call_arg : Ast.call_arg -> string list = function
   | Ast.CaParam (n, _) -> [ n ]
-  | Ast.CaRef _ -> []
+  | Ast.CaRef _ | Ast.CaLit _ -> []
   | Ast.CaCtor c ->
       List.concat_map (fun (_, _, v) -> collect_trait_arg v) c.Ast.ctor_fields
 
@@ -59,7 +59,7 @@ let rec unknown_param_call_arg (declared : string list) :
           err Error_codes.extern_call_unknown_param span
             "'%s' is not a declared logical parameter of this extern" n;
         ]
-  | Ast.CaRef _ -> []
+  | Ast.CaRef _ | Ast.CaLit _ -> []
   | Ast.CaCtor c ->
       List.concat_map
         (fun (_, span, v) -> unknown_param_trait_arg declared span v)
@@ -316,7 +316,7 @@ let check_extern ~(tbl : Symtab.t)
       @ List.concat_map
           (function
             | Ast.CaCtor c -> check_ctor_projection structs e.Ast.ed_params c
-            | Ast.CaParam _ | Ast.CaRef _ -> [])
+            | Ast.CaParam _ | Ast.CaRef _ | Ast.CaLit _ -> [])
           b.Ast.elb_call_args
       @ check_yields_consumption b
       @ (match b.Ast.elb_yields with

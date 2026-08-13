@@ -182,3 +182,14 @@ let extern_param_unconsumed = "TC0078"
 let ext_lib_module_path_conflict = "TC0079"
 let extern_duplicate_name = "TC0080"
 let extern_lang_no_module = "TC0081"
+
+(* An op's own "impl .field.method(args)" body (RFC-0023). The receiver does
+   not resolve to an entry field whose type is a declared opaque handle; the
+   method is not one of that handle's declared "extern" methods; the
+   argument list disagrees in count with the method's declared logical
+   parameters, or an argument is a bare identifier (no extern-side
+   parameter list exists to forward from in this position; only a literal
+   or a field reference is legal). *)
+let op_impl_receiver_not_handle = "TC0082"
+let op_impl_unknown_method = "TC0083"
+let op_impl_arity_mismatch = "TC0084"

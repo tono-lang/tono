@@ -126,3 +126,14 @@ val extern_param_unconsumed : string
 val ext_lib_module_path_conflict : string
 val extern_duplicate_name : string
 val extern_lang_no_module : string
+
+(* An op's own "impl .field.method(args)" body (RFC-0023): the receiver is
+   not an entry field whose type is a declared opaque handle; the method is
+   not one of that handle's declared "extern" methods; the argument count
+   disagrees with the method's declared logical parameters, or an argument
+   is a bare identifier (only a literal or a field reference is legal in
+   this position, since there is no extern-side parameter list to forward
+   from). *)
+val op_impl_receiver_not_handle : string
+val op_impl_unknown_method : string
+val op_impl_arity_mismatch : string

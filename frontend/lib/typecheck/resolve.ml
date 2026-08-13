@@ -116,7 +116,7 @@ let rec resolve_decl ~(qualified : qualified) ~(known : string -> bool)
           | None -> [])
         variants
   | Ast.DEnum _ -> [] (* enum cases are scalar; no type references *)
-  | Ast.DOp { pname = _; input; output } ->
+  | Ast.DOp { pname = _; input; output; oimpl = _ } ->
       let opt = function
         | Some t -> resolve_ty ~params:[] ~tbl ~qualified ~known t
         | None -> []
