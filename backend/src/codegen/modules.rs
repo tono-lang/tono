@@ -76,6 +76,7 @@ fn module(config: &CodegenConfig, m: &Module) -> Module {
         shapes: m.shapes.iter().map(|s| shape(config, s)).collect(),
         operations: m.operations.iter().map(|s| shape(config, s)).collect(),
         extensions: m.extensions.iter().map(|e| extension(config, e)).collect(),
+        ext_libs: m.ext_libs.clone(),
         tests: m.tests.clone(),
     }
 }
@@ -257,6 +258,7 @@ mod tests {
                 }],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             }],
         };
         let c = CodegenConfig {
@@ -292,6 +294,7 @@ mod tests {
             format: None,
             transforms: vec![],
             select: None,
+            call: None,
             binds: vec![],
             constraints: vec![],
             traits: vec![],
@@ -333,6 +336,7 @@ mod tests {
                 ],
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             }],
         };
         let c = CodegenConfig {

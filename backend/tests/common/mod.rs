@@ -177,6 +177,7 @@ pub fn matrix_module() -> Module {
         // per-operation discriminator alongside the wire matrix.
         operations: vec![create_charge_operation()],
         extensions: vec![],
+        ext_libs: vec![],
     }
 }
 

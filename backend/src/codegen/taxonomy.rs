@@ -151,6 +151,7 @@ mod tests {
             shapes,
             operations,
             extensions,
+            ext_libs: vec![],
         }
     }
 
@@ -193,6 +194,7 @@ mod tests {
                     format: None,
                     transforms: vec![],
                     select: None,
+                    call: None,
                     binds: vec![],
                     constraints: vec![],
                     traits: vec![],

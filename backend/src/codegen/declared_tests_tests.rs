@@ -93,6 +93,7 @@ fn module(tests: Vec<TestDecl>) -> Module {
                         format: None,
                         transforms: vec![],
                         select: None,
+                        call: None,
                         binds: vec![],
                         constraints: vec![],
                         traits: vec![],
@@ -114,6 +115,7 @@ fn module(tests: Vec<TestDecl>) -> Module {
         ],
         operations: vec![],
         extensions: vec![impl_ext(false)],
+        ext_libs: vec![],
         tests,
     }
 }

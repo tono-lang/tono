@@ -210,6 +210,7 @@ fn module() -> impl Strategy<Value = Module> {
             shapes,
             operations,
             extensions: vec![],
+            ext_libs: vec![],
         }
     })
 }

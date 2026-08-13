@@ -9,8 +9,10 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-// The declared-test types live in their own file to stay within the file-size
-// gate; re-exporting them here keeps the IR mirror a single public surface.
+// The declared-test types and the FFI ext/extern library types live in their
+// own files to stay within the file-size gate; re-exporting them here keeps
+// the IR mirror a single public surface.
+pub use crate::ir_extern_model::*;
 pub use crate::ir_tests_model::*;
 
 /// IR schema revision this build understands. Bumped by one on every
@@ -56,7 +58,14 @@ pub use crate::ir_tests_model::*;
 /// when the operation sends none), and `WireValue` gained an `Object`
 /// variant (named fields, each a `WireValue`) for the new @body ctor-mapper
 /// form.
-pub const TONO_IR_VERSION: u32 = 13;
+/// v14 added the module `ext_libs` array: per-language module paths, foreign
+/// struct/opaque-handle declarations, and `extern` declarations with a
+/// per-language call/yields/returns/errors binding (surface-and-IR only; no
+/// typecheck or codegen consumes it yet, see `ir_extern_model.rs`). An entry
+/// field's `call` key (alongside the existing `select`) carries a field's
+/// `= ns.fn(args)` extern-call source, and `CallArg` gained `lit`/`list`/
+/// `call` variants for ctor-field values.
+pub const TONO_IR_VERSION: u32 = 14;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -366,6 +375,9 @@ pub struct EntryField {
     pub transforms: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<Select>,
+    /// A `= ns.fn(args)` extern-call source, alongside the existing `select`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<EntryCall>,
     #[serde(default)]
     pub binds: Vec<Bind>,
     #[serde(default)]
@@ -572,6 +584,8 @@ pub struct Module {
     pub extensions: Vec<Extension>,
     // Always written by the frontend for the same round-trip reason as
     // `extensions`.
+    #[serde(default)]
+    pub ext_libs: Vec<ExtLib>,
     #[serde(default)]
     pub tests: Vec<TestDecl>,
 }

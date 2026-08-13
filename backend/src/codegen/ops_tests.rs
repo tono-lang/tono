@@ -67,6 +67,7 @@ fn module(shapes: Vec<Shape>, operations: Vec<Shape>) -> Module {
         shapes,
         operations,
         extensions: vec![],
+        ext_libs: vec![],
     }
 }
 
@@ -135,6 +136,7 @@ fn entry_field(name: &str, target_id: &str) -> crate::ir::EntryField {
         format: None,
         transforms: vec![],
         select: None,
+        call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],

@@ -10,6 +10,7 @@ fn field(name: &str, sources: Vec<Source>) -> EntryField {
         format: None,
         transforms: vec![],
         select: None,
+        call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],
@@ -34,6 +35,7 @@ fn module_of(shapes: Vec<Shape>) -> Module {
         shapes,
         operations: vec![],
         extensions: vec![],
+        ext_libs: vec![],
     }
 }
 
@@ -404,6 +406,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             shapes,
             operations: vec![],
             extensions,
+            ext_libs: vec![],
         }],
     };
     // A field named after a transport slot collides with the Settings member.
@@ -624,6 +627,7 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
             shapes,
             operations: vec![],
             extensions: vec![],
+            ext_libs: vec![],
         }],
     };
     // A wire struct spelling a generated companion type collides with it.
@@ -690,6 +694,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
             shapes: vec![entry_shape("m#sdk", vec![])],
             operations: vec![loose_op],
             extensions: vec![hook],
+            ext_libs: vec![],
         }],
     };
     let err = validate_entries(&m).unwrap_err();

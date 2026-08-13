@@ -216,6 +216,7 @@ mod tests {
                 shapes,
                 operations: vec![],
                 extensions: vec![],
+                ext_libs: vec![],
             }],
         }
     }
@@ -302,6 +303,7 @@ mod tests {
                     shapes: vec![public(refers("a#outer", "b#middle"))],
                     operations: vec![],
                     extensions: vec![],
+                    ext_libs: vec![],
                 },
                 Module {
                     tests: vec![],
@@ -313,6 +315,7 @@ mod tests {
                     ],
                     operations: vec![],
                     extensions: vec![],
+                    ext_libs: vec![],
                 },
             ],
         };
@@ -351,6 +354,7 @@ mod tests {
                     format: None,
                     transforms: vec![],
                     select: None,
+                    call: None,
                     binds: vec![],
                     constraints: vec![],
                     traits: vec![],
@@ -399,6 +403,7 @@ mod tests {
                     shapes: vec![refers("a#local", "b#shared")],
                     operations: vec![],
                     extensions: vec![],
+                    ext_libs: vec![],
                 },
                 Module {
                     tests: vec![],
@@ -416,6 +421,7 @@ mod tests {
                     ],
                     operations: vec![],
                     extensions: vec![],
+                    ext_libs: vec![],
                 },
             ],
         };
