@@ -19,6 +19,16 @@ val check_decls : tbl:Symtab.t -> Ast.decl list -> Diagnostic.t list
    [Resolve.resolve_decls] wherever they already thread [qualified]. *)
 val qualified_of : Ast.decl list -> Resolve.qualified -> Resolve.qualified
 
+(* Whether a bare name is a foreign struct or opaque type declared inside
+   some "ext" library block in this module. [Resolve]'s generic name
+   resolution has no visibility into these (they are never a [Symtab]
+   shape), so without this a foreign name used anywhere would be flagged
+   both TC0001 (unknown) and, correctly, TC0034 (the closed-boundary
+   violation) -- the second already says what is wrong; the first is just
+   noise. Callers thread the result into [Resolve.resolve_decls]'s
+   [~known]. *)
+val is_foreign_name : Ast.decl list -> string -> bool
+
 (* The cross-file closed accounting (decision K): every module's own
    (name, decls) pair, keyed the same way project tooling names a module.
    Needs every module at once, so callers run it themselves alongside

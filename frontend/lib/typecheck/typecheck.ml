@@ -11,10 +11,13 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
   let tbl, dup_diags = Symtab.build decls in
   (* An "ext <name> { ... }" block is also a namespace ("name.Type" for a
      declared opaque type), which [qualified] alone has no visibility into
-     (it only knows cross-module imports). *)
+     (it only knows cross-module imports); and a bare foreign name (never a
+     Symtab shape) is [known] rather than unknown, so it does not also draw
+     a redundant TC0001 alongside Check_entries' TC0034. *)
   let ref_diags =
     Resolve.resolve_decls
       ~qualified:(Check_ext_lib.qualified_of decls qualified)
+      ~known:(Check_ext_lib.is_foreign_name decls)
       tbl decls
   in
   let member_diags = Check_member.check_decls decls in

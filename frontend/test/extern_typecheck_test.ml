@@ -7,6 +7,13 @@ open Tono_frontend
    (decision K, [Check_ext_lib.check_project]). Mirrors [typecheck_test.ml]'s
    [check]/[codes] helpers. *)
 
+(* Substring test for message assertions, mirroring [module_test.ml]'s helper
+   of the same name. *)
+let contains ~sub s =
+  let n = String.length sub and m = String.length s in
+  let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
+  n = 0 || go 0
+
 let check src =
   let file, _ = Parser.parse src in
   let diags = ref [] in
@@ -325,7 +332,10 @@ struct app_config { endpoint: string }
 
 let foreign_struct_as_op_output () =
   let src = base ^ "\nop fetch(): go_cfg\n" in
-  Alcotest.(check bool) "foreign struct as op output" true (has "TC0034" src)
+  Alcotest.(check bool) "foreign struct as op output" true (has "TC0034" src);
+  (* TC0034 alone: a foreign name is not a Symtab shape, but it is not
+     unknown either, so it must not also draw TC0001. *)
+  Alcotest.(check bool) "no redundant TC0001" false (has "TC0001" src)
 
 let foreign_struct_as_op_input () =
   let src = base ^ "\nop fetch(x: go_cfg): app_config\n" in
@@ -458,9 +468,30 @@ let conflicting_module_path () =
 }
 |}
   in
-  Alcotest.(check bool)
-    "conflicting module path" true
-    (List.mem "TC0079" (project_codes [ ("a", split_lib_a); ("b", b) ]))
+  let _, ds = Tono_frontend.compile_project [ ("a", split_lib_a); ("b", b) ] in
+  let messages =
+    List.filter_map
+      (fun (d : Diagnostic.t) ->
+        if d.Diagnostic.code = Some "TC0079" then Some d.Diagnostic.message
+        else None)
+      ds
+  in
+  Alcotest.(check bool) "conflicting module path" true (messages <> []);
+  (* Each diagnostic must name both paths and both files: the reader should
+     never have to diff two separate messages to see what conflicts with
+     what. *)
+  List.iter
+    (fun msg ->
+      Alcotest.(check bool)
+        (msg ^ ": names both paths")
+        true
+        (contains ~sub:"github.com/x/y" msg
+        && contains ~sub:"github.com/x/other" msg);
+      Alcotest.(check bool)
+        (msg ^ ": names both files")
+        true
+        (contains ~sub:"'a'" msg && contains ~sub:"'b'" msg))
+    messages
 
 let duplicate_extern_name_across_files () =
   let b =
@@ -490,13 +521,23 @@ let lang_block_without_module () =
 
 (* ── The RFC-0023 appendix example compiles clean ────────────────────────── *)
 
-(* A near-verbatim transcription of RFC-0023's own appendix, with two
-   adjustments unrelated to this task's checker (called out at their exact
-   site below): "overloaded" gains @status (TC0015, a pre-existing rule
-   independent of ext/extern), and "publish"'s implementation binds through
-   the legacy "ext impl" form instead of the RFC's own "impl .bus.send(...)"
-   op-body spelling, which the grammar does not parse yet (that construct is
-   DAG/entry-construction wiring, a separate task's scope). *)
+(* A near-verbatim transcription of RFC-0023's own appendix, with three
+   adjustments unrelated to this task's checker (each called out at its
+   exact site below):
+   - "overloaded" gains @status (TC0015, a pre-existing rule independent of
+     ext/extern);
+   - the "bus" field's @with moves after its call value ("= ns.fn(...) @with"
+     instead of the RFC's own "@with = ns.fn(...)"): the member grammar
+     (parser.ml, "member ::= name ':' type ('=' (match | call_expr))?
+     trait*") only ever parses traits after the value, for every member in
+     the language, not just ext/extern ones -- this is a pre-existing,
+     general grammar rule the RFC's own spelling does not match, not
+     something this task's checker should special-case;
+   - "publish"'s implementation binds through the legacy "ext impl" form
+     instead of the RFC's own "impl .bus.send(...)" op-body spelling, which
+     the grammar does not parse at all yet ("impl" is only recognized after
+     "ext"; that construct is DAG/entry-construction wiring, a separate
+     task's scope). *)
 let rfc_appendix =
   {|import tono.http
 

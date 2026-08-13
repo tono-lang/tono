@@ -19,15 +19,24 @@ type qualified =
 val no_imports : qualified
 
 (* Resolve a single surface type; [params] are the type-parameter names in scope
-   of the enclosing shape. *)
+   of the enclosing shape. [known] recognizes a bare name outside [tbl] (an
+   "ext" library's foreign struct/opaque type, in particular: never a shape,
+   so never in [tbl], but not unknown either); it defaults to recognizing
+   nothing, so an unresolved bare name is always TC0001 unless a caller opts
+   in. A name [known] resolves takes no type arguments (TC0005 otherwise). *)
 val resolve_ty :
   params:string list ->
   tbl:Symtab.t ->
   qualified:qualified ->
+  ?known:(string -> bool) ->
   Ast.ty ->
   Diagnostic.t list
 
 (* Resolve every type reference across one module's declarations. [qualified]
-   defaults to [no_imports]. *)
+   defaults to [no_imports]; [known] defaults to recognizing nothing. *)
 val resolve_decls :
-  ?qualified:qualified -> Symtab.t -> Ast.decl list -> Diagnostic.t list
+  ?qualified:qualified ->
+  ?known:(string -> bool) ->
+  Symtab.t ->
+  Ast.decl list ->
+  Diagnostic.t list

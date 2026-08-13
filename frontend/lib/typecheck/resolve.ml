@@ -29,9 +29,10 @@ let no_imports : qualified =
   ]
 
 (* Validate the head of a [name<args>] reference (the arguments are resolved
-   separately). [name] is a type parameter, a declared shape, or unknown. *)
-let resolve_head ~params ~(tbl : Symtab.t) name n_args span : Diagnostic.t list
-    =
+   separately). [name] is a type parameter, a declared shape, a [known]
+   non-shape name (an "ext" library's foreign form), or unknown. *)
+let resolve_head ~params ~(tbl : Symtab.t) ~(known : string -> bool) name n_args
+    span : Diagnostic.t list =
   if String.equal name "decimal" then
     (* [decimal] is rejected during lowering with bespoke guidance (model money
        as minor units, or use float); do not also flag it as a generic unknown. *)
@@ -44,6 +45,17 @@ let resolve_head ~params ~(tbl : Symtab.t) name n_args span : Diagnostic.t list
       [
         err Error_codes.non_generic_applied span
           "type parameter '%s' is not generic and takes no type arguments" name;
+      ]
+  else if known name then
+    (* Recognized outside the shape table (a foreign struct/opaque type): not
+       unknown, and never generic. Whether this reference is even legal here
+       (an "ext" foreign form is never wire, entry/op boundary, ...) is a
+       different, closed-boundary question a later pass owns. *)
+    if n_args = 0 then []
+    else
+      [
+        err Error_codes.non_generic_applied span
+          "'%s' is not generic and takes no type arguments" name;
       ]
   else
     match Symtab.find name tbl with
@@ -66,46 +78,47 @@ let resolve_head ~params ~(tbl : Symtab.t) name n_args span : Diagnostic.t list
           ]
 
 let rec resolve_ty ~params ~(tbl : Symtab.t) ~(qualified : qualified)
-    (ty : Ast.ty) : Diagnostic.t list =
+    ?(known = fun _ -> false) (ty : Ast.ty) : Diagnostic.t list =
   match ty with
   | Ast.TPrim _ -> [] (* the parser only emits a recognized primitive here *)
   | Ast.TError _ -> [] (* a parse error was already reported *)
   | Ast.TList (t, _) | Ast.TNullable (t, _) ->
-      resolve_ty ~params ~tbl ~qualified t
+      resolve_ty ~params ~tbl ~qualified ~known t
   | Ast.TMap (k, v, _) ->
-      resolve_ty ~params ~tbl ~qualified k
-      @ resolve_ty ~params ~tbl ~qualified v
+      resolve_ty ~params ~tbl ~qualified ~known k
+      @ resolve_ty ~params ~tbl ~qualified ~known v
   | Ast.TName (name, args, span) ->
       let arg_diags =
-        List.concat_map (resolve_ty ~params ~tbl ~qualified) args
+        List.concat_map (resolve_ty ~params ~tbl ~qualified ~known) args
       in
-      resolve_head ~params ~tbl name (List.length args) span @ arg_diags
+      resolve_head ~params ~tbl ~known name (List.length args) span @ arg_diags
   | Ast.TQName (qualifier, name, args, span) ->
       let arg_diags =
-        List.concat_map (resolve_ty ~params ~tbl ~qualified) args
+        List.concat_map (resolve_ty ~params ~tbl ~qualified ~known) args
       in
       qualified ~qualifier ~name ~n_args:(List.length args) span @ arg_diags
 
-let rec resolve_decl ~(qualified : qualified) (tbl : Symtab.t) (d : Ast.decl) :
-    Diagnostic.t list =
+let rec resolve_decl ~(qualified : qualified) ~(known : string -> bool)
+    (tbl : Symtab.t) (d : Ast.decl) : Diagnostic.t list =
   match d.dkind with
   | Ast.DStruct { params; members; ops } ->
       List.concat_map
-        (fun (m : Ast.member) -> resolve_ty ~params ~tbl ~qualified m.mtype)
+        (fun (m : Ast.member) ->
+          resolve_ty ~params ~tbl ~qualified ~known m.mtype)
         members
       (* Ops nested in an entry body resolve exactly like top-level ops. *)
-      @ List.concat_map (resolve_decl ~qualified tbl) ops
+      @ List.concat_map (resolve_decl ~qualified ~known tbl) ops
   | Ast.DUnion { params; variants } ->
       List.concat_map
         (fun (v : Ast.union_variant) ->
           match v.vpayload with
-          | Some t -> resolve_ty ~params ~tbl ~qualified t
+          | Some t -> resolve_ty ~params ~tbl ~qualified ~known t
           | None -> [])
         variants
   | Ast.DEnum _ -> [] (* enum cases are scalar; no type references *)
   | Ast.DOp { pname = _; input; output } ->
       let opt = function
-        | Some t -> resolve_ty ~params:[] ~tbl ~qualified t
+        | Some t -> resolve_ty ~params:[] ~tbl ~qualified ~known t
         | None -> []
       in
       opt input @ opt output
@@ -122,6 +135,6 @@ let rec resolve_decl ~(qualified : qualified) (tbl : Symtab.t) (d : Ast.decl) :
      [Check_tests], which owns the richer diagnostics. *)
   | Ast.DTest _ -> []
 
-let resolve_decls ?(qualified = no_imports) (tbl : Symtab.t)
-    (decls : Ast.decl list) : Diagnostic.t list =
-  List.concat_map (resolve_decl ~qualified tbl) decls
+let resolve_decls ?(qualified = no_imports) ?(known = fun _ -> false)
+    (tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
+  List.concat_map (resolve_decl ~qualified ~known tbl) decls

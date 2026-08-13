@@ -400,6 +400,20 @@ let qualified_of (decls : Ast.decl list) (fallback : Resolve.qualified) :
       ]
   else fallback ~qualifier ~name ~n_args span
 
+let is_foreign_name (decls : Ast.decl list) (name : string) : bool =
+  List.exists
+    (fun (d : Ast.decl) ->
+      match d.Ast.dkind with
+      | Ast.DExtLib { body; _ } ->
+          List.exists
+            (fun (s : Ast.foreign_struct) -> String.equal s.Ast.fs_name name)
+            body.Ast.elib_structs
+          || List.exists
+               (fun (t : Ast.opaque_type) -> String.equal t.Ast.opq_name name)
+               body.Ast.elib_types
+      | _ -> false)
+    decls
+
 (* ── Per-module entry point ────────────────────────────────────────────── *)
 
 let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
@@ -479,13 +493,26 @@ let check_module_paths (ext_name : string) (occs : occurrence list) :
       in
       if List.length paths <= 1 then []
       else
+        (* Every other distinct (path, file) pair in the group, named in
+           full so one diagnostic is enough to see both sides of the
+           conflict without diffing it against a second message. *)
+        let describe path file = Printf.sprintf "'%s' (in '%s')" path file in
         List.map
           (fun (_, path, span, file) ->
+            let others =
+              List.sort_uniq compare
+                (List.filter_map
+                   (fun (_, p, _, f) ->
+                     if String.equal p path && String.equal f file then None
+                     else Some (describe p f))
+                   group)
+            in
             ( file,
               err Error_codes.ext_lib_module_path_conflict span
-                "module path for '%s' in ext '%s' is declared as '%s' here, \
-                 but differently elsewhere"
-                lang ext_name path ))
+                "module path for '%s' in ext '%s' is declared as %s here, \
+                 conflicting with %s"
+                lang ext_name (describe path file)
+                (String.concat ", " others) ))
           group)
     langs
 
