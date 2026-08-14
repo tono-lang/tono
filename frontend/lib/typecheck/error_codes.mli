@@ -65,7 +65,6 @@ val protocol_trait_invalid : string
 val transform_unknown : string
 val entry_shape_invalid : string
 val duplicate_trait : string
-val param_shadows_field : string
 
 (* Bespoke operation implementations: an impl naming no implementable operation
    or an ambiguous one, an operation implemented twice or not at all, and the raw
@@ -137,3 +136,12 @@ val extern_lang_no_module : string
 val op_impl_receiver_not_handle : string
 val op_impl_unknown_method : string
 val op_impl_arity_mismatch : string
+
+(* `.request` referenced from an entry field's extern-call arguments (see
+   error_codes.ml for the rule). *)
+val field_ref_request : string
+
+(* An op's named parameter shadowing an entry field of the same name (see
+   error_codes.ml for the rule; moved here from the former TC0048, which
+   collided with [ext_impl_unknown_op]). *)
+val param_shadows_field : string

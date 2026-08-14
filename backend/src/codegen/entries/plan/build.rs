@@ -30,7 +30,7 @@ fn member_err_name(field: &EntryField, member: &EntryField) -> String {
 /// and derivations keep their zero, out of this first cut. Returns the logical
 /// error-var name when tracking is needed.
 fn member_needs_err(field: &EntryField, member: &EntryField, entry: &EntryModel) -> Option<String> {
-    if member.select.is_some() || member.format.is_some() {
+    if member.select.is_some() || member.format.is_some() || member.call.is_some() {
         return None;
     }
     if field.binds.iter().any(|b| b.field == member.name) {
@@ -66,7 +66,41 @@ pub fn build_field<'a>(
         FieldShape::Structured(shape) => Stmt::Leaf(Leaf(e.structured_body(field, shape))),
         FieldShape::Json => Stmt::Leaf(Leaf(e.json_body(field))),
         FieldShape::Scalar => build_scalar(field, entry, e),
+        FieldShape::Call => {
+            let dest = e.dest(&field.name);
+            build_call_field(field, e, &dest)
+        }
     }
+}
+
+/// A `= ns.fn(args)` extern-call source (RFC-0023): a plain call is an
+/// unconditional assignment, always attempted, like a config compose or a
+/// `@default`. A call alongside `@with` (decision G) tries the injected
+/// value first and falls back to the call, the same two-route shape
+/// [`chain_sequential`]'s `Source::With` arm already gives a scalar chain.
+/// The call's own spelling is a per-target leaf, deferred to codegen. `dest`
+/// is the caller's destination (a top-level field or a config member path).
+fn build_call_field(field: &EntryField, e: &mut dyn Emitter, dest: &str) -> Stmt {
+    let Some(call) = &field.call else {
+        return Stmt::Nop;
+    };
+    let assign = Stmt::Leaf(Leaf(e.call_assign(field, call, dest)));
+    if !field.sources.iter().any(|s| matches!(s, Source::With)) {
+        return assign;
+    }
+    // Same idiom as a scalar chain's `Source::With` step: try the injected
+    // value first (its own presence check lives inside `with_step_body`),
+    // then fall back to the call only if it is still absent.
+    let err = field.name.clone();
+    let w = e.err_ident(&err);
+    seq(vec![
+        Stmt::Leaf(e.err_open(&err)),
+        Stmt::Leaf(Leaf(e.with_step_body(field, dest, &w))),
+        Stmt::If {
+            arms: vec![(e.cond_err_present(&err), assign)],
+            otherwise: None,
+        },
+    ])
 }
 
 fn is_numeric(t: &Tref) -> bool {
@@ -101,7 +135,10 @@ pub enum Presence {
 /// dispatch is shared; each target spells the resulting probe in its own syntax.
 pub fn presence_kind(field: &EntryField, entry: &EntryModel, module: &Module) -> Presence {
     if entry.is_guaranteed(field)
-        || matches!(entry.field_shape(field, module), FieldShape::Config(_))
+        || matches!(
+            entry.field_shape(field, module),
+            FieldShape::Config(_) | FieldShape::Call
+        )
     {
         Presence::Always
     } else if string_like(&field.target) {
@@ -410,6 +447,8 @@ fn build_member(
         build_member_select(member, entry, e, dest)
     } else if member.format.is_some() {
         build_format(member, entry, e, dest)
+    } else if member.call.is_some() {
+        build_call_field(member, e, dest)
     } else if let Some(err) = err {
         // A consumed non-string member tracks an error so its absence can be
         // required at construction (a resolved `0`/`false` is not absence). The

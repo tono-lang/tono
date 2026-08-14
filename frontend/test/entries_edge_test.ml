@@ -412,7 +412,7 @@ let endpoint_non_string_rejected () =
       }\n" ^ wire)
 
 let op_param_shadows_entry_field_warns () =
-  expect "op param shadows entry field" [ "TC0048" ]
+  expect "op param shadows entry field" [ "TC0086" ]
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
      \  op o(ep: string): r @http(method: \"GET\", path: \"/\", endpoint: .ep)\n\

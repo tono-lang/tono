@@ -162,8 +162,35 @@ let member_trait_refs (m : Ast.member) : (string list * Span.span) list =
   in
   List.concat_map of_trait m.mtraits
 
+(* The field references inside an extern call's own arguments (its
+   [call_arg]s), recursing into a ctor argument's fields — which carry the
+   richer [trait_arg] grammar (the same one @body's mapper and other trait
+   arguments use), so a nested list/ctor/call inside one of those fields is
+   walked too. [parse_trait_value] never produces [Ast.AKv] in this position
+   (that form is only reachable at a trait's own top-level "key: value"
+   argument, a different grammar position [op_refs] walks instead), so it
+   folds into the no-refs catch-all rather than carrying dead recursion. *)
+let rec trait_arg_refs (a : Ast.trait_arg) : (string list * Span.span) list =
+  match a with
+  | Ast.ARef r -> [ (r.Ast.segs, r.Ast.ref_span) ]
+  | Ast.AList xs -> List.concat_map trait_arg_refs xs
+  | Ast.ACtor c ->
+      List.concat_map (fun (_, _, v) -> trait_arg_refs v) c.Ast.ctor_fields
+  | Ast.ACall ce -> ce_refs ce
+  | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _ | Ast.AKv _ -> []
+
+and ce_refs (ce : Ast.call_expr) : (string list * Span.span) list =
+  List.concat_map
+    (function
+      | Ast.CaRef r -> [ (r.Ast.segs, r.Ast.ref_span) ]
+      | Ast.CaCtor c ->
+          List.concat_map (fun (_, _, v) -> trait_arg_refs v) c.Ast.ctor_fields
+      | Ast.CaParam _ | Ast.CaLit _ -> [])
+    ce.Ast.ce_args
+
 (* Every field reference a member consumes, including the match's subject and
-   arms; the dependency graph and the lazy-resolution walk read this. *)
+   arms, and an extern call's own argument refs; the dependency graph and the
+   lazy-resolution walk read this. *)
 let member_refs (m : Ast.member) : (string list * Span.span) list =
   let of_match (fm : Ast.field_match) =
     (fm.subject.segs, fm.subject.ref_span)
@@ -187,9 +214,8 @@ let member_refs (m : Ast.member) : (string list * Span.span) list =
   @
   match m.mvalue with
   | Some (Ast.MMatch fm) -> of_match fm
-  (* An extern call's own ref args are a DAG-wiring concern, out of scope
-     until the field-source call is resolved against its ext block. *)
-  | Some (Ast.MCall _) | None -> []
+  | Some (Ast.MCall ce) -> ce_refs ce
+  | None -> []
 
 let protocol_trait_names = Trait_vocab.protocol
 
