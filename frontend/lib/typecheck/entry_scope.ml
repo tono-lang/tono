@@ -166,16 +166,18 @@ let member_trait_refs (m : Ast.member) : (string list * Span.span) list =
    [call_arg]s), recursing into a ctor argument's fields — which carry the
    richer [trait_arg] grammar (the same one @body's mapper and other trait
    arguments use), so a nested list/ctor/call inside one of those fields is
-   walked too. *)
+   walked too. [parse_trait_value] never produces [Ast.AKv] in this position
+   (that form is only reachable at a trait's own top-level "key: value"
+   argument, a different grammar position [op_refs] walks instead), so it
+   folds into the no-refs catch-all rather than carrying dead recursion. *)
 let rec trait_arg_refs (a : Ast.trait_arg) : (string list * Span.span) list =
   match a with
   | Ast.ARef r -> [ (r.Ast.segs, r.Ast.ref_span) ]
-  | Ast.AKv (_, v) -> trait_arg_refs v
   | Ast.AList xs -> List.concat_map trait_arg_refs xs
   | Ast.ACtor c ->
       List.concat_map (fun (_, _, v) -> trait_arg_refs v) c.Ast.ctor_fields
   | Ast.ACall ce -> ce_refs ce
-  | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _ -> []
+  | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _ | Ast.AKv _ -> []
 
 and ce_refs (ce : Ast.call_expr) : (string list * Span.span) list =
   List.concat_map

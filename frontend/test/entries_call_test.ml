@@ -58,6 +58,37 @@ let call_two_segment_projection_accepted () =
         "  config: app_config = ns.load()\n\
         \  auth: string @format(\"Bearer {.config.token}\")")
 
+let config_member_call_request_ref_rejected () =
+  expect "request ref in a config member's call" [ "TC0085" ]
+    ("struct conf {\n  a: string = ns.load(.request)\n}\n"
+    ^ entry "  s: conf @bind(a, .ep)")
+
+let config_member_call_unresolved_ref_rejected () =
+  expect "unresolved ref in a config member's call" [ "TC0038" ]
+    ("struct conf {\n  a: string = ns.load(.nope)\n}\n"
+    ^ entry "  s: conf @bind(a, .ep)")
+
+(* Every [call_arg]/[trait_arg] shape the surface can produce inside a field
+   call: a bare parameter, a literal, a plain ref, and a ctor argument whose
+   own fields are, in turn, a ref, a list, a nested ctor, a nested call, and a
+   literal (the ctor-field catch-all). Exercises every branch of
+   [Entry_scope.ce_refs]/[trait_arg_refs] in one field, so none of them stays
+   silently untested as the grammar grows. *)
+let call_arg_rich_forms_all_resolve () =
+  expect "every call-arg/trait-arg shape resolves" []
+    (entry
+       "  a: string @arg\n\
+       \  b: string @arg\n\
+       \  c: string @arg\n\
+       \  d: string @arg\n\
+       \  config: string = ns.load(a, 3, .a, sub {\n\
+       \    ref_field: .b,\n\
+       \    list_field: [.a, .b],\n\
+       \    nested: inner { x: .c },\n\
+       \    hook: ns2.other(.d),\n\
+       \    label: \"lit\"\n\
+       \  })")
+
 let () =
   Alcotest.run "entries_call"
     [
@@ -74,5 +105,11 @@ let () =
             call_arg_request_ref_rejected;
           Alcotest.test_case "two-segment projection" `Quick
             call_two_segment_projection_accepted;
+          Alcotest.test_case "config member request ref" `Quick
+            config_member_call_request_ref_rejected;
+          Alcotest.test_case "config member unresolved ref" `Quick
+            config_member_call_unresolved_ref_rejected;
+          Alcotest.test_case "rich call-arg forms" `Quick
+            call_arg_rich_forms_all_resolve;
         ] );
     ]
