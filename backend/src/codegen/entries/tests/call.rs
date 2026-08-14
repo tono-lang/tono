@@ -5,7 +5,7 @@
 //! `entry_shape`, `module_of`) come from the parent module via `super::*`.
 
 use super::*;
-use crate::ir::{CallArg, EntryCall};
+use crate::ir::{CallArg, EntryCall, ExtLib, OpaqueType};
 
 fn call_field(name: &str, ns: &str, func: &str, args: Vec<CallArg>) -> EntryField {
     let mut f = field(name, vec![]);
@@ -182,5 +182,39 @@ fn gen_rejects_a_call_sourced_config_member_instead_of_panicking() {
     };
     let err = super::validate_entries(&model).unwrap_err();
     assert!(err.contains("token"), "{err}");
+    assert!(err.contains("extern-call"), "{err}");
+}
+
+/// An injectable-handle field (decision G, `bus: c.h @with = c.conn(...)`)
+/// targets an opaque type declared in the module's own `ext` block. That id
+/// lives in `ext_libs`, not `module.shapes`; the module-scoping check must
+/// recognize it as same-module instead of misreporting it as an out-of-module
+/// reference. The field still stops at the extern-call deferral (the same
+/// gate as the plain-call tests above), but for the right reason.
+#[test]
+fn a_with_and_call_field_targeting_an_ext_block_handle_is_same_module() {
+    let mut bus = call_field("bus", "c", "conn", vec![]);
+    bus.sources = vec![Source::With];
+    bus.target = Tref::Ref {
+        id: "c#h".into(),
+        args: vec![],
+    };
+    let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
+    module.ext_libs = vec![ExtLib {
+        name: "c".into(),
+        langs: vec![],
+        structs: vec![],
+        types: vec![OpaqueType {
+            name: "h".into(),
+            methods: vec![],
+        }],
+        externs: vec![],
+    }];
+    let model = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module],
+    };
+    let err = super::validate_entries(&model).unwrap_err();
+    assert!(!err.contains("outside this module"), "{err}");
     assert!(err.contains("extern-call"), "{err}");
 }

@@ -84,10 +84,6 @@ let entry_shape_invalid = "TC0046"
    declaration or member; usually the trailing-trait absorption footgun. *)
 let duplicate_trait = "TC0047"
 
-(* An op's named parameter has the same name as an entry field, so a `.name`
-   ref in that op now resolves to the parameter instead of the field. *)
-let param_shadows_field = "TC0048"
-
 (* Bespoke operation implementations. An "ext impl" names the operation it
    implements, so the name must reach exactly one operation an entry declares:
    none is an orphan, a loose one gets no generated body, and several is an
@@ -200,3 +196,10 @@ let op_impl_arity_mismatch = "TC0084"
    has not been built yet, so this gets its own message rather than reading
    as an ordinary unknown-field reference. *)
 let field_ref_request = "TC0085"
+
+(* An op's named parameter has the same name as an entry field, so a `.name`
+   ref in that op now resolves to the parameter instead of the field.
+   Previously TC0048, which collided with [ext_impl_unknown_op]; codes are
+   the stable identifier tooling keys on, so this moved rather than the
+   sequential TC0048-TC0053 bespoke-implementation block above. *)
+let param_shadows_field = "TC0086"

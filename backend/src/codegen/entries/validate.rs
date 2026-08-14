@@ -185,9 +185,20 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                 }
                 // A construction field resolves within its module: the
                 // resolution idiom (config vs structured vs scalar) and the
-                // generated type surface both need the referenced shape.
+                // generated type surface both need the referenced shape. An
+                // injectable-handle field (RFC-0023 decision G) may instead
+                // reference an opaque type declared in the module's own
+                // `ext` block: that id lives in `ext_libs`, not
+                // `module.shapes`, but is same-module all the same.
                 if let Tref::Ref { id, .. } = &field.target {
-                    if !module.shapes.iter().any(|shape| shape.id == *id) {
+                    let in_shapes = module.shapes.iter().any(|shape| shape.id == *id);
+                    let in_ext_lib = id.split_once('#').is_some_and(|(lib, ty)| {
+                        module
+                            .ext_libs
+                            .iter()
+                            .any(|l| l.name == lib && l.types.iter().any(|t| t.name == ty))
+                    });
+                    if !in_shapes && !in_ext_lib {
                         return Err(format!(
                             "module {}: entry {} field {} references {}, a shape outside this module; construction fields resolve within their module, move the shape or the entry",
                             module.name, entry.name, field.name, id
