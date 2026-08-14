@@ -130,7 +130,9 @@ fn config_type_ident(id: &str) -> String {
 }
 
 /// The Go type spelling of an entry field, hiding a composed config behind its
-/// unexported name while every other type keeps its normal (wire) spelling.
+/// unexported name, spelling a foreign opaque handle (RFC-0023) as a pointer
+/// to the real package's assumed exported type, while every other type keeps
+/// its normal (wire) spelling.
 fn field_go_type(t: &Tref, module: &Module) -> String {
     if let Tref::Ref { id, .. } = t {
         if module
@@ -140,8 +142,26 @@ fn field_go_type(t: &Tref, module: &Module) -> String {
         {
             return config_type_ident(id);
         }
+        if let Some((lib, type_name)) = ext::foreign_handle(t, module) {
+            if let Some(ty) = ext::handle_go_type(lib, &type_name) {
+                return ty;
+            }
+        }
     }
     go_type(t)
+}
+
+/// [`push_type_symbols`], but for an entry field's own declared type: a
+/// foreign opaque handle (RFC-0023) pulls its `ext` block's Go import
+/// instead of trying to resolve as an in-module reference.
+fn push_field_type_symbols(t: &Tref, module: &Module, refs: &mut Vec<Symbol>) {
+    if let Some((lib, _)) = ext::foreign_handle(t, module) {
+        if let Some(sym) = ext::handle_symbol(lib) {
+            refs.push(sym);
+        }
+        return;
+    }
+    push_type_symbols(t, refs);
 }
 
 /// The symbols a declared type references (for transitive import collection
@@ -176,6 +196,24 @@ fn field_pascal(name: &str, config: &CasingConfig) -> String {
 /// entry fields, so `@rename` on them is a later concern).
 fn field_pascal_ren(name: &str, rename: Option<&str>, config: &CasingConfig) -> String {
     transform(name, SymbolKind::Field, config, rename)
+}
+
+/// An entry field's Go identifier: its exported `@rename(go)` spelling, or
+/// (RFC-0023 decision F) an unexported camelCase name when the field's
+/// declared type is a foreign opaque handle — a handle never reaches the
+/// public surface, renamed or not.
+pub(super) fn entry_field_ident(
+    entry: &EntryModel<'_>,
+    module: &Module,
+    config: &CasingConfig,
+    name: &str,
+) -> String {
+    if let Some(field) = entry.fields.iter().find(|f| f.name == name) {
+        if ext::foreign_handle(&field.target, module).is_some() {
+            return camel(name);
+        }
+    }
+    field_pascal_ren(name, entry.field_rename(name, LANG).as_deref(), config)
 }
 
 /// The godoc `@doc` block plus a `// Deprecated:` line for an entry field's
@@ -472,6 +510,7 @@ pub(super) fn validate_block(
 /// name is never renamed, only an entry field's is).
 pub(super) fn field_path_expr(
     entry: &EntryModel<'_>,
+    module: &Module,
     config: &CasingConfig,
     path: &[String],
     root: &str,
@@ -480,11 +519,7 @@ pub(super) fn field_path_expr(
     for (i, seg) in path.iter().enumerate() {
         out.push('.');
         if i == 0 {
-            out.push_str(&field_pascal_ren(
-                seg,
-                entry.field_rename(seg, LANG).as_deref(),
-                config,
-            ));
+            out.push_str(&entry_field_ident(entry, module, config, seg));
         } else {
             out.push_str(&field_pascal(seg, config));
         }
@@ -572,9 +607,34 @@ fn op_method_decl(
     }
     let validate_block = validate_block(input, module, ret_zero, &fail);
     let Some(wire) = wire_binding(op) else {
-        // No protocol binding: the operation is implemented by bespoke sources
-        // the frontend proved are bound, and the generator gate proved are bound
-        // for this target.
+        // No protocol binding. Two bespoke shapes reach here: an op's own
+        // `impl .field.method(args)` body (RFC-0023) — a direct call into a
+        // declared opaque handle — takes priority when present, otherwise
+        // the legacy `ext impl` extension binding the generator gate proved
+        // is bound for this target.
+        if let Some(call) = crate::codegen::ops::op_impl_call(op) {
+            let body = ext::impl_call_body(
+                entry,
+                module,
+                config,
+                op_local_name(&op.id),
+                crate::codegen::ops::input_name(op),
+                call,
+                ret_zero,
+                &fail,
+                &mut refs,
+            );
+            let doc = doc_of(&op.traits)
+                .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
+                .unwrap_or_default();
+            return Decl::raw_with(
+                format!(
+                    "{doc}func (c *{client}) {sig} {{\n{zero_decl}{validate_block}{body}}}",
+                    client = n.client,
+                ),
+                refs,
+            );
+        }
         return impl_op::method_decl(impl_op::Method {
             n,
             op,
@@ -596,7 +656,7 @@ fn op_method_decl(
     // than passing through, so it reads the unexported, already-converted
     // client field the constructor built.
     let value_paths = entry.value_paths(module);
-    let field_access = |path: &[String]| field_path_expr(entry, config, path, "c.settings");
+    let field_access = |path: &[String]| field_path_expr(entry, module, config, path, "c.settings");
     let field_kind = |path: &[String]| {
         let key = path.join(".");
         field_kind_of(
@@ -678,6 +738,7 @@ mod assembly;
 mod bespoke_tests;
 mod constructor;
 mod decode;
+mod ext;
 mod impl_op;
 mod resolve;
 pub(crate) mod send;

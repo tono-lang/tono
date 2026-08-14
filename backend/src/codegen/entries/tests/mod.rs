@@ -416,13 +416,16 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
         }],
     };
     // A field named after a transport slot collides with the Settings member.
-    let err = validate_entries(&model(
-        vec![entry_shape(
-            "m#client",
-            vec![field("headers", vec![Source::Arg])],
-        )],
-        vec![],
-    ))
+    let err = validate_entries(
+        &model(
+            vec![entry_shape(
+                "m#client",
+                vec![field("headers", vec![Source::Arg])],
+            )],
+            vec![],
+        ),
+        true,
+    )
     .unwrap_err();
     assert!(err.contains("transport slot"), "{err}");
     // client_init cannot bridge two Settings types.
@@ -436,13 +439,16 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             .collect(),
         conformance: None,
     };
-    let err = validate_entries(&model(
-        vec![
-            entry_shape("m#client", vec![]),
-            entry_shape("m#admin", vec![]),
-        ],
-        vec![hook],
-    ))
+    let err = validate_entries(
+        &model(
+            vec![
+                entry_shape("m#client", vec![]),
+                entry_shape("m#admin", vec![]),
+            ],
+            vec![hook],
+        ),
+        true,
+    )
     .unwrap_err();
     assert!(err.contains("client_init"), "{err}");
     // A loose op and an entry op sharing a local name would collide.
@@ -482,7 +488,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
         vec![],
     );
     m.modules[0].operations = vec![loose_op];
-    let err = validate_entries(&m).unwrap_err();
+    let err = validate_entries(&m, true).unwrap_err();
     assert!(err.contains("declared both loose and in entry"), "{err}");
     // An entry named client next to loose operations collides with the
     // Client interface they emit.
@@ -500,7 +506,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     };
     let mut m = model(vec![entry_shape("m#client", vec![])], vec![]);
     m.modules[0].operations = vec![extra_op];
-    let err = validate_entries(&m).unwrap_err();
+    let err = validate_entries(&m, true).unwrap_err();
     assert!(err.contains("Client interface"), "{err}");
     // A construction field referencing a shape outside the module is
     // rejected with the offending id named.
@@ -509,43 +515,55 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
         id: "other#credentials".into(),
         args: vec![],
     };
-    let err =
-        validate_entries(&model(vec![entry_shape("m#client", vec![cross])], vec![])).unwrap_err();
+    let err = validate_entries(
+        &model(vec![entry_shape("m#client", vec![cross])], vec![]),
+        true,
+    )
+    .unwrap_err();
     assert!(err.contains("other#credentials"), "{err}");
     // An @arg named after a constructor local shadows it in the generated
     // signature.
-    let err = validate_entries(&model(
-        vec![entry_shape(
-            "m#client",
-            vec![field("config", vec![Source::Arg])],
-        )],
-        vec![],
-    ))
+    let err = validate_entries(
+        &model(
+            vec![entry_shape(
+                "m#client",
+                vec![field("config", vec![Source::Arg])],
+            )],
+            vec![],
+        ),
+        true,
+    )
     .unwrap_err();
     assert!(err.contains("local the generated constructor"), "{err}");
     // A non-arg field may use those names freely (it only lives as s.<field>).
-    assert!(validate_entries(&model(
-        vec![entry_shape(
-            "m#client",
-            vec![field(
-                "config",
-                vec![Source::Env(EnvName::Name("C".into()))]
+    assert!(validate_entries(
+        &model(
+            vec![entry_shape(
+                "m#client",
+                vec![field(
+                    "config",
+                    vec![Source::Env(EnvName::Name("C".into()))]
+                )],
             )],
-        )],
-        vec![],
-    ))
+            vec![],
+        ),
+        true
+    )
     .is_ok());
     // A sibling spelling a derived why/set variable collides with it.
-    let err = validate_entries(&model(
-        vec![entry_shape(
-            "m#client",
-            vec![
-                field("endpoint", vec![Source::Env(EnvName::Name("E".into()))]),
-                field("endpoint_why", vec![Source::Arg]),
-            ],
-        )],
-        vec![],
-    ))
+    let err = validate_entries(
+        &model(
+            vec![entry_shape(
+                "m#client",
+                vec![
+                    field("endpoint", vec![Source::Env(EnvName::Name("E".into()))]),
+                    field("endpoint_why", vec![Source::Arg]),
+                ],
+            )],
+            vec![],
+        ),
+        true,
+    )
     .unwrap_err();
     assert!(err.contains("endpoint_why"), "{err}");
     // An entry op with an @http binding that names no endpoint: the frontend
@@ -573,31 +591,38 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
         },
         traits: vec![],
     };
-    let err = validate_entries(&model(
-        vec![Shape {
-            id: "m#sdk".into(),
-            kind: ShapeKind::Entry {
-                fields: vec![],
-                operations: vec![no_endpoint_op],
-            },
-            traits: vec![],
-        }],
-        vec![],
-    ))
+    let err = validate_entries(
+        &model(
+            vec![Shape {
+                id: "m#sdk".into(),
+                kind: ShapeKind::Entry {
+                    fields: vec![],
+                    operations: vec![no_endpoint_op],
+                },
+                traits: vec![],
+            }],
+            vec![],
+        ),
+        true,
+    )
     .unwrap_err();
     assert!(err.contains("no endpoint"), "{err}");
     // A single entry named new collides with the Go constructor.
-    let err = validate_entries(&model(vec![entry_shape("m#new", vec![])], vec![])).unwrap_err();
+    let err =
+        validate_entries(&model(vec![entry_shape("m#new", vec![])], vec![]), true).unwrap_err();
     assert!(err.contains("New constructor"), "{err}");
     // In a multi-entry module, new_<entry> spells the other entry's
     // constructor name.
-    let err = validate_entries(&model(
-        vec![
-            entry_shape("m#admin", vec![]),
-            entry_shape("m#new_admin", vec![]),
-        ],
-        vec![],
-    ))
+    let err = validate_entries(
+        &model(
+            vec![
+                entry_shape("m#admin", vec![]),
+                entry_shape("m#new_admin", vec![]),
+            ],
+            vec![],
+        ),
+        true,
+    )
     .unwrap_err();
     assert!(err.contains("NewAdmin"), "{err}");
     // An @arg whose canonical name is clean but whose @rename(go) override is a
@@ -607,17 +632,23 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
         id: "rename".into(),
         value: json!({"go": "type"}),
     }];
-    let err =
-        validate_entries(&model(vec![entry_shape("m#client", vec![renamed])], vec![])).unwrap_err();
+    let err = validate_entries(
+        &model(vec![entry_shape("m#client", vec![renamed])], vec![]),
+        true,
+    )
+    .unwrap_err();
     assert!(err.contains("keyword") && err.contains("type"), "{err}");
     // A clean single-entry module passes.
-    assert!(validate_entries(&model(
-        vec![entry_shape(
-            "m#client",
-            vec![field("token", vec![Source::Arg])]
-        )],
-        vec![],
-    ))
+    assert!(validate_entries(
+        &model(
+            vec![entry_shape(
+                "m#client",
+                vec![field("token", vec![Source::Arg])]
+            )],
+            vec![],
+        ),
+        true
+    )
     .is_ok());
 }
 
@@ -649,8 +680,11 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
         },
         traits: vec![],
     };
-    let err =
-        validate_entries(&model(vec![entry_shape("m#client", vec![]), settings])).unwrap_err();
+    let err = validate_entries(
+        &model(vec![entry_shape("m#client", vec![]), settings]),
+        true,
+    )
+    .unwrap_err();
     assert!(err.contains("settings companion"), "{err}");
     // A shape spelling the entry's own client type collides too.
     let client_type = Shape {
@@ -661,14 +695,20 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
         },
         traits: vec![],
     };
-    let err =
-        validate_entries(&model(vec![entry_shape("m#client", vec![]), client_type])).unwrap_err();
+    let err = validate_entries(
+        &model(vec![entry_shape("m#client", vec![]), client_type]),
+        true,
+    )
+    .unwrap_err();
     assert!(err.contains("client type"), "{err}");
     // An @arg named after a target-language keyword is an invalid parameter.
-    let err = validate_entries(&model(vec![entry_shape(
-        "m#client",
-        vec![field("type", vec![Source::Arg])],
-    )]))
+    let err = validate_entries(
+        &model(vec![entry_shape(
+            "m#client",
+            vec![field("type", vec![Source::Arg])],
+        )]),
+        true,
+    )
     .unwrap_err();
     assert!(err.contains("keyword"), "{err}");
 }
@@ -708,11 +748,11 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
             ext_libs: vec![],
         }],
     };
-    let err = validate_entries(&m).unwrap_err();
+    let err = validate_entries(&m, true).unwrap_err();
     assert!(err.contains("mixes loose operations"), "{err}");
     m.modules[0].extensions.clear();
     m.modules[0].operations.clear();
-    assert!(validate_entries(&m).is_ok());
+    assert!(validate_entries(&m, true).is_ok());
     // A loose (non-entry) operation carrying a wire binding is rejected
     // outright: entries are the only supported HTTP client surface.
     let wire_loose_op = Shape {
@@ -739,7 +779,7 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
         traits: vec![],
     };
     m.modules[0].operations = vec![wire_loose_op];
-    let err = validate_entries(&m).unwrap_err();
+    let err = validate_entries(&m, true).unwrap_err();
     assert!(err.contains("outside an entry"), "{err}");
 }
 

@@ -201,11 +201,7 @@ impl Emitter for Resolver<'_, '_> {
     fn ident(&self, name: &str) -> String {
         format!(
             "s.{}",
-            field_pascal_ren(
-                name,
-                self.entry.field_rename(name, LANG).as_deref(),
-                self.config
-            )
+            super::entry_field_ident(self.entry, self.module, self.config, name)
         )
     }
 
@@ -213,13 +209,15 @@ impl Emitter for Resolver<'_, '_> {
         let mut out = "s".to_string();
         for (i, seg) in path.iter().enumerate() {
             out.push('.');
-            // Only the head is an entry field (it honors @rename); the tail
-            // reaches into config/struct members, spelled plainly.
+            // Only the head is an entry field (it honors @rename, and stays
+            // unexported when it is a foreign handle); the tail reaches into
+            // config/struct members, spelled plainly.
             if i == 0 {
-                out.push_str(&field_pascal_ren(
-                    seg,
-                    self.entry.field_rename(seg, LANG).as_deref(),
+                out.push_str(&super::entry_field_ident(
+                    self.entry,
+                    self.module,
                     self.config,
+                    seg,
                 ));
             } else {
                 out.push_str(&field_pascal(seg, self.config));
@@ -292,11 +290,19 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     /// The `@with` presence step of a non-guaranteed chain, relative to column
-    /// zero.
+    /// zero. A foreign opaque handle's carrier already holds the pointer
+    /// type the field itself carries (RFC-0023), so it assigns directly;
+    /// every other `@with` value's carrier is a pointer-to-value, so it
+    /// dereferences.
     fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String {
+        let carrier = camel(&field.name);
+        let value = if super::ext::foreign_handle(&field.target, self.module).is_some() {
+            format!("w.{carrier}")
+        } else {
+            format!("*w.{carrier}")
+        };
         format!(
-            "if w.{carrier} != nil {{\n\t{dest} = *w.{carrier}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
-            carrier = camel(&field.name),
+            "if w.{carrier} != nil {{\n\t{dest} = {value}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
             miss = self.config_error_expr("\"not configured\"", None),
         )
     }
@@ -624,6 +630,18 @@ impl Emitter for Resolver<'_, '_> {
             name = head,
             config = error_names().config,
         )
+    }
+
+    /// A field's own `= ns.fn(args)` extern-call source (RFC-0023): the call
+    /// itself, its `yields`/`returns` projection, and its declared
+    /// sentinel-to-error mapping. See [`super::ext::call_assign`].
+    fn call_assign(
+        &mut self,
+        field: &EntryField,
+        call: &crate::ir::EntryCall,
+        dest: &str,
+    ) -> String {
+        super::ext::call_assign(self, field, call, dest)
     }
 
     fn require_numeric(&mut self, head: &str, _target: &Tref) -> String {

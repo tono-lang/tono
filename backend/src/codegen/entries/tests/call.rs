@@ -141,11 +141,25 @@ fn a_call_sourced_field_reports_the_call_shape_regardless_of_its_target() {
     }
 }
 
-/// Per-target emission of a call source is deferred (its `Emitter` leaf
-/// method has no target override yet), so building its resolution plan
-/// would panic. `validate_entries` runs ahead of emission in every gen
-/// pipeline and must reject the field there instead, or `tono gen` panics
-/// on a spec `tono check` accepted.
+/// The Go target emits a call-sourced field (RFC-0023): a request that
+/// generates for Go only must not trip the ext-block deferral gate.
+#[test]
+fn go_only_accepts_a_call_sourced_field() {
+    let config = call_field("config", "ns", "load", vec![]);
+    let module = module_of(vec![entry_shape("m#client", vec![config])]);
+    let model = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module],
+    };
+    assert!(super::validate_entries(&model, true).is_ok());
+}
+
+/// Per-target emission of a call source is deferred for every target but Go
+/// (its `Emitter` leaf method has no override for TypeScript or Rust yet),
+/// so building its resolution plan there would panic. `validate_entries`
+/// runs ahead of emission in every gen pipeline and must reject the field
+/// there instead, whenever the request generates for a non-Go target, or
+/// `tono gen` panics on a spec `tono check` accepted.
 #[test]
 fn gen_rejects_a_call_sourced_field_instead_of_panicking() {
     let config = call_field("config", "ns", "load", vec![]);
@@ -154,7 +168,7 @@ fn gen_rejects_a_call_sourced_field_instead_of_panicking() {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],
     };
-    let err = super::validate_entries(&model).unwrap_err();
+    let err = super::validate_entries(&model, false).unwrap_err();
     assert!(err.contains("config"), "{err}");
     assert!(err.contains("ext block"), "{err}");
 }
@@ -180,7 +194,7 @@ fn gen_rejects_a_call_sourced_config_member_instead_of_panicking() {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],
     };
-    let err = super::validate_entries(&model).unwrap_err();
+    let err = super::validate_entries(&model, false).unwrap_err();
     assert!(err.contains("token"), "{err}");
     assert!(err.contains("ext block"), "{err}");
 }
@@ -218,7 +232,7 @@ fn a_with_and_call_field_targeting_an_ext_block_handle_is_same_module() {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],
     };
-    let err = super::validate_entries(&model).unwrap_err();
+    let err = super::validate_entries(&model, false).unwrap_err();
     assert!(!err.contains("outside this module"), "{err}");
     assert!(err.contains("ext block"), "{err}");
 }
@@ -242,7 +256,7 @@ fn gen_rejects_a_plain_arg_injected_foreign_handle_field() {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],
     };
-    let err = super::validate_entries(&model).unwrap_err();
+    let err = super::validate_entries(&model, false).unwrap_err();
     assert!(err.contains("bus"), "{err}");
     assert!(err.contains("ext block"), "{err}");
 }

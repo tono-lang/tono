@@ -253,7 +253,8 @@ pub fn generate(
     crate::codegen::extensions::validate_extensions(model)?;
     let langs: Vec<&[&str]> = targets.iter().map(|t| t.binding_langs()).collect();
     crate::codegen::extensions::validate_impl_coverage(model, &langs)?;
-    crate::codegen::entries::validate_entries(model)?;
+    let go_only = targets.iter().all(|t| *t == TargetKind::Go);
+    crate::codegen::entries::validate_entries(model, go_only)?;
     crate::codegen::declared_tests::validate_declared_tests(model)?;
     crate::codegen::ops::validate_error_codes(model)?;
     let (model, union_ids, exposed) = prepare(model, config);
@@ -286,7 +287,7 @@ pub fn generate_target(
 ) -> Result<Vec<GeneratedFile>, String> {
     crate::codegen::extensions::validate_extensions(model)?;
     crate::codegen::extensions::validate_impl_coverage(model, &[target.binding_langs()])?;
-    crate::codegen::entries::validate_entries(model)?;
+    crate::codegen::entries::validate_entries(model, target == TargetKind::Go)?;
     crate::codegen::declared_tests::validate_declared_tests(model)?;
     crate::codegen::ops::validate_error_codes(model)?;
     let (model, union_ids, exposed) = prepare(model, config);

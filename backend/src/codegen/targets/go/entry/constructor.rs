@@ -35,7 +35,7 @@ pub(super) fn new_decl(
     // default cast or a parse, all of them opaque text, so the references are
     // declared once here rather than at each spelling.
     for field in entry.declared() {
-        push_type_symbols(&field.target, &mut refs);
+        push_field_type_symbols(&field.target, module, &mut refs);
     }
     let mut body = String::new();
 

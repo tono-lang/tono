@@ -129,7 +129,14 @@ fn ref_id(t: &Tref) -> Option<&str> {
 /// endpoint is below. The frontend still accepts a loose `@http` op (nothing
 /// about the language changes), so this is a generation-time gap the same as
 /// the endpoint check, not a checker rule.
-pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
+///
+/// `go_only` says whether every target this call generates for is Go: an
+/// `ext`-touching field (RFC-0023) is emitted only by the Go target so far
+/// (TypeScript and Rust are separate, later tasks), so a request that
+/// generates for any other target still rejects it here instead of letting
+/// codegen panic or silently write uncompilable output for the target that
+/// cannot spell it.
+pub fn validate_entries(model: &crate::ir::Model, go_only: bool) -> Result<(), String> {
     for module in &model.modules {
         for op in &module.operations {
             if let ShapeKind::Operation { wire: Some(_), .. } = &op.kind {
@@ -222,33 +229,35 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                         ));
                     }
                 }
-                // Nothing that touches an `ext` block emits yet (RFC-0023):
-                // per-target codegen for the extern call itself, and for the
-                // foreign handle type a field carries, are separate tasks.
-                // Building the resolution plan for either would panic (a call
-                // source) or silently write uncompilable output (a foreign
-                // handle field, whose type the target emitter cannot spell).
-                // Reject every such field here, in one gate, rather than
-                // letting each gap surface as its own crash or bad-output
-                // report as the emission work lands piecemeal.
-                if field.call.is_some() || foreign_target {
+                // A field (or config member) that touches an `ext` block
+                // (RFC-0023) is only emitted by the Go target so far: the
+                // extern call itself, and the foreign handle type a field
+                // carries, have no TypeScript or Rust spelling yet. Building
+                // the resolution plan for either would panic (a call source)
+                // or silently write uncompilable output (a foreign handle
+                // field, whose type that target's emitter cannot spell).
+                // Reject every such field here, in one gate, whenever the
+                // request generates for a target other than Go.
+                if !go_only && (field.call.is_some() || foreign_target) {
                     return Err(format!(
-                        "module {}: entry {} field {} touches an ext block (an extern call or a foreign handle type); code generation for RFC-0023 constructs is not supported yet",
+                        "module {}: entry {} field {} touches an ext block (an extern call or a foreign handle type); code generation for RFC-0023 constructs is only supported for the Go target so far",
                         module.name, entry.name, field.name
                     ));
                 }
-                if let Tref::Ref { id, .. } = &field.target {
-                    if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
-                        if let ShapeKind::Config { fields } = &shape.kind {
-                            if let Some(member) = fields.iter().find(|m| {
-                                m.call.is_some()
-                                    || ref_id(&m.target)
-                                        .is_some_and(|id| is_foreign_ref(module, id))
-                            }) {
-                                return Err(format!(
-                                    "module {}: entry {} field {} member {} touches an ext block (an extern call or a foreign handle type); code generation for RFC-0023 constructs is not supported yet",
-                                    module.name, entry.name, field.name, member.name
-                                ));
+                if !go_only {
+                    if let Tref::Ref { id, .. } = &field.target {
+                        if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+                            if let ShapeKind::Config { fields } = &shape.kind {
+                                if let Some(member) = fields.iter().find(|m| {
+                                    m.call.is_some()
+                                        || ref_id(&m.target)
+                                            .is_some_and(|id| is_foreign_ref(module, id))
+                                }) {
+                                    return Err(format!(
+                                        "module {}: entry {} field {} member {} touches an ext block (an extern call or a foreign handle type); code generation for RFC-0023 constructs is only supported for the Go target so far",
+                                        module.name, entry.name, field.name, member.name
+                                    ));
+                                }
                             }
                         }
                     }
