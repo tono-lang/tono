@@ -461,8 +461,8 @@ let yields_with_no_returns_at_all_is_dead () =
 struct app_config { endpoint: string }
 |}
   in
-  Alcotest.(check bool) "dead position, no returns at all" true
-    (has "TC0072" src)
+  Alcotest.(check bool)
+    "dead position, no returns at all" true (has "TC0072" src)
 
 (* ── Decision K: cross-file closed accounting ────────────────────────────── *)
 

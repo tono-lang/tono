@@ -115,8 +115,8 @@ let qualifier_names_a_non_ext_decl_falls_through () =
 struct holder { p: notabus.thing }
 |}
   in
-  Alcotest.(check bool) "falls through to unknown import" true
-    (has "TC0023" src)
+  Alcotest.(check bool)
+    "falls through to unknown import" true (has "TC0023" src)
 
 (* A bare (unqualified) reference to a foreign struct name is also not
    generic; [Resolve.resolve_head]'s [known] branch covers this even without
@@ -142,7 +142,8 @@ struct app_config { endpoint: string }
 struct holder { c: go_cfg[i64] }
 |}
   in
-  Alcotest.(check bool) "bare foreign name is not generic" true (has "TC0005" src)
+  Alcotest.(check bool)
+    "bare foreign name is not generic" true (has "TC0005" src)
 
 (* ── Nested call: shapes: a list/ctor of refs still counts as consumption ─ *)
 
@@ -169,7 +170,8 @@ let param_consumed_through_nested_ctor_and_list () =
 struct app_config { endpoint: string }
 |}
   in
-  Alcotest.(check (list string)) "no unconsumed-param codes" []
+  Alcotest.(check (list string))
+    "no unconsumed-param codes" []
     (List.filter (String.equal "TC0078") (codes src))
 
 let () =

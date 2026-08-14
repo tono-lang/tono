@@ -220,8 +220,7 @@ let body_ctor_field_literal_string_accepted () =
 let entry_op_param_as_endpoint_accepted () =
   expect "op's own string param as endpoint" []
     ("pub struct c {\n\
-     \  op o(ep: string): r @http(method: \"GET\", path: \"/\", endpoint: \
-      .ep)\n\
+     \  op o(ep: string): r @http(method: \"GET\", path: \"/\", endpoint: .ep)\n\
       }\n" ^ wire)
 
 (* Same, for a member of the op's own struct-typed parameter (the
@@ -231,8 +230,8 @@ let entry_op_param_member_as_endpoint_accepted () =
   expect "op's own param member as endpoint" []
     ("struct cfg_type { host: string }\n\
       pub struct c {\n\
-     \  op o(cfg: cfg_type): r @http(method: \"GET\", path: \"/\", \
-      endpoint: .cfg.host)\n\
+     \  op o(cfg: cfg_type): r @http(method: \"GET\", path: \"/\", endpoint: \
+      .cfg.host)\n\
       }\n" ^ wire)
 
 (* An entry op's endpoint: as a literal/template string (not a field
@@ -341,8 +340,7 @@ let loose_op_path_presence_checked () =
    same as the entry-op case above. *)
 let loose_op_http_without_path_draws_nothing () =
   expect "loose op no path key" []
-    "struct w_ty { id: string }\n\
-     op o(w: w_ty): w_ty @http(method: \"GET\")"
+    "struct w_ty { id: string }\nop o(w: w_ty): w_ty @http(method: \"GET\")"
 
 (* A loose op's @header referencing an unresolvable ref (neither its own
    param nor an entry field, since loose ops have none) draws the one
@@ -360,8 +358,7 @@ let loose_op_header_unresolvable_ref_reported_once () =
 let loose_op_whole_param_in_header_accepted () =
   expect "loose op whole param in a header value" []
     "struct w_ty { x: string }\n\
-     op o(w: w_ty): w_ty @http(method: \"GET\", path: \"/\") @header(\"K\", \
-     .w)"
+     op o(w: w_ty): w_ty @http(method: \"GET\", path: \"/\") @header(\"K\", .w)"
 
 (* @timeout referencing a ref that resolves to neither the loose op's own
    param nor (loose ops have no fields) anything else draws only the one
@@ -377,8 +374,8 @@ let entry_op_path_via_own_param_accepted () =
   expect "entry op path via own param" []
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
-     \  op o(p: string): r @http(method: \"GET\", path: \"/x/{.p}\", \
-      endpoint: .ep)\n\
+     \  op o(p: string): r @http(method: \"GET\", path: \"/x/{.p}\", endpoint: \
+      .ep)\n\
       }\n" ^ wire)
 
 (* A @header/@query key given as a field reference (rather than a string

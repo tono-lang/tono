@@ -544,42 +544,36 @@ let eval_prog () =
      exercised above), plus equality on non-bool values. *)
   let p10b = prog "fn f(a: bool, b: bool) -> bool = a && b" in
   Alcotest.(check bool)
-    "&& short-circuits false"
-    false
+    "&& short-circuits false" false
     (match eval_fn p10b "f" [ VBool false; VBool true ] with
     | VBool b -> b
     | _ -> true);
   let p10c = prog "fn f(a: bool, b: bool) -> bool = a || b" in
   Alcotest.(check bool)
-    "|| short-circuits true"
-    true
+    "|| short-circuits true" true
     (match eval_fn p10c "f" [ VBool true; VBool false ] with
     | VBool b -> b
     | _ -> false);
   Alcotest.(check bool)
-    "|| evaluates the right side"
-    true
+    "|| evaluates the right side" true
     (match eval_fn p10c "f" [ VBool false; VBool true ] with
     | VBool b -> b
     | _ -> false);
   let p10d = prog "fn f(a: i64, b: i64) -> bool = a == b" in
   Alcotest.(check bool)
-    "equality"
-    true
+    "equality" true
     (match eval_fn p10d "f" [ vint 3; vint 3 ] with VBool b -> b | _ -> false);
   (* Float arithmetic and comparison, distinct from the int-typed [num]/[cmp]
      branches every other arithmetic test here exercises. *)
   let p10e = prog "fn f(a: float, b: float) -> float = a + b" in
   Alcotest.(check bool)
-    "float arithmetic"
-    true
+    "float arithmetic" true
     (match eval_fn p10e "f" [ VFloat 1.5; VFloat 2.5 ] with
     | VFloat f -> f = 4.0
     | _ -> false);
   let p10f = prog "fn f(a: float, b: float) -> bool = a < b" in
   Alcotest.(check bool)
-    "float comparison"
-    true
+    "float comparison" true
     (match eval_fn p10f "f" [ VFloat 1.0; VFloat 2.0 ] with
     | VBool b -> b
     | _ -> false);
