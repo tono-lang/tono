@@ -194,6 +194,29 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                         ));
                     }
                 }
+                // An extern-call field source (RFC-0023) orders correctly in
+                // the resolution DAG, but no target yet spells the call
+                // itself; building its resolution plan would panic. Reject
+                // here so an unsupported spec fails cleanly at generation
+                // time instead of crashing.
+                if field.call.is_some() {
+                    return Err(format!(
+                        "module {}: entry {} field {} has an extern-call value; code generation for extern calls is not supported yet",
+                        module.name, entry.name, field.name
+                    ));
+                }
+                if let Tref::Ref { id, .. } = &field.target {
+                    if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+                        if let ShapeKind::Config { fields } = &shape.kind {
+                            if let Some(member) = fields.iter().find(|m| m.call.is_some()) {
+                                return Err(format!(
+                                    "module {}: entry {} field {} member {} has an extern-call value; code generation for extern calls is not supported yet",
+                                    module.name, entry.name, field.name, member.name
+                                ));
+                            }
+                        }
+                    }
+                }
             }
         }
         // A module with loose operations emits the `Client` interface; an

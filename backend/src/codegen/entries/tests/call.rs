@@ -140,3 +140,47 @@ fn a_call_sourced_field_reports_the_call_shape_regardless_of_its_target() {
         assert!(matches!(entry.field_shape(f, &module), FieldShape::Call));
     }
 }
+
+/// Per-target emission of a call source is deferred (its `Emitter` leaf
+/// method has no target override yet), so building its resolution plan
+/// would panic. `validate_entries` runs ahead of emission in every gen
+/// pipeline and must reject the field there instead, or `tono gen` panics
+/// on a spec `tono check` accepted.
+#[test]
+fn gen_rejects_a_call_sourced_field_instead_of_panicking() {
+    let config = call_field("config", "ns", "load", vec![]);
+    let module = module_of(vec![entry_shape("m#client", vec![config])]);
+    let model = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module],
+    };
+    let err = super::validate_entries(&model).unwrap_err();
+    assert!(err.contains("config"), "{err}");
+    assert!(err.contains("extern-call"), "{err}");
+}
+
+/// The same deferral for a call-sourced member of a composed config field.
+#[test]
+fn gen_rejects_a_call_sourced_config_member_instead_of_panicking() {
+    let member = call_field("token", "ns", "load", vec![]);
+    let config_shape = Shape {
+        id: "m#conf".into(),
+        kind: ShapeKind::Config {
+            fields: vec![member],
+        },
+        traits: vec![],
+    };
+    let mut conf = field("conf", vec![]);
+    conf.target = Tref::Ref {
+        id: "m#conf".into(),
+        args: vec![],
+    };
+    let module = module_of(vec![entry_shape("m#client", vec![conf]), config_shape]);
+    let model = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module],
+    };
+    let err = super::validate_entries(&model).unwrap_err();
+    assert!(err.contains("token"), "{err}");
+    assert!(err.contains("extern-call"), "{err}");
+}
