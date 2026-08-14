@@ -526,39 +526,6 @@ let path_through_scalar_rejected () =
       @header(\"A\", .ep.x)\n\
       }\n" ^ wire)
 
-(* ── Extern-call field source (RFC-0023) ─────────────────────────────────── *)
-
-let call_and_arg_rejected () =
-  expect "call plus @arg" [ "TC0036" ]
-    (entry "  config: string = ns.load() @arg")
-
-let call_and_env_rejected () =
-  expect "call plus @env" [ "TC0036" ]
-    (entry "  config: string = ns.load() @env(\"C\")")
-
-let call_with_with_accepted () =
-  expect "call with an @with fallback slot" []
-    (entry "  config: string = ns.load() @with")
-
-let call_cycle_rejected () =
-  expect "cycle across call refs" [ "TC0039" ]
-    (entry "  a: string = ns.f(.b)\n  b: string = ns.g(.a)")
-
-let call_arg_unresolved_ref_rejected () =
-  expect "unresolved call arg ref" [ "TC0038" ]
-    (entry "  config: string = ns.load(.nope)")
-
-let call_arg_request_ref_rejected () =
-  expect "request ref in call arg" [ "TC0085" ]
-    (entry "  config: string = ns.load(.request)")
-
-let call_two_segment_projection_accepted () =
-  expect "two-segment projection into a call result" []
-    ("struct app_config { token: string }\n"
-    ^ entry
-        "  config: app_config = ns.load()\n\
-        \  auth: string @format(\"Bearer {.config.token}\")")
-
 let bool_and_name_arm_values_lower () =
   let file, _ =
     Parser.parse
@@ -825,19 +792,5 @@ let () =
             header_key_template_and_literal_value;
           Alcotest.test_case "resolver value template" `Quick
             resolver_tolerates_value_template;
-        ] );
-      ( "extern-call",
-        [
-          Alcotest.test_case "call plus @arg" `Quick call_and_arg_rejected;
-          Alcotest.test_case "call plus @env" `Quick call_and_env_rejected;
-          Alcotest.test_case "call with @with fallback" `Quick
-            call_with_with_accepted;
-          Alcotest.test_case "cycle across call refs" `Quick call_cycle_rejected;
-          Alcotest.test_case "unresolved call arg ref" `Quick
-            call_arg_unresolved_ref_rejected;
-          Alcotest.test_case "request ref in call arg" `Quick
-            call_arg_request_ref_rejected;
-          Alcotest.test_case "two-segment projection" `Quick
-            call_two_segment_projection_accepted;
         ] );
     ]

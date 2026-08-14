@@ -1,6 +1,11 @@
 use super::*;
-use crate::ir::{CallArg, EntryCall, EnvName, FieldRef, Select, SelectArm, WireValue};
+use crate::ir::{EnvName, FieldRef, Select, SelectArm, WireValue};
 use serde_json::json;
+
+// The extern-call field-source tests (RFC-0023) live in their own submodule
+// to keep this file under the line-count gate; they reuse the fixtures below
+// through `super::*`.
+mod call;
 
 fn field(name: &str, sources: Vec<Source>) -> EntryField {
     EntryField {
@@ -770,138 +775,4 @@ fn path_types_reach_structure_members_and_fall_back_to_string() {
     assert!(matches!(t, Tref::Prim(crate::ir::Prim::String)));
     let t = entry.path_type(&["ghost".into()], &module);
     assert!(matches!(t, Tref::Prim(crate::ir::Prim::String)));
-}
-
-fn call_field(name: &str, ns: &str, func: &str, args: Vec<CallArg>) -> EntryField {
-    let mut f = field(name, vec![]);
-    f.call = Some(EntryCall {
-        ns: ns.into(),
-        func: func.into(),
-        args,
-    });
-    f
-}
-
-fn call_ref(path: &[&str]) -> CallArg {
-    CallArg::Ref(path.iter().map(|s| (*s).to_string()).collect())
-}
-
-#[test]
-fn a_three_level_call_chain_orders_with_no_declared_order() {
-    // config reads .service/.region; auth and bus each read .config. Declared
-    // out of dependency order, on purpose, so the DAG (not declaration order)
-    // has to produce the chain.
-    let auth = call_field("auth", "companyauth", "sign", vec![call_ref(&["config"])]);
-    let bus = call_field(
-        "bus",
-        "companybus",
-        "connect",
-        vec![
-            call_ref(&["config", "endpoint"]),
-            call_ref(&["config", "token"]),
-        ],
-    );
-    let config = call_field(
-        "config",
-        "companyconfig",
-        "load",
-        vec![call_ref(&["service"]), call_ref(&["region"])],
-    );
-    let service = field("service", vec![Source::Default(json!("notes"))]);
-    let region = field("region", vec![Source::Arg]);
-    let module = module_of(vec![entry_shape(
-        "m#client",
-        vec![auth, bus, config, service, region],
-    )]);
-    let order: Vec<&str> = module_entries(&module)[0]
-        .fields
-        .iter()
-        .map(|f| f.name.as_str())
-        .collect();
-    let pos = |n: &str| order.iter().position(|x| *x == n).unwrap();
-    assert!(pos("service") < pos("config"));
-    assert!(pos("region") < pos("config"));
-    assert!(pos("config") < pos("auth"));
-    assert!(pos("config") < pos("bus"));
-}
-
-#[test]
-fn a_cycle_between_call_sourced_fields_appends_in_declaration_order_instead_of_dropping() {
-    let a = call_field("a", "ns", "f", vec![call_ref(&["b"])]);
-    let b = call_field("b", "ns", "g", vec![call_ref(&["a"])]);
-    let module = module_of(vec![entry_shape("m#client", vec![a, b])]);
-    let order: Vec<&str> = module_entries(&module)[0]
-        .fields
-        .iter()
-        .map(|f| f.name.as_str())
-        .collect();
-    assert_eq!(order, vec!["a", "b"]);
-}
-
-#[test]
-fn a_plain_call_field_is_guaranteed_when_its_args_are() {
-    let region = field("region", vec![Source::Arg]);
-    let config = call_field("config", "ns", "load", vec![call_ref(&["region"])]);
-    let module = module_of(vec![entry_shape("m#client", vec![config, region])]);
-    let entries = module_entries(&module);
-    let entry = &entries[0];
-    let config = entry.fields.iter().find(|f| f.name == "config").unwrap();
-    assert!(entry.is_guaranteed(config));
-}
-
-#[test]
-fn a_plain_call_field_is_not_guaranteed_when_it_reads_a_non_guaranteed_sibling() {
-    let region = field("region", vec![Source::Env(EnvName::Name("REGION".into()))]);
-    let config = call_field("config", "ns", "load", vec![call_ref(&["region"])]);
-    let module = module_of(vec![entry_shape("m#client", vec![config, region])]);
-    let entries = module_entries(&module);
-    let entry = &entries[0];
-    let config = entry.fields.iter().find(|f| f.name == "config").unwrap();
-    assert!(!entry.is_guaranteed(config));
-}
-
-#[test]
-fn a_with_field_backed_by_a_guaranteed_call_fallback_is_guaranteed() {
-    // decision G: an injectable handle with construction as fallback is
-    // guaranteed the same way a plain call is (either the caller injects it,
-    // or the fallback call runs and its own reads are guaranteed) — `@with`
-    // does not relax the rule, both reduce to the same check.
-    let region = field("region", vec![Source::Arg]);
-    let mut bus = call_field("bus", "companybus", "connect", vec![call_ref(&["region"])]);
-    bus.sources = vec![Source::With];
-    let module = module_of(vec![entry_shape("m#client", vec![bus, region])]);
-    let entries = module_entries(&module);
-    let entry = &entries[0];
-    let bus = entry.fields.iter().find(|f| f.name == "bus").unwrap();
-    assert!(entry.is_guaranteed(bus));
-}
-
-#[test]
-fn a_with_field_backed_by_a_non_guaranteed_call_fallback_is_not_guaranteed() {
-    let region = field("region", vec![Source::Env(EnvName::Name("REGION".into()))]);
-    let mut bus = call_field("bus", "companybus", "connect", vec![call_ref(&["region"])]);
-    bus.sources = vec![Source::With];
-    let module = module_of(vec![entry_shape("m#client", vec![bus, region])]);
-    let entries = module_entries(&module);
-    let entry = &entries[0];
-    let bus = entry.fields.iter().find(|f| f.name == "bus").unwrap();
-    assert!(!entry.is_guaranteed(bus));
-}
-
-#[test]
-fn a_call_sourced_field_reports_the_call_shape_regardless_of_its_target() {
-    let plain = call_field("config", "ns", "load", vec![]);
-    let mut opaque = call_field("bus", "ns", "connect", vec![]);
-    // An opaque handle's type has no entry in `module.shapes` at all.
-    opaque.target = Tref::Ref {
-        id: "ext#publisher".into(),
-        args: vec![],
-    };
-    let module = module_of(vec![entry_shape("m#client", vec![plain, opaque])]);
-    let entries = module_entries(&module);
-    let entry = &entries[0];
-    for name in ["config", "bus"] {
-        let f = entry.fields.iter().find(|f| f.name == name).unwrap();
-        assert!(matches!(entry.field_shape(f, &module), FieldShape::Call));
-    }
 }
