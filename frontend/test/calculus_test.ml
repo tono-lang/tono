@@ -537,11 +537,73 @@ let eval_prog () =
   Alcotest.(check bool)
     "some/none" true
     (match eval_fn p10 "f" [ vint 5 ] with VOpt (Some _) -> true | _ -> false);
+  Alcotest.(check bool)
+    "the none arm itself" true
+    (match eval_fn p10 "f" [ vint (-1) ] with VOpt None -> true | _ -> false);
+  (* Both short-circuit arms of && and || (only the truthful side of each was
+     exercised above), plus equality on non-bool values. *)
+  let p10b = prog "fn f(a: bool, b: bool) -> bool = a && b" in
+  Alcotest.(check bool)
+    "&& short-circuits false" false
+    (match eval_fn p10b "f" [ VBool false; VBool true ] with
+    | VBool b -> b
+    | _ -> true);
+  let p10c = prog "fn f(a: bool, b: bool) -> bool = a || b" in
+  Alcotest.(check bool)
+    "|| short-circuits true" true
+    (match eval_fn p10c "f" [ VBool true; VBool false ] with
+    | VBool b -> b
+    | _ -> false);
+  Alcotest.(check bool)
+    "|| evaluates the right side" true
+    (match eval_fn p10c "f" [ VBool false; VBool true ] with
+    | VBool b -> b
+    | _ -> false);
+  let p10d = prog "fn f(a: i64, b: i64) -> bool = a == b" in
+  Alcotest.(check bool)
+    "equality" true
+    (match eval_fn p10d "f" [ vint 3; vint 3 ] with VBool b -> b | _ -> false);
+  (* Float arithmetic and comparison, distinct from the int-typed [num]/[cmp]
+     branches every other arithmetic test here exercises. *)
+  let p10e = prog "fn f(a: float, b: float) -> float = a + b" in
+  Alcotest.(check bool)
+    "float arithmetic" true
+    (match eval_fn p10e "f" [ VFloat 1.5; VFloat 2.5 ] with
+    | VFloat f -> f = 4.0
+    | _ -> false);
+  let p10f = prog "fn f(a: float, b: float) -> bool = a < b" in
+  Alcotest.(check bool)
+    "float comparison" true
+    (match eval_fn p10f "f" [ VFloat 1.0; VFloat 2.0 ] with
+    | VBool b -> b
+    | _ -> false);
   let p11 = prog "fn f() -> card = card { last4: \"1234\" }" in
   Alcotest.(check bool)
     "struct ctor" true
     (match eval_fn p11 "f" [] with
     | VStruct [ ("last4", VStr "1234") ] -> true
+    | _ -> false);
+  (* Bare bool/float/string literals, a struct field projection, and boolean
+     negation, each evaluated directly (not merely parsed). *)
+  let p12 = prog "fn f() -> bool = true" in
+  Alcotest.(check bool)
+    "bool literal" true
+    (match eval_fn p12 "f" [] with VBool true -> true | _ -> false);
+  let p13 = prog "fn f() -> float = 3.5" in
+  Alcotest.(check bool)
+    "float literal" true
+    (match eval_fn p13 "f" [] with VFloat 3.5 -> true | _ -> false);
+  let p14 = prog "fn f() -> string = \"hi\"" in
+  Alcotest.(check string) "string literal" "hi" (asstr (eval_fn p14 "f" []));
+  let p15 = prog "fn f(c: card) -> string = c.last4" in
+  Alcotest.(check string)
+    "field projection" "9999"
+    (asstr (eval_fn p15 "f" [ VStruct [ ("last4", VStr "9999") ] ]));
+  let p16 = prog "fn f(c: card) -> bool = !c.flag" in
+  Alcotest.(check bool)
+    "boolean negation" true
+    (match eval_fn p16 "f" [ VStruct [ ("flag", VBool false) ] ] with
+    | VBool true -> true
     | _ -> false)
 
 let eval_ops () =

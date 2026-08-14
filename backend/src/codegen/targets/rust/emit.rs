@@ -364,6 +364,7 @@ mod tests {
                 output: None,
                 errors: vec![],
                 wire: Some(wire),
+                impl_call: None,
             },
             traits: vec![],
         };

@@ -14,7 +14,15 @@ let op ?(traits = []) ?pname ?input ?output ?(errors = []) id : Ir.shape =
   {
     Ir.id;
     kind =
-      Ir.Operation { input; input_name = pname; output; errors; wire = None };
+      Ir.Operation
+        {
+          input;
+          input_name = pname;
+          output;
+          errors;
+          wire = None;
+          impl_call = None;
+        };
     traits;
   }
 

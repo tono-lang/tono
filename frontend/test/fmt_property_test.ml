@@ -45,6 +45,7 @@ and erase_call_arg = function
   | Ast.CaParam (n, _) -> Ast.CaParam (n, dspan)
   | Ast.CaRef r -> Ast.CaRef (erase_ref r)
   | Ast.CaCtor c -> Ast.CaCtor (erase_ctor c)
+  | Ast.CaLit (l, _) -> Ast.CaLit (l, dspan)
 
 and erase_call_expr (ce : Ast.call_expr) : Ast.call_expr =
   {
@@ -56,6 +57,15 @@ and erase_call_expr (ce : Ast.call_expr) : Ast.call_expr =
 
 let erase_trait (t : Ast.trait) =
   { t with Ast.tspan = dspan; targs = List.map erase_arg t.Ast.targs }
+
+let erase_op_impl (oi : Ast.op_impl) : Ast.op_impl =
+  {
+    Ast.oi_recv = erase_ref oi.Ast.oi_recv;
+    oi_method = oi.Ast.oi_method;
+    oi_method_span = dspan;
+    oi_args = List.map erase_call_arg oi.Ast.oi_args;
+    oi_span = dspan;
+  }
 
 let erase_arm_value = function
   | Ast.AVRef r -> Ast.AVRef (erase_ref r)
@@ -202,12 +212,13 @@ let rec erase_kind = function
   | Ast.DEnum { cases } -> Ast.DEnum { cases = List.map erase_case cases }
   | Ast.DUnion { params; variants } ->
       Ast.DUnion { params; variants = List.map erase_variant variants }
-  | Ast.DOp { pname; input; output } ->
+  | Ast.DOp { pname; input; output; oimpl } ->
       Ast.DOp
         {
           pname;
           input = Option.map erase_ty input;
           output = Option.map erase_ty output;
+          oimpl = Option.map erase_op_impl oimpl;
         }
   | Ast.DExt { ekind; esig; eraw; ebindings; econformance; _ } ->
       Ast.DExt
@@ -503,7 +514,16 @@ let gen_entry_op =
     dtraits = traits;
     dkind =
       Ast.DOp
-        { pname = (if input = None then None else Some pname); input; output };
+        {
+          pname = (if input = None then None else Some pname);
+          input;
+          output;
+          (* Matches this generator's existing precedent of not chasing
+             newer IR additions (wire is left unfuzzed too): "impl" needs an
+             opaque handle in scope to be meaningful, well beyond what this
+             generator's shape vocabulary models. *)
+          oimpl = None;
+        };
   }
 
 let gen_ext_kind =
@@ -662,7 +682,12 @@ let gen_kind =
        and+ input = gen_opt_ty
        and+ output = gen_opt_ty in
        Ast.DOp
-         { pname = (if input = None then None else Some pname); input; output });
+         {
+           pname = (if input = None then None else Some pname);
+           input;
+           output;
+           oimpl = None;
+         });
       (let+ ekind = gen_ext_kind
        and+ raw = G.bool
        and+ esig =

@@ -390,11 +390,16 @@ let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
         | None -> [])
     | None -> []
   in
+  let impl_diags =
+    match op.Ast.dkind with
+    | Ast.DOp { oimpl = Some oi; _ } -> [ entry_only "'impl'" oi.Ast.oi_span ]
+    | _ -> []
+  in
   protocol_http_diags
   @ check_header_shapes ~resolve op
   @ check_query_shapes ~resolve op
   @ check_body_shapes ctx op @ check_code op @ ref_diags @ endpoint_diags
-  @ timeout_retry_diags @ path_diags
+  @ timeout_retry_diags @ path_diags @ impl_diags
 
 (* A value position (path, endpoint) that accepts the unified grammar:
    literal, template, or pure reference. Resolution of the refs a template or
@@ -426,6 +431,158 @@ let value_position_diags ~allow_input (arg : Ast.trait_arg) span :
         err Error_codes.protocol_trait_invalid span
           "expected a string literal/template or a field reference";
       ]
+
+(* ── An op's own "impl .field.method(args)" body (RFC-0023) ─────────────── *)
+
+(* The declared opaque type a foreign role's qualified name points at.
+   [Roles.classify] only says a "qualifier.name" pair is Foreign; resolving
+   it to the actual [Ast.opaque_type] (to read its declared methods) means
+   scanning the "ext" block named [qualifier] for it. *)
+let find_opaque_type (decls : Ast.decl list) ~(qualifier : string)
+    ~(name : string) : Ast.opaque_type option =
+  List.find_map
+    (fun (d : Ast.decl) ->
+      if not (String.equal d.Ast.dname qualifier) then None
+      else
+        match d.Ast.dkind with
+        | Ast.DExtLib { body; _ } ->
+            List.find_opt
+              (fun (t : Ast.opaque_type) -> String.equal t.Ast.opq_name name)
+              body.Ast.elib_types
+        | _ -> None)
+    decls
+
+(* Every argument to the handle's method must resolve like any other
+   operation ref (a bare identifier has no meaning here: unlike inside an
+   "ext" block's own call:, there is no extern-side parameter list to
+   forward from). *)
+let rec check_op_impl_arg ctx ~fields ~pname ~pty (a : Ast.call_arg) :
+    Diagnostic.t list =
+  match a with
+  | Ast.CaRef r -> (
+      match Entry_scope.resolve_ref ctx fields ~pname ~pty r.Ast.segs with
+      | Some _ -> []
+      | None ->
+          [
+            err Error_codes.field_ref_unknown r.Ast.ref_span
+              "unknown field '%s'" (path_str r.Ast.segs);
+          ])
+  | Ast.CaLit _ -> []
+  | Ast.CaParam (_, span) ->
+      [
+        err Error_codes.op_impl_arity_mismatch span
+          "a bare identifier has no meaning here; pass a literal or a field \
+           reference";
+      ]
+  | Ast.CaCtor c ->
+      List.concat_map
+        (fun (_, _, v) -> check_op_impl_trait_arg ctx ~fields ~pname ~pty v)
+        c.Ast.ctor_fields
+
+and check_op_impl_trait_arg ctx ~fields ~pname ~pty (v : Ast.trait_arg) :
+    Diagnostic.t list =
+  match v with
+  | Ast.ARef r -> (
+      match Entry_scope.resolve_ref ctx fields ~pname ~pty r.Ast.segs with
+      | Some _ -> []
+      | None ->
+          [
+            err Error_codes.field_ref_unknown r.Ast.ref_span
+              "unknown field '%s'" (path_str r.Ast.segs);
+          ])
+  | Ast.AKv (_, v) -> check_op_impl_trait_arg ctx ~fields ~pname ~pty v
+  | Ast.AList xs ->
+      List.concat_map (check_op_impl_trait_arg ctx ~fields ~pname ~pty) xs
+  | Ast.ACtor c ->
+      List.concat_map
+        (fun (_, _, v) -> check_op_impl_trait_arg ctx ~fields ~pname ~pty v)
+        c.Ast.ctor_fields
+  | Ast.ACall _ ->
+      [] (* a nested "ns.fn(...)" call resolves within its own ext block *)
+  | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _ -> []
+
+let check_op_impl ctx (fields : Ast.member list) (op : Ast.decl) :
+    Diagnostic.t list =
+  match op.Ast.dkind with
+  | Ast.DOp { oimpl = Some oi; _ } -> (
+      let pname, pty = op_param op in
+      match
+        Entry_scope.resolve_ref ctx fields ~pname ~pty oi.Ast.oi_recv.Ast.segs
+      with
+      | None ->
+          [
+            err Error_codes.field_ref_unknown oi.Ast.oi_recv.Ast.ref_span
+              "unknown field '%s'"
+              (path_str oi.Ast.oi_recv.Ast.segs);
+          ]
+      | Some (Entry_scope.RParam _) ->
+          [
+            err Error_codes.op_impl_receiver_not_handle
+              oi.Ast.oi_recv.Ast.ref_span
+              "'impl' calls a method on an entry field; '%s' is the \
+               operation's own parameter"
+              (path_str oi.Ast.oi_recv.Ast.segs);
+          ]
+      | Some (Entry_scope.RField m) -> (
+          match base_ty m.Ast.mtype with
+          | Ast.TQName (qualifier, name, [], _)
+            when Entry_scope.role_of_name ctx (qualifier ^ "." ^ name)
+                 = Roles.Foreign -> (
+              match find_opaque_type ctx.Entry_scope.decls ~qualifier ~name with
+              | None -> []
+              (* classified Foreign but the opaque_type itself was not
+                 found: unreachable in practice (Roles.classify only marks
+                 a qualified name Foreign by finding this same opaque_type),
+                 kept defensive rather than asserting. *)
+              | Some opq -> (
+                  match
+                    List.find_opt
+                      (fun (e : Ast.extern_decl) ->
+                        String.equal e.Ast.ed_name oi.Ast.oi_method)
+                      opq.Ast.opq_methods
+                  with
+                  | None ->
+                      [
+                        err Error_codes.op_impl_unknown_method
+                          oi.Ast.oi_method_span
+                          "'%s.%s' has no method '%s'; it declares: %s"
+                          qualifier name oi.Ast.oi_method
+                          (String.concat ", "
+                             (List.map
+                                (fun (e : Ast.extern_decl) -> e.Ast.ed_name)
+                                opq.Ast.opq_methods));
+                      ]
+                  | Some meth ->
+                      let arity_diags =
+                        if
+                          List.length oi.Ast.oi_args
+                          <> List.length meth.Ast.ed_params
+                        then
+                          [
+                            err Error_codes.op_impl_arity_mismatch
+                              oi.Ast.oi_span
+                              "'%s.%s' takes %d argument(s), but %d %s given"
+                              qualifier meth.Ast.ed_name
+                              (List.length meth.Ast.ed_params)
+                              (List.length oi.Ast.oi_args)
+                              (if List.length oi.Ast.oi_args = 1 then "was"
+                               else "were");
+                          ]
+                        else []
+                      in
+                      arity_diags
+                      @ List.concat_map
+                          (check_op_impl_arg ctx ~fields ~pname ~pty)
+                          oi.Ast.oi_args))
+          | _ ->
+              [
+                err Error_codes.op_impl_receiver_not_handle
+                  oi.Ast.oi_recv.Ast.ref_span
+                  "'%s' is not a declared opaque handle; 'impl' only calls a \
+                   method on an entry field whose type is one"
+                  (path_str oi.Ast.oi_recv.Ast.segs);
+              ]))
+  | _ -> []
 
 let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
     Diagnostic.t list =
@@ -558,3 +715,4 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
   @ check_header_shapes ~resolve:resolve_ty op
   @ check_query_shapes ~resolve:resolve_ty op
   @ check_body_shapes ctx op @ check_code op
+  @ check_op_impl ctx fields op

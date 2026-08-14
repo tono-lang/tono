@@ -135,6 +135,7 @@ fn kind(config: &CodegenConfig, k: &ShapeKind) -> ShapeKind {
             output,
             errors,
             wire,
+            impl_call,
         } => ShapeKind::Operation {
             input: input.as_ref().map(|t| tref(config, t)),
             input_name: input_name.clone(),
@@ -143,6 +144,9 @@ fn kind(config: &CodegenConfig, k: &ShapeKind) -> ShapeKind {
             // Nothing inside a wire binding carries a shape id to rewrite
             // (its refs are entry-field paths and literal HTTP names).
             wire: wire.clone(),
+            // Nothing inside an impl_call carries a shape id either (its
+            // refs are entry-field paths and a bare method name).
+            impl_call: impl_call.clone(),
         },
         ShapeKind::Entry { fields, operations } => ShapeKind::Entry {
             fields: fields.iter().map(|f| entry_field(config, f)).collect(),
@@ -320,6 +324,7 @@ mod tests {
                                     output: None,
                                     errors: vec![],
                                     wire: None,
+                                    impl_call: None,
                                 },
                                 traits: vec![],
                             }],

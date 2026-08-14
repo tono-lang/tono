@@ -58,8 +58,15 @@
    typecheck or codegen consumes it yet). An entry field's "call" key
    (alongside the existing "select") carries a field's [= ns.fn(args)]
    extern-call source, and a call argument gained "lit"/"list"/"call"
-   variants for ctor-field values. *)
-let current_ir_version = 14
+   variants for ctor-field values.
+   v15 added an operation's optional "impl_call": a third implementation
+   source (RFC-0023's own "impl .field.method(args)" op body), alongside a
+   protocol's "wire" and a legacy "ext impl" extension. It reuses the "lit"
+   call-argument variant v14 introduced for ctor-field values, now also
+   reachable as a bare call argument (e.g. the "notes" in
+   [.bus.send("notes", .payload.body)]) -- no wire-shape change there, only
+   a new use site. Surface-and-IR only; no codegen consumes "impl_call" yet. *)
+let current_ir_version = 15
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -90,6 +97,8 @@ let encode_bind = Ir_json_entry.encode_bind
 let decode_bind = Ir_json_entry.decode_bind
 let encode_entry_field = Ir_json_entry.encode_entry_field
 let decode_entry_field = Ir_json_entry.decode_entry_field
+let encode_call_arg = Ir_json_entry.encode_call_arg
+let decode_call_arg = Ir_json_entry.decode_call_arg
 let encode_ext_lib = Ir_json_extern.encode_ext_lib
 let decode_ext_lib = Ir_json_extern.decode_ext_lib
 let encode_test = Ir_json_tests.encode_test
@@ -108,6 +117,33 @@ let as_assoc = Ir_json_base.as_assoc
 let as_list = Ir_json_base.as_list
 let as_string = Ir_json_base.as_string
 let as_int = Ir_json_base.as_int
+
+(* An op's own "impl .field.method(args)" body (RFC-0023): [recv] mirrors
+   [entry_call]'s "ns"/"fn" shape, but as a field path rather than a bare "ext"
+   namespace, since the receiver is an entry field. *)
+let encode_op_impl_call (c : Ir.op_impl_call) : Ir.json =
+  `Assoc
+    [
+      ("recv", `List (List.map (fun s -> `String s) c.Ir.oic_recv));
+      ("method", `String c.Ir.oic_method);
+      ("args", `List (List.map encode_call_arg c.Ir.oic_args));
+    ]
+
+let decode_op_impl_call (j : Ir.json) : (Ir.op_impl_call, string) result =
+  let* kvs = as_assoc j in
+  match
+    ( List.assoc_opt "recv" kvs,
+      List.assoc_opt "method" kvs,
+      List.assoc_opt "args" kvs )
+  with
+  | Some recv, Some method_, Some args ->
+      let* recv_xs = as_list recv in
+      let* oic_recv = map_result as_string recv_xs in
+      let* oic_method = as_string method_ in
+      let* args_xs = as_list args in
+      let* oic_args = map_result decode_call_arg args_xs in
+      Ok ({ Ir.oic_recv; oic_method; oic_args } : Ir.op_impl_call)
+  | _ -> err "op impl_call must have recv, method, and args"
 
 (* ── Shapes, modules, and the model envelope ───────────────────────────── *)
 
@@ -139,7 +175,7 @@ let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("kind", `String "service");
         ("operations", `List (List.map (fun s -> `String s) operations));
       ]
-  | Operation { input; input_name; output; errors; wire } -> (
+  | Operation { input; input_name; output; errors; wire; impl_call } -> (
       let opt = function None -> `Null | Some t -> encode_tref t in
       [
         ("kind", `String "operation");
@@ -150,10 +186,13 @@ let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
       @ (match input_name with
         | None -> []
         | Some n -> [ ("input_name", `String n) ])
+      @ (match wire with
+        | None -> []
+        | Some w -> [ ("wire", encode_wire_binding w) ])
       @
-      match wire with
+      match impl_call with
       | None -> []
-      | Some w -> [ ("wire", encode_wire_binding w) ])
+      | Some c -> [ ("impl_call", encode_op_impl_call c) ])
   | Entry { fields; operations } ->
       [
         ("kind", `String "entry");
@@ -297,7 +336,14 @@ let rec decode_shape_kind kvs =
             map_result decode_tref xs
       in
       let* wire = decode_wire_binding_opt (get "wire") in
-      Ok (Ir.Operation { input; input_name; output; errors; wire })
+      let* impl_call =
+        match get "impl_call" with
+        | None -> Ok None
+        | Some v ->
+            let* c = decode_op_impl_call v in
+            Ok (Some c)
+      in
+      Ok (Ir.Operation { input; input_name; output; errors; wire; impl_call })
   | "entry" ->
       let* fields = decode_fields (get "fields") in
       let* operations =

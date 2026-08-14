@@ -146,31 +146,54 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
             ])
       (impl_decls decls)
   in
+  (* A third implementation source, alongside @http and "ext impl": the op's
+     own "impl .field.method(args)" body (RFC-0023). It lives on the op
+     itself, not as a separate decl, so it needs no [op_sites] lookup. *)
+  let inline_impl (s : op_site) : Ast.op_impl option =
+    match s.op.Ast.dkind with Ast.DOp { oimpl; _ } -> oimpl | _ -> None
+  in
   let count_diags =
     List.concat_map
       (fun s ->
         (* [find_all] yields the most recent first; source order reads better. *)
         let bound_here = List.rev (Hashtbl.find_all bound (site_key s)) in
-        match (find_trait "http" s.op.Ast.dtraits, bound_here) with
-        | Some _, impl :: _ ->
+        match
+          (find_trait "http" s.op.Ast.dtraits, inline_impl s, bound_here)
+        with
+        | Some _, Some oi, _ ->
+            [
+              err Error_codes.op_implementation_conflict oi.Ast.oi_span
+                "operation '%s' is already bound to a protocol by @http; an \
+                 operation is implemented exactly once"
+                (site_key s);
+            ]
+        | Some _, None, impl :: _ ->
             [
               err Error_codes.op_implementation_conflict impl.Ast.dname_span
                 "operation '%s' is already bound to a protocol by @http; an \
                  operation is implemented exactly once"
                 (site_key s);
             ]
-        | None, _ :: second :: _ ->
+        | None, Some oi, _ :: _ ->
+            [
+              err Error_codes.op_implementation_conflict oi.Ast.oi_span
+                "operation '%s' already has an 'ext impl'; an operation is \
+                 implemented exactly once"
+                (site_key s);
+            ]
+        | None, None, _ :: second :: _ ->
             [
               err Error_codes.op_implementation_conflict second.Ast.dname_span
                 "operation '%s' already has an impl; an operation is \
                  implemented exactly once"
                 (site_key s);
             ]
-        | None, [] when s.entry <> None ->
+        | None, None, [] when s.entry <> None ->
             [
               err Error_codes.op_implementation_missing s.op.Ast.dname_span
                 "entry operation '%s' has no implementation; bind it to a \
-                 protocol with @http or to bespoke sources with 'ext impl %s'"
+                 protocol with @http, to bespoke sources with 'ext impl %s', \
+                 or with its own 'impl .field.method(...)' body"
                 (site_key s) s.op.Ast.dname;
             ]
         | _ -> [])

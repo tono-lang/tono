@@ -133,6 +133,9 @@ and print_call_arg (a : Ast.call_arg) : string =
   | Ast.CaParam (n, _) -> n
   | Ast.CaRef r -> print_ref r
   | Ast.CaCtor c -> print_ctor_lit c
+  | Ast.CaLit (Ast.LStr s, _) -> string_literal s
+  | Ast.CaLit (Ast.LInt n, _) -> string_of_int n
+  | Ast.CaLit (Ast.LFloat f, _) -> float_literal f
 
 and print_call_expr (ce : Ast.call_expr) : string =
   ce.Ast.ce_ns ^ "." ^ ce.Ast.ce_fn ^ "("
@@ -211,9 +214,15 @@ let braced (header : string) (lines : string list) : string =
    @header, @timeout, @retry, @errors), which on one line runs past any usable
    width. They stay below, never above: whitespace is not significant, so a
    trait written above an op would bind to whatever was declared before it. *)
+let print_op_impl ~indent (oi : Ast.op_impl) : string =
+  "\n" ^ indent ^ "  impl " ^ print_ref oi.Ast.oi_recv ^ "." ^ oi.Ast.oi_method
+  ^ "("
+  ^ String.concat ", " (List.map print_call_arg oi.Ast.oi_args)
+  ^ ")"
+
 let print_op ~indent (d : Ast.decl) : string =
   match d.Ast.dkind with
-  | Ast.DOp { pname; input; output } ->
+  | Ast.DOp { pname; input; output; oimpl } ->
       let pub = if d.Ast.pub then "pub " else "" in
       let param =
         match (pname, input) with
@@ -228,7 +237,10 @@ let print_op ~indent (d : Ast.decl) : string =
       let traits =
         List.map (fun t -> "\n" ^ indent ^ "  " ^ print_trait t) d.Ast.dtraits
       in
-      signature ^ String.concat "" traits
+      let impl =
+        match oimpl with Some oi -> print_op_impl ~indent oi | None -> ""
+      in
+      signature ^ String.concat "" traits ^ impl
   | _ -> assert false
 
 (* ── Test blocks ───────────────────────────────────────────────────────── *)

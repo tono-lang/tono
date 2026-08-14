@@ -9,12 +9,27 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
     (m : Ir.module_) : Ir.module_ * Diagnostic.t list =
   let decls = file.Ast.decls in
   let tbl, dup_diags = Symtab.build decls in
-  let ref_diags = Resolve.resolve_decls ~qualified tbl decls in
+  (* An "ext <name> { ... }" block is also a namespace ("name.Type" for a
+     declared opaque type), which [qualified] alone has no visibility into
+     (it only knows cross-module imports); and a bare foreign name (never a
+     Symtab shape) is [known] rather than unknown, so it does not also draw
+     a redundant TC0001 alongside Check_entries' TC0034. *)
+  let ref_diags =
+    Resolve.resolve_decls
+      ~qualified:(Check_ext_lib.qualified_of decls qualified)
+      ~known:(Check_ext_lib.is_foreign_name decls)
+      tbl decls
+  in
   let member_diags = Check_member.check_decls decls in
   let enum_diags = Check_enum.check_decls decls in
   let constraint_diags = Check_constraints.check ~decls m in
   let op_diags = Check_operations.check_decls tbl decls in
   let ext_diags = Check_ext.check_decls decls in
+  (* The cross-file closed accounting for "ext" ([Check_ext_lib.check_project])
+     is not run here: it needs every module's decls at once, so the project
+     pipeline in [Tono_frontend] calls it directly, mirroring how [Modules.build]
+     runs outside this per-module pass. *)
+  let ext_lib_diags = Check_ext_lib.check_decls ~tbl decls in
   let impl_diags = Check_impl.check_decls decls in
   let entry_diags = Check_entries.check_decls decls in
   let repeat_diags = Check_trait_repeats.check_decls decls in
@@ -28,5 +43,5 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
   ( { m with tests },
     Diagnostic.sort
       (dup_diags @ ref_diags @ member_diags @ enum_diags @ constraint_diags
-     @ op_diags @ ext_diags @ impl_diags @ entry_diags @ repeat_diags
-     @ trait_name_diags @ trait_position_diags @ test_diags) )
+     @ op_diags @ ext_diags @ ext_lib_diags @ impl_diags @ entry_diags
+     @ repeat_diags @ trait_name_diags @ trait_position_diags @ test_diags) )

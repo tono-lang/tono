@@ -84,6 +84,9 @@ and shape_kind =
       output : tref option;
       errors : tref list;
       wire : wire_binding option;
+      impl_call : op_impl_call option;
+          (* the op's own "impl .field.method(args)" body (RFC-0023); see
+             ir.mli for the full rule commentary. No backend reads it yet. *)
     }
     (* tref, so an operation can reference an applied generic directly *)
   | Entry of { fields : entry_field list; operations : shape list }
@@ -193,6 +196,17 @@ and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
    [ext] block named [ec_ns]. Resolving [ec_ns]/[ec_fn] against a declared
    extern is deferred (out of scope; see [Ir.ext_lib]). *)
 and entry_call = { ec_ns : string; ec_fn : string; ec_args : call_arg list }
+
+(* An op's own [impl .field.method(args)] body: the receiver is a field path
+   (an entry field, an opaque handle), not a bare "ext" namespace, so this
+   mirrors [entry_call] with [oic_recv : string list] in place of [ec_ns].
+   Resolving the receiver/method against a declared handle is deferred to
+   the typechecker. *)
+and op_impl_call = {
+  oic_recv : string list;
+  oic_method : string;
+  oic_args : call_arg list;
+}
 
 (* One field of an entry or config. Presence is governed by the sources (there
    is no required/default pair: @default is a source, optionality is @with). *)

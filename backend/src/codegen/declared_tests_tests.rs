@@ -15,6 +15,7 @@ fn op(id: &str, traits: Vec<Trait>, errors: Vec<Tref>) -> Shape {
             output: Some(Tref::Prim(Prim::String)),
             errors,
             wire: None,
+            impl_call: None,
         },
         traits,
     }
@@ -40,6 +41,7 @@ fn http_op(id: &str) -> Shape {
                 timeout: None,
                 retry: None,
             })),
+            impl_call: None,
         },
         traits: vec![],
     }

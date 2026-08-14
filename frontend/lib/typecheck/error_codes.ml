@@ -155,3 +155,41 @@ let http_code_invalid = "TC0068"
    single position to check the rest of its members against, so this rule
    does not cover it. *)
 let trait_position_invalid = "TC0069"
+
+(* The "ext"/"extern" FFI library block (RFC-0023). A call: arg names a
+   parameter the extern's logical signature never declared; a ctor literal
+   projected into a foreign struct disagrees in field name or type with the
+   parameter it forwards. A yields: position nothing in returns:/errors:
+   reads; more than one "error"-typed position in one yields:; a returns:
+   with no yields: to project from; a returns: that builds a type other than
+   the extern's own declared logical return; a returns: field ref whose head
+   is not a declared yields: name. An errors: sentinel mapped to a type that
+   does not resolve. A logical parameter some language's call: never
+   consumes. Cross-file closed accounting (decision K): the same "ext" name's
+   module path for one language declared with two different targets; an
+   extern (or opaque-type method) name repeated within one "ext", even across
+   files; a language block for a target the "ext" declares no module path
+   for. *)
+let extern_call_unknown_param = "TC0070"
+let extern_call_type_mismatch = "TC0071"
+let extern_yields_position_dead = "TC0072"
+let extern_yields_multiple_errors = "TC0073"
+let extern_yields_required = "TC0074"
+let extern_returns_type_mismatch = "TC0075"
+let extern_returns_ref_unknown = "TC0076"
+let extern_error_sentinel_unknown = "TC0077"
+let extern_param_unconsumed = "TC0078"
+let ext_lib_module_path_conflict = "TC0079"
+let extern_duplicate_name = "TC0080"
+let extern_lang_no_module = "TC0081"
+
+(* An op's own "impl .field.method(args)" body (RFC-0023). The receiver does
+   not resolve to an entry field whose type is a declared opaque handle; the
+   method is not one of that handle's declared "extern" methods; the
+   argument list disagrees in count with the method's declared logical
+   parameters, or an argument is a bare identifier (no extern-side
+   parameter list exists to forward from in this position; only a literal
+   or a field reference is legal). *)
+let op_impl_receiver_not_handle = "TC0082"
+let op_impl_unknown_method = "TC0083"
+let op_impl_arity_mismatch = "TC0084"

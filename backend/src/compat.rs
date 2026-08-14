@@ -379,6 +379,10 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
         // input_name is deliberately excluded: the wire never carries the
         // parameter's own name, only its type/shape, so renaming it alone is
         // not a wire break.
+        // impl_call is deliberately excluded too, for the same reason as
+        // wire: it is bespoke implementation detail (RFC-0023's own
+        // "impl .field.method(args)" op body), not part of the compared
+        // wire surface.
         (
             ShapeKind::Operation {
                 input: bi,
@@ -386,6 +390,7 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
                 output: bo,
                 errors: be,
                 wire: _,
+                impl_call: _,
             },
             ShapeKind::Operation {
                 input: ci,
@@ -393,6 +398,7 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
                 output: co,
                 errors: ce,
                 wire: _,
+                impl_call: _,
             },
         ) => diff_operation(&b.id, bi, bo, be, ci, co, ce, out),
         (ShapeKind::Service { operations: bo }, ShapeKind::Service { operations: co }) => {

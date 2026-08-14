@@ -150,6 +150,35 @@ let raw_outside_impl () =
           "ext impl save { go: \"ext/go/s.go#Save\" }\n\
            ext hook before_request raw { ts: \"ext/ts/a.ts#f\" }"))
 
+(* An op's own "impl .field.method(args)" body (RFC-0023) and an "ext impl"
+   are two more of the three implementation sources; binding both to the same
+   op is the same conflict as @http plus an impl. *)
+let op_impl_conflicts_with_ext_impl () =
+  Alcotest.(check (list string))
+    "op impl and ext impl both bind the same op" [ "TC0050" ]
+    (codes
+       "ext bus {\n\
+       \  go: \"github.com/x/bus\"\n\
+       \  struct go_ack { OK: bool }\n\
+       \  type publisher {\n\
+       \    extern send(topic: string): ack {\n\
+       \      go { call: \"Send\"(topic) yields: (a: go_ack) returns: ack { \
+        accepted: .a.OK } }\n\
+       \    }\n\
+       \  }\n\
+       \  extern connect(endpoint: string): publisher {\n\
+       \    go { call: \"Connect\"(endpoint) }\n\
+       \  }\n\
+        }\n\
+        pub struct ack { accepted: bool }\n\
+        pub struct client {\n\
+       \  endpoint: string @arg\n\
+       \  bus: bus.publisher @with = bus.connect(.endpoint)\n\
+       \  op publish(topic: string): ack\n\
+       \    impl .bus.send(.topic)\n\
+        }\n\
+        ext impl publish { go: \"ext/go/p.go#Publish\" }")
+
 let () =
   Alcotest.run "impl"
     [
@@ -174,5 +203,7 @@ let () =
             raw_error_with_code_clean;
           Alcotest.test_case "typed impl needs no code" `Quick
             typed_impl_needs_no_error_code;
+          Alcotest.test_case "op impl conflicts with ext impl" `Quick
+            op_impl_conflicts_with_ext_impl;
         ] );
     ]

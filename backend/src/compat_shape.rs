@@ -187,6 +187,7 @@ mod tests {
                 output,
                 errors,
                 wire: None,
+                impl_call: None,
             },
             traits: vec![],
         }
@@ -267,7 +268,8 @@ mod tests {
                 input_name: None,
                 output: None,
                 errors: vec![],
-                wire: None
+                wire: None,
+                impl_call: None
             }),
             "operation"
         );

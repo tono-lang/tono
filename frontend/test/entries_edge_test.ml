@@ -634,6 +634,7 @@ let resolver_tolerates_value_template () =
             output = None;
             errors = [];
             wire = None;
+            impl_call = None;
           };
       traits =
         [

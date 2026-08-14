@@ -239,9 +239,11 @@ fn diff_entry_ops(id: &str, base: &[Shape], curr: &[Shape], out: &mut Vec<Change
                 detail: format!("operation added to {id}"),
             }),
             (Some(b), Some(c)) => {
-                // wire is deliberately excluded from this diff for the same
-                // reason as compat::diff_shape_kind's Operation arm: it is
-                // derived from traits diff_descriptor below already covers.
+                // wire and impl_call are deliberately excluded from this diff
+                // for the same reason as compat::diff_shape_kind's Operation
+                // arm: wire is derived from traits diff_descriptor below
+                // already covers, and impl_call is bespoke implementation
+                // detail, not part of the compared wire surface.
                 if let (
                     ShapeKind::Operation {
                         input: bin,
@@ -249,6 +251,7 @@ fn diff_entry_ops(id: &str, base: &[Shape], curr: &[Shape], out: &mut Vec<Change
                         output: bout,
                         errors: berr,
                         wire: _,
+                        impl_call: _,
                     },
                     ShapeKind::Operation {
                         input: cin,
@@ -256,6 +259,7 @@ fn diff_entry_ops(id: &str, base: &[Shape], curr: &[Shape], out: &mut Vec<Change
                         output: cout,
                         errors: cerr,
                         wire: _,
+                        impl_call: _,
                     },
                 ) = (&b.kind, &c.kind)
                 {

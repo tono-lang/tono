@@ -164,6 +164,7 @@ mod tests {
                 output: None,
                 errors: vec![],
                 wire: Some(crate::codegen::test_support::wire_binding("GET")),
+                impl_call: None,
             },
             traits: vec![],
         }
@@ -178,6 +179,7 @@ mod tests {
                 output: None,
                 errors: vec![],
                 wire: None,
+                impl_call: None,
             },
             traits: vec![],
         }
@@ -300,6 +302,7 @@ mod tests {
                     args: vec![],
                 }],
                 wire: None,
+                impl_call: None,
             },
             traits: vec![],
         };

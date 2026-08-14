@@ -129,6 +129,15 @@ and parse_trait_list_value st : Ast.trait_arg =
 and parse_call_arg st : Ast.call_arg =
   match (P.peek st).kind with
   | Token.Dot -> Ast.CaRef (parse_ref_path st)
+  | Token.Str s ->
+      let t = P.advance st in
+      Ast.CaLit (Ast.LStr s, t.span)
+  | Token.Int n ->
+      let t = P.advance st in
+      Ast.CaLit (Ast.LInt n, t.span)
+  | Token.Float f ->
+      let t = P.advance st in
+      Ast.CaLit (Ast.LFloat f, t.span)
   | Token.Ident n -> (
       let nt = P.advance st in
       match (P.peek st).kind with

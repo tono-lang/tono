@@ -132,6 +132,9 @@ and json_of_call_arg : Ast.call_arg -> Ir.json = function
   | Ast.CaRef r ->
       `Assoc [ ("field", `List (List.map (fun s -> `String s) r.Ast.segs)) ]
   | Ast.CaCtor c -> json_of_arg (Ast.ACtor c)
+  | Ast.CaLit (Ast.LStr s, _) -> `Assoc [ ("lit", `String s) ]
+  | Ast.CaLit (Ast.LInt n, _) -> `Assoc [ ("lit", `Int n) ]
+  | Ast.CaLit (Ast.LFloat f, _) -> `Assoc [ ("lit", `Float f) ]
 
 (* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
    -> {"method":"get","path":"/x"}); any positional arg keeps the uniform array
@@ -434,8 +437,15 @@ let take_trait name (traits : Ast.trait list) =
 
 (* Lower an operation's traits and body into an Operation shape under [id].
    Shared by top-level ops and ops nested in an entry body. *)
+let lower_op_impl_call (oi : Ast.op_impl) : Ir.op_impl_call =
+  {
+    Ir.oic_recv = oi.Ast.oi_recv.Ast.segs;
+    oic_method = oi.Ast.oi_method;
+    oic_args = List.map Lower_extern.lower_call_arg oi.Ast.oi_args;
+  }
+
 let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~pname ~input ~output
-    ~pub_trait : Ir.shape =
+    ~oimpl ~pub_trait : Ir.shape =
   let lower_opt = Option.map (lower_type ~params:[] ~resolve ~diags) in
   (* @errors(A, B) lists the operation's error types by name; repeated
      @errors traits accumulate. A non-name argument has no type to point
@@ -469,6 +479,7 @@ let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~pname ~input ~output
           errors;
           wire = None;
           (* Protocol resolution happens strictly after lowering. *)
+          impl_call = Option.map lower_op_impl_call oimpl;
         };
     traits = pub_trait @ lower_bag_traits rest;
   }
@@ -492,10 +503,10 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
           (fun (op : Ast.decl) ->
             check_snake diags op.dname_span "operation name" op.dname;
             match op.dkind with
-            | Ast.DOp { pname; input; output } ->
+            | Ast.DOp { pname; input; output; oimpl } ->
                 lower_op_shape
                   ~id:(qualify module_name (d.dname ^ "." ^ op.dname))
-                  ~resolve ~diags op ~pname ~input ~output ~pub_trait:[]
+                  ~resolve ~diags op ~pname ~input ~output ~oimpl ~pub_trait:[]
             | _ -> assert false)
           ops
       in
@@ -586,10 +597,10 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
         kind = Ir.Enum { backing; values };
         traits = bag d.dtraits;
       }
-  | Ast.DOp { pname; input; output } ->
+  | Ast.DOp { pname; input; output; oimpl } ->
       lower_op_shape
         ~id:(qualify module_name d.dname)
-        ~resolve ~diags d ~pname ~input ~output ~pub_trait
+        ~resolve ~diags d ~pname ~input ~output ~oimpl ~pub_trait
   | Ast.DExt _ | Ast.DExtLib _ | Ast.DTest _ ->
       (* Extensions, ext libs, and tests have no shape; [lower_file] routes
          extensions to [lower_ext], ext libs to [lower_ext_lib], and leaves

@@ -61,6 +61,7 @@ op origin(): point
                   output = Some (Ir.Ref ("geo#point", []));
                   errors = [];
                   wire = None;
+                  impl_call = None;
                 };
             traits = [];
           };

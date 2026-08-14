@@ -18,6 +18,9 @@ let rec lower_call_arg : Ast.call_arg -> Ir.call_arg = function
   | Ast.CaParam (n, _) -> Ir.Ca_param n
   | Ast.CaRef r -> Ir.Ca_ref r.segs
   | Ast.CaCtor c -> Ir.Ca_ctor (lower_call_ctor c)
+  | Ast.CaLit (Ast.LStr s, _) -> Ir.Ca_lit (`String s)
+  | Ast.CaLit (Ast.LInt n, _) -> Ir.Ca_lit (`Int n)
+  | Ast.CaLit (Ast.LFloat f, _) -> Ir.Ca_lit (`Float f)
 
 and lower_call_ctor (c : Ast.ctor_arg) : Ir.call_ctor =
   {

@@ -107,6 +107,7 @@ fn entry_module(retry: bool, timeout: bool) -> crate::ir::Module {
             output: None,
             errors: vec![],
             wire: Some(Box::new(wire)),
+            impl_call: None,
         },
         traits: vec![],
     };

@@ -16,6 +16,7 @@ module Printer = Printer
 module Lower = Lower
 module Typecheck = Typecheck
 module Check_ext = Check_ext
+module Check_ext_lib = Check_ext_lib
 module Check_entries = Check_entries
 module Entry_scope = Entry_scope
 module Protocol_http = Protocol_http
@@ -45,7 +46,12 @@ let compile ?(module_name = "") (src : string) : Ir.module_ * Diagnostic.t list
   let diags = ref [] in
   let m = Lower.lower_file ~module_name ~diags file in
   let m, tc_diags = Typecheck.check_module ~file m in
-  (m, Diagnostic.sort (parse_diags @ List.rev !diags @ tc_diags))
+  (* Cross-file "ext" closed accounting (decision K) runs outside
+     [Typecheck.check_module], same reasoning as [Modules.build]; a lone
+     module still gets it, checking an "ext" split into several blocks
+     within this one file. *)
+  let ext_lib_diags = Check_ext_lib.check_project [ ("", file.Ast.decls) ] in
+  (m, Diagnostic.sort (parse_diags @ List.rev !diags @ tc_diags @ ext_lib_diags))
 
 (* Compile a source string straight to canonical IR JSON. Errors (not warnings)
    abort with their messages joined; otherwise the single module is wrapped in a
@@ -117,8 +123,17 @@ let compile_project (files : (string * string) list) :
         (m :: mods, here @ diags))
       parsed ([], [])
   in
+  (* Cross-file "ext" closed accounting (decision K) needs every module's
+     decls at once, so it runs here rather than inside the per-module pass
+     above, the same way [Modules.build] does. It labels its own
+     diagnostics with the implicated file's name, so it is not run through
+     [label] again. *)
+  let ext_lib_diags =
+    Check_ext_lib.check_project
+      (List.map (fun (name, file, _) -> (name, file.Ast.decls)) parsed)
+  in
   let model = { Ir.tono_ir_version = Ir_json.current_ir_version; modules } in
-  (model, Diagnostic.sort (mod_diags @ per_diags))
+  (model, Diagnostic.sort (mod_diags @ per_diags @ ext_lib_diags))
 
 (* Compile a project straight to canonical IR JSON, or the joined error messages
    when any module has an error. *)

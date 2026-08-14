@@ -106,3 +106,34 @@ val http_code_invalid : string
 (* A known trait written where nothing reads it (see error_codes.ml for the
    rule). *)
 val trait_position_invalid : string
+
+(* The "ext"/"extern" FFI library block (RFC-0023, see error_codes.ml for the
+   rule commentary). Internal consistency of a call's arity/types against the
+   declared logical signature, of a returns: projection against a yields:
+   name, and of an errors: sentinel against a declared error; plus the
+   cross-file closed accounting of one library split across several .tono
+   files. Foreign-role boundary violations (a foreign form used as wire, an
+   op input/output, or public surface) reuse [entry_wire_boundary]. *)
+val extern_call_unknown_param : string
+val extern_call_type_mismatch : string
+val extern_yields_position_dead : string
+val extern_yields_multiple_errors : string
+val extern_yields_required : string
+val extern_returns_type_mismatch : string
+val extern_returns_ref_unknown : string
+val extern_error_sentinel_unknown : string
+val extern_param_unconsumed : string
+val ext_lib_module_path_conflict : string
+val extern_duplicate_name : string
+val extern_lang_no_module : string
+
+(* An op's own "impl .field.method(args)" body (RFC-0023): the receiver is
+   not an entry field whose type is a declared opaque handle; the method is
+   not one of that handle's declared "extern" methods; the argument count
+   disagrees with the method's declared logical parameters, or an argument
+   is a bare identifier (only a literal or a field reference is legal in
+   this position, since there is no extern-side parameter list to forward
+   from). *)
+val op_impl_receiver_not_handle : string
+val op_impl_unknown_method : string
+val op_impl_arity_mismatch : string

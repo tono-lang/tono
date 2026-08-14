@@ -61,6 +61,7 @@ let list_charges : Ir.model =
             output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
             errors = [];
             wire = None;
+            impl_call = None;
           };
       traits = [];
     }
@@ -291,6 +292,7 @@ let service_api : Ir.model =
             output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
             errors = [ ref_ "payments#NotFound" [] ];
             wire = None;
+            impl_call = None;
           };
       traits = [];
     }
@@ -423,6 +425,7 @@ let entries_client : Ir.model =
             output = Some (ref_ "notes#note" []);
             errors = [ ref_ "notes#overloaded" [] ];
             wire = None;
+            impl_call = None;
           };
       traits =
         [
@@ -591,6 +594,7 @@ let bespoke_impl : Ir.model =
             output = Some (ref_ output []);
             errors = [ ref_ "notes#overloaded" [] ];
             wire = None;
+            impl_call = None;
           };
       traits;
     }

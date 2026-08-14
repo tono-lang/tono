@@ -2,9 +2,12 @@
    emerges from content. A struct with ops in its body is an entry; a struct
    whose fields carry a construction source (@arg/@with/@env), or that an entry
    composes via @bind, is a config; everything else is wire data. @default alone
-   does not classify: on a plain member it is the ordinary wire default. *)
+   does not classify: on a plain member it is the ordinary wire default. A
+   foreign struct or opaque type declared inside an "ext" library block is
+   always Foreign, regardless of its own content: it is a shape the checker
+   only reads to validate a projection, never a shape a tono value can hold. *)
 
-type role = Entry | Config | Wire
+type role = Entry | Config | Wire | Foreign
 
 let source_marker = function "arg" | "with" | "env" -> true | _ -> false
 
@@ -24,6 +27,34 @@ let classify (decls : Ast.decl list) : (string, role) Hashtbl.t =
       | Ast.DStruct { ops = _ :: _; _ } -> Hashtbl.replace roles d.dname Entry
       | Ast.DStruct { members; _ } when List.exists member_has_source members ->
           Hashtbl.replace roles d.dname Config
+      | _ -> ())
+    decls;
+  (* Foreign names from every "ext" library block: foreign struct and opaque
+     type names never belong to a real tono shape, so they classify Foreign
+     regardless of their own field content. A name already claimed by a
+     DStruct above is left alone here; that collision is a diagnostic owned
+     by Check_ext_lib, not a silent overwrite. Opaque types are also
+     registered under their qualified "ext_name.type_name" spelling, since
+     that is how an entry field references an injectable handle
+     (companybus.publisher); foreign structs stay bare, as they are only
+     ever referenced unqualified inside their own block's language bodies. *)
+  List.iter
+    (fun (d : Ast.decl) ->
+      match d.Ast.dkind with
+      | Ast.DExtLib { body; _ } ->
+          List.iter
+            (fun (s : Ast.foreign_struct) ->
+              if not (Hashtbl.mem roles s.Ast.fs_name) then
+                Hashtbl.replace roles s.Ast.fs_name Foreign)
+            body.Ast.elib_structs;
+          List.iter
+            (fun (t : Ast.opaque_type) ->
+              if not (Hashtbl.mem roles t.Ast.opq_name) then
+                Hashtbl.replace roles t.Ast.opq_name Foreign;
+              let qualified = d.Ast.dname ^ "." ^ t.Ast.opq_name in
+              if not (Hashtbl.mem roles qualified) then
+                Hashtbl.replace roles qualified Foreign)
+            body.Ast.elib_types
       | _ -> ())
     decls;
   (* A @bind composition marks its target type a config even when every value

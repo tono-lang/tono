@@ -341,6 +341,7 @@ mod tests {
                     args: vec![],
                 }],
                 wire: None,
+                impl_call: None,
             },
             traits: vec![],
         };

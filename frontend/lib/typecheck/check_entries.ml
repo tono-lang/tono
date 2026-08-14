@@ -97,7 +97,15 @@ let check_source_combinations ~in_config (m : Ast.member) : Diagnostic.t list =
              its arms reference instead";
         ]
     | Some (Ast.MCall ce)
-      when (not (has "arg")) && (sources <> [] || has "format") ->
+      when (not (has "arg"))
+           (* @with is not a competing source here: paired with a call value
+              it is the RFC-0023 injectable-handle idiom (decision G) --
+              the caller may supply the value, construction is the fallback
+              -- not a source that would leave the call's own value dead. *)
+           && (List.exists
+                 (fun (t : Ast.trait) -> not (String.equal t.Ast.tname "with"))
+                 sources
+              || has "format") ->
         [
           dead ce.ce_span
             "an extern call is the field's only value; declare sources on \
@@ -304,16 +312,32 @@ let rec boundary_ty ctx (t : Ast.ty) : Diagnostic.t list =
                  entry field%s"
                 n (config_origin ctx n);
             ]
-        | Roles.Wire -> [])
+        | Roles.Wire -> []
+        | Roles.Foreign ->
+            [
+              err Error_codes.entry_wire_boundary span
+                "'%s' is a foreign form declared in an 'ext' library block and \
+                 can never be wire, an op input/output, or public surface"
+                n;
+            ])
       @ List.concat_map (boundary_ty ctx) args
-  | Ast.TQName (_, _, args, _) -> List.concat_map (boundary_ty ctx) args
+  | Ast.TQName (qualifier, n, args, span) ->
+      (if role_of_name ctx (qualifier ^ "." ^ n) = Roles.Foreign then
+         [
+           err Error_codes.entry_wire_boundary span
+             "'%s.%s' is a foreign handle declared in an 'ext' library block \
+              and can only be composed directly by an entry field"
+             qualifier n;
+         ]
+       else [])
+      @ List.concat_map (boundary_ty ctx) args
   | Ast.TList (t, _) | Ast.TNullable (t, _) -> boundary_ty ctx t
   | Ast.TMap (k, v, _) -> boundary_ty ctx k @ boundary_ty ctx v
   | Ast.TPrim _ | Ast.TError _ -> []
 
 let check_op_boundary ctx (op : Ast.decl) : Diagnostic.t list =
   match op.dkind with
-  | Ast.DOp { pname = _; input; output } ->
+  | Ast.DOp { pname = _; input; output; oimpl = _ } ->
       let opt = function Some t -> boundary_ty ctx t | None -> [] in
       let error_diags =
         List.concat_map
@@ -377,15 +401,21 @@ let check_generics (d : Ast.decl) params what : Diagnostic.t list =
 
 (* Member types never reference an entry, and reference a config only as the
    bare type of a direct entry field (the composition point); a config nested
-   in a list, map, or generic argument is closed like any wire position. *)
+   in a list, map, or generic argument is closed like any wire position. A
+   foreign opaque handle gets the same one carve-out: a bare qualified field
+   (bus: companybus.publisher) is the injectable-handle composition point the
+   RFC describes, but nested/wire uses stay closed like any config. *)
 let check_member_boundary ctx ~(container : Roles.role) (m : Ast.member) :
     Diagnostic.t list =
   match container with
   | Roles.Entry -> (
       match base_ty m.mtype with
       | Ast.TName (n, [], _) when role_of_name ctx n = Roles.Config -> []
+      | Ast.TQName (q, n, [], _)
+        when role_of_name ctx (q ^ "." ^ n) = Roles.Foreign ->
+          []
       | t -> boundary_ty ctx t)
-  | Roles.Config | Roles.Wire -> boundary_ty ctx m.mtype
+  | Roles.Config | Roles.Wire | Roles.Foreign -> boundary_ty ctx m.mtype
 
 (* Construction metadata on a wire member would be dropped in silence: the IR
    loses a match, and @format/@str::* would ride the bag with no consumer,
@@ -621,7 +651,11 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
                 (fun m ->
                   check_member_boundary ctx ~container:Roles.Wire m
                   @ check_wire_member_metadata m)
-                members)
+                members
+          (* A DStruct's own name is never classified Foreign: only a
+             foreign_struct/opaque_type declared inside an "ext" block is,
+             and those are never DStruct decls. Kept for exhaustiveness. *)
+          | Roles.Foreign -> [])
       | Ast.DUnion { variants; _ } ->
           check_non_struct_sources d
           @ List.concat_map

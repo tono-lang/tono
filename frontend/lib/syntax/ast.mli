@@ -29,10 +29,13 @@ and ctor_arg = {
   ctor_span : Span.span;
 }
 
+and call_lit = LStr of string | LInt of int | LFloat of float
+
 and call_arg =
   | CaParam of string * Span.span
   | CaRef of ref_path
   | CaCtor of ctor_arg
+  | CaLit of call_lit * Span.span
 
 and call_expr = {
   ce_ns : string;
@@ -269,11 +272,29 @@ type test_item =
       item_span : Span.span;
     }
 
+(* An op's own "impl .field.method(args)" body (RFC-0023): the receiver
+   names an entry field (a declared opaque handle), the method one of its
+   declared "extern" methods. This is a third implementation source for an
+   op, alongside a protocol trait (@http) and a legacy "ext impl" binding;
+   the closed-boundary/arity rules live in the typechecker, not here. *)
+type op_impl = {
+  oi_recv : ref_path;
+  oi_method : string;
+  oi_method_span : Span.span;
+  oi_args : call_arg list;
+  oi_span : Span.span;
+}
+
 type decl_kind =
   | DStruct of { params : string list; members : member list; ops : decl list }
   | DEnum of { cases : enum_case list }
   | DUnion of { params : string list; variants : union_variant list }
-  | DOp of { pname : string option; input : ty option; output : ty option }
+  | DOp of {
+      pname : string option;
+      input : ty option;
+      output : ty option;
+      oimpl : op_impl option;
+    }
   | DExt of {
       ekind : ext_kind;
       ekind_span : Span.span;
