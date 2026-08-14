@@ -156,7 +156,7 @@ fn gen_rejects_a_call_sourced_field_instead_of_panicking() {
     };
     let err = super::validate_entries(&model).unwrap_err();
     assert!(err.contains("config"), "{err}");
-    assert!(err.contains("extern-call"), "{err}");
+    assert!(err.contains("ext block"), "{err}");
 }
 
 /// The same deferral for a call-sourced member of a composed config field.
@@ -182,15 +182,28 @@ fn gen_rejects_a_call_sourced_config_member_instead_of_panicking() {
     };
     let err = super::validate_entries(&model).unwrap_err();
     assert!(err.contains("token"), "{err}");
-    assert!(err.contains("extern-call"), "{err}");
+    assert!(err.contains("ext block"), "{err}");
+}
+
+fn ext_lib_with_handle(lib: &str, handle: &str) -> ExtLib {
+    ExtLib {
+        name: lib.into(),
+        langs: vec![],
+        structs: vec![],
+        types: vec![OpaqueType {
+            name: handle.into(),
+            methods: vec![],
+        }],
+        externs: vec![],
+    }
 }
 
 /// An injectable-handle field (decision G, `bus: c.h @with = c.conn(...)`)
 /// targets an opaque type declared in the module's own `ext` block. That id
 /// lives in `ext_libs`, not `module.shapes`; the module-scoping check must
 /// recognize it as same-module instead of misreporting it as an out-of-module
-/// reference. The field still stops at the extern-call deferral (the same
-/// gate as the plain-call tests above), but for the right reason.
+/// reference. The field still stops at the ext-block deferral (the same gate
+/// as the plain-call tests above), but for the right reason.
 #[test]
 fn a_with_and_call_field_targeting_an_ext_block_handle_is_same_module() {
     let mut bus = call_field("bus", "c", "conn", vec![]);
@@ -200,21 +213,36 @@ fn a_with_and_call_field_targeting_an_ext_block_handle_is_same_module() {
         args: vec![],
     };
     let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
-    module.ext_libs = vec![ExtLib {
-        name: "c".into(),
-        langs: vec![],
-        structs: vec![],
-        types: vec![OpaqueType {
-            name: "h".into(),
-            methods: vec![],
-        }],
-        externs: vec![],
-    }];
+    module.ext_libs = vec![ext_lib_with_handle("c", "h")];
     let model = crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],
     };
     let err = super::validate_entries(&model).unwrap_err();
     assert!(!err.contains("outside this module"), "{err}");
-    assert!(err.contains("extern-call"), "{err}");
+    assert!(err.contains("ext block"), "{err}");
+}
+
+/// A plain `@arg`-injected handle field (`bus: c.h @arg`, no call at all)
+/// carries no `field.call`, so the call-source gate alone would miss it and
+/// let it reach codegen: the target emitter has no idea how to spell a
+/// foreign type, and would silently write an import path derived from the
+/// `ext` block's own name instead of its declared module path. The gate
+/// must reject on the foreign target type too, not only on a call source.
+#[test]
+fn gen_rejects_a_plain_arg_injected_foreign_handle_field() {
+    let mut bus = field("bus", vec![Source::Arg]);
+    bus.target = Tref::Ref {
+        id: "c#h".into(),
+        args: vec![],
+    };
+    let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
+    module.ext_libs = vec![ext_lib_with_handle("c", "h")];
+    let model = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module],
+    };
+    let err = super::validate_entries(&model).unwrap_err();
+    assert!(err.contains("bus"), "{err}");
+    assert!(err.contains("ext block"), "{err}");
 }

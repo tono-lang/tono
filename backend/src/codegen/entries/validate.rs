@@ -97,6 +97,28 @@ fn pascal_ident(name: &str) -> String {
     )
 }
 
+/// Whether a `Tref::Ref` id names an opaque handle declared in one of the
+/// module's own `ext` blocks (its id is `"{ext_name}#{type_name}"`, the same
+/// `#`-qualified shape id every other reference uses), rather than an
+/// ordinary shape in `module.shapes`.
+fn is_foreign_ref(module: &crate::ir::Module, id: &str) -> bool {
+    id.split_once('#').is_some_and(|(lib, ty)| {
+        module
+            .ext_libs
+            .iter()
+            .any(|l| l.name == lib && l.types.iter().any(|t| t.name == ty))
+    })
+}
+
+/// The `Tref::Ref` id a field's target names, if it is a shape/handle
+/// reference (as opposed to a primitive, list, or map).
+fn ref_id(t: &Tref) -> Option<&str> {
+    match t {
+        Tref::Ref { id, .. } => Some(id.as_str()),
+        _ => None,
+    }
+}
+
 /// Generation-time validation of the entry surface: the cases the frontend
 /// cannot see (they are target rules) and that would otherwise produce
 /// uncompilable or silently wrong output. Returns the first offense.
@@ -190,38 +212,41 @@ pub fn validate_entries(model: &crate::ir::Model) -> Result<(), String> {
                 // reference an opaque type declared in the module's own
                 // `ext` block: that id lives in `ext_libs`, not
                 // `module.shapes`, but is same-module all the same.
+                let foreign_target =
+                    ref_id(&field.target).is_some_and(|id| is_foreign_ref(module, id));
                 if let Tref::Ref { id, .. } = &field.target {
-                    let in_shapes = module.shapes.iter().any(|shape| shape.id == *id);
-                    let in_ext_lib = id.split_once('#').is_some_and(|(lib, ty)| {
-                        module
-                            .ext_libs
-                            .iter()
-                            .any(|l| l.name == lib && l.types.iter().any(|t| t.name == ty))
-                    });
-                    if !in_shapes && !in_ext_lib {
+                    if !foreign_target && !module.shapes.iter().any(|shape| shape.id == *id) {
                         return Err(format!(
                             "module {}: entry {} field {} references {}, a shape outside this module; construction fields resolve within their module, move the shape or the entry",
                             module.name, entry.name, field.name, id
                         ));
                     }
                 }
-                // An extern-call field source (RFC-0023) orders correctly in
-                // the resolution DAG, but no target yet spells the call
-                // itself; building its resolution plan would panic. Reject
-                // here so an unsupported spec fails cleanly at generation
-                // time instead of crashing.
-                if field.call.is_some() {
+                // Nothing that touches an `ext` block emits yet (RFC-0023):
+                // per-target codegen for the extern call itself, and for the
+                // foreign handle type a field carries, are separate tasks.
+                // Building the resolution plan for either would panic (a call
+                // source) or silently write uncompilable output (a foreign
+                // handle field, whose type the target emitter cannot spell).
+                // Reject every such field here, in one gate, rather than
+                // letting each gap surface as its own crash or bad-output
+                // report as the emission work lands piecemeal.
+                if field.call.is_some() || foreign_target {
                     return Err(format!(
-                        "module {}: entry {} field {} has an extern-call value; code generation for extern calls is not supported yet",
+                        "module {}: entry {} field {} touches an ext block (an extern call or a foreign handle type); code generation for RFC-0023 constructs is not supported yet",
                         module.name, entry.name, field.name
                     ));
                 }
                 if let Tref::Ref { id, .. } = &field.target {
                     if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
                         if let ShapeKind::Config { fields } = &shape.kind {
-                            if let Some(member) = fields.iter().find(|m| m.call.is_some()) {
+                            if let Some(member) = fields.iter().find(|m| {
+                                m.call.is_some()
+                                    || ref_id(&m.target)
+                                        .is_some_and(|id| is_foreign_ref(module, id))
+                            }) {
                                 return Err(format!(
-                                    "module {}: entry {} field {} member {} has an extern-call value; code generation for extern calls is not supported yet",
+                                    "module {}: entry {} field {} member {} touches an ext block (an extern call or a foreign handle type); code generation for RFC-0023 constructs is not supported yet",
                                     module.name, entry.name, field.name, member.name
                                 ));
                             }
