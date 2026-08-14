@@ -680,6 +680,9 @@ mod constructor;
 mod decode;
 mod impl_op;
 mod resolve;
+mod resolve_call;
+mod resolve_env;
+mod resolve_requires;
 mod shared;
 mod surface;
 #[cfg(test)]
