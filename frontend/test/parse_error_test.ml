@@ -51,6 +51,33 @@ let map_missing_bracket () =
 
 let unclosed_generic () = nonempty "unclosed generic" (type_diags "Page[Charge")
 
+(* A non-type token in type position reports its own human label
+   ([Token.describe]); a bare reserved keyword or a stray "->" each exercise
+   a distinct label the parser's own constructs never otherwise surface as
+   the *found* (as opposed to expected) token. *)
+let non_type_keyword_labels () =
+  let contains hay needle =
+    let hn = String.length hay and nn = String.length needle in
+    let rec loop i =
+      if i + nn > hn then false
+      else if String.sub hay i nn = needle then true
+      else loop (i + 1)
+    in
+    nn = 0 || loop 0
+  in
+  let has_label src label =
+    let ds = type_diags src in
+    Alcotest.(check bool)
+      (Printf.sprintf "%s: %s" src label)
+      true
+      (List.exists (fun (d : Diagnostic.t) -> contains d.message label) ds)
+  in
+  has_label "import" "'import'";
+  has_label "as" "'as'";
+  has_label "ext" "'ext'";
+  has_label "test" "'test'";
+  has_label "->" "'->'"
+
 (* ── Traits ────────────────────────────────────────────────────────────── *)
 
 let trait_name_missing () = nonempty "no name after '@'" (trait_diags "@5")
@@ -222,6 +249,8 @@ let () =
           Alcotest.test_case "list bad element" `Quick list_bad_element;
           Alcotest.test_case "map missing bracket" `Quick map_missing_bracket;
           Alcotest.test_case "unclosed generic" `Quick unclosed_generic;
+          Alcotest.test_case "non-type keyword labels" `Quick
+            non_type_keyword_labels;
         ] );
       ( "traits",
         [

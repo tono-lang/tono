@@ -159,6 +159,250 @@ let header_key_input_placeholder_rejected () =
       @header(\"X-{id}\", .ep)\n\
       }\n" ^ wire)
 
+let header_key_crlf_rejected () =
+  expect "carriage return/line feed in a header key" [ "TC0044" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
+      @header(\"X\\r\\nEvil\", .ep)\n\
+      }\n" ^ wire)
+
+(* A map or list value (nullable or not) has no defined header/query
+   serialization. *)
+let header_nullable_list_value_rejected () =
+  let src =
+    "pub struct c {\n\
+    \  ep: string @env(\"EP\")\n\
+    \  tags: []string? @with @default(null)\n\
+    \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
+     @header(\"K\", .tags)\n\
+     }\n" ^ wire
+  in
+  Alcotest.(check bool)
+    "nullable list header value" true
+    (List.mem "TC0021" (codes src))
+
+(* @body's ctor mapper rejects a bare non-ref/non-string/non-ctor value
+   (here an int) as a field value. *)
+let body_ctor_field_literal_int_rejected () =
+  expect "int field value in a @body ctor" [ "TC0044" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(input: r): r\n\
+     \    @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
+     \    @body(r { y: 5 })\n\
+      }\n" ^ wire)
+
+(* @body's ctor mapper rejects nesting a second ctor inside a field. *)
+let body_ctor_field_nested_ctor_rejected () =
+  expect "nested ctor in a @body ctor field" [ "TC0044" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(input: r): r\n\
+     \    @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
+     \    @body(r { y: r { y: \"x\" } })\n\
+      }\n" ^ wire)
+
+(* A plain string literal is a legal @body ctor field value. *)
+let body_ctor_field_literal_string_accepted () =
+  expect "string field value in a @body ctor" []
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(input: r): r\n\
+     \    @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
+     \    @body(r { y: \"literal\" })\n\
+      }\n" ^ wire)
+
+(* An entry op's own parameter, referenced directly as the endpoint, satisfies
+   the same typed-ref check an entry field does (the [Entry_scope.RParam]
+   branch, distinct from the [RField] one every other endpoint test here
+   exercises). *)
+let entry_op_param_as_endpoint_accepted () =
+  expect "op's own string param as endpoint" []
+    ("pub struct c {\n\
+     \  op o(ep: string): r @http(method: \"GET\", path: \"/\", endpoint: \
+      .ep)\n\
+      }\n" ^ wire)
+
+(* Same, for a member of the op's own struct-typed parameter (the
+   [Entry_scope.RParam (Member _)] branch, distinct from the whole-param
+   branch above). *)
+let entry_op_param_member_as_endpoint_accepted () =
+  expect "op's own param member as endpoint" []
+    ("struct cfg_type { host: string }\n\
+      pub struct c {\n\
+     \  op o(cfg: cfg_type): r @http(method: \"GET\", path: \"/\", \
+      endpoint: .cfg.host)\n\
+      }\n" ^ wire)
+
+(* An entry op's endpoint: as a literal/template string (not a field
+   reference) is the [value_position_diags] path, clean when it carries no
+   input placeholder. *)
+let entry_op_endpoint_literal_string_accepted () =
+  expect "literal string endpoint" []
+    ("pub struct c {\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: \
+      \"https://fixed.example.com\")\n\
+      }\n" ^ wire)
+
+(* endpoint: rejects a bare literal of any other kind (here, an int). *)
+let entry_op_endpoint_wrong_literal_kind_rejected () =
+  expect "int endpoint literal" [ "TC0043" ]
+    ("pub struct c {\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: 5)\n\
+      }\n" ^ wire)
+
+(* An endpoint: ref that does not resolve at all is already reported once
+   (as an unknown field reference); the endpoint-type check itself stays
+   silent rather than piling on a second diagnostic for the same ref. *)
+let entry_op_endpoint_unknown_ref_reported_once () =
+  expect "unknown endpoint ref" [ "TC0038" ]
+    ("pub struct c {\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .bogus)\n\
+      }\n" ^ wire)
+
+(* Same shape for @timeout: an unresolvable ref draws only the one
+   unknown-field diagnostic, not a second one from the typed-ref check. *)
+let entry_op_timeout_unknown_ref_reported_once () =
+  expect "unknown timeout ref" [ "TC0038" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
+      @timeout(.bogus)\n\
+      }\n" ^ wire)
+
+(* An @http trait with no path: at all (e.g. bound purely by method:) draws
+   no path diagnostics -- there is nothing to check. *)
+let entry_op_http_without_path_draws_no_path_diagnostics () =
+  expect "no path key" []
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", endpoint: .ep)\n\
+      }\n" ^ wire)
+
+(* An entry op's endpoint: as a template carrying the legacy @http-path-only
+   input placeholder ("{name}") is rejected outside the path position. *)
+let entry_op_endpoint_input_placeholder_rejected () =
+  expect "input placeholder in endpoint" [ "TC0044" ]
+    ("pub struct c {\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: \"{oops}\")\n\
+      }\n" ^ wire)
+
+(* An @http path: given as a field reference (rather than a literal/template)
+   is the [value_position_diags] ARef branch, clean on its own. *)
+let entry_op_path_as_ref_accepted () =
+  expect "path as a field reference" []
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: .ep, endpoint: .ep)\n\
+      }\n" ^ wire)
+
+(* path: rejects a bare literal of any other kind (here, an int). *)
+let entry_op_path_wrong_literal_kind_rejected () =
+  expect "int path literal" [ "TC0044" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: 5, endpoint: .ep)\n\
+      }\n" ^ wire)
+
+(* A loose op's own parameter, referenced by @header/@query, resolves the
+   same way [check_loose_op]'s local [resolve] wraps [resolve_param]'s
+   Whole/Member variants for the shared @header/@query shape checks. *)
+let loose_op_param_in_header_accepted () =
+  expect "loose op param in a header value" []
+    "struct w_ty { x: string }\n\
+     op o(w: w_ty): w_ty @http(method: \"GET\", path: \"/\") @header(\"K\", \
+     .w.x)"
+
+(* A loose op's endpoint: with a non-ref value (here a literal) still hits
+   the "belongs to an entry" rejection, distinct from the field-reference
+   case every other loose-op endpoint test here exercises. *)
+let loose_op_endpoint_literal_rejected () =
+  expect "loose op literal endpoint" [ "TC0044" ]
+    "struct w { x: string }\n\
+     op o(w): w @http(method: \"GET\", path: \"/\", endpoint: \"fixed\")"
+
+(* @timeout referencing the loose op's own parameter is legal (the one
+   carve-out a loose op has, mirroring [entry_op_param_as_endpoint_accepted]
+   but for the loose-op path). *)
+let loose_op_param_via_timeout_accepted () =
+  expect "loose op param via timeout" []
+    "struct w_ty { t: duration }\n\
+     op o(w: w_ty): w_ty @http(method: \"GET\", path: \"/\") @timeout(.w.t)"
+
+(* A loose op's @http path: referencing its own parameter goes through
+   [check_path_presence] the same way an entry op's does. *)
+let loose_op_path_presence_checked () =
+  expect "loose op path presence" []
+    "struct w_ty { id: string }\n\
+     op o(w: w_ty): w_ty @http(method: \"GET\", path: \"/x/{.w.id}\")"
+
+(* A loose op's @http with no path: key at all draws no path diagnostics,
+   same as the entry-op case above. *)
+let loose_op_http_without_path_draws_nothing () =
+  expect "loose op no path key" []
+    "struct w_ty { id: string }\n\
+     op o(w: w_ty): w_ty @http(method: \"GET\")"
+
+(* A loose op's @header referencing an unresolvable ref (neither its own
+   param nor an entry field, since loose ops have none) draws the one
+   already-reported diagnostic; the shared kv-shape resolver itself stays
+   silent on the unresolved ref. *)
+let loose_op_header_unresolvable_ref_reported_once () =
+  expect "loose op header unresolvable ref" [ "TC0044" ]
+    "struct w_ty { x: string }\n\
+     op o(w: w_ty): w_ty @http(method: \"GET\", path: \"/\") @header(\"K\", \
+     .bogus)"
+
+(* A loose op's @header referencing the whole parameter (not one of its
+   members) resolves through the [Whole] branch, distinct from the [Member]
+   branch [loose_op_param_in_header_accepted] exercises. *)
+let loose_op_whole_param_in_header_accepted () =
+  expect "loose op whole param in a header value" []
+    "struct w_ty { x: string }\n\
+     op o(w: w_ty): w_ty @http(method: \"GET\", path: \"/\") @header(\"K\", \
+     .w)"
+
+(* @timeout referencing a ref that resolves to neither the loose op's own
+   param nor (loose ops have no fields) anything else draws only the one
+   already-reported unknown-ref diagnostic. *)
+let loose_op_timeout_unresolvable_ref_reported_once () =
+  expect "loose op timeout unresolvable ref" [ "TC0044" ]
+    "struct w_ty { t: duration }\n\
+     op o(w: w_ty): w_ty @http(method: \"GET\", path: \"/\") @timeout(.bogus)"
+
+(* An entry op's @http path: referencing its own parameter (as opposed to an
+   entry field) goes through [resolve_ty]'s [RParam (Whole _)] branch. *)
+let entry_op_path_via_own_param_accepted () =
+  expect "entry op path via own param" []
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(p: string): r @http(method: \"GET\", path: \"/x/{.p}\", \
+      endpoint: .ep)\n\
+      }\n" ^ wire)
+
+(* A @header/@query key given as a field reference (rather than a string
+   literal/template) is a legal key shape on its own. *)
+let entry_op_header_key_as_ref_accepted () =
+  expect "header key as a field reference" []
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
+      @header(.ep, .ep)\n\
+      }\n" ^ wire)
+
+(* Unlike endpoint:, an entry op's @timeout/@retry may only ever name an
+   entry field (the [RParam _] branch always errors here, regardless of the
+   param's own type) -- the op's own parameter has no such carve-out the way
+   it does on a loose op. *)
+let entry_op_own_param_via_timeout_rejected () =
+  expect "op's own param via timeout is always rejected" [ "TC0044" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(t: duration): r @http(method: \"GET\", path: \"/\", endpoint: \
+      .ep) @timeout(.t)\n\
+      }\n" ^ wire)
+
 let unterminated_path_placeholder_diagnosed () =
   let diags =
     check
@@ -347,6 +591,57 @@ let () =
             header_value_template_accepted;
           Alcotest.test_case "header key input placeholder" `Quick
             header_key_input_placeholder_rejected;
+          Alcotest.test_case "header key crlf" `Quick header_key_crlf_rejected;
+          Alcotest.test_case "header nullable list value" `Quick
+            header_nullable_list_value_rejected;
+          Alcotest.test_case "body ctor int literal" `Quick
+            body_ctor_field_literal_int_rejected;
+          Alcotest.test_case "body ctor nested ctor" `Quick
+            body_ctor_field_nested_ctor_rejected;
+          Alcotest.test_case "body ctor string literal" `Quick
+            body_ctor_field_literal_string_accepted;
+          Alcotest.test_case "op param as endpoint" `Quick
+            entry_op_param_as_endpoint_accepted;
+          Alcotest.test_case "op param member as endpoint" `Quick
+            entry_op_param_member_as_endpoint_accepted;
+          Alcotest.test_case "endpoint literal string" `Quick
+            entry_op_endpoint_literal_string_accepted;
+          Alcotest.test_case "endpoint wrong literal kind" `Quick
+            entry_op_endpoint_wrong_literal_kind_rejected;
+          Alcotest.test_case "endpoint unknown ref reported once" `Quick
+            entry_op_endpoint_unknown_ref_reported_once;
+          Alcotest.test_case "timeout unknown ref reported once" `Quick
+            entry_op_timeout_unknown_ref_reported_once;
+          Alcotest.test_case "http without path draws nothing" `Quick
+            entry_op_http_without_path_draws_no_path_diagnostics;
+          Alcotest.test_case "endpoint input placeholder" `Quick
+            entry_op_endpoint_input_placeholder_rejected;
+          Alcotest.test_case "path as a field reference" `Quick
+            entry_op_path_as_ref_accepted;
+          Alcotest.test_case "path wrong literal kind" `Quick
+            entry_op_path_wrong_literal_kind_rejected;
+          Alcotest.test_case "loose op param in header" `Quick
+            loose_op_param_in_header_accepted;
+          Alcotest.test_case "loose op literal endpoint" `Quick
+            loose_op_endpoint_literal_rejected;
+          Alcotest.test_case "loose op param via timeout" `Quick
+            loose_op_param_via_timeout_accepted;
+          Alcotest.test_case "loose op path presence checked" `Quick
+            loose_op_path_presence_checked;
+          Alcotest.test_case "loose op http without path draws nothing" `Quick
+            loose_op_http_without_path_draws_nothing;
+          Alcotest.test_case "loose op header unresolvable ref" `Quick
+            loose_op_header_unresolvable_ref_reported_once;
+          Alcotest.test_case "loose op whole param in header" `Quick
+            loose_op_whole_param_in_header_accepted;
+          Alcotest.test_case "loose op timeout unresolvable ref" `Quick
+            loose_op_timeout_unresolvable_ref_reported_once;
+          Alcotest.test_case "entry op path via own param" `Quick
+            entry_op_path_via_own_param_accepted;
+          Alcotest.test_case "header key as a field reference" `Quick
+            entry_op_header_key_as_ref_accepted;
+          Alcotest.test_case "op param via timeout always rejected" `Quick
+            entry_op_own_param_via_timeout_rejected;
           Alcotest.test_case "unterminated path placeholder" `Quick
             unterminated_path_placeholder_diagnosed;
           Alcotest.test_case "duplicate trait is a warning" `Quick

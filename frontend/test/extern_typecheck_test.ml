@@ -441,6 +441,29 @@ pub struct client {
     "no boundary diagnostics" []
     (List.filter (String.equal "TC0034") (codes src))
 
+(* A yields: position with no returns: at all (not merely one that omits a
+   ref to this position) still has nothing to consume it. *)
+let yields_with_no_returns_at_all_is_dead () =
+  let src =
+    {|ext lib {
+  go: "github.com/x/y"
+
+  struct go_cfg { Host: string }
+
+  extern load(service: string): app_config {
+    go {
+      call: "Load"(service)
+      yields: (cfg: go_cfg)
+    }
+  }
+}
+
+struct app_config { endpoint: string }
+|}
+  in
+  Alcotest.(check bool) "dead position, no returns at all" true
+    (has "TC0072" src)
+
 (* ── Decision K: cross-file closed accounting ────────────────────────────── *)
 
 let split_lib_a =
@@ -545,8 +568,13 @@ let lang_block_without_module () =
     "lang block without module" true
     (List.mem "TC0081" (project_codes [ ("a", split_lib_a); ("b", b) ]))
 
-(* The op's own "impl .field.method(args)" body (RFC-0023) has its own test
-   file, [op_impl_test.ml], split out to stay under the file-size cap. *)
+(* Module-local foreign-name collisions (TC0080's in-file half), the
+   opaque-handle-is-not-generic check (TC0005), and nested call: arg shape
+   coverage have their own test file, [ext_lib_collisions_test.ml], split out
+   to stay under the file-size cap.
+
+   The op's own "impl .field.method(args)" body (RFC-0023) has its own test
+   file, [op_impl_test.ml], for the same reason. *)
 
 (* ── The RFC-0023 appendix example compiles clean ────────────────────────── *)
 
@@ -679,6 +707,8 @@ let () =
       ( "yields-returns-errors",
         [
           Alcotest.test_case "dead yields position" `Quick dead_yields_position;
+          Alcotest.test_case "yields with no returns at all" `Quick
+            yields_with_no_returns_at_all_is_dead;
           Alcotest.test_case "dead error position" `Quick dead_error_position;
           Alcotest.test_case "two error positions" `Quick two_error_positions;
           Alcotest.test_case "returns without yields" `Quick
