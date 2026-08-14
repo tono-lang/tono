@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 
 use crate::ir::{
-    ArmValue, EntryField, Member, Module, Shape, ShapeKind, Source, TemplatePart, Tref,
+    ArmValue, CallArg, EntryField, Member, Module, Shape, ShapeKind, Source, TemplatePart, Tref,
 };
 
 mod checks;
@@ -59,6 +59,10 @@ pub enum FieldShape<'a> {
     Structured(&'a Shape),
     /// A map/list decoded as JSON whole; no per-member layering.
     Json,
+    /// A `= ns.fn(args)` extern-call source. Its presentation is governed by
+    /// the call, not by its target type's own shape (which may be a plain
+    /// struct or an opaque handle with no entry in `module.shapes` at all).
+    Call,
 }
 
 /// The local (snake) name of a shape id (`notes#client` -> `client`).
@@ -122,6 +126,9 @@ impl<'a> EntryModel<'a> {
 
     /// The field shape a target dispatches its resolution idiom on.
     pub fn field_shape(&self, field: &EntryField, module: &'a Module) -> FieldShape<'a> {
+        if field.call.is_some() {
+            return FieldShape::Call;
+        }
         match &field.target {
             Tref::Ref { id, .. } => match module.shapes.iter().find(|s| s.id == *id) {
                 Some(shape) if matches!(shape.kind, ShapeKind::Config { .. }) => {
@@ -644,6 +651,26 @@ fn arg_identifiers(field: &EntryField) -> Vec<String> {
     out
 }
 
+/// Whether every ref a call's arguments read is itself guaranteed, recursing
+/// into a ctor field's values, a list's items, and a nested call's own args.
+/// A `Param`/`Lit` reads nothing, so it is trivially guaranteed.
+fn call_args_guaranteed<'a>(
+    args: &[CallArg],
+    path_guaranteed: &impl Fn(&[String], &mut HashSet<&'a str>) -> bool,
+    visiting: &mut HashSet<&'a str>,
+) -> bool {
+    args.iter().all(|arg| match arg {
+        CallArg::Ref(path) => path_guaranteed(path, visiting),
+        CallArg::Ctor(ctor) => ctor
+            .fields
+            .values()
+            .all(|v| call_args_guaranteed(std::slice::from_ref(v), path_guaranteed, visiting)),
+        CallArg::List(items) => call_args_guaranteed(items, path_guaranteed, visiting),
+        CallArg::Call(call) => call_args_guaranteed(&call.args, path_guaranteed, visiting),
+        CallArg::Param(_) | CallArg::Lit(_) => true,
+    })
+}
+
 impl<'a> EntryModel<'a> {
     /// Whether a field always resolves to a value: an `@arg`, a chain ending in
     /// `@default`, or a derivation whose inputs are all guaranteed. A
@@ -695,6 +722,15 @@ impl<'a> EntryModel<'a> {
                 // track).
                 TemplatePart::Input(_) | TemplatePart::Param(_) => true,
             })
+        } else if let Some(call) = &field.call {
+            // A call always attempts and either resolves or fails construction
+            // outright (a ContractError boundary, not an absence a downstream
+            // chain falls back past); it is guaranteed once every ref it reads
+            // is. An `@with` alongside it (decision G) only adds an injected
+            // shortcut ahead of the same fallback call, so the classification
+            // reduces to the same check either way: whether the call's own
+            // reads are guaranteed. `field.sources` plays no part here.
+            call_args_guaranteed(&call.args, &path_guaranteed, visiting)
         } else {
             sources_guaranteed(&field.sources)
         };

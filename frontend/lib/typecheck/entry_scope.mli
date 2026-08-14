@@ -62,6 +62,10 @@ val member_trait_refs : Ast.member -> (string list * Span.span) list
 
 (* All references a member consumes, match subject and arms included. *)
 val member_refs : Ast.member -> (string list * Span.span) list
+
+(* The field references inside an extern call's own arguments, including
+   ones nested in a ctor field's value. *)
+val ce_refs : Ast.call_expr -> (string list * Span.span) list
 val protocol_trait_names : string list
 
 (* References consumed by an operation's protocol traits. *)

@@ -108,8 +108,8 @@ let check_source_combinations ~in_config (m : Ast.member) : Diagnostic.t list =
               || has "format") ->
         [
           dead ce.ce_span
-            "an extern call is the field's only value; declare sources on \
-             other fields instead";
+            "an extern call is the field's value (with an optional @with \
+             fallback slot); declare other sources on different fields instead";
         ]
     | _ -> []
   in
@@ -466,13 +466,39 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
                      (path_str segs)))
             (member_trait_refs m)
         in
+        (* An extern call's own argument refs: `.request` is rejected outright
+           (it is only built once the request is assembled, at a protocol
+           trait argument, RFC-0023 decision M); any other unresolved ref is
+           the ordinary unknown-field diagnostic. *)
+        let call_arg_diags =
+          match m.mvalue with
+          | Some (Ast.MCall ce) ->
+              List.filter_map
+                (fun (segs, span) ->
+                  match segs with
+                  | "request" :: _ ->
+                      Some
+                        (err Error_codes.field_ref_request span
+                           "'.request' is not available while constructing \
+                            entry fields; it exists only in a protocol trait \
+                            argument, after the request is built")
+                  | _ ->
+                      if Option.is_some (resolve_path ctx members segs) then
+                        None
+                      else
+                        Some
+                          (err Error_codes.field_ref_unknown span
+                             "unknown field '%s'" (path_str segs)))
+                (Entry_scope.ce_refs ce)
+          | Some (Ast.MMatch _) | None -> []
+        in
         check_source_combinations ~in_config:false m
         @ check_env_names m
         @ check_env_ref_types ctx members m
         @ check_transforms m @ check_nullable_field m
         @ check_binds ctx members m
         @ check_member_boundary ctx ~container:Roles.Entry m
-        @ unresolved_ref_diags
+        @ unresolved_ref_diags @ call_arg_diags
         @
         match m.mvalue with
         | Some (Ast.MMatch fm) -> check_match ctx members m fm
@@ -614,6 +640,28 @@ let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
                 m.mname;
             ]
         in
+        let call_arg_diags =
+          match m.mvalue with
+          | Some (Ast.MCall ce) ->
+              List.filter_map
+                (fun (segs, span) ->
+                  match segs with
+                  | "request" :: _ ->
+                      Some
+                        (err Error_codes.field_ref_request span
+                           "'.request' is not available while constructing \
+                            entry fields; it exists only in a protocol trait \
+                            argument, after the request is built")
+                  | _ ->
+                      if Option.is_some (resolve_path ctx members segs) then
+                        None
+                      else
+                        Some
+                          (err Error_codes.field_ref_unknown span
+                             "unknown field '%s'" (path_str segs)))
+                (Entry_scope.ce_refs ce)
+          | Some (Ast.MMatch _) | None -> []
+        in
         check_source_combinations ~in_config:true m
         @ check_env_names m
         @ check_env_ref_types ctx members m
@@ -624,7 +672,7 @@ let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
               err Error_codes.bind_invalid tr.Ast.tspan
                 "@bind only lives at a composition point: an entry field whose \
                  type is a config"))
-        @ unresolved_ref_diags @ sourceless
+        @ unresolved_ref_diags @ call_arg_diags @ sourceless
         @
         match m.mvalue with
         | Some (Ast.MMatch fm) -> check_match ctx members m fm

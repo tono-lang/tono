@@ -193,3 +193,10 @@ let extern_lang_no_module = "TC0081"
 let op_impl_receiver_not_handle = "TC0082"
 let op_impl_unknown_method = "TC0083"
 let op_impl_arity_mismatch = "TC0084"
+
+(* An entry field's `= ns.fn(args)` call reads `.request` in its own
+   argument list. The canonical request only exists at the point a protocol
+   trait argument uses it (RFC-0023 decision M); during field construction it
+   has not been built yet, so this gets its own message rather than reading
+   as an ordinary unknown-field reference. *)
+let field_ref_request = "TC0085"

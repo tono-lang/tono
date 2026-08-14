@@ -1,17 +1,44 @@
 //! The resolution DAG: ordering an entry's fields so every field a step reads
 //! is resolved before it. The edges are sibling references (`@env(.ref)` names,
-//! `@format` placeholders, `match` subjects/arms, `@bind` sources), plus the
-//! reads a composed config makes through its own members.
+//! `@format` placeholders, `match` subjects/arms, `@bind` sources, extern-call
+//! argument refs), plus the reads a composed config makes through its own
+//! members.
 
 use std::collections::HashSet;
 
 use crate::ir::{
-    ArmValue, Bind, EntryField, EnvName, Module, ShapeKind, Source, TemplatePart, Tref,
+    ArmValue, Bind, CallArg, EntryField, EnvName, Module, ShapeKind, Source, TemplatePart, Tref,
 };
 
+/// The sibling-field heads a `= ns.fn(args)` call reads: every `CallArg::Ref`
+/// head, recursing into a ctor field's values and a list's items. A `Param`/
+/// `Lit` reads nothing; a nested call (an arg that is itself a call) recurses
+/// the same way.
+fn call_arg_heads<'a>(arg: &'a CallArg, out: &mut Vec<&'a str>) {
+    match arg {
+        CallArg::Ref(path) => out.extend(path.first().map(String::as_str)),
+        CallArg::Ctor(ctor) => {
+            for v in ctor.fields.values() {
+                call_arg_heads(v, out);
+            }
+        }
+        CallArg::List(items) => {
+            for item in items {
+                call_arg_heads(item, out);
+            }
+        }
+        CallArg::Call(call) => {
+            for a in &call.args {
+                call_arg_heads(a, out);
+            }
+        }
+        CallArg::Param(_) | CallArg::Lit(_) => {}
+    }
+}
+
 /// The sibling entry fields one field's resolution reads directly (its own
-/// `@env(.ref)`, `@format`, `match`, and `@bind` heads), without descending into
-/// a composed config's members.
+/// `@env(.ref)`, `@format`, `match`, `@bind`, and extern-call argument heads),
+/// without descending into a composed config's members.
 fn own_dep_heads(field: &EntryField) -> Vec<&str> {
     fn head(p: &[String]) -> Option<&str> {
         p.first().map(String::as_str)
@@ -41,6 +68,11 @@ fn own_dep_heads(field: &EntryField) -> Vec<&str> {
                 }
                 ArmValue::Lit(_) => {}
             }
+        }
+    }
+    if let Some(call) = &field.call {
+        for arg in &call.args {
+            call_arg_heads(arg, &mut deps);
         }
     }
     for Bind { source, .. } in &field.binds {

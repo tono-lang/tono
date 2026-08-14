@@ -137,3 +137,7 @@ val extern_lang_no_module : string
 val op_impl_receiver_not_handle : string
 val op_impl_unknown_method : string
 val op_impl_arity_mismatch : string
+
+(* `.request` referenced from an entry field's extern-call arguments (see
+   error_codes.ml for the rule). *)
+val field_ref_request : string

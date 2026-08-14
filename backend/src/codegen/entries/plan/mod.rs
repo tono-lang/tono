@@ -13,7 +13,7 @@ use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::extensions::{bound_extensions, BoundExtension};
 use crate::codegen::symbol::SymbolKind;
 use crate::codegen::tree::Decl;
-use crate::ir::{EntryField, EnvName, Module, Prim, Shape, Source, TemplatePart, Tref};
+use crate::ir::{EntryCall, EntryField, EnvName, Module, Prim, Shape, Source, TemplatePart, Tref};
 
 use super::{module_entries, source_stub, EntryModel};
 
@@ -474,6 +474,18 @@ pub trait Emitter {
     }
     fn bind_expr(&self, source: &[String]) -> String {
         self.path_expr(source)
+    }
+    /// The extern-call assignment itself (`dest = ns.fn(args)` in the
+    /// target's own call/casing syntax, RFC-0023). Per-target emission
+    /// (the actual call spelling, arg projection, `yields`/`returns`
+    /// wiring) is a separate task; this default keeps the plan buildable
+    /// and testable without requiring every target `Emitter` to implement
+    /// it yet.
+    fn call_assign(&mut self, field: &EntryField, call: &EntryCall, dest: &str) -> String {
+        let _ = (field, call, dest);
+        unimplemented!(
+            "extern-call emission for {dest} is deferred to per-target codegen (RFC-0023)"
+        )
     }
     fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{member_dest} = {expr}{}", self.term()))
