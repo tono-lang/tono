@@ -302,6 +302,15 @@ impl Emitter for Resolver<'_, '_> {
         }
     }
 
+    fn call_assign(
+        &mut self,
+        field: &EntryField,
+        call: &crate::ir::EntryCall,
+        dest: &str,
+    ) -> String {
+        super::ext_call::call_assign(self, field, call, dest)
+    }
+
     fn config_open(&mut self, _field: &EntryField, shape: &Shape) -> Leaf {
         Leaf(format!(
             "const composed = {{}} as {};",
