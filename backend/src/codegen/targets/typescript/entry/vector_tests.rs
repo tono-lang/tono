@@ -6,7 +6,10 @@
 //! exported per-operation swapper ([`super::impl_op::swap_fn_name`]). A test
 //! whose call has no stub runs against the real dependency, so it lands in the
 //! live file, gated behind `TONO_LIVE_TESTS=1` so it stays out of a default
-//! `vitest` run; a construction-only test is hermetic by nature.
+//! `vitest` run; a construction-only test is hermetic by nature. A call whose
+//! own dependency is neither `.http` nor `.impl` reaches an extern handle
+//! method through the op's own `impl` body; only Go renders that call today,
+//! so such a test is skipped here rather than mis-rendered.
 //!
 //! Unlike Go's shared package scope, each test file is its own ES module, so
 //! it imports the surface it exercises. Each test body is self-contained
@@ -69,14 +72,21 @@ pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFi
                 bound: &bound,
                 test,
             };
-            if test.hermetic {
-                hermetic_cases.push(indent(
-                    &hermetic_case(&ctx, &mut hermetic_uses_env, &mut hermetic_refs),
-                    "  ",
-                ));
-            } else {
+            if !test.hermetic {
                 live_cases.push(indent(&live_case(&ctx, &mut live_refs), "  "));
+                continue;
             }
+            // A call whose own dependency has no classic stub (neither Http
+            // nor Impl) reaches an extern handle method through the op's
+            // `impl` body; no target but Go renders that call today, so the
+            // test is skipped here rather than mis-rendered.
+            if test.call.is_some() && test.stub.is_none() {
+                continue;
+            }
+            hermetic_cases.push(indent(
+                &hermetic_case(&ctx, &mut hermetic_uses_env, &mut hermetic_refs),
+                "  ",
+            ));
         }
         // The env const precedes the cases: a `const` does not hoist, and a
         // describe argument evaluates at module load.

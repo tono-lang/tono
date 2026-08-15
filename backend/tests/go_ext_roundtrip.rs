@@ -152,7 +152,7 @@ fn a_field_the_library_does_not_have_breaks_the_go_build() {
     );
 }
 
-/// The RFC-0023 appendix's own two declared tests run and pass: the
+/// The appendix fixture's own two declared tests run and pass: the
 /// generated hermetic test file swaps the foreign handle field's static type
 /// for tono's own interface, fakes `companybus.publisher.send` through it,
 /// and overrides the `companyconfig.load`/`companybus.connect` construction

@@ -466,7 +466,7 @@ fn config_load_stub() -> ExternStub {
     }
 }
 
-/// The two declared tests the RFC-0023 appendix itself specifies: a
+/// The two declared tests the appendix fixture itself specifies: a
 /// construction-only test stubbing the free `companyconfig.load` call, and a
 /// call test additionally stubbing the `companybus.publisher.send` handle
 /// method the `publish` op's own `impl` body reaches. Both are hermetic: no

@@ -47,7 +47,7 @@
 //! nothing -- is freely assignable to it (a function declaring fewer
 //! parameters than its target type is always assignable in TypeScript). The
 //! stub's own answer is validated against the extern's declared *logical*
-//! return type at the frontend (RFC-0023 decision I), which is exactly what
+//! return type at the frontend, which is exactly what
 //! this seam's own return type is: swapping it in skips the real call, the
 //! `yields`/`returns` projection, and the error mapping in one step, rather
 //! than trying to fake a raw foreign result the projection would have to

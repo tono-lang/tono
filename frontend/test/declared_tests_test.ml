@@ -354,8 +354,8 @@ let binding_cases =
 (* ── "ext"/"extern" FFI stub forms ───────────────────────────────────────
    A free function ("companyconfig.load") and an opaque-handle method
    ("companybus.publisher.send", qualified by its type) declared alongside
-   the ordinary base fixture, so a declared test can stub either the RFC-0023
-   way. [overloaded] (already declared by [base] for [save_note]'s error) is
+   the ordinary base fixture, so a declared test can stub either shape.
+   [overloaded] (already declared by [base] for [save_note]'s error) is
    reused as the method's declared error sentinel. *)
 let ext_base =
   with_base
