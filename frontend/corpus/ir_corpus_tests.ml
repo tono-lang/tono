@@ -198,6 +198,7 @@ let declared_tests : Ir.model =
               ];
           };
         ];
+      t_extern_stubs = [];
       t_calls =
         [
           {
@@ -279,6 +280,7 @@ let declared_tests : Ir.model =
               ];
           };
         ];
+      t_extern_stubs = [];
       t_calls =
         [
           {
@@ -321,6 +323,7 @@ let declared_tests : Ir.model =
       t_constructions =
         [ { tc_binding = "c"; tc_entry = "client"; tc_values = [] } ];
       t_stubs = [];
+      t_extern_stubs = [];
       t_calls =
         [
           {

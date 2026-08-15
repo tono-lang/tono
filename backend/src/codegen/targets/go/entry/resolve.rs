@@ -6,6 +6,8 @@
 //! `if v, ok := os.LookupEnv` env boundary, the typed `strconv`/`json.Decoder`
 //! parses, the branded-string casts) that no other target shares.
 
+use std::collections::HashMap;
+
 use super::*;
 use crate::codegen::entries::plan::{self, Cond, Emitter, Leaf};
 
@@ -25,6 +27,33 @@ pub(super) struct Resolver<'a, 'b> {
     pub(super) body: &'b mut String,
     pub(super) resolve_fns: &'b mut Vec<Decl>,
     pub(super) multi: bool,
+    /// The declared-test seam's per-field overrides, keyed by field name: a
+    /// non-nil override skips the field's real `extern` construction call
+    /// entirely, which is what lets a hermetic declared test avoid the real
+    /// library. Empty outside the test-seam constructor variant.
+    pub(super) overrides: &'b HashMap<String, FieldOverride>,
+}
+
+/// The seam constructor's override parameter for one field with its own
+/// `extern` construction call: `pointer` is a plain value field's override
+/// (`*T`, nil meaning "call the real thing"), and a foreign-handle field's
+/// override carries the handle's own interface type directly (already
+/// nilable, so no extra pointer indirection).
+#[derive(Clone)]
+pub(super) struct FieldOverride {
+    pub(super) var: String,
+    pub(super) pointer: bool,
+}
+
+impl FieldOverride {
+    /// The Go expression the override resolves to once its nil check passes.
+    fn value_expr(&self) -> String {
+        if self.pointer {
+            format!("*{}", self.var)
+        } else {
+            self.var.clone()
+        }
+    }
 }
 
 impl Resolver<'_, '_> {
@@ -655,7 +684,21 @@ impl Emitter for Resolver<'_, '_> {
         call: &crate::ir::EntryCall,
         dest: &str,
     ) -> String {
-        super::ext::call_assign(self, field, call, dest)
+        // A declared test that stubs this field's own extern call names an
+        // override parameter the seam constructor carries; a non-nil value
+        // there skips the real call outright, which is what keeps the
+        // hermetic build free of a direct, unconditional reference to it.
+        match self.overrides.get(&field.name).cloned() {
+            Some(ov) => {
+                let value = ov.value_expr();
+                let real = super::ext::call_assign(self, field, call, dest);
+                format!(
+                    "if {var} != nil {{\n\t{dest} = {value}\n}} else {{\n{real}}}\n",
+                    var = ov.var
+                )
+            }
+            None => super::ext::call_assign(self, field, call, dest),
+        }
     }
 
     fn require_numeric(&mut self, head: &str, _target: &Tref) -> String {

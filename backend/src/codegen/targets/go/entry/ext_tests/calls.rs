@@ -29,25 +29,47 @@ fn the_appendix_module_wires_the_call_handle_and_impl_call() {
     assert!(text.contains("s.Config = AppConfig{"));
     assert!(text.contains("Token: configCfg.Credentials.Secret"));
 
-    // The handle field is unexported, its With* option assigns without a
-    // dereference (the carrier already holds the pointer type), and the
-    // construction fallback wraps the call.
-    assert!(text.contains("\tbus *companybus.Publisher\n"));
+    // The handle field is unexported and, in its own storage position
+    // (Settings/carrier), spelled as tono's own generated interface rather
+    // than the real package's concrete type, so a hermetic declared test can
+    // fake it. The With* option keeps the concrete type for consumer
+    // ergonomics, wrapping the real value in the adapter that lets it
+    // satisfy the interface (its methods return the foreign package's own
+    // types, not the interface's logical ones), and the construction
+    // fallback wraps the real call the same way.
+    assert!(text.contains("\tbus companybusPublisherIface\n"));
     assert!(!text.contains("\tBus "));
+    assert!(!text.contains("\tbus *companybus.Publisher\n"));
+    assert!(text.contains("type companybusPublisherIface interface {"));
+    assert!(text.contains("Send(topic string, body string) (Ack, error)"));
+    assert!(text.contains("type companybusPublisherIfaceAdapter struct {"));
+    assert!(text.contains("real *companybus.Publisher"));
     assert!(text.contains("func WithBus(v *companybus.Publisher) ClientOption {"));
-    assert!(text.contains("w.bus = v"));
+    assert!(text.contains("w.bus = &companybusPublisherIfaceAdapter{real: v}"));
     assert!(text.contains("if w.bus != nil {"));
     assert!(text.contains("s.bus = w.bus"));
     assert!(text.contains(":= companybus.Connect(s.Config.Endpoint, s.Config.Token)"));
+    assert!(text.contains("s.bus = &companybusPublisherIfaceAdapter{real: busResult}"));
 
-    // The op's own impl call: reads the receiver, calls the method, maps
-    // the declared sentinel, and projects the return.
+    // The adapter method: the real call, the declared sentinel mapped to its
+    // typed error, and the return projected into the logical shape — all the
+    // specificity a foreign call needs, run exactly once, behind the
+    // interface.
+    assert!(text.contains(
+        "func (a *companybusPublisherIfaceAdapter) Send(topic string, body string) (Ack, error) {"
+    ));
+    assert!(text.contains(":= a.real.Send(topic, body)"));
+    assert!(text.contains("errors.Is(sendErr, companybus.ErrBusy)"));
+    assert!(text.contains("&Overloaded{Message: sendErr.Error()}"));
+    assert!(text.contains("ContractName: \"companybus.publisher.send\""));
+    assert!(text.contains("return Ack{ID: sendA.ID, Accepted: sendA.OK}, nil"));
+
+    // The op's own impl call: a plain call through the interface, no
+    // foreign-specific handling left to repeat (the adapter already ran it).
     assert!(text.contains("c.settings.bus"));
     assert!(text.contains(".Send(\"notes\", input.Body)"));
-    assert!(text.contains("errors.Is(publishErr, companybus.ErrBusy)"));
-    assert!(text.contains("&Overloaded{Message: publishErr.Error()}"));
-    assert!(text.contains("ContractName: \"companybus.publisher.send\""));
-    assert!(text.contains("return Ack{"));
+    assert!(text.contains("if publishErr != nil {\n\treturn zero, publishErr\n}"));
+    assert!(text.contains("return publishOut, nil"));
 }
 
 // --- defensive fallbacks, exercised directly ---------------------------
@@ -107,6 +129,7 @@ fn call_assign_for(module: &Module, config_field: &EntryField) -> String {
     let entries = module_entries(module);
     let entry = &entries[0];
     let config = go_casing();
+    let overrides = std::collections::HashMap::new();
     let mut r = Resolver {
         entry,
         module,
@@ -116,6 +139,7 @@ fn call_assign_for(module: &Module, config_field: &EntryField) -> String {
         body: &mut String::new(),
         resolve_fns: &mut Vec::new(),
         multi: false,
+        overrides: &overrides,
     };
     let call = config_field.call.clone().unwrap();
     ext::call_assign(&mut r, config_field, &call, "s.Config")

@@ -310,14 +310,12 @@ and test_pattern_field =
   | TpfAny of Span.span
   | TpfAbsent of Span.span
 
-(* [stub c.get_user.http]: the construction binding, the operation, and the
-   declared dependency the stub replaces. *)
-type stub_target = {
-  st_binding : string;
-  st_op : string;
-  st_dep : string;
-  st_span : Span.span;
-}
+(* [stub c.get_user.http]: a dotted path of 2 or 3 identifiers. Typecheck
+   disambiguates the shape: a 3-segment path whose first segment names a
+   construction binding is the client/op/dep form; otherwise the path names
+   an "ext" library free function (2 segments) or opaque-handle method (3
+   segments, qualified by the type name). *)
+type stub_target = { st_path : (string * Span.span) list; st_span : Span.span }
 
 type test_item =
   | TiConstruct of {

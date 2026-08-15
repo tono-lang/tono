@@ -116,6 +116,7 @@ fn resolve_body(
         body: &mut body,
         resolve_fns: &mut resolve_fns,
         multi,
+        n,
     };
     // The constructor is nested one level deeper here than in Go's flat
     // function (a class body wraps it), so the plan renders one indent unit
@@ -146,6 +147,7 @@ fn requires_block(
     config: &CasingConfig,
     helpers: &mut Helpers,
     multi: bool,
+    n: &Names,
     resolve_fns: &mut Vec<Decl>,
     body: &mut String,
 ) {
@@ -157,6 +159,7 @@ fn requires_block(
         body,
         resolve_fns,
         multi,
+        n,
     };
     let requires = plan::build_requires(entry, module, &mut r);
     let text = plan::render(&requires, 2, &r);
@@ -615,6 +618,7 @@ pub(super) fn class_decl(
         config,
         helpers,
         multi,
+        n,
         &mut resolve_fns,
         &mut body,
     );

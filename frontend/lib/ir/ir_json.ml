@@ -71,8 +71,11 @@
    argument's "field"/"param"/"lit"/"ctor" tags, plus the bare string
    "request" for ".request", the canonical already-assembled request --
    legal only in this position, never during entry construction (that side
-   is rejected at typecheck). *)
-let current_ir_version = 17
+   is rejected at typecheck).
+   v18 added a test's "extern_stubs" table: a declared test can now stub an
+   "ext"/"extern" FFI free function or opaque-handle method, alongside the
+   existing client/op "stubs" table. *)
+let current_ir_version = 18
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

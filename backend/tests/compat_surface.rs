@@ -129,6 +129,7 @@ fn declared_tests_are_not_surface() {
         name: "charge decodes".into(),
         constructions: vec![],
         stubs: vec![],
+        extern_stubs: vec![],
         calls: vec![],
         expects: vec![],
     }];

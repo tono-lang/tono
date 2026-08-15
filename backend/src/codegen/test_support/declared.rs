@@ -182,6 +182,7 @@ impl DeclaredTestBed {
             name: name.into(),
             constructions: vec![self.construction()],
             stubs: vec![self.http_stub(None)],
+            extern_stubs: vec![],
             calls: vec![self.call()],
             expects: vec![TestExpect::Outcome {
                 subject: "saved".into(),
@@ -347,6 +348,7 @@ impl DeclaredTestBed {
             name: "traces the request".into(),
             constructions: vec![self.construction()],
             stubs: vec![self.http_stub(Some("s"))],
+            extern_stubs: vec![],
             calls: vec![self.call()],
             expects: vec![TestExpect::Requests {
                 subject: "s".into(),
@@ -378,6 +380,7 @@ impl DeclaredTestBed {
                 // and any further call repeats the last.
                 answers: vec![self.http_answer(500), self.http_answer(200)],
             }],
+            extern_stubs: vec![],
             calls: vec![self.call()],
             expects: vec![
                 TestExpect::Outcome {
@@ -406,6 +409,7 @@ impl DeclaredTestBed {
                     value: self.input.clone(),
                 }],
             }],
+            extern_stubs: vec![],
             calls: vec![self.call()],
             expects: vec![self.echo_expect()],
         };

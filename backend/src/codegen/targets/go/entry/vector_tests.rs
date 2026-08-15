@@ -23,10 +23,13 @@ use crate::codegen::group::Group;
 use crate::codegen::ops::{error_names, op_io};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::{Decl, ModuleFile};
-use crate::ir::{EnvName, HttpAnswer, Module, Source, StubAnswer, StubDep, TestPattern, Tref};
+use crate::ir::{
+    EnvName, ExtLib, ExternStubTarget, HttpAnswer, Module, OpaqueType, Source, StubAnswer, StubDep,
+    TestPattern, Tref,
+};
 
 use super::surface::{method_name, with_option_name};
-use super::{go_type, import, pascal, push_type_symbols, support_symbol, EntryModel};
+use super::{camel, ext, go_type, import, pascal, push_type_symbols, support_symbol, EntryModel};
 
 #[path = "vector_expects.rs"]
 mod expects;
@@ -70,7 +73,7 @@ pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFi
                 test,
             };
             if test.hermetic {
-                hermetic.push(hermetic_test_decl(&ctx, &mut first_unset));
+                hermetic.extend(hermetic_test_decl(&ctx, &mut first_unset));
             } else {
                 live.push(live_test_decl(&ctx));
             }
@@ -539,15 +542,21 @@ fn invoke_block(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
 /// One hermetic test: pin the environment, install the declared stub, build
 /// the client through the real construction path, run the call, assert. A
 /// construction-only test just constructs and asserts its outcome.
-fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Decl {
+fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Vec<Decl> {
     let mut refs = vec![import("testing", "testing")];
     let mut body = String::new();
+    let mut extra_decls = Vec::new();
     body.push_str(&env_pinning(ctx, &mut refs, first_unset));
     let (args, opts) = construction_args(ctx, &mut refs);
+    let (override_pre, override_args) = extern_override_args(ctx, &mut refs, &mut extra_decls);
+    body.push_str(&override_pre);
+    // Go requires the seam's variadic `opts ...Option` parameter last, so a
+    // field override (declared between the positional args and it) always
+    // sits ahead of `opts` in the call, matching how the seam declares them.
+    let overrides_joined = override_args.join(", ");
     if ctx.test.call.is_some() {
-        let stub = ctx.test.stub.expect("a hermetic call has its stub");
-        let construct = match stub.dep {
-            StubDep::Http => {
+        let construct = match ctx.test.stub {
+            Some(stub) if stub.dep == StubDep::Http => {
                 refs.push(support_symbol("HTTPRequest"));
                 refs.push(support_symbol("HTTPResponse"));
                 refs.push(import("context", "context"));
@@ -563,17 +572,35 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Decl {
                 format!(
                     "\tc, err := {seam}({call})\n",
                     seam = super::constructor::seam_fn_name(&ctx.n.new_fn),
-                    call = join_args("transport", &[&args, &opts]),
+                    call = join_args("transport", &[&args, &overrides_joined, &opts]),
                 )
             }
-            StubDep::Impl => {
+            Some(stub) => {
+                debug_assert_eq!(stub.dep, StubDep::Impl);
                 body.push_str(&impl_stub_block(ctx, &stub.answers, &mut refs));
-                format!(
-                    "\tc, err := {new_fn}({call})\n",
-                    new_fn = ctx.n.new_fn,
-                    call = join_args(&args, &[&opts]),
-                )
+                if override_args.is_empty() {
+                    format!(
+                        "\tc, err := {new_fn}({call})\n",
+                        new_fn = ctx.n.new_fn,
+                        call = join_args(&args, &[&opts]),
+                    )
+                } else {
+                    format!(
+                        "\tc, err := {seam}({call})\n",
+                        seam = super::constructor::seam_fn_name(&ctx.n.new_fn),
+                        call = join_args("nil", &[&args, &overrides_joined, &opts]),
+                    )
+                }
             }
+            // Every extern call reached during a call-carrying test is
+            // stubbed (planning validation guarantees it), so a call whose
+            // dependency is not itself stubbed but reaches only overridden
+            // extern calls still runs through the seam.
+            None => format!(
+                "\tc, err := {seam}({call})\n",
+                seam = super::constructor::seam_fn_name(&ctx.n.new_fn),
+                call = join_args("nil", &[&args, &overrides_joined, &opts]),
+            ),
         };
         body.push_str(&construct);
         body.push_str("\tif err != nil {\n\t\tt.Fatalf(\"construct client: %v\", err)\n\t}\n");
@@ -582,7 +609,7 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Decl {
         if let Some(patterns) = ctx.test.requests {
             body.push_str(&request_asserts(patterns, &mut refs));
         }
-    } else {
+    } else if override_args.is_empty() {
         // Construction-only: the outcome pattern reads the construction error.
         body.push_str(&format!(
             "\t_, err := {new_fn}({call})\n",
@@ -590,15 +617,28 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Decl {
             call = join_args(&args, &[&opts]),
         ));
         body.push_str(&outcome_asserts(ctx, &mut refs));
+    } else {
+        body.push_str(&format!(
+            "\t_, err := {seam}({call})\n",
+            seam = super::constructor::seam_fn_name(&ctx.n.new_fn),
+            call = join_args("nil", &[&args, &overrides_joined, &opts]),
+        ));
+        body.push_str(&outcome_asserts(ctx, &mut refs));
     }
-    Decl::raw_with(
+    let mut decls = vec![Decl::raw_with(
         format!(
             "func {name}(t *testing.T) {{\n{body}}}",
             name = test_fn_name(ctx),
         ),
         refs,
-    )
+    )];
+    decls.extend(extra_decls);
+    decls
 }
+
+#[path = "vector_extern.rs"]
+mod vector_extern;
+use vector_extern::extern_override_args;
 
 /// One live test: no stub and no pinned environment; construction reads the
 /// ambient env (real credentials), and the same expectations verify that the

@@ -9,18 +9,24 @@
 //! was checked.
 //!
 //! The current generation phase covers a single construction, at most one
-//! stubbed dependency, and at most one call per test. Anything beyond that
-//! (multi-call flows, dataflow between bindings) is a *loud* generation error,
-//! never a silently skipped case.
+//! call-scoped stubbed dependency (`Http`/`Impl`), any number of `extern`
+//! stubs, and at most one call per test. Anything beyond that (multi-call
+//! flows, dataflow between bindings) is a *loud* generation error, never a
+//! silently skipped case.
 
 use std::collections::BTreeSet;
 
 use serde_json::Value;
 
 use crate::ir::{
-    ExtKind, FieldPattern, Model, Module, RequestPattern, Shape, ShapeKind, ShapePattern,
-    StubAnswer, StubDep, TestCall, TestConstruction, TestDecl, TestExpect, TestPattern, TestStub,
+    ExtKind, ExternStub, ExternStubTarget, FieldPattern, Model, Module, RequestPattern, Shape,
+    ShapeKind, ShapePattern, StubAnswer, StubDep, TestCall, TestConstruction, TestDecl, TestExpect,
+    TestPattern, TestStub, Tref,
 };
+
+#[path = "declared_tests_extern.rs"]
+mod extern_coverage;
+use extern_coverage::{validate_extern_coverage, validate_extern_stub};
 
 /// The bare operation name of an entry op id (`notes#client.fetch_note` ->
 /// `fetch_note`).
@@ -40,6 +46,9 @@ pub struct PlannedTest<'a> {
     pub construction: &'a TestConstruction,
     /// The stub covering the call, when the test pins the dependency.
     pub stub: Option<&'a TestStub>,
+    /// Stubs for `extern` FFI calls reachable during construction or the
+    /// call, keyed by target on match, not tied to one client/op.
+    pub extern_stubs: Vec<&'a ExternStub>,
     pub call: Option<&'a TestCall>,
     /// The operation shape of the call, resolved in the entry.
     pub op: Option<&'a Shape>,
@@ -50,7 +59,9 @@ pub struct PlannedTest<'a> {
     /// matches all recorded requests, in order, with equal length.
     pub requests: Option<&'a [RequestPattern]>,
     /// A call with its dependency stubbed is hermetic; one against the real
-    /// dependency is live; a construction-only test is hermetic.
+    /// dependency is live; a construction-only test is hermetic. A test that
+    /// reaches an unstubbed `extern` call anywhere in its construction/call
+    /// path is never hermetic (rejected at plan time instead).
     pub hermetic: bool,
 }
 
@@ -210,17 +221,40 @@ fn plan_test<'a>(module: &'a Module, test: &'a TestDecl) -> Result<PlannedTest<'
         validate_stub(module, entry, construction, call, stub)?;
     }
 
+    let extern_stubs: Vec<&ExternStub> = test.extern_stubs.iter().collect();
+    for extern_stub in &extern_stubs {
+        validate_extern_stub(module, extern_stub)?;
+    }
+    validate_extern_coverage(module, entry, op, &extern_stubs)?;
+
     let (outcome, requests) = resolve_expects(module, construction, call, op, stub, test)?;
 
     Ok(PlannedTest {
         name: &test.name,
         construction,
         stub,
+        extern_stubs,
         call,
         op,
         outcome,
         requests,
-        hermetic: call.is_none() || stub.is_some(),
+        // A call with a pinned Http/Impl stub is hermetic as before. A call
+        // whose own body is entirely an `extern` handle-method call (no
+        // wire binding, no bespoke `ext impl`) carries no dependency beyond
+        // what `validate_extern_coverage` already required covered above,
+        // so it is hermetic on that coverage alone, with no separate
+        // call-scoped stub to pin.
+        hermetic: call.is_none()
+            || stub.is_some()
+            || op.is_some_and(|op| {
+                matches!(
+                    &op.kind,
+                    ShapeKind::Operation {
+                        impl_call: Some(_),
+                        ..
+                    }
+                )
+            }),
     })
 }
 

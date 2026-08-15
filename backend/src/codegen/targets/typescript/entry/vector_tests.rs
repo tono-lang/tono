@@ -436,6 +436,76 @@ fn invoke_and_expect(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
     text
 }
 
+/// The canned answer of a free extern-fn stub, as the value the seam's swap
+/// installs: a plain arrow returning the decoded value (the extern's
+/// declared `returns:`-projected logical value, or the field's own declared
+/// type -- both stub kinds only ever answer a single `Value`, matching
+/// `validate_extern_stub`'s own restriction to `StubAnswer::Value` for a
+/// free function).
+fn extern_stub_answer_expr(
+    ctx: &TestCtx<'_>,
+    target: &Tref,
+    stub: &crate::ir::ExternStub,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    let value = match stub.answers.first() {
+        Some(StubAnswer::Value { value }) => value,
+        // Rejected by `validate_extern_stub`: a free-fn stub answers a plain
+        // value only.
+        _ => &serde_json::Value::Null,
+    };
+    format!(
+        "async () => {}",
+        decoded_value_expr(target, value, refs, ctx.module)
+    )
+}
+
+/// Every free extern-fn stub this test declares, wrapped as nested
+/// swap/restore pairs around `body`: `entries::plan` and
+/// `declared_tests::reachable_externs` guarantee every extern call the
+/// construction path reaches is covered by exactly one of these before
+/// generation reaches here, so this only has to spell the swap itself, not
+/// validate coverage again. A handle-method stub (`ExternStubTarget::Method`)
+/// has nothing to wrap yet: no target's codegen consumes an op's own
+/// `impl_call` body (see `ir.rs`'s note by `OpImplCall`), so a test that
+/// reaches one is unreachable through this target today.
+fn wrap_extern_stubs(ctx: &TestCtx<'_>, body: String, refs: &mut Vec<Symbol>) -> String {
+    let mut wrapped = body;
+    for stub in &ctx.test.extern_stubs {
+        let crate::ir::ExternStubTarget::Free { lib, fn_ } = &stub.target else {
+            panic!(
+                "a handle-method extern stub was planned for a TypeScript test, but no TypeScript \
+                 codegen consumes an op's own impl_call body yet"
+            );
+        };
+        let field = ctx
+            .entry
+            .fields
+            .iter()
+            .find(|f| {
+                f.call
+                    .as_ref()
+                    .is_some_and(|c| &c.ns == lib && &c.func == fn_)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "extern stub on '{lib}.{fn_}' names no field of entry '{}'",
+                    ctx.entry.name
+                )
+            });
+        let swap = super::ext_call::ext_swap_fn_name(ctx.n, field);
+        refs.push(module_symbol(&swap, ctx.module));
+        let answer = extern_stub_answer_expr(ctx, &field.target, stub, refs);
+        wrapped = format!(
+            "const prev{Field} = {swap}({answer});\n\
+             try {{\n{inner}}} finally {{\n  {swap}(prev{Field});\n}}\n",
+            Field = super::pascal(&field.name),
+            inner = indent(&wrapped, "  "),
+        );
+    }
+    wrapped
+}
+
 /// One hermetic test: pin the environment, install the declared stub, build
 /// the client through the real construction path, run the call, assert. A
 /// construction-only test just constructs and asserts its outcome.
@@ -535,6 +605,7 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
             ),
         }
     };
+    let body = wrap_extern_stubs(ctx, body, refs);
     let pins = env_pins(ctx);
     let inner = if pins.is_empty() {
         indent(&body, "  ")

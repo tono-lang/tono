@@ -233,12 +233,7 @@ and test_pattern_field =
   | TpfAny of Span.span
   | TpfAbsent of Span.span
 
-type stub_target = {
-  st_binding : string;
-  st_op : string;
-  st_dep : string;
-  st_span : Span.span;
-}
+type stub_target = { st_path : (string * Span.span) list; st_span : Span.span }
 
 type test_item =
   | TiConstruct of {

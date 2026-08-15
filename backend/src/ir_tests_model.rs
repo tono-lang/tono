@@ -21,6 +21,8 @@ pub struct TestDecl {
     #[serde(default)]
     pub stubs: Vec<TestStub>,
     #[serde(default)]
+    pub extern_stubs: Vec<ExternStub>,
+    #[serde(default)]
     pub calls: Vec<TestCall>,
     #[serde(default)]
     pub expects: Vec<TestExpect>,
@@ -57,6 +59,38 @@ pub struct TestStub {
     pub dep: StubDep,
     #[serde(default)]
     pub answers: Vec<StubAnswer>,
+}
+
+/// A stub for an `extern` FFI call, not tied to one client/op: it applies
+/// wherever the target free function or handle method is reached during the
+/// test's construction/call path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExternStub {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+    pub target: ExternStubTarget,
+    #[serde(default)]
+    pub answers: Vec<StubAnswer>,
+}
+
+/// A free extern function (`lib.fn`) or an opaque handle's method
+/// (`lib.type.method`). Distinguished on the wire by the presence of the
+/// `method` key alone (no tag), matching `ir_json_tests.ml`'s
+/// `decode_extern_target`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExternStubTarget {
+    Method {
+        lib: String,
+        #[serde(rename = "type")]
+        ty: String,
+        method: String,
+    },
+    Free {
+        lib: String,
+        #[serde(rename = "fn")]
+        fn_: String,
+    },
 }
 
 /// One canned answer. An HTTP answer is a bare status/headers/body object; an

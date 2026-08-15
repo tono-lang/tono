@@ -3,7 +3,7 @@
 //! module path (to import from) and the symbol (to call) split apart, plus a way
 //! to find the binding a given target language provides.
 
-use crate::ir::{ExtKind, Model, Module, Shape, ShapeKind, Signature};
+use crate::ir::{ExtKind, ExternStubTarget, Model, Module, Shape, ShapeKind, Signature};
 
 /// The four closed lifecycle hook slots, in invocation order.
 pub const HOOK_SLOTS: [&str; 4] = [
@@ -138,6 +138,36 @@ pub fn validate_extensions(model: &Model) -> Result<(), String> {
                 ExtKind::Hook | ExtKind::Constraint => {}
             }
         }
+        for lib in &module.ext_libs {
+            for extern_decl in &lib.externs {
+                if extern_decl.langs.len() > 1
+                    && !extern_covered_by_test(module, &lib.name, None, &extern_decl.name)
+                {
+                    return Err(extern_coverage_error(
+                        module,
+                        &lib.name,
+                        None,
+                        &extern_decl.name,
+                        &extern_decl.langs,
+                    ));
+                }
+            }
+            for ty in &lib.types {
+                for method in &ty.methods {
+                    if method.langs.len() > 1
+                        && !extern_covered_by_test(module, &lib.name, Some(&ty.name), &method.name)
+                    {
+                        return Err(extern_coverage_error(
+                            module,
+                            &lib.name,
+                            Some(&ty.name),
+                            &method.name,
+                            &method.langs,
+                        ));
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -158,6 +188,56 @@ fn impl_covered_by_test(module: &Module, ext: &crate::ir::Extension) -> bool {
             ext.name == call.op || qualified.as_deref() == Some(ext.name.as_str())
         })
     })
+}
+
+/// Whether any declared test of the module stubs this extern integration: a
+/// free function (`ty` absent) or an opaque-type method (`ty` present),
+/// matched by `(lib, fn)` or `(lib, ty, method)`. An extern stub is not tied
+/// to one client/op the way an `Http`/`Impl` stub is, so this scans every
+/// test's `extern_stubs`, not just the one covering the operation.
+fn extern_covered_by_test(module: &Module, lib: &str, ty: Option<&str>, name: &str) -> bool {
+    module.tests.iter().any(|test| {
+        test.extern_stubs
+            .iter()
+            .any(|stub| match (&stub.target, ty) {
+                (ExternStubTarget::Free { lib: l, fn_ }, None) => l == lib && fn_ == name,
+                (
+                    ExternStubTarget::Method {
+                        lib: l,
+                        ty: t,
+                        method,
+                    },
+                    Some(ty),
+                ) => l == lib && t == ty && method == name,
+                _ => false,
+            })
+    })
+}
+
+/// Renders the `lib.fn` or `lib.ty.method` display name and the multi-
+/// language error naming both, in the same posture as the `Impl` gate.
+fn extern_coverage_error(
+    module: &Module,
+    lib: &str,
+    ty: Option<&str>,
+    name: &str,
+    langs: &[crate::ir::ExternLang],
+) -> String {
+    let display = match ty {
+        Some(ty) => format!("{lib}.{ty}.{name}"),
+        None => format!("{lib}.{name}"),
+    };
+    let lang_list = langs
+        .iter()
+        .map(|l| l.lang.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "extern '{display}' in module '{}' is bound in more than one language ({lang_list}) \
+         but no declared test stubs it; add a `test` block with a `stub {display}: ...` that \
+         covers it",
+        module.name
+    )
 }
 
 /// The implementation count, per target. The frontend proves every entry
@@ -198,7 +278,10 @@ pub fn validate_impl_coverage(model: &Model, langs: &[&[&str]]) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Extension, Prim, Signature, Tref};
+    use crate::ir::{
+        ExtLib, Extension, ExternDecl, ExternLang, ExternStub, OpaqueType, Prim, Signature,
+        StubAnswer, TestDecl, Tref,
+    };
 
     #[test]
     fn parse_binding_splits_on_the_hash() {
@@ -333,6 +416,7 @@ mod tests {
                 values: Default::default(),
             }],
             stubs: vec![],
+            extern_stubs: vec![],
             calls: vec![crate::ir::TestCall {
                 binding: "got".into(),
                 client: "c".into(),
@@ -424,5 +508,136 @@ mod tests {
             binding("luhn", ExtKind::Constraint, "ext/ts/l.ts#h"),
         ]);
         assert!(validate_extensions(&model).is_ok());
+    }
+
+    /// An `ext lib` declaring `companyconfig.load` (a free fn) and
+    /// `companybus.Publisher.send` (an opaque-type method), each bound in
+    /// `langs`.
+    fn ext_libs_bound_in(langs: &[&str]) -> Vec<ExtLib> {
+        let extern_langs = || {
+            langs
+                .iter()
+                .map(|l| ExternLang {
+                    lang: l.to_string(),
+                    symbol: "Do".into(),
+                    call_args: vec![],
+                    yields: vec![],
+                    returns: None,
+                    errors: vec![],
+                    sync: false,
+                })
+                .collect::<Vec<_>>()
+        };
+        vec![
+            ExtLib {
+                name: "companyconfig".into(),
+                langs: vec![],
+                structs: vec![],
+                types: vec![],
+                externs: vec![ExternDecl {
+                    name: "load".into(),
+                    params: vec![],
+                    r#return: Tref::Prim(Prim::String),
+                    langs: extern_langs(),
+                }],
+            },
+            ExtLib {
+                name: "companybus".into(),
+                langs: vec![],
+                structs: vec![],
+                types: vec![OpaqueType {
+                    name: "Publisher".into(),
+                    methods: vec![ExternDecl {
+                        name: "send".into(),
+                        params: vec![],
+                        r#return: Tref::Prim(Prim::String),
+                        langs: extern_langs(),
+                    }],
+                }],
+                externs: vec![],
+            },
+        ]
+    }
+
+    /// A single-module model carrying `ext_libs` and `tests`, enough to
+    /// exercise the extern coverage gate.
+    fn model_with_ext_libs(ext_libs: Vec<ExtLib>, tests: Vec<TestDecl>) -> Model {
+        Model {
+            tono_ir_version: crate::ir::TONO_IR_VERSION,
+            modules: vec![Module {
+                tests,
+                name: "m".into(),
+                shapes: vec![],
+                operations: vec![],
+                extensions: vec![],
+                ext_libs,
+            }],
+        }
+    }
+
+    /// A declared test whose `extern_stubs` cover both the free-fn and the
+    /// handle-method extern shapes `ext_libs_bound_in` declares.
+    fn covering_extern_test() -> TestDecl {
+        TestDecl {
+            name: "covers it".into(),
+            constructions: vec![],
+            stubs: vec![],
+            extern_stubs: vec![
+                ExternStub {
+                    binding: None,
+                    target: ExternStubTarget::Free {
+                        lib: "companyconfig".into(),
+                        fn_: "load".into(),
+                    },
+                    answers: vec![StubAnswer::Value {
+                        value: serde_json::json!("x"),
+                    }],
+                },
+                ExternStub {
+                    binding: None,
+                    target: ExternStubTarget::Method {
+                        lib: "companybus".into(),
+                        ty: "Publisher".into(),
+                        method: "send".into(),
+                    },
+                    answers: vec![StubAnswer::Value {
+                        value: serde_json::json!("x"),
+                    }],
+                },
+            ],
+            calls: vec![],
+            expects: vec![],
+        }
+    }
+
+    #[test]
+    fn a_multi_language_extern_without_a_covering_stub_refuses_to_emit() {
+        // A single language is the lighter case and needs no stub at all.
+        let one = model_with_ext_libs(ext_libs_bound_in(&["ts"]), vec![]);
+        assert!(validate_extensions(&one).is_ok());
+
+        // Bound in two languages, with no test at all: rejected, naming both
+        // the free-fn and the handle-method integration.
+        let two = model_with_ext_libs(ext_libs_bound_in(&["ts", "go"]), vec![]);
+        let err = validate_extensions(&two).unwrap_err();
+        assert!(err.contains("bound in more than one language"), "{err}");
+        assert!(err.contains("companyconfig.load"), "{err}");
+
+        // Covered by a declared test's extern_stubs: passes.
+        let covered = model_with_ext_libs(
+            ext_libs_bound_in(&["ts", "go"]),
+            vec![covering_extern_test()],
+        );
+        assert!(validate_extensions(&covered).is_ok());
+    }
+
+    #[test]
+    fn an_uncovered_handle_method_extern_is_named_in_the_error() {
+        // Cover only the free fn, leaving the handle method uncovered.
+        let mut only_free = covering_extern_test();
+        only_free.extern_stubs.truncate(1);
+        let model = model_with_ext_libs(ext_libs_bound_in(&["ts", "go"]), vec![only_free]);
+        let err = validate_extensions(&model).unwrap_err();
+        assert!(err.contains("companybus.Publisher.send"), "{err}");
     }
 }

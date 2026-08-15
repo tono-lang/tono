@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::ir::{
-    AnswerError, Empty, ExtKind, Extension, HttpAnswer, Prim, ShapePattern, TaxonomyPattern,
-    TemplatePart, Trait, Tref, WireBinding, WireValue,
+    AnswerError, Empty, ExtKind, Extension, ExternDecl, HttpAnswer, OpImplCall, OpaqueType, Prim,
+    ShapePattern, TaxonomyPattern, TemplatePart, Trait, Tref, WireBinding, WireValue,
 };
 
 fn op(id: &str, traits: Vec<Trait>, errors: Vec<Tref>) -> Shape {
@@ -163,10 +163,22 @@ fn test(
     calls: Vec<TestCall>,
     expects: Vec<TestExpect>,
 ) -> TestDecl {
+    test_with_externs(constructions, stubs, vec![], calls, expects)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn test_with_externs(
+    constructions: Vec<TestConstruction>,
+    stubs: Vec<TestStub>,
+    extern_stubs: Vec<ExternStub>,
+    calls: Vec<TestCall>,
+    expects: Vec<TestExpect>,
+) -> TestDecl {
     TestDecl {
         name: "the case".into(),
         constructions,
         stubs,
+        extern_stubs,
         calls,
         expects,
     }
@@ -175,6 +187,9 @@ fn test(
 fn err_of(tests: Vec<TestDecl>) -> String {
     entry_tests(&module(tests)).unwrap_err()
 }
+
+#[path = "declared_tests_extern_stub_tests.rs"]
+mod extern_stub_tests;
 
 #[test]
 fn tests_group_per_entry_and_derive_hermetic_or_live() {

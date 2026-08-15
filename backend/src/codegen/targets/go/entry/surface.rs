@@ -63,7 +63,7 @@ pub(super) fn settings_decl(
         fields.push_str(&format!(
             "{doc}\t{} {}\n",
             entry_field_ident(entry, module, config, &f.name),
-            field_go_type(&f.target, module),
+            field_go_type_storage(&f.target, module),
             doc = field_doc(&f.traits, "\t"),
         ));
     }
@@ -106,11 +106,10 @@ pub(super) fn option_decls(
             // the carrier holds it directly; every other `@with` value gets
             // the usual extra pointer so an unset option is distinguishable
             // from a zero value.
-            let ty = field_go_type(&f.target, module);
             let carrier_ty = if is_foreign_handle(&f.target, module) {
-                ty
+                field_go_type_storage(&f.target, module)
             } else {
-                format!("*{ty}")
+                format!("*{}", field_go_type(&f.target, module))
             };
             format!("\t{} {carrier_ty}\n", camel(&f.name))
         })
@@ -134,10 +133,18 @@ pub(super) fn option_decls(
         let mut option_refs = Vec::new();
         push_field_type_symbols(&f.target, module, &mut option_refs);
         let ty = field_go_type(&f.target, module);
-        let assign = if is_foreign_handle(&f.target, module) {
-            format!("w.{member} = v", member = camel(&f.name))
-        } else {
-            format!("w.{member} = &v", member = camel(&f.name))
+        let assign = match ext::foreign_handle(&f.target, module) {
+            // The real concrete value never satisfies the field's own
+            // generated interface directly (its methods return the foreign
+            // package's own types, not the logical ones the interface
+            // declares), so it is wrapped in the matching adapter, exactly
+            // like the field's own real construction call is.
+            Some((lib, type_name)) => format!(
+                "w.{member} = &{adapter}{{real: v}}",
+                member = camel(&f.name),
+                adapter = ext::handle_adapter_ident(&lib.name, &type_name),
+            ),
+            None => format!("w.{member} = &v", member = camel(&f.name)),
         };
         decls.push(Decl::raw_with(
             format!(

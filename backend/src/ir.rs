@@ -77,7 +77,10 @@ pub use crate::ir_tests_model::*;
 /// `ctor` tags, plus a reserved `request` tag for `.request`, the
 /// canonical already-assembled request -- legal only in this position,
 /// never during entry construction.
-pub const TONO_IR_VERSION: u32 = 17;
+/// v18 added a declared test's `extern_stubs`: a stub for an `extern` FFI
+/// call (free function or opaque-handle method), not tied to one client/op
+/// like the existing HTTP/impl stub.
+pub const TONO_IR_VERSION: u32 = 18;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

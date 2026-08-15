@@ -14,6 +14,7 @@ let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 type bkind =
   | Bentry of Ast.decl
   | Bstub of { dep : Ir.test_dep }
+  | Bextern_stub
   | Bcall of { op : Ast.decl }
 
 (* ── Operation helpers ─────────────────────────────────────────────────── *)
@@ -244,6 +245,82 @@ let impl_answer ctx ~refty (op : Ast.decl) (v : Ast.test_value) :
             error, or errors.contract (or a list of them)");
       None
 
+(* ── "ext"/"extern" FFI stub lookups ───────────────────────────────────── *)
+
+let find_ext_lib (decls : Ast.decl list) (name : string) :
+    Ast.ext_lib_body option =
+  List.find_map
+    (fun (d : Ast.decl) ->
+      match d.Ast.dkind with
+      | Ast.DExtLib { body; _ } when String.equal d.Ast.dname name -> Some body
+      | _ -> None)
+    decls
+
+let find_free_extern (body : Ast.ext_lib_body) (fn : string) :
+    Ast.extern_decl option =
+  List.find_opt
+    (fun (e : Ast.extern_decl) -> String.equal e.Ast.ed_name fn)
+    body.Ast.elib_externs
+
+let find_opaque_method (body : Ast.ext_lib_body) (ty : string) (meth : string) :
+    Ast.extern_decl option =
+  match
+    List.find_opt
+      (fun (t : Ast.opaque_type) -> String.equal t.Ast.opq_name ty)
+      body.Ast.elib_types
+  with
+  | None -> None
+  | Some t ->
+      List.find_opt
+        (fun (e : Ast.extern_decl) -> String.equal e.Ast.ed_name meth)
+        t.Ast.opq_methods
+
+(* The value must match the extern's declared return type. *)
+let ext_free_answer ctx ~refty (ed : Ast.extern_decl) (v : Ast.test_value) :
+    Ir.stub_answer option =
+  Some (Ir.Answer_value (V.encode_value ctx ~refty ed.Ast.ed_return v))
+
+(* A handle method's stub answers with its declared return type, or one of the
+   error shapes bound across the method's own per-language ':errors' maps
+   (the stub is not scoped to one call site, so every language's sentinels
+   count). *)
+let ext_method_answer ctx ~refty (ed : Ast.extern_decl) (v : Ast.test_value) :
+    Ir.stub_answer option =
+  let error_names =
+    List.sort_uniq compare
+      (List.concat_map
+         (fun (l : Ast.extern_lang_body) ->
+           List.map
+             (fun (em : Ast.error_map_entry) -> em.Ast.em_type)
+             l.Ast.elb_errors)
+         ed.Ast.ed_langs)
+  in
+  match v with
+  | Ast.TvCtor c -> (
+      match
+        V.resolve_head ctx ~code:Error_codes.test_stub_value_invalid c.tc_head
+      with
+      | V.Huser n when List.mem n error_names ->
+          let data =
+            V.encode_value ctx ~refty (Ast.TName (n, [], c.tc_head.vh_span)) v
+          in
+          Some (Ir.Answer_error { ans_shape = n; ans_data = data })
+      | V.Hbad -> None
+      | _ ->
+          Some (Ir.Answer_value (V.encode_value ctx ~refty ed.Ast.ed_return v)))
+  | _ -> Some (Ir.Answer_value (V.encode_value ctx ~refty ed.Ast.ed_return v))
+
+let ext_stub_answers ctx (one : Ast.test_value -> Ir.stub_answer option)
+    (value : Ast.test_value) : Ir.stub_answer list =
+  match value with
+  | Ast.TvList ([], span) ->
+      V.report ctx
+        (err Error_codes.test_stub_value_invalid span
+           "a stub sequence needs at least one answer");
+      []
+  | Ast.TvList (items, _) -> List.filter_map one items
+  | v -> Option.to_list (one v)
+
 let stub_answers ctx ~refty (dep : Ir.test_dep) (op : Ast.decl)
     (value : Ast.test_value) : Ir.stub_answer list =
   let one v =
@@ -392,6 +469,7 @@ let check_test ctx (d : Ast.decl) (titems : Ast.test_item list) : Ir.test_decl =
   let refty = make_refty ctx scope in
   let constructions = ref [] in
   let stubs = ref [] in
+  let extern_stubs = ref [] in
   let calls = ref [] in
   let expects = ref [] in
   let lookup name span =
@@ -442,28 +520,31 @@ let check_test ctx (d : Ast.decl) (titems : Ast.test_item list) : Ir.test_decl =
                 (err Error_codes.test_value_invalid entry_span
                    "unknown entry '%s'" entry))
       | Ast.TiStub { bind; target; value; _ } -> (
-          match lookup target.st_binding target.st_span with
-          | Some (Bentry e) -> (
+          let path = List.map fst target.Ast.st_path in
+          let seg0, _ = List.hd target.Ast.st_path in
+          let as_binding = List.assoc_opt seg0 !scope in
+          match (as_binding, path) with
+          | Some (Bentry e), [ client; op_name; dep_name ] -> (
               match
                 List.find_opt
-                  (fun (o : Ast.decl) -> String.equal o.Ast.dname target.st_op)
+                  (fun (o : Ast.decl) -> String.equal o.Ast.dname op_name)
                   (entry_ops e)
               with
               | None ->
                   V.report ctx
                     (err Error_codes.test_op_unknown target.st_span
                        "entry '%s' declares no operation '%s'" e.Ast.dname
-                       target.st_op)
+                       op_name)
               | Some op -> (
                   let dep =
-                    match target.st_dep with
+                    match dep_name with
                     | "http" ->
                         if V.find_trait "http" op.Ast.dtraits = None then (
                           V.report ctx
                             (err Error_codes.test_dep_invalid target.st_span
                                "operation '%s' has no http dependency; it is \
                                 not bound to @http"
-                               target.st_op);
+                               op_name);
                           None)
                         else Some Ir.Dep_http
                     | "impl" ->
@@ -472,7 +553,7 @@ let check_test ctx (d : Ast.decl) (titems : Ast.test_item list) : Ir.test_decl =
                             (err Error_codes.test_dep_invalid target.st_span
                                "operation '%s' has no impl dependency; no 'ext \
                                 impl' covers it"
-                               target.st_op);
+                               op_name);
                           None)
                         else Some Ir.Dep_impl
                     | other ->
@@ -490,8 +571,8 @@ let check_test ctx (d : Ast.decl) (titems : Ast.test_item list) : Ir.test_decl =
                       stubs :=
                         {
                           Ir.ts_binding = Option.map fst bind;
-                          ts_client = target.st_binding;
-                          ts_op = target.st_op;
+                          ts_client = client;
+                          ts_op = op_name;
                           ts_dep = dep;
                           ts_answers = answers;
                         }
@@ -500,11 +581,77 @@ let check_test ctx (d : Ast.decl) (titems : Ast.test_item list) : Ir.test_decl =
                         (fun (b, bspan) ->
                           add_binding ctx scope b bspan (Bstub { dep }))
                         bind))
-          | Some _ ->
+          | Some (Bentry _), _ ->
+              V.report ctx
+                (err Error_codes.test_dep_invalid target.st_span
+                   "a construction binding's stub names the operation and its \
+                    '.http' or '.impl' dependency: '%s.op.http'"
+                   seg0)
+          | Some _, _ ->
               V.report ctx
                 (err Error_codes.test_binding_unknown target.st_span
-                   "'%s' is not a construction binding" target.st_binding)
-          | None -> ())
+                   "'%s' is not a construction binding" seg0)
+          | None, _ -> (
+              match find_ext_lib ctx.V.decls seg0 with
+              | None ->
+                  V.report ctx
+                    (err Error_codes.test_dep_invalid target.st_span
+                       "'%s' is neither a construction binding nor a declared \
+                        'ext' library"
+                       (String.concat "." path))
+              | Some body -> (
+                  match path with
+                  | [ lib; fn ] -> (
+                      match find_free_extern body fn with
+                      | None ->
+                          V.report ctx
+                            (err Error_codes.test_dep_invalid target.st_span
+                               "'ext %s' declares no function '%s'" lib fn)
+                      | Some ed ->
+                          let answers =
+                            ext_stub_answers ctx
+                              (ext_free_answer ctx ~refty ed)
+                              value
+                          in
+                          extern_stubs :=
+                            {
+                              Ir.es_binding = Option.map fst bind;
+                              es_target = Ir.Ext_free { lib; fn };
+                              es_answers = answers;
+                            }
+                            :: !extern_stubs;
+                          Option.iter
+                            (fun (b, bspan) ->
+                              add_binding ctx scope b bspan Bextern_stub)
+                            bind)
+                  | [ lib; ty; meth ] -> (
+                      match find_opaque_method body ty meth with
+                      | None ->
+                          V.report ctx
+                            (err Error_codes.test_dep_invalid target.st_span
+                               "'ext %s' declares no method '%s.%s'" lib ty meth)
+                      | Some ed ->
+                          let answers =
+                            ext_stub_answers ctx
+                              (ext_method_answer ctx ~refty ed)
+                              value
+                          in
+                          extern_stubs :=
+                            {
+                              Ir.es_binding = Option.map fst bind;
+                              es_target = Ir.Ext_method { lib; ty; meth };
+                              es_answers = answers;
+                            }
+                            :: !extern_stubs;
+                          Option.iter
+                            (fun (b, bspan) ->
+                              add_binding ctx scope b bspan Bextern_stub)
+                            bind)
+                  | _ ->
+                      V.report ctx
+                        (err Error_codes.test_dep_invalid target.st_span
+                           "a stub target is 'binding.op.dep', 'ext_lib.fn', \
+                            or 'ext_lib.type.method'"))))
       | Ast.TiCall { bind; bind_span; recv; recv_span; op; op_span; input; _ }
         -> (
           match lookup recv recv_span with
@@ -569,6 +716,10 @@ let check_test ctx (d : Ast.decl) (titems : Ast.test_item list) : Ir.test_decl =
                   V.report ctx
                     (err Error_codes.test_pattern_invalid subject_span
                        "a stub binding is asserted through '.requests'")
+              | false, Bextern_stub ->
+                  V.report ctx
+                    (err Error_codes.test_pattern_invalid subject_span
+                       "an extern stub binding has no outcome to assert")
               | false, Bentry _ ->
                   Option.iter
                     (fun p ->
@@ -598,6 +749,7 @@ let check_test ctx (d : Ast.decl) (titems : Ast.test_item list) : Ir.test_decl =
     Ir.t_name = d.Ast.dname;
     t_constructions = List.rev !constructions;
     t_stubs = List.rev !stubs;
+    t_extern_stubs = List.rev !extern_stubs;
     t_calls = List.rev !calls;
     t_expects = List.rev !expects;
   }
