@@ -12,7 +12,7 @@
 //! fields directly and builds the request inline; no runtime interprets a
 //! descriptor.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{
@@ -24,7 +24,7 @@ use crate::codegen::ops::{declared_errors, error_names, wire_binding};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
 use crate::codegen::targets::typescript::render::TsRules;
-use crate::codegen::targets::typescript::types::{type_expr_of, TsVal, LANG};
+use crate::codegen::targets::typescript::types::{type_expr_of, LANG};
 use crate::codegen::tree::Decl;
 use crate::codegen::validation;
 use crate::ir::{EntryField, EnvName, Module, Prim, Shape, ShapeKind, Source, TemplatePart, Tref};

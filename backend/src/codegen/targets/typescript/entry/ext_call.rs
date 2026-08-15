@@ -28,10 +28,14 @@
 //! invoked from an op's `impl`) are a different call site that no codegen
 //! consumes yet.
 
-use super::*;
+use super::{field_camel, module_symbol, pascal, Resolver};
 use crate::codegen::entries::plan::Emitter;
 use crate::codegen::ops::error_names;
-use crate::ir::{ArmValue, CallArg, CallCtor, EntryCall, ExternParam, ReturnsValue, Select};
+use crate::codegen::symbol::Symbol;
+use crate::codegen::tree::Decl;
+use crate::ir::{
+    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExternParam, Module, ReturnsValue, Select,
+};
 
 /// The typed-error class name a declared sentinel maps to: the bare
 /// identifier the `.tono` author wrote (`overloaded`), cased through the
@@ -334,12 +338,13 @@ pub(super) fn call_assign(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::targets::typescript::entry::emit;
     use crate::codegen::targets::typescript::types::ts_casing;
     use crate::codegen::targets::typescript::TsRules;
     use crate::codegen::test_support::{member, rendered, structure};
     use crate::ir::{
         EntryField, ExtLib, ExternDecl, ExternLang as IrExternLang, ForeignField, ForeignStruct,
-        LangPath, OpaqueType, ReturnsField, ReturnsLit, Source,
+        LangPath, OpaqueType, Prim, ReturnsField, ReturnsLit, Shape, ShapeKind, Source, Tref,
     };
     use std::collections::BTreeMap;
 
