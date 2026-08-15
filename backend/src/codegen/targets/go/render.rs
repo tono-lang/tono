@@ -18,19 +18,6 @@ use crate::codegen::syntax::{self, TypeSyntax};
 use crate::codegen::target::RenderRules;
 use crate::codegen::tree::{Decl, EnumDecl, EnumRepr, Field, FnBody, Function, Method, TypeExpr};
 
-/// Whether `s` is a legal Go identifier (so Go can infer a package selector from
-/// an import path segment). A hyphenated segment like `http-go` is not, and needs
-/// an explicit import alias.
-fn is_go_ident(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if c == '_' || c.is_ascii_alphabetic() => {
-            chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
-        }
-        _ => false,
-    }
-}
-
 /// A godoc comment prefix for a documented element, indented and newline-terminated,
 /// or empty when there is no doc. The Markdown is flattened to plain text (godoc is
 /// not Markdown) and sits directly above the declaration.
@@ -284,17 +271,21 @@ impl RenderRules for GoRules {
             None if module.contains('/') => module.to_string(),
             None => module.replace('.', "/"),
         };
-        // Go infers the package selector from the path's last segment, but only
-        // when that segment is a legal identifier. A path whose last segment has
-        // a hyphen (a real-world module like "some-package") cannot resolve
-        // without an explicit alias, so emit one, taking it from the import
-        // name. A legal-identifier segment (every stdlib package, every
-        // internal SDK module, the flat single-package layout) stays bare, so
-        // the `imported` slot (reused for the referenced symbol name in those
-        // layouts) is correctly ignored.
+        // Go infers the package selector from the path's last segment, but that
+        // guess is not reliable: a hyphenated segment (a real-world module like
+        // "some-package") cannot resolve at all, and a legal-looking segment can
+        // still disagree with the package's own declared name (a `/vN`
+        // module-version suffix is the case that motivated this: the module path
+        // versions, the package's own `package` clause does not, so the last
+        // segment is literally "v5" while the package Go actually binds is
+        // "jwt"). Whenever the selector this codegen already committed to using
+        // (`alias`) differs from what Go's own inference would produce, spell the
+        // alias out explicitly rather than trust the guess; every stdlib package,
+        // every internal SDK module, and the flat single-package layout already
+        // agree with Go's inference, so this never adds a redundant alias there.
         let inferred = full.rsplit('/').next().unwrap_or(&full);
         match names.first() {
-            Some(alias) if !is_internal && !is_go_ident(inferred) => {
+            Some(alias) if !is_internal && *alias != inferred => {
                 format!("{alias} \"{full}\"")
             }
             _ => format!("\"{full}\""),

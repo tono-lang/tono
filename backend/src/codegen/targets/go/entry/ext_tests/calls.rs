@@ -8,6 +8,49 @@ use super::*;
 
 // --- call_assign / impl_call_body: happy paths and defensive fallbacks -
 
+/// A `/vN` Go module path (a real one: `github.com/golang-jwt/jwt/v5`) has a
+/// last path segment ("v5") that is a legal Go identifier on its own, but is
+/// not the package's own declared name (module versioning does not touch the
+/// `package` clause). The call site must use the `ext` block's own declared
+/// name as its selector, never a guess derived from the path (the import
+/// alias itself is `GoRules::render_import`'s job, covered directly in
+/// `go/render_tests.rs`).
+#[test]
+fn a_versioned_go_module_path_still_selects_by_the_ext_lib_name() {
+    let lib = ExtLib {
+        name: "authlib".into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: "github.com/golang-jwt/jwt/v5".into(),
+        }],
+        structs: vec![],
+        types: vec![],
+        externs: vec![ExternDecl {
+            name: "parse".into(),
+            params: vec![],
+            r#return: string_t(),
+            langs: vec![ExternLang {
+                lang: "go".into(),
+                symbol: "Parse".into(),
+                call_args: vec![],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: false,
+            }],
+        }],
+    };
+    let call = EntryCall {
+        ns: "authlib".into(),
+        func: "parse".into(),
+        args: vec![],
+    };
+    let (module, _) = module_with_call_field(vec![lib], call);
+    let text = entry_text(&module);
+    assert!(text.contains("authlib.Parse()"));
+    assert!(!text.contains("v5.Parse("));
+}
+
 #[test]
 fn the_appendix_module_wires_the_call_handle_and_impl_call() {
     // The exact fixture the go_ext_roundtrip integration test also `go

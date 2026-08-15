@@ -57,17 +57,18 @@ pub(super) fn sibling_path_expr(
     out
 }
 
-/// A valid Go identifier derived from a foreign module path's last segment
-/// (Go's own inferred package selector): non-identifier bytes become `_`,
-/// and a result that cannot start an identifier gets a leading `_`. Used as
-/// the in-code package selector every generated call through this lib uses.
-/// When the real path segment is already a legal identifier (the common
-/// case), this is exactly what Go itself infers, so no import alias is
-/// written (see `GoRules::render_import`); it is only spelled out as an
-/// alias when the path segment is not legal Go on its own.
-pub(super) fn lib_ident(go_path: &str) -> String {
-    let last = go_path.rsplit('/').next().unwrap_or(go_path);
-    let cleaned: String = last
+/// A valid Go identifier derived from the `ext` block's own declared name,
+/// not from the import path: non-identifier bytes become `_`, and a result
+/// that cannot start an identifier gets a leading `_`. Used as the in-code
+/// package selector every generated call through this lib uses, and always
+/// spelled out as an explicit import alias (see `GoRules::render_import`),
+/// because the path's last segment is not a reliable guess at the real
+/// package's own declared name — a `/vN` module-version suffix (the module
+/// path versions, the package's `package` clause does not) is the case that
+/// motivated always aliasing, but any arbitrarily-named package has the same
+/// problem.
+pub(super) fn lib_ident(name: &str) -> String {
+    let cleaned: String = name
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' {
@@ -115,7 +116,7 @@ pub(super) fn go_lang(decl: &ExternDecl) -> Option<&ExternLang> {
 /// bind other targets only).
 pub(super) fn import_lib(refs: &mut Vec<Symbol>, lib: &ExtLib) -> Option<String> {
     let path = lib_go_path(lib)?;
-    let ident = lib_ident(path);
+    let ident = lib_ident(&lib.name);
     refs.push(import(&ident, path));
     Some(ident)
 }
@@ -143,14 +144,14 @@ pub(super) fn foreign_handle<'a>(t: &Tref, module: &'a Module) -> Option<(&'a Ex
 /// identifier differs fails `go build`, which is the intended failure mode,
 /// not a generation-time crash.
 pub(super) fn handle_go_type(lib: &ExtLib, type_name: &str) -> Option<String> {
-    let ident = lib_ident(lib_go_path(lib)?);
-    Some(format!("*{ident}.{}", pascal(type_name)))
+    lib_go_path(lib)?;
+    Some(format!("*{}.{}", lib_ident(&lib.name), pascal(type_name)))
 }
 
 /// The import a foreign handle field's type needs, alongside its spelling.
 pub(super) fn handle_symbol(lib: &ExtLib) -> Option<Symbol> {
     let path = lib_go_path(lib)?;
-    Some(import(&lib_ident(path), path))
+    Some(import(&lib_ident(&lib.name), path))
 }
 
 #[path = "ext_handle.rs"]
@@ -224,7 +225,7 @@ pub(super) fn ctor_expr(
     let Some(path) = path else {
         return "nil".to_string();
     };
-    let ident = lib_ident(path);
+    let ident = lib_ident(&lib.name);
     refs.push(import(&ident, path));
     let fields: Vec<String> = ctor
         .fields

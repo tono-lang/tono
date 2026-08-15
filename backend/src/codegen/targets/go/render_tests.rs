@@ -58,6 +58,19 @@ fn imports_render_as_go_import_lines() {
         ),
         "alias \"github.com/example/some-package\""
     );
+    // A `/vN` module-version suffix leaves the path's last segment a legal
+    // identifier ("v5"), but that is not the package's own declared name
+    // (versioning is a module-path convention, not a `package` clause
+    // rewrite), so the alias must still be spelled out explicitly whenever
+    // it disagrees with what Go would infer.
+    assert_eq!(
+        rules.render_import(
+            "payments.charges::types",
+            "github.com/golang-jwt/jwt/v5",
+            &["authlib"]
+        ),
+        "authlib \"github.com/golang-jwt/jwt/v5\""
+    );
     // The statements are one block, since gofmt will not fold loose ones.
     assert_eq!(
         rules.render_imports(vec!["\"fmt\"".into(), "\"os\"".into()]),
