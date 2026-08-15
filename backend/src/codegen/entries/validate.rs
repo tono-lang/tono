@@ -49,11 +49,11 @@ fn call_resolves(
         ));
     };
     for target in targets {
-        if !decl
+        let Some(lang) = decl
             .langs
             .iter()
-            .any(|l| target.binding_langs().contains(&l.lang.as_str()))
-        {
+            .find(|l| target.binding_langs().contains(&l.lang.as_str()))
+        else {
             return Err(format!(
                 "{} = {}.{}(..): extern {} declares no {} block; {} codegen has nothing to emit",
                 field.name,
@@ -63,6 +63,37 @@ fn call_resolves(
                 target.binding_langs()[0],
                 target.dir()
             ));
+        };
+        // A hand-fed IR bypasses the frontend's own "every yields: position
+        // is consumed" rule (`tono gen` accepts raw IR directly), so this
+        // reasserts it at generation time: a non-error position with
+        // nothing declared to project it into would meet an emitter as a
+        // pipeline defect instead of an authoring error.
+        let projects = lang.yields.iter().any(|y| !y.is_error);
+        if projects && lang.returns.is_none() {
+            return Err(format!(
+                "{} = {}.{}(..): the {} block declares yields but no returns to project them into",
+                field.name,
+                call.ns,
+                call.func,
+                target.binding_langs()[0],
+            ));
+        }
+        // A single call expression can only ever produce one value in
+        // TypeScript (no multi-return), so a binding naming more than one
+        // non-error position has nothing to spell it as, unlike a target
+        // whose call convention returns several values at once.
+        if *target == TargetKind::TypeScript {
+            let non_error = lang.yields.iter().filter(|y| !y.is_error).count();
+            if non_error > 1 {
+                return Err(format!(
+                    "{} = {}.{}(..): the {} block names {non_error} non-error yields positions; a single TypeScript call result can only bind one",
+                    field.name,
+                    call.ns,
+                    call.func,
+                    target.binding_langs()[0],
+                ));
+            }
         }
     }
     Ok(())
@@ -162,7 +193,7 @@ fn pascal_ident(name: &str) -> String {
 /// module's own `ext` blocks (its id is `"{ext_name}#{type_name}"`, the same
 /// `#`-qualified shape id every other reference uses), rather than an
 /// ordinary shape in `module.shapes`.
-fn is_foreign_ref(module: &crate::ir::Module, id: &str) -> bool {
+pub(crate) fn is_foreign_ref(module: &crate::ir::Module, id: &str) -> bool {
     id.split_once('#').is_some_and(|(lib, ty)| {
         module
             .ext_libs

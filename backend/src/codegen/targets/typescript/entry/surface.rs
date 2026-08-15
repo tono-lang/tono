@@ -49,7 +49,7 @@ pub(super) fn settings_interface(
         fields.push_str(&format!(
             "{doc}  {}: {};\n",
             field_camel_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
-            ts_type(&f.target),
+            field_ts_type(&f.target, entry_module),
             doc = field_doc(&f.traits, "  "),
         ));
         refs.extend(type_refs(&f.target, entry_module));
@@ -87,7 +87,7 @@ pub(super) fn config_object_interface(
             format!(
                 "{doc}  {}?: {};\n",
                 field_camel_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
-                ts_type(&f.target),
+                field_ts_type(&f.target, entry_module),
                 doc = field_doc(&f.traits, "  "),
             )
         })

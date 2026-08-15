@@ -61,8 +61,8 @@ impl TargetKind {
     /// so landing the next target changes this arm and nothing else.
     pub fn emits_ext_constructs(self) -> bool {
         match self {
-            Self::Go => true,
-            Self::Rust | Self::TypeScript => false,
+            Self::Go | Self::TypeScript => true,
+            Self::Rust => false,
         }
     }
 }
