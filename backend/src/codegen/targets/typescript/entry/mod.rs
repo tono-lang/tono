@@ -413,6 +413,7 @@ fn op_method(
     };
     let transport_body = transport::op_call(
         wire,
+        module,
         &http_method,
         &input_expr,
         has_declared_errors,

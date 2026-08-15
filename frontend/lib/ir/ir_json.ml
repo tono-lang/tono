@@ -65,8 +65,14 @@
    call-argument variant v14 introduced for ctor-field values, now also
    reachable as a bare call argument (e.g. the "notes" in
    [.bus.send("notes", .payload.body)]) -- no wire-shape change there, only
-   a new use site. Surface-and-IR only; no codegen consumes "impl_call" yet. *)
-let current_ir_version = 16
+   a new use site. Surface-and-IR only; no codegen consumes "impl_call" yet.
+   v17 added wire_value's "call" variant: an extern call read as a
+   @header/@query/@body value. Its own arguments mirror an ordinary call
+   argument's "field"/"param"/"lit"/"ctor" tags, plus the bare string
+   "request" for ".request", the canonical already-assembled request --
+   legal only in this position, never during entry construction (that side
+   is rejected at typecheck). *)
+let current_ir_version = 17
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

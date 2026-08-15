@@ -15,9 +15,35 @@ use crate::codegen::entries::wire::{
     body_reads_record, has_query, needs_record_for_reads, success_test_expr,
 };
 use crate::codegen::symbol::Symbol;
-use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
+use crate::ir::{
+    ExtLib, ExternDecl, ExternLang, Module, TemplatePart, WireBinding, WireCall, WireCallArg,
+    WireResponsePart, WireValue,
+};
 
+use super::module_symbol;
 use super::support_symbol;
+
+fn find_lib<'a>(module: &'a Module, ns: &str) -> &'a ExtLib {
+    module
+        .ext_libs
+        .iter()
+        .find(|l| l.name == ns)
+        .expect("validate::wire_call_resolves checked this ext block exists")
+}
+
+fn find_extern<'a>(lib: &'a ExtLib, func: &str) -> &'a ExternDecl {
+    lib.externs
+        .iter()
+        .find(|e| e.name == func)
+        .expect("validate::wire_call_resolves checked this extern exists")
+}
+
+fn find_ts_lang(decl: &ExternDecl) -> &ExternLang {
+    decl.langs
+        .iter()
+        .find(|l| l.lang == "ts" || l.lang == "typescript")
+        .expect("validate::wire_call_resolves checked a ts block exists")
+}
 
 /// A resolved param-member access off `input`: the TypeScript property
 /// expression (`input.avatarHint`, `@rename(typescript)` already applied).
@@ -118,6 +144,85 @@ fn param_expr(segs: &[String], param_access: ParamAccess<'_>, input_expr: &str) 
     }
 }
 
+/// One argument to a @header/@query/@body-position extern call: an ordinary
+/// ref resolves against the op's own scope exactly like a `WireValue` in
+/// the same position would; the reserved [`WireCallArg::Request`] resolves
+/// to `request_var`, the already-assembled request the call reads. `Ctor`
+/// never reaches here: `validate::wire_call_resolves` rejects a
+/// struct-literal mapper in this position (not yet supported by this
+/// target's emitter).
+fn wire_call_arg_expr(
+    arg: &WireCallArg,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+    param_access: ParamAccess<'_>,
+    request_var: &str,
+) -> String {
+    match arg {
+        WireCallArg::Request => request_var.to_string(),
+        WireCallArg::Field(path) => field_expr(path),
+        WireCallArg::Param(segs) => param_expr(segs, param_access, input_expr),
+        WireCallArg::Lit(v) => match v.as_str() {
+            Some(s) => js_str(s),
+            None => v.to_string(),
+        },
+        WireCallArg::Ctor(_) => unreachable!(
+            "validate::wire_call_resolves rejects a ctor argument in a wire-position call"
+        ),
+    }
+}
+
+/// The statement invoking a @header/@body-position extern call and binding
+/// its result to `const {result_var}`: caught failures wrap into
+/// `ContractError` naming the extern -- TypeScript's outer method boundary
+/// already re-wraps an uncaught throw the same way (see `client.rs`), but a
+/// wire-position call catches locally so the contract name reads the call
+/// site, not the enclosing method. Unlike an entry field's own construction
+/// call ([`super::ext_call`]), a declared sentinel is not yet projected to
+/// its own typed error class here -- every failure reaches `ContractError`,
+/// a scoped-down first pass.
+#[allow(clippy::too_many_arguments)]
+fn call_wire_stmt(
+    call: &WireCall,
+    module: &Module,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+    param_access: ParamAccess<'_>,
+    request_var: &str,
+    result_var: &str,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    let lib = find_lib(module, &call.ns);
+    let decl = find_extern(lib, &call.fn_name);
+    let lang = find_ts_lang(decl);
+    let lib_path = lib
+        .langs
+        .iter()
+        .find(|p| p.lang == "ts" || p.lang == "typescript")
+        .expect("validate::wire_call_resolves checked a ts module path exists");
+    refs.push(Symbol::imported(
+        lang.symbol.clone(),
+        lib_path.path.clone(),
+        lang.symbol.clone(),
+    ));
+    refs.push(module_symbol(
+        &crate::codegen::ops::error_names().contract,
+        module,
+    ));
+    let args: Vec<String> = call
+        .args
+        .iter()
+        .map(|a| wire_call_arg_expr(a, field_expr, input_expr, param_access, request_var))
+        .collect();
+    let contract = crate::codegen::ops::error_names().contract;
+    let contract_name = format!("{}.{}", call.ns, call.fn_name);
+    format!(
+        "let {result_var};\ntry {{\n  {result_var} = await {symbol}({args});\n}} catch (e) {{\n  throw new {contract}({contract_name:?}, e);\n}}\n",
+        symbol = lang.symbol,
+        args = args.join(", "),
+    )
+}
+
 /// A `WireValue` position (a `request_headers` value) rendered the same way a
 /// template is, plus the two scalar forms.
 fn wire_value_expr(
@@ -143,6 +248,14 @@ fn wire_value_expr(
                 "JSON.stringify({})",
                 wire_value_native_expr(v, field_expr, input_expr, param_access)
             )
+        }
+        // A top-level header call is rendered as its own statement by
+        // `call_header_lines` (`declared_header_lines` filters it out
+        // before reaching here); a fallible call has no expression-position
+        // form (`await`/`try`/`catch` are statements), so it can only ever
+        // be a statement, never nested inside a scalar-position expression.
+        WireValue::Call(_) => {
+            unreachable!("a header position never carries a top-level extern call here")
         }
     }
 }
@@ -179,6 +292,14 @@ fn wire_value_native_expr(
                 .join(", ");
             format!("{{ {entries} }}")
         }
+        // A top-level @body call is rendered as its own statement (see
+        // `call_body_stmt`; `body_expr` skips it here). A call nested
+        // inside a ctor field would need the same statement it has no
+        // expression-position form for; `validate::wire_call_resolves`
+        // rejects that shape upstream, so it never reaches this renderer.
+        WireValue::Call(_) => unreachable!(
+            "validate::wire_call_resolves rejects an extern call nested inside a ctor field"
+        ),
     }
 }
 
@@ -219,7 +340,10 @@ fn uri_expr(
     }
 }
 
-/// One `setHeader(...)` call per declared `request_headers` entry.
+/// One `setHeader(...)` call per declared `request_headers` entry whose
+/// value is not a call: a call reads `.request`, which does not exist yet
+/// at this point in assembly (headers are still being built) -- see
+/// [`call_header_lines`], which patches those in once the request exists.
 fn declared_header_lines(
     wire: &WireBinding,
     indent_str: &str,
@@ -229,6 +353,7 @@ fn declared_header_lines(
 ) -> String {
     wire.request_headers
         .iter()
+        .filter(|(_, value)| !matches!(value, WireValue::Call(_)))
         .map(|(key, value)| {
             format!(
                 "{indent_str}setHeader(headers, {}, {});\n",
@@ -237,6 +362,51 @@ fn declared_header_lines(
             )
         })
         .collect()
+}
+
+/// One call-statement block per call-valued `request_headers` entry: run
+/// once the request is fully assembled (the declared values already folded
+/// in, see [`declared_header_lines`]), so the call's own `.request`
+/// argument (`request_var`) is the complete, already-built request --
+/// method, path, headers, and body -- matching the same slot the
+/// `before_request` hook occupies (right before it, so a hook still sees
+/// the signed header).
+#[allow(clippy::too_many_arguments)]
+fn call_header_lines(
+    wire: &WireBinding,
+    module: &Module,
+    indent_str: &str,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+    param_access: ParamAccess<'_>,
+    request_var: &str,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    let mut out = String::new();
+    for (i, (key, value)) in wire.request_headers.iter().enumerate() {
+        let WireValue::Call(call) = value else {
+            continue;
+        };
+        let result_var = format!("signed{i}");
+        out.push_str(&indent(
+            &call_wire_stmt(
+                call,
+                module,
+                field_expr,
+                input_expr,
+                param_access,
+                request_var,
+                &result_var,
+                refs,
+            ),
+            indent_str,
+        ));
+        out.push_str(&format!(
+            "{indent_str}setHeader({request_var}.headers, {}, {result_var});\n",
+            template_expr(key, field_expr, input_expr, param_access),
+        ));
+    }
+    out
 }
 
 /// One `appendQuery(...)` call per declared `@query` entry.
@@ -274,6 +444,12 @@ fn body_expr(
     param_access: ParamAccess<'_>,
 ) -> Option<String> {
     let body = wire.body.as_ref()?;
+    // A call-valued body reads `.request`, which does not exist yet at this
+    // point in assembly; `call_body_stmt` patches it in once the request is
+    // fully built.
+    if matches!(body, WireValue::Call(_)) {
+        return None;
+    }
     if matches!(body, WireValue::Param(segs) if segs.is_empty()) {
         return Some(format!("JSON.stringify({input_expr})"));
     }
@@ -281,6 +457,39 @@ fn body_expr(
         "JSON.stringify({})",
         wire_value_native_expr(body, field_expr, input_expr, param_access)
     ))
+}
+
+/// The `request.body = ...` statement patching a call-valued `@body` in
+/// once the request is fully assembled, mirroring [`call_header_lines`].
+#[allow(clippy::too_many_arguments)]
+fn call_body_stmt(
+    wire: &WireBinding,
+    module: &Module,
+    indent_str: &str,
+    field_expr: &dyn Fn(&[String]) -> String,
+    input_expr: &str,
+    param_access: ParamAccess<'_>,
+    request_var: &str,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    let Some(WireValue::Call(call)) = wire.body.as_ref() else {
+        return String::new();
+    };
+    let mut out = indent(
+        &call_wire_stmt(
+            call,
+            module,
+            field_expr,
+            input_expr,
+            param_access,
+            request_var,
+            "signedBody",
+            refs,
+        ),
+        indent_str,
+    );
+    out.push_str(&format!("{indent_str}{request_var}.body = signedBody;\n"));
+    out
 }
 
 /// The TypeScript spelling of the shared [`success_test_expr`] rule.
@@ -401,6 +610,7 @@ fn hook_line(indent_str: &str, bound: bool, slot: &str, var: &str) -> String {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn op_call(
     wire: &WireBinding,
+    module: &Module,
     method: &str,
     input_expr: &str,
     has_declared_errors: bool,
@@ -493,11 +703,41 @@ pub(super) fn op_call(
     // The per-attempt body: `d` is its own statement depth, one level deeper
     // than the method (`"    "`) when a retry loop wraps it.
     let d = if has_retry { "      " } else { "    " };
-    let request_kw = if before_request_bound { "let" } else { "const" };
+    // A call-valued header/body reads the request once it exists, so it
+    // patches in right here: after the declared values are folded into
+    // `request` (the next line), before it is sent -- the same slot
+    // `before_request` occupies, and right before it, so a hook still sees
+    // the signed header/body.
+    let mut call_request_lines = call_header_lines(
+        wire,
+        module,
+        d,
+        field_expr,
+        input_expr,
+        param_access,
+        "request",
+        refs,
+    );
+    call_request_lines.push_str(&call_body_stmt(
+        wire,
+        module,
+        d,
+        field_expr,
+        input_expr,
+        param_access,
+        "request",
+        refs,
+    ));
+    let request_kw = if before_request_bound || !call_request_lines.is_empty() {
+        "let"
+    } else {
+        "const"
+    };
     let mut attempt = String::new();
     attempt.push_str(&format!(
         "{d}{request_kw} request: HttpRequest = {request_literal};\n"
     ));
+    attempt.push_str(&call_request_lines);
     attempt.push_str(&hook_line(
         d,
         before_request_bound,

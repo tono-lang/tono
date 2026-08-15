@@ -1,7 +1,19 @@
 use super::*;
+use crate::codegen::casing::CaseStyle;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::tree::Decl;
-use crate::ir::{WireBinding, WireValue};
+use crate::ir::{Module, WireBinding, WireValue};
+
+fn empty_module() -> Module {
+    Module {
+        name: "m".into(),
+        shapes: vec![],
+        operations: vec![],
+        extensions: vec![],
+        ext_libs: vec![],
+        tests: vec![],
+    }
+}
 
 fn base_wire() -> WireBinding {
     WireBinding {
@@ -56,8 +68,12 @@ impl Case {
                 .map(|(_, field, kind)| (field.to_string(), *kind))
         };
         let mut refs = Vec::new();
+        let module = empty_module();
+        let config = CasingConfig::new(CaseStyle::Camel);
         let call = OpCall {
             wire: &self.wire,
+            module: &module,
+            config: &config,
             has_input: true,
             ret_zero: "zero, ",
             discriminator: self.discriminator,

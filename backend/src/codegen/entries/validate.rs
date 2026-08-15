@@ -6,7 +6,9 @@ use super::{
     arg_identifiers, companion_name, has_source, local_name, module_entries, op_local_name,
 };
 use crate::codegen::output::TargetKind;
-use crate::ir::{EntryField, ShapeKind, Source, Tref};
+use crate::ir::{
+    EntryField, Module, ShapeKind, Source, Tref, WireBinding, WireCall, WireCallArg, WireValue,
+};
 
 /// The requested targets that cannot emit an extern-call field source, by
 /// output name. `None` means every target in this run can, so a call-
@@ -107,6 +109,109 @@ fn call_resolves(
                     target.binding_langs()[0],
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Every top-level `WireCall` directly on a `@header`/`@body` value (never
+/// `@query`: unlike headers/body, the URL is already finalized by the time
+/// a call could patch it in, so a call there has nowhere to run -- the
+/// frontend only ever binds one to header/body in the first place, this is
+/// belt-and-suspenders for hand-fed IR). `uri`/`endpoint` carry no call
+/// form at all (rejected upstream, at the frontend's protocol-trait
+/// position check).
+fn top_level_wire_calls(wire: &WireBinding) -> Vec<&WireCall> {
+    let mut out = Vec::new();
+    for (_, v) in &wire.request_headers {
+        if let WireValue::Call(c) = v {
+            out.push(c);
+        }
+    }
+    if let Some(WireValue::Call(c)) = &wire.body {
+        out.push(c);
+    }
+    out
+}
+
+/// A `WireValue` reachable anywhere off the binding that carries an extern
+/// call in a shape no emitter supports yet: nested inside a `@body` ctor
+/// field's value (every target's fallible-call handling needs its own
+/// statement, which an object-literal field's expression position has no
+/// room for), or anywhere in `@query` (the query string is already
+/// finalized before a call could read the assembled request, so `.request`
+/// has nothing to read there, and a call that reads no `.request` has no
+/// reason to run this late instead of in the field it was declared on).
+fn unsupported_nested_wire_call(wire: &WireBinding) -> Option<&'static str> {
+    fn object_has_call(v: &WireValue) -> bool {
+        match v {
+            WireValue::Call(_) => true,
+            WireValue::Object(fields) => fields.iter().any(|(_, v)| object_has_call(v)),
+            WireValue::Lit(_)
+            | WireValue::Field(_)
+            | WireValue::Param(_)
+            | WireValue::Template(_) => false,
+        }
+    }
+    if wire
+        .query
+        .iter()
+        .any(|(_, v)| matches!(v, WireValue::Call(_)) || object_has_call(v))
+    {
+        return Some("@query");
+    }
+    if let Some(WireValue::Object(fields)) = &wire.body {
+        if fields.iter().any(|(_, v)| object_has_call(v)) {
+            return Some("a @body ctor field");
+        }
+    }
+    None
+}
+
+/// A struct-literal mapper as a wire-position call's own argument (e.g.
+/// `ns.fn(opts { region: .r })`) is not yet supported by any target's
+/// emitter: unlike an entry field's own `= ns.fn(args)` construction call,
+/// no emitter here renders a foreign struct literal in this position yet.
+fn has_ctor_call_arg(call: &WireCall) -> bool {
+    call.args.iter().any(|a| matches!(a, WireCallArg::Ctor(_)))
+}
+
+/// A @header/@body-position extern call must resolve to a declared
+/// `extern` that carries a binding for every target being generated, the
+/// same rule [`call_resolves`] enforces for an entry field's own call
+/// source. Without this an emitter would meet "no such ext block" as a
+/// pipeline defect -- a panic -- instead of an authoring error.
+fn wire_call_resolves(
+    module: &Module,
+    call: &WireCall,
+    targets: &[TargetKind],
+) -> Result<(), String> {
+    let Some(lib) = module.ext_libs.iter().find(|l| l.name == call.ns) else {
+        return Err(format!(
+            "{}.{}(..): no ext block named {} is declared in this module",
+            call.ns, call.fn_name, call.ns
+        ));
+    };
+    let Some(decl) = lib.externs.iter().find(|e| e.name == call.fn_name) else {
+        return Err(format!(
+            "{}.{}(..): ext {} declares no extern named {}",
+            call.ns, call.fn_name, call.ns, call.fn_name
+        ));
+    };
+    for target in targets {
+        if !decl
+            .langs
+            .iter()
+            .any(|l| target.binding_langs().contains(&l.lang.as_str()))
+        {
+            return Err(format!(
+                "{}.{}(..): extern {} declares no {} block; {} codegen has nothing to emit",
+                call.ns,
+                call.fn_name,
+                call.fn_name,
+                target.binding_langs()[0],
+                target.dir()
+            ));
         }
     }
     Ok(())
@@ -271,6 +376,36 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                     wire: Some(wire), ..
                 } = &op.kind
                 {
+                    if let Some(position) = unsupported_nested_wire_call(wire) {
+                        return Err(format!(
+                            "module {}: entry {} operation {} carries an extern call inside {}; no target's emitter supports a call there yet",
+                            module.name,
+                            entry.name,
+                            local_name(&op.id),
+                            position
+                        ));
+                    }
+                    for call in top_level_wire_calls(wire) {
+                        if has_ctor_call_arg(call) {
+                            return Err(format!(
+                                "module {}: entry {} operation {} calls {}.{}(..) with a struct-literal argument; no target's emitter supports that in a @header/@body call yet",
+                                module.name,
+                                entry.name,
+                                local_name(&op.id),
+                                call.ns,
+                                call.fn_name
+                            ));
+                        }
+                        wire_call_resolves(module, call, targets).map_err(|e| {
+                            format!(
+                                "module {}: entry {} operation {} {}",
+                                module.name,
+                                entry.name,
+                                local_name(&op.id),
+                                e
+                            )
+                        })?;
+                    }
                     if wire.endpoint.is_none() {
                         return Err(format!(
                             "module {}: entry {} operation {} carries an @http binding with no endpoint; an entry operation's @http must name its endpoint",

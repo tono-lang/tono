@@ -3,7 +3,7 @@
 //! the binding alone, so the decision lives once here and each target
 //! spells only its own syntax over the answer.
 
-use crate::ir::{TemplatePart, WireBinding, WireValue};
+use crate::ir::{TemplatePart, WireBinding, WireCallArg, WireValue};
 
 /// Whether the operation reads any input member individually off a decoded
 /// record (an op-parameter member reference in the uri/endpoint/header/
@@ -28,6 +28,19 @@ fn template_reads_record_with(parts: &[TemplatePart], resolves: &dyn Fn(&str) ->
     parts.iter().any(|p| part_reads_record_with(p, resolves))
 }
 
+fn call_arg_reads_record_with(arg: &WireCallArg, resolves: &dyn Fn(&str) -> bool) -> bool {
+    match arg {
+        WireCallArg::Param(segs) => match segs.first() {
+            None => false,
+            Some(name) => !resolves(name),
+        },
+        WireCallArg::Ctor(fields) => fields
+            .iter()
+            .any(|(_, v)| call_arg_reads_record_with(v, resolves)),
+        WireCallArg::Field(_) | WireCallArg::Lit(_) | WireCallArg::Request => false,
+    }
+}
+
 fn value_reads_record_with(value: &WireValue, resolves: &dyn Fn(&str) -> bool) -> bool {
     match value {
         WireValue::Param(segs) => match segs.first() {
@@ -38,6 +51,10 @@ fn value_reads_record_with(value: &WireValue, resolves: &dyn Fn(&str) -> bool) -
         WireValue::Object(fields) => fields
             .iter()
             .any(|(_, v)| value_reads_record_with(v, resolves)),
+        WireValue::Call(call) => call
+            .args
+            .iter()
+            .any(|a| call_arg_reads_record_with(a, resolves)),
         WireValue::Lit(_) | WireValue::Field(_) => false,
     }
 }

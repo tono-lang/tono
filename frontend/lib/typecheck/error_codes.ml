@@ -191,10 +191,10 @@ let op_impl_unknown_method = "TC0083"
 let op_impl_arity_mismatch = "TC0084"
 
 (* An entry field's `= ns.fn(args)` call reads `.request` in its own
-   argument list. The canonical request only exists at the point a protocol
-   trait argument uses it (RFC-0023 decision M); during field construction it
-   has not been built yet, so this gets its own message rather than reading
-   as an ordinary unknown-field reference. *)
+   argument list. The canonical request only exists once a protocol trait
+   argument's call reads it; during field construction it has not been
+   built yet, so this gets its own message rather than reading as an
+   ordinary unknown-field reference. *)
 let field_ref_request = "TC0085"
 
 (* An op's named parameter has the same name as an entry field, so a `.name`
@@ -203,3 +203,12 @@ let field_ref_request = "TC0085"
    the stable identifier tooling keys on, so this moved rather than the
    sequential TC0048-TC0053 bespoke-implementation block above. *)
 let param_shadows_field = "TC0086"
+
+(* `.request` referenced outside the one legal position: a direct or
+   ctor-nested argument to an extern call that is itself the value of a
+   @header/@query/@body trait. Anywhere else it is reserved and
+   unresolvable — a bare use, a use inside another trait (@http, @timeout,
+   @retry, @errors, ...), or a bare identifier passed to the call in its
+   place. The entry-field-construction side of the same reserved name is
+   [field_ref_request]. *)
+let request_value_invalid = "TC0087"

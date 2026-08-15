@@ -72,7 +72,12 @@ pub use crate::ir_tests_model::*;
 /// now also reachable as a bare call argument -- no wire-shape change
 /// there, only a new use site (`CallArg`'s codec already accepted `lit` at
 /// any position). Surface-and-IR only; no codegen consumes `impl_call` yet.
-pub const TONO_IR_VERSION: u32 = 16;
+/// v17 added `WireValue::Call`: an extern call read as a @header/@query/
+/// @body value. Its arguments mirror `CallArg`'s `field`/`param`/`lit`/
+/// `ctor` tags, plus a reserved `request` tag for `.request`, the
+/// canonical already-assembled request -- legal only in this position,
+/// never during entry construction.
+pub const TONO_IR_VERSION: u32 = 17;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -417,6 +422,35 @@ pub enum WireValue {
     Param(Vec<String>),
     Template(Vec<TemplatePart>),
     Object(Vec<(String, WireValue)>),
+    /// An extern call read as a @header/@query/@body value.
+    Call(WireCall),
+}
+
+/// An extern call bound as a @header/@query/@body value: `ns`/`fn` name the
+/// `extern` declared in the module's own `ext_libs`, `args` are its
+/// arguments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WireCall {
+    pub ns: String,
+    #[serde(rename = "fn")]
+    pub fn_name: String,
+    pub args: Vec<WireCallArg>,
+}
+
+/// One argument to a wire-position extern call: a ref into the op's own
+/// scope (`Field`/`Param`, matching `WireValue`'s own), a literal, a
+/// struct-literal mapper, or the reserved `Request` marker for `.request`,
+/// the canonical, already-assembled request -- legal only here, never
+/// during entry construction (see `CallArg` for the entry-construction
+/// counterpart, which has no such marker).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WireCallArg {
+    Field(Vec<String>),
+    Param(Vec<String>),
+    Lit(Value),
+    Ctor(Vec<(String, WireCallArg)>),
+    Request,
 }
 
 /// The resolved HTTP binding a Protocol pass computes once and a Target

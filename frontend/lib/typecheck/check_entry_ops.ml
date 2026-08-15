@@ -66,7 +66,7 @@ let rec is_map_or_list_type : Ast.ty -> bool = function
    reference. The legacy [{name}] input placeholder is excluded: that
    convention only exists in the @http path. [resolve] types a value
    reference's segs, when resolvable, to reject a map/list value. *)
-let check_kv_shape ~trait_name ~key_what ~value_what
+let check_kv_shape ~trait_name ~key_what ~value_what ~(allow_call : bool)
     ~(resolve : string list -> Ast.ty option) (tr : Ast.trait) :
     Diagnostic.t list =
   match tr.Ast.targs with
@@ -110,12 +110,19 @@ let check_kv_shape ~trait_name ~key_what ~value_what
                   value_what (path_str r.segs);
               ]
           | _ -> [])
+      | Ast.ACall _ when allow_call ->
+          (* Arity/type-checking a call read as this position's value is the
+             target compiler's job (RFC-0023's own verification ladder): a
+             call reads `.request` and third-party symbols this checker
+             cannot see into, so it only recognizes the shape here. *)
+          []
       | _ ->
           [
             err Error_codes.protocol_trait_invalid tr.tspan
-              "@%s expects a string literal/template or a field reference as \
-               its value"
-              trait_name;
+              "@%s expects a string literal/template or a field reference%s \
+               as its value"
+              trait_name
+              (if allow_call then ", or an extern call" else "");
           ])
   | _ ->
       [
@@ -130,15 +137,17 @@ let check_header_shapes ~resolve (op : Ast.decl) : Diagnostic.t list =
   List.concat_map
     (check_kv_shape ~trait_name:"header"
        ~key_what:"a @header key takes {.field} references"
-       ~value_what:"a @header value" ~resolve)
+       ~value_what:"a @header value" ~allow_call:true ~resolve)
     (traits_named "header" op.Ast.dtraits)
 
-(* Shape rules of @query, mirroring @header. *)
+(* Shape rules of @query, mirroring @header. A call value is not accepted
+   here: unlike @header/@body, the URL is already finalized by the time a
+   call could patch it in, so a call has nowhere to run in this position. *)
 let check_query_shapes ~resolve (op : Ast.decl) : Diagnostic.t list =
   List.concat_map
     (check_kv_shape ~trait_name:"query"
        ~key_what:"a @query key takes {.field} references"
-       ~value_what:"a @query value" ~resolve)
+       ~value_what:"a @query value" ~allow_call:false ~resolve)
     (traits_named "query" op.Ast.dtraits)
 
 (* @http(code:) is well-formed only as an int or a non-empty list of ints.
@@ -251,12 +260,17 @@ let check_body_shapes ctx (op : Ast.decl) : Diagnostic.t list =
         match tr.Ast.targs with
         | [ Ast.ARef _ ] -> []
         | [ Ast.ACtor c ] -> check_body_ctor ctx c
+        (* Arity/type-checking a call read as @body's value is the target
+           compiler's job (RFC-0023's own verification ladder): a call
+           reads `.request` and third-party symbols this checker cannot see
+           into, so it only recognizes the shape here. *)
+        | [ Ast.ACall _ ] -> []
         | [ _ ] ->
             [
               err Error_codes.protocol_trait_invalid tr.Ast.tspan
                 "@body expects a field reference (e.g. .input or \
-                 .input.member) or a struct-literal mapper (e.g. note_body { \
-                 title: .input.title })";
+                 .input.member), a struct-literal mapper (e.g. note_body { \
+                 title: .input.title }), or an extern call";
             ]
         | _ ->
             [
@@ -313,6 +327,76 @@ let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
                tr.tname)
         else None)
       op.Ast.dtraits
+
+(* `.request` is the canonical, already-assembled request; it exists only
+   once a @header/@query/@body extern call reads it, never before. Legal: a direct or ctor-nested [CaRef ["request"]] argument
+   to an [Ast.ACall] that is itself the value of a header/query/body trait.
+   Everywhere else — bare (not passed to a call), inside another trait
+   (@http, @timeout, @retry, @errors, ...), or passed to a call in a
+   non-header/query/body position — is an error: reading it there would mean
+   a request that has not been built yet. A bare [CaParam] inside the call's
+   own arguments is also rejected: unlike an "ext" block's own [call:] line,
+   a trait argument's call has no extern-side parameter list to forward a
+   bare identifier from. *)
+let request_trait_names = [ "header"; "query"; "body" ]
+
+let check_request_value (op : Ast.decl) : Diagnostic.t list =
+  let bad_bare span =
+    err Error_codes.request_value_invalid span
+      "'.request' is only valid as an argument to an extern call inside \
+       @header/@query/@body"
+  in
+  let bad_param span =
+    err Error_codes.request_value_invalid span
+      "a bare identifier has no meaning here; pass a literal or a field \
+       reference"
+  in
+  (* [allow_request] is true only inside the argument subtree of an
+     [Ast.ACall] reached directly from a header/query/body trait's value: a
+     nested ctor/list/call within that subtree still counts (a signer that
+     forwards `.request` into a nested struct-literal mapper is still
+     "argument of a trait of request"), but stepping into a *different*
+     top-level trait argument, or a call anywhere outside that subtree,
+     resets it to false. *)
+  let rec value_diags ~allow_request (v : Ast.trait_arg) : Diagnostic.t list =
+    match v with
+    | Ast.ARef r when r.Ast.segs = [ "request" ] ->
+        if allow_request then [] else [ bad_bare r.Ast.ref_span ]
+    | Ast.ARef _ -> []
+    | Ast.AKv (_, v) -> value_diags ~allow_request v
+    | Ast.AList xs -> List.concat_map (value_diags ~allow_request) xs
+    | Ast.ACtor c ->
+        List.concat_map
+          (fun (_, _, v) -> value_diags ~allow_request v)
+          c.Ast.ctor_fields
+    | Ast.ACall ce -> List.concat_map (call_arg_diags ~allow_request) ce.Ast.ce_args
+    | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _ -> []
+  and call_arg_diags ~allow_request (a : Ast.call_arg) : Diagnostic.t list =
+    match a with
+    | Ast.CaRef r when r.Ast.segs = [ "request" ] ->
+        if allow_request then [] else [ bad_bare r.Ast.ref_span ]
+    | Ast.CaRef _ | Ast.CaLit _ -> []
+    | Ast.CaParam (_, span) -> [ bad_param span ]
+    | Ast.CaCtor c ->
+        List.concat_map
+          (fun (_, _, v) -> value_diags ~allow_request v)
+          c.Ast.ctor_fields
+  in
+  List.concat_map
+    (fun (tr : Ast.trait) ->
+      let is_request_trait = List.mem tr.Ast.tname request_trait_names in
+      (* A "key: value"-form top-level argument is unwrapped before the
+         request-trait dispatch, so @header(value: ns.fn(.request)) reaches
+         the same allow-zone as the ordinary positional spelling. *)
+      let rec top (v : Ast.trait_arg) : Diagnostic.t list =
+        match v with
+        | Ast.AKv (_, v) -> top v
+        | Ast.ACall ce when is_request_trait ->
+            List.concat_map (call_arg_diags ~allow_request:true) ce.Ast.ce_args
+        | v -> value_diags ~allow_request:false v
+      in
+      List.concat_map top tr.Ast.targs)
+    op.Ast.dtraits
 
 (* A loose (non-entry) operation has no entry-field scope, but it can still
    reference its own declared parameter (zero or one segment deep, matching
@@ -399,7 +483,7 @@ let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
   @ check_header_shapes ~resolve op
   @ check_query_shapes ~resolve op
   @ check_body_shapes ctx op @ check_code op @ ref_diags @ endpoint_diags
-  @ timeout_retry_diags @ path_diags @ impl_diags
+  @ timeout_retry_diags @ path_diags @ impl_diags @ check_request_value op
 
 (* A value position (path, endpoint) that accepts the unified grammar:
    literal, template, or pure reference. Resolution of the refs a template or
@@ -715,4 +799,4 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
   @ check_header_shapes ~resolve:resolve_ty op
   @ check_query_shapes ~resolve:resolve_ty op
   @ check_body_shapes ctx op @ check_code op
-  @ check_op_impl ctx fields op
+  @ check_op_impl ctx fields op @ check_request_value op

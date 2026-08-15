@@ -22,7 +22,20 @@ type value_expr =
     (* segments into the op's declared parameter; [] is the whole value *)
   | Vtemplate of Ir.template_part list
   | Vctor of (string * value_expr) list
-(* @body's ctor mapper: field name -> value *)
+    (* @body's ctor mapper: field name -> value *)
+  | Vcall of call_value
+(* an extern call read as a @header/@query/@body value *)
+
+and call_value = { vc_ns : string; vc_fn : string; vc_args : call_arg_value list }
+
+and call_arg_value =
+  | Cv_field of string list
+  | Cv_param of string list
+  | Cv_lit of Ir.json
+  | Cv_ctor of (string * call_arg_value) list
+  | Cv_request
+(* the reserved ".request" marker: the canonical, already-assembled
+       request, legal only here *)
 
 (* The language-agnostic wire form of one operation, en route to
    [Ir.wire_binding]. The endpoint, timeout, and retry refs only arise on

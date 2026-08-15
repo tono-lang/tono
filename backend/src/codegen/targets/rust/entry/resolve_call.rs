@@ -26,26 +26,26 @@ use crate::ir::{
     ReturnsField, ReturnsLit, ReturnsValue, Select, YieldsPos,
 };
 
-fn find_lib<'a>(module: &'a Module, ns: &str) -> &'a ExtLib {
+pub(super) fn find_lib<'a>(module: &'a Module, ns: &str) -> &'a ExtLib {
     module
         .ext_libs
         .iter()
         .find(|l| l.name == ns)
-        .expect("validate::call_resolves checked this ext block exists")
+        .expect("validate::call_resolves/wire_call_resolves checked this ext block exists")
 }
 
-fn find_extern<'a>(lib: &'a ExtLib, func: &str) -> &'a ExternDecl {
+pub(super) fn find_extern<'a>(lib: &'a ExtLib, func: &str) -> &'a ExternDecl {
     lib.externs
         .iter()
         .find(|e| e.name == func)
-        .expect("validate::call_resolves checked this extern exists")
+        .expect("validate::call_resolves/wire_call_resolves checked this extern exists")
 }
 
-fn find_rust_lang(decl: &ExternDecl) -> &ExternLang {
+pub(super) fn find_rust_lang(decl: &ExternDecl) -> &ExternLang {
     decl.langs
         .iter()
         .find(|l| l.lang == "rust")
-        .expect("validate::call_resolves checked a rust block exists")
+        .expect("validate::call_resolves/wire_call_resolves checked a rust block exists")
 }
 
 /// A `@default`-shaped best-effort Rust literal for a raw JSON call
@@ -54,7 +54,7 @@ fn find_rust_lang(decl: &ExternDecl) -> &ExternLang {
 /// possible (a `Ctor` field's `Lit` has no positional `ExternParam` at all),
 /// so this stays intentionally naive rather than half-implementing the
 /// general `literal()` machinery for a shape it cannot always see.
-fn json_literal(v: &serde_json::Value) -> String {
+pub(super) fn json_literal(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => format!("{s:?}.to_string()"),
         serde_json::Value::Bool(b) => b.to_string(),

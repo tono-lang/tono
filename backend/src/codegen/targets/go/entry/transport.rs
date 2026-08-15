@@ -12,15 +12,42 @@
 
 use std::collections::BTreeSet;
 
+use crate::codegen::casing::CasingConfig;
 use crate::codegen::entries::plan::push_gap;
 use crate::codegen::entries::wire::{
     body_reads_record, has_query, needs_record_for_reads, success_test_expr,
 };
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::symbol_slot;
-use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
+use crate::ir::{
+    ExtLib, ExternDecl, ExternLang, Module, TemplatePart, WireBinding, WireCall, WireCallArg,
+    WireResponsePart, WireValue,
+};
 
+use super::ext::{error_block, import_lib};
 use super::shared_symbol;
+
+fn find_lib<'a>(module: &'a Module, ns: &str) -> &'a ExtLib {
+    module
+        .ext_libs
+        .iter()
+        .find(|l| l.name == ns)
+        .expect("validate::wire_call_resolves checked this ext block exists")
+}
+
+fn find_extern<'a>(lib: &'a ExtLib, func: &str) -> &'a ExternDecl {
+    lib.externs
+        .iter()
+        .find(|e| e.name == func)
+        .expect("validate::wire_call_resolves checked this extern exists")
+}
+
+fn find_go_lang(decl: &ExternDecl) -> &ExternLang {
+    decl.langs
+        .iter()
+        .find(|l| l.lang == "go")
+        .expect("validate::wire_call_resolves checked a go block exists")
+}
 
 /// How a resolved entry-field read spells in a wire string position: a string
 /// already, a branded string needing the `string(...)` flattening, or a value
@@ -44,6 +71,8 @@ pub(super) type ParamAccess<'a> = &'a dyn Fn(&str) -> Option<(String, FieldKind)
 /// re-derives casing or hook routing.
 pub(super) struct OpCall<'a> {
     pub wire: &'a WireBinding,
+    pub module: &'a Module,
+    pub config: &'a CasingConfig,
     pub has_input: bool,
     pub ret_zero: &'a str,
     /// The operation's error discriminator, when it declares errors.
@@ -232,6 +261,84 @@ fn template_expr(
     out.join(" + ")
 }
 
+/// One argument to a @header/@query/@body-position extern call: an ordinary
+/// ref resolves against the op's own scope exactly like a `WireValue` in
+/// the same position would; the reserved [`WireCallArg::Request`] resolves
+/// to `request_var`, the already-assembled request the call reads. `Ctor`
+/// never reaches here: `validate::wire_call_resolves` rejects a
+/// struct-literal mapper in this position (not yet supported by this
+/// target's emitter).
+fn wire_call_arg_expr(
+    arg: &WireCallArg,
+    field_access: &dyn Fn(&[String]) -> String,
+    param_access: ParamAccess<'_>,
+    request_var: &str,
+) -> String {
+    match arg {
+        WireCallArg::Request => request_var.to_string(),
+        WireCallArg::Field(path) => field_access(path),
+        WireCallArg::Param(segs) => match segs.first() {
+            None => "input".to_string(),
+            Some(name) => param_access(name)
+                .map(|(access, _)| access)
+                .unwrap_or_else(|| format!("record[{name:?}]")),
+        },
+        WireCallArg::Lit(v) => go_json_lit(v),
+        WireCallArg::Ctor(_) => unreachable!(
+            "validate::wire_call_resolves rejects a ctor argument in a wire-position call"
+        ),
+    }
+}
+
+/// The Go statement(s) invoking a @header/@query/@body-position extern
+/// call and binding its result to `result_var`: the call itself, then
+/// [`error_block`]'s sentinel discrimination (a mapped sentinel becomes its
+/// declared SDK error type, unmapped becomes `ContractError` naming the
+/// extern -- the same fallback [`hook_lines`]-equivalent Go glue uses
+/// elsewhere), returning early on failure so `result_var` is always valid
+/// past this point.
+#[allow(clippy::too_many_arguments)]
+fn call_wire_stmt(
+    call: &WireCall,
+    module: &Module,
+    config: &CasingConfig,
+    field_access: &dyn Fn(&[String]) -> String,
+    param_access: ParamAccess<'_>,
+    request_var: &str,
+    result_var: &str,
+    ret_zero: &str,
+    fail: &dyn Fn(String) -> String,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    let lib = find_lib(module, &call.ns);
+    let decl = find_extern(lib, &call.fn_name);
+    let lang = find_go_lang(decl);
+    let callee = import_lib(refs, lib).unwrap_or_default();
+    let args: Vec<String> = call
+        .args
+        .iter()
+        .map(|a| wire_call_arg_expr(a, field_access, param_access, request_var))
+        .collect();
+    let err_var = format!("{result_var}Err");
+    let mut out = format!(
+        "{result_var}, {err_var} := {callee}.{}({})\n",
+        lang.symbol,
+        args.join(", ")
+    );
+    let contract_name = format!("{}.{}", call.ns, call.fn_name);
+    out.push_str(&error_block(
+        refs,
+        module,
+        config,
+        lib,
+        &lang.errors,
+        &contract_name,
+        &err_var,
+        &|expr| format!("return {ret_zero}{}\n", fail(expr)),
+    ));
+    out
+}
+
 /// A `WireValue` position (a `request_headers` value) rendered as a string
 /// expression: the two scalar forms, or a template.
 fn wire_value_expr(
@@ -260,6 +367,15 @@ fn wire_value_expr(
         // wire_value_any_expr + json.Marshal (see body_lines), never through
         // this string-position renderer.
         WireValue::Object(_) => unreachable!("a wire object never reaches a scalar position"),
+        // A top-level header call is rendered as its own statement by
+        // `call_header_lines` (`header_lines` filters it out before reaching
+        // here); Go's error handling has no expression-position form for a
+        // fallible call (unlike Rust's inline `match`), so a call can only
+        // ever be a statement, never nested inside a scalar-position
+        // expression.
+        WireValue::Call(_) => {
+            unreachable!("a header position never carries a top-level extern call here")
+        }
     }
 }
 
@@ -321,6 +437,15 @@ fn wire_value_any_expr(
                 .collect();
             format!("map[string]any{{{}}}", items.join(", "))
         }
+        // A top-level @body call is rendered as its own statement (see
+        // `call_body_stmt`; `body_lines` skips it here). A call nested
+        // inside a ctor field would need the same statement-hoisting Go's
+        // fallible-call error handling has no expression form for;
+        // `validate::wire_call_resolves` rejects that shape upstream, so it
+        // never reaches this renderer.
+        WireValue::Call(_) => unreachable!(
+            "validate::wire_call_resolves rejects an extern call nested inside a ctor field"
+        ),
     }
 }
 
@@ -415,6 +540,12 @@ fn header_lines(
     let set = reached.slot("SetHeader");
     let mut out = String::from("\theaders := map[string]string{}\n");
     for (key, value) in &wire.request_headers {
+        // A call-valued header reads `.request`, which does not exist yet
+        // at this point in assembly; `call_header_lines` patches it in once
+        // the request is fully built.
+        if matches!(value, WireValue::Call(_)) {
+            continue;
+        }
         out.push_str(&format!(
             "\t{set}(headers, {}, {})\n",
             template_expr(key, false, field_access, field_kind, param_access, reached),
@@ -424,6 +555,52 @@ fn header_lines(
     out.push_str(&format!(
         "\tfor name, value := range c.settings.Headers {{\n\t\t{set}(headers, name, value)\n\t}}\n"
     ));
+    out
+}
+
+/// One call-statement block per call-valued `request_headers` entry: run
+/// once the request is fully assembled (the declared values already folded
+/// in, see [`header_lines`]), so the call's own `.request` argument
+/// (`request_var`) is the complete, already-built request -- method, path,
+/// headers, and body.
+#[allow(clippy::too_many_arguments)]
+fn call_header_lines(
+    wire: &WireBinding,
+    module: &Module,
+    config: &CasingConfig,
+    field_access: &dyn Fn(&[String]) -> String,
+    field_kind: &dyn Fn(&[String]) -> FieldKind,
+    param_access: ParamAccess<'_>,
+    request_var: &str,
+    ret_zero: &str,
+    fail: &dyn Fn(String) -> String,
+    reached: &mut Reached,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    let set = reached.slot("SetHeader");
+    let mut out = String::new();
+    for (i, (key, value)) in wire.request_headers.iter().enumerate() {
+        let WireValue::Call(call) = value else {
+            continue;
+        };
+        let result_var = format!("signed{i}");
+        out.push_str(&call_wire_stmt(
+            call,
+            module,
+            config,
+            field_access,
+            param_access,
+            request_var,
+            &result_var,
+            ret_zero,
+            fail,
+            refs,
+        ));
+        out.push_str(&format!(
+            "\t{set}({request_var}.Headers, {}, {result_var})\n",
+            template_expr(key, false, field_access, field_kind, param_access, reached),
+        ));
+    }
     out
 }
 
@@ -448,6 +625,13 @@ fn body_lines(
     let Some(body) = wire.body.as_ref() else {
         return (String::new(), None);
     };
+    // A call-valued body reads `.request`, which does not exist yet at this
+    // point in assembly; `call_body_stmt` patches it in once the request is
+    // fully built (the "None" content-type guard skips the normal `body`
+    // field here, exactly like the no-body case).
+    if matches!(body, WireValue::Call(_)) {
+        return (String::new(), None);
+    }
     if let WireValue::Param(segs) = body {
         if segs.is_empty() {
             let text = format!(
@@ -478,6 +662,41 @@ fn body_lines(
         fail_enc = fail("err".to_string()),
     );
     (text, Some(false))
+}
+
+/// The `request.Body = ...` statement patching a call-valued `@body` in once
+/// the request is fully assembled, mirroring [`call_header_lines`]. Bytes,
+/// not a string: `Request.Body` is `[]byte` (see `send.rs`'s `Request`
+/// struct), matching every other body-building path in this file.
+#[allow(clippy::too_many_arguments)]
+fn call_body_stmt(
+    wire: &WireBinding,
+    module: &Module,
+    config: &CasingConfig,
+    field_access: &dyn Fn(&[String]) -> String,
+    param_access: ParamAccess<'_>,
+    request_var: &str,
+    ret_zero: &str,
+    fail: &dyn Fn(String) -> String,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    let Some(WireValue::Call(call)) = wire.body.as_ref() else {
+        return String::new();
+    };
+    let mut out = call_wire_stmt(
+        call,
+        module,
+        config,
+        field_access,
+        param_access,
+        request_var,
+        "signedBody",
+        ret_zero,
+        fail,
+        refs,
+    );
+    out.push_str(&format!("\t{request_var}.Body = []byte(signedBody)\n"));
+    out
 }
 
 /// The `Retry` field value: the resolved maximum, plus the `When` predicate
@@ -632,15 +851,47 @@ pub(super) fn op_call(
     } else {
         String::new()
     };
+    let request = reached.slot("Request");
+    // A call-valued header/body reads the request once it exists: it patches
+    // in right here, materialized as its own variable so the call has
+    // something to read, right before it is sent.
+    let mut call_lines = call_header_lines(
+        wire,
+        call.module,
+        call.config,
+        field_access,
+        field_kind,
+        param_access,
+        "req",
+        ret_zero,
+        fail,
+        &mut reached,
+        refs,
+    );
+    call_lines.push_str(&call_body_stmt(
+        wire,
+        call.module,
+        call.config,
+        field_access,
+        param_access,
+        "req",
+        ret_zero,
+        fail,
+        refs,
+    ));
     push_gap(&mut out);
+    let send_arg = if call_lines.is_empty() {
+        format!("{request}{{\n{field_lines}\t}}")
+    } else {
+        out.push_str(&format!("\treq := {request}{{\n{field_lines}\t}}\n"));
+        out.push_str(&call_lines);
+        "req".to_string()
+    };
     out.push_str(&format!(
-        "\toutcome := {send}(ctx, c.settings.HTTPClient, c.settings.Transport, {request}{{\n\
-         {field_lines}\
-         \t}})\n\
+        "\toutcome := {send}(ctx, c.settings.HTTPClient, c.settings.Transport, {send_arg})\n\
          {hook_check}\
          \tif outcome.Cause != nil {{\n\t\treturn {ret_zero}{fail_transport}\n\t}}\n",
         send = reached.slot("Send"),
-        request = reached.slot("Request"),
         fail_transport = fail(format!(
             "&{transport}{{Cause: outcome.Cause}}",
             transport = call.transport_error

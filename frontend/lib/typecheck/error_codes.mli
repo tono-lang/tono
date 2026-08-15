@@ -145,3 +145,7 @@ val field_ref_request : string
    error_codes.ml for the rule; moved here from the former TC0048, which
    collided with [ext_impl_unknown_op]). *)
 val param_shadows_field : string
+
+(* `.request` used outside a @header/@query/@body extern-call argument (see
+   error_codes.ml for the rule). *)
+val request_value_invalid : string

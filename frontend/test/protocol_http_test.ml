@@ -59,6 +59,25 @@ and show_value_expr : Protocol_http.value_expr -> string = function
           fields
       in
       Printf.sprintf "{%s}" (String.concat "," shown)
+  | Protocol_http.Vcall { vc_ns; vc_fn; vc_args } ->
+      let shown = List.map show_call_arg_value vc_args in
+      Printf.sprintf "%s.%s(%s)" vc_ns vc_fn (String.concat "," shown)
+
+and show_call_arg_value : Protocol_http.call_arg_value -> string = function
+  | Protocol_http.Cv_field p -> Printf.sprintf ".%s" (String.concat "." p)
+  | Protocol_http.Cv_param [] -> ".param"
+  | Protocol_http.Cv_param p ->
+      Printf.sprintf ".param.%s" (String.concat "." p)
+  | Protocol_http.Cv_lit (`String s) -> s
+  | Protocol_http.Cv_lit _ -> "<lit>"
+  | Protocol_http.Cv_ctor fields ->
+      let shown =
+        List.map
+          (fun (n, v) -> Printf.sprintf "%s:%s" n (show_call_arg_value v))
+          fields
+      in
+      Printf.sprintf "{%s}" (String.concat "," shown)
+  | Protocol_http.Cv_request -> ".request"
 
 let show_kv (parts, v) =
   Printf.sprintf "%s=%s"

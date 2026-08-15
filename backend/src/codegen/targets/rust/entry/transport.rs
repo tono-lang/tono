@@ -21,8 +21,12 @@ use crate::codegen::entries::wire::{
 use crate::codegen::entries::EntryModel;
 use crate::codegen::extensions::BoundExtension;
 use crate::codegen::symbol::Symbol;
-use crate::ir::{Module, Prim, TemplatePart, Tref, WireBinding, WireResponsePart, WireValue};
+use crate::ir::{
+    Module, Prim, TemplatePart, Tref, WireBinding, WireCall, WireCallArg, WireResponsePart,
+    WireValue,
+};
 
+use super::resolve_call::{find_extern, find_lib, find_rust_lang, json_literal};
 use super::use_path;
 
 /// Everything a settings-field read needs: the entry (for `@rename` and the
@@ -140,6 +144,125 @@ impl FieldCtx<'_> {
     }
 }
 
+/// One argument to a @header/@query/@body-position extern call: an ordinary
+/// ref resolves against the op's own scope exactly like a `WireValue` in
+/// the same position would; the reserved [`WireCallArg::Request`] resolves
+/// to `request_var`, the already-assembled request the call reads.
+/// `Ctor` never reaches here: `validate::wire_call_resolves` rejects a
+/// struct-literal mapper in this position (not yet supported by this
+/// target's emitter).
+fn call_arg_wire_expr(arg: &WireCallArg, fields: &FieldCtx<'_>, request_var: &str) -> String {
+    match arg {
+        WireCallArg::Request => format!("{request_var}.clone()"),
+        WireCallArg::Field(path) => format!("{}.clone()", fields.access(path)),
+        WireCallArg::Param(segs) => match segs.first() {
+            None => "input.clone()".to_string(),
+            Some(name) => fields
+                .param(name)
+                .map(|(access, _)| format!("{access}.clone()"))
+                .unwrap_or_else(|| {
+                    format!(
+                        "record.get({}).cloned().unwrap_or(serde_json::Value::Null)",
+                        rust_str(name)
+                    )
+                }),
+        },
+        WireCallArg::Lit(v) => json_literal(v),
+        WireCallArg::Ctor(_) => unreachable!(
+            "validate::wire_call_resolves rejects a ctor argument in a wire-position call"
+        ),
+    }
+}
+
+/// The bare call expression (crate-qualified symbol, args, `.await`) for a
+/// @header/@query/@body-position extern call. Mirrors
+/// [`super::resolve_call::call_expr`], but arguments resolve against the
+/// op's own scope (through `fields`) and the assembled request, not an
+/// entry's; lookups are `expect`ed rather than diagnosed, exactly like that
+/// sibling function -- `validate::wire_call_resolves` checks this ahead of
+/// every Rust generation call.
+fn call_wire_bare_expr(
+    call: &WireCall,
+    module: &Module,
+    fields: &FieldCtx<'_>,
+    request_var: &str,
+) -> String {
+    let lib = find_lib(module, &call.ns);
+    let decl = find_extern(lib, &call.fn_name);
+    let lang = find_rust_lang(decl);
+    let crate_ident = lib
+        .langs
+        .iter()
+        .find(|l| l.lang == "rust")
+        .map(|l| l.path.replace('-', "_"))
+        .expect("validate::wire_call_resolves checked a rust module path exists");
+    let args: Vec<String> = call
+        .args
+        .iter()
+        .map(|a| call_arg_wire_expr(a, fields, request_var))
+        .collect();
+    let awaited = if lang.sync { "" } else { ".await" };
+    format!(
+        "{crate_ident}::{}({}){awaited}",
+        lang.symbol,
+        args.join(", ")
+    )
+}
+
+/// The `errors:` mapping for a wire-position call. A mapped sentinel would
+/// ideally construct the declared error type the RFC's `errors:` line
+/// names, the same category a bespoke hook's declared error reaches; the
+/// `errors:` grammar only names a sentinel -> type, with no field mapping
+/// to build an arbitrary shape from a raw error string, so every failure
+/// here -- mapped or not -- currently reaches `Contract`, naming the
+/// extern, mirroring `hook_lines`'s own unmapped fallback.
+fn wire_call_error_wrap(call: &WireCall) -> String {
+    let contract_name = format!("{}.{}", call.ns, call.fn_name);
+    format!(
+        "TonoError::Contract(ContractError {{ contract_name: {contract_name:?}.to_string(), cause: e.to_string().into() }})"
+    )
+}
+
+/// A wire-position call as a `String`-typed expression (a header value):
+/// the extern's declared return type decides whether the `Ok` binding needs
+/// converting, mirroring [`FieldCtx::string_expr`]'s own String/Uuid split.
+/// The call is inline as a `match` -- valid in expression position because
+/// the `Err` arm diverges via `return` -- so the caller needs no
+/// surrounding statement.
+fn call_wire_string_expr(
+    call: &WireCall,
+    module: &Module,
+    fields: &FieldCtx<'_>,
+    request_var: &str,
+) -> String {
+    let bare = call_wire_bare_expr(call, module, fields, request_var);
+    let lib = find_lib(module, &call.ns);
+    let decl = find_extern(lib, &call.fn_name);
+    let convert = match &decl.r#return {
+        Tref::Prim(Prim::String | Prim::Uuid) => "v",
+        _ => "v.to_string()",
+    };
+    format!(
+        "match {bare} {{ Ok(v) => {convert}, Err(e) => return Err({}) }}",
+        wire_call_error_wrap(call)
+    )
+}
+
+/// A wire-position call as a `serde_json::Value`-producing expression (a
+/// body value), mirroring [`call_wire_string_expr`].
+fn call_wire_json_expr(
+    call: &WireCall,
+    module: &Module,
+    fields: &FieldCtx<'_>,
+    request_var: &str,
+) -> String {
+    let bare = call_wire_bare_expr(call, module, fields, request_var);
+    format!(
+        "match {bare} {{ Ok(v) => serde_json::to_value(&v).unwrap_or(serde_json::Value::Null), Err(e) => return Err({}) }}",
+        wire_call_error_wrap(call)
+    )
+}
+
 /// A Rust string literal for plain text (the `{s:?}` escaping rules cover
 /// everything a wire binding's literals may carry).
 fn rust_str(s: &str) -> String {
@@ -244,6 +367,16 @@ fn wire_value_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
         }
         // Only ever emitted for @body; never a header/query/uri value.
         WireValue::Object(_) => format!("{}.to_string()", wire_value_json_expr(v, fields)),
+        // A top-level header/@body call is rendered directly by
+        // `call_wire_string_expr`/`call_wire_json_expr` at its own call
+        // site (declared_header_lines skips it here; body_lines does too),
+        // and a nested call inside a @body ctor field never carries
+        // `.request` (Check_entry_ops.check_request_value only allows it as
+        // a top-level trait value, never nested), so this position is
+        // never actually reached for a `Call`.
+        WireValue::Call(_) => {
+            unreachable!("a header/uri/endpoint position never carries a top-level extern call")
+        }
     }
 }
 
@@ -312,10 +445,14 @@ fn url_line(wire: &WireBinding, has_query: bool, fields: &FieldCtx<'_>) -> Strin
     format!("{binding} = format!(\"{fmt}\", {});\n", args.join(", "))
 }
 
-/// One `set_header(...)` call per declared `request_headers` entry.
+/// One `set_header(...)` call per declared `request_headers` entry whose
+/// value is not a call: a call reads `.request`, which does not exist yet
+/// at this point in assembly (headers are still being built) -- see
+/// [`call_header_lines`], which patches those in once the request exists.
 fn declared_header_lines(wire: &WireBinding, fields: &FieldCtx<'_>) -> String {
     wire.request_headers
         .iter()
+        .filter(|(_, value)| !matches!(value, WireValue::Call(_)))
         .map(|(key, value)| {
             let key_expr = template_expr(key, fields);
             let key_ref = if key_expr.starts_with('"') {
@@ -327,6 +464,46 @@ fn declared_header_lines(wire: &WireBinding, fields: &FieldCtx<'_>) -> String {
                 "set_header(&mut headers, {key_ref}, {});\n",
                 wire_value_expr(value, fields)
             )
+        })
+        .collect()
+}
+
+/// One `set_header(&mut request.headers, ...)` per call-valued
+/// `request_headers` entry: run once the request is fully assembled (the
+/// declared values already folded in, see [`declared_header_lines`]), so
+/// the call's own `.request` argument (`request_var`) is the complete,
+/// already-built request -- method, path, headers, and body -- matching
+/// the same slot the `before_request` hook occupies (right before it, so a
+/// hook still sees the signed header).
+fn call_header_lines(
+    wire: &WireBinding,
+    module: &Module,
+    fields: &FieldCtx<'_>,
+    request_var: &str,
+) -> String {
+    wire.request_headers
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (key, value))| match value {
+            WireValue::Call(call) => {
+                let key_expr = template_expr(key, fields);
+                let key_ref = if key_expr.starts_with('"') {
+                    key_expr
+                } else {
+                    format!("&{key_expr}")
+                };
+                let result_var = format!("signed{i}");
+                // Bound to its own `let` first, not inlined into
+                // `set_header`'s argument list: the call's own `.request`
+                // argument borrows `request` (via `.clone()`) while
+                // `&mut request.headers` is also live as an argument in the
+                // same call expression, which the borrow checker rejects.
+                Some(format!(
+                    "let {result_var} = {};\nset_header(&mut {request_var}.headers, {key_ref}, {result_var});\n",
+                    call_wire_string_expr(call, module, fields, request_var)
+                ))
+            }
+            _ => None,
         })
         .collect()
 }
@@ -404,6 +581,14 @@ fn wire_value_json_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
                 )
             )
         }
+        // A top-level @body call is rendered directly by `call_wire_json_expr`
+        // at its own call site (`body_lines` skips it here). A call nested
+        // inside a ctor field would need to run before the request it might
+        // read exists; `validate::wire_call_resolves` rejects that shape
+        // upstream, so it never reaches this renderer.
+        WireValue::Call(_) => unreachable!(
+            "validate::wire_call_resolves rejects an extern call nested inside a ctor field"
+        ),
     }
 }
 
@@ -417,6 +602,11 @@ fn wire_value_json_expr(v: &WireValue, fields: &FieldCtx<'_>) -> String {
 fn body_lines(wire: &WireBinding, fields: &FieldCtx<'_>) -> Option<String> {
     let body = wire.body.as_ref()?;
     match body {
+        // A top-level call reads `.request`, which does not exist yet at
+        // this point in assembly; [`call_body_stmt`] patches it in once the
+        // request is fully built (`body_field` renders "body: None" here in
+        // the meantime).
+        WireValue::Call(_) => None,
         WireValue::Param(segs) if segs.is_empty() => Some(format!(
             "let body = Some(serde_json::to_string(&input).map_err(|e| {})?);\n",
             encode_failure("e")
@@ -434,6 +624,23 @@ fn body_lines(wire: &WireBinding, fields: &FieldCtx<'_>) -> Option<String> {
             "let body = Some({}.to_string());\n",
             wire_value_json_expr(other, fields)
         )),
+    }
+}
+
+/// The `request.body = ...` statement patching a call-valued `@body` in
+/// once the request is fully assembled, mirroring [`call_header_lines`].
+fn call_body_stmt(
+    wire: &WireBinding,
+    module: &Module,
+    fields: &FieldCtx<'_>,
+    request_var: &str,
+) -> Option<String> {
+    match wire.body.as_ref()? {
+        WireValue::Call(call) => Some(format!(
+            "{request_var}.body = Some({}.to_string());\n",
+            call_wire_json_expr(call, module, fields, request_var)
+        )),
+        _ => None,
     }
 }
 
@@ -629,13 +836,26 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         Some(field) => format!("http_send_with_timeout(&self.options, request, self.{field})"),
         None => "http_send(&self.options, request)".to_string(),
     };
-    // A fresh headers copy per attempt: a before_request hook may rewrite the
-    // map it receives, and a retried attempt must not see a prior attempt's
-    // rewrite.
+    // A call-valued @header/@body reads the request once it exists, so it
+    // patches in right here: after the declared values are folded into
+    // `request` (this line), before it is sent -- the same slot
+    // `before_request` occupies, and right before it, so a hook still sees
+    // the signed header/body.
+    let call_request_lines = call_header_lines(wire, fields.module, fields, "request")
+        + &call_body_stmt(wire, fields.module, fields, "request").unwrap_or_default();
+    let request_binding = if call_request_lines.is_empty() {
+        "let request"
+    } else {
+        "let mut request"
+    };
+    // A fresh headers copy per attempt: a before_request hook (or a
+    // call-valued header/body above) may rewrite the map/body it receives,
+    // and a retried attempt must not see a prior attempt's rewrite.
     let mut attempt = format!(
-        "let request = HttpRequest {{ method: {method}.to_string(), url: url.clone(), headers: headers.clone(), {body_field} }};\n",
+        "{request_binding} = HttpRequest {{ method: {method}.to_string(), url: url.clone(), headers: headers.clone(), {body_field} }};\n",
         method = rust_str(call.method),
     );
+    attempt.push_str(&call_request_lines);
     attempt.push_str(&hook_lines(
         "before_request",
         "request",

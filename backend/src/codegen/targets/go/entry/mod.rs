@@ -699,6 +699,8 @@ fn op_method_decl(
         || hook_binding(bound, "after_response").is_some();
     let call = transport::OpCall {
         wire,
+        module,
+        config,
         has_input: input.is_some(),
         ret_zero,
         discriminator: has_declared_errors.then_some(discriminator.as_str()),

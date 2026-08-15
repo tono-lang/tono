@@ -21,7 +21,7 @@ use crate::codegen::entries::{has_entries, module_entries};
 use crate::codegen::extensions::{bound_extensions, impl_binding};
 use crate::codegen::ops::{module_declared_errors, wire_binding};
 use crate::codegen::validation::shape_has_checks;
-use crate::ir::Module;
+use crate::ir::{Module, WireBinding, WireValue};
 
 /// Whether a module's generated code can construct each error-taxonomy
 /// category, for one target. Computed once per `(module, target)` and
@@ -108,7 +108,29 @@ fn contract_live(module: &Module, langs: &[&str]) -> bool {
             .iter()
             .any(|op| wire_binding(op).is_none() && impl_binding(&bound, &op.id).is_none())
             || entry.fields.iter().any(|f| f.call.is_some())
+            || entry
+                .operations
+                .iter()
+                .any(|op| wire_binding(op).is_some_and(wire_binding_has_call))
     })
+}
+
+/// Whether a wire binding's @header/@body values carry an extern call: any
+/// third-party failure with no mapped sentinel falls back to `ContractError`
+/// naming the extern, the same reason an entry field's own `= ns.fn(args)`
+/// call makes `Contract` live above.
+fn wire_binding_has_call(wire: &WireBinding) -> bool {
+    fn value_has_call(v: &WireValue) -> bool {
+        match v {
+            WireValue::Call(_) => true,
+            WireValue::Object(fields) => fields.iter().any(|(_, v)| value_has_call(v)),
+            WireValue::Lit(_) | WireValue::Field(_) | WireValue::Param(_) | WireValue::Template(_) => {
+                false
+            }
+        }
+    }
+    wire.request_headers.iter().any(|(_, v)| value_has_call(v))
+        || wire.body.as_ref().is_some_and(value_has_call)
 }
 
 /// An entry module's taxonomy liveness for Rust: [`derive`]'s general
