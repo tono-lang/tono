@@ -41,6 +41,9 @@ struct Case {
     /// falls back to the decoded record, matching every other case in this
     /// file.
     resolved_params: Vec<(&'static str, &'static str, FieldKind)>,
+    /// Overrides `empty_module()` when a case needs `ext_libs` (a
+    /// call-valued header/body reads the module's own extern declarations).
+    module: Option<Module>,
 }
 
 impl Case {
@@ -52,6 +55,7 @@ impl Case {
             retry_expr: None,
             timeout_expr: None,
             resolved_params: Vec::new(),
+            module: None,
         }
     }
 
@@ -68,7 +72,7 @@ impl Case {
                 .map(|(_, field, kind)| (field.to_string(), *kind))
         };
         let mut refs = Vec::new();
-        let module = empty_module();
+        let module = self.module.clone().unwrap_or_else(empty_module);
         let config = CasingConfig::new(CaseStyle::Camel);
         let call = OpCall {
             wire: &self.wire,
@@ -455,4 +459,76 @@ fn a_param_reference_in_a_header_key_reads_off_the_record() {
     )];
     let out = case.text();
     assert!(out.contains("transport.FormatScalar(record[\"region\"])"));
+}
+
+/// A module declaring `companyauth.sign`, the ext block a call-valued
+/// header/body reads to resolve its callee.
+fn module_with_sign_extern() -> Module {
+    use crate::ir::{CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, LangPath, Prim, Tref};
+    let mut module = empty_module();
+    module.ext_libs = vec![ExtLib {
+        name: "companyauth".into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: "company/auth".into(),
+        }],
+        structs: vec![],
+        types: vec![],
+        externs: vec![ExternDecl {
+            name: "sign".into(),
+            params: vec![ExternParam {
+                name: "request".into(),
+                r#type: Tref::Prim(Prim::String),
+            }],
+            r#return: Tref::Prim(Prim::String),
+            langs: vec![ExternLang {
+                lang: "go".into(),
+                symbol: "Sign".into(),
+                call_args: vec![CallArg::Ref(vec!["request".into()])],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: true,
+            }],
+        }],
+    }];
+    module
+}
+
+fn sign_call() -> WireValue {
+    use crate::ir::WireCall;
+    WireValue::Call(WireCall {
+        ns: "companyauth".into(),
+        fn_name: "sign".into(),
+        args: vec![crate::ir::WireCallArg::Request],
+    })
+}
+
+#[test]
+fn a_call_valued_header_invokes_the_extern_before_set_header() {
+    let mut case = Case::new(base_wire());
+    case.module = Some(module_with_sign_extern());
+    case.wire.request_headers =
+        vec![(vec![TemplatePart::Lit("Authorization".into())], sign_call())];
+    let out = case.text();
+    assert!(out.contains("signed0, signed0Err :="), "{out}");
+    assert!(out.contains(".Sign(req)"), "{out}");
+    assert!(out.contains("signed0)"), "{out}");
+}
+
+#[test]
+fn a_call_valued_body_assigns_the_extern_result_to_req_body() {
+    let mut case = Case::new(base_wire());
+    case.module = Some(module_with_sign_extern());
+    case.wire.body = Some(sign_call());
+    let out = case.text();
+    assert!(out.contains("signedBody, signedBodyErr :="), "{out}");
+    assert!(out.contains("req.Body = []byte(signedBody)"), "{out}");
+}
+
+#[test]
+fn no_call_valued_header_or_body_emits_no_call_lines() {
+    let case = Case::new(base_wire());
+    let out = case.text();
+    assert!(!out.contains("Err :="));
 }

@@ -195,3 +195,255 @@ pub(super) fn call_body_stmt(
     out.push_str(&format!("{indent_str}{request_var}.body = signedBody;\n"));
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{
+        CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, LangPath, Prim, TemplatePart, Tref,
+    };
+
+    fn module_with_sign_extern() -> Module {
+        Module {
+            name: "m".into(),
+            shapes: vec![],
+            operations: vec![],
+            extensions: vec![],
+            tests: vec![],
+            ext_libs: vec![ExtLib {
+                name: "companyauth".into(),
+                langs: vec![LangPath {
+                    lang: "ts".into(),
+                    path: "@company/auth".into(),
+                }],
+                structs: vec![],
+                types: vec![],
+                externs: vec![ExternDecl {
+                    name: "sign".into(),
+                    params: vec![ExternParam {
+                        name: "request".into(),
+                        r#type: Tref::Prim(Prim::String),
+                    }],
+                    r#return: Tref::Prim(Prim::String),
+                    langs: vec![ExternLang {
+                        lang: "ts".into(),
+                        symbol: "sign".into(),
+                        call_args: vec![CallArg::Ref(vec!["request".into()])],
+                        yields: vec![],
+                        returns: None,
+                        errors: vec![],
+                        sync: false,
+                    }],
+                }],
+            }],
+        }
+    }
+
+    fn field_expr(path: &[String]) -> String {
+        format!("this.settings.{}", path.join("."))
+    }
+
+    fn no_param_access(_: &str) -> Option<String> {
+        None
+    }
+
+    fn call() -> WireCall {
+        WireCall {
+            ns: "companyauth".into(),
+            fn_name: "sign".into(),
+            args: vec![WireCallArg::Request],
+        }
+    }
+
+    #[test]
+    fn a_request_argument_reads_the_assembled_request_variable() {
+        let out = wire_call_arg_expr(
+            &WireCallArg::Request,
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+        );
+        assert_eq!(out, "request");
+    }
+
+    #[test]
+    fn a_field_argument_reads_through_the_field_expr_closure() {
+        let out = wire_call_arg_expr(
+            &WireCallArg::Field(vec!["id".into()]),
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+        );
+        assert_eq!(out, "this.settings.id");
+    }
+
+    #[test]
+    fn a_string_literal_argument_renders_as_a_js_string() {
+        let out = wire_call_arg_expr(
+            &WireCallArg::Lit(serde_json::json!("v")),
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+        );
+        assert_eq!(out, "\"v\"");
+    }
+
+    #[test]
+    fn a_non_string_literal_argument_renders_as_raw_json() {
+        let out = wire_call_arg_expr(
+            &WireCallArg::Lit(serde_json::json!(3)),
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+        );
+        assert_eq!(out, "3");
+    }
+
+    #[test]
+    fn call_wire_stmt_awaits_the_imported_symbol_inside_a_try_catch() {
+        let module = module_with_sign_extern();
+        let mut refs = Vec::new();
+        let out = call_wire_stmt(
+            &call(),
+            &module,
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+            "signed0",
+            &mut refs,
+        );
+        assert!(out.contains("let signed0;"), "{out}");
+        assert!(out.contains("signed0 = await sign(request);"), "{out}");
+        assert!(out.contains("} catch (e) {"), "{out}");
+        assert!(out.contains("\"companyauth.sign\""), "{out}");
+        assert!(!refs.is_empty());
+    }
+
+    #[test]
+    fn call_header_lines_emits_the_call_then_set_header_per_entry() {
+        let module = module_with_sign_extern();
+        let mut refs = Vec::new();
+        let wire = WireBinding {
+            method: "GET".into(),
+            uri: WireValue::Template(vec![]),
+            body: None,
+            response_bindings: Default::default(),
+            success: Vec::new(),
+            endpoint: None,
+            request_headers: vec![(
+                vec![TemplatePart::Lit("Authorization".into())],
+                WireValue::Call(call()),
+            )],
+            query: vec![],
+            timeout: None,
+            retry: None,
+        };
+        let out = call_header_lines(
+            &wire,
+            &module,
+            "  ",
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+            &mut refs,
+        );
+        assert!(out.contains("signed0 = await sign(request);"), "{out}");
+        assert!(
+            out.contains("setHeader(request.headers, \"Authorization\", signed0);"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn call_header_lines_is_empty_with_no_call_valued_header() {
+        let module = module_with_sign_extern();
+        let mut refs = Vec::new();
+        let wire = WireBinding {
+            method: "GET".into(),
+            uri: WireValue::Template(vec![]),
+            body: None,
+            response_bindings: Default::default(),
+            success: Vec::new(),
+            endpoint: None,
+            request_headers: vec![],
+            query: vec![],
+            timeout: None,
+            retry: None,
+        };
+        let out = call_header_lines(
+            &wire,
+            &module,
+            "  ",
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+            &mut refs,
+        );
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn call_body_stmt_assigns_the_signed_value_to_request_body() {
+        let module = module_with_sign_extern();
+        let mut refs = Vec::new();
+        let wire = WireBinding {
+            method: "POST".into(),
+            uri: WireValue::Template(vec![]),
+            body: Some(WireValue::Call(call())),
+            response_bindings: Default::default(),
+            success: Vec::new(),
+            endpoint: None,
+            request_headers: vec![],
+            query: vec![],
+            timeout: None,
+            retry: None,
+        };
+        let out = call_body_stmt(
+            &wire,
+            &module,
+            "  ",
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+            &mut refs,
+        );
+        assert!(out.contains("request.body = signedBody;"), "{out}");
+    }
+
+    #[test]
+    fn call_body_stmt_is_empty_without_a_call_valued_body() {
+        let module = module_with_sign_extern();
+        let mut refs = Vec::new();
+        let wire = WireBinding {
+            method: "POST".into(),
+            uri: WireValue::Template(vec![]),
+            body: None,
+            response_bindings: Default::default(),
+            success: Vec::new(),
+            endpoint: None,
+            request_headers: vec![],
+            query: vec![],
+            timeout: None,
+            retry: None,
+        };
+        let out = call_body_stmt(
+            &wire,
+            &module,
+            "  ",
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+            &mut refs,
+        );
+        assert_eq!(out, "");
+    }
+}

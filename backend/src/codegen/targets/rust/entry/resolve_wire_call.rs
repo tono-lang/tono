@@ -189,3 +189,254 @@ pub(super) fn call_body_stmt(
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::entries::module_entries;
+    use crate::codegen::targets::rust::types::rust_casing;
+    use crate::ir::{
+        CallArg, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam, LangPath, Shape,
+        ShapeKind, Source, TemplatePart,
+    };
+
+    fn field(name: &str, target: Tref) -> EntryField {
+        EntryField {
+            name: name.into(),
+            target,
+            sources: vec![Source::Arg],
+            format: None,
+            transforms: vec![],
+            select: None,
+            call: None,
+            binds: vec![],
+            constraints: vec![],
+            traits: vec![],
+        }
+    }
+
+    fn module_with_extern(return_type: Tref, sync: bool) -> Module {
+        Module {
+            name: "m".into(),
+            shapes: vec![Shape {
+                id: "m#client".into(),
+                kind: ShapeKind::Entry {
+                    fields: vec![field("id", Tref::Prim(Prim::String))],
+                    operations: vec![],
+                },
+                traits: vec![],
+            }],
+            operations: vec![],
+            extensions: vec![],
+            tests: vec![],
+            ext_libs: vec![ExtLib {
+                name: "companyauth".into(),
+                langs: vec![LangPath {
+                    lang: "rust".into(),
+                    path: "company-auth".into(),
+                }],
+                structs: vec![],
+                types: vec![],
+                externs: vec![ExternDecl {
+                    name: "sign".into(),
+                    params: vec![ExternParam {
+                        name: "request".into(),
+                        r#type: Tref::Prim(Prim::String),
+                    }],
+                    r#return: return_type,
+                    langs: vec![ExternLang {
+                        lang: "rust".into(),
+                        symbol: "Client::sign".into(),
+                        call_args: vec![CallArg::Ref(vec!["request".into()])],
+                        yields: vec![],
+                        returns: None,
+                        errors: vec![],
+                        sync,
+                    }],
+                }],
+            }],
+        }
+    }
+
+    fn with_ctx<R>(module: &Module, f: impl FnOnce(&FieldCtx<'_>) -> R) -> R {
+        let entries = module_entries(module);
+        let config = rust_casing();
+        let ctx = FieldCtx {
+            entry: &entries[0],
+            module,
+            config: &config,
+            input: None,
+        };
+        f(&ctx)
+    }
+
+    fn call() -> WireCall {
+        WireCall {
+            ns: "companyauth".into(),
+            fn_name: "sign".into(),
+            args: vec![WireCallArg::Request],
+        }
+    }
+
+    #[test]
+    fn a_request_argument_clones_the_assembled_request() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let out = with_ctx(&module, |ctx| {
+            call_arg_wire_expr(&WireCallArg::Request, ctx, "request")
+        });
+        assert_eq!(out, "request.clone()");
+    }
+
+    #[test]
+    fn a_field_argument_clones_the_typed_settings_read() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let out = with_ctx(&module, |ctx| {
+            call_arg_wire_expr(&WireCallArg::Field(vec!["id".into()]), ctx, "request")
+        });
+        assert_eq!(out, "self.settings.id.clone()");
+    }
+
+    #[test]
+    fn an_unresolved_param_argument_falls_back_to_the_record() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let out = with_ctx(&module, |ctx| {
+            call_arg_wire_expr(&WireCallArg::Param(vec!["id".into()]), ctx, "request")
+        });
+        assert_eq!(
+            out,
+            "record.get(\"id\").cloned().unwrap_or(serde_json::Value::Null)"
+        );
+    }
+
+    #[test]
+    fn a_bare_param_argument_with_no_segments_reads_the_whole_input() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let out = with_ctx(&module, |ctx| {
+            call_arg_wire_expr(&WireCallArg::Param(vec![]), ctx, "request")
+        });
+        assert_eq!(out, "input.clone()");
+    }
+
+    #[test]
+    fn a_literal_argument_renders_as_a_json_literal() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let out = with_ctx(&module, |ctx| {
+            call_arg_wire_expr(&WireCallArg::Lit(serde_json::json!("v")), ctx, "request")
+        });
+        assert!(out.contains("\\\"v\\\"") || out.contains('v'), "{out}");
+    }
+
+    #[test]
+    fn the_bare_call_expression_uses_the_crate_ident_and_awaits_when_async() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let out = with_ctx(&module, |ctx| {
+            call_wire_bare_expr(&call(), &module, ctx, "request")
+        });
+        assert_eq!(out, "company_auth::Client::sign(request.clone()).await");
+    }
+
+    #[test]
+    fn a_sync_extern_emits_the_bare_call_without_await() {
+        let module = module_with_extern(Tref::Prim(Prim::String), true);
+        let out = with_ctx(&module, |ctx| {
+            call_wire_bare_expr(&call(), &module, ctx, "request")
+        });
+        assert_eq!(out, "company_auth::Client::sign(request.clone())");
+    }
+
+    #[test]
+    fn the_error_wrap_names_the_extern_as_the_contract() {
+        let out = wire_call_error_wrap(&call());
+        assert!(out.contains("\"companyauth.sign\""), "{out}");
+        assert!(out.contains("TonoError::Contract"), "{out}");
+    }
+
+    #[test]
+    fn a_string_returning_call_binds_ok_directly() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let out = with_ctx(&module, |ctx| {
+            call_wire_string_expr(&call(), &module, ctx, "request")
+        });
+        assert!(out.contains("Ok(v) => v"), "{out}");
+        assert!(out.contains("Err(e) => return Err("), "{out}");
+    }
+
+    #[test]
+    fn a_non_string_returning_call_converts_before_binding() {
+        let module = module_with_extern(Tref::Prim(Prim::I32), false);
+        let out = with_ctx(&module, |ctx| {
+            call_wire_string_expr(&call(), &module, ctx, "request")
+        });
+        assert!(out.contains("Ok(v) => v.to_string()"), "{out}");
+    }
+
+    #[test]
+    fn a_json_expr_wraps_the_ok_value_through_serde_json() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let out = with_ctx(&module, |ctx| {
+            call_wire_json_expr(&call(), &module, ctx, "request")
+        });
+        assert!(out.contains("serde_json::to_value(&v)"), "{out}");
+    }
+
+    #[test]
+    fn call_header_lines_binds_a_let_before_set_header() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let mut wire = WireBinding {
+            method: "GET".into(),
+            uri: WireValue::Template(vec![]),
+            body: None,
+            response_bindings: Default::default(),
+            success: Vec::new(),
+            endpoint: Some(WireValue::Field(vec!["id".into()])),
+            request_headers: vec![(
+                vec![TemplatePart::Lit("Authorization".into())],
+                WireValue::Call(call()),
+            )],
+            query: vec![],
+            timeout: None,
+            retry: None,
+        };
+        let out = with_ctx(&module, |ctx| {
+            call_header_lines(&wire, &module, ctx, "request")
+        });
+        assert!(out.contains("let signed0 ="), "{out}");
+        assert!(
+            out.contains("set_header(&mut request.headers, \"Authorization\", signed0);"),
+            "{out}"
+        );
+        wire.request_headers.clear();
+        let empty = with_ctx(&module, |ctx| {
+            call_header_lines(&wire, &module, ctx, "request")
+        });
+        assert_eq!(empty, "");
+    }
+
+    #[test]
+    fn call_body_stmt_is_none_without_a_call_valued_body() {
+        let module = module_with_extern(Tref::Prim(Prim::String), false);
+        let mut wire = WireBinding {
+            method: "POST".into(),
+            uri: WireValue::Template(vec![]),
+            body: None,
+            response_bindings: Default::default(),
+            success: Vec::new(),
+            endpoint: Some(WireValue::Field(vec!["id".into()])),
+            request_headers: vec![],
+            query: vec![],
+            timeout: None,
+            retry: None,
+        };
+        assert!(with_ctx(&module, |ctx| call_body_stmt(
+            &wire, &module, ctx, "request"
+        ))
+        .is_none());
+        wire.body = Some(WireValue::Call(call()));
+        let out = with_ctx(&module, |ctx| {
+            call_body_stmt(&wire, &module, ctx, "request")
+        })
+        .unwrap();
+        assert!(out.contains("request.body = Some("), "{out}");
+        assert!(out.contains("serde_json::to_value(&v)"), "{out}");
+    }
+}

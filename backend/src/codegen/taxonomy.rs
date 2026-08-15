@@ -419,6 +419,96 @@ mod tests {
         assert!(liveness.config);
     }
 
+    fn call_value() -> WireValue {
+        WireValue::Call(crate::ir::WireCall {
+            ns: "companyauth".into(),
+            fn_name: "sign".into(),
+            args: vec![crate::ir::WireCallArg::Request],
+        })
+    }
+
+    #[test]
+    fn a_wire_op_with_a_call_valued_header_lights_up_contract() {
+        let mut wire = crate::codegen::test_support::wire_binding("GET");
+        wire.request_headers = vec![(vec![], call_value())];
+        let op = Shape {
+            id: "m#client.ping".into(),
+            kind: ShapeKind::Operation {
+                input_name: None,
+                input: None,
+                output: None,
+                errors: vec![],
+                wire: Some(wire),
+                impl_call: None,
+            },
+            traits: vec![],
+        };
+        let m = module(vec![entry("m#client", vec![op])], vec![], vec![]);
+        assert!(derive(&m, &["rust"]).contract);
+    }
+
+    #[test]
+    fn a_wire_op_with_a_call_valued_body_lights_up_contract() {
+        let mut wire = crate::codegen::test_support::wire_binding("POST");
+        wire.body = Some(call_value());
+        let op = Shape {
+            id: "m#client.ping".into(),
+            kind: ShapeKind::Operation {
+                input_name: None,
+                input: None,
+                output: None,
+                errors: vec![],
+                wire: Some(wire),
+                impl_call: None,
+            },
+            traits: vec![],
+        };
+        let m = module(vec![entry("m#client", vec![op])], vec![], vec![]);
+        assert!(derive(&m, &["rust"]).contract);
+    }
+
+    #[test]
+    fn a_wire_op_with_a_call_nested_in_an_object_body_lights_up_contract() {
+        let mut wire = crate::codegen::test_support::wire_binding("POST");
+        wire.body = Some(WireValue::Object(vec![("signature".into(), call_value())]));
+        let op = Shape {
+            id: "m#client.ping".into(),
+            kind: ShapeKind::Operation {
+                input_name: None,
+                input: None,
+                output: None,
+                errors: vec![],
+                wire: Some(wire),
+                impl_call: None,
+            },
+            traits: vec![],
+        };
+        let m = module(vec![entry("m#client", vec![op])], vec![], vec![]);
+        assert!(derive(&m, &["rust"]).contract);
+    }
+
+    #[test]
+    fn wire_binding_has_call_is_false_with_neither_a_call_header_nor_a_call_body() {
+        let mut wire = crate::codegen::test_support::wire_binding("GET");
+        wire.request_headers = vec![(vec![], WireValue::Field(vec!["id".into()]))];
+        wire.body = Some(WireValue::Field(vec!["id".into()]));
+        assert!(!wire_binding_has_call(&wire));
+    }
+
+    #[test]
+    fn wire_binding_has_call_is_true_from_the_header_alone() {
+        let mut wire = crate::codegen::test_support::wire_binding("GET");
+        wire.request_headers = vec![(vec![], call_value())];
+        assert!(wire_binding_has_call(&wire));
+    }
+
+    #[test]
+    fn wire_binding_has_call_is_true_from_the_body_alone() {
+        let mut wire = crate::codegen::test_support::wire_binding("POST");
+        wire.body = Some(call_value());
+        assert!(wire_binding_has_call(&wire));
+    }
+
     #[test]
     fn all_live_reports_every_category() {
         let liveness = TaxonomyLiveness::all_live();
