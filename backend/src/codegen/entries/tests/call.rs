@@ -141,13 +141,16 @@ fn a_call_sourced_field_reports_the_call_shape_regardless_of_its_target() {
     }
 }
 
-fn model_with_a_call_sourced_field() -> crate::ir::Model {
-    let config = call_field("config", "ns", "load", vec![]);
-    let module = module_of(vec![entry_shape("m#client", vec![config])]);
+fn model_of(module: Module) -> crate::ir::Model {
     crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],
     }
+}
+
+fn model_with_a_call_sourced_field() -> crate::ir::Model {
+    let config = call_field("config", "ns", "load", vec![]);
+    model_of(module_of(vec![entry_shape("m#client", vec![config])]))
 }
 
 /// Per-target emission of a call source is deferred for every target but Go
@@ -182,11 +185,10 @@ fn gen_rejects_a_call_sourced_config_member_instead_of_panicking() {
         id: "m#conf".into(),
         args: vec![],
     };
-    let module = module_of(vec![entry_shape("m#client", vec![conf]), config_shape]);
-    let model = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module],
-    };
+    let model = model_of(module_of(vec![
+        entry_shape("m#client", vec![conf]),
+        config_shape,
+    ]));
     let err = super::validate_entries(&model, false).unwrap_err();
     assert!(err.contains("token"), "{err}");
     assert!(err.contains("ext block"), "{err}");
@@ -221,10 +223,7 @@ fn a_with_and_call_field_targeting_an_ext_block_handle_is_same_module() {
     };
     let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
     module.ext_libs = vec![ext_lib_with_handle("c", "h")];
-    let model = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module],
-    };
+    let model = model_of(module);
     let err = super::validate_entries(&model, false).unwrap_err();
     assert!(!err.contains("outside this module"), "{err}");
     assert!(err.contains("ext block"), "{err}");
@@ -245,10 +244,7 @@ fn gen_rejects_a_plain_arg_injected_foreign_handle_field() {
     };
     let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
     module.ext_libs = vec![ext_lib_with_handle("c", "h")];
-    let model = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module],
-    };
+    let model = model_of(module);
     let err = super::validate_entries(&model, false).unwrap_err();
     assert!(err.contains("bus"), "{err}");
     assert!(err.contains("ext block"), "{err}");

@@ -90,6 +90,58 @@ fn ext_param(name: &str, target: Tref) -> ExternParam {
     }
 }
 
+/// A single-language (`go`) extern declaration: the shape every `extern` in
+/// this fixture shares (one `ExternLang`, no per-language variation), so a
+/// call site only spells what actually differs between `load`/`send`/
+/// `connect` instead of the whole `ExternDecl { .. langs: vec![ExternLang {
+/// .. }] }` skeleton each time.
+#[allow(clippy::too_many_arguments)]
+fn go_extern(
+    name: &str,
+    params: Vec<ExternParam>,
+    ret: Tref,
+    symbol: &str,
+    call_args: Vec<CallArg>,
+    yields: Vec<YieldsPos>,
+    returns: Option<ReturnsLit>,
+    errors: Vec<ErrorBinding>,
+) -> ExternDecl {
+    ExternDecl {
+        name: name.into(),
+        params,
+        r#return: ret,
+        langs: vec![ExternLang {
+            lang: "go".into(),
+            symbol: symbol.into(),
+            call_args,
+            yields,
+            returns,
+            errors,
+        }],
+    }
+}
+
+/// An `ext` block declaring only a Go module path, for the common case (this
+/// fixture never exercises a lib bound for more than one target).
+fn go_ext_lib(
+    name: &str,
+    path: &str,
+    structs: Vec<ForeignStruct>,
+    types: Vec<OpaqueType>,
+    externs: Vec<ExternDecl>,
+) -> ExtLib {
+    ExtLib {
+        name: name.into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: path.into(),
+        }],
+        structs,
+        types,
+        externs,
+    }
+}
+
 /// The IR model the RFC-0023 appendix describes, trimmed to the constructs
 /// this task covers (the field-construction call with a `match` projection,
 /// the injectable handle with a construction fallback, and the op-level
@@ -198,13 +250,10 @@ fn model() -> Model {
         traits: vec![],
     };
 
-    let companyconfig = ExtLib {
-        name: "companyconfig".into(),
-        langs: vec![LangPath {
-            lang: "go".into(),
-            path: "tono-ext-fixture/companyconfig".into(),
-        }],
-        structs: vec![
+    let companyconfig = go_ext_lib(
+        "companyconfig",
+        "tono-ext-fixture/companyconfig",
+        vec![
             ForeignStruct {
                 name: "go_config".into(),
                 fields: vec![
@@ -237,79 +286,70 @@ fn model() -> Model {
                 }],
             },
         ],
-        types: vec![],
-        externs: vec![ExternDecl {
-            name: "load".into(),
-            params: vec![
+        vec![],
+        vec![go_extern(
+            "load",
+            vec![
                 ext_param("service", string()),
                 ext_param("region", string()),
             ],
-            r#return: Tref::Ref {
+            Tref::Ref {
                 id: "m#app_config".into(),
                 args: vec![],
             },
-            langs: vec![ExternLang {
-                lang: "go".into(),
-                symbol: "Load".into(),
-                call_args: vec![
-                    CallArg::Param("service".into()),
-                    CallArg::Param("region".into()),
-                ],
-                yields: vec![YieldsPos {
-                    name: "cfg".into(),
-                    r#type: Some(Tref::Ref {
-                        id: "companyconfig#go_config".into(),
-                        args: vec![],
-                    }),
-                    is_error: false,
-                }],
-                returns: Some(ReturnsLit {
-                    r#type: Tref::Ref {
-                        id: "m#app_config".into(),
-                        args: vec![],
-                    },
-                    fields: vec![
-                        ReturnsField {
-                            name: "endpoint".into(),
-                            value: ReturnsValue::Select(Select {
-                                subject: vec!["cfg".into(), "Env".into()],
-                                arms: vec![
-                                    SelectArm {
-                                        pattern: Some(serde_json::json!("prod")),
-                                        value: ArmValue::Field(vec!["cfg".into(), "Host".into()]),
-                                    },
-                                    SelectArm {
-                                        pattern: None,
-                                        value: ArmValue::Field(vec![
-                                            "cfg".into(),
-                                            "DevHost".into(),
-                                        ]),
-                                    },
-                                ],
-                            }),
-                        },
-                        ReturnsField {
-                            name: "token".into(),
-                            value: ReturnsValue::Field(vec![
-                                "cfg".into(),
-                                "Credentials".into(),
-                                "Secret".into(),
-                            ]),
-                        },
-                    ],
+            "Load",
+            vec![
+                CallArg::Param("service".into()),
+                CallArg::Param("region".into()),
+            ],
+            vec![YieldsPos {
+                name: "cfg".into(),
+                r#type: Some(Tref::Ref {
+                    id: "companyconfig#go_config".into(),
+                    args: vec![],
                 }),
-                errors: vec![],
+                is_error: false,
             }],
-        }],
-    };
+            Some(ReturnsLit {
+                r#type: Tref::Ref {
+                    id: "m#app_config".into(),
+                    args: vec![],
+                },
+                fields: vec![
+                    ReturnsField {
+                        name: "endpoint".into(),
+                        value: ReturnsValue::Select(Select {
+                            subject: vec!["cfg".into(), "Env".into()],
+                            arms: vec![
+                                SelectArm {
+                                    pattern: Some(serde_json::json!("prod")),
+                                    value: ArmValue::Field(vec!["cfg".into(), "Host".into()]),
+                                },
+                                SelectArm {
+                                    pattern: None,
+                                    value: ArmValue::Field(vec!["cfg".into(), "DevHost".into()]),
+                                },
+                            ],
+                        }),
+                    },
+                    ReturnsField {
+                        name: "token".into(),
+                        value: ReturnsValue::Field(vec![
+                            "cfg".into(),
+                            "Credentials".into(),
+                            "Secret".into(),
+                        ]),
+                    },
+                ],
+            }),
+            vec![],
+        )],
+    );
 
-    let companybus = ExtLib {
-        name: "companybus".into(),
-        langs: vec![LangPath {
-            lang: "go".into(),
-            path: "tono-ext-fixture/companybus".into(),
-        }],
-        structs: vec![ForeignStruct {
+    let companybus = go_ext_lib(
+        "companybus",
+        "tono-ext-fixture/companybus",
+        vec![ForeignStruct {
             name: "go_ack".into(),
             fields: vec![
                 ForeignField {
@@ -322,76 +362,70 @@ fn model() -> Model {
                 },
             ],
         }],
-        types: vec![OpaqueType {
+        vec![OpaqueType {
             name: "publisher".into(),
-            methods: vec![ExternDecl {
-                name: "send".into(),
-                params: vec![ext_param("topic", string()), ext_param("body", string())],
-                r#return: Tref::Ref {
+            methods: vec![go_extern(
+                "send",
+                vec![ext_param("topic", string()), ext_param("body", string())],
+                Tref::Ref {
                     id: "m#ack".into(),
                     args: vec![],
                 },
-                langs: vec![ExternLang {
-                    lang: "go".into(),
-                    symbol: "Send".into(),
-                    call_args: vec![
-                        CallArg::Param("topic".into()),
-                        CallArg::Param("body".into()),
-                    ],
-                    yields: vec![YieldsPos {
-                        name: "a".into(),
-                        r#type: Some(Tref::Ref {
-                            id: "companybus#go_ack".into(),
-                            args: vec![],
-                        }),
-                        is_error: false,
-                    }],
-                    returns: Some(ReturnsLit {
-                        r#type: Tref::Ref {
-                            id: "m#ack".into(),
-                            args: vec![],
-                        },
-                        fields: vec![
-                            ReturnsField {
-                                name: "id".into(),
-                                value: ReturnsValue::Field(vec!["a".into(), "ID".into()]),
-                            },
-                            ReturnsField {
-                                name: "accepted".into(),
-                                value: ReturnsValue::Field(vec!["a".into(), "OK".into()]),
-                            },
-                        ],
+                "Send",
+                vec![
+                    CallArg::Param("topic".into()),
+                    CallArg::Param("body".into()),
+                ],
+                vec![YieldsPos {
+                    name: "a".into(),
+                    r#type: Some(Tref::Ref {
+                        id: "companybus#go_ack".into(),
+                        args: vec![],
                     }),
-                    errors: vec![ErrorBinding {
-                        sentinel: "ErrBusy".into(),
-                        r#type: "overloaded".into(),
-                    }],
+                    is_error: false,
                 }],
-            }],
+                Some(ReturnsLit {
+                    r#type: Tref::Ref {
+                        id: "m#ack".into(),
+                        args: vec![],
+                    },
+                    fields: vec![
+                        ReturnsField {
+                            name: "id".into(),
+                            value: ReturnsValue::Field(vec!["a".into(), "ID".into()]),
+                        },
+                        ReturnsField {
+                            name: "accepted".into(),
+                            value: ReturnsValue::Field(vec!["a".into(), "OK".into()]),
+                        },
+                    ],
+                }),
+                vec![ErrorBinding {
+                    sentinel: "ErrBusy".into(),
+                    r#type: "overloaded".into(),
+                }],
+            )],
         }],
-        externs: vec![ExternDecl {
-            name: "connect".into(),
-            params: vec![
+        vec![go_extern(
+            "connect",
+            vec![
                 ext_param("endpoint", string()),
                 ext_param("token", string()),
             ],
-            r#return: Tref::Ref {
+            Tref::Ref {
                 id: "companybus#publisher".into(),
                 args: vec![],
             },
-            langs: vec![ExternLang {
-                lang: "go".into(),
-                symbol: "Connect".into(),
-                call_args: vec![
-                    CallArg::Param("endpoint".into()),
-                    CallArg::Param("token".into()),
-                ],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-            }],
-        }],
-    };
+            "Connect",
+            vec![
+                CallArg::Param("endpoint".into()),
+                CallArg::Param("token".into()),
+            ],
+            vec![],
+            None,
+            vec![],
+        )],
+    );
 
     let module = Module {
         name: "m".into(),
