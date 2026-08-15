@@ -3,6 +3,7 @@
 //! from the parent module via `super::*`.
 
 use super::*;
+use crate::codegen::output::TargetKind;
 use crate::ir::WireValue;
 
 #[test]
@@ -27,7 +28,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             )],
             vec![],
         ),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("transport slot"), "{err}");
@@ -50,7 +51,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             ],
             vec![hook],
         ),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("client_init"), "{err}");
@@ -91,7 +92,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
         vec![],
     );
     m.modules[0].operations = vec![loose_op];
-    let err = validate_entries(&m, true).unwrap_err();
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
     assert!(err.contains("declared both loose and in entry"), "{err}");
     // An entry named client next to loose operations collides with the
     // Client interface they emit.
@@ -109,7 +110,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     };
     let mut m = model(vec![entry_shape("m#client", vec![])], vec![]);
     m.modules[0].operations = vec![extra_op];
-    let err = validate_entries(&m, true).unwrap_err();
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
     assert!(err.contains("Client interface"), "{err}");
     // A construction field referencing a shape outside the module is
     // rejected with the offending id named.
@@ -120,7 +121,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     };
     let err = validate_entries(
         &model(vec![entry_shape("m#client", vec![cross])], vec![]),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("other#credentials"), "{err}");
@@ -134,7 +135,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             )],
             vec![],
         ),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("local the generated constructor"), "{err}");
@@ -150,7 +151,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             )],
             vec![],
         ),
-        true
+        &[TargetKind::Go]
     )
     .is_ok());
     // A sibling spelling a derived why/set variable collides with it.
@@ -165,7 +166,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             )],
             vec![],
         ),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("endpoint_why"), "{err}");
@@ -206,13 +207,16 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             }],
             vec![],
         ),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("no endpoint"), "{err}");
     // A single entry named new collides with the Go constructor.
-    let err =
-        validate_entries(&model(vec![entry_shape("m#new", vec![])], vec![]), true).unwrap_err();
+    let err = validate_entries(
+        &model(vec![entry_shape("m#new", vec![])], vec![]),
+        &[TargetKind::Go],
+    )
+    .unwrap_err();
     assert!(err.contains("New constructor"), "{err}");
     // In a multi-entry module, new_<entry> spells the other entry's
     // constructor name.
@@ -224,7 +228,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             ],
             vec![],
         ),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("NewAdmin"), "{err}");
@@ -237,7 +241,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     }];
     let err = validate_entries(
         &model(vec![entry_shape("m#client", vec![renamed])], vec![]),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("keyword") && err.contains("type"), "{err}");
@@ -250,7 +254,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             )],
             vec![],
         ),
-        true
+        &[TargetKind::Go]
     )
     .is_ok());
 }
@@ -285,7 +289,7 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
     };
     let err = validate_entries(
         &model(vec![entry_shape("m#client", vec![]), settings]),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("settings companion"), "{err}");
@@ -300,7 +304,7 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
     };
     let err = validate_entries(
         &model(vec![entry_shape("m#client", vec![]), client_type]),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("client type"), "{err}");
@@ -310,7 +314,7 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
             "m#client",
             vec![field("type", vec![Source::Arg])],
         )]),
-        true,
+        &[TargetKind::Go],
     )
     .unwrap_err();
     assert!(err.contains("keyword"), "{err}");
@@ -351,11 +355,11 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
             ext_libs: vec![],
         }],
     };
-    let err = validate_entries(&m, true).unwrap_err();
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
     assert!(err.contains("mixes loose operations"), "{err}");
     m.modules[0].extensions.clear();
     m.modules[0].operations.clear();
-    assert!(validate_entries(&m, true).is_ok());
+    assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
     // A loose (non-entry) operation carrying a wire binding is rejected
     // outright: entries are the only supported HTTP client surface.
     let wire_loose_op = Shape {
@@ -382,6 +386,6 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
         traits: vec![],
     };
     m.modules[0].operations = vec![wire_loose_op];
-    let err = validate_entries(&m, true).unwrap_err();
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
     assert!(err.contains("outside an entry"), "{err}");
 }

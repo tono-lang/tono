@@ -5,7 +5,68 @@
 use super::{
     arg_identifiers, companion_name, has_source, local_name, module_entries, op_local_name,
 };
-use crate::ir::{ShapeKind, Source, Tref};
+use crate::codegen::output::TargetKind;
+use crate::ir::{EntryField, ShapeKind, Source, Tref};
+
+/// The requested targets that cannot emit `ext` constructs, by output
+/// name. `None` means every target in this run can, so an `ext`-touching field
+/// passes. A run naming no target vouches for nothing, so it counts as
+/// unsupported rather than vacuously supported.
+fn ext_unsupported_by(targets: &[TargetKind]) -> Option<String> {
+    if targets.is_empty() {
+        return Some("no target requested".to_string());
+    }
+    let names: Vec<&str> = targets
+        .iter()
+        .filter(|t| !t.emits_ext_constructs())
+        .map(|t| t.dir())
+        .collect();
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// A field's `= ns.fn(args)` source must resolve to a declared `extern` that
+/// carries a binding for every target being generated. Without this an emitter
+/// would meet "no such ext block" or "no block for my language" as a pipeline
+/// defect -- a panic -- instead of an authoring error carrying a message.
+fn call_resolves(
+    module: &crate::ir::Module,
+    field: &EntryField,
+    targets: &[TargetKind],
+) -> Result<(), String> {
+    let Some(call) = &field.call else {
+        return Ok(());
+    };
+    let Some(lib) = module.ext_libs.iter().find(|l| l.name == call.ns) else {
+        return Err(format!(
+            "{} = {}.{}(..): no ext block named {} is declared in this module",
+            field.name, call.ns, call.func, call.ns
+        ));
+    };
+    let Some(decl) = lib.externs.iter().find(|e| e.name == call.func) else {
+        return Err(format!(
+            "{} = {}.{}(..): ext {} declares no extern named {}",
+            field.name, call.ns, call.func, call.ns, call.func
+        ));
+    };
+    for target in targets {
+        if !decl
+            .langs
+            .iter()
+            .any(|l| target.binding_langs().contains(&l.lang.as_str()))
+        {
+            return Err(format!(
+                "{} = {}.{}(..): extern {} declares no {} block; {} codegen has nothing to emit",
+                field.name,
+                call.ns,
+                call.func,
+                call.func,
+                target.binding_langs()[0],
+                target.dir()
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// The construction-surface names the generated Settings reserves for its
 /// transport slots, per binding language key. An entry field with one of
@@ -130,13 +191,15 @@ fn ref_id(t: &Tref) -> Option<&str> {
 /// about the language changes), so this is a generation-time gap the same as
 /// the endpoint check, not a checker rule.
 ///
-/// `go_only` says whether every target this call generates for is Go: an
-/// `ext`-touching field (RFC-0023) is emitted only by the Go target so far
-/// (TypeScript and Rust are separate, later tasks), so a request that
-/// generates for any other target still rejects it here instead of letting
-/// codegen panic or silently write uncompilable output for the target that
-/// cannot spell it.
-pub fn validate_entries(model: &crate::ir::Model, go_only: bool) -> Result<(), String> {
+/// `targets` is every target this generation call produces. A field touching
+/// an `ext` block is rejected unless all of them can emit it: a
+/// green pass for one target says nothing about another in the same call, and
+/// the target that cannot spell the construct would panic or write
+/// uncompilable output. Each target answers for itself through
+/// [`TargetKind::emits_ext_constructs`], so landing the next one touches that
+/// method and not this gate.
+pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Result<(), String> {
+    let ext_unsupported = ext_unsupported_by(targets);
     for module in &model.modules {
         for op in &module.operations {
             if let ShapeKind::Operation { wire: Some(_), .. } = &op.kind {
@@ -229,22 +292,20 @@ pub fn validate_entries(model: &crate::ir::Model, go_only: bool) -> Result<(), S
                         ));
                     }
                 }
-                // A field (or config member) that touches an `ext` block
-                // (RFC-0023) is only emitted by the Go target so far: the
-                // extern call itself, and the foreign handle type a field
-                // carries, have no TypeScript or Rust spelling yet. Building
-                // the resolution plan for either would panic (a call source)
-                // or silently write uncompilable output (a foreign handle
-                // field, whose type that target's emitter cannot spell).
-                // Reject every such field here, in one gate, whenever the
-                // request generates for a target other than Go.
-                if !go_only && (field.call.is_some() || foreign_target) {
-                    return Err(format!(
-                        "module {}: entry {} field {} touches an ext block (an extern call or a foreign handle type); code generation for RFC-0023 constructs is only supported for the Go target so far",
-                        module.name, entry.name, field.name
-                    ));
-                }
-                if !go_only {
+                // A field (or config member) touching an `ext` block
+                // reaches an emitter that may have no spelling for
+                // it: building the resolution plan would panic (a call
+                // source) or silently write uncompilable output (a foreign
+                // handle field, whose type that target cannot name). Reject
+                // it here, in one gate, whenever any requested target has not
+                // landed its emission yet.
+                if let Some(unsupported) = &ext_unsupported {
+                    if field.call.is_some() || foreign_target {
+                        return Err(format!(
+                            "module {}: entry {} field {} touches an ext block (an extern call or a foreign handle type); {} cannot emit extern calls or foreign handle types yet",
+                            module.name, entry.name, field.name, unsupported
+                        ));
+                    }
                     if let Tref::Ref { id, .. } = &field.target {
                         if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
                             if let ShapeKind::Config { fields } = &shape.kind {
@@ -254,14 +315,20 @@ pub fn validate_entries(model: &crate::ir::Model, go_only: bool) -> Result<(), S
                                             .is_some_and(|id| is_foreign_ref(module, id))
                                 }) {
                                     return Err(format!(
-                                        "module {}: entry {} field {} member {} touches an ext block (an extern call or a foreign handle type); code generation for RFC-0023 constructs is only supported for the Go target so far",
-                                        module.name, entry.name, field.name, member.name
+                                        "module {}: entry {} field {} member {} touches an ext block (an extern call or a foreign handle type); {} cannot emit extern calls or foreign handle types yet",
+                                        module.name, entry.name, field.name, member.name, unsupported
                                     ));
                                 }
                             }
                         }
                     }
                 }
+                // Resolvable for the targets that will emit it. Checked even
+                // when the gate above let the field through, since that gate
+                // says the target can emit calls, not that this call names a
+                // declared extern with a binding for it.
+                call_resolves(module, field, targets)
+                    .map_err(|e| format!("module {}: entry {} {}", module.name, entry.name, e))?;
             }
         }
         // A module with loose operations emits the `Client` interface; an
