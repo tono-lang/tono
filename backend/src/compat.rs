@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use crate::codegen::taxonomy::{self, TaxonomyLiveness};
 use crate::compat_entry;
+use crate::compat_ext;
 use crate::compat_shape::*;
 use crate::ir::{
     Constraint, EnumBacking, EnumValue, Member, Model, Module, Shape, ShapeKind, Trait, Tref,
@@ -190,6 +191,7 @@ pub fn diff(baseline: &Model, current: &Model) -> Report {
         }
     }
     diff_taxonomy(baseline, current, &mut out);
+    compat_ext::diff_ext_libs(baseline, current, &mut out);
     Report { changes: out }
 }
 

@@ -22,12 +22,15 @@
 
 mod frontend;
 mod gen;
+mod gen_ext;
 mod init;
+mod init_ext;
 #[cfg(feature = "playground")]
 mod playground;
 mod preview;
 mod split;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -315,10 +318,12 @@ fn run_breaking(args: &[String]) -> Result<(), String> {
 
     // The policy layers, weakest to strongest: the project manifest's [compat] if
     // one is discoverable, then a JSON config file, then --level flags on top.
-    let manifest_compat = match discover_manifest().ok() {
-        Some(path) => Some(manifest::Config::load(&path)?.compat),
+    let manifest_file_path = discover_manifest().ok();
+    let manifest_loaded = match &manifest_file_path {
+        Some(path) => Some(manifest::Config::load(path)?),
         None => None,
     };
+    let manifest_compat = manifest_loaded.as_ref().map(|c| c.compat.clone());
     let mut config = Config::default();
     if let Some(compat_cfg) = &manifest_compat {
         apply_manifest_severities(&mut config, compat_cfg);
@@ -363,7 +368,14 @@ fn run_breaking(args: &[String]) -> Result<(), String> {
     let baseline =
         decode_model(&baseline_json).map_err(|e| format!("baseline {git_ref}:{git_path}: {e}"))?;
 
-    let report = compat::diff(&baseline, &current);
+    let mut report = compat::diff(&baseline, &current);
+    if let Some(manifest) = &manifest_loaded {
+        report.changes.extend(ext_version_changes(
+            &git_ref,
+            manifest_file_path.as_deref().unwrap(),
+            &manifest.ext_versions,
+        ));
+    }
     print_report(&report, &config, &git_ref);
 
     if report.worst(&config) == Severity::Error {
@@ -430,6 +442,54 @@ fn git_show(git_ref: &str, path: &str) -> Result<String, String> {
         ));
     }
     String::from_utf8(out.stdout).map_err(|e| format!("git show {spec}: output is not utf-8: {e}"))
+}
+
+/// The repository's top-level directory, so an absolute path (like the one
+/// [`discover_manifest`] returns) can be turned into the repo-root-relative
+/// spelling `git show <ref>:<path>` requires.
+fn git_repo_root() -> Result<PathBuf, String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|e| format!("running git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git rev-parse --show-toplevel: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+    ))
+}
+
+/// The `[ext.*]` version-pin changes between the baseline manifest (fetched
+/// the same way the baseline IR is, `git show <ref>:<path>`) and the current
+/// one already on disk. A project adopting `[ext]` for the first time has no
+/// manifest at the baseline ref: that `git show` failure is not an error for
+/// this check, it just means there is nothing to compare against yet.
+fn ext_version_changes(
+    git_ref: &str,
+    manifest_path: &Path,
+    current: &BTreeMap<String, BTreeMap<String, String>>,
+) -> Vec<compat::Change> {
+    let Ok(root) = git_repo_root() else {
+        return Vec::new();
+    };
+    let Ok(rel) = manifest_path.strip_prefix(&root) else {
+        return Vec::new();
+    };
+    let Some(rel) = rel.to_str() else {
+        return Vec::new();
+    };
+    let baseline = match git_show(git_ref, rel) {
+        Ok(text) => match manifest::Config::from_toml_str(&text) {
+            Ok(cfg) => cfg.ext_versions,
+            Err(_) => return Vec::new(),
+        },
+        Err(_) => return Vec::new(),
+    };
+    tono_backend::compat_ext::diff_ext_versions(&baseline, current)
 }
 
 /// The most recent tag, the default baseline ref (compare against the last

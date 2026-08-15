@@ -145,15 +145,32 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
     let declared = manifest::declared_target_keys(&text)?;
     let cfg = manifest::Config::load(manifest_path)?;
     let targets = resolve_targets(targets_csv, yes, &declared)?;
-    if targets.is_empty() {
-        eprintln!("{}: nothing to add", manifest_path.display());
-        return Ok(());
-    }
 
     let base = manifest_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
+    // A project can gain `ext` blocks with no new target requested at all, so
+    // this is scanned regardless of whether `targets` turns out empty below.
+    let declared_ext = manifest::declared_ext_keys(&text)?;
+    let source_root = base.join(&cfg.project.root);
+    let mut additions = String::new();
+    for (name, langs) in crate::init_ext::scan_ext_names(&source_root) {
+        if !declared_ext.contains(&name) {
+            additions.push_str(&crate::init_ext::ext_block(&name, &langs));
+        }
+    }
+
+    if targets.is_empty() {
+        if additions.is_empty() {
+            eprintln!("{}: nothing to add", manifest_path.display());
+            return Ok(());
+        }
+        fs::write(manifest_path, append_blocks(&text, &additions))
+            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        return Ok(());
+    }
+
     let package_default = cfg
         .project
         .name
@@ -161,7 +178,6 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
         .map(slugify)
         .unwrap_or_else(|| slugify(&project_name_default(&base)));
 
-    let mut additions = String::new();
     for target in targets {
         let key = target.key();
         let is_new = !declared.contains(key);
@@ -181,6 +197,7 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
             }
         }
     }
+
     if !additions.is_empty() {
         fs::write(manifest_path, append_blocks(&text, &additions))
             .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
@@ -294,11 +311,15 @@ fn run_fresh(
     };
     let package_default = slugify(&name);
 
-    fs::write(
-        &manifest_path,
-        render_manifest(&name, root.as_deref(), &targets, &package_default),
-    )
-    .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let mut text = render_manifest(&name, root.as_deref(), &targets, &package_default);
+    let source_root = match &root {
+        Some(r) => cwd.join(r),
+        None => cwd.clone(),
+    };
+    for (name, langs) in crate::init_ext::scan_ext_names(&source_root) {
+        text.push_str(&crate::init_ext::ext_block(&name, &langs));
+    }
+    fs::write(&manifest_path, text).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
     eprintln!("wrote {}", manifest_path.display());
 
     for target in targets {

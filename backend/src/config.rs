@@ -29,6 +29,21 @@ pub struct Config {
     pub compat: Compat,
     /// Enabled and generatable targets only, ordered Rust, Go, TypeScript.
     pub targets: Vec<ResolvedTarget>,
+    /// `[ext.<name>]` pinned versions (RFC-0023): ext name -> normalized lang
+    /// key ("go"/"rust"/"ts") -> version string. Carried through verbatim; the
+    /// target/model-aware checks (missing pin, compat) live where the model
+    /// is available, not here.
+    pub ext_versions: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+/// `"typescript"` normalizes to `"ts"` so a manifest key and an `ExtLib`
+/// `LangPath.lang`/`ExternLang.lang` string always compare equal regardless
+/// of which spelling was used.
+pub fn normalize_ext_lang(lang: &str) -> &str {
+    match lang {
+        "typescript" => "ts",
+        other => other,
+    }
 }
 
 /// Global project settings. `root` anchors the qualified module names (RFC-0011)
@@ -128,6 +143,14 @@ pub fn declared_target_keys(text: &str) -> Result<BTreeSet<String>, String> {
     Ok(raw.target.keys().cloned().collect())
 }
 
+/// The raw `[ext.*]` keys a manifest text declares. Same purpose as
+/// [`declared_target_keys`]: lets `tono init` ask "is this ext already
+/// pinned" without resolving the whole config.
+pub fn declared_ext_keys(text: &str) -> Result<BTreeSet<String>, String> {
+    let raw: RawManifest = toml::from_str(text).map_err(|e| format!("invalid tono.toml: {e}"))?;
+    Ok(raw.ext.keys().cloned().collect())
+}
+
 // --- raw TOML surface -------------------------------------------------------
 
 #[derive(Deserialize, Default)]
@@ -139,6 +162,11 @@ struct RawManifest {
     compat: RawCompat,
     #[serde(default)]
     target: BTreeMap<String, RawTarget>,
+    /// `[ext.<name>]`: pinned version per language for an FFI library
+    /// (RFC-0023). Kept as a bare string map here; validating that a key is a
+    /// known lang belongs to the target/model-aware check in `gen`.
+    #[serde(default)]
+    ext: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -213,10 +241,20 @@ fn resolve(raw: RawManifest) -> Result<Config, String> {
     // A deterministic engine order regardless of the manifest's key order.
     targets.sort_by_key(|t| kind_order(t.kind));
 
+    let mut ext_versions = BTreeMap::new();
+    for (name, langs) in raw.ext {
+        let mut normalized = BTreeMap::new();
+        for (lang, version) in langs {
+            normalized.insert(normalize_ext_lang(&lang).to_string(), version);
+        }
+        ext_versions.insert(name, normalized);
+    }
+
     Ok(Config {
         project,
         compat,
         targets,
+        ext_versions,
     })
 }
 
@@ -618,5 +656,41 @@ enabled = false
         assert!(casing.contains(&(SymbolKind::EnumMember, CaseStyle::ScreamingSnake)));
         assert!(casing.contains(&(SymbolKind::Variant, CaseStyle::Pascal)));
         assert!(casing.contains(&(SymbolKind::Module, CaseStyle::Snake)));
+    }
+
+    #[test]
+    fn ext_versions_section_parses() {
+        let src = "[ext.companyconfig]\ngo = \"v1.4.2\"\nts = \"^3.1.0\"\n";
+        let cfg = Config::from_toml_str(src).unwrap();
+        let lib = cfg.ext_versions.get("companyconfig").unwrap();
+        assert_eq!(lib.get("go").map(String::as_str), Some("v1.4.2"));
+        assert_eq!(lib.get("ts").map(String::as_str), Some("^3.1.0"));
+    }
+
+    #[test]
+    fn ext_versions_normalizes_typescript_to_ts() {
+        let src = "[ext.companyconfig]\ntypescript = \"^3.1.0\"\n";
+        let cfg = Config::from_toml_str(src).unwrap();
+        let lib = cfg.ext_versions.get("companyconfig").unwrap();
+        assert_eq!(lib.get("ts").map(String::as_str), Some("^3.1.0"));
+        assert!(!lib.contains_key("typescript"));
+    }
+
+    #[test]
+    fn ext_versions_defaults_to_empty() {
+        let cfg = Config::from_toml_str("[target.rust]\n").unwrap();
+        assert!(cfg.ext_versions.is_empty());
+    }
+
+    #[test]
+    fn declared_ext_keys_lists_the_ext_names() {
+        let keys = declared_ext_keys("[ext.companyconfig]\ngo = \"v1\"\n").unwrap();
+        assert!(keys.contains("companyconfig"));
+    }
+
+    #[test]
+    fn declared_ext_keys_is_empty_for_a_manifest_with_no_ext() {
+        let keys = declared_ext_keys("[project]\nname = \"demo\"\n").unwrap();
+        assert!(keys.is_empty());
     }
 }

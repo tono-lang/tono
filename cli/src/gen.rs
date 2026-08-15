@@ -18,6 +18,7 @@ use tono_backend::config as manifest;
 use tono_backend::ir::{decode_model, Model};
 
 use crate::frontend::{Frontend, FrontendError};
+use crate::gen_ext;
 use crate::{discover_manifest, flag_value, read_stdin};
 
 pub fn run(args: &[String]) -> Result<(), String> {
@@ -129,17 +130,62 @@ fn gen_from_manifest(
     // manifest, which is exactly what compiling the project from source needs.
     let source_root = base.join(&cfg.project.root);
     let model = read_ir(ir_path, &source_root)?;
+
+    // An ext lib used by an enabled target with no pinned version fails the
+    // whole run before anything is written, rather than partway through.
+    let mut ext_deps = Vec::new();
     for target in &cfg.targets {
+        ext_deps.push(gen_ext::ext_deps_for(&model, &cfg, target.kind)?);
+    }
+
+    for (target, deps) in cfg.targets.iter().zip(&ext_deps) {
         let out_dir = base.join(&target.out);
         let mut written = Vec::new();
         for (rel, formatted) in target_outputs(&model, target)? {
-            let dest = out_dir.join(rel);
+            let formatted = if target.kind == TargetKind::TypeScript
+                && rel == Path::new("package.json")
+                && !deps.is_empty()
+            {
+                gen_ext::inject_package_json_dependencies(&formatted, deps)?
+            } else {
+                formatted
+            };
+            let dest = out_dir.join(&rel);
             write_generated(&dest, target.kind, &formatted)?;
             written.push(dest);
+        }
+        if !deps.is_empty() {
+            merge_native_manifest(target.kind, &out_dir, deps)?;
         }
         report_target(target.kind, &out_dir, &written, clean)?;
     }
     Ok(())
+}
+
+type ManifestMerge = fn(&str, &[(String, String)]) -> String;
+
+/// Patch the ext dependencies into the native build manifest `tono init`
+/// scaffolds (`go.mod`, `Cargo.toml`), if it is already on disk. Silently
+/// skipped when absent: generation never creates this file, only merges into
+/// what `init` already wrote, the same guard `write_generated` applies to
+/// `package.json`.
+fn merge_native_manifest(
+    kind: TargetKind,
+    out_dir: &Path,
+    deps: &[(String, String)],
+) -> Result<(), String> {
+    let (file_name, merge): (&str, ManifestMerge) = match kind {
+        TargetKind::Go => ("go.mod", gen_ext::merge_go_mod),
+        TargetKind::Rust => ("Cargo.toml", gen_ext::merge_cargo_toml),
+        TargetKind::TypeScript => return Ok(()),
+    };
+    let dest = out_dir.join(file_name);
+    if !dest.is_file() {
+        return Ok(());
+    }
+    let existing = fs::read_to_string(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    let merged = merge(&existing, deps);
+    fs::write(&dest, merged).map_err(|e| format!("{}: {e}", dest.display()))
 }
 
 /// The formatted files a manifest target generates: each entry is the path

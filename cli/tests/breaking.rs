@@ -250,6 +250,75 @@ fn dropping_a_bound_hook_reports_a_pruned_declaration_as_source_breaking() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A pinned `[ext.*]` version bumped between the baseline commit and the
+/// working tree is reported, even though the IR itself did not change.
+#[test]
+fn a_pinned_ext_version_bump_is_reported() {
+    let dir = repo("ext-version-bump");
+    std::fs::write(
+        dir.join("tono.toml"),
+        "[ext.companyconfig]\ngo = \"v1.4.2\"\n",
+    )
+    .unwrap();
+    git(&dir, &["add", "tono.toml"]);
+    git(&dir, &["commit", "-q", "-m", "pin companyconfig"]);
+
+    std::fs::write(
+        dir.join("tono.toml"),
+        "[ext.companyconfig]\ngo = \"v1.5.0\"\n",
+    )
+    .unwrap();
+    // Reuse the baseline IR unchanged, so the version bump is the only diff.
+    std::fs::write(dir.join("current.json"), BASELINE).unwrap();
+    let out = tono()
+        .current_dir(&dir)
+        .args([
+            "breaking",
+            "current.json",
+            "--baseline",
+            "HEAD",
+            "--baseline-path",
+            "ir.json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ext-version-bumped companyconfig@go"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("v1.4.2"), "{stdout}");
+    assert!(stdout.contains("v1.5.0"), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A project with no `[ext]` table at either commit gets no ext-related noise.
+#[test]
+fn no_ext_table_reports_nothing_new() {
+    let dir = repo("no-ext");
+    std::fs::write(dir.join("current.json"), BASELINE).unwrap();
+    let out = tono()
+        .current_dir(&dir)
+        .args([
+            "breaking",
+            "current.json",
+            "--baseline",
+            "HEAD",
+            "--baseline-path",
+            "ir.json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("ext-version-bumped"), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // Every IR fixture literal in this file embeds a bare version number; a
 // stale one fails with a decode error far from this assertion. Catch it
 // here instead: the same bump every past IR version change forgot.
