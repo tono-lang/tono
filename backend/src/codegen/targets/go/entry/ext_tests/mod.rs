@@ -5,18 +5,15 @@
 //! compile" proof lives in `backend/tests/go_ext_roundtrip.rs`; this module
 //! exercises the emitter's own branches directly.
 
-use super::ext_fixtures::{
-    call_ref, ext_param, field, go_ext_lib, go_extern, member, string_t, structure,
-};
+use super::ext_fixtures::{ext_param, field, member, string_t, structure};
 use super::*;
 use crate::codegen::entries::module_entries;
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::rendered;
 use crate::ir::{
-    ArmValue, CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang,
-    ForeignField, ForeignStruct, LangPath, OpImplCall, OpaqueType, ReturnsField, ReturnsLit,
-    ReturnsValue, Select, SelectArm, Shape, ShapeKind, Source, Trait, Tref, YieldsPos,
+    CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang, LangPath,
+    OpImplCall, OpaqueType, Shape, ShapeKind, Tref, YieldsPos,
 };
 
 fn entry_text(module: &Module) -> String {

@@ -8,267 +8,43 @@ use super::*;
 
 // --- call_assign / impl_call_body: happy paths and defensive fallbacks -
 
-/// A single-entry module wiring a field-construction call, an injectable
-/// handle with a construction fallback, and an op implemented by a call
-/// into that handle's method with a declared sentinel: close to the RFC's
-/// own appendix, exercised through the full `emit` pipeline so the
-/// integration with `mod.rs`/`surface.rs`/`constructor.rs`/`resolve.rs` is
-/// covered too, not just `ext.rs` in isolation.
-fn appendix_like_module() -> Module {
-    let app_config = structure(
-        "m#app_config",
-        vec![
-            member("endpoint", string_t(), true),
-            member("token", string_t(), true),
-        ],
-    );
-    let ack = structure("m#ack", vec![member("id", string_t(), true)]);
-    let note = structure("m#note", vec![member("body", string_t(), true)]);
-    let mut overloaded = structure("m#overloaded", vec![member("message", string_t(), true)]);
-    overloaded.traits = vec![Trait {
-        id: "retryable".into(),
-        value: serde_json::Value::Null,
-    }];
-
-    let mut config_field = field(
-        "config",
-        Tref::Ref {
-            id: "m#app_config".into(),
-            args: vec![],
-        },
-        vec![],
-    );
-    config_field.call = Some(EntryCall {
-        ns: "companyconfig".into(),
-        func: "load".into(),
-        args: vec![call_ref(&["region"])],
-    });
-
-    let mut bus_field = field(
-        "bus",
-        Tref::Ref {
-            id: "companybus#publisher".into(),
-            args: vec![],
-        },
-        vec![Source::With],
-    );
-    // Exercises Ctor, List, and Lit call-arg shapes together with a Ref, so
-    // every `CallArg` branch a real field-construction call can carry is
-    // covered through the full plan, not only the standalone unit test.
-    let mut ctor_fields = std::collections::BTreeMap::new();
-    ctor_fields.insert("Region".to_string(), call_ref(&["region"]));
-    bus_field.call = Some(EntryCall {
-        ns: "companybus".into(),
-        func: "connect".into(),
-        args: vec![
-            CallArg::Ctor(CallCtor {
-                name: "opts".into(),
-                fields: ctor_fields,
-            }),
-            CallArg::List(vec![CallArg::Lit(serde_json::json!(1))]),
-        ],
-    });
-
-    let region_field = field("region", string_t(), vec![Source::Arg]);
-
-    let publish_op = Shape {
-        id: "m#client.publish".into(),
-        kind: ShapeKind::Operation {
-            input: Some(Tref::Ref {
-                id: "m#note".into(),
-                args: vec![],
-            }),
-            input_name: Some("payload".into()),
-            output: Some(Tref::Ref {
-                id: "m#ack".into(),
-                args: vec![],
-            }),
-            errors: vec![Tref::Ref {
-                id: "m#overloaded".into(),
-                args: vec![],
-            }],
-            wire: None,
-            impl_call: Some(OpImplCall {
-                recv: vec!["bus".into()],
-                method: "send".into(),
-                args: vec![call_ref(&["payload", "body"])],
-            }),
-        },
-        traits: vec![],
-    };
-
-    let entry = Shape {
-        id: "m#client".into(),
-        kind: ShapeKind::Entry {
-            fields: vec![region_field, config_field, bus_field],
-            operations: vec![publish_op],
-        },
-        traits: vec![],
-    };
-
-    let companyconfig = go_ext_lib(
-        "companyconfig",
-        "company/config",
-        vec![ForeignStruct {
-            name: "go_config".into(),
-            fields: vec![ForeignField {
-                name: "Host".into(),
-                r#type: string_t(),
-            }],
-        }],
-        vec![],
-        vec![go_extern(
-            "load",
-            vec![ext_param("region", string_t())],
-            Tref::Ref {
-                id: "m#app_config".into(),
-                args: vec![],
-            },
-            "Load",
-            vec![CallArg::Param("region".into())],
-            vec![YieldsPos {
-                name: "cfg".into(),
-                r#type: Some(Tref::Ref {
-                    id: "companyconfig#go_config".into(),
-                    args: vec![],
-                }),
-                is_error: false,
-            }],
-            Some(ReturnsLit {
-                r#type: Tref::Ref {
-                    id: "m#app_config".into(),
-                    args: vec![],
-                },
-                fields: vec![
-                    ReturnsField {
-                        name: "endpoint".into(),
-                        value: ReturnsValue::Field(vec!["cfg".into(), "Host".into()]),
-                    },
-                    ReturnsField {
-                        name: "token".into(),
-                        // A match projection, so the hoisted `switch` path
-                        // renders too.
-                        value: ReturnsValue::Select(Select {
-                            subject: vec!["cfg".into(), "Host".into()],
-                            arms: vec![
-                                SelectArm {
-                                    pattern: Some(serde_json::json!("prod")),
-                                    value: ArmValue::Lit(serde_json::json!("p")),
-                                },
-                                SelectArm {
-                                    pattern: None,
-                                    value: ArmValue::Field(vec!["cfg".into(), "Host".into()]),
-                                },
-                            ],
-                        }),
-                    },
-                ],
-            }),
-            vec![],
-        )],
-    );
-
-    let companybus = ExtLib {
-        name: "companybus".into(),
-        langs: vec![LangPath {
-            lang: "go".into(),
-            path: "company/bus".into(),
-        }],
-        structs: vec![],
-        types: vec![OpaqueType {
-            name: "publisher".into(),
-            methods: vec![go_extern(
-                "send",
-                vec![ext_param("body", string_t())],
-                Tref::Ref {
-                    id: "m#ack".into(),
-                    args: vec![],
-                },
-                "Send",
-                vec![CallArg::Param("body".into())],
-                vec![YieldsPos {
-                    name: "a".into(),
-                    r#type: Some(string_t()),
-                    is_error: false,
-                }],
-                Some(ReturnsLit {
-                    r#type: Tref::Ref {
-                        id: "m#ack".into(),
-                        args: vec![],
-                    },
-                    fields: vec![ReturnsField {
-                        name: "id".into(),
-                        value: ReturnsValue::Field(vec!["a".into()]),
-                    }],
-                }),
-                vec![ErrorBinding {
-                    sentinel: "ErrBusy".into(),
-                    r#type: "overloaded".into(),
-                }],
-            )],
-        }],
-        externs: vec![go_extern(
-            "connect",
-            vec![
-                ext_param("opts", string_t()),
-                ext_param("extra", string_t()),
-            ],
-            Tref::Ref {
-                id: "companybus#publisher".into(),
-                args: vec![],
-            },
-            "Connect",
-            vec![
-                CallArg::Param("opts".into()),
-                CallArg::Param("extra".into()),
-            ],
-            vec![],
-            None,
-            vec![],
-        )],
-    };
-
-    Module {
-        name: "m".into(),
-        shapes: vec![app_config, note, ack, overloaded, entry],
-        operations: vec![],
-        extensions: vec![],
-        ext_libs: vec![companyconfig, companybus],
-        tests: vec![],
-    }
-}
-
 #[test]
-fn the_appendix_like_module_wires_the_call_handle_and_impl_call() {
-    let module = appendix_like_module();
+fn the_appendix_module_wires_the_call_handle_and_impl_call() {
+    // The exact RFC-0023 appendix fixture the go_ext_roundtrip integration
+    // test also `go build`s against real libraries (shared via
+    // `ext_fixtures::rfc0023_appendix_module`, so the two never drift):
+    // this test checks the generated Go statements directly, exercised
+    // through the full `emit` pipeline so the integration with
+    // `mod.rs`/`surface.rs`/`constructor.rs`/`resolve.rs` is covered too,
+    // not just `ext.rs` in isolation.
+    let module = crate::codegen::targets::go::entry::ext_fixtures::rfc0023_appendix_module();
     let text = entry_text(&module);
 
     // Field-construction call: import, call, yields naming, returns
     // projection with a hoisted match.
-    assert!(text.contains(":= config.Load(s.Region)"));
+    assert!(text.contains(":= companyconfig.Load(s.Service, s.Region)"));
     assert!(text.contains("configErr != nil"));
-    assert!(text.contains("switch configCfg.Host {"));
-    assert!(text.contains("var configToken string"));
+    assert!(text.contains("switch configCfg.Env {"));
+    assert!(text.contains("var configEndpoint string"));
     assert!(text.contains("s.Config = AppConfig{"));
+    assert!(text.contains("Token: configCfg.Credentials.Secret"));
 
     // The handle field is unexported, its With* option assigns without a
     // dereference (the carrier already holds the pointer type), and the
     // construction fallback wraps the call.
-    assert!(text.contains("\tbus *bus.Publisher\n"));
+    assert!(text.contains("\tbus *companybus.Publisher\n"));
     assert!(!text.contains("\tBus "));
-    assert!(text.contains("func WithBus(v *bus.Publisher) ClientOption {"));
+    assert!(text.contains("func WithBus(v *companybus.Publisher) ClientOption {"));
     assert!(text.contains("w.bus = v"));
     assert!(text.contains("if w.bus != nil {"));
     assert!(text.contains("s.bus = w.bus"));
-    assert!(text.contains("bus.Opts{Region: s.Region}"));
-    assert!(text.contains("[]any{1}"));
-    assert!(text.contains(":= bus.Connect("));
+    assert!(text.contains(":= companybus.Connect(s.Config.Endpoint, s.Config.Token)"));
 
     // The op's own impl call: reads the receiver, calls the method, maps
     // the declared sentinel, and projects the return.
     assert!(text.contains("c.settings.bus"));
-    assert!(text.contains(".Send(input.Body)"));
-    assert!(text.contains("errors.Is(publishErr, bus.ErrBusy)"));
+    assert!(text.contains(".Send(\"notes\", input.Body)"));
+    assert!(text.contains("errors.Is(publishErr, companybus.ErrBusy)"));
     assert!(text.contains("&Overloaded{Message: publishErr.Error()}"));
     assert!(text.contains("ContractName: \"companybus.publisher.send\""));
     assert!(text.contains("return Ack{"));
