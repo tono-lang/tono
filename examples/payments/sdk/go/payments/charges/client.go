@@ -100,9 +100,11 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	return newWithTransport(nil, apiKey, opts...)
 }
 
-// newWithTransport is New plus the transport seam the generated tests use: a
-// non-nil canonical transport replaces whatever construction resolved,
-// after client_init ran, so a test answers canonically without a server.
+// newWithTransport is New plus the seams the generated tests use: a non-nil
+// canonical transport replaces whatever construction resolved, after
+// client_init ran; a non-nil field override skips that field's own real
+// `extern` construction call outright, so a hermetic test never reaches
+// the real library, not just avoids calling it at runtime.
 func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...ClientOption) (*Client, error) {
 	w := clientOptions{}
 	for _, opt := range opts {

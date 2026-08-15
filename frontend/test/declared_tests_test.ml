@@ -401,6 +401,11 @@ ext companybus {
         errors: { "BUSY" => overloaded }
       }
     }
+
+    extern count(): i32 {
+      go { call: "Count"() }
+      ts { call: "count"() }
+    }
   }
 
   extern connect(endpoint: string): publisher {
@@ -465,6 +470,59 @@ let extern_stub_cases =
       {|test "t" {
   c: client { api_token: "t0" }
   stub companybus.publisher.ghost: ack { id: "x" }
+  expect c: ok
+}|};
+    etc "unknown opaque type (TC0057)" [ "TC0057" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.nope.send: ack { id: "x" }
+  expect c: ok
+}|};
+    etc "construction stub missing dependency segment (TC0057)" [ "TC0057" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub c.get_user: user { login: "x", id: 1 }
+  expect c: ok
+}|};
+    etc "extern free stub binding has no outcome to assert (TC0060)"
+      [ "TC0060" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  s: stub companyconfig.load: app_config { endpoint: "https://stub" }
+  expect s: ok
+  expect c: ok
+}|};
+    etc "extern method stub binding has no outcome to assert (TC0060)"
+      [ "TC0060" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  s: stub companybus.publisher.send: ack { id: "a1" }
+  expect s: ok
+  expect c: ok
+}|};
+    etc "extern method stub answered with a non-constructor value" []
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.count: 42
+  expect c: ok
+}|};
+    etc "extern free stub empty sequence (TC0058)" [ "TC0058" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companyconfig.load: []
+  expect c: ok
+}|};
+    etc "extern method stub answered with a sequence" []
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.send: [ack { id: "a1" }, ack { id: "a2" }]
+  expect c: ok
+}|};
+    etc "extern method stub answered with an unknown constructor (TC0058)"
+      [ "TC0058" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.send: nope.thing { x: 1 }
   expect c: ok
 }|};
   ]
