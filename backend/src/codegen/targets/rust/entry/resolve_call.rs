@@ -264,7 +264,7 @@ mod tests {
     use crate::codegen::test_support::bare_entry_field;
     use crate::ir::{
         CallArg, EntryCall, ExtLib, ExternDecl, ExternParam, LangPath, ReturnsField, ReturnsLit,
-        ReturnsValue, YieldsPos,
+        ReturnsValue, SelectArm, YieldsPos,
     };
 
     fn module_of(shapes: Vec<Shape>) -> Module {
@@ -414,5 +414,199 @@ mod tests {
         assert!(out.contains("endpoint: cfg.Host"), "{out}");
         assert!(out.contains("\"ErrBusy\""), "{out}");
         assert!(out.contains("ContractError"), "{out}");
+    }
+
+    #[test]
+    fn json_literal_covers_every_json_value_kind() {
+        assert_eq!(json_literal(&serde_json::json!("hi")), "\"hi\".to_string()");
+        assert_eq!(json_literal(&serde_json::json!(true)), "true");
+        assert_eq!(json_literal(&serde_json::json!(3)), "3");
+        assert_eq!(json_literal(&serde_json::json!(null)), "Default::default()");
+        assert_eq!(
+            json_literal(&serde_json::json!([1, 2])),
+            "serde_json::json!([1,2])"
+        );
+    }
+
+    #[test]
+    fn ok_pattern_destructures_a_tuple_for_more_than_one_position() {
+        let a = YieldsPos {
+            name: "a".into(),
+            r#type: None,
+            is_error: false,
+        };
+        let b = YieldsPos {
+            name: "b".into(),
+            r#type: None,
+            is_error: false,
+        };
+        assert_eq!(ok_pattern(&[&a]), "a");
+        assert_eq!(ok_pattern(&[&a, &b]), "(a, b)");
+    }
+
+    #[test]
+    fn select_expr_covers_a_field_arm_a_sources_arm_and_the_synthesized_default() {
+        let select = Select {
+            subject: vec!["cfg".into(), "env".into()],
+            arms: vec![
+                SelectArm {
+                    pattern: Some(serde_json::json!("prod")),
+                    value: ArmValue::Field(vec!["cfg".into(), "host".into()]),
+                },
+                SelectArm {
+                    pattern: Some(serde_json::json!("dev")),
+                    value: ArmValue::Sources(vec![]),
+                },
+            ],
+        };
+        let out = select_expr(&select);
+        assert!(out.contains("\"prod\".to_string() => cfg.host"), "{out}");
+        // Every declared arm carries a pattern, so the function synthesizes
+        // a trailing wildcard arm rather than leaving the match non-total.
+        assert!(out.contains("_ => cfg.env.clone()"), "{out}");
+    }
+
+    #[test]
+    fn error_match_maps_every_declared_sentinel_and_falls_back_to_contract_error() {
+        let out = error_match(
+            "companybus",
+            "send",
+            &[
+                crate::ir::ErrorBinding {
+                    sentinel: "ErrBusy".into(),
+                    r#type: "overloaded".into(),
+                },
+                crate::ir::ErrorBinding {
+                    sentinel: "ErrGone".into(),
+                    r#type: "not_found".into(),
+                },
+            ],
+        );
+        assert!(out.contains("\"ErrBusy\" =>"), "{out}");
+        assert!(out.contains("\"ErrGone\" =>"), "{out}");
+        assert!(out.contains("companybus.send"), "{out}");
+        assert!(out.contains("ContractError"), "{out}");
+    }
+
+    /// A call whose `call_args` mix every `CallArg` variant (`Param`,
+    /// `List`, `Ctor`, a nested `Call`), and whose `yields` carries two
+    /// non-error positions, exercises `call_arg_expr`'s full match and the
+    /// `ok_pattern` tuple branch together.
+    #[test]
+    fn a_call_field_with_every_call_arg_variant_and_a_nested_call_emits_without_panicking() {
+        let mut region = bare_entry_field("region", Tref::Prim(Prim::String), vec![Source::Arg]);
+        region.name = "region".into();
+        let mut token = bare_entry_field("token", Tref::Prim(Prim::String), vec![]);
+        token.call = Some(EntryCall {
+            ns: "companyauth".into(),
+            func: "sign".into(),
+            args: vec![],
+        });
+        let mut config = bare_entry_field("config", Tref::Prim(Prim::String), vec![]);
+        config.call = Some(EntryCall {
+            ns: "companyconfig".into(),
+            func: "load".into(),
+            args: vec![
+                CallArg::Param("region".into()),
+                CallArg::List(vec![CallArg::Lit(serde_json::json!(1))]),
+                CallArg::Ctor(crate::ir::CallCtor {
+                    name: "opts".into(),
+                    fields: [("retries".to_string(), CallArg::Lit(serde_json::json!(3)))]
+                        .into_iter()
+                        .collect(),
+                }),
+                CallArg::Call(Box::new(EntryCall {
+                    ns: "companyauth".into(),
+                    func: "sign".into(),
+                    args: vec![],
+                })),
+            ],
+        });
+        let mut module = module_of(vec![client_shape(vec![token, config, region])]);
+        module.ext_libs = vec![
+            ExtLib {
+                name: "companyauth".into(),
+                langs: vec![LangPath {
+                    lang: "rust".into(),
+                    path: "company-auth".into(),
+                }],
+                structs: vec![],
+                types: vec![],
+                externs: vec![ExternDecl {
+                    name: "sign".into(),
+                    params: vec![],
+                    r#return: Tref::Prim(Prim::String),
+                    langs: vec![ExternLang {
+                        lang: "rust".into(),
+                        symbol: "sign".into(),
+                        call_args: vec![],
+                        yields: vec![],
+                        returns: None,
+                        errors: vec![],
+                    }],
+                }],
+            },
+            ExtLib {
+                name: "companyconfig".into(),
+                langs: vec![LangPath {
+                    lang: "rust".into(),
+                    path: "company_config".into(),
+                }],
+                structs: vec![crate::ir::ForeignStruct {
+                    name: "opts".into(),
+                    fields: vec![crate::ir::ForeignField {
+                        name: "retries".into(),
+                        r#type: Tref::Prim(Prim::I32),
+                    }],
+                }],
+                types: vec![],
+                externs: vec![ExternDecl {
+                    name: "load".into(),
+                    params: vec![],
+                    r#return: Tref::Prim(Prim::String),
+                    langs: vec![ExternLang {
+                        lang: "rust".into(),
+                        symbol: "Client::load".into(),
+                        call_args: vec![
+                            CallArg::Param("region".into()),
+                            CallArg::List(vec![CallArg::Lit(serde_json::json!(1))]),
+                            CallArg::Ctor(crate::ir::CallCtor {
+                                name: "opts".into(),
+                                fields: [(
+                                    "retries".to_string(),
+                                    CallArg::Lit(serde_json::json!(3)),
+                                )]
+                                .into_iter()
+                                .collect(),
+                            }),
+                            CallArg::Call(Box::new(EntryCall {
+                                ns: "companyauth".into(),
+                                func: "sign".into(),
+                                args: vec![],
+                            })),
+                        ],
+                        yields: vec![
+                            YieldsPos {
+                                name: "a".into(),
+                                r#type: Some(Tref::Prim(Prim::String)),
+                                is_error: false,
+                            },
+                            YieldsPos {
+                                name: "b".into(),
+                                r#type: Some(Tref::Prim(Prim::String)),
+                                is_error: false,
+                            },
+                        ],
+                        returns: None,
+                        errors: vec![],
+                    }],
+                }],
+            },
+        ];
+        let out = entry_text(&module, &rust_casing());
+        assert!(out.contains("vec![1]"), "{out}");
+        assert!(out.contains("opts { retries: 3 }"), "{out}");
+        assert!(out.contains("company_auth::sign().await"), "{out}");
+        assert!(out.contains("Ok((a, b))"), "{out}");
     }
 }
