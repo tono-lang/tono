@@ -179,3 +179,7 @@ fn fake_method_body(
         StubAnswer::Http(_) => format!("{zero}\treturn zero, nil\n"),
     }
 }
+
+#[cfg(test)]
+#[path = "vector_extern_tests.rs"]
+mod extern_tests;
