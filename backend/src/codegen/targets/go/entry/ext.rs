@@ -37,7 +37,7 @@ use super::{
 /// scope): the head honors `@rename(go)` unless it is itself a foreign
 /// handle (unexported regardless), every later segment is a plain member
 /// access into whatever that field resolved to.
-fn sibling_path_expr(
+pub(super) fn sibling_path_expr(
     entry: &EntryModel<'_>,
     module: &Module,
     config: &CasingConfig,
@@ -63,7 +63,7 @@ fn sibling_path_expr(
 /// case), this is exactly what Go itself infers, so no import alias is
 /// written (see `GoRules::render_import`); it is only spelled out as an
 /// alias when the path segment is not legal Go on its own.
-fn lib_ident(go_path: &str) -> String {
+pub(super) fn lib_ident(go_path: &str) -> String {
     let last = go_path.rsplit('/').next().unwrap_or(go_path);
     let cleaned: String = last
         .chars()
@@ -82,7 +82,7 @@ fn lib_ident(go_path: &str) -> String {
     }
 }
 
-fn lib_go_path(lib: &ExtLib) -> Option<&str> {
+pub(super) fn lib_go_path(lib: &ExtLib) -> Option<&str> {
     lib.langs
         .iter()
         .find(|l| l.lang == "go")
@@ -104,14 +104,14 @@ pub(super) fn find_extern<'a>(lib: &'a ExtLib, name: &str) -> Option<&'a ExternD
     })
 }
 
-fn go_lang(decl: &ExternDecl) -> Option<&ExternLang> {
+pub(super) fn go_lang(decl: &ExternDecl) -> Option<&ExternLang> {
     decl.langs.iter().find(|l| l.lang == "go")
 }
 
 /// Import the lib's Go package and return the selector every call through it
 /// uses, or `None` when the `ext` block declares no Go module path (it may
 /// bind other targets only).
-fn import_lib(refs: &mut Vec<Symbol>, lib: &ExtLib) -> Option<String> {
+pub(super) fn import_lib(refs: &mut Vec<Symbol>, lib: &ExtLib) -> Option<String> {
     let path = lib_go_path(lib)?;
     let ident = lib_ident(path);
     refs.push(import(&ident, path));
@@ -151,7 +151,7 @@ pub(super) fn handle_symbol(lib: &ExtLib) -> Option<Symbol> {
     Some(import(&lib_ident(path), path))
 }
 
-fn literal_of_json(v: &serde_json::Value) -> String {
+pub(super) fn literal_of_json(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => format!("{s:?}"),
         serde_json::Value::Bool(b) => b.to_string(),
@@ -204,7 +204,7 @@ pub(super) fn call_arg_expr(
     }
 }
 
-fn ctor_expr(
+pub(super) fn ctor_expr(
     refs: &mut Vec<Symbol>,
     lib: &ExtLib,
     ctor: &CallCtor,
@@ -232,7 +232,7 @@ fn ctor_expr(
     format!("{ident}.{}{{{}}}", pascal(&ctor.name), fields.join(", "))
 }
 
-fn yields_path_expr(yields_vars: &HashMap<String, String>, path: &[String]) -> String {
+pub(super) fn yields_path_expr(yields_vars: &HashMap<String, String>, path: &[String]) -> String {
     let head = path.first().cloned().unwrap_or_default();
     let mut expr = yields_vars
         .get(&head)
@@ -245,7 +245,7 @@ fn yields_path_expr(yields_vars: &HashMap<String, String>, path: &[String]) -> S
     expr
 }
 
-fn member_type(module: &Module, target: &Tref, member: &str) -> Option<Tref> {
+pub(super) fn member_type(module: &Module, target: &Tref, member: &str) -> Option<Tref> {
     let Tref::Ref { id, .. } = target else {
         return None;
     };
@@ -264,7 +264,7 @@ fn member_type(module: &Module, target: &Tref, member: &str) -> Option<Tref> {
 /// struct-literal expression itself. `var_prefix` names the hoisted match
 /// variables (the field's own name for a construction call, the op's for a
 /// method call), so two calls in the same scope never collide.
-fn returns_expr(
+pub(super) fn returns_expr(
     module: &Module,
     config: &CasingConfig,
     returns: &ReturnsLit,
@@ -315,7 +315,7 @@ fn returns_expr(
 /// wrapped Go error's message (the closest a bespoke sentinel gets to a
 /// reason, matching the `Cause`/`Message` shape every other boundary wrap in
 /// this target uses), or a bare zero value when no such member exists.
-fn declared_error_literal(
+pub(super) fn declared_error_literal(
     module: &Module,
     config: &crate::codegen::casing::CasingConfig,
     type_name: &str,
@@ -380,7 +380,7 @@ pub(super) fn error_block(
 
 /// Whether any declared `yields` position is the reserved `error` sentinel
 /// (an out-of-convention error position, RFC-0023).
-fn has_error_position(lang: &ExternLang) -> bool {
+pub(super) fn has_error_position(lang: &ExternLang) -> bool {
     lang.yields.iter().any(|y| y.is_error)
 }
 

@@ -739,6 +739,8 @@ mod bespoke_tests;
 mod constructor;
 mod decode;
 mod ext;
+#[cfg(test)]
+mod ext_tests;
 mod impl_op;
 mod resolve;
 pub(crate) mod send;
