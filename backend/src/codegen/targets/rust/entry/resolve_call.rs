@@ -122,7 +122,12 @@ fn call_expr(r: &mut Resolver<'_, '_>, call: &EntryCall) -> String {
         .iter()
         .map(|a| call_arg_expr(r, lib, a))
         .collect();
-    format!("{crate_ident}::{}({}).await", lang.symbol, args.join(", "))
+    let awaited = if lang.sync { "" } else { ".await" };
+    format!(
+        "{crate_ident}::{}({}){awaited}",
+        lang.symbol,
+        args.join(", ")
+    )
 }
 
 /// A `returns:` field's source expression, read off the `yields` binding
@@ -337,6 +342,7 @@ mod tests {
                     yields: vec![],
                     returns: None,
                     errors: vec![],
+                    sync: false,
                 }],
             }],
         }];
@@ -344,6 +350,47 @@ mod tests {
         assert!(out.contains("company_config::Client::load"), "{out}");
         assert!(out.contains(".await"), "{out}");
         assert!(out.contains("async fn new"), "{out}");
+    }
+
+    #[test]
+    fn a_sync_call_field_emits_without_await() {
+        let region = bare_entry_field("region", Tref::Prim(Prim::String), vec![Source::Arg]);
+        let mut config = bare_entry_field("config", Tref::Prim(Prim::String), vec![]);
+        config.call = Some(EntryCall {
+            ns: "companyconfig".into(),
+            func: "load".into(),
+            args: vec![CallArg::Ref(vec!["region".into()])],
+        });
+        let mut module = module_of(vec![client_shape(vec![config, region])]);
+        module.ext_libs = vec![ExtLib {
+            name: "companyconfig".into(),
+            langs: vec![LangPath {
+                lang: "rust".into(),
+                path: "company-config".into(),
+            }],
+            structs: vec![],
+            types: vec![],
+            externs: vec![ExternDecl {
+                name: "load".into(),
+                params: vec![ExternParam {
+                    name: "region".into(),
+                    r#type: Tref::Prim(Prim::String),
+                }],
+                r#return: Tref::Prim(Prim::String),
+                langs: vec![ExternLang {
+                    lang: "rust".into(),
+                    symbol: "Client::load".into(),
+                    call_args: vec![CallArg::Ref(vec!["region".into()])],
+                    yields: vec![],
+                    returns: None,
+                    errors: vec![],
+                    sync: true,
+                }],
+            }],
+        }];
+        let out = entry_text(&module, &rust_casing());
+        assert!(out.contains("company_config::Client::load"), "{out}");
+        assert!(!out.contains(".await"), "{out}");
     }
 
     /// A `@with` field backed by a call fallback builds through
@@ -379,6 +426,7 @@ mod tests {
                         yields: vec![],
                         returns: None,
                         errors: vec![],
+                        sync: false,
                     }],
                 }],
             }];
@@ -463,6 +511,7 @@ mod tests {
                         sentinel: "ErrBusy".into(),
                         r#type: "overloaded".into(),
                     }],
+                    sync: false,
                 }],
             }],
         }];
@@ -600,6 +649,7 @@ mod tests {
                         yields: vec![],
                         returns: None,
                         errors: vec![],
+                        sync: false,
                     }],
                 }],
             },
@@ -656,6 +706,7 @@ mod tests {
                         ],
                         returns: None,
                         errors: vec![],
+                        sync: false,
                     }],
                 }],
             },

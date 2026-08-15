@@ -72,7 +72,7 @@ pub use crate::ir_tests_model::*;
 /// now also reachable as a bare call argument -- no wire-shape change
 /// there, only a new use site (`CallArg`'s codec already accepted `lit` at
 /// any position). Surface-and-IR only; no codegen consumes `impl_call` yet.
-pub const TONO_IR_VERSION: u32 = 15;
+pub const TONO_IR_VERSION: u32 = 16;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

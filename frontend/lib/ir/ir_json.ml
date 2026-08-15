@@ -66,7 +66,7 @@
    reachable as a bare call argument (e.g. the "notes" in
    [.bus.send("notes", .payload.body)]) -- no wire-shape change there, only
    a new use site. Surface-and-IR only; no codegen consumes "impl_call" yet. *)
-let current_ir_version = 15
+let current_ir_version = 16
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

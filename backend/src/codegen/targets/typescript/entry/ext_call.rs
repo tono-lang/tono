@@ -467,6 +467,7 @@ mod tests {
                         sentinel: "BUSY".into(),
                         r#type: "overloaded".into(),
                     }],
+                    sync: false,
                 }],
             }],
         };
@@ -507,6 +508,7 @@ mod tests {
                     yields: vec![],
                     returns: None,
                     errors: vec![],
+                    sync: false,
                 }],
             }],
         };
@@ -768,6 +770,7 @@ mod tests {
                         }],
                     }),
                     errors: vec![],
+                    sync: false,
                 }],
             }],
         };

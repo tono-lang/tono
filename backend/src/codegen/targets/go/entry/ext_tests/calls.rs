@@ -74,6 +74,7 @@ fn lib_missing(lib_langs: Vec<LangPath>, fn_name: &str, fn_lang: &str) -> ExtLib
                 yields: vec![],
                 returns: None,
                 errors: vec![],
+                sync: false,
             }],
         }],
     }
@@ -186,6 +187,7 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
                 ],
                 returns: None,
                 errors: vec![],
+                sync: false,
             }],
         }],
     };

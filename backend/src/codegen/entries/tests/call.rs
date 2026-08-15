@@ -172,6 +172,7 @@ fn ext_lib_with_extern(lib: &str, name: &str, langs: &[&str]) -> ExtLib {
                     yields: vec![],
                     returns: None,
                     errors: vec![],
+                    sync: false,
                 })
                 .collect(),
         }],

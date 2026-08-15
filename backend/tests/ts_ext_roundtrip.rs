@@ -144,6 +144,7 @@ fn appendix_model() -> Model {
                     sentinel: "BUSY".into(),
                     r#type: "overloaded".into(),
                 }],
+                sync: false,
             }],
         }],
     };
@@ -184,6 +185,7 @@ fn appendix_model() -> Model {
                 yields: vec![],
                 returns: None,
                 errors: vec![],
+                sync: false,
             }],
         }],
     };

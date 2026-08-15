@@ -289,6 +289,7 @@ type extern_lang = {
   el_yields : yields_pos list; (* [] when no yields: line *)
   el_returns : returns_lit option;
   el_errors : error_binding list;
+  el_sync : bool;
 }
 
 type extern_param = { xp_name : string; xp_type : tref }

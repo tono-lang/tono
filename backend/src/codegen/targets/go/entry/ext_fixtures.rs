@@ -92,6 +92,7 @@ pub fn go_extern(
             yields,
             returns,
             errors,
+            sync: false,
         }],
     }
 }

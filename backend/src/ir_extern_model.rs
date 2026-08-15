@@ -222,6 +222,8 @@ pub struct ExternLang {
     pub returns: Option<ReturnsLit>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<ErrorBinding>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sync: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -385,5 +387,39 @@ mod tests {
         assert!(json.contains(r#""is_error":true"#));
         let back: YieldsPos = serde_json::from_str(&json).unwrap();
         assert_eq!(back, sentinel);
+    }
+
+    #[test]
+    fn extern_lang_sync_omits_the_flag_when_false() {
+        let lang = ExternLang {
+            lang: "rust".into(),
+            symbol: "load".into(),
+            call_args: vec![],
+            yields: vec![],
+            returns: None,
+            errors: vec![],
+            sync: false,
+        };
+        let json = serde_json::to_string(&lang).unwrap();
+        assert!(!json.contains("sync"));
+        let back: ExternLang = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, lang);
+    }
+
+    #[test]
+    fn extern_lang_sync_serializes_true_and_round_trips() {
+        let lang = ExternLang {
+            lang: "rust".into(),
+            symbol: "load".into(),
+            call_args: vec![],
+            yields: vec![],
+            returns: None,
+            errors: vec![],
+            sync: true,
+        };
+        let json = serde_json::to_string(&lang).unwrap();
+        assert!(json.contains(r#""sync":true"#));
+        let back: ExternLang = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, lang);
     }
 }

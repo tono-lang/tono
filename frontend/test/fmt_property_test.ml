@@ -613,7 +613,8 @@ let gen_extern_lang_body =
         (let+ r = gen_returns_lit in
          Some r);
       ]
-  and+ errors = G.list_size (G.int_range 0 2) gen_error_map_entry in
+  and+ errors = G.list_size (G.int_range 0 2) gen_error_map_entry
+  and+ sync = G.bool in
   {
     Ast.elb_lang = lang;
     elb_lang_span = dspan;
@@ -623,6 +624,7 @@ let gen_extern_lang_body =
     elb_yields = yields;
     elb_returns = returns;
     elb_errors = errors;
+    elb_sync = sync;
     elb_span = dspan;
   }
 
