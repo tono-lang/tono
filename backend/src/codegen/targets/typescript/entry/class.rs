@@ -23,9 +23,10 @@ pub(super) fn class_decl(
     // compiler cannot know statically whether a third-party function
     // returns a Promise, so `ext_call::call_assign` awaits every one
     // unconditionally. An entry with at least one such field therefore
-    // always resolves through an async path here; ADR-0010 applied to
-    // construction means Go stays blocking for the identical `.tono`
-    // source.
+    // always resolves through an async path here, while Go keeps its
+    // blocking constructor for the identical `.tono` source: sync vs
+    // async is a target's own idiom, lowered per language the same way
+    // at every site it comes up.
     let is_async = entry.fields.iter().any(|f| f.call.is_some());
     let mut resolve_fns: Vec<Decl> = Vec::new();
     let mut refs = vec![
@@ -374,8 +375,7 @@ pub(super) fn class_decl(
         // The entry resolves at least one field through an async external
         // call: a TypeScript constructor cannot itself be async, so
         // construction goes through this static factory instead of
-        // `new {client}(...)`; the same `.tono` source keeps Go blocking
-        // (ADR-0010).
+        // `new {client}(...)`; the same `.tono` source keeps Go blocking.
         let ctor_params: String = std::iter::once(format!("settings: {}", n.settings))
             .chain(std::iter::once("options: ClientOptions".to_string()))
             .chain(timeout_field_names.iter().map(|f| format!("{f}: number")))
