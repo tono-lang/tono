@@ -9,7 +9,7 @@
 //! `vitest` run; a construction-only test is hermetic by nature. A call whose
 //! own dependency is neither `.http` nor `.impl` reaches an extern handle
 //! method through the op's own `impl` body; only Go renders that call today,
-//! so such a test is skipped here rather than mis-rendered.
+//! so such a test is skipped here rather than rendered wrong.
 //!
 //! Unlike Go's shared package scope, each test file is its own ES module, so
 //! it imports the surface it exercises. Each test body is self-contained
@@ -79,7 +79,7 @@ pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFi
             // A call whose own dependency has no classic stub (neither Http
             // nor Impl) reaches an extern handle method through the op's
             // `impl` body; no target but Go renders that call today, so the
-            // test is skipped here rather than mis-rendered.
+            // test is skipped here rather than rendered wrong.
             if test.call.is_some() && test.stub.is_none() {
                 continue;
             }

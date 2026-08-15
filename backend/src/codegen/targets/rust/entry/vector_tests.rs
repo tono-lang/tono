@@ -11,7 +11,7 @@
 //! live path can be exercised natively. A call whose own dependency is
 //! neither `.http` nor `.impl` reaches an extern handle method through the
 //! op's own `impl` body; only Go renders that call today, so such a test is
-//! skipped here too rather than mis-rendered.
+//! skipped here too rather than rendered wrong.
 //!
 //! Each generated file is a `#[cfg(test)]` module of the SDK crate itself
 //! (the module tree declares it), which is what lets it reach the
@@ -70,7 +70,7 @@ pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFi
             // A call whose own dependency has no classic stub (neither Http
             // nor Impl) reaches an extern handle method through the op's
             // `impl` body; no target but Go renders that call today, so the
-            // test is skipped here rather than mis-rendered.
+            // test is skipped here rather than rendered wrong.
             if test.call.is_some() && test.stub.is_none() {
                 continue;
             }
