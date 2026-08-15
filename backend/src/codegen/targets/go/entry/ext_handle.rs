@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// One declared method's Go-rendered parameter list (`name Type`, in
+/// declared order) and return type, with every referenced type registered
+/// into `refs` along the way: shared by [`handle_iface_decl`] and
+/// [`handle_adapter_decl`], whose interface method and adapter method
+/// signatures must render byte-for-byte the same so the adapter actually
+/// satisfies the interface.
+fn method_signature(m: &ExternDecl, refs: &mut Vec<Symbol>) -> (Vec<String>, String) {
+    let params: Vec<String> = m
+        .params
+        .iter()
+        .map(|p| {
+            push_type_symbols(&p.r#type, refs);
+            format!("{} {}", camel(&p.name), go_type(&p.r#type))
+        })
+        .collect();
+    push_type_symbols(&m.r#return, refs);
+    (params, go_type(&m.r#return))
+}
+
 /// The unexported name tono generates for a foreign opaque handle's own
 /// method-set interface, qualified by lib and type so two libs' same-named
 /// handle never collide in one Go package.
@@ -55,16 +74,7 @@ pub(in super::super) fn handle_adapter_decl(
     let mut methods = String::new();
     for m in &handle.methods {
         let Some(lang) = go_lang(m) else { continue };
-        let params: Vec<String> = m
-            .params
-            .iter()
-            .map(|p| {
-                push_type_symbols(&p.r#type, &mut refs);
-                format!("{} {}", camel(&p.name), go_type(&p.r#type))
-            })
-            .collect();
-        push_type_symbols(&m.r#return, &mut refs);
-        let ret_ty = go_type(&m.r#return);
+        let (params, ret_ty) = method_signature(m, &mut refs);
         // The adapter's own parameters are exactly the method's declared
         // params, so a `Param` argument in the real call template resolves
         // to the adapter's own identically-named parameter.
@@ -155,20 +165,12 @@ pub(in super::super) fn handle_iface_decl(lib: &ExtLib, handle: &OpaqueType) -> 
     let mut methods = String::new();
     for m in &handle.methods {
         let Some(lang) = go_lang(m) else { continue };
-        let params: Vec<String> = m
-            .params
-            .iter()
-            .map(|p| {
-                push_type_symbols(&p.r#type, &mut refs);
-                format!("{} {}", camel(&p.name), go_type(&p.r#type))
-            })
-            .collect();
-        push_type_symbols(&m.r#return, &mut refs);
+        let (params, ret_ty) = method_signature(m, &mut refs);
         methods.push_str(&format!(
             "\t{}({}) ({}, error)\n",
             lang.symbol,
             params.join(", "),
-            go_type(&m.r#return),
+            ret_ty,
         ));
     }
     if methods.is_empty() {

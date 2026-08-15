@@ -1,7 +1,7 @@
 //! Coverage for the extern-stub fakes a hermetic declared test needs
 //! ([`super`]): the seam constructor's per-field override arguments, the
 //! fake handle type a foreign-handle stub builds, and the canned answer a
-//! fake method body renders. The RFC-0023 appendix fixture already wires a
+//! fake method body renders. The shared appendix fixture already wires a
 //! plain free-fn stub and a stubbed handle method through the real
 //! validation pipeline, so most scenarios here reuse it as-is; the branches
 //! that pipeline never reaches (no stub at all, an unstubbed handle method,
@@ -44,13 +44,46 @@ fn appendix_ctx<'a>(
     }
 }
 
+/// The shared appendix fixture, planned into its entry setup: every test
+/// below starts here, since the fixture already wires a plain free-fn stub
+/// and a stubbed handle method through the real validation pipeline.
+fn appendix_setup(
+    module: &crate::ir::Module,
+) -> (
+    Vec<crate::codegen::entries::EntryModel<'_>>,
+    bool,
+    Names,
+    crate::codegen::casing::CasingConfig,
+) {
+    let (entries, multi, _bound) =
+        plan::entry_setup(module, &BINDING_LANGS).expect("the fixture declares an entry");
+    let n = names(&entries[0], multi);
+    let config = go_casing();
+    (entries, multi, n, config)
+}
+
+/// [`appendix_setup`] plus the fixture's own declared tests, planned: the
+/// scenarios that exercise a specific declared test (a stubbed handle
+/// method, an unstubbed one) index into the returned `Vec` instead of
+/// building a `PlannedTest` by hand.
+fn appendix_setup_with_tests(
+    module: &crate::ir::Module,
+) -> (
+    Vec<crate::codegen::entries::EntryModel<'_>>,
+    bool,
+    Names,
+    crate::codegen::casing::CasingConfig,
+    Vec<declared_tests::EntryTests<'_>>,
+) {
+    let (entries, multi, n, config) = appendix_setup(module);
+    let planned = declared_tests::entry_tests(module).expect("the declared tests validate");
+    (entries, multi, n, config, planned)
+}
+
 #[test]
 fn a_field_with_no_matching_stub_pushes_a_nil_override_for_every_field() {
     let module = ext_fixtures::rfc0023_appendix_module();
-    let (entries, multi, _bound) =
-        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
-    let n = names(&entries[0], multi);
-    let config = go_casing();
+    let (entries, multi, n, config) = appendix_setup(&module);
     let construction = TestConstruction {
         binding: "c".into(),
         entry: "client".into(),
@@ -79,10 +112,7 @@ fn a_field_with_no_matching_stub_pushes_a_nil_override_for_every_field() {
 #[test]
 fn a_plain_free_fn_stub_decodes_a_literal_into_an_override_var() {
     let module = ext_fixtures::rfc0023_appendix_module();
-    let (entries, multi, _bound) =
-        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
-    let n = names(&entries[0], multi);
-    let config = go_casing();
+    let (entries, multi, n, config) = appendix_setup(&module);
     let construction = TestConstruction {
         binding: "c".into(),
         entry: "client".into(),
@@ -123,11 +153,7 @@ fn a_plain_free_fn_stub_decodes_a_literal_into_an_override_var() {
 #[test]
 fn a_foreign_handle_stub_builds_a_fake_and_an_unstubbed_method_panics() {
     let module = ext_fixtures::rfc0023_appendix_module();
-    let (entries, multi, _bound) =
-        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
-    let planned = declared_tests::entry_tests(&module).expect("the declared tests validate");
-    let n = names(&entries[0], multi);
-    let config = go_casing();
+    let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[0]);
     let mut refs = Vec::new();
     let mut extra_decls = Vec::new();
@@ -144,11 +170,7 @@ fn a_foreign_handle_stub_builds_a_fake_and_an_unstubbed_method_panics() {
 #[test]
 fn a_stubbed_handle_method_renders_the_canned_value_answer() {
     let module = ext_fixtures::rfc0023_appendix_module();
-    let (entries, multi, _bound) =
-        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
-    let planned = declared_tests::entry_tests(&module).expect("the declared tests validate");
-    let n = names(&entries[0], multi);
-    let config = go_casing();
+    let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let mut refs = Vec::new();
     let mut extra_decls = Vec::new();
@@ -165,11 +187,7 @@ fn a_stubbed_handle_method_renders_the_canned_value_answer() {
 #[test]
 fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
     let module = ext_fixtures::rfc0023_appendix_module();
-    let (entries, multi, _bound) =
-        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
-    let planned = declared_tests::entry_tests(&module).expect("the declared tests validate");
-    let n = names(&entries[0], multi);
-    let config = go_casing();
+    let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[0]);
     let lib = ExtLib {
         name: "companybus".into(),
@@ -207,11 +225,7 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
 #[test]
 fn fake_method_body_renders_the_declared_error_answer() {
     let module = ext_fixtures::rfc0023_appendix_module();
-    let (entries, multi, _bound) =
-        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
-    let planned = declared_tests::entry_tests(&module).expect("the declared tests validate");
-    let n = names(&entries[0], multi);
-    let config = go_casing();
+    let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let ret = Tref::Ref {
         id: "m#ack".into(),
@@ -232,11 +246,7 @@ fn fake_method_body_renders_the_declared_error_answer() {
 #[test]
 fn fake_method_body_renders_the_contract_dead_letter_answer() {
     let module = ext_fixtures::rfc0023_appendix_module();
-    let (entries, multi, _bound) =
-        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
-    let planned = declared_tests::entry_tests(&module).expect("the declared tests validate");
-    let n = names(&entries[0], multi);
-    let config = go_casing();
+    let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let ret = Tref::Ref {
         id: "m#ack".into(),
@@ -251,11 +261,7 @@ fn fake_method_body_renders_the_contract_dead_letter_answer() {
 #[test]
 fn fake_method_body_renders_the_defensive_http_dead_branch() {
     let module = ext_fixtures::rfc0023_appendix_module();
-    let (entries, multi, _bound) =
-        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
-    let planned = declared_tests::entry_tests(&module).expect("the declared tests validate");
-    let n = names(&entries[0], multi);
-    let config = go_casing();
+    let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let ret = Tref::Ref {
         id: "m#ack".into(),

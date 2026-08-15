@@ -24,6 +24,62 @@ fn ef(name: &str, target: Tref, sources: Vec<Source>, call: Option<EntryCall>) -
     }
 }
 
+/// A single-language (`ts`) module path, the shape every `ExtLib` in this
+/// file declares.
+fn ts_lang_path(path: &str) -> Vec<LangPath> {
+    vec![LangPath {
+        lang: "ts".into(),
+        path: path.into(),
+    }]
+}
+
+/// An `ext` library declaring only a `ts` binding: shared by every fixture
+/// below so the `langs`/`name` boilerplate lives in one place.
+fn ext_lib(
+    name: &str,
+    path: &str,
+    structs: Vec<ForeignStruct>,
+    types: Vec<OpaqueType>,
+    externs: Vec<ExternDecl>,
+) -> ExtLib {
+    ExtLib {
+        name: name.into(),
+        langs: ts_lang_path(path),
+        structs,
+        types,
+        externs,
+    }
+}
+
+fn extern_param(name: &str, r#type: Tref) -> ExternParam {
+    ExternParam {
+        name: name.into(),
+        r#type,
+    }
+}
+
+fn string_param(name: &str) -> ExternParam {
+    extern_param(name, Tref::Prim(Prim::String))
+}
+
+fn foreign_field(name: &str, r#type: Tref) -> ForeignField {
+    ForeignField {
+        name: name.into(),
+        r#type,
+    }
+}
+
+fn string_field(name: &str) -> ForeignField {
+    foreign_field(name, Tref::Prim(Prim::String))
+}
+
+fn foreign_struct(name: &str, fields: Vec<ForeignField>) -> ForeignStruct {
+    ForeignStruct {
+        name: name.into(),
+        fields,
+    }
+}
+
 fn app_config_shape() -> Shape {
     structure(
         "m#app_config",
@@ -42,53 +98,23 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
     let mut load_ctor_fields = BTreeMap::new();
     load_ctor_fields.insert("region".to_string(), CallArg::Param("region".into()));
     load_ctor_fields.insert("service".to_string(), CallArg::Param("service".into()));
-    let companyconfig = ExtLib {
-        name: "companyconfig".into(),
-        langs: vec![LangPath {
-            lang: "ts".into(),
-            path: "@company/config".into(),
-        }],
-        structs: vec![
-            ForeignStruct {
-                name: "ts_opts".into(),
-                fields: vec![
-                    ForeignField {
-                        name: "region".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                    ForeignField {
-                        name: "service".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                ],
-            },
-            ForeignStruct {
-                name: "ts_config".into(),
-                fields: vec![
-                    ForeignField {
-                        name: "host".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                    ForeignField {
-                        name: "token".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                ],
-            },
+    let companyconfig = ext_lib(
+        "companyconfig",
+        "@company/config",
+        vec![
+            foreign_struct(
+                "ts_opts",
+                vec![string_field("region"), string_field("service")],
+            ),
+            foreign_struct(
+                "ts_config",
+                vec![string_field("host"), string_field("token")],
+            ),
         ],
-        types: vec![],
-        externs: vec![ExternDecl {
+        vec![],
+        vec![ExternDecl {
             name: "load".into(),
-            params: vec![
-                ExternParam {
-                    name: "service".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-                ExternParam {
-                    name: "region".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-            ],
+            params: vec![string_param("service"), string_param("region")],
             r#return: Tref::Ref {
                 id: "m#app_config".into(),
                 args: vec![],
@@ -131,30 +157,18 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
                 sync: false,
             }],
         }],
-    };
-    let companybus = ExtLib {
-        name: "companybus".into(),
-        langs: vec![LangPath {
-            lang: "ts".into(),
-            path: "@company/bus".into(),
-        }],
-        structs: vec![],
-        types: vec![OpaqueType {
+    );
+    let companybus = ext_lib(
+        "companybus",
+        "@company/bus",
+        vec![],
+        vec![OpaqueType {
             name: "publisher".into(),
             methods: vec![],
         }],
-        externs: vec![ExternDecl {
+        vec![ExternDecl {
             name: "connect".into(),
-            params: vec![
-                ExternParam {
-                    name: "endpoint".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-                ExternParam {
-                    name: "token".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-            ],
+            params: vec![string_param("endpoint"), string_param("token")],
             r#return: Tref::Ref {
                 id: "companybus#publisher".into(),
                 args: vec![],
@@ -172,7 +186,7 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
                 sync: false,
             }],
         }],
-    };
+    );
     vec![companyconfig, companybus]
 }
 
@@ -243,11 +257,15 @@ fn appendix_module(fields: Vec<EntryField>) -> Module {
     }
 }
 
-fn rendered_text(module: &Module) -> String {
+fn rendered_decls(module: &Module) -> Vec<Decl> {
     let emission = emit(module, &ts_casing());
     let mut decls = emission.shared;
     decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
-    rendered(&decls, &TsRules)
+    decls
+}
+
+fn rendered_text(module: &Module) -> String {
+    rendered(&rendered_decls(module), &TsRules)
 }
 
 #[test]
@@ -429,13 +447,6 @@ fn a_free_extern_fn_stub_swaps_the_seam_in_the_generated_hermetic_test() {
     );
 }
 
-fn rendered_decls(module: &Module) -> Vec<Decl> {
-    let emission = emit(module, &ts_casing());
-    let mut decls = emission.shared;
-    decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
-    decls
-}
-
 /// A `match` inside `returns:` (the appendix's `.cfg.Env` example), the
 /// same construct a config member's own `= match` selection uses,
 /// lowered to an immediately invoked switch since TypeScript has no
@@ -446,20 +457,14 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
 
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("service".to_string(), CallArg::Param("service".into()));
-    let lib = ExtLib {
-        name: "companyconfig".into(),
-        langs: vec![crate::ir::LangPath {
-            lang: "ts".into(),
-            path: "@company/config".into(),
-        }],
-        structs: vec![],
-        types: vec![],
-        externs: vec![ExternDecl {
+    let lib = ext_lib(
+        "companyconfig",
+        "@company/config",
+        vec![],
+        vec![],
+        vec![ExternDecl {
             name: "load".into(),
-            params: vec![ExternParam {
-                name: "service".into(),
-                r#type: Tref::Prim(Prim::String),
-            }],
+            params: vec![string_param("service")],
             r#return: Tref::Ref {
                 id: "m#app_config".into(),
                 args: vec![],
@@ -499,7 +504,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                 sync: false,
             }],
         }],
-    };
+    );
     let config = ef(
         "config",
         Tref::Ref {
