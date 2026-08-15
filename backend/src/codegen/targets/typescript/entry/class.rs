@@ -29,10 +29,19 @@ pub(super) fn class_decl(
     // at every site it comes up.
     let is_async = entry.fields.iter().any(|f| f.call.is_some());
     let mut resolve_fns: Vec<Decl> = Vec::new();
-    let mut refs = vec![
-        support_symbol("ClientOptions"),
-        module_symbol(&en.transport, module),
-    ];
+    let mut refs = vec![support_symbol("ClientOptions")];
+    // TransportError is only ever thrown from a wire operation's own call
+    // site (`transport::op_call`, which already adds its own reference
+    // there); an entry with no wire operation at all never reaches that
+    // code, so importing the category unconditionally here would ask for a
+    // class the taxonomy's own liveness never generates in the first place.
+    let has_wire_op = entry
+        .operations
+        .iter()
+        .any(|op| matches!(&op.kind, ShapeKind::Operation { wire: Some(_), .. }));
+    if has_wire_op {
+        refs.push(module_symbol(&en.transport, module));
+    }
     for f in &entry.fields {
         refs.extend(type_refs(&f.target, module));
         if let FieldShape::Structured(shape) = entry.field_shape(f, module) {
