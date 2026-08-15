@@ -8,6 +8,58 @@ use super::*;
 
 // --- call_assign / impl_call_body: happy paths and defensive fallbacks -
 
+/// A single-language (`go`) extern declaration: the shape every `extern` in
+/// this fixture shares (one `ExternLang`, no per-language variation), so a
+/// call site only spells what actually differs between `load`/`send`/
+/// `connect` instead of the whole `ExternDecl { .. langs: vec![ExternLang {
+/// .. }] }` skeleton each time.
+#[allow(clippy::too_many_arguments)]
+fn go_extern(
+    name: &str,
+    params: Vec<ExternParam>,
+    ret: Tref,
+    symbol: &str,
+    call_args: Vec<CallArg>,
+    yields: Vec<YieldsPos>,
+    returns: Option<ReturnsLit>,
+    errors: Vec<ErrorBinding>,
+) -> ExternDecl {
+    ExternDecl {
+        name: name.into(),
+        params,
+        r#return: ret,
+        langs: vec![ExternLang {
+            lang: "go".into(),
+            symbol: symbol.into(),
+            call_args,
+            yields,
+            returns,
+            errors,
+        }],
+    }
+}
+
+/// An `ext` block declaring only a Go module path, for the common case (this
+/// fixture never exercises a lib bound for more than one target).
+fn go_ext_lib(
+    name: &str,
+    path: &str,
+    structs: Vec<ForeignStruct>,
+    types: Vec<OpaqueType>,
+    externs: Vec<ExternDecl>,
+) -> ExtLib {
+    ExtLib {
+        name: name.into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: path.into(),
+        }],
+        structs,
+        types,
+        externs,
+    }
+}
+
 /// A single-entry module wiring a field-construction call, an injectable
 /// handle with a construction fallback, and an op implemented by a call
 /// into that handle's method with a declared sentinel: close to the RFC's
@@ -106,73 +158,67 @@ fn appendix_like_module() -> Module {
         traits: vec![],
     };
 
-    let companyconfig = ExtLib {
-        name: "companyconfig".into(),
-        langs: vec![LangPath {
-            lang: "go".into(),
-            path: "company/config".into(),
-        }],
-        structs: vec![ForeignStruct {
+    let companyconfig = go_ext_lib(
+        "companyconfig",
+        "company/config",
+        vec![ForeignStruct {
             name: "go_config".into(),
             fields: vec![ForeignField {
                 name: "Host".into(),
                 r#type: string_t(),
             }],
         }],
-        types: vec![],
-        externs: vec![ExternDecl {
-            name: "load".into(),
-            params: vec![ext_param("region", string_t())],
-            r#return: Tref::Ref {
+        vec![],
+        vec![go_extern(
+            "load",
+            vec![ext_param("region", string_t())],
+            Tref::Ref {
                 id: "m#app_config".into(),
                 args: vec![],
             },
-            langs: vec![ExternLang {
-                lang: "go".into(),
-                symbol: "Load".into(),
-                call_args: vec![CallArg::Param("region".into())],
-                yields: vec![YieldsPos {
-                    name: "cfg".into(),
-                    r#type: Some(Tref::Ref {
-                        id: "companyconfig#go_config".into(),
-                        args: vec![],
-                    }),
-                    is_error: false,
-                }],
-                returns: Some(ReturnsLit {
-                    r#type: Tref::Ref {
-                        id: "m#app_config".into(),
-                        args: vec![],
-                    },
-                    fields: vec![
-                        ReturnsField {
-                            name: "endpoint".into(),
-                            value: ReturnsValue::Field(vec!["cfg".into(), "Host".into()]),
-                        },
-                        ReturnsField {
-                            name: "token".into(),
-                            // A match projection, so the hoisted `switch`
-                            // path renders too.
-                            value: ReturnsValue::Select(Select {
-                                subject: vec!["cfg".into(), "Host".into()],
-                                arms: vec![
-                                    SelectArm {
-                                        pattern: Some(serde_json::json!("prod")),
-                                        value: ArmValue::Lit(serde_json::json!("p")),
-                                    },
-                                    SelectArm {
-                                        pattern: None,
-                                        value: ArmValue::Field(vec!["cfg".into(), "Host".into()]),
-                                    },
-                                ],
-                            }),
-                        },
-                    ],
+            "Load",
+            vec![CallArg::Param("region".into())],
+            vec![YieldsPos {
+                name: "cfg".into(),
+                r#type: Some(Tref::Ref {
+                    id: "companyconfig#go_config".into(),
+                    args: vec![],
                 }),
-                errors: vec![],
+                is_error: false,
             }],
-        }],
-    };
+            Some(ReturnsLit {
+                r#type: Tref::Ref {
+                    id: "m#app_config".into(),
+                    args: vec![],
+                },
+                fields: vec![
+                    ReturnsField {
+                        name: "endpoint".into(),
+                        value: ReturnsValue::Field(vec!["cfg".into(), "Host".into()]),
+                    },
+                    ReturnsField {
+                        name: "token".into(),
+                        // A match projection, so the hoisted `switch` path
+                        // renders too.
+                        value: ReturnsValue::Select(Select {
+                            subject: vec!["cfg".into(), "Host".into()],
+                            arms: vec![
+                                SelectArm {
+                                    pattern: Some(serde_json::json!("prod")),
+                                    value: ArmValue::Lit(serde_json::json!("p")),
+                                },
+                                SelectArm {
+                                    pattern: None,
+                                    value: ArmValue::Field(vec!["cfg".into(), "Host".into()]),
+                                },
+                            ],
+                        }),
+                    },
+                ],
+            }),
+            vec![],
+        )],
+    );
 
     let companybus = ExtLib {
         name: "companybus".into(),
@@ -183,61 +229,55 @@ fn appendix_like_module() -> Module {
         structs: vec![],
         types: vec![OpaqueType {
             name: "publisher".into(),
-            methods: vec![ExternDecl {
-                name: "send".into(),
-                params: vec![ext_param("body", string_t())],
-                r#return: Tref::Ref {
+            methods: vec![go_extern(
+                "send",
+                vec![ext_param("body", string_t())],
+                Tref::Ref {
                     id: "m#ack".into(),
                     args: vec![],
                 },
-                langs: vec![ExternLang {
-                    lang: "go".into(),
-                    symbol: "Send".into(),
-                    call_args: vec![CallArg::Param("body".into())],
-                    yields: vec![YieldsPos {
-                        name: "a".into(),
-                        r#type: Some(string_t()),
-                        is_error: false,
-                    }],
-                    returns: Some(ReturnsLit {
-                        r#type: Tref::Ref {
-                            id: "m#ack".into(),
-                            args: vec![],
-                        },
-                        fields: vec![ReturnsField {
-                            name: "id".into(),
-                            value: ReturnsValue::Field(vec!["a".into()]),
-                        }],
-                    }),
-                    errors: vec![ErrorBinding {
-                        sentinel: "ErrBusy".into(),
-                        r#type: "overloaded".into(),
-                    }],
+                "Send",
+                vec![CallArg::Param("body".into())],
+                vec![YieldsPos {
+                    name: "a".into(),
+                    r#type: Some(string_t()),
+                    is_error: false,
                 }],
-            }],
+                Some(ReturnsLit {
+                    r#type: Tref::Ref {
+                        id: "m#ack".into(),
+                        args: vec![],
+                    },
+                    fields: vec![ReturnsField {
+                        name: "id".into(),
+                        value: ReturnsValue::Field(vec!["a".into()]),
+                    }],
+                }),
+                vec![ErrorBinding {
+                    sentinel: "ErrBusy".into(),
+                    r#type: "overloaded".into(),
+                }],
+            )],
         }],
-        externs: vec![ExternDecl {
-            name: "connect".into(),
-            params: vec![
+        externs: vec![go_extern(
+            "connect",
+            vec![
                 ext_param("opts", string_t()),
                 ext_param("extra", string_t()),
             ],
-            r#return: Tref::Ref {
+            Tref::Ref {
                 id: "companybus#publisher".into(),
                 args: vec![],
             },
-            langs: vec![ExternLang {
-                lang: "go".into(),
-                symbol: "Connect".into(),
-                call_args: vec![
-                    CallArg::Param("opts".into()),
-                    CallArg::Param("extra".into()),
-                ],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-            }],
-        }],
+            "Connect",
+            vec![
+                CallArg::Param("opts".into()),
+                CallArg::Param("extra".into()),
+            ],
+            vec![],
+            None,
+            vec![],
+        )],
     };
 
     Module {
@@ -288,15 +328,15 @@ fn the_appendix_like_module_wires_the_call_handle_and_impl_call() {
 
 // --- defensive fallbacks, exercised directly ---------------------------
 
-/// A go-less extern binding, for the "declares no Go binding" case: a real
-/// declared extern whose only language block is `ts`.
-fn ts_only_extern(fn_name: &str) -> ExtLib {
+/// A declared extern with no module path for `lang` (the "no Go binding"
+/// case leaves the lib's own `langs` empty and binds `fn_name` for `ts`
+/// only; the "no Go module path" case binds `fn_name` for `go` but leaves
+/// the lib's own `langs` empty), so `go_lang`/`import_lib` each miss on
+/// exactly the one thing they check.
+fn lib_missing(lib_langs: Vec<LangPath>, fn_name: &str, fn_lang: &str) -> ExtLib {
     ExtLib {
         name: "nope".into(),
-        langs: vec![LangPath {
-            lang: "ts".into(),
-            path: "@company/nope".into(),
-        }],
+        langs: lib_langs,
         structs: vec![],
         types: vec![],
         externs: vec![ExternDecl {
@@ -304,32 +344,8 @@ fn ts_only_extern(fn_name: &str) -> ExtLib {
             params: vec![],
             r#return: string_t(),
             langs: vec![ExternLang {
-                lang: "ts".into(),
+                lang: fn_lang.into(),
                 symbol: fn_name.into(),
-                call_args: vec![],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-            }],
-        }],
-    }
-}
-
-/// A Go-bound extern declared with no `ext` module path at all, for the
-/// "declares no Go module path" case.
-fn no_go_path_extern(fn_name: &str) -> ExtLib {
-    ExtLib {
-        name: "nope".into(),
-        langs: vec![],
-        structs: vec![],
-        types: vec![],
-        externs: vec![ExternDecl {
-            name: fn_name.into(),
-            params: vec![],
-            r#return: string_t(),
-            langs: vec![ExternLang {
-                lang: "go".into(),
-                symbol: "Load".into(),
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
@@ -395,10 +411,19 @@ fn call_assign_degrades_on_every_unresolved_lookup() {
         module_with_call_field(vec![handle_lib("nope", "publisher")], call.clone());
     assert!(call_assign_for(&module, &config_field).contains("unresolved extern"));
 
-    let (module, config_field) = module_with_call_field(vec![ts_only_extern("load")], call.clone());
+    let ts_only = lib_missing(
+        vec![LangPath {
+            lang: "ts".into(),
+            path: "@company/nope".into(),
+        }],
+        "load",
+        "ts",
+    );
+    let (module, config_field) = module_with_call_field(vec![ts_only], call.clone());
     assert!(call_assign_for(&module, &config_field).contains("declares no Go binding"));
 
-    let (module, config_field) = module_with_call_field(vec![no_go_path_extern("load")], call);
+    let no_go_path = lib_missing(vec![], "load", "go");
+    let (module, config_field) = module_with_call_field(vec![no_go_path], call);
     assert!(call_assign_for(&module, &config_field).contains("declares no Go module path"));
 }
 

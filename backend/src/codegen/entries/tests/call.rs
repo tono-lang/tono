@@ -141,17 +141,13 @@ fn a_call_sourced_field_reports_the_call_shape_regardless_of_its_target() {
     }
 }
 
-/// The Go target emits a call-sourced field (RFC-0023): a request that
-/// generates for Go only must not trip the ext-block deferral gate.
-#[test]
-fn go_only_accepts_a_call_sourced_field() {
+fn model_with_a_call_sourced_field() -> crate::ir::Model {
     let config = call_field("config", "ns", "load", vec![]);
     let module = module_of(vec![entry_shape("m#client", vec![config])]);
-    let model = crate::ir::Model {
+    crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],
-    };
-    assert!(super::validate_entries(&model, true).is_ok());
+    }
 }
 
 /// Per-target emission of a call source is deferred for every target but Go
@@ -159,18 +155,15 @@ fn go_only_accepts_a_call_sourced_field() {
 /// so building its resolution plan there would panic. `validate_entries`
 /// runs ahead of emission in every gen pipeline and must reject the field
 /// there instead, whenever the request generates for a non-Go target, or
-/// `tono gen` panics on a spec `tono check` accepted.
+/// `tono gen` panics on a spec `tono check` accepted. A request generating
+/// for Go only must not trip that same gate.
 #[test]
 fn gen_rejects_a_call_sourced_field_instead_of_panicking() {
-    let config = call_field("config", "ns", "load", vec![]);
-    let module = module_of(vec![entry_shape("m#client", vec![config])]);
-    let model = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module],
-    };
+    let model = model_with_a_call_sourced_field();
     let err = super::validate_entries(&model, false).unwrap_err();
     assert!(err.contains("config"), "{err}");
     assert!(err.contains("ext block"), "{err}");
+    assert!(super::validate_entries(&model, true).is_ok());
 }
 
 /// The same deferral for a call-sourced member of a composed config field.
