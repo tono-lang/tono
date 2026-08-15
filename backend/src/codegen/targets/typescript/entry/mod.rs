@@ -448,6 +448,7 @@ mod decode;
 mod ext_call;
 mod impl_op;
 mod resolve;
+mod resolve_wire_call;
 mod surface;
 #[cfg(test)]
 mod tests;

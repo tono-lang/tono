@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const IR: &str = r#"{"tono_ir_version":16,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR: &str = r#"{"tono_ir_version":17,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))
@@ -285,4 +285,13 @@ fn root_is_detected_from_an_existing_tono_file() {
     assert!(manifest.contains("root = \"src\""), "{manifest}");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Every IR fixture literal in this file embeds a bare version number; a
+// stale one fails with a decode error far from this assertion. Catch it
+// here instead: the same bump every past IR version change forgot.
+#[test]
+fn ir_fixture_uses_the_current_ir_version() {
+    let expected = format!("\"tono_ir_version\":{}", tono_backend::ir::TONO_IR_VERSION);
+    assert!(IR.contains(&expected), "stale tono_ir_version in IR: {IR}");
 }

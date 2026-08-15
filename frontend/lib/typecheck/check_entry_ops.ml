@@ -112,9 +112,9 @@ let check_kv_shape ~trait_name ~key_what ~value_what ~(allow_call : bool)
           | _ -> [])
       | Ast.ACall _ when allow_call ->
           (* Arity/type-checking a call read as this position's value is the
-             target compiler's job (RFC-0023's own verification ladder): a
-             call reads `.request` and third-party symbols this checker
-             cannot see into, so it only recognizes the shape here. *)
+             target compiler's job: a call reads `.request` and third-party
+             symbols this checker cannot see into, so it only recognizes
+             the shape here. *)
           []
       | _ ->
           [
@@ -261,9 +261,9 @@ let check_body_shapes ctx (op : Ast.decl) : Diagnostic.t list =
         | [ Ast.ARef _ ] -> []
         | [ Ast.ACtor c ] -> check_body_ctor ctx c
         (* Arity/type-checking a call read as @body's value is the target
-           compiler's job (RFC-0023's own verification ladder): a call
-           reads `.request` and third-party symbols this checker cannot see
-           into, so it only recognizes the shape here. *)
+           compiler's job: a call reads `.request` and third-party symbols
+           this checker cannot see into, so it only recognizes the shape
+           here. *)
         | [ Ast.ACall _ ] -> []
         | [ _ ] ->
             [
@@ -328,75 +328,7 @@ let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
         else None)
       op.Ast.dtraits
 
-(* `.request` is the canonical, already-assembled request; it exists only
-   once a @header/@query/@body extern call reads it, never before. Legal: a direct or ctor-nested [CaRef ["request"]] argument
-   to an [Ast.ACall] that is itself the value of a header/query/body trait.
-   Everywhere else — bare (not passed to a call), inside another trait
-   (@http, @timeout, @retry, @errors, ...), or passed to a call in a
-   non-header/query/body position — is an error: reading it there would mean
-   a request that has not been built yet. A bare [CaParam] inside the call's
-   own arguments is also rejected: unlike an "ext" block's own [call:] line,
-   a trait argument's call has no extern-side parameter list to forward a
-   bare identifier from. *)
-let request_trait_names = [ "header"; "query"; "body" ]
-
-let check_request_value (op : Ast.decl) : Diagnostic.t list =
-  let bad_bare span =
-    err Error_codes.request_value_invalid span
-      "'.request' is only valid as an argument to an extern call inside \
-       @header/@query/@body"
-  in
-  let bad_param span =
-    err Error_codes.request_value_invalid span
-      "a bare identifier has no meaning here; pass a literal or a field \
-       reference"
-  in
-  (* [allow_request] is true only inside the argument subtree of an
-     [Ast.ACall] reached directly from a header/query/body trait's value: a
-     nested ctor/list/call within that subtree still counts (a signer that
-     forwards `.request` into a nested struct-literal mapper is still
-     "argument of a trait of request"), but stepping into a *different*
-     top-level trait argument, or a call anywhere outside that subtree,
-     resets it to false. *)
-  let rec value_diags ~allow_request (v : Ast.trait_arg) : Diagnostic.t list =
-    match v with
-    | Ast.ARef r when r.Ast.segs = [ "request" ] ->
-        if allow_request then [] else [ bad_bare r.Ast.ref_span ]
-    | Ast.ARef _ -> []
-    | Ast.AKv (_, v) -> value_diags ~allow_request v
-    | Ast.AList xs -> List.concat_map (value_diags ~allow_request) xs
-    | Ast.ACtor c ->
-        List.concat_map
-          (fun (_, _, v) -> value_diags ~allow_request v)
-          c.Ast.ctor_fields
-    | Ast.ACall ce -> List.concat_map (call_arg_diags ~allow_request) ce.Ast.ce_args
-    | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.AName _ -> []
-  and call_arg_diags ~allow_request (a : Ast.call_arg) : Diagnostic.t list =
-    match a with
-    | Ast.CaRef r when r.Ast.segs = [ "request" ] ->
-        if allow_request then [] else [ bad_bare r.Ast.ref_span ]
-    | Ast.CaRef _ | Ast.CaLit _ -> []
-    | Ast.CaParam (_, span) -> [ bad_param span ]
-    | Ast.CaCtor c ->
-        List.concat_map
-          (fun (_, _, v) -> value_diags ~allow_request v)
-          c.Ast.ctor_fields
-  in
-  List.concat_map
-    (fun (tr : Ast.trait) ->
-      let is_request_trait = List.mem tr.Ast.tname request_trait_names in
-      (* A "key: value"-form top-level argument is unwrapped before the
-         request-trait dispatch, so @header(value: ns.fn(.request)) reaches
-         the same allow-zone as the ordinary positional spelling. *)
-      let rec top (v : Ast.trait_arg) : Diagnostic.t list =
-        match v with
-        | Ast.AKv (_, v) -> top v
-        | Ast.ACall ce when is_request_trait ->
-            List.concat_map (call_arg_diags ~allow_request:true) ce.Ast.ce_args
-        | v -> value_diags ~allow_request:false v
-      in
-      List.concat_map top tr.Ast.targs)
-    op.Ast.dtraits
+let check_request_value = Check_request_value.check_request_value
 
 (* A loose (non-entry) operation has no entry-field scope, but it can still
    reference its own declared parameter (zero or one segment deep, matching

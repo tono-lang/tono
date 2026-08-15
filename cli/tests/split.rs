@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The IR the monorepo commits: one module `spec` with a single structure.
-const IR_V1: &str = r#"{"tono_ir_version":16,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR_V1: &str = r#"{"tono_ir_version":17,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// The evolved IR: the same structure grows a `currency` member.
-const IR_V2: &str = r#"{"tono_ir_version":16,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]},{"name":"currency","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR_V2: &str = r#"{"tono_ir_version":17,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]},{"name":"currency","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))
@@ -422,4 +422,18 @@ fn an_invalid_branch_name_is_rejected_before_any_push() {
         ""
     );
     let _ = std::fs::remove_dir_all(&base);
+}
+
+// Every IR fixture literal in this file embeds a bare version number; a
+// stale one fails with a decode error far from this assertion. Catch it
+// here instead: the same bump every past IR version change forgot.
+#[test]
+fn ir_fixtures_use_the_current_ir_version() {
+    let expected = format!("\"tono_ir_version\":{}", tono_backend::ir::TONO_IR_VERSION);
+    for (name, fixture) in [("IR_V1", IR_V1), ("IR_V2", IR_V2)] {
+        assert!(
+            fixture.contains(&expected),
+            "stale tono_ir_version in {name}: {fixture}"
+        );
+    }
 }

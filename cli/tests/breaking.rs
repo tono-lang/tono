@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The baseline IR: one structure with an `i64` amount.
-const BASELINE: &str = r#"{"tono_ir_version":16,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const BASELINE: &str = r#"{"tono_ir_version":17,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// The current IR: `amount` retyped to a string, a wire break.
-const RETYPED: &str = r#"{"tono_ir_version":16,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const RETYPED: &str = r#"{"tono_ir_version":17,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))
@@ -209,7 +209,7 @@ fn entry_model_json(bound: bool) -> String {
         "[]"
     };
     format!(
-        r#"{{"tono_ir_version":16,"modules":[{{"name":"notes","shapes":[{{"id":"notes#client","kind":"entry","fields":[{{"name":"endpoint","target":{{"prim":"string"}}}}],"operations":[{{"id":"notes#client.ping","kind":"operation","input":null,"output":null,"errors":[],"traits":[],"wire":{{"method":"GET","uri":{{"template":[{{"lit":"/x"}}]}},"bindings":{{}},"response_bindings":{{}},"success":[200],"endpoint":{{"field":["endpoint"]}}}}}}]}}],"operations":[],"extensions":{extensions}}}]}}"#
+        r#"{{"tono_ir_version":17,"modules":[{{"name":"notes","shapes":[{{"id":"notes#client","kind":"entry","fields":[{{"name":"endpoint","target":{{"prim":"string"}}}}],"operations":[{{"id":"notes#client.ping","kind":"operation","input":null,"output":null,"errors":[],"traits":[],"wire":{{"method":"GET","uri":{{"template":[{{"lit":"/x"}}]}},"bindings":{{}},"response_bindings":{{}},"success":[200],"endpoint":{{"field":["endpoint"]}}}}}}]}}],"operations":[],"extensions":{extensions}}}]}}"#
     )
 }
 
@@ -248,4 +248,18 @@ fn dropping_a_bound_hook_reports_a_pruned_declaration_as_source_breaking() {
         "{stdout}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Every IR fixture literal in this file embeds a bare version number; a
+// stale one fails with a decode error far from this assertion. Catch it
+// here instead: the same bump every past IR version change forgot.
+#[test]
+fn ir_fixtures_use_the_current_ir_version() {
+    let expected = format!("\"tono_ir_version\":{}", tono_backend::ir::TONO_IR_VERSION);
+    for (name, fixture) in [("BASELINE", BASELINE), ("RETYPED", RETYPED)] {
+        assert!(
+            fixture.contains(&expected),
+            "stale tono_ir_version in {name}: {fixture}"
+        );
+    }
 }

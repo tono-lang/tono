@@ -39,7 +39,7 @@ fn fake_frontend(dir: &Path, ir: &str) -> PathBuf {
     script
 }
 
-const IR: &str = r#"{"tono_ir_version":16,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR: &str = r#"{"tono_ir_version":17,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 #[test]
 fn preview_requires_a_target() {
@@ -126,4 +126,13 @@ fn preview_renders_the_generated_sdk() {
         stdout.contains("compiles: yes") || stdout.contains("tsc not found (skipped)"),
         "reports a check outcome:\n{stdout}"
     );
+}
+
+// Every IR fixture literal in this file embeds a bare version number; a
+// stale one fails with a decode error far from this assertion. Catch it
+// here instead: the same bump every past IR version change forgot.
+#[test]
+fn ir_fixture_uses_the_current_ir_version() {
+    let expected = format!("\"tono_ir_version\":{}", tono_backend::ir::TONO_IR_VERSION);
+    assert!(IR.contains(&expected), "stale tono_ir_version in IR: {IR}");
 }

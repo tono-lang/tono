@@ -750,6 +750,7 @@ pub mod ext_fixtures;
 mod ext_tests;
 mod impl_op;
 mod resolve;
+mod resolve_wire_call;
 pub(crate) mod send;
 mod shared;
 mod surface;

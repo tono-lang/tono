@@ -124,9 +124,10 @@ fn wire_binding_has_call(wire: &WireBinding) -> bool {
         match v {
             WireValue::Call(_) => true,
             WireValue::Object(fields) => fields.iter().any(|(_, v)| value_has_call(v)),
-            WireValue::Lit(_) | WireValue::Field(_) | WireValue::Param(_) | WireValue::Template(_) => {
-                false
-            }
+            WireValue::Lit(_)
+            | WireValue::Field(_)
+            | WireValue::Param(_)
+            | WireValue::Template(_) => false,
         }
     }
     wire.request_headers.iter().any(|(_, v)| value_has_call(v))

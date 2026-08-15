@@ -19,35 +19,10 @@ use crate::codegen::entries::wire::{
 };
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::symbol_slot;
-use crate::ir::{
-    ExtLib, ExternDecl, ExternLang, Module, TemplatePart, WireBinding, WireCall, WireCallArg,
-    WireResponsePart, WireValue,
-};
+use crate::ir::{Module, TemplatePart, WireBinding, WireResponsePart, WireValue};
 
-use super::ext::{error_block, import_lib};
+use super::resolve_wire_call::{call_body_stmt, call_header_lines};
 use super::shared_symbol;
-
-fn find_lib<'a>(module: &'a Module, ns: &str) -> &'a ExtLib {
-    module
-        .ext_libs
-        .iter()
-        .find(|l| l.name == ns)
-        .expect("validate::wire_call_resolves checked this ext block exists")
-}
-
-fn find_extern<'a>(lib: &'a ExtLib, func: &str) -> &'a ExternDecl {
-    lib.externs
-        .iter()
-        .find(|e| e.name == func)
-        .expect("validate::wire_call_resolves checked this extern exists")
-}
-
-fn find_go_lang(decl: &ExternDecl) -> &ExternLang {
-    decl.langs
-        .iter()
-        .find(|l| l.lang == "go")
-        .expect("validate::wire_call_resolves checked a go block exists")
-}
 
 /// How a resolved entry-field read spells in a wire string position: a string
 /// already, a branded string needing the `string(...)` flattening, or a value
@@ -92,10 +67,10 @@ pub(super) struct OpCall<'a> {
 
 /// The helper names the emitted text reached, so exactly those references are
 /// declared (an unreached helper must stay prunable).
-struct Reached(BTreeSet<&'static str>);
+pub(super) struct Reached(BTreeSet<&'static str>);
 
 impl Reached {
-    fn slot(&mut self, name: &'static str) -> String {
+    pub(super) fn slot(&mut self, name: &'static str) -> String {
         self.0.insert(name);
         symbol_slot(name)
     }
@@ -211,7 +186,7 @@ fn param_any_expr(segs: &[String], param_access: ParamAccess<'_>) -> String {
 /// whether placeholders route through `PathPart` (URI positions) or
 /// `FormatScalar` (header positions, which the wire does not percent-encode).
 #[allow(clippy::too_many_arguments)]
-fn template_expr(
+pub(super) fn template_expr(
     parts: &[TemplatePart],
     escape: bool,
     field_access: &dyn Fn(&[String]) -> String,
@@ -261,84 +236,6 @@ fn template_expr(
     out.join(" + ")
 }
 
-/// One argument to a @header/@query/@body-position extern call: an ordinary
-/// ref resolves against the op's own scope exactly like a `WireValue` in
-/// the same position would; the reserved [`WireCallArg::Request`] resolves
-/// to `request_var`, the already-assembled request the call reads. `Ctor`
-/// never reaches here: `validate::wire_call_resolves` rejects a
-/// struct-literal mapper in this position (not yet supported by this
-/// target's emitter).
-fn wire_call_arg_expr(
-    arg: &WireCallArg,
-    field_access: &dyn Fn(&[String]) -> String,
-    param_access: ParamAccess<'_>,
-    request_var: &str,
-) -> String {
-    match arg {
-        WireCallArg::Request => request_var.to_string(),
-        WireCallArg::Field(path) => field_access(path),
-        WireCallArg::Param(segs) => match segs.first() {
-            None => "input".to_string(),
-            Some(name) => param_access(name)
-                .map(|(access, _)| access)
-                .unwrap_or_else(|| format!("record[{name:?}]")),
-        },
-        WireCallArg::Lit(v) => go_json_lit(v),
-        WireCallArg::Ctor(_) => unreachable!(
-            "validate::wire_call_resolves rejects a ctor argument in a wire-position call"
-        ),
-    }
-}
-
-/// The Go statement(s) invoking a @header/@query/@body-position extern
-/// call and binding its result to `result_var`: the call itself, then
-/// [`error_block`]'s sentinel discrimination (a mapped sentinel becomes its
-/// declared SDK error type, unmapped becomes `ContractError` naming the
-/// extern -- the same fallback [`hook_lines`]-equivalent Go glue uses
-/// elsewhere), returning early on failure so `result_var` is always valid
-/// past this point.
-#[allow(clippy::too_many_arguments)]
-fn call_wire_stmt(
-    call: &WireCall,
-    module: &Module,
-    config: &CasingConfig,
-    field_access: &dyn Fn(&[String]) -> String,
-    param_access: ParamAccess<'_>,
-    request_var: &str,
-    result_var: &str,
-    ret_zero: &str,
-    fail: &dyn Fn(String) -> String,
-    refs: &mut Vec<Symbol>,
-) -> String {
-    let lib = find_lib(module, &call.ns);
-    let decl = find_extern(lib, &call.fn_name);
-    let lang = find_go_lang(decl);
-    let callee = import_lib(refs, lib).unwrap_or_default();
-    let args: Vec<String> = call
-        .args
-        .iter()
-        .map(|a| wire_call_arg_expr(a, field_access, param_access, request_var))
-        .collect();
-    let err_var = format!("{result_var}Err");
-    let mut out = format!(
-        "{result_var}, {err_var} := {callee}.{}({})\n",
-        lang.symbol,
-        args.join(", ")
-    );
-    let contract_name = format!("{}.{}", call.ns, call.fn_name);
-    out.push_str(&error_block(
-        refs,
-        module,
-        config,
-        lib,
-        &lang.errors,
-        &contract_name,
-        &err_var,
-        &|expr| format!("return {ret_zero}{}\n", fail(expr)),
-    ));
-    out
-}
-
 /// A `WireValue` position (a `request_headers` value) rendered as a string
 /// expression: the two scalar forms, or a template.
 fn wire_value_expr(
@@ -384,7 +281,7 @@ fn wire_value_expr(
 /// field value, and the frontend's ctor typecheck only accepts a reference
 /// or a scalar literal/template per field (RFC-0022 §4: zero new expressive
 /// power).
-fn go_json_lit(json: &serde_json::Value) -> String {
+pub(super) fn go_json_lit(json: &serde_json::Value) -> String {
     match json {
         serde_json::Value::Null => "nil".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
@@ -558,52 +455,6 @@ fn header_lines(
     out
 }
 
-/// One call-statement block per call-valued `request_headers` entry: run
-/// once the request is fully assembled (the declared values already folded
-/// in, see [`header_lines`]), so the call's own `.request` argument
-/// (`request_var`) is the complete, already-built request -- method, path,
-/// headers, and body.
-#[allow(clippy::too_many_arguments)]
-fn call_header_lines(
-    wire: &WireBinding,
-    module: &Module,
-    config: &CasingConfig,
-    field_access: &dyn Fn(&[String]) -> String,
-    field_kind: &dyn Fn(&[String]) -> FieldKind,
-    param_access: ParamAccess<'_>,
-    request_var: &str,
-    ret_zero: &str,
-    fail: &dyn Fn(String) -> String,
-    reached: &mut Reached,
-    refs: &mut Vec<Symbol>,
-) -> String {
-    let set = reached.slot("SetHeader");
-    let mut out = String::new();
-    for (i, (key, value)) in wire.request_headers.iter().enumerate() {
-        let WireValue::Call(call) = value else {
-            continue;
-        };
-        let result_var = format!("signed{i}");
-        out.push_str(&call_wire_stmt(
-            call,
-            module,
-            config,
-            field_access,
-            param_access,
-            request_var,
-            &result_var,
-            ret_zero,
-            fail,
-            refs,
-        ));
-        out.push_str(&format!(
-            "\t{set}({request_var}.Headers, {}, {result_var})\n",
-            template_expr(key, false, field_access, field_kind, param_access, reached),
-        ));
-    }
-    out
-}
-
 /// The request body, or `None` when the operation sends no body: `wire.body`
 /// says exactly what the body is, never inferred from what the input leaves
 /// undeclared. The whole-parameter form marshals the typed input directly
@@ -662,41 +513,6 @@ fn body_lines(
         fail_enc = fail("err".to_string()),
     );
     (text, Some(false))
-}
-
-/// The `request.Body = ...` statement patching a call-valued `@body` in once
-/// the request is fully assembled, mirroring [`call_header_lines`]. Bytes,
-/// not a string: `Request.Body` is `[]byte` (see `send.rs`'s `Request`
-/// struct), matching every other body-building path in this file.
-#[allow(clippy::too_many_arguments)]
-fn call_body_stmt(
-    wire: &WireBinding,
-    module: &Module,
-    config: &CasingConfig,
-    field_access: &dyn Fn(&[String]) -> String,
-    param_access: ParamAccess<'_>,
-    request_var: &str,
-    ret_zero: &str,
-    fail: &dyn Fn(String) -> String,
-    refs: &mut Vec<Symbol>,
-) -> String {
-    let Some(WireValue::Call(call)) = wire.body.as_ref() else {
-        return String::new();
-    };
-    let mut out = call_wire_stmt(
-        call,
-        module,
-        config,
-        field_access,
-        param_access,
-        request_var,
-        "signedBody",
-        ret_zero,
-        fail,
-        refs,
-    );
-    out.push_str(&format!("\t{request_var}.Body = []byte(signedBody)\n"));
-    out
 }
 
 /// The `Retry` field value: the resolved maximum, plus the `When` predicate

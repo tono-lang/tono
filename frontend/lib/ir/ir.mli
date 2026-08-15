@@ -126,12 +126,11 @@ and wire_value =
   | Wire_object of (string * wire_value) list
   | Wire_call of wire_call
 
-(* An extern call read as a @header/@query/@body value (RFC-0023's
-   "argument of a request trait" binding site, decision M): [wcl_args]
-   mirror an ordinary extern call's arguments, plus the reserved
-   [Wca_request] marker for ".request", the canonical, already-assembled
-   request -- legal only here, never during entry construction (see
-   [Ir.entry_call] and [Wca_request]'s own comment). *)
+(* An extern call read as a @header/@body value: [wcl_args] mirror an
+   ordinary extern call's arguments, plus the reserved [Wca_request] marker
+   for ".request", the canonical, already-assembled request -- legal only
+   here, never during entry construction (see [Ir.entry_call] and
+   [Wca_request]'s own comment). *)
 and wire_call = { wcl_ns : string; wcl_fn : string; wcl_args : wire_call_arg list }
 
 and wire_call_arg =
