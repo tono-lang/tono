@@ -739,6 +739,11 @@ mod bespoke_tests;
 mod constructor;
 mod decode;
 mod ext;
+/// IR builders shared by `ext_tests` (this crate's own unit tests) and the
+/// `go_ext_roundtrip` integration test (a separate binary, which can only
+/// see this crate's public API): not `cfg(test)`, so both can reuse the same
+/// fixture builders instead of each declaring their own copy.
+pub mod ext_fixtures;
 #[cfg(test)]
 mod ext_tests;
 mod impl_op;

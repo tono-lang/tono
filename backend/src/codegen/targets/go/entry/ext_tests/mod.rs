@@ -5,46 +5,19 @@
 //! compile" proof lives in `backend/tests/go_ext_roundtrip.rs`; this module
 //! exercises the emitter's own branches directly.
 
+use super::ext_fixtures::{
+    call_ref, ext_param, field, go_ext_lib, go_extern, member, string_t, structure,
+};
 use super::*;
 use crate::codegen::entries::module_entries;
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
-use crate::codegen::test_support::{member, rendered, structure};
+use crate::codegen::test_support::rendered;
 use crate::ir::{
     ArmValue, CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang,
-    ExternParam, ForeignField, ForeignStruct, LangPath, OpImplCall, OpaqueType, Prim, ReturnsField,
-    ReturnsLit, ReturnsValue, Select, SelectArm, Shape, ShapeKind, Source, Trait, Tref, YieldsPos,
+    ForeignField, ForeignStruct, LangPath, OpImplCall, OpaqueType, ReturnsField, ReturnsLit,
+    ReturnsValue, Select, SelectArm, Shape, ShapeKind, Source, Trait, Tref, YieldsPos,
 };
-
-fn string_t() -> Tref {
-    Tref::Prim(Prim::String)
-}
-
-fn field(name: &str, target: Tref, sources: Vec<Source>) -> EntryField {
-    EntryField {
-        name: name.into(),
-        target,
-        sources,
-        format: None,
-        transforms: vec![],
-        select: None,
-        call: None,
-        binds: vec![],
-        constraints: vec![],
-        traits: vec![],
-    }
-}
-
-fn call_ref(path: &[&str]) -> CallArg {
-    CallArg::Ref(path.iter().map(|s| (*s).to_string()).collect())
-}
-
-fn ext_param(name: &str, target: Tref) -> ExternParam {
-    ExternParam {
-        name: name.into(),
-        r#type: target,
-    }
-}
 
 fn entry_text(module: &Module) -> String {
     let emission = emit(module, &go_casing());
