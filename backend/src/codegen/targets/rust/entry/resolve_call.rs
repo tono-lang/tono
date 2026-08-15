@@ -72,7 +72,11 @@ fn call_arg_expr(r: &mut Resolver<'_, '_>, lib: &ExtLib, arg: &CallArg) -> Strin
         // a logical parameter no `call_args` position renamed away, so this
         // reads the same-named field as a best effort.
         CallArg::Param(name) => format!("{}{}.clone()", r.arg_prefix, field_snake(name, r.config)),
-        CallArg::Ref(path) => r.path_expr(path),
+        // Cloned, not moved: `s` (the composed settings struct) is still
+        // read later (the frozen `ClientOptions`, `Client { settings: s,
+        // .. }`), the same "copy, don't move a sibling" rule every other
+        // leaf reading a resolved field already follows.
+        CallArg::Ref(path) => format!("({}).clone()", r.path_expr(path)),
         CallArg::Lit(v) => json_literal(v),
         CallArg::List(items) => {
             let rendered: Vec<String> = items.iter().map(|a| call_arg_expr(r, lib, a)).collect();
@@ -152,8 +156,13 @@ fn select_expr(select: &Select) -> String {
             ArmValue::Sources(_) => subject.clone(),
         };
         match &arm.pattern {
+            // A match arm's pattern position takes a bare literal, not an
+            // expression: `json_literal`'s `"x".to_string()` (built for a
+            // value position) is not valid pattern syntax, so this uses the
+            // same bare-literal spelling `pattern_literal` already gives the
+            // shared plan's own switch leaves.
             Some(pat) => {
-                let _ = write!(arms, "{} => {value}, ", json_literal(pat));
+                let _ = write!(arms, "{} => {value}, ", pattern_literal(pat));
             }
             None => {
                 let _ = write!(arms, "_ => {value}, ");
@@ -508,7 +517,7 @@ mod tests {
             ],
         };
         let out = select_expr(&select);
-        assert!(out.contains("\"prod\".to_string() => cfg.host"), "{out}");
+        assert!(out.contains("\"prod\" => cfg.host"), "{out}");
         // Every declared arm carries a pattern, so the function synthesizes
         // a trailing wildcard arm rather than leaving the match non-total.
         assert!(out.contains("_ => cfg.env.clone()"), "{out}");

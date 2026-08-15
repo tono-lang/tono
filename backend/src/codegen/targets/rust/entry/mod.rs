@@ -678,6 +678,7 @@ mod checks;
 mod conformance_tests;
 mod constructor;
 mod decode;
+pub mod ext_fixtures;
 mod impl_op;
 mod resolve;
 mod resolve_call;
