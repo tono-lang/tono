@@ -95,8 +95,8 @@ pub fn derive(module: &Module, langs: &[&str]) -> TaxonomyLiveness {
 /// bespoke (non-wire) operation this target has no binding for at all (which
 /// always falls back to the "operation has no implementation" `ContractError`
 /// regardless of whether anything else is bound), or an entry field resolves
-/// through an extern call (RFC-0023): any third-party failure with no
-/// mapped sentinel falls back to `ContractError` naming the `extern`.
+/// through an extern call: any third-party failure with no mapped sentinel
+/// falls back to `ContractError` naming the extern.
 fn contract_live(module: &Module, langs: &[&str]) -> bool {
     let bound = bound_extensions(module, langs);
     if !bound.is_empty() {

@@ -18,14 +18,14 @@ pub(super) fn class_decl(
     has_tests: bool,
 ) -> Vec<Decl> {
     let en = error_names();
-    // TypeScript's own identity is "lança e pode devolver Promise"
-    // (RFC-0023): nothing in the IR marks a given extern call sync or
-    // async, and the compiler cannot know statically whether a
-    // third-party function returns a Promise, so `ext_call::call_assign`
-    // awaits every one unconditionally. An entry with at least one such
-    // field therefore always resolves through an async path here; ADR-0010
-    // applied to construction means Go stays blocking for the identical
-    // `.tono` source.
+    // TypeScript's own identity is "throws, and may return a Promise":
+    // nothing in the IR marks a given extern call sync or async, and the
+    // compiler cannot know statically whether a third-party function
+    // returns a Promise, so `ext_call::call_assign` awaits every one
+    // unconditionally. An entry with at least one such field therefore
+    // always resolves through an async path here; ADR-0010 applied to
+    // construction means Go stays blocking for the identical `.tono`
+    // source.
     let is_async = entry.fields.iter().any(|f| f.call.is_some());
     let mut resolve_fns: Vec<Decl> = Vec::new();
     let mut refs = vec![
@@ -372,8 +372,8 @@ pub(super) fn class_decl(
          // client_init bridge, validates, and freezes the runtime options.\n";
     let text = if is_async {
         // The entry resolves at least one field through an async external
-        // call (RFC-0023): a TypeScript constructor cannot itself be async,
-        // so construction goes through this static factory instead of
+        // call: a TypeScript constructor cannot itself be async, so
+        // construction goes through this static factory instead of
         // `new {client}(...)`; the same `.tono` source keeps Go blocking
         // (ADR-0010).
         let ctor_params: String = std::iter::once(format!("settings: {}", n.settings))
@@ -433,9 +433,9 @@ pub(super) fn class_decl(
     if text.contains(&format!("new {}(", en.config)) {
         refs.push(module_symbol(&en.config, module));
     }
-    // An extern-call leaf (RFC-0023) has no other way back to this Decl's
-    // own refs than the shared `Helpers` sink `plan::Emitter::call_assign`
-    // writes into (see `ext_call::call_assign`).
+    // An extern-call leaf has no other way back to this Decl's own refs
+    // than the shared `Helpers` sink `plan::Emitter::call_assign` writes
+    // into (see `ext_call::call_assign`).
     refs.append(&mut helpers.ext_refs);
     resolve_fns.push(Decl::raw_with(text, refs));
     resolve_fns

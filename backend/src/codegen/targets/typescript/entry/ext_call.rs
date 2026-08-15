@@ -1,34 +1,37 @@
-//! The `= ns.fn(args)` extern-call field source (RFC-0023): importing the
-//! foreign symbol, calling it with the `ts` language block's own argument
-//! order (including a `Ctor` struct literal, foreign field names verbatim),
+//! The `= ns.fn(args)` extern-call field source: importing the foreign
+//! symbol, calling it with the `ts` language block's own argument order
+//! (including a `Ctor` struct literal, foreign field names verbatim),
 //! projecting `yields`/`returns` onto the declared logical type, and mapping
 //! a declared sentinel (or any unmapped failure) onto a typed error at the
 //! `ContractError` boundary already used elsewhere in this target.
 //!
-//! TypeScript's own identity is "lança e pode devolver Promise" (RFC-0023):
-//! nothing in the IR marks a given extern call sync or async, and the
-//! compiler cannot know statically whether a third-party function returns a
-//! Promise. So every call is awaited unconditionally here (`await` on a
-//! plain value is a safe no-op); `class_decl` (in `entry/mod.rs`) is what
-//! turns an entry with at least one such field into an async-constructed
-//! client (a `static async create`, not a plain `constructor`).
+//! TypeScript's own identity is "throws, and may return a Promise": nothing
+//! in the IR marks a given extern call sync or async, and the compiler
+//! cannot know statically whether a third-party function returns a Promise.
+//! So every call is awaited unconditionally here (`await` on a plain value
+//! is a safe no-op); `class_decl` (in `entry/mod.rs`) is what turns an entry
+//! with at least one such field into an async-constructed client (a
+//! `static async create`, not a plain `constructor`).
 //!
 //! Scope: a free function in an `ext` block (`module.ext_libs[].externs`),
 //! including one whose logical return type is an opaque handle (the
 //! `companybus.connect(..)` shape: no `yields`, the raw call result already
-//! is the logical value). Not yet supported, and left as a clear
-//! generation-time panic rather than silently wrong output: a `yields`
-//! position that is not consumed by a bare `returns:` field reference (a
-//! `match` selection, `ReturnsValue::Select`), more than one non-error
-//! `yields` position, and `CallArg::Call` (a nested extern call used as
-//! another call's argument). An opaque handle's own methods
-//! (`type publisher { extern send(..) }`, invoked from an op's `impl`) are a
-//! different call site (`OpImplCall`) that no codegen consumes yet.
+//! is the logical value). `entries::validate_entries` guarantees, before
+//! this runs, that a call names a declared extern carrying a `ts` binding,
+//! that a projecting `yields` names a `returns`, and that a `ts` binding
+//! names at most one non-error `yields` position (a single call result has
+//! nothing to bind a second one to); the lookups below still fail loudly on
+//! a broken invariant rather than silently miscompiling. Not yet supported,
+//! left as a clear generation-time panic rather than silently wrong output:
+//! `CallArg::Call` (a nested extern call used as another call's argument).
+//! An opaque handle's own methods (`type publisher { extern send(..) }`,
+//! invoked from an op's `impl`) are a different call site that no codegen
+//! consumes yet.
 
 use super::*;
 use crate::codegen::entries::plan::Emitter;
 use crate::codegen::ops::error_names;
-use crate::ir::{CallArg, CallCtor, EntryCall, ExternParam, ReturnsValue};
+use crate::ir::{ArmValue, CallArg, CallCtor, EntryCall, ExternParam, ReturnsValue, Select};
 
 /// The typed-error class name a declared sentinel maps to: the bare
 /// identifier the `.tono` author wrote (`overloaded`), cased through the
@@ -43,20 +46,23 @@ pub(super) fn sentinel_error_class(sentinel_type: &str) -> String {
 /// once per module regardless of how many extern calls declare it. Rooted
 /// under the same taxonomy root as every other category, so the existing
 /// `instanceof TonoError` boundary checks still see it.
-pub(super) fn sentinel_error_decl(sentinel_type: &str) -> Decl {
+pub(super) fn sentinel_error_decl(sentinel_type: &str, module: &Module) -> Decl {
     let name = sentinel_error_class(sentinel_type);
     let root = error_names().root;
-    Decl::raw(format!(
-        "// {name} is the typed error a declared ext sentinel (RFC-0023) maps\n\
-         // to; a third-party call that throws this sentinel surfaces as this\n\
-         // class instead of the generic ContractError fallback.\n\
+    Decl::raw_with(
+        format!(
+            "// {name} is the typed error a declared ext sentinel maps to; a\n\
+         // third-party call that throws this sentinel surfaces as this class\n\
+         // instead of the generic ContractError fallback.\n\
          export class {name} extends {root} {{\n\
          \x20 constructor(readonly cause: unknown) {{\n\
          \x20   super({sentinel_type:?});\n\
          \x20   this.name = {name:?};\n\
          \x20 }}\n\
          }}",
-    ))
+        ),
+        vec![module_symbol(&root, module)],
+    )
 }
 
 fn json_literal(v: &serde_json::Value) -> String {
@@ -128,33 +134,73 @@ fn render_arg(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        CallArg::Call(_) => unimplemented!(
-            "a nested extern call used as another call's argument is not supported yet (RFC-0023)"
-        ),
+        CallArg::Call(_) => {
+            unimplemented!(
+                "a nested extern call used as another call's argument is not supported yet"
+            )
+        }
     }
 }
 
-/// A `returns:` field's value, projected off the single bound `yields` name
-/// (`Select`, a `match` inside `returns:`, is deferred; see the module doc).
+/// A path rooted at the single bound `yields` name, read off the awaited
+/// call's raw result: the head (the `yields:` position name itself) becomes
+/// `raw`, the rest stays verbatim (a foreign struct's own field names, never
+/// cased).
+fn foreign_path_expr(yields_name: &str, path: &[String]) -> String {
+    let (head, rest) = path
+        .split_first()
+        .unwrap_or_else(|| panic!("a returns: value has no path segments"));
+    assert_eq!(
+        head, yields_name,
+        "a returns: value references a yields name other than the one bound here, which is not supported yet"
+    );
+    if rest.is_empty() {
+        "raw".to_string()
+    } else {
+        format!("raw.{}", rest.join("."))
+    }
+}
+
+fn arm_value_expr(yields_name: &str, value: &ArmValue) -> String {
+    match value {
+        ArmValue::Field(path) => foreign_path_expr(yields_name, path),
+        ArmValue::Lit(v) => json_literal(v),
+        // A declared-source chain names an entry field's own resolution, not
+        // a foreign value the extern call just produced; a `returns:` match
+        // arm inside an extern binding has nothing to run that chain over.
+        ArmValue::Sources(_) => {
+            unreachable!("a returns: match arm cannot bind a declared-source chain")
+        }
+    }
+}
+
+/// A `match` inside `returns:`, lowered to an immediately invoked switch:
+/// TypeScript has no match expression, so the arms return from a wrapper
+/// function instead of assigning through a shared destination the way a
+/// statement-level `switch` (`plan::Stmt::Switch`) does elsewhere in this
+/// target. The subject and every arm read off the same awaited raw result
+/// `returns:`'s bare-field case does.
+fn select_expr(yields_name: &str, select: &Select) -> String {
+    let subject = foreign_path_expr(yields_name, &select.subject);
+    let mut arms = String::new();
+    for arm in &select.arms {
+        let value = arm_value_expr(yields_name, &arm.value);
+        match &arm.pattern {
+            Some(pattern) => arms.push_str(&format!(
+                "    case {}: return {value};\n",
+                json_literal(pattern)
+            )),
+            None => arms.push_str(&format!("    default: return {value};\n")),
+        }
+    }
+    format!("(() => {{\n  switch ({subject}) {{\n{arms}  }}\n}})()")
+}
+
+/// A `returns:` field's value, projected off the single bound `yields` name.
 fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> String {
     match value {
-        ReturnsValue::Field(path) => {
-            let (head, rest) = path
-                .split_first()
-                .unwrap_or_else(|| panic!("a returns: field value has no path segments"));
-            assert_eq!(
-                head, yields_name,
-                "a returns: field references a yields name other than the one bound here, which is not supported yet"
-            );
-            if rest.is_empty() {
-                "raw".to_string()
-            } else {
-                format!("raw.{}", rest.join("."))
-            }
-        }
-        ReturnsValue::Select(_) => {
-            unimplemented!("a match selection inside returns: is not supported yet (RFC-0023)")
-        }
+        ReturnsValue::Field(path) => foreign_path_expr(yields_name, path),
+        ReturnsValue::Select(select) => select_expr(yields_name, select),
     }
 }
 
@@ -169,6 +215,9 @@ pub(super) fn call_assign(
     call: &EntryCall,
     dest: &str,
 ) -> String {
+    // `entries::validate_entries` (`call_resolves`) has already confirmed all
+    // of this for the typescript target before generation reaches here, so
+    // every lookup below is an internal-invariant check, not a validation.
     let lib = r
         .module
         .ext_libs
@@ -176,7 +225,7 @@ pub(super) fn call_assign(
         .find(|l| l.name == call.ns)
         .unwrap_or_else(|| {
             panic!(
-                "entry field {:?} calls undeclared ext lib {:?}",
+                "entry field {:?} calls undeclared ext lib {:?} (validate_entries should have rejected this)",
                 field.name, call.ns
             )
         });
@@ -186,7 +235,7 @@ pub(super) fn call_assign(
         .find(|e| e.name == call.func)
         .unwrap_or_else(|| {
             panic!(
-                "entry field {:?} calls undeclared extern {:?} in ext lib {:?}",
+                "entry field {:?} calls undeclared extern {:?} in ext lib {:?} (validate_entries should have rejected this)",
                 field.name, call.func, lib.name
             )
         });
@@ -194,12 +243,22 @@ pub(super) fn call_assign(
         .langs
         .iter()
         .find(|l| l.lang == "ts" || l.lang == "typescript")
-        .unwrap_or_else(|| panic!("extern {}.{} has no typescript binding", call.ns, call.func));
+        .unwrap_or_else(|| {
+            panic!(
+                "extern {}.{} has no typescript binding (validate_entries should have rejected this)",
+                call.ns, call.func
+            )
+        });
     let lib_path = lib
         .langs
         .iter()
         .find(|p| p.lang == "ts" || p.lang == "typescript")
-        .unwrap_or_else(|| panic!("ext lib {:?} declares no typescript module path", lib.name));
+        .unwrap_or_else(|| {
+            panic!(
+                "ext lib {:?} declares no typescript module path (validate_entries should have rejected this)",
+                lib.name
+            )
+        });
 
     r.helpers.ext_refs.push(Symbol::imported(
         lang.symbol.clone(),
@@ -219,21 +278,17 @@ pub(super) fn call_assign(
     };
     let call_name = format!("{}.{}", call.ns, call.func);
 
-    if lang.yields.len() > 1 {
-        unimplemented!(
-            "more than one non-error yields position is not supported yet for typescript (RFC-0023): {call_name}"
-        );
-    }
-    let assign = match lang.yields.first() {
+    // A `ts` binding never reads its own `error` yields position (the
+    // catch below is the only error channel a thrown Promise rejection
+    // gives this target); `validate_entries` guarantees at most one
+    // non-error position, which is the only one worth projecting.
+    let assign = match lang.yields.iter().find(|y| !y.is_error) {
         None => format!("{dest} = raw;"),
         Some(y) => {
-            if y.is_error {
-                unimplemented!(
-                    "a lone `error` yields position with nothing else bound is not supported yet (RFC-0023): {call_name}"
-                );
-            }
             let returns = lang.returns.as_ref().unwrap_or_else(|| {
-                panic!("extern {call_name} declares yields but no returns to project them into")
+                panic!(
+                    "extern {call_name} declares a yields position but no returns to project it into (validate_entries should have rejected this)"
+                )
             });
             let projected = returns
                 .fields
@@ -313,10 +368,10 @@ mod tests {
         )
     }
 
-    /// The `companyconfig`/`companybus` `ext` libs from the RFC-0023
-    /// appendix: `load` (a `Ctor` argument, `yields`+`returns` projecting
-    /// foreign field names onto `app_config`, a declared sentinel) and
-    /// `connect` (a bare handle construction, no `yields`).
+    /// A worked `companyconfig`/`companybus` `ext` library pair: `load` (a
+    /// `Ctor` argument, `yields`+`returns` projecting foreign field names
+    /// onto `app_config`, a declared sentinel) and `connect` (a bare handle
+    /// construction, no `yields`).
     fn appendix_ext_libs() -> Vec<ExtLib> {
         let mut load_ctor_fields = BTreeMap::new();
         load_ctor_fields.insert("region".to_string(), CallArg::Param("region".into()));
@@ -643,5 +698,95 @@ mod tests {
         let mut decls = emission.shared;
         decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
         decls
+    }
+
+    /// A `match` inside `returns:` (the appendix's `.cfg.Env` example), the
+    /// same construct a config member's own `= match` selection uses,
+    /// lowered to an immediately invoked switch since TypeScript has no
+    /// match expression.
+    #[test]
+    fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
+        use crate::ir::{ArmValue, Select, SelectArm};
+
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("service".to_string(), CallArg::Param("service".into()));
+        let lib = ExtLib {
+            name: "companyconfig".into(),
+            langs: vec![crate::ir::LangPath {
+                lang: "ts".into(),
+                path: "@company/config".into(),
+            }],
+            structs: vec![],
+            types: vec![],
+            externs: vec![ExternDecl {
+                name: "load".into(),
+                params: vec![ExternParam {
+                    name: "service".into(),
+                    r#type: Tref::Prim(Prim::String),
+                }],
+                r#return: Tref::Ref {
+                    id: "m#app_config".into(),
+                    args: vec![],
+                },
+                langs: vec![crate::ir::ExternLang {
+                    lang: "ts".into(),
+                    symbol: "load".into(),
+                    call_args: vec![CallArg::Param("service".into())],
+                    yields: vec![crate::ir::YieldsPos {
+                        name: "cfg".into(),
+                        r#type: None,
+                        is_error: false,
+                    }],
+                    returns: Some(ReturnsLit {
+                        r#type: Tref::Ref {
+                            id: "m#app_config".into(),
+                            args: vec![],
+                        },
+                        fields: vec![ReturnsField {
+                            name: "endpoint".into(),
+                            value: ReturnsValue::Select(Select {
+                                subject: vec!["cfg".into(), "Env".into()],
+                                arms: vec![
+                                    SelectArm {
+                                        pattern: Some(serde_json::json!("prod")),
+                                        value: ArmValue::Field(vec!["cfg".into(), "Host".into()]),
+                                    },
+                                    SelectArm {
+                                        pattern: None,
+                                        value: ArmValue::Field(vec![
+                                            "cfg".into(),
+                                            "DevHost".into(),
+                                        ]),
+                                    },
+                                ],
+                            }),
+                        }],
+                    }),
+                    errors: vec![],
+                }],
+            }],
+        };
+        let config = ef(
+            "config",
+            Tref::Ref {
+                id: "m#app_config".into(),
+                args: vec![],
+            },
+            vec![],
+            Some(EntryCall {
+                ns: "companyconfig".into(),
+                func: "load".into(),
+                args: vec![CallArg::Ref(vec!["service".into()])],
+            }),
+        );
+        let service = ef("service", Tref::Prim(Prim::String), vec![Source::Arg], None);
+        let mut module = appendix_module(vec![service, config]);
+        module.ext_libs = vec![lib];
+        let out = rendered_text(&module);
+        assert!(out.contains("s.config = { endpoint: (() => {"), "{out}");
+        assert!(out.contains("switch (raw.Env) {"), "{out}");
+        assert!(out.contains("case \"prod\": return raw.Host;"), "{out}");
+        assert!(out.contains("default: return raw.DevHost;"), "{out}");
+        assert!(out.contains("})() };"), "{out}");
     }
 }

@@ -311,6 +311,14 @@ impl Emitter for Resolver<'_, '_> {
         super::ext_call::call_assign(self, field, call, dest)
     }
 
+    fn with_present_cond(&self, field: &EntryField) -> Cond {
+        Cond(format!("{} !== undefined", self.with_access(field)))
+    }
+
+    fn with_assign(&self, field: &EntryField, dest: &str) -> Leaf {
+        Leaf(format!("{dest} = {};", self.with_access(field)))
+    }
+
     fn config_open(&mut self, _field: &EntryField, shape: &Shape) -> Leaf {
         Leaf(format!(
             "const composed = {{}} as {};",

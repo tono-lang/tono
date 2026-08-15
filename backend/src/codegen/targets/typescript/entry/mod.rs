@@ -104,7 +104,7 @@ pub(super) fn module_symbol(name: &str, module: &Module) -> Symbol {
 }
 
 /// Whether `t` names an opaque handle declared in one of the module's own
-/// `ext` blocks (RFC-0023): never serializes, never crosses the wire, and
+/// `ext` blocks: never serializes, never crosses the wire, and
 /// has no companion import (its only real type lives in the third-party
 /// module the SDK never re-exports). Rendered as `unknown` everywhere a
 /// declared type is spelled, since the SDK only ever passes the handle
@@ -286,10 +286,10 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         per_entry.push((entry.name.to_string(), own));
     }
     // One class per distinct sentinel-mapped type name any entry's extern
-    // call declared (RFC-0023 `errors:`), module-wide rather than per entry:
-    // two entries mapping the same sentinel share the one class.
+    // call declared, module-wide rather than per entry: two entries mapping
+    // the same sentinel share the one class.
     for sentinel_type in &helpers.ext_error_types {
-        decls.push(ext_call::sentinel_error_decl(sentinel_type));
+        decls.push(ext_call::sentinel_error_decl(sentinel_type, module));
     }
     EntryEmission {
         shared: decls,
