@@ -1,4 +1,5 @@
-//! Go emission for the `ext`/`extern` FFI library block (RFC-0023).
+//! Go emission for the `ext`/`extern` FFI library block: importing and
+//! calling a declared foreign library from generated Go.
 //!
 //! Three sites read this module: a field's own `= ns.fn(args)` construction
 //! call ([`call_assign`], wired as `Resolver::call_assign`), the foreign
@@ -6,7 +7,7 @@
 //! [`handle_go_type`]), and an op's own `impl .field.method(args)` body
 //! (`impl_op`, which reuses [`call_arg_expr`] and [`error_block`] here).
 //!
-//! Verification is the target compiler (RFC-0023, degrau 2): every value this
+//! Verification is the target compiler, not this emitter: every value this
 //! module reads off a `yields` position, an `errors:` sentinel, or a foreign
 //! handle's assumed exported name is spelled as a direct Go field/identifier
 //! access against whatever the real call returns. A library that does not
@@ -137,9 +138,9 @@ pub(super) fn foreign_handle<'a>(t: &Tref, module: &'a Module) -> Option<(&'a Ex
 /// package's exported type, assumed to share its identifier with the
 /// handle's own canonical name Pascal-cased — the same casing convention
 /// every other nominal type in this codegen follows. This is the one guess
-/// RFC-0023's own verification model expects the target compiler to grade: a
-/// library whose real exported identifier differs fails `go build` (degrau
-/// 2), which is the intended failure mode, not a generation-time crash.
+/// the target compiler is expected to grade: a library whose real exported
+/// identifier differs fails `go build`, which is the intended failure mode,
+/// not a generation-time crash.
 pub(super) fn handle_go_type(lib: &ExtLib, type_name: &str) -> Option<String> {
     let ident = lib_ident(lib_go_path(lib)?);
     Some(format!("*{ident}.{}", pascal(type_name)))
@@ -198,8 +199,8 @@ pub(super) fn call_arg_expr(
         ),
         CallArg::Ctor(ctor) => ctor_expr(refs, lib, ctor, params, entry_args, ref_expr),
         // A nested extern call as a call argument (e.g. a request-signing
-        // call read at a trait-argument site) is not exercised by the
-        // appendix this task targets; deferred rather than guessed at.
+        // call read at a trait-argument site) is not exercised by the RFC
+        // appendix; deferred rather than guessed at.
         CallArg::Call(_) => "nil /* nested extern-call argument: deferred */".to_string(),
     }
 }
@@ -224,8 +225,8 @@ pub(super) fn ctor_expr(
         .map(|(name, value)| {
             let expr = call_arg_expr(refs, lib, value, params, entry_args, ref_expr);
             // Mirrors the foreign side's own field spelling verbatim, like
-            // a declared `ForeignStruct`'s fields (RFC-0023): the ctor's
-            // field key is written exactly as the caller declared it.
+            // a declared foreign struct's fields: the ctor's field key is
+            // written exactly as the caller declared it.
             format!("{name}: {expr}")
         })
         .collect();
@@ -292,8 +293,8 @@ pub(super) fn returns_expr(
                         ArmValue::Lit(v) => literal(&member_ty, v),
                         ArmValue::Field(path) => yields_path_expr(yields_vars, path),
                         // No source chain exists inside a `returns:` match
-                        // arm (RFC-0023): only a literal or a yields-bound
-                        // reference. Unreachable through `tono check`.
+                        // arm: only a literal or a yields-bound reference.
+                        // Unreachable through `tono check`.
                         ArmValue::Sources(_) => "nil".to_string(),
                     };
                     match &arm.pattern {
@@ -379,15 +380,15 @@ pub(super) fn error_block(
 }
 
 /// Whether any declared `yields` position is the reserved `error` sentinel
-/// (an out-of-convention error position, RFC-0023).
+/// (an out-of-convention error position).
 pub(super) fn has_error_position(lang: &ExternLang) -> bool {
     lang.yields.iter().any(|y| y.is_error)
 }
 
 /// The result of building and assigning an extern call's return values: the
 /// Go statement(s) up to and including the call itself, the yields-bound
-/// variable names (empty-string key for the no-`yields` case, RFC-0023), and
-/// the error variable's own name.
+/// variable names (empty-string key for the no-`yields` case), and the
+/// error variable's own name.
 struct CallResult {
     stmt: String,
     yields_vars: HashMap<String, String>,
@@ -458,11 +459,12 @@ fn build_call(
     }
 }
 
-/// A field's own `= ns.fn(args)` construction call (RFC-0023): the call
-/// itself, its `yields`-position bindings (implicit trailing `error` unless
-/// an explicit position is marked, ADR-0031), the sentinel-to-error mapping,
-/// and the `returns:` projection (or the bare call result when the extern's
-/// return already is the logical type).
+/// A field's own `= ns.fn(args)` construction call: the call itself, its
+/// `yields`-position bindings (implicit trailing `error` unless an explicit
+/// position is marked, matching each target's own idiomatic error-return
+/// convention), the sentinel-to-error mapping, and the `returns:` projection
+/// (or the bare call result when the extern's return already is the logical
+/// type).
 pub(super) fn call_assign(
     r: &mut Resolver<'_, '_>,
     field: &EntryField,
@@ -508,7 +510,7 @@ pub(super) fn call_assign(
         r.config,
         lib,
         &lang.errors,
-        &format!("{}.{}", call.ns, field.name),
+        &format!("{}.{}", call.ns, call.func),
         &built.err_var,
         &|expr| format!("return nil, {expr}"),
     ));
@@ -533,8 +535,8 @@ pub(super) fn call_assign(
     out
 }
 
-/// An op's own `impl .field.method(args)` body (RFC-0023): a call into an
-/// entry field's declared opaque-handle method, in place of the transport.
+/// An op's own `impl .field.method(args)` body: a call into an entry
+/// field's declared opaque-handle method, in place of the transport.
 /// Shares the call/yields/errors/returns machinery with [`call_assign`]; the
 /// receiver is a foreign handle field instead of an `ext` namespace, the
 /// failure path returns the op's own zero value (through `on_error` when

@@ -73,9 +73,9 @@ pub fn build_field<'a>(
     }
 }
 
-/// A `= ns.fn(args)` extern-call source (RFC-0023): a plain call is an
+/// A `= ns.fn(args)` extern-call source: a plain call is an
 /// unconditional assignment, always attempted, like a config compose or a
-/// `@default`. A call alongside `@with` (decision G) tries the injected
+/// `@default`. A call alongside `@with` tries the injected
 /// value first and falls back to the call, the same two-route shape
 /// [`chain_sequential`]'s `Source::With` arm already gives a scalar chain.
 /// The call's own spelling is a per-target leaf, deferred to codegen. `dest`
@@ -88,19 +88,18 @@ fn build_call_field(field: &EntryField, e: &mut dyn Emitter, dest: &str) -> Stmt
     if !field.sources.iter().any(|s| matches!(s, Source::With)) {
         return assign;
     }
-    // Same idiom as a scalar chain's `Source::With` step: try the injected
-    // value first (its own presence check lives inside `with_step_body`),
-    // then fall back to the call only if it is still absent.
-    let err = field.name.clone();
-    let w = e.err_ident(&err);
-    seq(vec![
-        Stmt::Leaf(e.err_open(&err)),
-        Stmt::Leaf(Leaf(e.with_step_body(field, dest, &w))),
-        Stmt::If {
-            arms: vec![(e.cond_err_present(&err), assign)],
-            otherwise: None,
-        },
-    ])
+    // The injected value wins when present; the call is the construction
+    // fallback otherwise. No error tracking here (contrast a scalar chain's
+    // `Source::With` step, [`chain_sequential`]): absence just means "run
+    // the fallback call", never a deferred failure to report, so this reads
+    // as a plain `if`/`else` rather than the error-var cascade.
+    Stmt::If {
+        arms: vec![(
+            e.with_present_cond(field),
+            Stmt::Leaf(e.with_assign(field, dest)),
+        )],
+        otherwise: Some(Box::new(assign)),
+    }
 }
 
 fn is_numeric(t: &Tref) -> bool {

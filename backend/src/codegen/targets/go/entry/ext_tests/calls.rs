@@ -10,8 +10,8 @@ use super::*;
 
 #[test]
 fn the_appendix_module_wires_the_call_handle_and_impl_call() {
-    // The exact RFC-0023 appendix fixture the go_ext_roundtrip integration
-    // test also `go build`s against real libraries (shared via
+    // The exact fixture the go_ext_roundtrip integration test also `go
+    // build`s against real libraries (shared via
     // `ext_fixtures::rfc0023_appendix_module`, so the two never drift):
     // this test checks the generated Go statements directly, exercised
     // through the full `emit` pipeline so the integration with
@@ -169,7 +169,7 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
                 lang: "go".into(),
                 symbol: "Fetch".into(),
                 call_args: vec![],
-                // The error position leads instead of trailing (ADR-0031
+                // The error position leads instead of trailing (an
                 // out-of-convention case), and there is no `returns:`,
                 // so the bare call result assigns directly.
                 yields: vec![

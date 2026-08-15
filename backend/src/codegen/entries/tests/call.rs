@@ -1,4 +1,4 @@
-//! The extern-call field-source tests (RFC-0023): DAG ordering across a call
+//! The extern-call field-source tests: DAG ordering across a call
 //! chain, cycle detection over call-arg refs, `is_guaranteed` classification
 //! for plain and `@with`-fallback call fields, and `FieldShape::Call`
 //! dispatch regardless of the target's own shape. Fixtures (`field`,
@@ -98,7 +98,7 @@ fn a_plain_call_field_is_not_guaranteed_when_it_reads_a_non_guaranteed_sibling()
 
 #[test]
 fn a_with_field_backed_by_a_guaranteed_call_fallback_is_guaranteed() {
-    // decision G: an injectable handle with construction as fallback is
+    // An injectable handle with construction as fallback is
     // guaranteed the same way a plain call is (either the caller injects it,
     // or the fallback call runs and its own reads are guaranteed) — `@with`
     // does not relax the rule, both reduce to the same check.
@@ -291,7 +291,7 @@ fn ext_lib_with_handle(lib: &str, handle: &str) -> ExtLib {
     }
 }
 
-/// An injectable-handle field (decision G, `bus: c.h @with = c.conn(...)`)
+/// An injectable-handle field (`bus: c.h @with = c.conn(...)`)
 /// targets an opaque type declared in the module's own `ext` block. That id
 /// lives in `ext_libs`, not `module.shapes`; the module-scoping check must
 /// recognize it as same-module instead of misreporting it as an out-of-module

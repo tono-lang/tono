@@ -278,7 +278,7 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                 // A construction field resolves within its module: the
                 // resolution idiom (config vs structured vs scalar) and the
                 // generated type surface both need the referenced shape. An
-                // injectable-handle field (RFC-0023 decision G) may instead
+                // injectable-handle field may instead
                 // reference an opaque type declared in the module's own
                 // `ext` block: that id lives in `ext_libs`, not
                 // `module.shapes`, but is same-module all the same.

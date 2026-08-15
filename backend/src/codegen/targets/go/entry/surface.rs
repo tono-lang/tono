@@ -102,7 +102,7 @@ pub(super) fn option_decls(
         .map(|f| {
             push_field_type_symbols(&f.target, module, &mut carrier_refs);
             // A foreign opaque handle's Go type is already a pointer (a
-            // guess at the real package's return convention, RFC-0023), so
+            // guess at the real package's return convention), so
             // the carrier holds it directly; every other `@with` value gets
             // the usual extra pointer so an unset option is distinguishable
             // from a zero value.

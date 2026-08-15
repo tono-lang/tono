@@ -327,7 +327,7 @@ pub fn wire_binding(op: &Shape) -> Option<&crate::ir::WireBinding> {
     }
 }
 
-/// An op's own `impl .field.method(args)` body (RFC-0023), when it has one.
+/// An op's own `impl .field.method(args)` body, when it has one.
 /// `None` for a purely local operation, a wire-bound one, or one implemented
 /// through the legacy `ext impl` extension.
 pub fn op_impl_call(op: &Shape) -> Option<&crate::ir::OpImplCall> {

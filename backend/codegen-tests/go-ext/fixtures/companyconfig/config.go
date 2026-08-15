@@ -1,5 +1,5 @@
 // Package companyconfig is a stand-in for the third-party config library the
-// generated SDK integrates with (RFC-0023 appendix fixture).
+// generated SDK integrates with.
 package companyconfig
 
 type Credentials struct {

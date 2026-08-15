@@ -1,4 +1,4 @@
-//! Coverage for the `ext`/`extern` FFI emission (RFC-0023, [`super::ext`]):
+//! Coverage for the `ext`/`extern` FFI emission ([`super::ext`]):
 //! the field-construction call, the injectable opaque handle, the op-level
 //! method call, and the defensive fallbacks each lookup degrades to instead
 //! of panicking on inconsistent IR. The end-to-end "does the Go actually

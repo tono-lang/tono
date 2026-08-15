@@ -130,7 +130,7 @@ fn config_type_ident(id: &str) -> String {
 }
 
 /// The Go type spelling of an entry field, hiding a composed config behind its
-/// unexported name, spelling a foreign opaque handle (RFC-0023) as a pointer
+/// unexported name, spelling a foreign opaque handle as a pointer
 /// to the real package's assumed exported type, while every other type keeps
 /// its normal (wire) spelling.
 fn field_go_type(t: &Tref, module: &Module) -> String {
@@ -152,7 +152,7 @@ fn field_go_type(t: &Tref, module: &Module) -> String {
 }
 
 /// [`push_type_symbols`], but for an entry field's own declared type: a
-/// foreign opaque handle (RFC-0023) pulls its `ext` block's Go import
+/// foreign opaque handle pulls its `ext` block's Go import
 /// instead of trying to resolve as an in-module reference.
 fn push_field_type_symbols(t: &Tref, module: &Module, refs: &mut Vec<Symbol>) {
     if let Some((lib, _)) = ext::foreign_handle(t, module) {
@@ -199,7 +199,7 @@ fn field_pascal_ren(name: &str, rename: Option<&str>, config: &CasingConfig) -> 
 }
 
 /// An entry field's Go identifier: its exported `@rename(go)` spelling, or
-/// (RFC-0023 decision F) an unexported camelCase name when the field's
+/// an unexported camelCase name when the field's
 /// declared type is a foreign opaque handle — a handle never reaches the
 /// public surface, renamed or not.
 pub(super) fn entry_field_ident(
@@ -318,7 +318,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let mut per_entry = Vec::new();
     for entry in &entries {
         let n = names(entry, multi);
-        // The constructor comes right after the type (ADR-0031).
+        // The constructor comes right after the type.
         let mut decls = surface::entry_type_decls(entry, &n, module, config, multi, &bound);
         decls.extend(new_decl(
             entry,
@@ -608,7 +608,7 @@ fn op_method_decl(
     let validate_block = validate_block(input, module, ret_zero, &fail);
     let Some(wire) = wire_binding(op) else {
         // No protocol binding. Two bespoke shapes reach here: an op's own
-        // `impl .field.method(args)` body (RFC-0023) — a direct call into a
+        // `impl .field.method(args)` body — a direct call into a
         // declared opaque handle — takes priority when present, otherwise
         // the legacy `ext impl` extension binding the generator gate proved
         // is bound for this target.

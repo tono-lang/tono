@@ -476,16 +476,32 @@ pub trait Emitter {
         self.path_expr(source)
     }
     /// The extern-call assignment itself (`dest = ns.fn(args)` in the
-    /// target's own call/casing syntax, RFC-0023). Per-target emission
+    /// target's own call/casing syntax). Per-target emission
     /// (the actual call spelling, arg projection, `yields`/`returns`
     /// wiring) is a separate task; this default keeps the plan buildable
     /// and testable without requiring every target `Emitter` to implement
     /// it yet.
     fn call_assign(&mut self, field: &EntryField, call: &EntryCall, dest: &str) -> String {
         let _ = (field, call, dest);
-        unimplemented!(
-            "extern-call emission for {dest} is deferred to per-target codegen (RFC-0023)"
-        )
+        unimplemented!("extern-call emission for {dest} is deferred to per-target codegen")
+    }
+    /// Whether an `@with` field backing a call's construction fallback
+    /// was injected, as a plain boolean condition: no error
+    /// tracking, since absence here means only "run the fallback call", not
+    /// a deferred failure to report. [`build::build_call_field`] wraps the
+    /// call itself in the `else` branch, so the two-route shape reads as an
+    /// ordinary `if`/`else` rather than the error-var cascade a scalar
+    /// chain's `@with` step needs (that one distinguishes injected from
+    /// deferred-with-a-reason; this one never defers).
+    fn with_present_cond(&self, field: &EntryField) -> Cond {
+        let _ = field;
+        unimplemented!("with-field presence check is deferred to per-target codegen")
+    }
+    /// Assign the injected `@with` value once [`Emitter::with_present_cond`]
+    /// has already confirmed it is present.
+    fn with_assign(&self, field: &EntryField, dest: &str) -> Leaf {
+        let _ = (field, dest);
+        unimplemented!("with-field assignment is deferred to per-target codegen")
     }
     fn member_bind_assign(&self, member_dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{member_dest} = {expr}{}", self.term()))

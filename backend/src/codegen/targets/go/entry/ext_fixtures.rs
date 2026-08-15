@@ -1,4 +1,4 @@
-//! IR builders shared by every `ext`/`extern` (RFC-0023) test fixture: the
+//! IR builders shared by every `ext`/`extern` FFI test fixture: the
 //! Go emitter's own unit tests (`ext_tests`, `#[cfg(test)]`) and the
 //! `go_ext_roundtrip` integration test (a separate binary, linked against
 //! this crate's public API rather than compiled with it). Not `cfg(test)`
@@ -117,12 +117,13 @@ pub fn go_ext_lib(
     }
 }
 
-/// The IR module the RFC-0023 appendix describes, trimmed to the constructs
-/// this task covers (the field-construction call with a `match` projection,
-/// the injectable handle with a construction fallback, and the op-level
-/// method-call form with a declared sentinel). The HTTP `fetch` op from the
-/// appendix is left out: it exercises the (already covered) transport
-/// machinery, not the ext/extern surface these fixtures target.
+/// A worked example of the `ext`/`extern` FFI surface, trimmed to the Go
+/// constructs these fixtures cover: a field-construction call with a
+/// `match` projection, an injectable handle with a construction fallback,
+/// and an op-level method-call form with a declared sentinel. An HTTP op
+/// alongside these is deliberately left out: it would exercise the
+/// (already covered) transport machinery, not the ext/extern surface these
+/// fixtures target.
 ///
 /// Shared by the Go emitter's own `ext_tests` (a Rust-level check of the
 /// generated statements) and the `go_ext_roundtrip` integration test (a

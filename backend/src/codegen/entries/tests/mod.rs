@@ -2,7 +2,7 @@ use super::*;
 use crate::ir::{EnvName, FieldRef, Select, SelectArm};
 use serde_json::json;
 
-// The extern-call field-source tests (RFC-0023) live in their own submodule
+// The extern-call field-source tests live in their own submodule
 // to keep this file under the line-count gate; they reuse the fixtures below
 // through `super::*`.
 mod call;

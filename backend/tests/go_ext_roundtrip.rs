@@ -1,11 +1,11 @@
 //! End-to-end check that the Go the engine emits for the `ext`/`extern` FFI
-//! library block (RFC-0023) compiles against a real library: the module in
-//! this test mirrors the RFC's own appendix (a config load with a per-field
+//! library block compiles against a real library: the module in
+//! this test exercises a worked example (a config load with a per-field
 //! `yields`/`returns` projection and a `match`, an injectable bus handle
 //! with a construction fallback, and an op implemented by a call into the
 //! handle's own method with a declared sentinel-to-error mapping).
 //!
-//! The verification model RFC-0023 asks for is the target compiler, not a
+//! The verification model this test relies on is the target compiler, not a
 //! Rust assertion: the generated Go reads `cfg.Host`/`ack.OK` directly off
 //! whatever the stand-in libraries under `fixtures/` return, so a
 //! `fixtures/` package that does not match the declared shape must fail
@@ -114,8 +114,8 @@ fn the_rfc_appendix_generates_go_that_compiles_against_the_real_libraries() {
 
 /// Declaring a field the library does not actually have (or reordering an
 /// argument list with incompatible types) must break the Go build: the
-/// declaration is a hypothesis the target compiler grades (RFC-0023, degrau
-/// 2), not a contract `tono` itself confirms. This renames the real
+/// declaration is a hypothesis the target compiler grades,
+/// not a contract `tono` itself confirms. This renames the real
 /// `companyconfig.Config.Host` field so the generated `cfg.Host` access no
 /// longer compiles, without touching the generator at all.
 #[test]

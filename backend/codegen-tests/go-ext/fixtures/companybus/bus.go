@@ -1,5 +1,5 @@
 // Package companybus is a stand-in for the third-party bus library the
-// generated SDK integrates with (RFC-0023 appendix fixture).
+// generated SDK integrates with.
 package companybus
 
 import "errors"

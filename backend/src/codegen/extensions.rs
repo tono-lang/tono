@@ -173,7 +173,7 @@ pub fn validate_impl_coverage(model: &Model, langs: &[&[&str]]) -> Result<(), St
                 if crate::codegen::ops::wire_binding(op).is_some() {
                     continue;
                 }
-                // An op's own `impl .field.method(args)` body (RFC-0023) is a
+                // An op's own `impl .field.method(args)` body is a
                 // third implementation source alongside a protocol binding
                 // and the legacy `ext impl` extension: it needs no bound
                 // extension at all, the call is direct.

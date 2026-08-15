@@ -291,7 +291,7 @@ impl Emitter for Resolver<'_, '_> {
 
     /// The `@with` presence step of a non-guaranteed chain, relative to column
     /// zero. A foreign opaque handle's carrier already holds the pointer
-    /// type the field itself carries (RFC-0023), so it assigns directly;
+    /// type the field itself carries, so it assigns directly;
     /// every other `@with` value's carrier is a pointer-to-value, so it
     /// dereferences.
     fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String {
@@ -305,6 +305,20 @@ impl Emitter for Resolver<'_, '_> {
             "if w.{carrier} != nil {{\n\t{dest} = {value}\n\t{err} = nil\n}} else {{\n\t{err} = {miss}\n}}",
             miss = self.config_error_expr("\"not configured\"", None),
         )
+    }
+
+    fn with_present_cond(&self, field: &EntryField) -> Cond {
+        Cond(format!("w.{} != nil", camel(&field.name)))
+    }
+
+    fn with_assign(&self, field: &EntryField, dest: &str) -> Leaf {
+        let carrier = camel(&field.name);
+        let value = if super::ext::foreign_handle(&field.target, self.module).is_some() {
+            format!("w.{carrier}")
+        } else {
+            format!("*w.{carrier}")
+        };
+        Leaf(format!("{dest} = {value}"))
     }
 
     /// The env presence step: `if v, ok := lookup; ok && v != "" { parse } else
@@ -632,7 +646,7 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    /// A field's own `= ns.fn(args)` extern-call source (RFC-0023): the call
+    /// A field's own `= ns.fn(args)` extern-call source: the call
     /// itself, its `yields`/`returns` projection, and its declared
     /// sentinel-to-error mapping. See [`super::ext::call_assign`].
     fn call_assign(
