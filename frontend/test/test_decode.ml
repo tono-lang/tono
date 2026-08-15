@@ -200,6 +200,53 @@ let wire_value_suite =
       {|{"object": [["a", 5]]}|};
     ok "wire value object" Ir_json.decode_wire_value
       {|{"object": [["a", {"lit": 1}], ["b", {"field": ["x"]}]]}|};
+    fails "wire value call missing ns" Ir_json.decode_wire_value
+      {|{"call": {"fn": "sign", "args": []}}|};
+    fails "wire value call missing fn" Ir_json.decode_wire_value
+      {|{"call": {"ns": "companyauth", "args": []}}|};
+    fails "wire value call bad arg" Ir_json.decode_wire_value
+      {|{"call": {"ns": "companyauth", "fn": "sign", "args": [5]}}|};
+    fails "wire value call ctor arg not a pair" Ir_json.decode_wire_value
+      {|{"call": {"ns": "companyauth", "fn": "sign", "args": [{"ctor": [5]}]}}|};
+    ok "wire value call with no args" Ir_json.decode_wire_value
+      {|{"call": {"ns": "companyauth", "fn": "sign", "args": []}}|};
+    ok "wire value call with every arg tag" Ir_json.decode_wire_value
+      {|{"call": {"ns": "companyauth", "fn": "sign", "args": [
+          "request",
+          {"field": ["id"]},
+          {"param": ["region"]},
+          {"lit": "v"},
+          {"ctor": [["signature", {"field": ["sig"]}]]}
+        ]}}|};
+  ]
+
+(* Every encode_wire_call_arg tag round-trips through decode unchanged,
+   proving the encoder's own output (not just hand-written decode fixtures
+   above) stays parseable. *)
+let wire_call_round_trip_suite =
+  [
+    Alcotest.test_case "wire call round-trips every argument tag" `Quick
+      (fun () ->
+        let call : Ir.wire_call =
+          {
+            wcl_ns = "companyauth";
+            wcl_fn = "sign";
+            wcl_args =
+              [
+                Ir.Wca_request;
+                Ir.Wca_field [ "id" ];
+                Ir.Wca_param [ "region" ];
+                Ir.Wca_lit (`String "v");
+                Ir.Wca_ctor [ ("signature", Ir.Wca_field [ "sig" ]) ];
+              ];
+          }
+        in
+        let value = Ir.Wire_call call in
+        let json = Ir_json.encode_wire_value value in
+        match Ir_json.decode_wire_value json with
+        | Error e -> Alcotest.failf "decode failed: %s" e
+        | Ok decoded ->
+            Alcotest.(check bool) "round-trips" true (decoded = value));
   ]
 
 let wire_binding_suite =
@@ -242,6 +289,7 @@ let wire_binding_suite =
 
 let wire_suite =
   wire_response_part_suite @ wire_value_suite @ wire_binding_suite
+  @ wire_call_round_trip_suite
 
 let union_discriminator_defaults () =
   match Ir_json.decode_shape (parse {|{"id": "x#U", "kind": "union"}|}) with

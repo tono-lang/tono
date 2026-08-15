@@ -413,6 +413,7 @@ fn op_method(
     };
     let transport_body = transport::op_call(
         wire,
+        module,
         &http_method,
         &input_expr,
         has_declared_errors,
@@ -447,6 +448,7 @@ mod decode;
 mod ext_call;
 mod impl_op;
 mod resolve;
+mod resolve_wire_call;
 mod surface;
 #[cfg(test)]
 mod tests;

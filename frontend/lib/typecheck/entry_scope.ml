@@ -221,7 +221,13 @@ let protocol_trait_names = Trait_vocab.protocol
 
 (* The field references an operation's protocol traits consume: the @http
    endpoint and path template, @header/@query keys and values, @body's
-   reference (or ctor field references), @timeout and @retry. *)
+   reference (or ctor field references), @timeout and @retry, and an extern
+   call's own field-reference arguments (e.g.
+   @header("Authorization", companyauth.sign(.request, .secret)) — ".secret"
+   is collected here like any other ref; ".request" is the reserved
+   canonical-request marker and is excluded, since it never names a field
+   to resolve — its position is validated separately by
+   [Check_entry_ops.check_request_value]. *)
 let op_refs (op : Ast.decl) : (string list * Span.span) list =
   List.concat_map
     (fun (tr : Ast.trait) ->
@@ -238,6 +244,12 @@ let op_refs (op : Ast.decl) : (string list * Span.span) list =
               | Ast.AKv (_, v) -> refs_of v
               | Ast.ACtor c ->
                   List.concat_map (fun (_, _, v) -> refs_of v) c.Ast.ctor_fields
+              | Ast.ACall ce ->
+                  List.filter_map
+                    (fun (segs, _) ->
+                      if segs = [ "request" ] then None
+                      else Some (segs, tr.Ast.tspan))
+                    (ce_refs ce)
               | _ -> []
             in
             refs_of arg)

@@ -15,8 +15,9 @@ use crate::codegen::entries::wire::{
     body_reads_record, has_query, needs_record_for_reads, success_test_expr,
 };
 use crate::codegen::symbol::Symbol;
-use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
+use crate::ir::{Module, TemplatePart, WireBinding, WireResponsePart, WireValue};
 
+use super::resolve_wire_call::{call_body_stmt, call_header_lines};
 use super::support_symbol;
 
 /// A resolved param-member access off `input`: the TypeScript property
@@ -33,7 +34,7 @@ pub(super) type ParamAccess<'a> = &'a dyn Fn(&str) -> Option<String>;
 /// nesting depth that a caller embeds one level deeper (the retry loop wraps
 /// the success block that a non-retrying operation leaves at the method's own
 /// depth).
-fn indent(text: &str, by: &str) -> String {
+pub(super) fn indent(text: &str, by: &str) -> String {
     text.lines()
         .map(|line| {
             if line.is_empty() {
@@ -49,7 +50,7 @@ fn indent(text: &str, by: &str) -> String {
 /// A JS string literal, double-quoted (matches the target's own string
 /// spelling elsewhere: `format!("{s:?}")` on a plain ASCII/UTF-8 string
 /// produces the same escaping rules JSON and JS share).
-fn js_str(s: &str) -> String {
+pub(super) fn js_str(s: &str) -> String {
     format!("{s:?}")
 }
 
@@ -58,7 +59,7 @@ fn js_str(s: &str) -> String {
 /// needs no template-literal wrapper, and a placeholder resolves either from
 /// the resolved client settings (`Field`, via `field_expr`) or the call's own
 /// record (`Input`).
-fn template_expr(
+pub(super) fn template_expr(
     parts: &[TemplatePart],
     field_expr: &dyn Fn(&[String]) -> String,
     input_expr: &str,
@@ -111,7 +112,11 @@ fn template_expr(
 
 /// A `Param(segs)` position: the whole parameter, a resolved member's typed
 /// access, or the decoded record when unresolved.
-fn param_expr(segs: &[String], param_access: ParamAccess<'_>, input_expr: &str) -> String {
+pub(super) fn param_expr(
+    segs: &[String],
+    param_access: ParamAccess<'_>,
+    input_expr: &str,
+) -> String {
     match segs.first() {
         None => input_expr.to_string(),
         Some(name) => param_access(name).unwrap_or_else(|| format!("record[{}]", js_str(name))),
@@ -143,6 +148,14 @@ fn wire_value_expr(
                 "JSON.stringify({})",
                 wire_value_native_expr(v, field_expr, input_expr, param_access)
             )
+        }
+        // A top-level header call is rendered as its own statement by
+        // `call_header_lines` (`declared_header_lines` filters it out
+        // before reaching here); a fallible call has no expression-position
+        // form (`await`/`try`/`catch` are statements), so it can only ever
+        // be a statement, never nested inside a scalar-position expression.
+        WireValue::Call(_) => {
+            unreachable!("a header position never carries a top-level extern call here")
         }
     }
 }
@@ -179,6 +192,14 @@ fn wire_value_native_expr(
                 .join(", ");
             format!("{{ {entries} }}")
         }
+        // A top-level @body call is rendered as its own statement (see
+        // `call_body_stmt`; `body_expr` skips it here). A call nested
+        // inside a ctor field would need the same statement it has no
+        // expression-position form for; `validate::wire_call_resolves`
+        // rejects that shape upstream, so it never reaches this renderer.
+        WireValue::Call(_) => unreachable!(
+            "validate::wire_call_resolves rejects an extern call nested inside a ctor field"
+        ),
     }
 }
 
@@ -219,7 +240,10 @@ fn uri_expr(
     }
 }
 
-/// One `setHeader(...)` call per declared `request_headers` entry.
+/// One `setHeader(...)` call per declared `request_headers` entry whose
+/// value is not a call: a call reads `.request`, which does not exist yet
+/// at this point in assembly (headers are still being built) -- see
+/// [`call_header_lines`], which patches those in once the request exists.
 fn declared_header_lines(
     wire: &WireBinding,
     indent_str: &str,
@@ -229,6 +253,7 @@ fn declared_header_lines(
 ) -> String {
     wire.request_headers
         .iter()
+        .filter(|(_, value)| !matches!(value, WireValue::Call(_)))
         .map(|(key, value)| {
             format!(
                 "{indent_str}setHeader(headers, {}, {});\n",
@@ -274,6 +299,12 @@ fn body_expr(
     param_access: ParamAccess<'_>,
 ) -> Option<String> {
     let body = wire.body.as_ref()?;
+    // A call-valued body reads `.request`, which does not exist yet at this
+    // point in assembly; `call_body_stmt` patches it in once the request is
+    // fully built.
+    if matches!(body, WireValue::Call(_)) {
+        return None;
+    }
     if matches!(body, WireValue::Param(segs) if segs.is_empty()) {
         return Some(format!("JSON.stringify({input_expr})"));
     }
@@ -401,6 +432,7 @@ fn hook_line(indent_str: &str, bound: bool, slot: &str, var: &str) -> String {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn op_call(
     wire: &WireBinding,
+    module: &Module,
     method: &str,
     input_expr: &str,
     has_declared_errors: bool,
@@ -493,11 +525,41 @@ pub(super) fn op_call(
     // The per-attempt body: `d` is its own statement depth, one level deeper
     // than the method (`"    "`) when a retry loop wraps it.
     let d = if has_retry { "      " } else { "    " };
-    let request_kw = if before_request_bound { "let" } else { "const" };
+    // A call-valued header/body reads the request once it exists, so it
+    // patches in right here: after the declared values are folded into
+    // `request` (the next line), before it is sent -- the same slot
+    // `before_request` occupies, and right before it, so a hook still sees
+    // the signed header/body.
+    let mut call_request_lines = call_header_lines(
+        wire,
+        module,
+        d,
+        field_expr,
+        input_expr,
+        param_access,
+        "request",
+        refs,
+    );
+    call_request_lines.push_str(&call_body_stmt(
+        wire,
+        module,
+        d,
+        field_expr,
+        input_expr,
+        param_access,
+        "request",
+        refs,
+    ));
+    let request_kw = if before_request_bound || !call_request_lines.is_empty() {
+        "let"
+    } else {
+        "const"
+    };
     let mut attempt = String::new();
     attempt.push_str(&format!(
         "{d}{request_kw} request: HttpRequest = {request_literal};\n"
     ));
+    attempt.push_str(&call_request_lines);
     attempt.push_str(&hook_line(
         d,
         before_request_bound,

@@ -320,9 +320,22 @@ compatibility).
   construction time.
 - `request_headers` is `[[key, value], ...]`: `key` is a parsed template
   (same `lit`/`field`/`input` parts as `uri`), `value` is
-  `{"lit": <json>}`, `{"field": [...]}`, or `{"template": [...]}`.
-  Declared by op-level `@header(key, value)`; either a loose or an
-  entry-nested operation may carry these.
+  `{"lit": <json>}`, `{"field": [...]}`, `{"template": [...]}`, or (v17)
+  `{"call": <wire_call>}`. Declared by op-level `@header(key, value)`;
+  either a loose or an entry-nested operation may carry these.
+- (v17) `{"call": <wire_call>}` is an extern call read as a `@header`/`@body`
+  value (never `@query`: the URL is already finalized before a call could
+  patch it in). `wire_call` is `{"ns", "fn", "args": [<wire_call_arg>]}`,
+  same shape as an entry field's own `call` key. A `wire_call_arg` is
+  `{"field": [...]}`, `{"param": [...]}`, `{"lit": <json>}`,
+  `{"ctor": [[name, wire_call_arg], ...]}`, or the bare string `"request"` --
+  the reserved marker for `.request`, the canonical already-assembled
+  request. `.request` is legal only here (as a direct or ctor-nested call
+  argument); an entry field's own call rejects it at typecheck instead
+  (`.request` does not exist yet during construction). No emitter supports a
+  call nested inside a `@body` ctor field's own value, or any call in
+  `@query`, yet; `tono gen` rejects both at generation time rather than
+  emitting broken output.
 - The legacy blob's `errors` array (status, error shape id, `@errorCode`
   value, `@retryable` flag) has no counterpart here: the backend's typed
   error taxonomy is derived directly from the operation's own `errors` field

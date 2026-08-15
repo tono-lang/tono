@@ -124,6 +124,25 @@ and wire_value =
   | Wire_param of string list
   | Wire_template of template_part list
   | Wire_object of (string * wire_value) list
+  | Wire_call of wire_call
+
+(* An extern call read as a @header/@body value: [wcl_args] mirror an
+   ordinary extern call's arguments, plus the reserved [Wca_request] marker
+   for ".request", the canonical, already-assembled request -- legal only
+   here, never during entry construction (see [Ir.entry_call] and
+   [Wca_request]'s own comment). *)
+and wire_call = {
+  wcl_ns : string;
+  wcl_fn : string;
+  wcl_args : wire_call_arg list;
+}
+
+and wire_call_arg =
+  | Wca_field of string list
+  | Wca_param of string list
+  | Wca_lit of json
+  | Wca_ctor of (string * wire_call_arg) list
+  | Wca_request
 
 and wire_binding = {
   wb_method : string;

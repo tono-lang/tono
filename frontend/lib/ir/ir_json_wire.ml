@@ -21,6 +21,29 @@ let encode_wire_response_part : Ir.wire_response_part -> Ir.json = function
       `Assoc [ ("kind", `String "header"); ("name", `String name) ]
   | Ir.Wire_response_status_code -> `Assoc [ ("kind", `String "statusCode") ]
 
+let rec encode_wire_call_arg : Ir.wire_call_arg -> Ir.json = function
+  | Ir.Wca_field p -> `Assoc [ ("field", encode_path p) ]
+  | Ir.Wca_param p -> `Assoc [ ("param", encode_path p) ]
+  | Ir.Wca_lit v -> `Assoc [ ("lit", v) ]
+  | Ir.Wca_ctor fields ->
+      `Assoc
+        [
+          ( "ctor",
+            `List
+              (List.map
+                 (fun (n, v) -> `List [ `String n; encode_wire_call_arg v ])
+                 fields) );
+        ]
+  | Ir.Wca_request -> `String "request"
+
+let encode_wire_call (c : Ir.wire_call) : Ir.json =
+  `Assoc
+    [
+      ("ns", `String c.wcl_ns);
+      ("fn", `String c.wcl_fn);
+      ("args", `List (List.map encode_wire_call_arg c.wcl_args));
+    ]
+
 let rec encode_wire_value : Ir.wire_value -> Ir.json = function
   | Ir.Wire_lit j -> `Assoc [ ("lit", j) ]
   | Ir.Wire_field p -> `Assoc [ ("field", encode_path p) ]
@@ -36,6 +59,7 @@ let rec encode_wire_value : Ir.wire_value -> Ir.json = function
                  (fun (n, v) -> `List [ `String n; encode_wire_value v ])
                  fields) );
         ]
+  | Ir.Wire_call c -> `Assoc [ ("call", encode_wire_call c) ]
 
 let encode_named_assoc encode_v (xs : (string * 'a) list) : Ir.json =
   `Assoc (List.map (fun (n, v) -> (n, encode_v v)) xs)
@@ -98,6 +122,56 @@ let rec decode_object_field j =
       Ok (n, w)
   | _ -> err "wire object field must be a [name, value] pair"
 
+and decode_wire_call_arg_field j =
+  match j with
+  | `List [ `String n; v ] ->
+      let* w = decode_wire_call_arg v in
+      Ok (n, w)
+  | _ -> err "wire call ctor field must be a [name, value] pair"
+
+and decode_wire_call_arg j =
+  match j with
+  | `String "request" -> Ok Ir.Wca_request
+  | _ -> (
+      let* kvs = as_assoc j in
+      match kvs with
+      | [ ("field", v) ] ->
+          let* p = decode_path v in
+          Ok (Ir.Wca_field p)
+      | [ ("param", v) ] ->
+          let* p = decode_path v in
+          Ok (Ir.Wca_param p)
+      | [ ("lit", v) ] -> Ok (Ir.Wca_lit v)
+      | [ ("ctor", v) ] ->
+          let* xs = as_list v in
+          let* fields = map_result decode_wire_call_arg_field xs in
+          Ok (Ir.Wca_ctor fields)
+      | _ ->
+          err
+            "wire call argument must be \"request\" or a single field, param, \
+             lit, or ctor key")
+
+and decode_wire_call j =
+  let* kvs = as_assoc j in
+  let* wcl_ns =
+    match List.assoc_opt "ns" kvs with
+    | Some v -> as_string v
+    | None -> err "wire call is missing ns"
+  in
+  let* wcl_fn =
+    match List.assoc_opt "fn" kvs with
+    | Some v -> as_string v
+    | None -> err "wire call is missing fn"
+  in
+  let* wcl_args =
+    match List.assoc_opt "args" kvs with
+    | None -> Ok []
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_wire_call_arg xs
+  in
+  Ok ({ wcl_ns; wcl_fn; wcl_args } : Ir.wire_call)
+
 and decode_wire_value j =
   let* kvs = as_assoc j in
   match kvs with
@@ -116,9 +190,13 @@ and decode_wire_value j =
       let* xs = as_list v in
       let* fields = map_result decode_object_field xs in
       Ok (Ir.Wire_object fields)
+  | [ ("call", v) ] ->
+      let* c = decode_wire_call v in
+      Ok (Ir.Wire_call c)
   | _ ->
       err
-        "wire value must be a single lit, field, param, template, or object key"
+        "wire value must be a single lit, field, param, template, object, or \
+         call key"
 
 let decode_named_assoc decode_v j =
   let* kvs = as_assoc j in

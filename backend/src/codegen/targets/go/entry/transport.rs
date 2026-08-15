@@ -12,14 +12,16 @@
 
 use std::collections::BTreeSet;
 
+use crate::codegen::casing::CasingConfig;
 use crate::codegen::entries::plan::push_gap;
 use crate::codegen::entries::wire::{
     body_reads_record, has_query, needs_record_for_reads, success_test_expr,
 };
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::symbol_slot;
-use crate::ir::{TemplatePart, WireBinding, WireResponsePart, WireValue};
+use crate::ir::{Module, TemplatePart, WireBinding, WireResponsePart, WireValue};
 
+use super::resolve_wire_call::{call_body_stmt, call_header_lines};
 use super::shared_symbol;
 
 /// How a resolved entry-field read spells in a wire string position: a string
@@ -44,6 +46,8 @@ pub(super) type ParamAccess<'a> = &'a dyn Fn(&str) -> Option<(String, FieldKind)
 /// re-derives casing or hook routing.
 pub(super) struct OpCall<'a> {
     pub wire: &'a WireBinding,
+    pub module: &'a Module,
+    pub config: &'a CasingConfig,
     pub has_input: bool,
     pub ret_zero: &'a str,
     /// The operation's error discriminator, when it declares errors.
@@ -63,10 +67,10 @@ pub(super) struct OpCall<'a> {
 
 /// The helper names the emitted text reached, so exactly those references are
 /// declared (an unreached helper must stay prunable).
-struct Reached(BTreeSet<&'static str>);
+pub(super) struct Reached(BTreeSet<&'static str>);
 
 impl Reached {
-    fn slot(&mut self, name: &'static str) -> String {
+    pub(super) fn slot(&mut self, name: &'static str) -> String {
         self.0.insert(name);
         symbol_slot(name)
     }
@@ -182,7 +186,7 @@ fn param_any_expr(segs: &[String], param_access: ParamAccess<'_>) -> String {
 /// whether placeholders route through `PathPart` (URI positions) or
 /// `FormatScalar` (header positions, which the wire does not percent-encode).
 #[allow(clippy::too_many_arguments)]
-fn template_expr(
+pub(super) fn template_expr(
     parts: &[TemplatePart],
     escape: bool,
     field_access: &dyn Fn(&[String]) -> String,
@@ -260,6 +264,15 @@ fn wire_value_expr(
         // wire_value_any_expr + json.Marshal (see body_lines), never through
         // this string-position renderer.
         WireValue::Object(_) => unreachable!("a wire object never reaches a scalar position"),
+        // A top-level header call is rendered as its own statement by
+        // `call_header_lines` (`header_lines` filters it out before reaching
+        // here); Go's error handling has no expression-position form for a
+        // fallible call (unlike Rust's inline `match`), so a call can only
+        // ever be a statement, never nested inside a scalar-position
+        // expression.
+        WireValue::Call(_) => {
+            unreachable!("a header position never carries a top-level extern call here")
+        }
     }
 }
 
@@ -268,7 +281,7 @@ fn wire_value_expr(
 /// field value, and the frontend's ctor typecheck only accepts a reference
 /// or a scalar literal/template per field (RFC-0022 §4: zero new expressive
 /// power).
-fn go_json_lit(json: &serde_json::Value) -> String {
+pub(super) fn go_json_lit(json: &serde_json::Value) -> String {
     match json {
         serde_json::Value::Null => "nil".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
@@ -321,6 +334,15 @@ fn wire_value_any_expr(
                 .collect();
             format!("map[string]any{{{}}}", items.join(", "))
         }
+        // A top-level @body call is rendered as its own statement (see
+        // `call_body_stmt`; `body_lines` skips it here). A call nested
+        // inside a ctor field would need the same statement-hoisting Go's
+        // fallible-call error handling has no expression form for;
+        // `validate::wire_call_resolves` rejects that shape upstream, so it
+        // never reaches this renderer.
+        WireValue::Call(_) => unreachable!(
+            "validate::wire_call_resolves rejects an extern call nested inside a ctor field"
+        ),
     }
 }
 
@@ -415,6 +437,12 @@ fn header_lines(
     let set = reached.slot("SetHeader");
     let mut out = String::from("\theaders := map[string]string{}\n");
     for (key, value) in &wire.request_headers {
+        // A call-valued header reads `.request`, which does not exist yet
+        // at this point in assembly; `call_header_lines` patches it in once
+        // the request is fully built.
+        if matches!(value, WireValue::Call(_)) {
+            continue;
+        }
         out.push_str(&format!(
             "\t{set}(headers, {}, {})\n",
             template_expr(key, false, field_access, field_kind, param_access, reached),
@@ -448,6 +476,13 @@ fn body_lines(
     let Some(body) = wire.body.as_ref() else {
         return (String::new(), None);
     };
+    // A call-valued body reads `.request`, which does not exist yet at this
+    // point in assembly; `call_body_stmt` patches it in once the request is
+    // fully built (the "None" content-type guard skips the normal `body`
+    // field here, exactly like the no-body case).
+    if matches!(body, WireValue::Call(_)) {
+        return (String::new(), None);
+    }
     if let WireValue::Param(segs) = body {
         if segs.is_empty() {
             let text = format!(
@@ -632,15 +667,47 @@ pub(super) fn op_call(
     } else {
         String::new()
     };
+    let request = reached.slot("Request");
+    // A call-valued header/body reads the request once it exists: it patches
+    // in right here, materialized as its own variable so the call has
+    // something to read, right before it is sent.
+    let mut call_lines = call_header_lines(
+        wire,
+        call.module,
+        call.config,
+        field_access,
+        field_kind,
+        param_access,
+        "req",
+        ret_zero,
+        fail,
+        &mut reached,
+        refs,
+    );
+    call_lines.push_str(&call_body_stmt(
+        wire,
+        call.module,
+        call.config,
+        field_access,
+        param_access,
+        "req",
+        ret_zero,
+        fail,
+        refs,
+    ));
     push_gap(&mut out);
+    let send_arg = if call_lines.is_empty() {
+        format!("{request}{{\n{field_lines}\t}}")
+    } else {
+        out.push_str(&format!("\treq := {request}{{\n{field_lines}\t}}\n"));
+        out.push_str(&call_lines);
+        "req".to_string()
+    };
     out.push_str(&format!(
-        "\toutcome := {send}(ctx, c.settings.HTTPClient, c.settings.Transport, {request}{{\n\
-         {field_lines}\
-         \t}})\n\
+        "\toutcome := {send}(ctx, c.settings.HTTPClient, c.settings.Transport, {send_arg})\n\
          {hook_check}\
          \tif outcome.Cause != nil {{\n\t\treturn {ret_zero}{fail_transport}\n\t}}\n",
         send = reached.slot("Send"),
-        request = reached.slot("Request"),
         fail_transport = fail(format!(
             "&{transport}{{Cause: outcome.Cause}}",
             transport = call.transport_error

@@ -684,6 +684,7 @@ mod resolve;
 mod resolve_call;
 mod resolve_env;
 mod resolve_requires;
+mod resolve_wire_call;
 mod shared;
 mod surface;
 #[cfg(test)]

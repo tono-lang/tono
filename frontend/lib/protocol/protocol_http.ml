@@ -9,9 +9,27 @@ type value_expr =
     (* segments into the op's declared parameter; [] is the whole value *)
   | Vtemplate of Ir.template_part list
   | Vctor of (string * value_expr) list
-(* @body's ctor mapper: field name -> value, resolved down to lit/field/
+    (* @body's ctor mapper: field name -> value, resolved down to lit/field/
        param/template positions (the struct name itself carries no wire
        meaning; only the target's own field-to-wire-key encoding does) *)
+  | Vcall of call_value
+(* an extern call read as a @header/@query/@body value;
+       Check_entry_ops.check_request_value already rejected every other
+       position ".request" could appear in, so this only has to recognize
+       the shape, not re-validate it. *)
+
+and call_value = {
+  vc_ns : string;
+  vc_fn : string;
+  vc_args : call_arg_value list;
+}
+
+and call_arg_value =
+  | Cv_field of string list
+  | Cv_param of string list
+  | Cv_lit of Ir.json
+  | Cv_ctor of (string * call_arg_value) list
+  | Cv_request
 
 type resolution = {
   http_method : string;
@@ -120,21 +138,62 @@ let ctor_fields (v : Ir.json) : (string * Ir.json) list option =
   | `Assoc [ ("ctor", `String _); ("fields", `Assoc kvs) ] -> Some kvs
   | _ -> None
 
-let rec value_expr_of ?(pname : string option) (j : Ir.json) : value_expr =
-  match field_path j with
-  | Some p -> (
-      match rewrite_param_path pname p with
-      | `Field segs -> Vfield segs
-      | `Param segs -> Vparam segs)
-  | None -> (
-      match ctor_fields j with
-      | Some kvs ->
-          Vctor (List.map (fun (n, v) -> (n, value_expr_of ?pname v)) kvs)
+(* An extern call the frontend lowered as
+   {"call": {"ns": ..., "fn": ...}, "args": [...]} (Lower.json_of_arg's
+   [ACall] case). Each argument is a call_arg's own encoding: {"param": ...}
+   (only reachable if Check_entry_ops.check_request_value didn't already
+   reject a bare identifier here — kept total rather than asserting),
+   {"field": ["request"]} for the reserved canonical-request marker,
+   {"field": [...]} for an ordinary ref, or {"ctor": ...}. *)
+let call_of (j : Ir.json) : (string * string * Ir.json list) option =
+  match j with
+  | `Assoc
+      [
+        ("call", `Assoc [ ("ns", `String ns); ("fn", `String fn) ]);
+        ("args", `List args);
+      ] ->
+      Some (ns, fn, args)
+  | _ -> None
+
+let rec call_arg_value_of ?(pname : string option) (j : Ir.json) :
+    call_arg_value =
+  match j with
+  | `Assoc [ ("param", `String n) ] -> Cv_param [ n ]
+  | _ -> (
+      match field_path j with
+      | Some [ "request" ] -> Cv_request
+      | Some p -> (
+          match rewrite_param_path pname p with
+          | `Field segs -> Cv_field segs
+          | `Param segs -> Cv_param segs)
       | None -> (
-          match j with
-          | `String s when has_placeholder s ->
-              Vtemplate (rewrite_param_template pname (template_of s))
-          | other -> Vlit other))
+          match ctor_fields j with
+          | Some kvs ->
+              Cv_ctor
+                (List.map (fun (n, v) -> (n, call_arg_value_of ?pname v)) kvs)
+          | None -> Cv_lit j))
+
+let call_value_of ?pname (ns, fn, args) : call_value =
+  { vc_ns = ns; vc_fn = fn; vc_args = List.map (call_arg_value_of ?pname) args }
+
+let rec value_expr_of ?(pname : string option) (j : Ir.json) : value_expr =
+  match call_of j with
+  | Some c -> Vcall (call_value_of ?pname c)
+  | None -> (
+      match field_path j with
+      | Some p -> (
+          match rewrite_param_path pname p with
+          | `Field segs -> Vfield segs
+          | `Param segs -> Vparam segs)
+      | None -> (
+          match ctor_fields j with
+          | Some kvs ->
+              Vctor (List.map (fun (n, v) -> (n, value_expr_of ?pname v)) kvs)
+          | None -> (
+              match j with
+              | `String s when has_placeholder s ->
+                  Vtemplate (rewrite_param_template pname (template_of s))
+              | other -> Vlit other)))
 
 (* ── Binding assignment ────────────────────────────────────────────────── *)
 
@@ -248,6 +307,21 @@ let to_wire_response_part : response_part -> Ir.wire_response_part = function
   | Response_header n -> Ir.Wire_response_header n
   | Response_status_code -> Ir.Wire_response_status_code
 
+let rec to_wire_call_arg : call_arg_value -> Ir.wire_call_arg = function
+  | Cv_field p -> Ir.Wca_field p
+  | Cv_param p -> Ir.Wca_param p
+  | Cv_lit j -> Ir.Wca_lit j
+  | Cv_ctor fields ->
+      Ir.Wca_ctor (List.map (fun (n, v) -> (n, to_wire_call_arg v)) fields)
+  | Cv_request -> Ir.Wca_request
+
+let to_wire_call (c : call_value) : Ir.wire_call =
+  {
+    Ir.wcl_ns = c.vc_ns;
+    wcl_fn = c.vc_fn;
+    wcl_args = List.map to_wire_call_arg c.vc_args;
+  }
+
 let rec to_wire_value : value_expr -> Ir.wire_value = function
   | Vlit j -> Ir.Wire_lit j
   | Vfield p -> Ir.Wire_field p
@@ -255,6 +329,7 @@ let rec to_wire_value : value_expr -> Ir.wire_value = function
   | Vtemplate t -> Ir.Wire_template t
   | Vctor fields ->
       Ir.Wire_object (List.map (fun (n, v) -> (n, to_wire_value v)) fields)
+  | Vcall c -> Ir.Wire_call (to_wire_call c)
 
 (* The typed IR value for [Ir.wire_binding]: the resolution minus the dead
    weight (the errors array duplicates the operation's own [errors] field and

@@ -138,7 +138,25 @@ and wire_value =
     (* segments into the op's declared parameter; [] is the whole value *)
   | Wire_template of template_part list
   | Wire_object of (string * wire_value) list
-(* a @body ctor mapper: struct-literal field name -> value *)
+    (* a @body ctor mapper: struct-literal field name -> value *)
+  | Wire_call of wire_call
+(* an extern call read as a @header/@query/@body value, the request-trait
+       counterpart of an entry field's own call source above *)
+
+and wire_call = {
+  wcl_ns : string;
+  wcl_fn : string;
+  wcl_args : wire_call_arg list;
+}
+
+and wire_call_arg =
+  | Wca_field of string list
+  | Wca_param of string list
+  | Wca_lit of json
+  | Wca_ctor of (string * wire_call_arg) list
+  | Wca_request
+(* the canonical, already-assembled request (".request"); legal only
+         as a call argument here, never during entry construction *)
 
 and wire_binding = {
   wb_method : string;

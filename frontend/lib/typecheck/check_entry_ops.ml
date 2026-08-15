@@ -66,7 +66,7 @@ let rec is_map_or_list_type : Ast.ty -> bool = function
    reference. The legacy [{name}] input placeholder is excluded: that
    convention only exists in the @http path. [resolve] types a value
    reference's segs, when resolvable, to reject a map/list value. *)
-let check_kv_shape ~trait_name ~key_what ~value_what
+let check_kv_shape ~trait_name ~key_what ~value_what ~(allow_call : bool)
     ~(resolve : string list -> Ast.ty option) (tr : Ast.trait) :
     Diagnostic.t list =
   match tr.Ast.targs with
@@ -110,12 +110,19 @@ let check_kv_shape ~trait_name ~key_what ~value_what
                   value_what (path_str r.segs);
               ]
           | _ -> [])
+      | Ast.ACall _ when allow_call ->
+          (* Arity/type-checking a call read as this position's value is the
+             target compiler's job: a call reads `.request` and third-party
+             symbols this checker cannot see into, so it only recognizes
+             the shape here. *)
+          []
       | _ ->
           [
             err Error_codes.protocol_trait_invalid tr.tspan
-              "@%s expects a string literal/template or a field reference as \
+              "@%s expects a string literal/template or a field reference%s as \
                its value"
-              trait_name;
+              trait_name
+              (if allow_call then ", or an extern call" else "");
           ])
   | _ ->
       [
@@ -130,15 +137,17 @@ let check_header_shapes ~resolve (op : Ast.decl) : Diagnostic.t list =
   List.concat_map
     (check_kv_shape ~trait_name:"header"
        ~key_what:"a @header key takes {.field} references"
-       ~value_what:"a @header value" ~resolve)
+       ~value_what:"a @header value" ~allow_call:true ~resolve)
     (traits_named "header" op.Ast.dtraits)
 
-(* Shape rules of @query, mirroring @header. *)
+(* Shape rules of @query, mirroring @header. A call value is not accepted
+   here: unlike @header/@body, the URL is already finalized by the time a
+   call could patch it in, so a call has nowhere to run in this position. *)
 let check_query_shapes ~resolve (op : Ast.decl) : Diagnostic.t list =
   List.concat_map
     (check_kv_shape ~trait_name:"query"
        ~key_what:"a @query key takes {.field} references"
-       ~value_what:"a @query value" ~resolve)
+       ~value_what:"a @query value" ~allow_call:false ~resolve)
     (traits_named "query" op.Ast.dtraits)
 
 (* @http(code:) is well-formed only as an int or a non-empty list of ints.
@@ -251,12 +260,17 @@ let check_body_shapes ctx (op : Ast.decl) : Diagnostic.t list =
         match tr.Ast.targs with
         | [ Ast.ARef _ ] -> []
         | [ Ast.ACtor c ] -> check_body_ctor ctx c
+        (* Arity/type-checking a call read as @body's value is the target
+           compiler's job: a call reads `.request` and third-party symbols
+           this checker cannot see into, so it only recognizes the shape
+           here. *)
+        | [ Ast.ACall _ ] -> []
         | [ _ ] ->
             [
               err Error_codes.protocol_trait_invalid tr.Ast.tspan
                 "@body expects a field reference (e.g. .input or \
-                 .input.member) or a struct-literal mapper (e.g. note_body { \
-                 title: .input.title })";
+                 .input.member), a struct-literal mapper (e.g. note_body { \
+                 title: .input.title }), or an extern call";
             ]
         | _ ->
             [
@@ -313,6 +327,8 @@ let check_protocol_positions (op : Ast.decl) : Diagnostic.t list =
                tr.tname)
         else None)
       op.Ast.dtraits
+
+let check_request_value = Check_request_value.check_request_value
 
 (* A loose (non-entry) operation has no entry-field scope, but it can still
    reference its own declared parameter (zero or one segment deep, matching
@@ -399,7 +415,7 @@ let check_loose_op ctx (op : Ast.decl) : Diagnostic.t list =
   @ check_header_shapes ~resolve op
   @ check_query_shapes ~resolve op
   @ check_body_shapes ctx op @ check_code op @ ref_diags @ endpoint_diags
-  @ timeout_retry_diags @ path_diags @ impl_diags
+  @ timeout_retry_diags @ path_diags @ impl_diags @ check_request_value op
 
 (* A value position (path, endpoint) that accepts the unified grammar:
    literal, template, or pure reference. Resolution of the refs a template or
@@ -716,3 +732,4 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
   @ check_query_shapes ~resolve:resolve_ty op
   @ check_body_shapes ctx op @ check_code op
   @ check_op_impl ctx fields op
+  @ check_request_value op
