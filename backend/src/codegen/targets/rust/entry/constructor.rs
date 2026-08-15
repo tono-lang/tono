@@ -79,6 +79,14 @@ pub(super) fn construction_decls(
     let args = entry.args();
     let timeouts = timeout_fields(entry);
     let seam = has_retry(entry);
+    // A call-sourced field's emitted call is always awaited (`resolve_call`),
+    // so construction itself becomes async whenever the entry has one,
+    // mirroring `impl_op`'s own `is_async` gate for op methods: Rust is an
+    // async-lowering target, so a construction that depends on an external
+    // call takes the language's idiomatic async form.
+    let is_async = entry.declared().iter().any(|f| f.call.is_some());
+    let effect = if is_async { "async " } else { "" };
+    let awaited = if is_async { ".await" } else { "" };
 
     // The client struct itself: the resolved settings, the frozen transport
     // options, one private field per distinct `@timeout` path (converted to
@@ -174,14 +182,14 @@ pub(super) fn construction_decls(
             let comma = if params.is_empty() { "" } else { ", " };
             refs.push(support_symbol("HttpTransport"));
             format!(
-                "{doc}    pub fn new({params}) -> Result<Self, TonoError> {{\n        Self::new_with_transport(None{comma}{pass})\n    }}\n\n    /// `new` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) fn new_with_transport(transport: Option<HttpTransport>{comma}{params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
+                "{doc}    pub {effect}fn new({params}) -> Result<Self, TonoError> {{\n        Self::new_with_transport(None{comma}{pass}){awaited}\n    }}\n\n    /// `new` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) {effect}fn new_with_transport(transport: Option<HttpTransport>{comma}{params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
                 params = params.join(", "),
                 pass = pass.join(", "),
                 body = indent(&plain_body, 2),
             )
         } else {
             format!(
-                "{doc}    pub fn new({params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
+                "{doc}    pub {effect}fn new({params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
                 params = params.join(", "),
                 body = indent(&plain_body, 2),
             )
@@ -239,13 +247,13 @@ pub(super) fn construction_decls(
         let build_fns = if test_seam {
             refs.push(support_symbol("HttpTransport"));
             format!(
-                "{build_doc}    pub fn build(self) -> Result<{client}, TonoError> {{\n        self.build_with_transport(None)\n    }}\n\n    /// `build` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
+                "{build_doc}    pub {effect}fn build(self) -> Result<{client}, TonoError> {{\n        self.build_with_transport(None){awaited}\n    }}\n\n    /// `build` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) {effect}fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
                 client = n.client,
                 body = indent(&body, 2),
             )
         } else {
             format!(
-                "{build_doc}    pub fn build(self) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
+                "{build_doc}    pub {effect}fn build(self) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
                 client = n.client,
                 body = indent(&body, 2),
             )

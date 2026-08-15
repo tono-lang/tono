@@ -313,6 +313,7 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
   let yields = ref None in
   let returns = ref None in
   let errors = ref [] in
+  let sync = ref false in
   let rec go () =
     match (P.peek st).kind with
     | Token.RBrace | Token.Eof -> ()
@@ -330,6 +331,10 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
         go ()
     | Token.Ident "errors" ->
         errors := parse_errors st;
+        go ()
+    | Token.Ident "sync" ->
+        ignore (P.advance st);
+        sync := true;
         go ()
     | _ ->
         P.error st (P.peek st).span "unexpected token in a language block";
@@ -354,6 +359,7 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
     elb_yields = !yields;
     elb_returns = !returns;
     elb_errors = !errors;
+    elb_sync = !sync;
     elb_span =
       Span.merge langt.span
         (match close with Some t -> t.span | None -> langt.span);

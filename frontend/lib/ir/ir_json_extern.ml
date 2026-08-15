@@ -16,6 +16,7 @@ let map_result = Ir_json_base.map_result
 let as_assoc = Ir_json_base.as_assoc
 let as_list = Ir_json_base.as_list
 let as_string = Ir_json_base.as_string
+let as_bool = Ir_json_base.as_bool
 
 (* ── Encoding ──────────────────────────────────────────────────────────── *)
 
@@ -73,9 +74,9 @@ let encode_extern_lang (l : Ir.extern_lang) : Ir.json =
     @ (match l.el_returns with
       | None -> []
       | Some r -> [ ("returns", encode_returns_lit r) ])
-    @
-    if l.el_errors = [] then []
-    else [ ("errors", `List (List.map encode_error_binding l.el_errors)) ])
+    @ (if l.el_errors = [] then []
+       else [ ("errors", `List (List.map encode_error_binding l.el_errors)) ])
+    @ if l.el_sync then [ ("sync", `Bool true) ] else [])
 
 let encode_extern_param (p : Ir.extern_param) : Ir.json =
   `Assoc [ ("name", `String p.xp_name); ("type", encode_tref p.xp_type) ]
@@ -272,6 +273,7 @@ let decode_extern_lang j =
         let* xs = as_list v in
         map_result decode_error_binding xs
   in
+  let* sync = match get "sync" with None -> Ok false | Some v -> as_bool v in
   Ok
     ({
        el_lang = lang;
@@ -280,6 +282,7 @@ let decode_extern_lang j =
        el_yields = yields;
        el_returns = returns;
        el_errors = errors;
+       el_sync = sync;
      }
       : Ir.extern_lang)
 

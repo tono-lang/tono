@@ -54,12 +54,25 @@ impl TargetKind {
         }
     }
 
-    /// Whether this target's codegen can emit the `ext` constructs a field may
-    /// touch: an extern-call source, or a foreign handle type. This is the one
-    /// place a target declares that capability, flipped by that target's own
-    /// emission work; every other layer asks here instead of naming a target,
-    /// so landing the next target changes this arm and nothing else.
-    pub fn emits_ext_constructs(self) -> bool {
+    /// Whether this target's codegen can emit an extern-call field source
+    /// (`field: T = ns.fn(args)`). This is the one place a target declares
+    /// that capability, flipped by that target's own emission work; every
+    /// other layer asks here instead of naming a target, so landing the
+    /// next target changes this arm and nothing else.
+    pub fn emits_ext_calls(self) -> bool {
+        match self {
+            Self::Go | Self::TypeScript | Self::Rust => true,
+        }
+    }
+
+    /// Whether this target's codegen can emit a foreign opaque-handle type
+    /// on the entry surface (a field whose target is a `type` declared
+    /// inside an `ext` block). Separate from [`Self::emits_ext_calls`]: a
+    /// target can emit the call that returns a handle before it can also
+    /// spell the handle's own field type, and conflating the two would let
+    /// a handle-typed field through validation to an emitter with no case
+    /// for it.
+    pub fn emits_ext_handle_types(self) -> bool {
         match self {
             Self::Go | Self::TypeScript => true,
             Self::Rust => false,

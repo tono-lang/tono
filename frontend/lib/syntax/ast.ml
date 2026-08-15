@@ -219,6 +219,7 @@ type extern_lang_body = {
   elb_yields : yields_pos list option;
   elb_returns : returns_lit option;
   elb_errors : error_map_entry list;
+  elb_sync : bool;
   elb_span : Span.span;
 }
 

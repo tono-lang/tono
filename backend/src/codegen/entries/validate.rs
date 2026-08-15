@@ -8,17 +8,30 @@ use super::{
 use crate::codegen::output::TargetKind;
 use crate::ir::{EntryField, ShapeKind, Source, Tref};
 
-/// The requested targets that cannot emit `ext` constructs, by output
-/// name. `None` means every target in this run can, so an `ext`-touching field
-/// passes. A run naming no target vouches for nothing, so it counts as
-/// unsupported rather than vacuously supported.
-fn ext_unsupported_by(targets: &[TargetKind]) -> Option<String> {
+/// The requested targets that cannot emit an extern-call field source, by
+/// output name. `None` means every target in this run can, so a call-
+/// touching field passes. A run naming no target vouches for nothing, so it
+/// counts as unsupported rather than vacuously supported.
+fn ext_calls_unsupported_by(targets: &[TargetKind]) -> Option<String> {
+    unsupported_by(targets, TargetKind::emits_ext_calls)
+}
+
+/// The requested targets that cannot emit a foreign opaque-handle type on
+/// the entry surface, by output name. Separate from
+/// [`ext_calls_unsupported_by`]: a target can land call emission before it
+/// also spells the handle's own field type, and a handle-typed field must
+/// stay rejected on that target until it does.
+fn ext_handle_types_unsupported_by(targets: &[TargetKind]) -> Option<String> {
+    unsupported_by(targets, TargetKind::emits_ext_handle_types)
+}
+
+fn unsupported_by(targets: &[TargetKind], capable: fn(TargetKind) -> bool) -> Option<String> {
     if targets.is_empty() {
         return Some("no target requested".to_string());
     }
     let names: Vec<&str> = targets
         .iter()
-        .filter(|t| !t.emits_ext_constructs())
+        .filter(|t| !capable(**t))
         .map(|t| t.dir())
         .collect();
     (!names.is_empty()).then(|| names.join(", "))
@@ -223,14 +236,16 @@ fn ref_id(t: &Tref) -> Option<&str> {
 /// the endpoint check, not a checker rule.
 ///
 /// `targets` is every target this generation call produces. A field touching
-/// an `ext` block is rejected unless all of them can emit it: a
-/// green pass for one target says nothing about another in the same call, and
-/// the target that cannot spell the construct would panic or write
-/// uncompilable output. Each target answers for itself through
-/// [`TargetKind::emits_ext_constructs`], so landing the next one touches that
-/// method and not this gate.
+/// an `ext` block is rejected unless all of them can emit the construct it
+/// touches: a green pass for one target says nothing about another in the
+/// same call, and the target that cannot spell the construct would panic or
+/// write uncompilable output. Each target answers for itself through
+/// [`TargetKind::emits_ext_calls`] and [`TargetKind::emits_ext_handle_types`],
+/// so landing the next half of a target's emission touches one of those
+/// methods and not this gate.
 pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Result<(), String> {
-    let ext_unsupported = ext_unsupported_by(targets);
+    let ext_calls_unsupported = ext_calls_unsupported_by(targets);
+    let ext_handle_types_unsupported = ext_handle_types_unsupported_by(targets);
     for module in &model.modules {
         for op in &module.operations {
             if let ShapeKind::Operation { wire: Some(_), .. } = &op.kind {
@@ -328,12 +343,35 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                 // it: building the resolution plan would panic (a call
                 // source) or silently write uncompilable output (a foreign
                 // handle field, whose type that target cannot name). Reject
-                // it here, in one gate, whenever any requested target has not
-                // landed its emission yet.
-                if let Some(unsupported) = &ext_unsupported {
-                    if field.call.is_some() || foreign_target {
+                // it here, in one gate per capability, whenever any
+                // requested target has not landed that half of the emission
+                // yet -- a target can emit the call before it can also spell
+                // the handle's own field type, so the two reject
+                // independently.
+                if let Some(unsupported) = &ext_calls_unsupported {
+                    if field.call.is_some() {
                         return Err(format!(
-                            "module {}: entry {} field {} touches an ext block (an extern call or a foreign handle type); {} cannot emit extern calls or foreign handle types yet",
+                            "module {}: entry {} field {} touches an ext block (an extern call); {} cannot emit extern calls yet",
+                            module.name, entry.name, field.name, unsupported
+                        ));
+                    }
+                    if let Tref::Ref { id, .. } = &field.target {
+                        if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+                            if let ShapeKind::Config { fields } = &shape.kind {
+                                if let Some(member) = fields.iter().find(|m| m.call.is_some()) {
+                                    return Err(format!(
+                                        "module {}: entry {} field {} member {} touches an ext block (an extern call); {} cannot emit extern calls yet",
+                                        module.name, entry.name, field.name, member.name, unsupported
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(unsupported) = &ext_handle_types_unsupported {
+                    if foreign_target {
+                        return Err(format!(
+                            "module {}: entry {} field {} touches an ext block (a foreign handle type); {} cannot emit foreign handle types yet",
                             module.name, entry.name, field.name, unsupported
                         ));
                     }
@@ -341,12 +379,10 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                         if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
                             if let ShapeKind::Config { fields } = &shape.kind {
                                 if let Some(member) = fields.iter().find(|m| {
-                                    m.call.is_some()
-                                        || ref_id(&m.target)
-                                            .is_some_and(|id| is_foreign_ref(module, id))
+                                    ref_id(&m.target).is_some_and(|id| is_foreign_ref(module, id))
                                 }) {
                                     return Err(format!(
-                                        "module {}: entry {} field {} member {} touches an ext block (an extern call or a foreign handle type); {} cannot emit extern calls or foreign handle types yet",
+                                        "module {}: entry {} field {} member {} touches an ext block (a foreign handle type); {} cannot emit foreign handle types yet",
                                         module.name, entry.name, field.name, member.name, unsupported
                                     ));
                                 }

@@ -17,9 +17,12 @@
 //!   Rust match-pattern syntax, so one spelling covers a `String`, a numeric,
 //!   or an open-enum subject without needing its type at the call site.
 
+use super::resolve_call;
+use super::resolve_env;
+use super::resolve_requires;
 use super::*;
 use crate::codegen::entries::plan::{Cond, Emitter, Leaf};
-use crate::ir::EnvName;
+use crate::ir::{EntryCall, EnvName};
 
 /// The Rust resolution emitter: holds the entry model and flags the shared
 /// on-demand helpers the leaves use. `body` receives the rendered plan for
@@ -46,51 +49,10 @@ pub(super) struct Resolver<'a, 'b> {
     pub(super) multi: bool,
 }
 
-/// An expression casting a Rust `String` into the field's target type. Only
-/// valid for the string-shaped targets a `@format`/`@str::*` pipeline can
-/// produce.
+/// An expression casting a Rust `String` into the field's target type. See
+/// [`resolve_env::cast_string`] for the full leaf table.
 fn cast_string(t: &Tref, expr: &str) -> String {
-    match t {
-        Tref::Prim(Prim::String | Prim::Uuid) => expr.to_string(),
-        Tref::Prim(Prim::Timestamp) => format!("Timestamp({expr})"),
-        Tref::Prim(Prim::Date) => format!("LocalDate({expr})"),
-        Tref::Prim(Prim::Duration) => format!("Duration({expr})"),
-        // An open enum accepts any wire value; a dynamically derived string
-        // (not a compile-time literal, so the known-variant lookup
-        // `literal_enum` uses is unavailable here) always resolves through
-        // the Unknown catch-all, which serializes identically to a named
-        // variant carrying the same wire spelling.
-        Tref::Ref { id, .. } => format!("{}::Unknown({expr})", type_ident_from_id(id)),
-        _ => expr.to_string(),
-    }
-}
-
-fn prim_rust_name(p: &Prim) -> &'static str {
-    match p {
-        Prim::I8 => "i8",
-        Prim::I16 => "i16",
-        Prim::I32 => "i32",
-        Prim::I64 => "i64",
-        Prim::U8 => "u8",
-        Prim::U16 => "u16",
-        Prim::U32 => "u32",
-        Prim::U64 => "u64",
-        _ => "i64",
-    }
-}
-
-fn prim_label(p: &Prim) -> &'static str {
-    match p {
-        Prim::I8 => "i8",
-        Prim::I16 => "i16",
-        Prim::I32 => "i32",
-        Prim::I64 => "i64",
-        Prim::U8 => "u8",
-        Prim::U16 => "u16",
-        Prim::U32 => "u32",
-        Prim::U64 => "u64",
-        _ => "value",
-    }
+    resolve_env::cast_string(t, expr)
 }
 
 impl Resolver<'_, '_> {
@@ -158,66 +120,7 @@ impl Resolver<'_, '_> {
     /// field's declared type; a parse failure fails construction naming the
     /// variable (`label_expr`) and the type. Relative to column zero.
     fn env_parse(&mut self, field: &EntryField, dest: &str, label_expr: &str) -> String {
-        let t = &field.target;
-        match t {
-            Tref::Prim(Prim::Bool) => {
-                let fail = checks::config_error(&format!(
-                    "format!(\"{{}}: invalid bool {{:?}} (want true/false/1/0)\", {label_expr}, v)"
-                ));
-                format!(
-                    "match v.as_str() {{\n    \"true\" | \"1\" => {{ {dest} = true; }}\n    \"false\" | \"0\" => {{ {dest} = false; }}\n    _ => {{ {fail} }}\n}}"
-                )
-            }
-            Tref::Prim(
-                p @ (Prim::I8
-                | Prim::I16
-                | Prim::I32
-                | Prim::I64
-                | Prim::U8
-                | Prim::U16
-                | Prim::U32
-                | Prim::U64),
-            ) => {
-                let ty = prim_rust_name(p);
-                let fail = checks::config_error(&format!(
-                    "format!(\"{{}}: invalid {prim} {{:?}}\", {label_expr}, v)",
-                    prim = prim_label(p),
-                ));
-                format!("match v.parse::<{ty}>() {{\n    Ok(n) => {{ {dest} = n; }}\n    Err(_) => {{ {fail} }}\n}}")
-            }
-            Tref::Prim(Prim::Float) => {
-                let fail = checks::config_error(&format!(
-                    "format!(\"{{}}: invalid float {{:?}}\", {label_expr}, v)"
-                ));
-                // Decimal notation only: bare parse::<f64> also accepts
-                // "inf"/"nan" spellings the Go/TypeScript boundary rejects.
-                format!(
-                    "if !v.chars().all(|c| c.is_ascii_digit() || \"+-.eE\".contains(c)) {{\n    {fail}\n}}\nmatch v.parse::<f64>() {{\n    Ok(n) if n.is_finite() => {{ {dest} = n; }}\n    _ => {{ {fail} }}\n}}"
-                )
-            }
-            Tref::Prim(Prim::Bytes) => {
-                self.refs.push(Symbol::imported(
-                    "base64_bytes",
-                    crate::codegen::group::Group::root("bytes").path(),
-                    "base64_bytes",
-                ));
-                let fail = checks::config_error(&format!(
-                    "format!(\"{{}}: invalid base64 {{:?}}\", {label_expr}, v)"
-                ));
-                format!("match {}::decode(&v) {{\n    Ok(b) => {{ {dest} = b; }}\n    Err(_) => {{ {fail} }}\n}}", shared_slot("base64_bytes"))
-            }
-            Tref::Prim(Prim::Duration) => {
-                self.refs.push(shared_symbol("parse_duration_ms"));
-                let fail = checks::config_error(&format!(
-                    "format!(\"{{}}: invalid duration {{:?}}\", {label_expr}, v)"
-                ));
-                format!(
-                    "if {}(&v).is_err() {{\n    {fail}\n}}\n{dest} = Duration(v.clone());",
-                    shared_slot("parse_duration_ms")
-                )
-            }
-            _ => format!("{dest} = {};", cast_string(t, "v")),
-        }
+        resolve_env::env_parse(self, field, dest, label_expr)
     }
 
     /// Fold a field's declared sources into a presence cascade: `@with`
@@ -318,6 +221,27 @@ impl Emitter for Resolver<'_, '_> {
     /// copy / TypeScript's reference read do implicitly.
     fn assign_expr(&self, dest: &str, expr: &str) -> Leaf {
         Leaf(format!("{dest} = ({expr}).clone();"))
+    }
+
+    fn call_assign(&mut self, field: &EntryField, call: &EntryCall, dest: &str) -> String {
+        resolve_call::call_assign(self, field, call, dest)
+    }
+
+    /// A call-sourced field's `@with` fallback only ever reaches this leaf
+    /// from the builder path (an entry with a `@with`
+    /// field always builds through `ClientBuilder`, never a bare `new`), so
+    /// `arg_prefix` is always `"self."` here and the injected value reads
+    /// off the builder's own `Option<T>` field.
+    fn with_present_cond(&self, field: &EntryField) -> Cond {
+        Cond(format!("{}.is_some()", self.arg_read(field)))
+    }
+
+    /// `with_present_cond` is a plain boolean `if`, not an `if let`, so this
+    /// leaf independently re-reads and unwraps the same `Option<T>`; safe
+    /// because the two always run together (the shared plan emits this leaf
+    /// only inside the branch `with_present_cond` guards).
+    fn with_assign(&self, field: &EntryField, dest: &str) -> Leaf {
+        Leaf(format!("{dest} = {}.unwrap();", self.arg_take(field)))
     }
 
     fn member_dest(&self, member_name: &str) -> String {
@@ -726,61 +650,22 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
-        let head_ident = field_snake_ren(
-            head,
-            self.entry.field_rename(head, LANG).as_deref(),
-            self.config,
-        );
-        let member_ident = field_snake(member, self.config);
-        let zero = zero_value(leaf, self.module, self.config);
-        let msg = format!("{name}: no value");
-        format!(
-            "if s.{head_ident}.{member_ident} == {zero} {{\n    return Err(TonoError::Config(ConfigError {{ message: {msg:?}.to_string() }}));\n}}"
-        )
+        resolve_requires::require_member(self, head, member, leaf, name)
     }
 
     fn require_member_deferred(&mut self, name: &str, err: &str) -> String {
-        let e = err_var(err);
-        format!(
-            "if let Some({e}) = &{e} {{\n    return Err(TonoError::Config(ConfigError {{ message: format!(\"{name} <- {{}}\", {e}.message) }}));\n}}"
-        )
+        resolve_requires::require_member_deferred(name, err)
     }
 
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
-        let ident = field_snake_ren(
-            head,
-            self.entry.field_rename(head, LANG).as_deref(),
-            self.config,
-        );
-        let zero = zero_value(target, self.module, self.config);
-        let e = err_var(head);
-        format!(
-            "if s.{ident} == {zero} {{\n    let reason = {e}.as_ref().map(|err| err.message.clone()).unwrap_or_else(|| \"no value\".to_string());\n    return Err(TonoError::Config(ConfigError {{ message: format!(\"{head} <- {{}}\", reason) }}));\n}}"
-        )
+        resolve_requires::require_string(self, head, target)
     }
 
     fn require_bytes(&mut self, head: &str) -> String {
-        let ident = field_snake_ren(
-            head,
-            self.entry.field_rename(head, LANG).as_deref(),
-            self.config,
-        );
-        let e = err_var(head);
-        format!(
-            "if s.{ident}.is_empty() {{\n    let reason = {e}.as_ref().map(|err| err.message.clone()).unwrap_or_else(|| \"no value\".to_string());\n    return Err(TonoError::Config(ConfigError {{ message: format!(\"{head} <- {{}}\", reason) }}));\n}}"
-        )
+        resolve_requires::require_bytes(self, head)
     }
 
     fn require_numeric(&mut self, head: &str, target: &Tref) -> String {
-        let ident = field_snake_ren(
-            head,
-            self.entry.field_rename(head, LANG).as_deref(),
-            self.config,
-        );
-        let e = err_var(head);
-        let zero = numeric_zero(target);
-        format!(
-            "if let Some({e}) = &{e} {{\n    if s.{ident} == {zero} {{\n        return Err(TonoError::Config(ConfigError {{ message: format!(\"{head} <- {{}}\", {e}.message) }}));\n    }}\n}}"
-        )
+        resolve_requires::require_numeric(self, head, target)
     }
 }

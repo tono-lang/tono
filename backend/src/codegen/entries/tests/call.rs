@@ -172,6 +172,7 @@ fn ext_lib_with_extern(lib: &str, name: &str, langs: &[&str]) -> ExtLib {
                     yields: vec![],
                     returns: None,
                     errors: vec![],
+                    sync: false,
                 })
                 .collect(),
         }],
@@ -237,25 +238,25 @@ fn model_with_a_call_sourced_field() -> crate::ir::Model {
     model_of(module)
 }
 
-/// Per-target emission of a call source is deferred for every target but Go
-/// (its `Emitter` leaf method has no override for TypeScript or Rust yet),
-/// so building its resolution plan there would panic. `validate_entries`
-/// runs ahead of emission in every gen pipeline and must reject the field
-/// there instead, whenever the request generates for a non-Go target, or
-/// `tono gen` panics on a spec `tono check` accepted. A request generating
-/// for Go only must not trip that same gate.
+/// A call-sourced field with no binding for the target being generated is
+/// rejected instead of reaching the emitter as a pipeline defect (a panic).
+/// This model's extern declares only a `go` block, so every other target
+/// meets it through `call_resolves`'s per-target lang-binding check, not
+/// the coarser "target cannot emit calls at all" gate (every target emits
+/// calls now).
 #[test]
-fn gen_rejects_a_call_sourced_field_instead_of_panicking() {
+fn gen_rejects_a_call_sourced_field_with_no_binding_for_the_target() {
     let model = model_with_a_call_sourced_field();
     let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
     assert!(err.contains("config"), "{err}");
-    assert!(err.contains("ext block"), "{err}");
+    assert!(err.contains("declares no rust block"), "{err}");
     assert!(super::validate_entries(&model, &[TargetKind::Go]).is_ok());
 }
 
-/// The same deferral for a call-sourced member of a composed config field.
+/// A call-sourced field whose extern declares a block for every requested
+/// target validates cleanly, including a config member's own call source.
 #[test]
-fn gen_rejects_a_call_sourced_config_member_instead_of_panicking() {
+fn gen_accepts_a_call_sourced_field_and_config_member_once_every_target_has_a_binding() {
     let member = call_field("token", "ns", "load", vec![]);
     let config_shape = Shape {
         id: "m#conf".into(),
@@ -269,13 +270,11 @@ fn gen_rejects_a_call_sourced_config_member_instead_of_panicking() {
         id: "m#conf".into(),
         args: vec![],
     };
-    let model = model_of(module_of(vec![
-        entry_shape("m#client", vec![conf]),
-        config_shape,
-    ]));
-    let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
-    assert!(err.contains("token"), "{err}");
-    assert!(err.contains("ext block"), "{err}");
+    let mut module = module_of(vec![entry_shape("m#client", vec![conf]), config_shape]);
+    module.ext_libs = vec![ext_lib_with_extern("ns", "load", &["rust", "go"])];
+    let model = model_of(module);
+    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
+    assert!(super::validate_entries(&model, &[TargetKind::Go]).is_ok());
 }
 
 fn ext_lib_with_handle(lib: &str, handle: &str) -> ExtLib {
