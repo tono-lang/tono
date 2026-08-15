@@ -136,6 +136,96 @@ let resolve_full () =
     "GET|/things/{id}|limit=.param.limit|Authorization=.param.auth|-|trace<-header(X-Trace),code<-statusCode|"
     (show_desc d)
 
+let call_json ns fn args =
+  `Assoc
+    [
+      ("call", `Assoc [ ("ns", `String ns); ("fn", `String fn) ]);
+      ("args", `List args);
+    ]
+
+let request_arg = `Assoc [ ("field", `List [ `String "request" ]) ]
+
+(* A signing extern call read as an argument to @header, the RFC's own
+   canonical example: `.request` resolves to [Cv_request], the call itself
+   to [Vcall]. *)
+let a_signing_call_in_a_header_resolves_to_vcall () =
+  let o =
+    op "get_thing" ~pname:"ref"
+      ~traits:
+        [
+          trait "http"
+            (`Assoc [ ("method", `String "get"); ("path", `String "/things") ]);
+          trait "header"
+            (`List
+               [
+                 `String "Authorization";
+                 call_json "companyauth" "sign" [ request_arg ];
+               ]);
+        ]
+  in
+  let d = resolve [] o in
+  Alcotest.(check string)
+    "descriptor" "GET|/things||Authorization=companyauth.sign(.request)|-||"
+    (show_desc d);
+  let binding = Protocol_http.to_ir_binding d in
+  match binding.wb_request_headers with
+  | [ (_, Ir.Wire_call { wcl_ns; wcl_fn; wcl_args }) ] ->
+      Alcotest.(check string) "ns" "companyauth" wcl_ns;
+      Alcotest.(check string) "fn" "sign" wcl_fn;
+      Alcotest.(check bool) "request arg" true (wcl_args = [ Ir.Wca_request ])
+  | _ -> Alcotest.fail "expected a single call-valued header"
+
+(* A field/param/lit argument inside the call each resolve the same way a
+   bare value in the same position would; a nested ctor recurses. *)
+let a_call_arg_resolves_field_param_lit_and_nested_ctor () =
+  let o =
+    op "get_thing" ~pname:"ref"
+      ~traits:
+        [
+          trait "http"
+            (`Assoc [ ("method", `String "get"); ("path", `String "/things") ]);
+          trait "header"
+            (`List
+               [
+                 `String "X-Sig";
+                 call_json "companyauth" "sign"
+                   [
+                     field [ "other"; "id" ];
+                     `Assoc [ ("param", `String "region") ];
+                     `String "v";
+                     `Assoc
+                       [
+                         ("ctor", `String "opts");
+                         ( "fields",
+                           `Assoc [ ("scope", field [ "other"; "id" ]) ] );
+                       ];
+                   ];
+               ]);
+        ]
+  in
+  let d = resolve [] o in
+  (match d.request_headers with
+  | [ (_, Protocol_http.Vcall { vc_args; _ }) ] ->
+      let shown = String.concat "," (List.map show_call_arg_value vc_args) in
+      Alcotest.(check string)
+        "call args" ".other.id,.param.region,v,{scope:.other.id}" shown
+  | _ -> Alcotest.fail "expected a single call-valued header");
+  (* Exercises every [to_wire_call_arg] branch (field/param/lit/ctor), not
+     just the [Wca_request] branch [a_signing_call_in_a_header_resolves_to_vcall]
+     already covers. *)
+  match (Protocol_http.to_ir_binding d).wb_request_headers with
+  | [ (_, Ir.Wire_call { wcl_args; _ }) ] ->
+      Alcotest.(check bool)
+        "wire call args" true
+        (wcl_args
+        = [
+            Ir.Wca_field [ "other"; "id" ];
+            Ir.Wca_param [ "region" ];
+            Ir.Wca_lit (`String "v");
+            Ir.Wca_ctor [ ("scope", Ir.Wca_field [ "other"; "id" ]) ];
+          ])
+  | _ -> Alcotest.fail "expected a single call-valued wire header"
+
 (* No @body means no body: it is never inferred from the input's shape. *)
 let no_body_by_default () =
   let req = structure "req" [ member "a"; member "b" ] in
@@ -474,6 +564,10 @@ let () =
       ( "resolve",
         [
           Alcotest.test_case "resolve full" `Quick resolve_full;
+          Alcotest.test_case "signing call in header resolves to Vcall" `Quick
+            a_signing_call_in_a_header_resolves_to_vcall;
+          Alcotest.test_case "call arg resolves field param lit and nested ctor"
+            `Quick a_call_arg_resolves_field_param_lit_and_nested_ctor;
           Alcotest.test_case "no body by default" `Quick no_body_by_default;
           Alcotest.test_case "body whole param" `Quick body_whole_param;
           Alcotest.test_case "body one member" `Quick body_one_member;

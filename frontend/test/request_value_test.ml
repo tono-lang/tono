@@ -101,6 +101,44 @@ pub struct client {
     "the legal header call still leaves other traits untouched" false
     (has "TC0087" src)
 
+let legal_kv_wrapped_arg () =
+  let src =
+    client {|@header(key: "Authorization", value: companyauth.sign(.request))|}
+  in
+  Alcotest.(check bool)
+    "no TC0087 for a key:value-wrapped call argument" false (has "TC0087" src)
+
+let illegal_call_in_query () =
+  let src =
+    Printf.sprintf
+      {|import tono.http
+%s
+pub struct note { id: string }
+
+pub struct client {
+  ep: string @env("EP")
+
+  op fetch(): note
+    @http(method: "GET", path: "/notes", endpoint: .ep)
+    @query("sig", companyauth.sign(.request))
+}
+|}
+      ext_block
+  in
+  Alcotest.(check bool)
+    "a call reading .request is illegal in @query" true (has "TC0087" src)
+
+(* A call argument referencing a field the entry doesn't declare is
+   collected as an ordinary ref by [Entry_scope.op_refs]'s [Ast.ACall] case
+   (not silently dropped, and not confused with the reserved `.request`
+   exclusion), so it is diagnosed exactly like a bare unresolved reference
+   would be. *)
+let an_unknown_field_inside_a_call_argument_is_still_diagnosed () =
+  let src = client {|@header("Authorization", companyauth.sign(.nope))|} in
+  Alcotest.(check bool)
+    "some diagnostic fires for the unresolved field" true
+    (check src <> [])
+
 let illegal_bare_param () =
   let src = client {|@header("Authorization", companyauth.sign(token))|} in
   Alcotest.(check bool)
@@ -120,5 +158,11 @@ let () =
             illegal_in_errors;
           Alcotest.test_case "illegal bare param in call" `Quick
             illegal_bare_param;
+          Alcotest.test_case "legal key:value-wrapped call argument" `Quick
+            legal_kv_wrapped_arg;
+          Alcotest.test_case "illegal call in @query" `Quick
+            illegal_call_in_query;
+          Alcotest.test_case "unknown field inside a call argument diagnosed"
+            `Quick an_unknown_field_inside_a_call_argument_is_still_diagnosed;
         ] );
     ]
