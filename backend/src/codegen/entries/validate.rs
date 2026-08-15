@@ -27,6 +27,12 @@ fn ext_handle_types_unsupported_by(targets: &[TargetKind]) -> Option<String> {
     unsupported_by(targets, TargetKind::emits_ext_handle_types)
 }
 
+/// The requested targets that cannot emit an operation's own
+/// `impl .field.method(args)` body, by output name.
+fn ext_handle_calls_unsupported_by(targets: &[TargetKind]) -> Option<String> {
+    unsupported_by(targets, TargetKind::emits_ext_handle_calls)
+}
+
 fn unsupported_by(targets: &[TargetKind], capable: fn(TargetKind) -> bool) -> Option<String> {
     if targets.is_empty() {
         return Some("no target requested".to_string());
@@ -345,12 +351,13 @@ fn ref_id(t: &Tref) -> Option<&str> {
 /// touches: a green pass for one target says nothing about another in the
 /// same call, and the target that cannot spell the construct would panic or
 /// write uncompilable output. Each target answers for itself through
-/// [`TargetKind::emits_ext_calls`] and [`TargetKind::emits_ext_handle_types`],
-/// so landing the next half of a target's emission touches one of those
-/// methods and not this gate.
+/// [`TargetKind::emits_ext_calls`], [`TargetKind::emits_ext_handle_types`],
+/// and [`TargetKind::emits_ext_handle_calls`], so landing the next half of a
+/// target's emission touches one of those methods and not this gate.
 pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Result<(), String> {
     let ext_calls_unsupported = ext_calls_unsupported_by(targets);
     let ext_handle_types_unsupported = ext_handle_types_unsupported_by(targets);
+    let ext_handle_calls_unsupported = ext_handle_calls_unsupported_by(targets);
     for module in &model.modules {
         for op in &module.operations {
             if let ShapeKind::Operation { wire: Some(_), .. } = &op.kind {
@@ -412,6 +419,23 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                             module.name,
                             entry.name,
                             local_name(&op.id)
+                        ));
+                    }
+                }
+                if let ShapeKind::Operation {
+                    impl_call: Some(call),
+                    ..
+                } = &op.kind
+                {
+                    if let Some(unsupported) = &ext_handle_calls_unsupported {
+                        return Err(format!(
+                            "module {}: entry {} operation {} implements itself as a call into .{}.{}(..) (an extern handle method); {} cannot emit that call yet",
+                            module.name,
+                            entry.name,
+                            local_name(&op.id),
+                            call.recv.join("."),
+                            call.method,
+                            unsupported
                         ));
                     }
                 }

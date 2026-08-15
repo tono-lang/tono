@@ -78,6 +78,20 @@ impl TargetKind {
             Self::Rust => false,
         }
     }
+
+    /// Whether this target's codegen can emit an operation's own
+    /// `impl .field.method(args)` body: a call into a foreign handle's
+    /// method, standing in for the wire protocol. Separate from
+    /// [`Self::emits_ext_handle_types`]: a target can spell a handle's field
+    /// type before it can also render a call through it, and conflating the
+    /// two would let an operation whose only implementation is this call
+    /// through validation to an emitter with no case for it.
+    pub fn emits_ext_handle_calls(self) -> bool {
+        match self {
+            Self::Go => true,
+            Self::TypeScript | Self::Rust => false,
+        }
+    }
 }
 
 /// A generated source file: which target produced it (so a caller knows which

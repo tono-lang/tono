@@ -9,9 +9,11 @@
 //! stubs an `.impl` dependency generates nothing here: the Rust bespoke ops
 //! expose no swappable per-operation seam, so only the transport stub and the
 //! live path can be exercised natively. A call whose own dependency is
-//! neither `.http` nor `.impl` reaches an extern handle method through the
-//! op's own `impl` body; only Go renders that call today, so such a test is
-//! skipped here too rather than rendered wrong.
+//! neither `.http` nor `.impl` can only be an extern handle method reached
+//! through the op's own `impl` body, which generation-time validation
+//! ([`TargetKind::emits_ext_handle_calls`]) already refuses for this target
+//! before any test file is built, so that combination never reaches this
+//! emitter.
 //!
 //! Each generated file is a `#[cfg(test)]` module of the SDK crate itself
 //! (the module tree declares it), which is what lets it reach the
@@ -65,13 +67,6 @@ pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFi
             }
             // An impl-stubbed test is skipped for Rust (see module doc).
             if test.stub.is_some_and(|s| s.dep == StubDep::Impl) {
-                continue;
-            }
-            // A call whose own dependency has no classic stub (neither Http
-            // nor Impl) reaches an extern handle method through the op's
-            // `impl` body; no target but Go renders that call today, so the
-            // test is skipped here rather than rendered wrong.
-            if test.call.is_some() && test.stub.is_none() {
                 continue;
             }
             hermetic.push(hermetic_test_decl(&ctx));

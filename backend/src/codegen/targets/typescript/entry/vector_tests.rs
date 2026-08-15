@@ -7,9 +7,11 @@
 //! whose call has no stub runs against the real dependency, so it lands in the
 //! live file, gated behind `TONO_LIVE_TESTS=1` so it stays out of a default
 //! `vitest` run; a construction-only test is hermetic by nature. A call whose
-//! own dependency is neither `.http` nor `.impl` reaches an extern handle
-//! method through the op's own `impl` body; only Go renders that call today,
-//! so such a test is skipped here rather than rendered wrong.
+//! own dependency is neither `.http` nor `.impl` can only be an extern handle
+//! method reached through the op's own `impl` body, which generation-time
+//! validation ([`TargetKind::emits_ext_handle_calls`]) already refuses for
+//! this target before any test file is built, so that combination never
+//! reaches this emitter.
 //!
 //! Unlike Go's shared package scope, each test file is its own ES module, so
 //! it imports the surface it exercises. Each test body is self-contained
@@ -72,21 +74,14 @@ pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFi
                 bound: &bound,
                 test,
             };
-            if !test.hermetic {
+            if test.hermetic {
+                hermetic_cases.push(indent(
+                    &hermetic_case(&ctx, &mut hermetic_uses_env, &mut hermetic_refs),
+                    "  ",
+                ));
+            } else {
                 live_cases.push(indent(&live_case(&ctx, &mut live_refs), "  "));
-                continue;
             }
-            // A call whose own dependency has no classic stub (neither Http
-            // nor Impl) reaches an extern handle method through the op's
-            // `impl` body; no target but Go renders that call today, so the
-            // test is skipped here rather than rendered wrong.
-            if test.call.is_some() && test.stub.is_none() {
-                continue;
-            }
-            hermetic_cases.push(indent(
-                &hermetic_case(&ctx, &mut hermetic_uses_env, &mut hermetic_refs),
-                "  ",
-            ));
         }
         // The env const precedes the cases: a `const` does not hoist, and a
         // describe argument evaluates at module load.
