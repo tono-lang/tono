@@ -14,11 +14,7 @@ pub(super) fn require_member(
     leaf: &Tref,
     name: &str,
 ) -> String {
-    let head_ident = field_snake_ren(
-        head,
-        r.entry.field_rename(head, LANG).as_deref(),
-        r.config,
-    );
+    let head_ident = field_snake_ren(head, r.entry.field_rename(head, LANG).as_deref(), r.config);
     let member_ident = field_snake(member, r.config);
     let zero = zero_value(leaf, r.module, r.config);
     let msg = format!("{name}: no value");
@@ -35,11 +31,7 @@ pub(super) fn require_member_deferred(name: &str, err: &str) -> String {
 }
 
 pub(super) fn require_string(r: &Resolver<'_, '_>, head: &str, target: &Tref) -> String {
-    let ident = field_snake_ren(
-        head,
-        r.entry.field_rename(head, LANG).as_deref(),
-        r.config,
-    );
+    let ident = field_snake_ren(head, r.entry.field_rename(head, LANG).as_deref(), r.config);
     let zero = zero_value(target, r.module, r.config);
     let e = err_var(head);
     format!(
@@ -48,11 +40,7 @@ pub(super) fn require_string(r: &Resolver<'_, '_>, head: &str, target: &Tref) ->
 }
 
 pub(super) fn require_bytes(r: &Resolver<'_, '_>, head: &str) -> String {
-    let ident = field_snake_ren(
-        head,
-        r.entry.field_rename(head, LANG).as_deref(),
-        r.config,
-    );
+    let ident = field_snake_ren(head, r.entry.field_rename(head, LANG).as_deref(), r.config);
     let e = err_var(head);
     format!(
         "if s.{ident}.is_empty() {{\n    let reason = {e}.as_ref().map(|err| err.message.clone()).unwrap_or_else(|| \"no value\".to_string());\n    return Err(TonoError::Config(ConfigError {{ message: format!(\"{head} <- {{}}\", reason) }}));\n}}"
@@ -60,11 +48,7 @@ pub(super) fn require_bytes(r: &Resolver<'_, '_>, head: &str) -> String {
 }
 
 pub(super) fn require_numeric(r: &Resolver<'_, '_>, head: &str, target: &Tref) -> String {
-    let ident = field_snake_ren(
-        head,
-        r.entry.field_rename(head, LANG).as_deref(),
-        r.config,
-    );
+    let ident = field_snake_ren(head, r.entry.field_rename(head, LANG).as_deref(), r.config);
     let e = err_var(head);
     let zero = numeric_zero(target);
     format!(

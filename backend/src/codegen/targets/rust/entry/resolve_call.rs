@@ -1,18 +1,18 @@
-//! The extern-call leaf (RFC-0023): `field: T = ns.fn(args)` lowered to a
-//! Rust call against the declared crate, its `yields`/`returns` projection,
-//! and its `errors:` sentinel mapping. Split out from `resolve.rs` (a new
-//! leaf entirely, not a moved one) to keep that file's leaf table from
-//! growing past the file-size gate.
+//! The extern-call leaf: `field: T = ns.fn(args)` lowered to a Rust call
+//! against the declared crate, its `yields`/`returns` projection, and its
+//! `errors:` sentinel mapping. Split out from `resolve.rs` (a new leaf
+//! entirely, not a moved one) to keep that file's leaf table from growing
+//! past the file-size gate.
 //!
 //! `ns`/`fn` are guaranteed to resolve against a real `extern` carrying a
-//! `lang: "rust"` block: `validate::call_resolves_for_rust` checks this
-//! ahead of every Rust generation call, so the lookups below are `expect`ed
-//! rather than diagnosed here — a miss at this point is a validator gap, not
-//! an authoring error.
+//! `lang: "rust"` block: `validate::call_resolves` checks this ahead of
+//! every Rust generation call, so the lookups below are `expect`ed rather
+//! than diagnosed here — a miss at this point is a validator gap, not an
+//! authoring error.
 //!
-//! The call is always awaited: Rust is an async-lowering target (ADR-0010),
-//! and an arbitrary third-party symbol is exactly the "might block on I/O"
-//! case that target already treats as async. `constructor.rs` gates the
+//! The call is always awaited: Rust is an async-lowering target, and an
+//! arbitrary third-party symbol is exactly the "might block on I/O" case
+//! that target already treats as async. `constructor.rs` gates the
 //! surrounding `new`/`build` to `async fn` whenever an entry has one of
 //! these fields.
 
@@ -31,21 +31,21 @@ fn find_lib<'a>(module: &'a Module, ns: &str) -> &'a ExtLib {
         .ext_libs
         .iter()
         .find(|l| l.name == ns)
-        .expect("validate::call_resolves_for_rust checked this ext block exists")
+        .expect("validate::call_resolves checked this ext block exists")
 }
 
 fn find_extern<'a>(lib: &'a ExtLib, func: &str) -> &'a ExternDecl {
     lib.externs
         .iter()
         .find(|e| e.name == func)
-        .expect("validate::call_resolves_for_rust checked this extern exists")
+        .expect("validate::call_resolves checked this extern exists")
 }
 
 fn find_rust_lang(decl: &ExternDecl) -> &ExternLang {
     decl.langs
         .iter()
         .find(|l| l.lang == "rust")
-        .expect("validate::call_resolves_for_rust checked a rust block exists")
+        .expect("validate::call_resolves checked a rust block exists")
 }
 
 /// A `@default`-shaped best-effort Rust literal for a raw JSON call
@@ -112,7 +112,7 @@ fn call_expr(r: &mut Resolver<'_, '_>, call: &EntryCall) -> String {
         .iter()
         .find(|l| l.lang == "rust")
         .map(|l| l.path.replace('-', "_"))
-        .expect("validate::call_resolves_for_rust checked a rust module path exists");
+        .expect("validate::call_resolves checked a rust module path exists");
     let args: Vec<String> = lang
         .call_args
         .iter()
@@ -195,7 +195,10 @@ fn ok_pattern(positions: &[&YieldsPos]) -> String {
         [one] => one.name.clone(),
         many => format!(
             "({})",
-            many.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ")
+            many.iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     }
 }
@@ -222,7 +225,7 @@ fn ok_assign(dest: &str, ok_binding: &str, returns: Option<&ReturnsLit>) -> Stri
     format!("{dest} = {ty} {{ {} }};", fields.join(", "))
 }
 
-/// The extern-call assignment (RFC-0023): resolves `ns.fn` against the
+/// The extern-call assignment: resolves `ns.fn` against the
 /// module's own `ext_libs`, emits the awaited call in the declared argument
 /// order, destructures `yields`, projects `returns:`, and maps `errors:` —
 /// or, absent `yields`, treats the call as a plain `Result<T, E>` whose `Ok`
@@ -332,6 +335,51 @@ mod tests {
         assert!(out.contains("company_config::Client::load"), "{out}");
         assert!(out.contains(".await"), "{out}");
         assert!(out.contains("async fn new"), "{out}");
+    }
+
+    /// A `@with` field backed by a call fallback builds through
+    /// `ClientBuilder`, and the injected value wins over the call: this
+    /// exercises `with_present_cond`/`with_assign` (the plain boolean
+    /// `if`/`else` the shared plan wraps a call in when `@with` is also
+    /// declared).
+    #[test]
+    fn a_with_field_backed_by_a_call_fallback_prefers_the_injected_value() {
+        let mut bus = bare_entry_field("bus", Tref::Prim(Prim::String), vec![Source::With]);
+        bus.call = Some(EntryCall {
+            ns: "companybus".into(),
+            func: "connect".into(),
+            args: vec![],
+        });
+        let module_with_lib = |mut module: Module| {
+            module.ext_libs = vec![ExtLib {
+                name: "companybus".into(),
+                langs: vec![LangPath {
+                    lang: "rust".into(),
+                    path: "company_bus".into(),
+                }],
+                structs: vec![],
+                types: vec![],
+                externs: vec![ExternDecl {
+                    name: "connect".into(),
+                    params: vec![],
+                    r#return: Tref::Prim(Prim::String),
+                    langs: vec![ExternLang {
+                        lang: "rust".into(),
+                        symbol: "connect".into(),
+                        call_args: vec![],
+                        yields: vec![],
+                        returns: None,
+                        errors: vec![],
+                    }],
+                }],
+            }];
+            module
+        };
+        let module = module_with_lib(module_of(vec![client_shape(vec![bus])]));
+        let out = entry_text(&module, &rust_casing());
+        assert!(out.contains(".is_some()"), "{out}");
+        assert!(out.contains(".unwrap();"), "{out}");
+        assert!(out.contains("company_bus::connect()"), "{out}");
     }
 
     /// A call declaring `yields`/`returns`/`errors:` projects the success

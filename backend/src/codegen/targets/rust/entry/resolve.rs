@@ -227,6 +227,23 @@ impl Emitter for Resolver<'_, '_> {
         resolve_call::call_assign(self, field, call, dest)
     }
 
+    /// A call-sourced field's `@with` fallback only ever reaches this leaf
+    /// from the builder path (an entry with a `@with`
+    /// field always builds through `ClientBuilder`, never a bare `new`), so
+    /// `arg_prefix` is always `"self."` here and the injected value reads
+    /// off the builder's own `Option<T>` field.
+    fn with_present_cond(&self, field: &EntryField) -> Cond {
+        Cond(format!("{}.is_some()", self.arg_read(field)))
+    }
+
+    /// `with_present_cond` is a plain boolean `if`, not an `if let`, so this
+    /// leaf independently re-reads and unwraps the same `Option<T>`; safe
+    /// because the two always run together (the shared plan emits this leaf
+    /// only inside the branch `with_present_cond` guards).
+    fn with_assign(&self, field: &EntryField, dest: &str) -> Leaf {
+        Leaf(format!("{dest} = {}.unwrap();", self.arg_take(field)))
+    }
+
     fn member_dest(&self, member_name: &str) -> String {
         format!("composed.{}", field_snake(member_name, self.config))
     }

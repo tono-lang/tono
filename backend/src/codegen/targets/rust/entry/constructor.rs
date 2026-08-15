@@ -79,10 +79,11 @@ pub(super) fn construction_decls(
     let args = entry.args();
     let timeouts = timeout_fields(entry);
     let seam = has_retry(entry);
-    // A call-sourced field (RFC-0023) is always awaited (`resolve_call`'s
-    // emitted call), so construction itself becomes async whenever the
-    // entry has one, mirroring `impl_op`'s own `is_async` gate for op
-    // methods (ADR-0010: Rust is an async-lowering target).
+    // A call-sourced field's emitted call is always awaited (`resolve_call`),
+    // so construction itself becomes async whenever the entry has one,
+    // mirroring `impl_op`'s own `is_async` gate for op methods: Rust is an
+    // async-lowering target, so a construction that depends on an external
+    // call takes the language's idiomatic async form.
     let is_async = entry.declared().iter().any(|f| f.call.is_some());
     let effect = if is_async { "async " } else { "" };
     let awaited = if is_async { ".await" } else { "" };
