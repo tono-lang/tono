@@ -44,8 +44,7 @@ pub struct client {
 let legal_direct_arg () =
   let src = client {|@header("Authorization", companyauth.sign(.request))|} in
   Alcotest.(check bool)
-    "no TC0087 for a direct call argument" false
-    (has "TC0087" src)
+    "no TC0087 for a direct call argument" false (has "TC0087" src)
 
 let legal_ctor_nested_arg () =
   let src =
@@ -53,8 +52,7 @@ let legal_ctor_nested_arg () =
       {|@header("Authorization", companyauth.sign(opts { token: .request }))|}
   in
   Alcotest.(check bool)
-    "no TC0087 for a ctor-nested call argument" false
-    (has "TC0087" src)
+    "no TC0087 for a ctor-nested call argument" false (has "TC0087" src)
 
 let illegal_bare_value () =
   let src = client {|@header("Authorization", .request)|} in
@@ -106,8 +104,7 @@ pub struct client {
 let illegal_bare_param () =
   let src = client {|@header("Authorization", companyauth.sign(token))|} in
   Alcotest.(check bool)
-    "a bare identifier call argument rejected" true
-    (has "TC0087" src)
+    "a bare identifier call argument rejected" true (has "TC0087" src)
 
 let () =
   Alcotest.run "request_value"

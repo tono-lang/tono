@@ -148,8 +148,8 @@ and decode_wire_call_arg j =
           Ok (Ir.Wca_ctor fields)
       | _ ->
           err
-            "wire call argument must be \"request\" or a single field, \
-             param, lit, or ctor key")
+            "wire call argument must be \"request\" or a single field, param, \
+             lit, or ctor key")
 
 and decode_wire_call j =
   let* kvs = as_assoc j in

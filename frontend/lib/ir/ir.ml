@@ -140,7 +140,7 @@ and wire_value =
   | Wire_object of (string * wire_value) list
     (* a @body ctor mapper: struct-literal field name -> value *)
   | Wire_call of wire_call
-    (* an extern call read as a @header/@query/@body value, the request-trait
+(* an extern call read as a @header/@query/@body value, the request-trait
        counterpart of an entry field's own call source above *)
 
 and wire_call = {
@@ -155,7 +155,7 @@ and wire_call_arg =
   | Wca_lit of json
   | Wca_ctor of (string * wire_call_arg) list
   | Wca_request
-      (* the canonical, already-assembled request (".request"); legal only
+(* the canonical, already-assembled request (".request"); legal only
          as a call argument here, never during entry construction *)
 
 and wire_binding = {

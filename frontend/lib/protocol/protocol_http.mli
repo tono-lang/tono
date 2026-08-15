@@ -26,7 +26,11 @@ type value_expr =
   | Vcall of call_value
 (* an extern call read as a @header/@query/@body value *)
 
-and call_value = { vc_ns : string; vc_fn : string; vc_args : call_arg_value list }
+and call_value = {
+  vc_ns : string;
+  vc_fn : string;
+  vc_args : call_arg_value list;
+}
 
 and call_arg_value =
   | Cv_field of string list

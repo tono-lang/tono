@@ -18,7 +18,11 @@ type value_expr =
        position ".request" could appear in, so this only has to recognize
        the shape, not re-validate it. *)
 
-and call_value = { vc_ns : string; vc_fn : string; vc_args : call_arg_value list }
+and call_value = {
+  vc_ns : string;
+  vc_fn : string;
+  vc_args : call_arg_value list;
+}
 
 and call_arg_value =
   | Cv_field of string list
@@ -141,8 +145,7 @@ let ctor_fields (v : Ir.json) : (string * Ir.json) list option =
    reject a bare identifier here — kept total rather than asserting),
    {"field": ["request"]} for the reserved canonical-request marker,
    {"field": [...]} for an ordinary ref, or {"ctor": ...}. *)
-let call_of (j : Ir.json) :
-    (string * string * Ir.json list) option =
+let call_of (j : Ir.json) : (string * string * Ir.json list) option =
   match j with
   | `Assoc
       [

@@ -119,8 +119,8 @@ let check_kv_shape ~trait_name ~key_what ~value_what ~(allow_call : bool)
       | _ ->
           [
             err Error_codes.protocol_trait_invalid tr.tspan
-              "@%s expects a string literal/template or a field reference%s \
-               as its value"
+              "@%s expects a string literal/template or a field reference%s as \
+               its value"
               trait_name
               (if allow_call then ", or an extern call" else "");
           ])
@@ -731,4 +731,5 @@ let check_entry_op ctx (fields : Ast.member list) (op : Ast.decl) :
   @ check_header_shapes ~resolve:resolve_ty op
   @ check_query_shapes ~resolve:resolve_ty op
   @ check_body_shapes ctx op @ check_code op
-  @ check_op_impl ctx fields op @ check_request_value op
+  @ check_op_impl ctx fields op
+  @ check_request_value op

@@ -131,7 +131,11 @@ and wire_value =
    for ".request", the canonical, already-assembled request -- legal only
    here, never during entry construction (see [Ir.entry_call] and
    [Wca_request]'s own comment). *)
-and wire_call = { wcl_ns : string; wcl_fn : string; wcl_args : wire_call_arg list }
+and wire_call = {
+  wcl_ns : string;
+  wcl_fn : string;
+  wcl_args : wire_call_arg list;
+}
 
 and wire_call_arg =
   | Wca_field of string list

@@ -66,8 +66,7 @@ and show_value_expr : Protocol_http.value_expr -> string = function
 and show_call_arg_value : Protocol_http.call_arg_value -> string = function
   | Protocol_http.Cv_field p -> Printf.sprintf ".%s" (String.concat "." p)
   | Protocol_http.Cv_param [] -> ".param"
-  | Protocol_http.Cv_param p ->
-      Printf.sprintf ".param.%s" (String.concat "." p)
+  | Protocol_http.Cv_param p -> Printf.sprintf ".param.%s" (String.concat "." p)
   | Protocol_http.Cv_lit (`String s) -> s
   | Protocol_http.Cv_lit _ -> "<lit>"
   | Protocol_http.Cv_ctor fields ->
