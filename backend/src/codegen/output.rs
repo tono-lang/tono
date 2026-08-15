@@ -53,6 +53,18 @@ impl TargetKind {
             Self::TypeScript => &["ts", "typescript"],
         }
     }
+
+    /// Whether this target's codegen can emit the `ext` constructs a field may
+    /// touch: an extern-call source, or a foreign handle type. This is the one
+    /// place a target declares that capability, flipped by that target's own
+    /// emission work; every other layer asks here instead of naming a target,
+    /// so landing the next target changes this arm and nothing else.
+    pub fn emits_ext_constructs(self) -> bool {
+        match self {
+            Self::Go => true,
+            Self::Rust | Self::TypeScript => false,
+        }
+    }
 }
 
 /// A generated source file: which target produced it (so a caller knows which

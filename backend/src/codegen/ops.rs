@@ -327,6 +327,26 @@ pub fn wire_binding(op: &Shape) -> Option<&crate::ir::WireBinding> {
     }
 }
 
+/// An op's own `impl .field.method(args)` body, when it has one.
+/// `None` for a purely local operation, a wire-bound one, or one implemented
+/// through the legacy `ext impl` extension.
+pub fn op_impl_call(op: &Shape) -> Option<&crate::ir::OpImplCall> {
+    match &op.kind {
+        ShapeKind::Operation { impl_call, .. } => impl_call.as_ref(),
+        _ => None,
+    }
+}
+
+/// The op's declared parameter name (`op fetch(ref: note_ref): note` names
+/// `ref`), the name a `.ref...` reference inside the op body resolves
+/// against. Absent for the legacy unnamed input form.
+pub fn input_name(op: &Shape) -> Option<&str> {
+    match &op.kind {
+        ShapeKind::Operation { input_name, .. } => input_name.as_deref(),
+        _ => None,
+    }
+}
+
 /// The member a `WireValue::Param`/`TemplatePart::Param` segment names: the
 /// op's declared parameter type, resolved to a same-module structure, then
 /// the one member matching `seg`. `None` when the parameter type is not a

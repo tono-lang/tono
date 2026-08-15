@@ -59,10 +59,10 @@ pub(super) fn settings_decl(
         super::support_symbol("HTTPTransport"),
     ];
     for f in entry.declared() {
-        push_type_symbols(&f.target, &mut refs);
+        push_field_type_symbols(&f.target, module, &mut refs);
         fields.push_str(&format!(
             "{doc}\t{} {}\n",
-            field_pascal_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
+            entry_field_ident(entry, module, config, &f.name),
             field_go_type(&f.target, module),
             doc = field_doc(&f.traits, "\t"),
         ));
@@ -85,7 +85,12 @@ pub(super) fn settings_decl(
 /// The functional-option surface: one `With*` per `@with` field over a private
 /// carrier struct (a pointer per field, so an unset option is distinguishable
 /// from a zero value).
-pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Vec<Decl> {
+pub(super) fn option_decls(
+    entry: &EntryModel<'_>,
+    n: &Names,
+    multi: bool,
+    module: &Module,
+) -> Vec<Decl> {
     let configurable = entry.with_fields();
     if configurable.is_empty() {
         return Vec::new();
@@ -95,8 +100,19 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
     let carrier_fields: String = configurable
         .iter()
         .map(|f| {
-            push_type_symbols(&f.target, &mut carrier_refs);
-            format!("\t{} *{}\n", camel(&f.name), go_type(&f.target))
+            push_field_type_symbols(&f.target, module, &mut carrier_refs);
+            // A foreign opaque handle's Go type is already a pointer (a
+            // guess at the real package's return convention), so
+            // the carrier holds it directly; every other `@with` value gets
+            // the usual extra pointer so an unset option is distinguishable
+            // from a zero value.
+            let ty = field_go_type(&f.target, module);
+            let carrier_ty = if is_foreign_handle(&f.target, module) {
+                ty
+            } else {
+                format!("*{ty}")
+            };
+            format!("\t{} {carrier_ty}\n", camel(&f.name))
         })
         .collect();
     decls.push(Decl::raw_with(
@@ -116,22 +132,30 @@ pub(super) fn option_decls(entry: &EntryModel<'_>, n: &Names, multi: bool) -> Ve
         // declared identifier, so the canonical sentence leads and any @doc /
         // @deprecated lines follow as continuation.
         let mut option_refs = Vec::new();
-        push_type_symbols(&f.target, &mut option_refs);
+        push_field_type_symbols(&f.target, module, &mut option_refs);
+        let ty = field_go_type(&f.target, module);
+        let assign = if is_foreign_handle(&f.target, module) {
+            format!("w.{member} = v", member = camel(&f.name))
+        } else {
+            format!("w.{member} = &v", member = camel(&f.name))
+        };
         decls.push(Decl::raw_with(
             format!(
-            "// {fn_name} sets the {field} construction value.\n\
-             {doc}func {fn_name}(v {ty}) {option} {{\n\treturn func(w *{carrier_ty}) {{ w.{member} = &v }}\n}}",
-            field = f.name,
-            ty = go_type(&f.target),
-            option = n.option,
-            carrier_ty = n.carrier,
-            member = camel(&f.name),
-            doc = field_doc(&f.traits, ""),
+                "// {fn_name} sets the {field} construction value.\n\
+             {doc}func {fn_name}(v {ty}) {option} {{\n\treturn func(w *{carrier_ty}) {{ {assign} }}\n}}",
+                field = f.name,
+                option = n.option,
+                carrier_ty = n.carrier,
+                doc = field_doc(&f.traits, ""),
             ),
             option_refs,
         ));
     }
     decls
+}
+
+fn is_foreign_handle(t: &Tref, module: &Module) -> bool {
+    ext::foreign_handle(t, module).is_some()
 }
 
 /// The client struct, its mock interface (one method per operation, `ctx`
@@ -284,7 +308,7 @@ pub(super) fn entry_type_decls(
     bound: &[BoundExtension<'_>],
 ) -> Vec<Decl> {
     let mut decls = vec![settings_decl(entry, n, config, module)];
-    decls.extend(option_decls(entry, n, multi));
+    decls.extend(option_decls(entry, n, multi, module));
     decls.extend(client_decls(entry, n, config, bound));
     decls
 }

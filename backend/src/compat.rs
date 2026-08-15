@@ -380,7 +380,7 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
         // parameter's own name, only its type/shape, so renaming it alone is
         // not a wire break.
         // impl_call is deliberately excluded too, for the same reason as
-        // wire: it is bespoke implementation detail (RFC-0023's own
+        // wire: it is bespoke implementation detail (the
         // "impl .field.method(args)" op body), not part of the compared
         // wire surface.
         (

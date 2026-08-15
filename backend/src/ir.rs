@@ -66,7 +66,7 @@ pub use crate::ir_tests_model::*;
 /// `= ns.fn(args)` extern-call source, and `CallArg` gained `lit`/`list`/
 /// `call` variants for ctor-field values.
 /// v15 added an operation's optional `impl_call` (`OpImplCall`): a third
-/// implementation source (RFC-0023's own `impl .field.method(args)` op
+/// implementation source (a bespoke `impl .field.method(args)` op
 /// body), alongside a protocol's `wire` and a legacy `impl` extension. It
 /// reuses the `lit` `CallArg` variant v14 introduced for ctor-field values,
 /// now also reachable as a bare call argument -- no wire-shape change
@@ -458,7 +458,7 @@ impl WireBinding {
     }
 }
 
-/// An op's own `impl .field.method(args)` body (RFC-0023): a call into an
+/// An op's own `impl .field.method(args)` body: a call into an
 /// entry field's declared opaque-handle method. Mirrors `EntryCall` with
 /// `recv: Vec<String>` (a field path) in place of `ns` (a bare `ext`
 /// namespace), since the receiver is an entry field, not an extern
@@ -518,9 +518,9 @@ pub enum ShapeKind {
         // for every non-Operation variant too (clippy::large_enum_variant).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire: Option<Box<WireBinding>>,
-        /// The op's own `impl .field.method(args)` body (RFC-0023): a third
+        /// The op's own `impl .field.method(args)` body: a third
         /// implementation source alongside `wire` and a legacy `impl`
-        /// extension. Not yet consumed by any backend target.
+        /// extension.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         impl_call: Option<OpImplCall>,
     },

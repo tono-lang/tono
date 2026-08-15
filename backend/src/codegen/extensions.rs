@@ -173,6 +173,13 @@ pub fn validate_impl_coverage(model: &Model, langs: &[&[&str]]) -> Result<(), St
                 if crate::codegen::ops::wire_binding(op).is_some() {
                     continue;
                 }
+                // An op's own `impl .field.method(args)` body is a
+                // third implementation source alongside a protocol binding
+                // and the legacy `ext impl` extension: it needs no bound
+                // extension at all, the call is direct.
+                if crate::codegen::ops::op_impl_call(op).is_some() {
+                    continue;
+                }
                 if impl_binding(&bound, &op.id).is_none() {
                     return Err(format!(
                         "operation '{}' in module '{}' has no protocol binding and no '{}' impl; \

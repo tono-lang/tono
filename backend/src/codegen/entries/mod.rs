@@ -407,7 +407,7 @@ impl<'a> EntryModel<'a> {
             // A call always attempts and either resolves or fails construction
             // outright (a ContractError boundary, not an absence a downstream
             // chain falls back past); it is guaranteed once every ref it reads
-            // is. An `@with` alongside it (decision G) only adds an injected
+            // is. An `@with` alongside it only adds an injected
             // shortcut ahead of the same fallback call, so the classification
             // reduces to the same check either way: whether the call's own
             // reads are guaranteed. `field.sources` plays no part here.

@@ -1,11 +1,12 @@
-//! The extern-call field-source tests (RFC-0023): DAG ordering across a call
+//! The extern-call field-source tests: DAG ordering across a call
 //! chain, cycle detection over call-arg refs, `is_guaranteed` classification
 //! for plain and `@with`-fallback call fields, and `FieldShape::Call`
 //! dispatch regardless of the target's own shape. Fixtures (`field`,
 //! `entry_shape`, `module_of`) come from the parent module via `super::*`.
 
 use super::*;
-use crate::ir::{CallArg, EntryCall, ExtLib, OpaqueType};
+use crate::codegen::output::TargetKind;
+use crate::ir::{CallArg, EntryCall, ExtLib, ExternDecl, ExternLang, OpaqueType};
 
 fn call_field(name: &str, ns: &str, func: &str, args: Vec<CallArg>) -> EntryField {
     let mut f = field(name, vec![]);
@@ -97,7 +98,7 @@ fn a_plain_call_field_is_not_guaranteed_when_it_reads_a_non_guaranteed_sibling()
 
 #[test]
 fn a_with_field_backed_by_a_guaranteed_call_fallback_is_guaranteed() {
-    // decision G: an injectable handle with construction as fallback is
+    // An injectable handle with construction as fallback is
     // guaranteed the same way a plain call is (either the caller injects it,
     // or the fallback call runs and its own reads are guaranteed) — `@with`
     // does not relax the rule, both reduce to the same check.
@@ -141,22 +142,115 @@ fn a_call_sourced_field_reports_the_call_shape_regardless_of_its_target() {
     }
 }
 
-/// Per-target emission of a call source is deferred (its `Emitter` leaf
-/// method has no target override yet), so building its resolution plan
-/// would panic. `validate_entries` runs ahead of emission in every gen
-/// pipeline and must reject the field there instead, or `tono gen` panics
-/// on a spec `tono check` accepted.
-#[test]
-fn gen_rejects_a_call_sourced_field_instead_of_panicking() {
-    let config = call_field("config", "ns", "load", vec![]);
-    let module = module_of(vec![entry_shape("m#client", vec![config])]);
-    let model = crate::ir::Model {
+fn model_of(module: Module) -> crate::ir::Model {
+    crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],
-    };
-    let err = super::validate_entries(&model).unwrap_err();
+    }
+}
+
+/// An `ext` block declaring one extern bound for `langs`. A call field is only
+/// well-formed when its `ns.fn` resolves to a declaration like this carrying a
+/// binding for the target being generated, so fixtures that expect to clear
+/// validation have to supply it.
+fn ext_lib_with_extern(lib: &str, name: &str, langs: &[&str]) -> ExtLib {
+    ExtLib {
+        name: lib.into(),
+        langs: vec![],
+        structs: vec![],
+        types: vec![],
+        externs: vec![ExternDecl {
+            name: name.into(),
+            params: vec![],
+            r#return: Tref::Prim(crate::ir::Prim::String),
+            langs: langs
+                .iter()
+                .map(|l| ExternLang {
+                    lang: (*l).into(),
+                    symbol: "Load".into(),
+                    call_args: vec![],
+                    yields: vec![],
+                    returns: None,
+                    errors: vec![],
+                })
+                .collect(),
+        }],
+    }
+}
+
+/// A run generating for several targets is only as capable as its weakest
+/// one: Go emits the construct, Rust does not, and a green Go pass says
+/// nothing about the Rust files written by the same `tono gen`. The gate reads
+/// every requested target rather than any one of them.
+#[test]
+fn a_mixed_target_run_rejects_even_though_one_target_supports_ext() {
+    let model = model_with_a_call_sourced_field();
+    assert!(super::validate_entries(&model, &[TargetKind::Go]).is_ok());
+    let err = super::validate_entries(&model, &[TargetKind::Go, TargetKind::Rust]).unwrap_err();
+    assert!(err.contains("rust"), "names the target that cannot: {err}");
+}
+
+/// A run naming no target vouches for nothing; treating an empty list as
+/// "every target supports it" would let the construct through unguarded.
+#[test]
+fn an_empty_target_list_does_not_vacuously_permit_ext() {
+    let model = model_with_a_call_sourced_field();
+    assert!(super::validate_entries(&model, &[]).is_err());
+}
+
+/// The call has to name a declared extern carrying a binding for the target
+/// about to emit it. Without this the emitter meets the gap as a pipeline
+/// defect (a panic) instead of an authoring error with a message.
+#[test]
+fn an_unresolvable_call_is_diagnosed_rather_than_reaching_the_emitter() {
+    // No ext block at all.
+    let bare = model_of(module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]));
+    let err = super::validate_entries(&bare, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("no ext block named ns"), "{err}");
+
+    // Declared, but the extern the call names is missing.
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "missing", vec![])],
+    )]);
+    module.ext_libs = vec![ext_lib_with_extern("ns", "load", &["go"])];
+    let err = super::validate_entries(&model_of(module), &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("declares no extern named missing"), "{err}");
+
+    // Declared, but with no binding for the target being generated.
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    module.ext_libs = vec![ext_lib_with_extern("ns", "load", &["ts"])];
+    let err = super::validate_entries(&model_of(module), &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("declares no go block"), "{err}");
+}
+
+fn model_with_a_call_sourced_field() -> crate::ir::Model {
+    let config = call_field("config", "ns", "load", vec![]);
+    let mut module = module_of(vec![entry_shape("m#client", vec![config])]);
+    module.ext_libs = vec![ext_lib_with_extern("ns", "load", &["go"])];
+    model_of(module)
+}
+
+/// Per-target emission of a call source is deferred for every target but Go
+/// (its `Emitter` leaf method has no override for TypeScript or Rust yet),
+/// so building its resolution plan there would panic. `validate_entries`
+/// runs ahead of emission in every gen pipeline and must reject the field
+/// there instead, whenever the request generates for a non-Go target, or
+/// `tono gen` panics on a spec `tono check` accepted. A request generating
+/// for Go only must not trip that same gate.
+#[test]
+fn gen_rejects_a_call_sourced_field_instead_of_panicking() {
+    let model = model_with_a_call_sourced_field();
+    let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
     assert!(err.contains("config"), "{err}");
     assert!(err.contains("ext block"), "{err}");
+    assert!(super::validate_entries(&model, &[TargetKind::Go]).is_ok());
 }
 
 /// The same deferral for a call-sourced member of a composed config field.
@@ -175,12 +269,11 @@ fn gen_rejects_a_call_sourced_config_member_instead_of_panicking() {
         id: "m#conf".into(),
         args: vec![],
     };
-    let module = module_of(vec![entry_shape("m#client", vec![conf]), config_shape]);
-    let model = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module],
-    };
-    let err = super::validate_entries(&model).unwrap_err();
+    let model = model_of(module_of(vec![
+        entry_shape("m#client", vec![conf]),
+        config_shape,
+    ]));
+    let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
     assert!(err.contains("token"), "{err}");
     assert!(err.contains("ext block"), "{err}");
 }
@@ -198,7 +291,7 @@ fn ext_lib_with_handle(lib: &str, handle: &str) -> ExtLib {
     }
 }
 
-/// An injectable-handle field (decision G, `bus: c.h @with = c.conn(...)`)
+/// An injectable-handle field (`bus: c.h @with = c.conn(...)`)
 /// targets an opaque type declared in the module's own `ext` block. That id
 /// lives in `ext_libs`, not `module.shapes`; the module-scoping check must
 /// recognize it as same-module instead of misreporting it as an out-of-module
@@ -214,11 +307,8 @@ fn a_with_and_call_field_targeting_an_ext_block_handle_is_same_module() {
     };
     let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
     module.ext_libs = vec![ext_lib_with_handle("c", "h")];
-    let model = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module],
-    };
-    let err = super::validate_entries(&model).unwrap_err();
+    let model = model_of(module);
+    let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
     assert!(!err.contains("outside this module"), "{err}");
     assert!(err.contains("ext block"), "{err}");
 }
@@ -238,11 +328,8 @@ fn gen_rejects_a_plain_arg_injected_foreign_handle_field() {
     };
     let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
     module.ext_libs = vec![ext_lib_with_handle("c", "h")];
-    let model = crate::ir::Model {
-        tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module],
-    };
-    let err = super::validate_entries(&model).unwrap_err();
+    let model = model_of(module);
+    let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
     assert!(err.contains("bus"), "{err}");
     assert!(err.contains("ext block"), "{err}");
 }
