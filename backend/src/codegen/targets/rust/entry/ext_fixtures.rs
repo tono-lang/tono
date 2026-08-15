@@ -7,12 +7,22 @@
 //! opaque-handle type yet (`TargetKind::emits_ext_handle_types`), so a
 //! model exercising it would not validate for this target.
 
-use crate::ir::Prim;
 use crate::ir::{
     ArmValue, CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam,
-    ForeignField, ForeignStruct, LangPath, Member, Model, Module, ReturnsField, ReturnsLit,
+    ForeignField, ForeignStruct, LangPath, Member, Model, Module, Prim, ReturnsField, ReturnsLit,
     ReturnsValue, Select, SelectArm, Shape, ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
 };
+
+fn strings(names: &[&str]) -> Vec<String> {
+    names.iter().map(|s| (*s).to_string()).collect()
+}
+
+fn ref_to(id: &str) -> Tref {
+    Tref::Ref {
+        id: id.into(),
+        args: vec![],
+    }
+}
 
 fn string_field(name: &str, sources: Vec<Source>) -> EntryField {
     EntryField {
@@ -40,6 +50,53 @@ fn member(name: &str) -> Member {
     }
 }
 
+/// A foreign struct whose fields are all `string`, save one that may point
+/// at another declared foreign struct (`nested`).
+fn foreign_struct(
+    name: &str,
+    string_fields: &[&str],
+    nested: Option<(&str, &str)>,
+) -> ForeignStruct {
+    let mut fields: Vec<ForeignField> = string_fields
+        .iter()
+        .map(|f| ForeignField {
+            name: (*f).to_string(),
+            r#type: Tref::Prim(Prim::String),
+        })
+        .collect();
+    if let Some((field, target_id)) = nested {
+        fields.push(ForeignField {
+            name: field.into(),
+            r#type: ref_to(target_id),
+        });
+    }
+    ForeignStruct {
+        name: name.into(),
+        fields,
+    }
+}
+
+fn string_params(names: &[&str]) -> Vec<ExternParam> {
+    names
+        .iter()
+        .map(|n| ExternParam {
+            name: (*n).to_string(),
+            r#type: Tref::Prim(Prim::String),
+        })
+        .collect()
+}
+
+fn ref_args(names: &[&str]) -> Vec<CallArg> {
+    names
+        .iter()
+        .map(|n| CallArg::Ref(vec![(*n).to_string()]))
+        .collect()
+}
+
+fn field_path(segments: &[&str]) -> ArmValue {
+    ArmValue::Field(strings(segments))
+}
+
 /// The RFC appendix's `companyconfig.load`, scoped to the extern-call
 /// field source: an entry `config` field reads `service`/`region`, the
 /// library returns a shape whose `Env` is matched to pick `Host`/`DevHost`,
@@ -48,17 +105,11 @@ pub fn rust_ext_fixture_model() -> Model {
     let service = string_field("service", vec![Source::Default(serde_json::json!("notes"))]);
     let region = string_field("region", vec![Source::Arg]);
     let mut config = string_field("config", vec![]);
-    config.target = Tref::Ref {
-        id: "m#app_config".into(),
-        args: vec![],
-    };
+    config.target = ref_to("m#app_config");
     config.call = Some(EntryCall {
         ns: "companyconfig".into(),
         func: "load".into(),
-        args: vec![
-            CallArg::Ref(vec!["service".into()]),
-            CallArg::Ref(vec!["region".into()]),
-        ],
+        args: ref_args(&["service", "region"]),
     });
 
     let app_config = Shape {
@@ -86,102 +137,49 @@ pub fn rust_ext_fixture_model() -> Model {
             path: "companyconfig".into(),
         }],
         structs: vec![
-            ForeignStruct {
-                name: "Creds".into(),
-                fields: vec![ForeignField {
-                    name: "secret".into(),
-                    r#type: Tref::Prim(Prim::String),
-                }],
-            },
-            ForeignStruct {
-                name: "Config".into(),
-                fields: vec![
-                    ForeignField {
-                        name: "host".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                    ForeignField {
-                        name: "dev_host".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                    ForeignField {
-                        name: "env".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                    ForeignField {
-                        name: "credentials".into(),
-                        r#type: Tref::Ref {
-                            id: "companyconfig#Creds".into(),
-                            args: vec![],
-                        },
-                    },
-                ],
-            },
+            foreign_struct("Creds", &["secret"], None),
+            foreign_struct(
+                "Config",
+                &["host", "dev_host", "env"],
+                Some(("credentials", "companyconfig#Creds")),
+            ),
         ],
         types: vec![],
         externs: vec![ExternDecl {
             name: "load".into(),
-            params: vec![
-                ExternParam {
-                    name: "service".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-                ExternParam {
-                    name: "region".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-            ],
-            r#return: Tref::Ref {
-                id: "m#app_config".into(),
-                args: vec![],
-            },
+            params: string_params(&["service", "region"]),
+            r#return: ref_to("m#app_config"),
             langs: vec![ExternLang {
                 lang: "rust".into(),
                 symbol: "load".into(),
-                call_args: vec![
-                    CallArg::Ref(vec!["service".into()]),
-                    CallArg::Ref(vec!["region".into()]),
-                ],
+                call_args: ref_args(&["service", "region"]),
                 yields: vec![YieldsPos {
                     name: "cfg".into(),
-                    r#type: Some(Tref::Ref {
-                        id: "companyconfig#Config".into(),
-                        args: vec![],
-                    }),
+                    r#type: Some(ref_to("companyconfig#Config")),
                     is_error: false,
                 }],
                 returns: Some(ReturnsLit {
-                    r#type: Tref::Ref {
-                        id: "m#app_config".into(),
-                        args: vec![],
-                    },
+                    r#type: ref_to("m#app_config"),
                     fields: vec![
                         ReturnsField {
                             name: "endpoint".into(),
                             value: ReturnsValue::Select(Select {
-                                subject: vec!["cfg".into(), "env".into()],
+                                subject: strings(&["cfg", "env"]),
                                 arms: vec![
                                     SelectArm {
                                         pattern: Some(serde_json::json!("prod")),
-                                        value: ArmValue::Field(vec!["cfg".into(), "host".into()]),
+                                        value: field_path(&["cfg", "host"]),
                                     },
                                     SelectArm {
                                         pattern: None,
-                                        value: ArmValue::Field(vec![
-                                            "cfg".into(),
-                                            "dev_host".into(),
-                                        ]),
+                                        value: field_path(&["cfg", "dev_host"]),
                                     },
                                 ],
                             }),
                         },
                         ReturnsField {
                             name: "token".into(),
-                            value: ReturnsValue::Field(vec![
-                                "cfg".into(),
-                                "credentials".into(),
-                                "secret".into(),
-                            ]),
+                            value: ReturnsValue::Field(strings(&["cfg", "credentials", "secret"])),
                         },
                     ],
                 }),
