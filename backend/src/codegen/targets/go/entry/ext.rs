@@ -23,15 +23,16 @@ use crate::codegen::casing::CasingConfig;
 use crate::codegen::entries::EntryModel;
 use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
+use crate::codegen::tree::Decl;
 use crate::ir::{
     ArmValue, CallArg, CallCtor, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl,
-    ExternLang, ExternParam, Module, Prim, ReturnsLit, ReturnsValue, ShapeKind, Tref,
+    ExternLang, ExternParam, Module, OpaqueType, Prim, ReturnsLit, ReturnsValue, ShapeKind, Tref,
 };
 
 use super::resolve::Resolver;
 use super::{
     camel, entry_field_ident, field_pascal, field_path_expr, go_type, import, literal, pascal,
-    pattern_literal,
+    pattern_literal, push_type_symbols,
 };
 
 /// A sibling entry field's read expression off `s` (field construction
@@ -56,17 +57,18 @@ pub(super) fn sibling_path_expr(
     out
 }
 
-/// A valid Go identifier derived from a foreign module path's last segment
-/// (Go's own inferred package selector): non-identifier bytes become `_`,
-/// and a result that cannot start an identifier gets a leading `_`. Used as
-/// the in-code package selector every generated call through this lib uses.
-/// When the real path segment is already a legal identifier (the common
-/// case), this is exactly what Go itself infers, so no import alias is
-/// written (see `GoRules::render_import`); it is only spelled out as an
-/// alias when the path segment is not legal Go on its own.
-pub(super) fn lib_ident(go_path: &str) -> String {
-    let last = go_path.rsplit('/').next().unwrap_or(go_path);
-    let cleaned: String = last
+/// A valid Go identifier derived from the `ext` block's own declared name,
+/// not from the import path: non-identifier bytes become `_`, and a result
+/// that cannot start an identifier gets a leading `_`. Used as the in-code
+/// package selector every generated call through this lib uses, and always
+/// spelled out as an explicit import alias (see `GoRules::render_import`),
+/// because the path's last segment is not a reliable guess at the real
+/// package's own declared name — a `/vN` module-version suffix (the module
+/// path versions, the package's `package` clause does not) is the case that
+/// motivated always aliasing, but any arbitrarily-named package has the same
+/// problem.
+pub(super) fn lib_ident(name: &str) -> String {
+    let cleaned: String = name
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' {
@@ -114,7 +116,7 @@ pub(super) fn go_lang(decl: &ExternDecl) -> Option<&ExternLang> {
 /// bind other targets only).
 pub(super) fn import_lib(refs: &mut Vec<Symbol>, lib: &ExtLib) -> Option<String> {
     let path = lib_go_path(lib)?;
-    let ident = lib_ident(path);
+    let ident = lib_ident(&lib.name);
     refs.push(import(&ident, path));
     Some(ident)
 }
@@ -142,15 +144,21 @@ pub(super) fn foreign_handle<'a>(t: &Tref, module: &'a Module) -> Option<(&'a Ex
 /// identifier differs fails `go build`, which is the intended failure mode,
 /// not a generation-time crash.
 pub(super) fn handle_go_type(lib: &ExtLib, type_name: &str) -> Option<String> {
-    let ident = lib_ident(lib_go_path(lib)?);
-    Some(format!("*{ident}.{}", pascal(type_name)))
+    lib_go_path(lib)?;
+    Some(format!("*{}.{}", lib_ident(&lib.name), pascal(type_name)))
 }
 
 /// The import a foreign handle field's type needs, alongside its spelling.
 pub(super) fn handle_symbol(lib: &ExtLib) -> Option<Symbol> {
     let path = lib_go_path(lib)?;
-    Some(import(&lib_ident(path), path))
+    Some(import(&lib_ident(&lib.name), path))
 }
+
+#[path = "ext_handle.rs"]
+mod ext_handle;
+pub(super) use ext_handle::{
+    handle_adapter_decl, handle_adapter_ident, handle_iface_decl, handle_iface_type,
+};
 
 pub(super) fn literal_of_json(v: &serde_json::Value) -> String {
     match v {
@@ -217,7 +225,7 @@ pub(super) fn ctor_expr(
     let Some(path) = path else {
         return "nil".to_string();
     };
-    let ident = lib_ident(path);
+    let ident = lib_ident(&lib.name);
     refs.push(import(&ident, path));
     let fields: Vec<String> = ctor
         .fields
@@ -523,7 +531,18 @@ pub(super) fn call_assign(
                 .cloned()
                 .or_else(|| built.yields_vars.values().next().cloned())
                 .unwrap_or_else(|| "nil".to_string());
-            out.push_str(&format!("{dest} = {value}\n"));
+            // The field's own static type is the generated interface, never
+            // the real construction call's own concrete return type (its
+            // methods return the foreign package's own types, not the
+            // logical ones the interface declares), so the raw value is
+            // wrapped in the matching adapter before it is stored.
+            match foreign_handle(&field.target, r.module) {
+                Some((handle_lib, type_name)) => out.push_str(&format!(
+                    "{dest} = &{adapter}{{real: {value}}}\n",
+                    adapter = handle_adapter_ident(&handle_lib.name, &type_name),
+                )),
+                None => out.push_str(&format!("{dest} = {value}\n")),
+            }
         }
         Some(returns) => {
             let (pre, expr) =
@@ -572,11 +591,16 @@ pub(super) fn impl_call_body(
     let Some(lang) = go_lang(decl) else {
         return format!("// {:?} declares no Go binding\n", call.method);
     };
-    // The lib import may still be needed (an `errors:` sentinel reads its
-    // package), even though the call itself goes through the receiver, not
-    // the package selector.
-    let _ = import_lib(refs, lib);
-
+    // The receiver field's own static type is tono's generated interface
+    // (see `field_go_type_storage`), never the real package directly: its
+    // methods are already signed in logical/canonical types (the interface
+    // is generated from exactly this `ExternDecl`), and whatever backs it
+    // (the real adapter, or a hermetic test's fake) already ran the
+    // yields/returns/errors projection this call site would otherwise repeat
+    // against the wrong (foreign) shape. So the op's own body is a plain
+    // interface call plus the generic `fail` wrap, nothing declared-error-
+    // specific: that specificity already happened once, behind the
+    // interface.
     let recv_expr = field_path_expr(entry, module, config, &call.recv, "c.settings");
     let mut ref_expr = move |path: &[String]| match path.split_first() {
         Some((head, _)) if Some(head.as_str()) == input_name => {
@@ -593,43 +617,20 @@ pub(super) fn impl_call_body(
         }
         _ => field_path_expr(entry, module, config, path, "c.settings"),
     };
-    let built = build_call(
-        refs,
-        lib,
-        lang,
-        &recv_expr,
-        &decl.params,
-        &call.args,
-        op_name,
-        &mut ref_expr,
-    );
-
-    let mut out = built.stmt;
-    out.push_str(&error_block(
-        refs,
-        module,
-        config,
-        lib,
-        &lang.errors,
-        &format!("{}.{}.{}", lib.name, handle_ty, call.method),
-        &built.err_var,
-        &|expr| format!("return {ret_zero}{}", fail(expr)),
-    ));
-    match &lang.returns {
-        None => {
-            let value = built
-                .yields_vars
-                .get("")
-                .cloned()
-                .or_else(|| built.yields_vars.values().next().cloned())
-                .unwrap_or_else(|| "nil".to_string());
-            out.push_str(&format!("return {value}, nil\n"));
-        }
-        Some(returns) => {
-            let (pre, expr) = returns_expr(module, config, returns, &built.yields_vars, op_name);
-            out.push_str(&pre);
-            out.push_str(&format!("return {expr}, nil\n"));
-        }
-    }
-    out
+    let call_args: Vec<String> = lang
+        .call_args
+        .iter()
+        .map(|a| call_arg_expr(refs, lib, a, &decl.params, &call.args, &mut ref_expr))
+        .collect();
+    let prefix = camel(op_name);
+    let out_var = format!("{prefix}Out");
+    let err_var = format!("{prefix}Err");
+    format!(
+        "{out_var}, {err_var} := {recv_expr}.{}({})\n\
+         if {err_var} != nil {{\n\treturn {ret_zero}{}\n}}\n\
+         return {out_var}, nil\n",
+        lang.symbol,
+        call_args.join(", "),
+        fail(err_var.clone()),
+    )
 }

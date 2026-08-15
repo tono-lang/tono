@@ -275,7 +275,7 @@ let parser_rejects () =
       ("dots in value ctor", "test \"t\" { c: client { .. } }");
       ("pattern mark in value", "test \"t\" { c: client { a: any } }");
       ("bad projection", "test \"t\" { expect s.foo: ok }");
-      ("stub path too short", "test \"t\" { stub c.get: ok }");
+      ("stub path too short", "test \"t\" { stub c: ok }");
     ]
   in
   List.iter
@@ -301,7 +301,10 @@ let binding_cases =
   [
     tc "unknown expect subject (TC0055)" [ "TC0055" ]
       {|test "t" { expect nope: ok }|};
-    tc "forward reference (TC0055)" [ "TC0055" ]
+    (* "c" is neither a construction binding yet (forward reference) nor a
+       declared 'ext' library, so the stub's path is diagnosed as unresolved
+       rather than the binding itself as unknown. *)
+    tc "forward reference (TC0057)" [ "TC0057" ]
       {|test "t" { stub c.get_user.http: http.response { status: 200 } c: client {} expect c: ok }|};
     tc "call receiver not a construction (TC0055)" [ "TC0055" ]
       {|test "t" { c: client {} s: stub c.get_user.http: http.response { status: 200 } got: s.get_user(user_ref { username: "x" }) expect c: ok }|};
@@ -346,6 +349,182 @@ let binding_cases =
       {|test "t" { c: client {} got: c.get_user(user_ref { username: "x" }) expect got.requests: [http.request { .. }] }|};
     tc "duplicate binding (TC0066)" [ "TC0066" ]
       {|test "t" { c: client {} c: client {} expect c: ok }|};
+  ]
+
+(* ── "ext"/"extern" FFI stub forms ───────────────────────────────────────
+   A free function ("companyconfig.load") and an opaque-handle method
+   ("companybus.publisher.send", qualified by its type) declared alongside
+   the ordinary base fixture, so a declared test can stub either shape.
+   [overloaded] (already declared by [base] for [save_note]'s error) is
+   reused as the method's declared error sentinel. *)
+let ext_base =
+  with_base
+    {|
+ext companyconfig {
+  go: "github.com/company/config"
+  ts: "@company/config"
+
+  struct go_config { Host: string }
+
+  extern load(service: string): app_config {
+    go {
+      call: "Load"(service)
+      yields: (cfg: go_config)
+      returns: app_config { endpoint: .cfg.Host }
+    }
+    ts {
+      call: "load"(service)
+      yields: (cfg: go_config)
+      returns: app_config { endpoint: .cfg.Host }
+    }
+  }
+}
+
+ext companybus {
+  go: "github.com/company/bus"
+  ts: "@company/bus"
+
+  struct go_ack { ID: string }
+
+  type publisher {
+    extern send(topic: string): ack {
+      go {
+        call: "Send"(topic)
+        yields: (a: go_ack)
+        returns: ack { id: .a.ID }
+        errors: { "ErrBusy" => overloaded }
+      }
+      ts {
+        call: "send"(topic)
+        yields: (a: go_ack)
+        returns: ack { id: .a.ID }
+        errors: { "BUSY" => overloaded }
+      }
+    }
+
+    extern count(): i32 {
+      go { call: "Count"() }
+      ts { call: "count"() }
+    }
+  }
+
+  extern connect(endpoint: string): publisher {
+    go { call: "Connect"(endpoint) }
+    ts { call: "connect"(endpoint) }
+  }
+}
+
+struct app_config { endpoint: string }
+pub struct ack { id: string }
+|}
+
+let etc name expected body =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check (list string)) name expected (codes (ext_base ^ body)))
+
+let extern_stub_cases =
+  [
+    etc "free extern stub happy path" []
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companyconfig.load: app_config { endpoint: "https://stub" }
+  expect c: ok
+}|};
+    etc "handle method stub happy path (value)" []
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.send: ack { id: "a1" }
+  expect c: ok
+}|};
+    etc "handle method stub happy path (declared error)" []
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.send: overloaded { message: "busy" }
+  expect c: ok
+}|};
+    etc "free extern stub wrong shape (TC0059)" [ "TC0059" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companyconfig.load: ack { id: "x" }
+  expect c: ok
+}|};
+    etc "handle method stub wrong shape (TC0059)" [ "TC0059" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.send: app_config { endpoint: "x" }
+  expect c: ok
+}|};
+    etc "unknown extern function (TC0057)" [ "TC0057" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companyconfig.ghost: app_config { endpoint: "x" }
+  expect c: ok
+}|};
+    etc "unknown extern lib (TC0057)" [ "TC0057" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub ghostlib.ghost: app_config { endpoint: "x" }
+  expect c: ok
+}|};
+    etc "unknown opaque method (TC0057)" [ "TC0057" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.ghost: ack { id: "x" }
+  expect c: ok
+}|};
+    etc "unknown opaque type (TC0057)" [ "TC0057" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.nope.send: ack { id: "x" }
+  expect c: ok
+}|};
+    etc "construction stub missing dependency segment (TC0057)" [ "TC0057" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub c.get_user: user { login: "x", id: 1 }
+  expect c: ok
+}|};
+    etc "extern free stub binding has no outcome to assert (TC0060)"
+      [ "TC0060" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  s: stub companyconfig.load: app_config { endpoint: "https://stub" }
+  expect s: ok
+  expect c: ok
+}|};
+    etc "extern method stub binding has no outcome to assert (TC0060)"
+      [ "TC0060" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  s: stub companybus.publisher.send: ack { id: "a1" }
+  expect s: ok
+  expect c: ok
+}|};
+    etc "extern method stub answered with a non-constructor value" []
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.count: 42
+  expect c: ok
+}|};
+    etc "extern free stub empty sequence (TC0058)" [ "TC0058" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companyconfig.load: []
+  expect c: ok
+}|};
+    etc "extern method stub answered with a sequence" []
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.send: [ack { id: "a1" }, ack { id: "a2" }]
+  expect c: ok
+}|};
+    etc "extern method stub answered with an unknown constructor (TC0058)"
+      [ "TC0058" ]
+      {|test "t" {
+  c: client { api_token: "t0" }
+  stub companybus.publisher.send: nope.thing { x: 1 }
+  expect c: ok
+}|};
   ]
 
 (* A shape that is both output and declared error is unreadable (TC0063). *)
@@ -461,6 +640,28 @@ let fmt_idempotent () =
   let once = fmt rich_src in
   Alcotest.(check string) "fmt (fmt x) = fmt x" once (fmt once)
 
+(* Both new stub forms print as a plain dotted path and re-parse to the same
+   text, exactly like the existing binding.op.dep form. *)
+let extern_stub_fmt_roundtrip () =
+  let src =
+    ext_base
+    ^ {|
+test "t" {
+  c: client { api_token: "t0" }
+  stub companyconfig.load: app_config { endpoint: "https://stub" }
+  stub companybus.publisher.send: ack { id: "a1" }
+  expect c: ok
+}|}
+  in
+  let once = fmt src in
+  Alcotest.(check string) "fmt (fmt x) = fmt x" once (fmt once);
+  Alcotest.(check bool)
+    "free-fn path prints" true
+    (contains once "stub companyconfig.load:");
+  Alcotest.(check bool)
+    "method path prints" true
+    (contains once "stub companybus.publisher.send:")
+
 let () =
   Alcotest.run "declared_tests"
     [
@@ -483,7 +684,7 @@ let () =
             contextual_words_stay_identifiers;
         ] );
       ( "typecheck",
-        binding_cases
+        binding_cases @ extern_stub_cases
         @ [
             Alcotest.test_case "ambiguous output/error shape" `Quick
               ambiguous_shape;
@@ -498,5 +699,7 @@ let () =
         [
           Alcotest.test_case "golden layout" `Quick fmt_golden;
           Alcotest.test_case "idempotent" `Quick fmt_idempotent;
+          Alcotest.test_case "extern stub round-trip" `Quick
+            extern_stub_fmt_roundtrip;
         ] );
     ]

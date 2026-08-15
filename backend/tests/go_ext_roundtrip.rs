@@ -151,3 +151,52 @@ fn a_field_the_library_does_not_have_breaks_the_go_build() {
         String::from_utf8_lossy(&result.stderr)
     );
 }
+
+/// The appendix fixture's own two declared tests run and pass: the
+/// generated hermetic test file swaps the foreign handle field's static type
+/// for tono's own interface, fakes `companybus.publisher.send` through it,
+/// and overrides the `companyconfig.load`/`companybus.connect` construction
+/// calls outright, so neither declared test's assertions depend on the real
+/// stand-in libraries answering correctly.
+///
+/// This does not yet prove the stronger claim the seam mechanism aims for
+/// (a hermetic build succeeding with the real packages absent from
+/// `go.mod` entirely): the always-built entry file still references
+/// `companyconfig`/`companybus` directly on the production construction
+/// path (`New`, not the seam), so removing the `require` lines still fails
+/// `go build`. Closing that gap needs the build-tag file partition the plan
+/// flags as the highest-risk remaining piece; see the task's own report for
+/// what was tried.
+#[test]
+fn the_rfc_appendix_declared_tests_pass_hermetically() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
+        return;
+    }
+    if !have("go", "version") || !have("gofmt", "-h") {
+        eprintln!("skipping: Go toolchain (go/gofmt) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk(&rfc0023_appendix_model());
+    let test = Command::new("go")
+        .arg("test")
+        .arg("./...")
+        .arg("-run")
+        .arg("Test")
+        .arg("-v")
+        .current_dir(&dir)
+        .output()
+        .expect("run go test");
+    assert!(
+        test.status.success(),
+        "the generated hermetic declared tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&test.stdout),
+        String::from_utf8_lossy(&test.stderr)
+    );
+    let out = String::from_utf8_lossy(&test.stdout);
+    assert!(
+        out.contains("PASS"),
+        "expected at least one passing test:\n{out}"
+    );
+}

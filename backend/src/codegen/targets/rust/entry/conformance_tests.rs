@@ -74,6 +74,7 @@ fn create_charge_tests() -> Vec<TestDecl> {
             name: "answers the charge".into(),
             constructions: vec![construction()],
             stubs: vec![http_stub(vec![answer(200, "{\"id\":\"c1\"}")])],
+            extern_stubs: vec![],
             calls: vec![call()],
             expects: vec![
                 TestExpect::Outcome {
@@ -93,6 +94,7 @@ fn create_charge_tests() -> Vec<TestDecl> {
                 answer(500, "boom"),
                 answer(502, "still down"),
             ])],
+            extern_stubs: vec![],
             calls: vec![call()],
             expects: vec![TestExpect::Outcome {
                 subject: "got".into(),
@@ -107,6 +109,7 @@ fn create_charge_tests() -> Vec<TestDecl> {
             name: "round trips".into(),
             constructions: vec![construction()],
             stubs: vec![],
+            extern_stubs: vec![],
             calls: vec![call()],
             expects: vec![TestExpect::Outcome {
                 subject: "got".into(),
@@ -281,6 +284,7 @@ fn impl_stubbed_tests_are_skipped_for_rust() {
                 value: serde_json::json!({"id": "c1"}),
             }],
         }],
+        extern_stubs: vec![],
         calls: vec![call()],
         expects: vec![],
     };

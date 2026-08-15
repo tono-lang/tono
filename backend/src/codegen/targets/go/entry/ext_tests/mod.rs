@@ -26,25 +26,22 @@ fn entry_text(module: &Module) -> String {
 // --- pure helpers -----------------------------------------------------
 
 #[test]
-fn lib_ident_keeps_a_legal_path_segment_verbatim() {
-    assert_eq!(ext::lib_ident("github.com/company/config"), "config");
+fn lib_ident_keeps_a_legal_lib_name_verbatim() {
+    assert_eq!(ext::lib_ident("companyconfig"), "companyconfig");
 }
 
 #[test]
-fn lib_ident_replaces_illegal_characters_in_a_hyphenated_segment() {
-    assert_eq!(
-        ext::lib_ident("github.com/company/some-package"),
-        "some_package"
-    );
+fn lib_ident_replaces_illegal_characters_in_a_hyphenated_name() {
+    assert_eq!(ext::lib_ident("some-package"), "some_package");
 }
 
 #[test]
-fn lib_ident_prefixes_a_digit_leading_segment() {
-    assert_eq!(ext::lib_ident("github.com/company/9lives"), "_9lives");
+fn lib_ident_prefixes_a_digit_leading_name() {
+    assert_eq!(ext::lib_ident("9lives"), "_9lives");
 }
 
 #[test]
-fn lib_ident_falls_back_when_the_segment_is_empty() {
+fn lib_ident_falls_back_when_the_name_is_empty() {
     assert_eq!(ext::lib_ident(""), "extlib");
 }
 

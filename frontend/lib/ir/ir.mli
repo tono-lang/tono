@@ -311,6 +311,16 @@ type test_stub = {
   ts_answers : stub_answer list;
 }
 
+type extern_stub_target =
+  | Ext_free of { lib : string; fn : string }
+  | Ext_method of { lib : string; ty : string; meth : string }
+
+type extern_stub = {
+  es_binding : string option;
+  es_target : extern_stub_target;
+  es_answers : stub_answer list;
+}
+
 type test_call = {
   call_binding : string;
   call_client : string;
@@ -356,6 +366,7 @@ type test_decl = {
   t_name : string;
   t_constructions : test_construction list;
   t_stubs : test_stub list;
+  t_extern_stubs : extern_stub list;
   t_calls : test_call list;
   t_expects : test_expect list;
 }

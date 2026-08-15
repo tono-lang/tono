@@ -6,11 +6,14 @@
 //! so this stays a small, always-compiled, always-public module rather than
 //! source the same builders twice.
 
+use std::collections::BTreeMap;
+
 use crate::ir::{
-    ArmValue, CallArg, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternLang,
-    ExternParam, ForeignField, ForeignStruct, LangPath, Member, Model, Module, OpImplCall,
-    OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue, Select, SelectArm, Shape, ShapeKind,
-    Source, Trait, Tref, YieldsPos, TONO_IR_VERSION,
+    ArmValue, CallArg, Empty, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternLang,
+    ExternParam, ExternStub, ExternStubTarget, ForeignField, ForeignStruct, LangPath, Member,
+    Model, Module, OpImplCall, OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue, Select,
+    SelectArm, Shape, ShapeKind, Source, StubAnswer, TestCall, TestConstruction, TestDecl,
+    TestExpect, TestPattern, Trait, Tref, YieldsPos, TONO_IR_VERSION,
 };
 
 pub fn string_t() -> Tref {
@@ -426,8 +429,97 @@ pub fn rfc0023_appendix_module() -> Module {
         operations: vec![],
         extensions: vec![],
         ext_libs: vec![companyconfig, companybus],
-        tests: vec![],
+        tests: rfc0023_appendix_tests(),
     }
+}
+
+/// The free-fn stub every test constructing `client` needs: `bus`'s own
+/// construction call (`companybus.connect`) is reachable regardless of
+/// whether a test also calls `publish`, since `reachable_externs` walks
+/// every field's `call` unconditionally. The answer itself is never decoded
+/// (a handle-typed free stub only marks the field overridden; the actual
+/// fake implementing the handle's interface comes from a handle-method
+/// stub), so its value is a placeholder.
+fn bus_connect_stub() -> ExternStub {
+    ExternStub {
+        binding: None,
+        target: ExternStubTarget::Free {
+            lib: "companybus".into(),
+            fn_: "connect".into(),
+        },
+        answers: vec![StubAnswer::Value {
+            value: serde_json::Value::Null,
+        }],
+    }
+}
+
+fn config_load_stub() -> ExternStub {
+    ExternStub {
+        binding: None,
+        target: ExternStubTarget::Free {
+            lib: "companyconfig".into(),
+            fn_: "load".into(),
+        },
+        answers: vec![StubAnswer::Value {
+            value: serde_json::json!({"endpoint": "https://api.example.com", "token": "s3cr3t"}),
+        }],
+    }
+}
+
+/// The two declared tests the appendix fixture itself specifies: a
+/// construction-only test stubbing the free `companyconfig.load` call, and a
+/// call test additionally stubbing the `companybus.publisher.send` handle
+/// method the `publish` op's own `impl` body reaches. Both are hermetic: no
+/// stub answer ever calls into the real `companyconfig`/`companybus`
+/// libraries.
+fn rfc0023_appendix_tests() -> Vec<TestDecl> {
+    let construction = TestConstruction {
+        binding: "c".into(),
+        entry: "client".into(),
+        values: BTreeMap::from([("region".to_string(), serde_json::json!("us-east"))]),
+    };
+    let construction_only = TestDecl {
+        name: "constructs the client from the stubbed config".into(),
+        constructions: vec![construction.clone()],
+        stubs: vec![],
+        extern_stubs: vec![config_load_stub(), bus_connect_stub()],
+        calls: vec![],
+        expects: vec![TestExpect::Outcome {
+            subject: "c".into(),
+            pattern: TestPattern::Ok(Empty {}),
+        }],
+    };
+    let publishes = TestDecl {
+        name: "publishes a note through the stubbed handle".into(),
+        constructions: vec![construction],
+        stubs: vec![],
+        extern_stubs: vec![
+            config_load_stub(),
+            bus_connect_stub(),
+            ExternStub {
+                binding: None,
+                target: ExternStubTarget::Method {
+                    lib: "companybus".into(),
+                    ty: "publisher".into(),
+                    method: "send".into(),
+                },
+                answers: vec![StubAnswer::Value {
+                    value: serde_json::json!({"id": "n1", "accepted": true}),
+                }],
+            },
+        ],
+        calls: vec![TestCall {
+            binding: "r".into(),
+            client: "c".into(),
+            op: "publish".into(),
+            input: Some(serde_json::json!({"id": "n1", "body": "hello"})),
+        }],
+        expects: vec![TestExpect::Outcome {
+            subject: "r".into(),
+            pattern: TestPattern::Ok(Empty {}),
+        }],
+    };
+    vec![construction_only, publishes]
 }
 
 /// [`rfc0023_appendix_module`], wrapped in a `Model`.

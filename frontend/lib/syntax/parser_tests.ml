@@ -303,19 +303,23 @@ and parse_map_pattern_body st :
 
 (* ── Items ─────────────────────────────────────────────────────────────── *)
 
-(* stub_target ::= binding '.' op '.' dep -- three dotted identifiers. *)
+(* stub_target ::= ident ('.' ident){1,2} -- a dotted path of 2 or 3
+   identifiers. Typecheck resolves the shape: "binding.op.dep", "ext_lib.fn",
+   or "ext_lib.type.method". *)
 let parse_stub_target st : Ast.stub_target =
-  let b, bspan = ident st "the construction binding of the stub target" in
-  ignore (P.expect st Token.Dot "'.' after the binding in the stub target");
-  let op, _ = ident st "the operation name in the stub target" in
-  ignore (P.expect st Token.Dot "'.' before the dependency in the stub target");
-  let dep, dspan = ident st "the dependency name (http or impl)" in
-  {
-    Ast.st_binding = b;
-    st_op = op;
-    st_dep = dep;
-    st_span = Span.merge bspan dspan;
-  }
+  let first, fspan = ident st "the stub target" in
+  let rec go acc last_span =
+    if (P.peek st).kind = Token.Dot && List.length acc < 3 then (
+      ignore (P.advance st);
+      let seg, sspan = ident st "a segment of the stub target" in
+      go ((seg, sspan) :: acc) sspan)
+    else (List.rev acc, last_span)
+  in
+  let path, last_span = go [ (first, fspan) ] fspan in
+  if List.length path < 2 then
+    P.error st (P.peek st).span
+      "expected '.' after the stub target's first segment";
+  { Ast.st_path = path; st_span = Span.merge fspan last_span }
 
 (* stub ::= "stub" stub_target ":" value -- the leading keyword and any
    [name ":"] binding are already consumed. *)

@@ -333,8 +333,7 @@ let print_test_item (i : Ast.test_item) : string =
   | Ast.TiStub { bind; target; value; _ } ->
       let prefix = match bind with Some (b, _) -> b ^ ": " | None -> "" in
       "  " ^ prefix ^ "stub "
-      ^ String.concat "."
-          [ target.Ast.st_binding; target.Ast.st_op; target.Ast.st_dep ]
+      ^ String.concat "." (List.map fst target.Ast.st_path)
       ^ ": " ^ print_test_value value
   | Ast.TiCall { bind; recv; op; input; _ } ->
       "  " ^ bind ^ ": " ^ recv ^ "." ^ op ^ "("

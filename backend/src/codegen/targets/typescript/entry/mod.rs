@@ -272,6 +272,14 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         let mut own = vec![settings_interface(entry, &n, config, module)];
         own.extend(config_object_interface(entry, &n, config, module));
         own.extend(impl_op::seam_decls(entry, &n, module, &bound, has_tests));
+        own.extend(ext_call::seam_decls(
+            entry,
+            &n,
+            module,
+            config,
+            &mut helpers,
+            has_tests,
+        ));
         own.extend(class_decl(
             entry,
             &n,

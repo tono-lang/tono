@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The IR the monorepo commits: one module `spec` with a single structure.
-const IR_V1: &str = r#"{"tono_ir_version":17,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR_V1: &str = r#"{"tono_ir_version":18,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// The evolved IR: the same structure grows a `currency` member.
-const IR_V2: &str = r#"{"tono_ir_version":17,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]},{"name":"currency","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR_V2: &str = r#"{"tono_ir_version":18,"modules":[{"name":"spec","shapes":[{"id":"spec#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]},{"name":"currency","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))

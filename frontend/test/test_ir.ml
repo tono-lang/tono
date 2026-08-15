@@ -684,6 +684,96 @@ let version_suite =
       version_gate_accepts_current;
   ]
 
+(* ── Declared-test extern stub codec ─────────────────────────────────────
+   [Ir_json_tests.encode_extern_target]/[decode_extern_target] disambiguate a
+   free function from an opaque-handle method by the presence of a "method"
+   key; the round-trip below exercises both shapes, with and without a
+   binding name, plus every answer kind carried on one target. *)
+
+let extern_stub_test : Ir.test_decl =
+  {
+    t_name = "t";
+    t_constructions = [];
+    t_stubs = [];
+    t_extern_stubs =
+      [
+        {
+          es_binding = Some "s";
+          es_target = Ir.Ext_free { lib = "companyconfig"; fn = "load" };
+          es_answers =
+            [
+              Ir.Answer_value (`Assoc [ ("endpoint", `String "https://stub") ]);
+            ];
+        };
+        {
+          es_binding = None;
+          es_target =
+            Ir.Ext_method
+              { lib = "companybus"; ty = "publisher"; meth = "send" };
+          es_answers =
+            [
+              Ir.Answer_error { ans_shape = "overloaded"; ans_data = `Assoc [] };
+              Ir.Answer_contract;
+            ];
+        };
+      ];
+    t_calls = [];
+    t_expects = [];
+  }
+
+(* Wraps a single raw extern-stub JSON object into a minimal test_decl for
+   [Ir_json.decode_test], so the malformed-shape cases below can target
+   [Ir_json_tests.decode_extern_target]/[decode_extern_stub] without those
+   internals being exposed outside [Ir_json]. *)
+let test_with_extern_stub_json (stub_json : Ir.json) : Ir.json =
+  `Assoc [ ("name", `String "t"); ("extern_stubs", `List [ stub_json ]) ]
+
+let extern_stub_suite =
+  [
+    roundtrip "extern stub round-trip" ~encode:Ir_json.encode_test
+      ~decode:Ir_json.decode_test extern_stub_test;
+    decode_fails "extern stub target missing lib (free shape)"
+      ~decode:Ir_json.decode_test
+      (test_with_extern_stub_json
+         (`Assoc [ ("target", `Assoc [ ("fn", `String "load") ]) ]));
+    decode_fails "extern stub target missing fn (free shape)"
+      ~decode:Ir_json.decode_test
+      (test_with_extern_stub_json
+         (`Assoc [ ("target", `Assoc [ ("lib", `String "companyconfig") ]) ]));
+    decode_fails "extern stub target missing type (method shape)"
+      ~decode:Ir_json.decode_test
+      (test_with_extern_stub_json
+         (`Assoc
+            [
+              ( "target",
+                `Assoc
+                  [ ("lib", `String "companybus"); ("method", `String "send") ]
+              );
+            ]));
+    decode_fails "extern stub missing target" ~decode:Ir_json.decode_test
+      (test_with_extern_stub_json (`Assoc []));
+    (* No "answers" key at all (not even an empty list) still decodes, an
+       extern stub with no answers recorded yet. *)
+    Alcotest.test_case "extern stub answers default to empty" `Quick (fun () ->
+        match
+          Ir_json.decode_test
+            (test_with_extern_stub_json
+               (`Assoc
+                  [
+                    ( "target",
+                      `Assoc
+                        [
+                          ("lib", `String "companyconfig");
+                          ("fn", `String "load");
+                        ] );
+                  ]))
+        with
+        | Error e -> Alcotest.failf "expected a decode: %s" e
+        | Ok t -> (
+            match t.Ir.t_extern_stubs with
+            | [ { Ir.es_answers = []; _ } ] -> ()
+            | _ -> Alcotest.fail "expected one extern stub with no answers"));
+  ]
 (* ── Runner ────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -706,4 +796,5 @@ let () =
       ("model", model_suite);
       ("version", version_suite);
       ("negative", negative_suite);
+      ("extern_stub", extern_stub_suite);
     ]

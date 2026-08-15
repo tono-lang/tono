@@ -151,6 +151,32 @@ fn field_go_type(t: &Tref, module: &Module) -> String {
     go_type(t)
 }
 
+/// The Go type spelling of an entry field's own *storage* position (the
+/// Settings struct field and the `@with` carrier field): identical to
+/// [`field_go_type`] except a foreign opaque handle spells as tono's own
+/// generated interface rather than the real package's concrete pointer type,
+/// so a hermetic declared test can fake it without the real library. Every
+/// concrete value the field can hold (the real construction call's result, or
+/// a `@with` setter's concrete-typed argument) still satisfies the interface
+/// implicitly.
+pub(super) fn field_go_type_storage(t: &Tref, module: &Module) -> String {
+    if let Tref::Ref { id, .. } = t {
+        if module
+            .shapes
+            .iter()
+            .any(|s| s.id == *id && matches!(s.kind, ShapeKind::Config { .. }))
+        {
+            return config_type_ident(id);
+        }
+        if let Some((lib, type_name)) = ext::foreign_handle(t, module) {
+            if let Some(ty) = ext::handle_iface_type(lib, &type_name) {
+                return ty;
+            }
+        }
+    }
+    go_type(t)
+}
+
 /// [`push_type_symbols`], but for an entry field's own declared type: a
 /// foreign opaque handle pulls its `ext` block's Go import
 /// instead of trying to resolve as an in-module reference.
@@ -308,6 +334,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let tested: BTreeSet<String> = crate::codegen::declared_tests::entries_with_tests(module);
     let mut helpers = Helpers::default();
     let mut shared = surface::config_structs(module, config);
+    shared.extend(handle_iface_decls(module, config));
     shared.extend(hook_wrapper_decls(&bound, &entries, multi));
     shared.extend(plan::output_decode_decls(
         &entries,
@@ -337,6 +364,28 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         per_entry.push((entry.name.to_string(), decls));
     }
     EntryEmission { shared, per_entry }
+}
+
+/// The interface declaration of every foreign opaque handle the module's
+/// `ext` block declares (deduplicated by lib+type, so two entries sharing one
+/// handle never redeclare the same Go type in one package), emitted once as
+/// shared machinery rather than per entry.
+fn handle_iface_decls(module: &Module, config: &CasingConfig) -> Vec<Decl> {
+    let pairs: Vec<_> = module
+        .ext_libs
+        .iter()
+        .flat_map(|lib| lib.types.iter().map(move |t| (lib, t)))
+        .collect();
+    let mut decls: Vec<Decl> = pairs
+        .iter()
+        .filter_map(|(lib, t)| ext::handle_iface_decl(lib, t))
+        .collect();
+    decls.extend(
+        pairs
+            .iter()
+            .filter_map(|(lib, t)| ext::handle_adapter_decl(module, config, lib, t)),
+    );
+    decls
 }
 
 fn discriminator_name(n: &Names, op: &Shape) -> String {
@@ -468,273 +517,6 @@ fn hook_wrapper_name(slot: &str) -> String {
     camel(&format!("{slot}_hook"))
 }
 
-/// The zero-value declaration and the return prefix a method needs to bail out
-/// early. `var zero T` is the one zero spelling valid for every Go type (a
-/// composite literal is not, for primitives).
-pub(super) fn zero_of(output: Option<&Tref>) -> (String, &'static str) {
-    match output {
-        Some(t) => (format!("\tvar zero {}\n", go_type(t)), "zero, "),
-        None => (String::new(), ""),
-    }
-}
-
-/// A constrained input is validated before it leaves the process, so a bad
-/// request surfaces as a ValidationError instead of a round trip (or a call into
-/// bespoke code that would have to reject it again).
-pub(super) fn validate_block(
-    input: Option<&Tref>,
-    module: &Module,
-    ret_zero: &str,
-    fail: &dyn Fn(String) -> String,
-) -> String {
-    let validated = match input {
-        Some(Tref::Ref { id, .. }) => module
-            .shapes
-            .iter()
-            .find(|s| s.id == *id)
-            .filter(|s| validation::shape_has_checks(s))
-            .map(|s| type_ident_from_id(&s.id)),
-        _ => None,
-    };
-    match validated {
-        Some(ty) => format!(
-            "\tif invalid := Validate{ty}(input); invalid != nil {{\n\t\treturn {ret_zero}{fail_val}\n\t}}\n",
-            fail_val = fail("invalid".to_string()),
-        ),
-        None => String::new(),
-    }
-}
-
-/// The Go read of a resolved entry-field path off `root`, honoring
-/// `@rename(go)` on the leading segment only (a config/struct member's own
-/// name is never renamed, only an entry field's is).
-pub(super) fn field_path_expr(
-    entry: &EntryModel<'_>,
-    module: &Module,
-    config: &CasingConfig,
-    path: &[String],
-    root: &str,
-) -> String {
-    let mut out = root.to_string();
-    for (i, seg) in path.iter().enumerate() {
-        out.push('.');
-        if i == 0 {
-            out.push_str(&entry_field_ident(entry, module, config, seg));
-        } else {
-            out.push_str(&field_pascal(seg, config));
-        }
-    }
-    out
-}
-
-/// The unexported client field holding a `@timeout` path's pre-converted
-/// `time.Duration`: the path's segments camel-joined, suffixed `Duration`.
-/// Collision-free within the client since it derives from the field's own
-/// (unique) path.
-pub(super) fn timeout_field_ident(
-    entry: &EntryModel<'_>,
-    _config: &CasingConfig,
-    path: &[String],
-) -> String {
-    let mut out = String::new();
-    for (i, seg) in path.iter().enumerate() {
-        let rename = if i == 0 {
-            entry.field_rename(seg, LANG)
-        } else {
-            None
-        };
-        let word = transform(
-            seg,
-            SymbolKind::Field,
-            &CasingConfig::new(CaseStyle::Camel),
-            rename.as_deref(),
-        );
-        if i == 0 {
-            out.push_str(&word);
-        } else {
-            let mut chars = word.chars();
-            if let Some(first) = chars.next() {
-                out.extend(first.to_uppercase());
-                out.push_str(chars.as_str());
-            }
-        }
-    }
-    out.push_str("Duration");
-    out
-}
-
-/// How a resolved field path spells in a wire string position, read off the
-/// declared value paths: a string is used verbatim, a branded string flattens
-/// through `string(...)`, everything else routes through the shared
-/// `FormatScalar`.
-fn field_kind_of(target: Option<&Tref>, module: &Module) -> transport::FieldKind {
-    match target {
-        Some(Tref::Prim(Prim::String | Prim::Uuid)) => transport::FieldKind::StringLike,
-        Some(Tref::Prim(Prim::Timestamp | Prim::Date | Prim::Duration)) => {
-            transport::FieldKind::Branded
-        }
-        Some(t @ Tref::Ref { .. }) if ref_is_enum(t, module) => transport::FieldKind::Branded,
-        _ => transport::FieldKind::Other,
-    }
-}
-
-/// One concrete client method: assemble the request from the typed resolved
-/// Settings and the encoded input, drive the SDK's emitted transport, and map
-/// the raw outcome onto the generated taxonomy.
-fn op_method_decl(
-    entry: &EntryModel<'_>,
-    n: &Names,
-    op: &Shape,
-    module: &Module,
-    config: &CasingConfig,
-    bound: &[BoundExtension<'_>],
-) -> Decl {
-    let en = error_names();
-    let (sig, mut refs) = method_signature(op, config);
-    let has_on_error = hook_binding(bound, "on_error").is_some();
-    let (input, output) = crate::codegen::ops::op_io(op);
-    let fail = |expr: String| {
-        if has_on_error {
-            format!("{}({expr})", hook_wrapper_name("on_error"))
-        } else {
-            expr
-        }
-    };
-    let (zero_decl, ret_zero) = zero_of(output);
-    // The zero value and the decode both name the output type in opaque text.
-    if let Some(t) = output {
-        push_type_symbols(t, &mut refs);
-    }
-    let validate_block = validate_block(input, module, ret_zero, &fail);
-    let Some(wire) = wire_binding(op) else {
-        // No protocol binding. Two bespoke shapes reach here: an op's own
-        // `impl .field.method(args)` body — a direct call into a
-        // declared opaque handle — takes priority when present, otherwise
-        // the legacy `ext impl` extension binding the generator gate proved
-        // is bound for this target.
-        if let Some(call) = crate::codegen::ops::op_impl_call(op) {
-            let body = ext::impl_call_body(
-                entry,
-                module,
-                config,
-                op_local_name(&op.id),
-                crate::codegen::ops::input_name(op),
-                call,
-                ret_zero,
-                &fail,
-                &mut refs,
-            );
-            let doc = doc_of(&op.traits)
-                .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
-                .unwrap_or_default();
-            return Decl::raw_with(
-                format!(
-                    "{doc}func (c *{client}) {sig} {{\n{zero_decl}{validate_block}{body}}}",
-                    client = n.client,
-                ),
-                refs,
-            );
-        }
-        return impl_op::method_decl(impl_op::Method {
-            n,
-            op,
-            module,
-            sig: &sig,
-            refs,
-            binding: impl_binding(bound, &op.id),
-            zero_decl: &zero_decl,
-            ret_zero,
-            validate_block: &validate_block,
-            fail: &fail,
-            discriminator: &discriminator_name(n, op),
-        });
-    };
-    let has_declared_errors = !declared_errors(op, module).is_empty();
-    let discriminator = discriminator_name(n, op);
-    // A wire position reads the typed resolved Settings directly. @timeout is
-    // the one exception: its field converts (Duration to time.Duration) rather
-    // than passing through, so it reads the unexported, already-converted
-    // client field the constructor built.
-    let value_paths = entry.value_paths(module);
-    let field_access = |path: &[String]| field_path_expr(entry, module, config, path, "c.settings");
-    let field_kind = |path: &[String]| {
-        let key = path.join(".");
-        field_kind_of(
-            value_paths
-                .iter()
-                .find(|vp| vp.path == key)
-                .map(|vp| vp.target),
-            module,
-        )
-    };
-    // A param-member reference resolves the same way, off the op's own
-    // parameter type instead of the entry: a same-module structure member
-    // reads as a typed `input.Field`; a cross-module parameter type is not
-    // chased here, so the caller falls back to the decoded record.
-    let param_access = |seg: &str| -> Option<(String, transport::FieldKind)> {
-        let member = crate::codegen::ops::param_member(module, input, seg)?;
-        Some((
-            field_ident(member, config, LANG),
-            field_kind_of(Some(&member.target), module),
-        ))
-    };
-    let success = decode::success_block(
-        output,
-        module,
-        &if wire.response_bindings.is_empty() {
-            decode::Payload {
-                text: "outcome.Body",
-                bytes: "[]byte(outcome.Body)",
-            }
-        } else {
-            decode::Payload {
-                text: "folded",
-                bytes: "[]byte(folded)",
-            }
-        },
-        &fail,
-        &mut refs,
-    );
-    let module_hooks = hook_binding(bound, "before_request").is_some()
-        || hook_binding(bound, "after_response").is_some();
-    let call = transport::OpCall {
-        wire,
-        module,
-        config,
-        has_input: input.is_some(),
-        ret_zero,
-        discriminator: has_declared_errors.then_some(discriminator.as_str()),
-        api_error: &en.api,
-        transport_error: &en.transport,
-        success_block: &success,
-        module_hooks,
-        retry_expr: wire
-            .retry
-            .as_deref()
-            .map(|path| format!("int({})", field_access(path))),
-        timeout_expr: wire
-            .timeout
-            .as_deref()
-            .map(|path| format!("c.{}", timeout_field_ident(entry, config, path))),
-    };
-    let body = transport::op_call(
-        &call,
-        &fail,
-        &field_access,
-        &field_kind,
-        &param_access,
-        &mut refs,
-    );
-    let doc = doc_of(&op.traits)
-        .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
-        .unwrap_or_default();
-    let text = format!(
-        "{doc}func (c *{client}) {sig} {{\n{zero_decl}{validate_block}{body}}}",
-        client = n.client,
-    );
-    Decl::raw_with(text, refs)
-}
-
 mod assembly;
 #[cfg(test)]
 mod bespoke_tests;
@@ -749,6 +531,7 @@ pub mod ext_fixtures;
 #[cfg(test)]
 mod ext_tests;
 mod impl_op;
+mod op_method;
 mod resolve;
 mod resolve_wire_call;
 pub(crate) mod send;
@@ -760,6 +543,7 @@ mod transport;
 pub(crate) mod vector_tests;
 
 use constructor::{err_var, new_decl};
+use op_method::{field_path_expr, op_method_decl, timeout_field_ident};
 use resolve::Resolver;
 use shared::{apply_transforms, shared_slot, shared_symbol};
 pub use shared::{shared_groups, shared_groups_for};

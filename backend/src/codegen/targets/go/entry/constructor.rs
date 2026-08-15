@@ -2,10 +2,29 @@
 //! client_init bridge, the consumed-chain requires, declared validation,
 //! and the frozen runtime values.
 
-use super::resolve::config_errorf;
+use std::collections::HashMap;
+
+use super::resolve::{config_errorf, FieldOverride};
 use super::*;
 use crate::codegen::entries::plan;
 use plan::push_gap;
+
+/// The seam constructor's override parameter name for a field with its own
+/// `extern` construction call.
+pub(super) fn override_param_name(field_name: &str) -> String {
+    format!("{}Override", camel(field_name))
+}
+
+/// The entry fields a declared test may stub during construction: every
+/// field with its own `extern` construction call, in declared order.
+pub(super) fn overridable_fields<'a>(entry: &'a EntryModel<'a>) -> Vec<&'a EntryField> {
+    entry
+        .fields
+        .iter()
+        .copied()
+        .filter(|f| f.call.is_some())
+        .collect()
+}
 
 /// The generated constructor. The body follows the declared order exactly:
 /// sources resolve top-down, `client_init` runs over the result (bespoke
@@ -72,6 +91,30 @@ pub(super) fn new_decl(
         settings = n.settings
     ));
 
+    // The declared-test seam gets one optional override per field with its
+    // own `extern` construction call: a non-nil value skips the real call,
+    // which is what lets a hermetic test avoid the real library. A
+    // foreign-handle field's override carries its own interface type
+    // directly (already nilable); every other field's override is a
+    // pointer, since the field's own zero value cannot double as "unset".
+    let overrides: HashMap<String, FieldOverride> = if test_seam {
+        overridable_fields(entry)
+            .into_iter()
+            .map(|f| {
+                let pointer = ext::foreign_handle(&f.target, module).is_none();
+                (
+                    f.name.clone(),
+                    FieldOverride {
+                        var: override_param_name(&f.name),
+                        pointer,
+                    },
+                )
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
     let mut r = Resolver {
         entry,
         module,
@@ -81,6 +124,7 @@ pub(super) fn new_decl(
         body: &mut body,
         resolve_fns: &mut resolve_fns,
         multi,
+        overrides: &overrides,
     };
     let fields = plan::emit_fields(entry, module, &mut r, 1);
     if !fields.is_empty() {
@@ -113,6 +157,7 @@ pub(super) fn new_decl(
             body: &mut body,
             resolve_fns: &mut resolve_fns,
             multi,
+            overrides: &overrides,
         };
         let requires = plan::build_requires(entry, module, &mut r);
         let text = plan::render(&requires, 1, &r);
@@ -285,35 +330,56 @@ pub(super) fn new_decl(
             .iter()
             .map(|f| plan::arg_camel(&f.name, &f.traits, LANG))
             .collect();
-        let pass_opts = if entry.with_fields().is_empty() {
+        let overridable = overridable_fields(entry);
+        // Go requires the variadic `opts ...Option` parameter last, so every
+        // override is threaded between the positional args and it, in both
+        // the signature and the wrapper's forwarding call.
+        let mut seam_param_parts: Vec<String> = params.clone();
+        let mut override_nil_parts: Vec<&str> = Vec::new();
+        for f in &overridable {
+            push_field_type_symbols(&f.target, module, &mut refs);
+            let storage = field_go_type_storage(&f.target, module);
+            let ty = if ext::foreign_handle(&f.target, module).is_none() {
+                format!("*{storage}")
+            } else {
+                storage
+            };
+            seam_param_parts.push(format!("{} {ty}", override_param_name(&f.name)));
+            override_nil_parts.push("nil");
+        }
+        if !entry.with_fields().is_empty() {
+            seam_param_parts.push(format!("opts ...{}", n.option));
+        }
+        let seam_params = if seam_param_parts.is_empty() {
             String::new()
         } else {
-            format!("{}opts...", if pass_args.is_empty() { "" } else { ", " })
+            format!(", {}", seam_param_parts.join(", "))
         };
-        let seam_params = if params.is_empty() && opts_param.is_empty() {
+        let mut pass_parts = pass_args.clone();
+        pass_parts.extend(override_nil_parts.iter().map(|s| s.to_string()));
+        if !entry.with_fields().is_empty() {
+            pass_parts.push("opts...".to_string());
+        }
+        let pass_call = if pass_parts.is_empty() {
             String::new()
         } else {
-            format!(", {}{opts_param}", params.join(", "))
+            format!(", {}", pass_parts.join(", "))
         };
         refs.push(super::support_symbol("HTTPTransport"));
         format!(
             "{doc}func {new_fn}({params}{opts_param}) (*{client}, error) {{\n\
-             \treturn {seam_fn}(nil{pass_sep}{pass_args}{pass_opts})\n\
+             \treturn {seam_fn}(nil{pass_call})\n\
              }}\n\n\
-             // {seam_fn} is {new_fn} plus the transport seam the generated tests use: a\n\
-             // non-nil canonical transport replaces whatever construction resolved,\n\
-             // after client_init ran, so a test answers canonically without a server.\n\
+             // {seam_fn} is {new_fn} plus the seams the generated tests use: a non-nil\n\
+             // canonical transport replaces whatever construction resolved, after\n\
+             // client_init ran; a non-nil field override skips that field's own real\n\
+             // `extern` construction call outright, so a hermetic test never reaches\n\
+             // the real library, not just avoids calling it at runtime.\n\
              func {seam_fn}(canonical {transport}{seam_params}) (*{client}, error) {{\n{body}}}",
             new_fn = n.new_fn,
             client = n.client,
             params = params.join(", "),
             transport = super::shared_slot("HTTPTransport"),
-            pass_sep = if pass_args.is_empty() && pass_opts.is_empty() {
-                ""
-            } else {
-                ", "
-            },
-            pass_args = pass_args.join(", "),
         )
     } else {
         format!(

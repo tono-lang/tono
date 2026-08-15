@@ -373,6 +373,20 @@ type test_stub = {
   ts_answers : stub_answer list;
 }
 
+(* One "ext"/"extern" FFI stub target: a free function, or an opaque-handle
+   method qualified by its type name. Not scoped to a client+op the way
+   [test_stub] is -- an extern call reaches wherever its symbol is used, not
+   one declared operation. *)
+type extern_stub_target =
+  | Ext_free of { lib : string; fn : string }
+  | Ext_method of { lib : string; ty : string; meth : string }
+
+type extern_stub = {
+  es_binding : string option;
+  es_target : extern_stub_target;
+  es_answers : stub_answer list;
+}
+
 (* One call binding: [got: c.get_user(input)]. The input is wire-form JSON in
    which a dataflow leaf is spelled {"$ref":{"binding":...,"path":[...]}}. *)
 type test_call = {
@@ -430,6 +444,7 @@ type test_decl = {
   t_name : string;
   t_constructions : test_construction list;
   t_stubs : test_stub list;
+  t_extern_stubs : extern_stub list;
   t_calls : test_call list;
   t_expects : test_expect list;
 }

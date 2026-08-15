@@ -389,3 +389,55 @@ fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
     let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
     assert!(err.contains("outside an entry"), "{err}");
 }
+
+/// An entry op whose own implementation is a call into a foreign handle's
+/// method (`impl .bus.send(..)`), named after the entry, the op, the field,
+/// and the method.
+fn entry_with_handle_call() -> Shape {
+    let op = Shape {
+        id: "m#client.publish".into(),
+        kind: ShapeKind::Operation {
+            input_name: None,
+            input: None,
+            output: None,
+            errors: vec![],
+            wire: None,
+            impl_call: Some(crate::ir::OpImplCall {
+                recv: vec!["bus".into()],
+                method: "send".into(),
+                args: vec![],
+            }),
+        },
+        traits: vec![],
+    };
+    Shape {
+        id: "m#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![],
+            operations: vec![op],
+        },
+        traits: vec![],
+    }
+}
+
+#[test]
+fn a_target_that_cannot_emit_an_extern_handle_call_is_named_and_refused() {
+    let m = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module_of(vec![entry_with_handle_call()])],
+    };
+    // Go emits an op's own extern handle-method call today; TypeScript and
+    // Rust do not, and a request naming either alongside Go must refuse the
+    // whole call, not silently drop it from just the targets that cannot
+    // render it.
+    assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
+    let err = validate_entries(&m, &[TargetKind::TypeScript]).unwrap_err();
+    assert!(err.contains("client.publish"), "{err}");
+    assert!(err.contains(".bus.send(..)"), "{err}");
+    assert!(
+        err.contains("typescript cannot emit that call yet"),
+        "{err}"
+    );
+    let err = validate_entries(&m, &[TargetKind::Go, TargetKind::Rust]).unwrap_err();
+    assert!(err.contains("rust cannot emit that call yet"), "{err}");
+}

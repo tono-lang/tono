@@ -283,6 +283,7 @@ fn two_entries_with_tests_share_the_package_without_redefining_symbols() {
                 body: "{\"id\":\"n1\"}".into(),
             })],
         }],
+        extern_stubs: vec![],
         calls: vec![notes_bed().call()],
         expects: vec![
             notes_bed().echo_expect(),

@@ -54,6 +54,24 @@ let encode_stub (s : Ir.test_stub) : Ir.json =
         ("answers", `List (List.map encode_answer s.ts_answers));
       ])
 
+let encode_extern_target (t : Ir.extern_stub_target) : Ir.json =
+  match t with
+  | Ir.Ext_free { lib; fn } ->
+      `Assoc [ ("lib", `String lib); ("fn", `String fn) ]
+  | Ir.Ext_method { lib; ty; meth } ->
+      `Assoc
+        [ ("lib", `String lib); ("type", `String ty); ("method", `String meth) ]
+
+let encode_extern_stub (s : Ir.extern_stub) : Ir.json =
+  `Assoc
+    ((match s.es_binding with
+       | Some b -> [ ("binding", `String b) ]
+       | None -> [])
+    @ [
+        ("target", encode_extern_target s.es_target);
+        ("answers", `List (List.map encode_answer s.es_answers));
+      ])
+
 let encode_call (c : Ir.test_call) : Ir.json =
   `Assoc
     ([
@@ -126,6 +144,7 @@ let encode_test (t : Ir.test_decl) : Ir.json =
       ("name", `String t.t_name);
       ("constructions", `List (List.map encode_construction t.t_constructions));
       ("stubs", `List (List.map encode_stub t.t_stubs));
+      ("extern_stubs", `List (List.map encode_extern_stub t.t_extern_stubs));
       ("calls", `List (List.map encode_call t.t_calls));
       ("expects", `List (List.map encode_expect t.t_expects));
     ]
@@ -241,6 +260,50 @@ let decode_stub j =
        ts_answers = answers;
      }
       : Ir.test_stub)
+
+let decode_extern_target j =
+  let* kvs = as_assoc j in
+  let get k = List.assoc_opt k kvs in
+  let req k =
+    match get k with
+    | Some v -> as_string v
+    | None -> err "extern stub target is missing %s" k
+  in
+  let* lib = req "lib" in
+  match get "method" with
+  | Some mv ->
+      let* meth = as_string mv in
+      let* ty = req "type" in
+      Ok (Ir.Ext_method { lib; ty; meth })
+  | None ->
+      let* fn = req "fn" in
+      Ok (Ir.Ext_free { lib; fn })
+
+let decode_extern_stub j =
+  let* kvs = as_assoc j in
+  let get k = List.assoc_opt k kvs in
+  let* binding =
+    match get "binding" with
+    | None -> Ok None
+    | Some v ->
+        let* s = as_string v in
+        Ok (Some s)
+  in
+  let* target =
+    match get "target" with
+    | Some v -> decode_extern_target v
+    | None -> err "extern stub is missing target"
+  in
+  let* answers =
+    match get "answers" with
+    | None -> Ok []
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_answer xs
+  in
+  Ok
+    ({ es_binding = binding; es_target = target; es_answers = answers }
+      : Ir.extern_stub)
 
 let decode_call j =
   let* kvs = as_assoc j in
@@ -392,6 +455,7 @@ let decode_test j =
   in
   let* constructions = list "constructions" decode_construction in
   let* stubs = list "stubs" decode_stub in
+  let* extern_stubs = list "extern_stubs" decode_extern_stub in
   let* calls = list "calls" decode_call in
   let* expects = list "expects" decode_expect in
   Ok
@@ -399,6 +463,7 @@ let decode_test j =
        t_name = name;
        t_constructions = constructions;
        t_stubs = stubs;
+       t_extern_stubs = extern_stubs;
        t_calls = calls;
        t_expects = expects;
      }

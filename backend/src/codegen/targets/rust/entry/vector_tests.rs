@@ -8,7 +8,12 @@
 //! carries `#[ignore]` to stay out of a default `cargo test` run. A test that
 //! stubs an `.impl` dependency generates nothing here: the Rust bespoke ops
 //! expose no swappable per-operation seam, so only the transport stub and the
-//! live path can be exercised natively.
+//! live path can be exercised natively. A call whose own dependency is
+//! neither `.http` nor `.impl` can only be an extern handle method reached
+//! through the op's own `impl` body, which generation-time validation
+//! ([`TargetKind::emits_ext_handle_calls`]) already refuses for this target
+//! before any test file is built, so that combination never reaches this
+//! emitter.
 //!
 //! Each generated file is a `#[cfg(test)]` module of the SDK crate itself
 //! (the module tree declares it), which is what lets it reach the

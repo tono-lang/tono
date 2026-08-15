@@ -27,45 +27,59 @@
 //! An opaque handle's own methods (`type publisher { extern send(..) }`,
 //! invoked from an op's `impl`) are a different call site that no codegen
 //! consumes yet.
+//!
+//! ## The declared-test stub seam
+//!
+//! A generated hermetic test stubbing a free extern-fn call (`stub
+//! companyconfig.load: ...`) needs to answer with the canned value in place
+//! of the real call, without ever letting the real third-party package
+//! resolve at Node's module-load time (a static top-level `import` is
+//! resolved eagerly, unconditionally, whether or not the call the import
+//! backs ever actually runs). The whole `try { await real(...); project;
+//! } catch { map }` body therefore lives once, module-scoped, behind a
+//! mutable `let` per extern-call field ([`seam_decls`]) rather than inline at
+//! the field's own resolution point: an ESM import is a read-only binding,
+//! so swapping *that* directly is not an option (the same reasoning
+//! `impl_op::impl_seam_var` already applies to a bespoke `ext impl`). The
+//! seam function receives the in-progress `Settings` draft as its own
+//! parameter (matching the `s.<field>` spelling every argument already reads
+//! off of), so a canned stub -- a plain `async () => value` closing over
+//! nothing -- is freely assignable to it (a function declaring fewer
+//! parameters than its target type is always assignable in TypeScript). The
+//! stub's own answer is validated against the extern's declared *logical*
+//! return type at the frontend, which is exactly what
+//! this seam's own return type is: swapping it in skips the real call, the
+//! `yields`/`returns` projection, and the error mapping in one step, rather
+//! than trying to fake a raw foreign result the projection would have to
+//! re-derive from.
 
-use super::{field_camel, module_symbol, pascal, Resolver};
-use crate::codegen::entries::plan::Emitter;
+use std::collections::BTreeSet;
+
+use super::{field_camel, field_ts_type, module_symbol, pascal, Helpers, Names, Resolver};
+use crate::codegen::entries::EntryModel;
 use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{
-    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExternParam, Module, ReturnsValue, Select,
+    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExternLang, ExternParam, Module,
+    ReturnsValue, Select,
 };
 
-/// The typed-error class name a declared sentinel maps to: the bare
-/// identifier the `.tono` author wrote (`overloaded`), cased through the
-/// same engine as every other generated identifier, suffixed the way every
-/// other category in the closed taxonomy is (`ContractError`,
-/// `ConfigError`, ...).
-pub(super) fn sentinel_error_class(sentinel_type: &str) -> String {
-    format!("{}Error", pascal(sentinel_type))
+use super::checks::field_path_expr;
+
+/// The module-local binding an extern-call field's generated leaf invokes
+/// instead of the imported foreign symbol directly: see the module-level doc
+/// for why. `swap_fn` names the exported test-only swapper it works with.
+pub(super) fn ext_seam_var(n: &Names, field: &EntryField) -> String {
+    super::camel(&format!("{}{}_ext", n.op_prefix, field.name))
 }
 
-/// The generated class for one distinct sentinel-mapped type name, emitted
-/// once per module regardless of how many extern calls declare it. Rooted
-/// under the same taxonomy root as every other category, so the existing
-/// `instanceof TonoError` boundary checks still see it.
-pub(super) fn sentinel_error_decl(sentinel_type: &str, module: &Module) -> Decl {
-    let name = sentinel_error_class(sentinel_type);
-    let root = error_names().root;
-    Decl::raw_with(
-        format!(
-            "// {name} is the typed error a declared ext sentinel maps to; a\n\
-         // third-party call that throws this sentinel surfaces as this class\n\
-         // instead of the generic ContractError fallback.\n\
-         export class {name} extends {root} {{\n\
-         \x20 constructor(readonly cause: unknown) {{\n\
-         \x20   super({sentinel_type:?});\n\
-         \x20   this.name = {name:?};\n\
-         \x20 }}\n\
-         }}",
-        ),
-        vec![module_symbol(&root, module)],
+/// The exported swapper a generated test simulates a free extern-fn stub
+/// through.
+pub(super) fn ext_swap_fn_name(n: &Names, field: &EntryField) -> String {
+    format!(
+        "swap{}ExtForTest",
+        super::pascal(&format!("{}{}", n.op_prefix, field.name))
     )
 }
 
@@ -95,14 +109,18 @@ fn json_literal(v: &serde_json::Value) -> String {
     }
 }
 
-/// Render one node of a `ts` language block's `call_args` template. `Param`
-/// substitutes the extern's declared logical parameter with the value the
-/// entry field's own call site passed for it (positional against `params`);
-/// the substituted value is rendered with an empty `(params, site_args)`, so
-/// a stray `Param` inside it (which the grammar never produces) fails loudly
-/// instead of silently matching the outer template's parameters.
+/// Render one node of a `ts` language block's `call_args` template, purely
+/// from (entry, config): `Resolver::path_read` is itself a pure function of
+/// exactly those two things (`field_path_expr`), so this needs no `Resolver`
+/// to reach byte-identical output. `Param` substitutes the extern's declared
+/// logical parameter with the value the entry field's own call site passed
+/// for it (positional against `params`); the substituted value is rendered
+/// with an empty `(params, site_args)`, so a stray `Param` inside it (which
+/// the grammar never produces) fails loudly instead of silently matching the
+/// outer template's parameters.
 fn render_arg(
-    r: &mut Resolver,
+    entry: &EntryModel<'_>,
+    config: &crate::codegen::casing::CasingConfig,
     arg: &CallArg,
     params: &[ExternParam],
     site_args: &[CallArg],
@@ -118,15 +136,15 @@ fn render_arg(
             let site = site_args.get(idx).unwrap_or_else(|| {
                 panic!("extern call site is missing an argument for parameter {name:?}")
             });
-            render_arg(r, site, &[], &[])
+            render_arg(entry, config, site, &[], &[])
         }
-        CallArg::Ref(path) => r.path_read(path),
+        CallArg::Ref(path) => field_path_expr(entry, config, path, "s"),
         CallArg::Lit(v) => json_literal(v),
         CallArg::List(items) => format!(
             "[{}]",
             items
                 .iter()
-                .map(|i| render_arg(r, i, params, site_args))
+                .map(|i| render_arg(entry, config, i, params, site_args))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -134,7 +152,7 @@ fn render_arg(
             "{{ {} }}",
             fields
                 .iter()
-                .map(|(k, v)| format!("{k}: {}", render_arg(r, v, params, site_args)))
+                .map(|(k, v)| format!("{k}: {}", render_arg(entry, config, v, params, site_args)))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -208,22 +226,18 @@ fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> String {
     }
 }
 
-/// [`plan::Emitter::call_assign`] for TypeScript: the try/catch around one
-/// awaited extern call, its argument rendering, its `yields`/`returns`
-/// projection (or bare pass-through when there is none), and its error
-/// boundary. `dest` is already a ready-to-use assignment target (a top-level
-/// field or a config member path), supplied by the shared plan.
-pub(super) fn call_assign(
-    r: &mut Resolver,
-    field: &EntryField,
-    call: &EntryCall,
-    dest: &str,
-) -> String {
-    // `entries::validate_entries` (`call_resolves`) has already confirmed all
-    // of this for the typescript target before generation reaches here, so
-    // every lookup below is an internal-invariant check, not a validation.
-    let lib = r
-        .module
+/// The extern lookup [`call_body`] and [`seam_decls`] share: the declared
+/// `ext` lib, its extern, and both their `ts`/`typescript` language blocks.
+/// `entries::validate_entries` (`call_resolves`) has already confirmed all of
+/// this for the typescript target before generation reaches here, so every
+/// lookup is an internal-invariant check, not a validation.
+struct Lookup<'a> {
+    lang: &'a ExternLang,
+    params: &'a [ExternParam],
+}
+
+fn lookup<'a>(module: &'a Module, field: &EntryField, call: &EntryCall) -> Lookup<'a> {
+    let lib = module
         .ext_libs
         .iter()
         .find(|l| l.name == call.ns)
@@ -253,30 +267,36 @@ pub(super) fn call_assign(
                 call.ns, call.func
             )
         });
-    let lib_path = lib
-        .langs
-        .iter()
-        .find(|p| p.lang == "ts" || p.lang == "typescript")
-        .unwrap_or_else(|| {
-            panic!(
-                "ext lib {:?} declares no typescript module path (validate_entries should have rejected this)",
-                lib.name
-            )
-        });
+    Lookup {
+        lang,
+        params: &decl.params,
+    }
+}
 
-    r.helpers.ext_refs.push(Symbol::imported(
-        lang.symbol.clone(),
-        lib_path.path.clone(),
-        lang.symbol.clone(),
-    ));
-    r.helpers
-        .ext_refs
-        .push(module_symbol(&error_names().contract, r.module));
+/// The try/catch body a seam function performs: the real call, its
+/// `yields`/`returns` projection (or bare pass-through), and its error
+/// boundary, ending in `return` rather than an assignment (this is always
+/// the seam's own body now -- see the module doc for why the assignment
+/// itself lives at the field's own resolution point instead).
+#[allow(clippy::too_many_arguments)]
+fn call_body(
+    entry: &EntryModel<'_>,
+    config: &crate::codegen::casing::CasingConfig,
+    module: &Module,
+    field: &EntryField,
+    call: &EntryCall,
+    refs: &mut Vec<Symbol>,
+    sentinel_types: &mut BTreeSet<String>,
+) -> String {
+    let l = lookup(module, field, call);
+    let lang = l.lang;
+
+    refs.push(module_symbol(&error_names().contract, module));
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
         for a in &lang.call_args {
-            parts.push(render_arg(r, a, &decl.params, &call.args));
+            parts.push(render_arg(entry, config, a, l.params, &call.args));
         }
         parts.join(", ")
     };
@@ -287,7 +307,7 @@ pub(super) fn call_assign(
     // gives this target); `validate_entries` guarantees at most one
     // non-error position, which is the only one worth projecting.
     let assign = match lang.yields.iter().find(|y| !y.is_error) {
-        None => format!("{dest} = raw;"),
+        None => "return raw;".to_string(),
         Some(y) => {
             let returns = lang.returns.as_ref().unwrap_or_else(|| {
                 panic!(
@@ -300,23 +320,21 @@ pub(super) fn call_assign(
                 .map(|f| {
                     format!(
                         "{}: {}",
-                        field_camel(&f.name, r.config),
+                        field_camel(&f.name, config),
                         returns_value_expr(&y.name, &f.value)
                     )
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{dest} = {{ {projected} }};")
+            format!("return {{ {projected} }};")
         }
     };
 
     let mut cases = String::new();
     for eb in &lang.errors {
         let class_name = sentinel_error_class(&eb.r#type);
-        r.helpers.ext_error_types.insert(eb.r#type.clone());
-        r.helpers
-            .ext_refs
-            .push(module_symbol(&class_name, r.module));
+        sentinel_types.insert(eb.r#type.clone());
+        refs.push(module_symbol(&class_name, module));
         cases.push_str(&format!(
             "      case {sentinel:?}: throw new {class_name}(e);\n",
             sentinel = eb.sentinel,
@@ -335,466 +353,153 @@ pub(super) fn call_assign(
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codegen::targets::typescript::entry::emit;
-    use crate::codegen::targets::typescript::types::ts_casing;
-    use crate::codegen::targets::typescript::TsRules;
-    use crate::codegen::test_support::{member, rendered, structure};
-    use crate::ir::{
-        EntryField, ExtLib, ExternDecl, ExternLang as IrExternLang, ForeignField, ForeignStruct,
-        LangPath, OpaqueType, Prim, ReturnsField, ReturnsLit, Shape, ShapeKind, Source, Tref,
-    };
-    use std::collections::BTreeMap;
-
-    fn ef(name: &str, target: Tref, sources: Vec<Source>, call: Option<EntryCall>) -> EntryField {
-        EntryField {
-            name: name.into(),
-            target,
-            sources,
-            format: None,
-            transforms: vec![],
-            select: None,
-            call,
-            binds: vec![],
-            constraints: vec![],
-            traits: vec![],
-        }
-    }
-
-    fn app_config_shape() -> Shape {
-        structure(
-            "m#app_config",
-            vec![
-                member("endpoint", Tref::Prim(Prim::String), true),
-                member("token", Tref::Prim(Prim::String), true),
-            ],
-        )
-    }
-
-    /// A worked `companyconfig`/`companybus` `ext` library pair: `load` (a
-    /// `Ctor` argument, `yields`+`returns` projecting foreign field names
-    /// onto `app_config`, a declared sentinel) and `connect` (a bare handle
-    /// construction, no `yields`).
-    fn appendix_ext_libs() -> Vec<ExtLib> {
-        let mut load_ctor_fields = BTreeMap::new();
-        load_ctor_fields.insert("region".to_string(), CallArg::Param("region".into()));
-        load_ctor_fields.insert("service".to_string(), CallArg::Param("service".into()));
-        let companyconfig = ExtLib {
-            name: "companyconfig".into(),
-            langs: vec![LangPath {
-                lang: "ts".into(),
-                path: "@company/config".into(),
-            }],
-            structs: vec![
-                ForeignStruct {
-                    name: "ts_opts".into(),
-                    fields: vec![
-                        ForeignField {
-                            name: "region".into(),
-                            r#type: Tref::Prim(Prim::String),
-                        },
-                        ForeignField {
-                            name: "service".into(),
-                            r#type: Tref::Prim(Prim::String),
-                        },
-                    ],
-                },
-                ForeignStruct {
-                    name: "ts_config".into(),
-                    fields: vec![
-                        ForeignField {
-                            name: "host".into(),
-                            r#type: Tref::Prim(Prim::String),
-                        },
-                        ForeignField {
-                            name: "token".into(),
-                            r#type: Tref::Prim(Prim::String),
-                        },
-                    ],
-                },
-            ],
-            types: vec![],
-            externs: vec![ExternDecl {
-                name: "load".into(),
-                params: vec![
-                    ExternParam {
-                        name: "service".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                    ExternParam {
-                        name: "region".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                ],
-                r#return: Tref::Ref {
-                    id: "m#app_config".into(),
-                    args: vec![],
-                },
-                langs: vec![IrExternLang {
-                    lang: "ts".into(),
-                    symbol: "load".into(),
-                    call_args: vec![CallArg::Ctor(CallCtor {
-                        name: "ts_opts".into(),
-                        fields: load_ctor_fields,
-                    })],
-                    yields: vec![crate::ir::YieldsPos {
-                        name: "cfg".into(),
-                        r#type: Some(Tref::Ref {
-                            id: "companyconfig#ts_config".into(),
-                            args: vec![],
-                        }),
-                        is_error: false,
-                    }],
-                    returns: Some(ReturnsLit {
-                        r#type: Tref::Ref {
-                            id: "m#app_config".into(),
-                            args: vec![],
-                        },
-                        fields: vec![
-                            ReturnsField {
-                                name: "endpoint".into(),
-                                value: ReturnsValue::Field(vec!["cfg".into(), "host".into()]),
-                            },
-                            ReturnsField {
-                                name: "token".into(),
-                                value: ReturnsValue::Field(vec!["cfg".into(), "token".into()]),
-                            },
-                        ],
-                    }),
-                    errors: vec![crate::ir::ErrorBinding {
-                        sentinel: "BUSY".into(),
-                        r#type: "overloaded".into(),
-                    }],
-                    sync: false,
-                }],
-            }],
-        };
-        let companybus = ExtLib {
-            name: "companybus".into(),
-            langs: vec![LangPath {
-                lang: "ts".into(),
-                path: "@company/bus".into(),
-            }],
-            structs: vec![],
-            types: vec![OpaqueType {
-                name: "publisher".into(),
-                methods: vec![],
-            }],
-            externs: vec![ExternDecl {
-                name: "connect".into(),
-                params: vec![
-                    ExternParam {
-                        name: "endpoint".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                    ExternParam {
-                        name: "token".into(),
-                        r#type: Tref::Prim(Prim::String),
-                    },
-                ],
-                r#return: Tref::Ref {
-                    id: "companybus#publisher".into(),
-                    args: vec![],
-                },
-                langs: vec![IrExternLang {
-                    lang: "ts".into(),
-                    symbol: "connect".into(),
-                    call_args: vec![
-                        CallArg::Param("endpoint".into()),
-                        CallArg::Param("token".into()),
-                    ],
-                    yields: vec![],
-                    returns: None,
-                    errors: vec![],
-                    sync: false,
-                }],
-            }],
-        };
-        vec![companyconfig, companybus]
-    }
-
-    /// `service`/`region` (`@arg`), `config` (a plain call, `load`-shaped),
-    /// `bus` (a `@with`-fallback call onto the opaque handle,
-    /// `connect`-shaped, reading `config`'s own resolved members).
-    fn appendix_fields() -> Vec<EntryField> {
-        vec![
-            ef("service", Tref::Prim(Prim::String), vec![Source::Arg], None),
-            ef("region", Tref::Prim(Prim::String), vec![Source::Arg], None),
-            ef(
-                "config",
-                Tref::Ref {
-                    id: "m#app_config".into(),
-                    args: vec![],
-                },
-                vec![],
-                Some(EntryCall {
-                    ns: "companyconfig".into(),
-                    func: "load".into(),
-                    args: vec![
-                        CallArg::Ref(vec!["service".into()]),
-                        CallArg::Ref(vec!["region".into()]),
-                    ],
-                }),
-            ),
-            {
-                let mut bus = ef(
-                    "bus",
-                    Tref::Ref {
-                        id: "companybus#publisher".into(),
-                        args: vec![],
-                    },
-                    vec![Source::With],
-                    Some(EntryCall {
-                        ns: "companybus".into(),
-                        func: "connect".into(),
-                        args: vec![
-                            CallArg::Ref(vec!["config".into(), "endpoint".into()]),
-                            CallArg::Ref(vec!["config".into(), "token".into()]),
-                        ],
-                    }),
-                );
-                bus.sources = vec![Source::With];
-                bus
-            },
-        ]
-    }
-
-    fn appendix_module(fields: Vec<EntryField>) -> Module {
-        Module {
-            tests: vec![],
-            name: "m".into(),
-            shapes: vec![
-                app_config_shape(),
-                Shape {
-                    id: "m#client".into(),
-                    kind: ShapeKind::Entry {
-                        fields,
-                        operations: vec![],
-                    },
-                    traits: vec![],
-                },
-            ],
-            operations: vec![],
-            extensions: vec![],
-            ext_libs: appendix_ext_libs(),
-        }
-    }
-
-    fn rendered_text(module: &Module) -> String {
-        let emission = emit(module, &ts_casing());
-        let mut decls = emission.shared;
-        decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
-        rendered(&decls, &TsRules)
-    }
-
-    #[test]
-    fn a_plain_call_field_awaits_the_foreign_symbol() {
-        // The import statement itself is a later file-assembly concern
-        // (`repoint_to_groups`/`fill_symbol_slots`), not exercised by this
-        // leaf-level harness; the ref that drives it is asserted separately
-        // by checking the class `Decl`'s own `refs`.
-        let module = appendix_module(appendix_fields());
-        let decls = rendered_decls(&module);
-        let client_decl = decls
+/// The per-field seam bindings of an entry's extern-call fields: one mutable
+/// `let` per field sourced by a free-fn `ext` call (an async function taking
+/// the in-progress `Settings` draft and performing the real call/projection/
+/// error-mapping the field's own resolution step used to inline directly),
+/// plus (only when the entry declares tests) the exported swapper a
+/// generated test goes through to stub that call. Handle-method calls (an
+/// op's own `impl` body reaching an opaque handle's method) are a different
+/// call site: no target's codegen consumes `OpImplCall` yet (see `ir.rs`'s
+/// own note by `impl_call`), so there is nothing to seam here for that form.
+pub(super) fn seam_decls(
+    entry: &EntryModel<'_>,
+    n: &Names,
+    module: &Module,
+    config: &crate::codegen::casing::CasingConfig,
+    helpers: &mut Helpers,
+    has_tests: bool,
+) -> Vec<Decl> {
+    let mut decls = Vec::new();
+    for field in entry.fields.iter().copied() {
+        let Some(call) = &field.call else { continue };
+        let l = lookup(module, field, call);
+        let lib = module
+            .ext_libs
             .iter()
-            .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("export class Client")))
-            .expect("client class decl");
-        let refs = crate::codegen::tree::item_refs(client_decl);
-        assert!(
-            refs.iter().any(|s| s.name == "load"
-                && s.import.as_ref().is_some_and(|i| i.module == "@company/config")),
-            "the client class must import the foreign symbol `load` from its declared module: {refs:?}"
-        );
-        let out = rendered_text(&module);
-        assert!(out.contains("const raw = await load("), "{out}");
-        // The `Ctor` argument's foreign field names ride verbatim, in the
-        // ts language block's own order; the values are the resolved
-        // sibling fields (`s.<field>`), not bare identifiers.
-        assert!(
-            out.contains("{ region: s.region, service: s.service }"),
-            "{out}"
-        );
-    }
+            .find(|lib| lib.name == call.ns)
+            .expect("looked up above");
+        let lib_path = lib
+            .langs
+            .iter()
+            .find(|p| p.lang == "ts" || p.lang == "typescript")
+            .unwrap_or_else(|| {
+                panic!(
+                    "ext lib {:?} declares no typescript module path (validate_entries should have rejected this)",
+                    lib.name
+                )
+            });
 
-    #[test]
-    fn a_yields_projection_reads_the_foreign_verbatim_member_and_casts_to_the_logical_type() {
-        let out = rendered_text(&appendix_module(appendix_fields()));
-        assert!(
-            out.contains("s.config = { endpoint: raw.host, token: raw.token };"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn a_bare_call_with_no_yields_assigns_the_raw_result_directly() {
-        let out = rendered_text(&appendix_module(appendix_fields()));
-        // The `@with` fallback wraps the call assignment inside its own
-        // presence check; the leaf itself is still a bare pass-through.
-        assert!(out.contains("s.bus = raw;"), "{out}");
-        assert!(out.contains("await connect("), "{out}");
-    }
-
-    #[test]
-    fn a_declared_sentinel_throws_the_generated_typed_error() {
-        let out = rendered_text(&appendix_module(appendix_fields()));
-        assert!(
-            out.contains("case \"BUSY\": throw new OverloadedError(e);"),
-            "{out}"
-        );
-        assert!(
-            out.contains("export class OverloadedError extends TonoError"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn an_unmapped_failure_falls_back_to_contract_error_naming_the_extern() {
-        let out = rendered_text(&appendix_module(appendix_fields()));
-        assert!(
-            out.contains("throw new ContractError(\"companyconfig.load\", e);"),
-            "{out}"
-        );
-        assert!(
-            out.contains("throw new ContractError(\"companybus.connect\", e);"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn an_entry_with_a_call_field_gets_an_async_static_factory_constructor() {
-        let out = rendered_text(&appendix_module(appendix_fields()));
-        let client_at = out.find("export class Client").expect("client class");
-        let client_text = &out[client_at..];
-        assert!(client_text.contains("private constructor("), "{out}");
-        assert!(client_text.contains("static async create("), "{out}");
-        assert!(!client_text.contains("\n  constructor("), "{out}");
-    }
-
-    #[test]
-    fn an_entry_with_no_call_field_keeps_the_plain_sync_constructor() {
-        let fields = vec![ef(
-            "service",
-            Tref::Prim(Prim::String),
-            vec![Source::Arg],
-            None,
+        let seam = ext_seam_var(n, field);
+        let mut refs = vec![Symbol::imported(
+            l.lang.symbol.clone(),
+            lib_path.path.clone(),
+            l.lang.symbol.clone(),
         )];
-        let out = rendered_text(&appendix_module(fields));
-        assert!(out.contains("\n  constructor("), "{out}");
-        assert!(!out.contains("static async create("), "{out}");
-        assert!(!out.contains("private constructor("), "{out}");
-    }
-
-    #[test]
-    fn no_foreign_form_is_exported_by_the_barrel() {
-        let module = appendix_module(appendix_fields());
-        let decls = rendered_decls(&module);
-        let exports = crate::codegen::targets::typescript::emit::exports_of(&decls);
-        for name in ["ts_opts", "ts_config", "load", "connect"] {
-            assert!(
-                !exports.values.iter().any(|v| v == name)
-                    && !exports.types.iter().any(|v| v == name),
-                "the barrel must not export the foreign name {name:?}"
-            );
-        }
-    }
-
-    fn rendered_decls(module: &Module) -> Vec<Decl> {
-        let emission = emit(module, &ts_casing());
-        let mut decls = emission.shared;
-        decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
-        decls
-    }
-
-    /// A `match` inside `returns:` (the appendix's `.cfg.Env` example), the
-    /// same construct a config member's own `= match` selection uses,
-    /// lowered to an immediately invoked switch since TypeScript has no
-    /// match expression.
-    #[test]
-    fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
-        use crate::ir::{ArmValue, Select, SelectArm};
-
-        let mut fields = std::collections::BTreeMap::new();
-        fields.insert("service".to_string(), CallArg::Param("service".into()));
-        let lib = ExtLib {
-            name: "companyconfig".into(),
-            langs: vec![crate::ir::LangPath {
-                lang: "ts".into(),
-                path: "@company/config".into(),
-            }],
-            structs: vec![],
-            types: vec![],
-            externs: vec![ExternDecl {
-                name: "load".into(),
-                params: vec![ExternParam {
-                    name: "service".into(),
-                    r#type: Tref::Prim(Prim::String),
-                }],
-                r#return: Tref::Ref {
-                    id: "m#app_config".into(),
-                    args: vec![],
-                },
-                langs: vec![crate::ir::ExternLang {
-                    lang: "ts".into(),
-                    symbol: "load".into(),
-                    call_args: vec![CallArg::Param("service".into())],
-                    yields: vec![crate::ir::YieldsPos {
-                        name: "cfg".into(),
-                        r#type: None,
-                        is_error: false,
-                    }],
-                    returns: Some(ReturnsLit {
-                        r#type: Tref::Ref {
-                            id: "m#app_config".into(),
-                            args: vec![],
-                        },
-                        fields: vec![ReturnsField {
-                            name: "endpoint".into(),
-                            value: ReturnsValue::Select(Select {
-                                subject: vec!["cfg".into(), "Env".into()],
-                                arms: vec![
-                                    SelectArm {
-                                        pattern: Some(serde_json::json!("prod")),
-                                        value: ArmValue::Field(vec!["cfg".into(), "Host".into()]),
-                                    },
-                                    SelectArm {
-                                        pattern: None,
-                                        value: ArmValue::Field(vec![
-                                            "cfg".into(),
-                                            "DevHost".into(),
-                                        ]),
-                                    },
-                                ],
-                            }),
-                        }],
-                    }),
-                    errors: vec![],
-                    sync: false,
-                }],
-            }],
-        };
-        let config = ef(
-            "config",
-            Tref::Ref {
-                id: "m#app_config".into(),
-                args: vec![],
-            },
-            vec![],
-            Some(EntryCall {
-                ns: "companyconfig".into(),
-                func: "load".into(),
-                args: vec![CallArg::Ref(vec!["service".into()])],
-            }),
+        let mut sentinel_types = BTreeSet::new();
+        let body = call_body(
+            entry,
+            config,
+            module,
+            field,
+            call,
+            &mut refs,
+            &mut sentinel_types,
         );
-        let service = ef("service", Tref::Prim(Prim::String), vec![Source::Arg], None);
-        let mut module = appendix_module(vec![service, config]);
-        module.ext_libs = vec![lib];
-        let out = rendered_text(&module);
-        assert!(out.contains("s.config = { endpoint: (() => {"), "{out}");
-        assert!(out.contains("switch (raw.Env) {"), "{out}");
-        assert!(out.contains("case \"prod\": return raw.Host;"), "{out}");
-        assert!(out.contains("default: return raw.DevHost;"), "{out}");
-        assert!(out.contains("})() };"), "{out}");
+        helpers.ext_error_types.extend(sentinel_types);
+        let target_ty = field_ts_type(&field.target, module);
+        refs.extend(super::type_refs(&field.target, module));
+
+        let mut text = format!(
+            "// {seam} is the call the generated field resolver goes through to reach\n\
+             // the foreign {sym} (an ESM import is a read-only binding, so a test that\n\
+             // simulates an outcome swaps this module-local one instead).\n\
+             let {seam}: (s: {settings}) => Promise<{target_ty}> = async (s) => {{\n{body}\n}};",
+            sym = l.lang.symbol,
+            settings = n.settings,
+            body = indent_body(&body),
+        );
+        if has_tests {
+            let swap = ext_swap_fn_name(n, field);
+            text.push_str(&format!(
+                "\n\n// {swap} swaps the extern call {field} goes through and returns the\n\
+                 // previous one; a test generated from the declared tests simulates an\n\
+                 // outcome with it and restores the real call afterwards.\n\
+                 export function {swap}(next: typeof {seam}): typeof {seam} {{\n\
+                 \x20 const prev = {seam};\n\
+                 \x20 {seam} = next;\n\
+                 \x20 return prev;\n\
+                 }}",
+                field = field.name,
+            ));
+        }
+        decls.push(Decl::raw_with(text, refs));
     }
+    decls
 }
+
+fn indent_body(body: &str) -> String {
+    body.lines()
+        .map(|line| {
+            if line.is_empty() {
+                "\n".to_string()
+            } else {
+                format!("  {line}\n")
+            }
+        })
+        .collect::<String>()
+        .trim_end_matches('\n')
+        .to_string()
+}
+
+/// The typed-error class name a declared sentinel maps to: the bare
+/// identifier the `.tono` author wrote (`overloaded`), cased through the
+/// same engine as every other generated identifier, suffixed the way every
+/// other category in the closed taxonomy is (`ContractError`,
+/// `ConfigError`, ...).
+pub(super) fn sentinel_error_class(sentinel_type: &str) -> String {
+    format!("{}Error", pascal(sentinel_type))
+}
+
+/// The generated class for one distinct sentinel-mapped type name, emitted
+/// once per module regardless of how many extern calls declare it. Rooted
+/// under the same taxonomy root as every other category, so the existing
+/// `instanceof TonoError` boundary checks still see it.
+pub(super) fn sentinel_error_decl(sentinel_type: &str, module: &Module) -> Decl {
+    let name = sentinel_error_class(sentinel_type);
+    let root = error_names().root;
+    Decl::raw_with(
+        format!(
+            "// {name} is the typed error a declared ext sentinel maps to; a\n\
+         // third-party call that throws this sentinel surfaces as this class\n\
+         // instead of the generic ContractError fallback.\n\
+         export class {name} extends {root} {{\n\
+         \x20 constructor(readonly cause: unknown) {{\n\
+         \x20   super({sentinel_type:?});\n\
+         \x20   this.name = {name:?};\n\
+         \x20 }}\n\
+         }}",
+        ),
+        vec![module_symbol(&root, module)],
+    )
+}
+
+/// [`plan::Emitter::call_assign`] for TypeScript: hands the field's own value
+/// off to the module-scoped seam ([`seam_decls`]), passing it the in-progress
+/// `Settings` draft any of the seam's own argument rendering reads sibling
+/// fields off of. `dest` is already a ready-to-use assignment target (a
+/// top-level field or a config member path), supplied by the shared plan.
+pub(super) fn call_assign(
+    _r: &mut Resolver,
+    field: &EntryField,
+    _call: &EntryCall,
+    dest: &str,
+    n: &Names,
+) -> String {
+    let seam = ext_seam_var(n, field);
+    format!("{dest} = await {seam}(s);")
+}
+
+#[cfg(test)]
+#[path = "ext_call_tests.rs"]
+mod tests;
