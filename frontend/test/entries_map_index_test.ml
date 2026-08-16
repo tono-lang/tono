@@ -73,6 +73,19 @@ let map_index_key_type_mismatch () =
         \  seg: i32 @env(\"SEG\")\n"
       ^ "  x: string = match .by_segment[.seg] { null => \"none\" _ => ._ }"))
 
+let map_index_key_unknown_field () =
+  expect "map index key names an unresolvable field" [ "TC0038" ]
+    (entry
+       (map_index_fields
+      ^ "  x: string = match .by_segment[.nope] { null => \"none\" _ => ._ }"))
+
+let map_index_on_non_map_subject () =
+  expect "'[...]' indexing a non-map subject" [ "TC0088" ]
+    (entry
+       "  v: string @env(\"V\")\n\
+       \  seg: string @env(\"SEG\")\n\
+       \  x: string = match .v[.seg] { null => \"none\" _ => ._ }")
+
 let map_index_exhaustiveness_unaffected_by_null () =
   (* A "null" arm never counts toward string/int coverage, and is checked
      separately: both diagnostics fire independently here. *)
@@ -101,6 +114,10 @@ let () =
             subject_ref_outside_match_is_unknown_field;
           Alcotest.test_case "map index key type mismatch" `Quick
             map_index_key_type_mismatch;
+          Alcotest.test_case "map index key names an unknown field" `Quick
+            map_index_key_unknown_field;
+          Alcotest.test_case "'[...]' on a non-map subject" `Quick
+            map_index_on_non_map_subject;
           Alcotest.test_case "map index exhaustiveness unaffected by null"
             `Quick map_index_exhaustiveness_unaffected_by_null;
         ] );
