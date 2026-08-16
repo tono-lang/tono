@@ -33,5 +33,6 @@
   entries_position_test
   request_value_test
   declared_tests_test
-  declared_tests_coverage_test)
+  declared_tests_coverage_test
+  syntax_vocab_test)
  (libraries tono_frontend alcotest qcheck-core qcheck-core.runner yojson))

@@ -35,5 +35,8 @@ type kind =
 
 type t = { kind : kind; span : Span.span }
 
+(* The reserved words with the token each lexes to; the lexer's own table. *)
+val keywords : (string * kind) list
+
 (* A human label for a token kind, for diagnostic messages. *)
 val describe : kind -> string

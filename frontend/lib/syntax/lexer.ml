@@ -68,18 +68,9 @@ let add_diag st severity message ~start =
     :: st.diags
 
 let classify (text : string) : Token.kind =
-  match text with
-  | "struct" -> KwStruct
-  | "enum" -> KwEnum
-  | "union" -> KwUnion
-  | "op" -> KwOp
-  | "map" -> KwMap
-  | "pub" -> KwPub
-  | "import" -> KwImport
-  | "as" -> KwAs
-  | "ext" -> KwExt
-  | "test" -> KwTest
-  | _ -> if List.mem text prims then Prim text else Ident text
+  match List.assoc_opt text Token.keywords with
+  | Some kw -> kw
+  | None -> if List.mem text prims then Prim text else Ident text
 
 (* A double-quoted single-line string with escapes. Unterminated at end of line
    or end of input, and invalid escapes, are diagnosed; scanning still yields a
