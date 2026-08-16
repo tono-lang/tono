@@ -56,12 +56,12 @@ fn a_versioned_go_module_path_still_selects_by_the_ext_lib_name() {
 fn the_appendix_module_wires_the_call_handle_and_impl_call() {
     // The exact fixture the go_ext_roundtrip integration test also `go
     // build`s against real libraries (shared via
-    // `ext_fixtures::rfc0023_appendix_module`, so the two never drift):
+    // `ext_fixtures::reference_example_module`, so the two never drift):
     // this test checks the generated Go statements directly, exercised
     // through the full `emit` pipeline so the integration with
     // `mod.rs`/`surface.rs`/`constructor.rs`/`resolve.rs` is covered too,
     // not just `ext.rs` in isolation.
-    let module = crate::codegen::targets::go::entry::ext_fixtures::rfc0023_appendix_module();
+    let module = crate::codegen::targets::go::entry::ext_fixtures::reference_example_module();
     let text = entry_text(&module);
 
     // Field-construction call: import, call, yields naming, returns

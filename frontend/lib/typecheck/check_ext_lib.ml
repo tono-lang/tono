@@ -1,5 +1,5 @@
 (* Internal-consistency typecheck for the "ext"/"extern" FFI library block
-   (RFC-0023). Two independent concerns:
+   (the ext/extern FFI library block). Two independent concerns:
 
    - Per extern, per language binding: a call: arg naming an undeclared
      logical parameter (TC0070); a ctor literal projected into a declared

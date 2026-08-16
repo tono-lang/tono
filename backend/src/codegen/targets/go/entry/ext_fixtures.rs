@@ -162,7 +162,7 @@ pub fn go_ext_lib(
 /// `codegen-tests/go-ext/fixtures/`): both need exactly this shape, so one
 /// definition serves both instead of two near-identical copies drifting
 /// apart.
-pub fn rfc0023_appendix_module() -> Module {
+pub fn reference_example_module() -> Module {
     let app_config = structure(
         "m#app_config",
         vec![
@@ -456,7 +456,7 @@ pub fn rfc0023_appendix_module() -> Module {
         operations: vec![],
         extensions: vec![],
         ext_libs: vec![companyconfig, companybus],
-        tests: rfc0023_appendix_tests(),
+        tests: reference_example_tests(),
     }
 }
 
@@ -499,7 +499,7 @@ fn config_load_stub() -> ExternStub {
 /// method the `publish` op's own `impl` body reaches. Both are hermetic: no
 /// stub answer ever calls into the real `companyconfig`/`companybus`
 /// libraries.
-fn rfc0023_appendix_tests() -> Vec<TestDecl> {
+fn reference_example_tests() -> Vec<TestDecl> {
     let construction = TestConstruction {
         binding: "c".into(),
         entry: "client".into(),
@@ -549,11 +549,11 @@ fn rfc0023_appendix_tests() -> Vec<TestDecl> {
     vec![construction_only, publishes]
 }
 
-/// [`rfc0023_appendix_module`], wrapped in a `Model`.
-pub fn rfc0023_appendix_model() -> Model {
+/// [`reference_example_module`], wrapped in a `Model`.
+pub fn reference_example_model() -> Model {
     Model {
         tono_ir_version: TONO_IR_VERSION,
-        modules: vec![rfc0023_appendix_module()],
+        modules: vec![reference_example_module()],
     }
 }
 

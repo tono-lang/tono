@@ -1,7 +1,7 @@
 open Tono_frontend
 
 (* Typecheck coverage for an op's own "impl .field.method(args)" body
-   (RFC-0023): the receiver must resolve to an entry field whose type is a
+  : the receiver must resolve to an entry field whose type is a
    declared opaque handle (TC0082), the method one of that handle's
    declared "extern" methods (TC0083), the argument count must match the
    method's declared logical parameters (TC0084), every argument ref must

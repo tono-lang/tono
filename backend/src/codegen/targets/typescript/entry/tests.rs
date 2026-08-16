@@ -62,7 +62,7 @@ fn the_constructor_body_indents_one_level_deeper_than_the_class() {
     // The plan renders at the depth its scaffold actually nests it at: Go's
     // constructor is a flat function (one level), TypeScript's is a method
     // inside a class body (two). Checked without prettier on the output (it
-    // is not installed in this environment), since RFC-0019 requires the raw
+    // is not installed in this environment), since the emitter contract requires the raw
     // emitter text to already be structurally aligned.
     let module = with_descriptors(fixture_module());
     let out = text(&module);

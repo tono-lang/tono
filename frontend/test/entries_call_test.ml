@@ -1,8 +1,8 @@
 open Tono_frontend
 
-(* The extern-call field source (RFC-0023): source-combination rules, DAG
+(* The extern-call field source: source-combination rules, DAG
    cycle detection over call-arg refs, unresolved-ref reporting, the
-   `.request` rejection (decision M), and a two-segment projection into a
+   `.request` rejection, and a two-segment projection into a
    call result. Split out of [entries_edge_test.ml] to stay under this repo's
    per-file line ceiling. *)
 

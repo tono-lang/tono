@@ -276,7 +276,7 @@ fn wire_value_expr(
 /// A Go literal for a JSON scalar; a compound literal (object/array) is
 /// unreachable here, since it would only arise nested inside a @body ctor's
 /// field value, and the frontend's ctor typecheck only accepts a reference
-/// or a scalar literal/template per field (RFC-0022 §4: zero new expressive
+/// or a scalar literal/template per field (the transport contract adds zero new expressive
 /// power).
 pub(super) fn go_json_lit(json: &serde_json::Value) -> String {
     match json {

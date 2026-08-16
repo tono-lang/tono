@@ -155,7 +155,7 @@ construction kinds (`entry` and `config`, below).
   resolved HTTP binding, see below) is present only on an operation with an
   `@http` trait; the key is omitted otherwise. `impl_call` (v15) is present
   only on an operation with its own `impl .field.method(args)` body
-  (RFC-0023): `{ "recv": ["bus"], "method": "send", "args": [ /* call
+  `{ "recv": ["bus"], "method": "send", "args": [ /* call
   arguments */ ] }`, where `recv` is the field path and `args` use the same
   call-argument encoding as an "ext" library's `call:` line (see "FFI
   library declarations" below). It is a third implementation source

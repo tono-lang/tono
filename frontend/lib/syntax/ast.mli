@@ -269,7 +269,7 @@ type test_item =
       item_span : Span.span;
     }
 
-(* An op's own "impl .field.method(args)" body (RFC-0023): the receiver
+(* An op's own "impl .field.method(args)" body: the receiver
    names an entry field (a declared opaque handle), the method one of its
    declared "extern" methods. This is a third implementation source for an
    op, alongside a protocol trait (@http) and a legacy "ext impl" binding;

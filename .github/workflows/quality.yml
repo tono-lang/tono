@@ -38,6 +38,14 @@ jobs:
       - name: Check file sizes
         run: bash scripts/check-file-size.sh
 
+  internal-doc-refs:
+    name: Internal doc references
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check for internal doc references
+        run: bash scripts/check-internal-doc-refs.sh
+
   unused-deps:
     name: Unused deps (cargo-machete)
     runs-on: ubuntu-latest
