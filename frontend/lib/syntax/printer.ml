@@ -108,7 +108,11 @@ let rec print_ty (t : Ast.ty) : string =
   | Ast.TNullable (inner, _) -> print_ty inner ^ "?"
   | Ast.TError _ -> "_"
 
-let print_ref (r : Ast.ref_path) : string = "." ^ String.concat "." r.Ast.segs
+let rec print_ref (r : Ast.ref_path) : string =
+  let base = "." ^ String.concat "." r.Ast.segs in
+  match r.Ast.index with
+  | None -> base
+  | Some idx -> base ^ "[" ^ print_ref idx ^ "]"
 
 let rec print_trait_arg (a : Ast.trait_arg) : string =
   match a with
@@ -161,6 +165,7 @@ let print_pattern (p : Ast.match_pattern) : string =
   | Ast.PInt n -> string_of_int n
   | Ast.PName n -> n
   | Ast.PWildcard -> "_"
+  | Ast.PNull -> "null"
 
 let print_arm_value (v : Ast.arm_value) : string =
   match v with
@@ -168,6 +173,7 @@ let print_arm_value (v : Ast.arm_value) : string =
   | Ast.AVString s -> string_literal s
   | Ast.AVInt n -> string_of_int n
   | Ast.AVName n -> n
+  | Ast.AVSubject _ -> "._"
   | Ast.AVSources ts -> String.concat " " (List.map (fun t -> print_trait t) ts)
 
 (* [indent] is the indentation of the line the match opens on, so the arms and

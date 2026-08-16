@@ -9,7 +9,11 @@ type ty =
   | TNullable of ty * Span.span
   | TError of Span.span
 
-type ref_path = { segs : string list; ref_span : Span.span }
+type ref_path = {
+  segs : string list;
+  index : ref_path option;
+  ref_span : Span.span;
+}
 
 type trait_arg =
   | AString of string
@@ -52,6 +56,7 @@ type match_pattern =
   | PInt of int
   | PName of string
   | PWildcard
+  | PNull
 
 type arm_value =
   | AVRef of ref_path
@@ -59,6 +64,7 @@ type arm_value =
   | AVInt of int
   | AVName of string
   | AVSources of trait list
+  | AVSubject of Span.span
 
 type match_arm = {
   pat : match_pattern;

@@ -175,7 +175,7 @@ let parse_returns_value st : Ast.returns_value =
   | _ ->
       P.error st (P.peek st).span
         "expected '.path' or 'match' as a returns field value";
-      Ast.RvRef { Ast.segs = []; ref_span = (P.peek st).span }
+      Ast.RvRef { Ast.segs = []; index = None; ref_span = (P.peek st).span }
 
 let parse_returns_field st : Ast.returns_field =
   let nt = P.peek st in

@@ -391,7 +391,11 @@ let parse_op_impl st : Ast.op_impl option =
               Some
                 {
                   Ast.oi_recv =
-                    { Ast.segs = List.map fst recv; ref_span = recv_span };
+                    {
+                      Ast.segs = List.map fst recv;
+                      index = None;
+                      ref_span = recv_span;
+                    };
                   oi_method = method_;
                   oi_method_span = method_span;
                   oi_args = args;
