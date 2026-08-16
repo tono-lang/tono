@@ -23,7 +23,7 @@ static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::go::entry::ext_fixtures::{
-    infallible_extern_model, reference_example_model,
+    composed_handles_model, infallible_extern_model, reference_example_model,
 };
 use tono_backend::codegen::targets::go::types::go_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
@@ -203,6 +203,140 @@ fn the_rfc_appendix_declared_tests_pass_hermetically() {
     assert!(
         out.contains("PASS"),
         "expected at least one passing test:\n{out}"
+    );
+}
+
+const COMPOSE_GO_MOD_DEPS: &str = "require tono-ext-fixture/compose v0.0.0\n\n\
+     replace tono-ext-fixture/compose => ../fixtures/compose\n";
+
+/// A field-typed handle passed as another extern call's own argument
+/// (`new_combined(.b, .primary, .secondary)`), plus the same handle type
+/// injected via `@arg` instead of constructed: two paths the appendix
+/// fixture above never compiled. Before the fix this failed three
+/// independent ways: `codec.go` referenced the library package without
+/// importing it (the adapter's own `real` field), `client.go` imported it
+/// without using it (the storage-typed positions never needed the import),
+/// the generated constructor named an undefined type instead of the
+/// storage interface, and the sibling `primary`/`secondary` arguments
+/// passed tono's own adapter into `NewCombined` instead of the real
+/// `*compose.Resource` value it declares.
+#[test]
+fn a_composed_and_an_injected_handle_both_build() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
+        return;
+    }
+    if !have("go", "version") || !have("gofmt", "-h") {
+        eprintln!("skipping: Go toolchain (go/gofmt) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk(&composed_handles_model(), COMPOSE_GO_MOD_DEPS);
+    let build = Command::new("go")
+        .arg("build")
+        .arg("./...")
+        .current_dir(&dir)
+        .output()
+        .expect("run go build");
+    assert!(
+        build.status.success(),
+        "generated Go failed to build:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+/// `go build` alone proves the *shape* compiles, not that it runs safely: an
+/// `@arg`-injected handle holds whatever the caller supplied, which is not
+/// guaranteed to be tono's own generated adapter (a hermetic test's fake,
+/// most obviously). Before the unwrap in `sibling_path_expr` was gated to
+/// constructed fields only, `New` compiled fine but a non-adapter `injected`
+/// value panicked the first time any *sibling* field's construction call
+/// tried to unwrap it — this only happens to a *different* field than the
+/// one holding the fake, so a build-only proof can never catch it. This test
+/// hand-authors exactly such a fake, passes it as `injected`, and drives
+/// both the injected and the fully-composed op through a real `go test` run.
+#[test]
+fn an_injected_fake_handle_runs_without_panicking() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
+        return;
+    }
+    if !have("go", "version") || !have("gofmt", "-h") {
+        eprintln!("skipping: Go toolchain (go/gofmt) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk(&composed_handles_model(), COMPOSE_GO_MOD_DEPS);
+    let test_go = dir.join("go/t/injected_fake_test.go");
+    std::fs::write(
+        &test_go,
+        r#"package t
+
+import (
+	"context"
+	"testing"
+)
+
+// fakeResource is authored by an SDK consumer, never by tono: it satisfies
+// the generated interface structurally, without embedding tono's own
+// unexported adapter type, exactly the shape an unconditional type
+// assertion in a sibling field's construction call used to panic on.
+type fakeResource struct{ data string }
+
+func (f fakeResource) Get() (Value, error) { return Value{Data: f.data}, nil }
+
+func TestInjectedFakeHandleRunsWithoutTheRealLibrary(t *testing.T) {
+	c, err := New("a", "b", "c", "d", fakeResource{data: "fake-value"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	injected, err := c.InjectedValue(context.Background())
+	if err != nil {
+		t.Fatalf("InjectedValue: %v", err)
+	}
+	if injected.Data != "fake-value" {
+		t.Fatalf("InjectedValue: got %q, want %q", injected.Data, "fake-value")
+	}
+
+	// The composed op reads sibling fields (`primary`/`secondary`) that
+	// were actually constructed against the real library, not the fake
+	// standing in for `injected`: this is what used to panic, since the
+	// old unconditional unwrap did not distinguish the two.
+	combined, err := c.CombinedValue(context.Background())
+	if err != nil {
+		t.Fatalf("CombinedValue: %v", err)
+	}
+	if combined.Data == "" {
+		t.Fatalf("CombinedValue: expected a value from the real composed chain")
+	}
+}
+"#,
+    )
+    .unwrap();
+
+    let test = Command::new("go")
+        .arg("test")
+        .arg("./...")
+        .arg("-run")
+        .arg("TestInjectedFakeHandleRunsWithoutTheRealLibrary")
+        .arg("-v")
+        .current_dir(&dir)
+        .output()
+        .expect("run go test");
+    std::fs::remove_file(&test_go).unwrap();
+    assert!(
+        test.status.success(),
+        "the injected fake handle must run without panicking:\n{}\n{}",
+        String::from_utf8_lossy(&test.stdout),
+        String::from_utf8_lossy(&test.stderr)
+    );
+    let out = String::from_utf8_lossy(&test.stdout);
+    assert!(
+        !out.contains("panic:"),
+        "expected no panic, got:\n{out}\n{}",
+        String::from_utf8_lossy(&test.stderr)
     );
 }
 

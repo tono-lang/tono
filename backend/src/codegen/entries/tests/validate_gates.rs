@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::codegen::output::TargetKind;
-use crate::ir::WireValue;
+use crate::ir::{
+    CallArg, CallCtor, EntryCall, ExtLib, ExternDecl, ExternLang, OpaqueType, WireValue,
+};
 
 #[test]
 fn validation_rejects_the_cases_no_layer_would_diagnose() {
@@ -390,4 +392,138 @@ fn a_target_that_cannot_emit_an_extern_handle_call_is_named_and_refused() {
     );
     let err = validate_entries(&m, &[TargetKind::Go, TargetKind::Rust]).unwrap_err();
     assert!(err.contains("rust cannot emit that call yet"), "{err}");
+}
+
+/// A handle lib declaring one opaque type and one free constructor that
+/// returns it, so a field can either construct the handle (`field.call`) or
+/// be injected as one (`@arg`, no `call`).
+fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLib {
+    ExtLib {
+        name: lib.into(),
+        langs: vec![],
+        structs: vec![],
+        types: vec![OpaqueType {
+            name: handle.into(),
+            methods: vec![],
+        }],
+        externs: vec![ExternDecl {
+            name: ctor.into(),
+            params: vec![],
+            r#return: Tref::Ref {
+                id: format!("{lib}#{handle}"),
+                args: vec![],
+            },
+            langs: vec![ExternLang {
+                lang: "go".into(),
+                symbol: "Make".into(),
+                call_args: vec![],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: false,
+                infallible: false,
+            }],
+        }],
+    }
+}
+
+fn handle_field(name: &str, lib: &str, handle: &str, sources: Vec<Source>) -> EntryField {
+    let mut f = field(name, sources);
+    f.target = Tref::Ref {
+        id: format!("{lib}#{handle}"),
+        args: vec![],
+    };
+    f
+}
+
+fn call_ref(path: &[&str]) -> CallArg {
+    CallArg::Ref(path.iter().map(|s| (*s).to_string()).collect())
+}
+
+/// A two-field entry (`source`, plus `combined` whose own construction call
+/// forwards `combined_args`) over the shared `lib#handle` fixture: every
+/// case below differs only in `source`'s own sourcing and in how the
+/// forwarding argument nests a `Ref` to it, so this is the one place that
+/// shape is spelled out.
+fn model_with_forwarding_call(source: EntryField, combined_args: Vec<CallArg>) -> crate::ir::Model {
+    let mut combined = handle_field("combined", "lib", "handle", vec![]);
+    combined.call = Some(EntryCall {
+        ns: "lib".into(),
+        func: "make".into(),
+        args: combined_args,
+    });
+    let mut m = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module_of(vec![entry_shape(
+            "m#client",
+            vec![source, combined],
+        )])],
+    };
+    m.modules[0].ext_libs = vec![ext_lib_with_handle_constructor("lib", "handle", "make")];
+    m
+}
+
+fn injected_source() -> EntryField {
+    handle_field("injected", "lib", "handle", vec![Source::Arg])
+}
+
+/// An `@arg`-injected handle field (`injected`, no `call` of its own) passed
+/// as another field's own construction-call argument (`combined`'s
+/// `make(.injected)`): rejected up front, naming the injected field and the
+/// call it was forwarded into, rather than reaching a target's emitter
+/// (which would either unwrap an unchecked type assertion that panics at
+/// runtime on a caller-supplied value, or leave a plain interface reference
+/// that fails `go build` on a type the author never wrote).
+#[test]
+fn an_injected_handle_forwarded_into_another_call_is_named_and_refused() {
+    let m = model_with_forwarding_call(injected_source(), vec![call_ref(&["injected"])]);
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("combined"), "{err}");
+    assert!(err.contains("injected"), "{err}");
+    assert!(err.contains("lib.make(..)"), "{err}");
+}
+
+/// The same shape, but `combined` forwards a sibling handle field this
+/// generator itself constructed (`primary.call` is `Some`, not injected):
+/// the guard only fires on an injected source, so a fully-constructed chain
+/// still validates.
+#[test]
+fn a_constructed_handle_forwarded_into_another_call_still_validates() {
+    let mut primary = handle_field("primary", "lib", "handle", vec![]);
+    primary.call = Some(EntryCall {
+        ns: "lib".into(),
+        func: "make".into(),
+        args: vec![],
+    });
+    let m = model_with_forwarding_call(primary, vec![call_ref(&["primary"])]);
+    assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
+}
+
+/// The same injected-handle-forwarded shape, but the `Ref` reaches the
+/// injected field nested inside a struct-literal argument (`opts { x:
+/// .injected }`) rather than as a call argument directly: `ref_paths` must
+/// recurse into a `Ctor`'s own fields, not just walk the call's top-level
+/// argument list.
+#[test]
+fn an_injected_handle_nested_in_a_ctor_argument_is_still_refused() {
+    let ctor_arg = CallArg::Ctor(CallCtor {
+        name: "opts".into(),
+        fields: std::collections::BTreeMap::from([("x".to_string(), call_ref(&["injected"]))]),
+    });
+    let m = model_with_forwarding_call(injected_source(), vec![ctor_arg]);
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("combined"), "{err}");
+    assert!(err.contains("injected"), "{err}");
+}
+
+/// Same shape again, but the `Ref` reaches the injected field nested inside
+/// a `List` argument: `ref_paths` must recurse into a `List`'s own items
+/// too, not just a `Ctor`'s fields.
+#[test]
+fn an_injected_handle_nested_in_a_list_argument_is_still_refused() {
+    let list_arg = CallArg::List(vec![call_ref(&["injected"])]);
+    let m = model_with_forwarding_call(injected_source(), vec![list_arg]);
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("combined"), "{err}");
+    assert!(err.contains("injected"), "{err}");
 }

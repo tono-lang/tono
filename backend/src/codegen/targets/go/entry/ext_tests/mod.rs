@@ -392,3 +392,4 @@ fn declared_error_literal_is_a_zero_value_without_a_message_member() {
 }
 
 mod calls;
+mod composed_handles;

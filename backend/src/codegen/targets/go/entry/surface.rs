@@ -135,12 +135,21 @@ pub(super) fn option_decls(
             // generated interface directly (its methods return the foreign
             // package's own types, not the logical ones the interface
             // declares), so it is wrapped in the matching adapter, exactly
-            // like the field's own real construction call is.
-            Some((lib, type_name)) => format!(
-                "w.{member} = &{adapter}{{real: v}}",
-                member = camel(&f.name),
-                adapter = ext::handle_adapter_ident(&lib.name, &type_name),
-            ),
+            // like the field's own real construction call is. The setter's
+            // own parameter spells the real concrete type (unlike the
+            // carrier field it feeds), so it needs the library's own import,
+            // which the storage-typed `push_field_type_symbols` above never
+            // pulls in.
+            Some((lib, type_name)) => {
+                if let Some(sym) = ext::handle_symbol(lib) {
+                    option_refs.push(sym);
+                }
+                format!(
+                    "w.{member} = &{adapter}{{real: v}}",
+                    member = camel(&f.name),
+                    adapter = ext::handle_adapter_ident(&lib.name, &type_name),
+                )
+            }
             None => format!("w.{member} = &v", member = camel(&f.name)),
         };
         decls.push(Decl::raw_with(

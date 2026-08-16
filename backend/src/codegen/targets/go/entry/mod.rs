@@ -176,14 +176,15 @@ pub(super) fn field_go_type_storage(t: &Tref, module: &Module) -> String {
     go_type(t)
 }
 
-/// [`push_type_symbols`], but for an entry field's own declared type: a
-/// foreign opaque handle pulls its `ext` block's Go import
-/// instead of trying to resolve as an in-module reference.
+/// [`push_type_symbols`], but for an entry field's own declared type at a
+/// *storage* position (Settings field, `@with` carrier, `@arg` param): a
+/// foreign opaque handle spells as tono's own generated interface there
+/// ([`field_go_type_storage`]), which is a local type, so nothing to
+/// import. A position that spells the real concrete type instead (a `With*`
+/// setter's own parameter) pulls the `ext` block's Go import itself, via
+/// [`ext::handle_symbol`], rather than through this helper.
 fn push_field_type_symbols(t: &Tref, module: &Module, refs: &mut Vec<Symbol>) {
-    if let Some((lib, _)) = ext::foreign_handle(t, module) {
-        if let Some(sym) = ext::handle_symbol(lib) {
-            refs.push(sym);
-        }
+    if ext::foreign_handle(t, module).is_some() {
         return;
     }
     push_type_symbols(t, refs);

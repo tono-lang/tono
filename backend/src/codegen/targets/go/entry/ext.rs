@@ -39,6 +39,27 @@ use super::{
 /// scope): the head honors `@rename(go)` unless it is itself a foreign
 /// handle (unexported regardless), every later segment is a plain member
 /// access into whatever that field resolved to.
+///
+/// Every use of this function feeds a real foreign call's own argument list
+/// (a field's own construction call, `build_call` in [`call_assign`]), never
+/// a tono-facing position. So when the referenced field is itself a foreign
+/// handle *this generator itself constructed* (`field.call` ran the real
+/// construction call and stored its result through [`call_assign`]'s own
+/// adapter wrap), the stored value is unwrapped back to the real value the
+/// foreign function actually declares its parameter as: the adapter exists
+/// for the tono/library boundary, not for one foreign call feeding another.
+///
+/// A handle field with no `call` (`@arg`/`@with`) holds whatever the caller
+/// supplied to satisfy the interface, which is not guaranteed to be this
+/// generator's own adapter type: unwrapping it the same way would be an
+/// unchecked type assertion that panics at runtime on any other conforming
+/// value (a hermetic test's fake, most obviously). Passing such a field into
+/// another foreign call is rejected up front, at generation time, by
+/// `entries::validate::injected_handle_forwarded_to_another_call` (naming
+/// both fields and the call), so this function never actually runs against
+/// that combination; the interface value is still read as-is here rather
+/// than unwrapped, so a bypass of that gate (hand-fed IR, a future caller of
+/// this function) fails `go build` instead of panicking.
 pub(super) fn sibling_path_expr(
     entry: &EntryModel<'_>,
     module: &Module,
@@ -46,12 +67,33 @@ pub(super) fn sibling_path_expr(
     path: &[String],
 ) -> String {
     let mut out = "s".to_string();
+    let mut head_handle = None;
     for (i, seg) in path.iter().enumerate() {
         out.push('.');
         if i == 0 {
             out.push_str(&entry_field_ident(entry, module, config, seg));
+            head_handle = entry
+                .fields
+                .iter()
+                .find(|f| f.name == *seg && f.call.is_some())
+                .and_then(|f| foreign_handle(&f.target, module));
         } else {
             out.push_str(&field_pascal(seg, config));
+        }
+    }
+    // A handle is opaque (it declares methods, never members), so a
+    // multi-segment path can never resolve through one: `tono check` rejects
+    // `.handle.member` before this ever runs. Asserted rather than silently
+    // falling through to the unwrapped spelling, which would hand the
+    // adapter to whatever segment follows instead of failing loudly.
+    debug_assert!(
+        head_handle.is_none() || path.len() == 1,
+        "a foreign handle field cannot have a member path: {path:?}"
+    );
+    if path.len() == 1 {
+        if let Some((lib, type_name)) = head_handle {
+            let adapter = handle_adapter_ident(&lib.name, &type_name);
+            return format!("{out}.(*{adapter}).real");
         }
     }
     out
