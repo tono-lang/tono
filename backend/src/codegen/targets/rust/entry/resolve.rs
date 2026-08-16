@@ -24,6 +24,12 @@ use super::*;
 use crate::codegen::entries::plan::{Cond, Emitter, Leaf};
 use crate::ir::{EntryCall, EnvName};
 
+/// The local variable a map-indexed match binds, scoped to the field driving
+/// the match so two map matches in the same body never collide.
+fn map_index_var(bound: &str) -> String {
+    snake(&format!("{bound}_v"))
+}
+
 /// The Rust resolution emitter: holds the entry model and flags the shared
 /// on-demand helpers the leaves use. `body` receives the rendered plan for
 /// each field; `refs` collects the `Symbol` for every SDK-root resolution
@@ -331,6 +337,25 @@ impl Emitter for Resolver<'_, '_> {
 
     fn field_guaranteed(&self, name: &str) -> bool {
         self.entry.field_guaranteed(name)
+    }
+
+    /// `HashMap::get` gives `Option<&V>`: `None` is the only spelling of
+    /// "not there", so a stored empty-string value and a missing key can
+    /// never be confused the way a bare zero-value check would confuse them.
+    fn map_index_bind(&mut self, path: &[String], key_expr: &str, bound: &str) -> Leaf {
+        Leaf(format!(
+            "let {} = {}.get(&{key_expr});",
+            map_index_var(bound),
+            self.path_expr(path),
+        ))
+    }
+
+    fn map_index_present_cond(&self, bound: &str) -> Cond {
+        Cond(format!("{}.is_some()", map_index_var(bound)))
+    }
+
+    fn map_index_value_expr(&self, bound: &str) -> String {
+        format!("{}.unwrap()", map_index_var(bound))
     }
 
     fn config_open(&mut self, field: &EntryField, _shape: &Shape) -> Leaf {

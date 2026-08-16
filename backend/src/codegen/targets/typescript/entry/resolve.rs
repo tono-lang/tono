@@ -12,6 +12,12 @@ use super::checks::*;
 use super::*;
 use crate::codegen::entries::plan::{self, Cond, Emitter, Leaf};
 
+/// The local variable a map-indexed match binds, scoped to the field driving
+/// the match so two map matches in the same body never collide.
+fn map_index_var(bound: &str, config: &CasingConfig) -> String {
+    field_camel(&format!("{bound}_v"), config)
+}
+
 /// The TypeScript resolution emitter: holds the entry model and flags the
 /// shared helpers the leaves use. `body` receives the rendered plan per field.
 /// `resolve_fns` collects each top-level field's standalone resolver function
@@ -450,6 +456,29 @@ impl Emitter for Resolver<'_, '_> {
 
     fn pattern_lit(&self, pattern: &serde_json::Value) -> String {
         pattern_literal(pattern)
+    }
+
+    /// A generated map is a plain object (`Record<K, V>`), so indexing it
+    /// misses to JavaScript's own `undefined` regardless of the value type;
+    /// an empty-string value and a missing key never read the same, which is
+    /// exactly what `!== undefined` (never a truthiness check) preserves.
+    fn map_index_bind(&mut self, path: &[String], key_expr: &str, bound: &str) -> Leaf {
+        Leaf(format!(
+            "const {} = {}[{key_expr}];",
+            map_index_var(bound, self.config),
+            self.path_expr(path),
+        ))
+    }
+
+    fn map_index_present_cond(&self, bound: &str) -> Cond {
+        Cond(format!(
+            "{} !== undefined",
+            map_index_var(bound, self.config)
+        ))
+    }
+
+    fn map_index_value_expr(&self, bound: &str) -> String {
+        map_index_var(bound, self.config)
     }
 
     /// Every enum is open, so an undeclared value can still arrive at run time

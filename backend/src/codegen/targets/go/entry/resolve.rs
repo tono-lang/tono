@@ -56,6 +56,16 @@ impl FieldOverride {
     }
 }
 
+/// The local variable names a map-indexed match binds: the looked-up value
+/// and its comma-ok flag, both scoped to the field driving the match so two
+/// map matches in the same body never collide.
+fn map_index_val(bound: &str) -> String {
+    camel(&format!("{bound}_v"))
+}
+fn map_index_ok(bound: &str) -> String {
+    camel(&format!("{bound}_ok"))
+}
+
 impl Resolver<'_, '_> {
     fn import(&mut self, name: &str, module: &str) {
         self.refs.push(import(name, module));
@@ -500,6 +510,26 @@ impl Emitter for Resolver<'_, '_> {
 
     fn pattern_lit(&self, pattern: &serde_json::Value) -> String {
         pattern_literal(pattern)
+    }
+
+    /// Go's native comma-ok map read: the only idiom that keeps a missing key
+    /// distinct from the value type's own zero (an empty string reads the
+    /// same whether it was stored or never there, so `ok` is load-bearing).
+    fn map_index_bind(&mut self, path: &[String], key_expr: &str, bound: &str) -> Leaf {
+        Leaf(format!(
+            "{}, {} := {}[{key_expr}]",
+            map_index_val(bound),
+            map_index_ok(bound),
+            self.path_expr(path),
+        ))
+    }
+
+    fn map_index_present_cond(&self, bound: &str) -> Cond {
+        Cond(map_index_ok(bound))
+    }
+
+    fn map_index_value_expr(&self, bound: &str) -> String {
+        map_index_val(bound)
     }
 
     /// Every enum is open, so an undeclared value can still arrive at run time

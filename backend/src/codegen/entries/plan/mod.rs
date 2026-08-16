@@ -547,6 +547,22 @@ pub trait Emitter {
         subject_expr: &str,
         guaranteed: bool,
     ) -> Leaf;
+
+    // --- map-indexed match subject (".cfg.by_segment[.seg]"): indexing a map
+    //     can always miss, so this is the two-state (present/absent) idiom
+    //     every target already has for an optional value, not a switch case.
+    //     No target's zero value may stand in for a miss here. ---
+    /// Declares the lookup binding for a map-indexed subject: `path` is the
+    /// map field's own path, `key_expr` the already-spelled key expression,
+    /// `bound` the field driving the local variable's naming. Relative to
+    /// column zero.
+    fn map_index_bind(&mut self, path: &[String], key_expr: &str, bound: &str) -> Leaf;
+    /// The condition testing the binding's presence (Go's `ok`, Rust's
+    /// `Some(..)`, TypeScript's `!== undefined`).
+    fn map_index_present_cond(&self, bound: &str) -> Cond;
+    /// The already-bound present value's read expression, narrowed non-optional
+    /// (what '._' reads inside a non-null arm, instead of re-indexing the map).
+    fn map_index_value_expr(&self, bound: &str) -> String;
 }
 
 /// A blank line between two logical sections of a generated body, skipped when
