@@ -193,6 +193,9 @@ fn arm_value_expr(yields_name: &str, value: &ArmValue) -> String {
         ArmValue::Sources(_) => {
             unreachable!("a returns: match arm cannot bind a declared-source chain")
         }
+        ArmValue::Subject => {
+            unreachable!("a returns: match arm cannot bind the entry-field match subject")
+        }
     }
 }
 

@@ -303,6 +303,7 @@ fn changing_a_format_template_or_a_transform_pipeline_is_behavioral() {
 #[test]
 fn changing_a_selection_table_is_behavioral() {
     let table = |arm: &str| Select {
+        subject_index: None,
         subject: vec!["version".into()],
         arms: vec![SelectArm {
             pattern: Some(json!(arm)),

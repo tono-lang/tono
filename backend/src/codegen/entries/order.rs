@@ -67,6 +67,8 @@ fn own_dep_heads(field: &EntryField) -> Vec<&str> {
                     }
                 }
                 ArmValue::Lit(_) => {}
+                // Names the subject itself, already added above.
+                ArmValue::Subject => {}
             }
         }
     }

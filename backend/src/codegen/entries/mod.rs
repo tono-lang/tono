@@ -392,6 +392,10 @@ impl<'a> EntryModel<'a> {
                     ArmValue::Lit(_) => true,
                     ArmValue::Field(p) => path_guaranteed(p, visiting),
                     ArmValue::Sources(sources) => sources_guaranteed(sources),
+                    // Guaranteed exactly when the subject itself is (already
+                    // required by the `path_guaranteed(&select.subject, ..)`
+                    // conjunct above).
+                    ArmValue::Subject => true,
                 })
         } else if let Some(format) = &field.format {
             format.iter().all(|part| match part {

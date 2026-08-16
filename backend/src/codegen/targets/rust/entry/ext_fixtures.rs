@@ -165,6 +165,7 @@ pub fn rust_ext_fixture_model() -> Model {
                             name: "endpoint".into(),
                             value: ReturnsValue::Select(Select {
                                 subject: strings(&["cfg", "env"]),
+                                subject_index: None,
                                 arms: vec![
                                     SelectArm {
                                         pattern: Some(serde_json::json!("prod")),

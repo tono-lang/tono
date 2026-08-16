@@ -340,6 +340,7 @@ pub fn reference_example_module() -> Module {
                         name: "endpoint".into(),
                         value: ReturnsValue::Select(Select {
                             subject: vec!["cfg".into(), "Env".into()],
+                            subject_index: None,
                             arms: vec![
                                 SelectArm {
                                     pattern: Some(serde_json::json!("prod")),

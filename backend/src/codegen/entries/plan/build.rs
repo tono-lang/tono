@@ -618,6 +618,31 @@ fn build_arm(
                 chain_sequential(&stub, e, dest, &field.name)
             }
         }
+        // "._": the same path the switch already dispatches on, read back
+        // out. The subject is present by construction in every non-null
+        // arm (the null arm is handled separately, before this function is
+        // reached for the rest), so this follows the same guaranteed/deferred
+        // shape as an ordinary field reference to that path.
+        ArmValue::Subject => {
+            let path = field
+                .select
+                .as_ref()
+                .map(|s| s.subject.clone())
+                .unwrap_or_default();
+            let head = path.first().cloned().unwrap_or_default();
+            let expr = e.path_read(&path);
+            if entry.field_guaranteed(&head) {
+                Stmt::Leaf(e.assign_expr(dest, &expr))
+            } else {
+                Stmt::If {
+                    arms: vec![(
+                        e.cond_err_present(&head),
+                        Stmt::Leaf(e.wrap_from(&field.name, &head)),
+                    )],
+                    otherwise: Some(Box::new(Stmt::Leaf(e.assign_expr(dest, &expr)))),
+                }
+            }
+        }
     }
 }
 
@@ -650,6 +675,26 @@ fn build_member_arm(
         ArmValue::Sources(sources) => Stmt::Leaf(Leaf(
             e.chain_guaranteed(&arm_sources(member, sources), dest),
         )),
+        ArmValue::Subject => {
+            let path = member
+                .select
+                .as_ref()
+                .map(|s| s.subject.clone())
+                .unwrap_or_default();
+            let head = path.first().cloned().unwrap_or_default();
+            let expr = e.path_read(&path);
+            if entry.field_guaranteed(&head) {
+                Stmt::Leaf(e.assign_expr(dest, &expr))
+            } else {
+                Stmt::If {
+                    arms: vec![(
+                        e.cond_err_absent(&head),
+                        Stmt::Leaf(e.assign_expr(dest, &expr)),
+                    )],
+                    otherwise: None,
+                }
+            }
+        }
     }
 }
 

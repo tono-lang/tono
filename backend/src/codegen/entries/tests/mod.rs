@@ -54,6 +54,7 @@ fn fields_order_by_resolution_dependencies_keeping_declaration_order() {
     // by naming_field; naming_field formats from base.
     let mut endpoint = field("endpoint", vec![]);
     endpoint.select = Some(Select {
+        subject_index: None,
         subject: vec!["version".into()],
         arms: vec![
             SelectArm {
@@ -378,6 +379,7 @@ fn an_env_ref_inside_a_match_arm_is_a_resolution_edge() {
     // resolve before the selecting field.
     let mut selector = field("selector", vec![]);
     selector.select = Some(Select {
+        subject_index: None,
         subject: vec!["version".into()],
         arms: vec![
             SelectArm {

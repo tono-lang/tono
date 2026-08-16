@@ -166,6 +166,10 @@ fn select_expr(select: &Select) -> String {
             // to the subject itself keeps the arm total without inventing a
             // resolution the grammar does not give this leaf enough to spell.
             ArmValue::Sources(_) => subject.clone(),
+            // A `returns:` match arm has no entry-field subject to narrow
+            // here (only the foreign yields binding); falling back to the
+            // subject text keeps the arm total, same as `Sources` above.
+            ArmValue::Subject => subject.clone(),
         };
         match &arm.pattern {
             // A match arm's pattern position takes a bare literal, not an
@@ -564,6 +568,7 @@ mod tests {
     #[test]
     fn select_expr_covers_a_field_arm_a_sources_arm_and_the_synthesized_default() {
         let select = Select {
+            subject_index: None,
             subject: vec!["cfg".into(), "env".into()],
             arms: vec![
                 SelectArm {

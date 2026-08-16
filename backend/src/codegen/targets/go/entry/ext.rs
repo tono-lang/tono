@@ -346,6 +346,10 @@ pub(super) fn returns_expr(
                         // arm: only a literal or a yields-bound reference.
                         // Unreachable through `tono check`.
                         ArmValue::Sources(_) => "nil".to_string(),
+                        // Same reasoning as `Sources` above: a `returns:`
+                        // match arm has no entry-field subject to narrow
+                        // here, only the foreign yields binding.
+                        ArmValue::Subject => "nil".to_string(),
                     };
                     match &arm.pattern {
                         Some(p) => pre
