@@ -624,12 +624,8 @@ impl ClientBuilder {
                 by_segment_err = labels_err.as_ref().map(|e| ConfigError { message: format!("labels <- {}", e.message) });
             } else {
                 let by_segment_v = s.labels.get(&s.seg);
-                if by_segment_v.is_some() {
-                    match (by_segment_v.unwrap()).to_string().as_str() {
-                    _ => {
-                        s.by_segment = (by_segment_v.unwrap()).clone();
-                    }
-                    }
+                if let Some(by_segment_v) = by_segment_v {
+                    s.by_segment = (by_segment_v).clone();
                 } else {
                     if endpoint_err.is_some() {
                         by_segment_err = endpoint_err.as_ref().map(|e| ConfigError { message: format!("endpoint <- {}", e.message) });

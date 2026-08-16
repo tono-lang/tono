@@ -350,12 +350,17 @@ impl Emitter for Resolver<'_, '_> {
         ))
     }
 
+    /// Shadows the bound `Option<&V>` with its unwrapped payload: idiomatic
+    /// `if let`, not an `is_some()`/`unwrap()` pair a linter would flag as
+    /// redundant (the switch that follows can only run once the binding is
+    /// already known `Some`).
     fn map_index_present_cond(&self, bound: &str) -> Cond {
-        Cond(format!("{}.is_some()", map_index_var(bound)))
+        let var = map_index_var(bound);
+        Cond(format!("let Some({var}) = {var}"))
     }
 
     fn map_index_value_expr(&self, bound: &str) -> String {
-        format!("{}.unwrap()", map_index_var(bound))
+        map_index_var(bound)
     }
 
     fn config_open(&mut self, field: &EntryField, _shape: &Shape) -> Leaf {

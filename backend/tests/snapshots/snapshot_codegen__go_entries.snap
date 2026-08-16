@@ -633,10 +633,7 @@ func New(apiKey string, seg string, opts ...ClientOption) (*Client, error) {
 	} else {
 		bySegmentV, bySegmentOk := s.Labels[s.Seg]
 		if bySegmentOk {
-			switch bySegmentV {
-			default:
-				s.BySegment = bySegmentV
-			}
+			s.BySegment = bySegmentV
 		} else {
 			if endpointErr != nil {
 				bySegmentErr = &ConfigError{Message: "endpoint <- " + endpointErr.Error(), Cause: endpointErr}

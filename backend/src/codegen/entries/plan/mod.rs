@@ -20,6 +20,8 @@ use super::{module_entries, source_stub, EntryModel};
 mod build;
 pub use build::{build_field, build_requires, presence_kind, Presence};
 
+mod select;
+
 mod dedup;
 pub use dedup::{
     arm_value_head, decode_cascade, decode_opening, env_parts, is_written_never_read, nest,

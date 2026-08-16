@@ -519,12 +519,7 @@ export class Client {
     } else {
       const bySegmentV = s.labels[s.seg];
       if (bySegmentV !== undefined) {
-        switch (bySegmentV) {
-        default: {
-          s.bySegment = bySegmentV;
-          break;
-        }
-        }
+        s.bySegment = bySegmentV;
       } else {
         if (endpointErr !== undefined) {
           bySegmentErr = new ConfigError(`endpoint <- ${endpointErr.message}`, endpointErr);

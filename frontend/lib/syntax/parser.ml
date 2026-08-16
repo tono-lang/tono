@@ -264,6 +264,15 @@ let parse_union st ~pub ~dtraits : Ast.decl =
 (* case ::= name ("=" int)? trait*  — the name token is already consumed and
    passed in, so the only caller that reaches here had an identifier in hand. *)
 let parse_enum_case st ~name ~name_span : Ast.enum_case =
+  (* A case named 'null' would be unreachable as a match pattern: the match
+     parser treats a bare 'null' token as the optional-subject absence
+     pattern regardless of the enum it matches, so a case with this name
+     could never be selected. Reject it at the declaration site instead of
+     silently reinterpreting the pattern later. *)
+  if String.equal name "null" then
+    P.error st name_span
+      "'null' is reserved for the optional-subject absence pattern in a match; \
+       an enum case cannot be named 'null'";
   (* A payload here means the author wanted a union; diagnose and skip it. *)
   (match (P.peek st).kind with
   | Token.LParen ->
