@@ -138,6 +138,47 @@ fn entries_module() -> tono_backend::ir::Module {
                 constraints: vec![],
                 traits: vec![],
             });
+            // The map-index match scenario: `by_segment: string = match
+            // .labels[.seg] { null => .endpoint, _ => ._ }`. `labels` and
+            // `endpoint` are the fixture's own existing fields (a map and a
+            // guaranteed string); `seg` is the index key.
+            fields.push(tono_backend::ir::EntryField {
+                name: "seg".into(),
+                target: tono_backend::ir::Tref::Prim(tono_backend::ir::Prim::String),
+                sources: vec![tono_backend::ir::Source::Arg],
+                format: None,
+                transforms: vec![],
+                select: None,
+                call: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
+            fields.push(tono_backend::ir::EntryField {
+                name: "by_segment".into(),
+                target: tono_backend::ir::Tref::Prim(tono_backend::ir::Prim::String),
+                sources: vec![],
+                format: None,
+                transforms: vec![],
+                select: Some(tono_backend::ir::Select {
+                    subject: vec!["labels".into()],
+                    subject_index: Some(vec!["seg".into()]),
+                    arms: vec![
+                        tono_backend::ir::SelectArm {
+                            pattern: Some(serde_json::json!({"null": true})),
+                            value: tono_backend::ir::ArmValue::Field(vec!["endpoint".into()]),
+                        },
+                        tono_backend::ir::SelectArm {
+                            pattern: None,
+                            value: tono_backend::ir::ArmValue::Subject,
+                        },
+                    ],
+                }),
+                call: None,
+                binds: vec![],
+                constraints: vec![],
+                traits: vec![],
+            });
         }
     }
     for shape in &mut module.shapes {
