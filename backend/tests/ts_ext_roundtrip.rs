@@ -145,6 +145,7 @@ fn appendix_model() -> Model {
                     r#type: "overloaded".into(),
                 }],
                 sync: false,
+                infallible: false,
             }],
         }],
     };
@@ -186,6 +187,7 @@ fn appendix_model() -> Model {
                 returns: None,
                 errors: vec![],
                 sync: false,
+                infallible: false,
             }],
         }],
     };

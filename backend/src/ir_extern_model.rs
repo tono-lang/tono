@@ -224,6 +224,12 @@ pub struct ExternLang {
     pub errors: Vec<ErrorBinding>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub sync: bool,
+    /// No error return (Go's own convention makes every call fallible by
+    /// default, `(value, error)`; this opts a single-return foreign function
+    /// like `uuid.NewString() string` out of that shape). Only Go's emitter
+    /// reads it, the same way only Rust's reads `sync`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub infallible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -399,6 +405,7 @@ mod tests {
             returns: None,
             errors: vec![],
             sync: false,
+            infallible: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(!json.contains("sync"));
@@ -416,9 +423,46 @@ mod tests {
             returns: None,
             errors: vec![],
             sync: true,
+            infallible: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(json.contains(r#""sync":true"#));
+        let back: ExternLang = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, lang);
+    }
+
+    #[test]
+    fn extern_lang_infallible_omits_the_flag_when_false() {
+        let lang = ExternLang {
+            lang: "go".into(),
+            symbol: "NewString".into(),
+            call_args: vec![],
+            yields: vec![],
+            returns: None,
+            errors: vec![],
+            sync: false,
+            infallible: false,
+        };
+        let json = serde_json::to_string(&lang).unwrap();
+        assert!(!json.contains("infallible"));
+        let back: ExternLang = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, lang);
+    }
+
+    #[test]
+    fn extern_lang_infallible_serializes_true_and_round_trips() {
+        let lang = ExternLang {
+            lang: "go".into(),
+            symbol: "NewString".into(),
+            call_args: vec![],
+            yields: vec![],
+            returns: None,
+            errors: vec![],
+            sync: false,
+            infallible: true,
+        };
+        let json = serde_json::to_string(&lang).unwrap();
+        assert!(json.contains(r#""infallible":true"#));
         let back: ExternLang = serde_json::from_str(&json).unwrap();
         assert_eq!(back, lang);
     }

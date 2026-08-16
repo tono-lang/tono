@@ -194,6 +194,7 @@ mod tests {
                         returns: None,
                         errors: vec![],
                         sync: false,
+                        infallible: false,
                     }],
                 }],
             }],
@@ -264,6 +265,7 @@ mod tests {
                     returns: None,
                     errors: vec![],
                     sync: false,
+                    infallible: false,
                 }],
             }],
         }];

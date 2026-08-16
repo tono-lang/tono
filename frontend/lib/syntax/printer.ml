@@ -429,8 +429,12 @@ let print_extern_lang_body ~indent (b : Ast.extern_lang_body) : string =
     else [ print_errors ~indent:inner b.elb_errors ]
   in
   let sync_lines = if b.Ast.elb_sync then [ inner ^ "sync" ] else [] in
+  let infallible_lines =
+    if b.Ast.elb_infallible then [ inner ^ "infallible" ] else []
+  in
   braced_at ~indent b.Ast.elb_lang
-    (call_line @ sync_lines @ yields_line @ returns_lines @ errors_lines)
+    (call_line @ sync_lines @ infallible_lines @ yields_line @ returns_lines
+   @ errors_lines)
 
 let print_extern ~indent (e : Ast.extern_decl) : string =
   let inner = indent ^ "  " in

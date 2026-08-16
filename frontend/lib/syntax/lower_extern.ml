@@ -115,6 +115,7 @@ let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags
         b.elb_returns;
     el_errors = List.map lower_error_binding b.elb_errors;
     el_sync = b.elb_sync;
+    el_infallible = b.elb_infallible;
   }
 
 let rec lower_extern ~lower_type ~lower_select ~resolve ~diags

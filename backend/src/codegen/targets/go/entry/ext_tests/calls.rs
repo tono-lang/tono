@@ -37,6 +37,7 @@ fn a_versioned_go_module_path_still_selects_by_the_ext_lib_name() {
                 returns: None,
                 errors: vec![],
                 sync: false,
+                infallible: false,
             }],
         }],
     };
@@ -140,6 +141,7 @@ fn lib_missing(lib_langs: Vec<LangPath>, fn_name: &str, fn_lang: &str) -> ExtLib
                 returns: None,
                 errors: vec![],
                 sync: false,
+                infallible: false,
             }],
         }],
     }
@@ -255,6 +257,7 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
                 returns: None,
                 errors: vec![],
                 sync: false,
+                infallible: false,
             }],
         }],
     };

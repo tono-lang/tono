@@ -153,6 +153,7 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
                     returns: None,
                     errors: vec![],
                     sync: false,
+                    infallible: false,
                 }],
             }],
         }],

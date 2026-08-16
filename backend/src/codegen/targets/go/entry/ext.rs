@@ -396,11 +396,12 @@ pub(super) fn has_error_position(lang: &ExternLang) -> bool {
 /// The result of building and assigning an extern call's return values: the
 /// Go statement(s) up to and including the call itself, the yields-bound
 /// variable names (empty-string key for the no-`yields` case), and the
-/// error variable's own name.
+/// error variable's own name, `None` for an `infallible` call (the real Go
+/// function has no error to check, so there is nothing to name).
 struct CallResult {
     stmt: String,
     yields_vars: HashMap<String, String>,
-    err_var: String,
+    err_var: Option<String>,
 }
 
 /// Build the call expression and its LHS variable bindings; does not handle
@@ -432,19 +433,26 @@ fn build_call(
     let has_error_pos = has_error_position(lang);
     let mut lhs: Vec<String> = Vec::new();
     let mut yields_vars: HashMap<String, String> = HashMap::new();
-    let mut err_var = format!("{prefix}Err");
+    let mut err_var: Option<String> = if lang.infallible {
+        None
+    } else {
+        Some(format!("{prefix}Err"))
+    };
     if lang.yields.is_empty() {
         // "sem yields: o retorno já é o tipo lógico" — the raw call result
         // is the target's own declared type, with no projection.
         let tmp = format!("{prefix}Result");
         lhs.push(tmp.clone());
-        lhs.push(err_var.clone());
+        if let Some(err_var) = &err_var {
+            lhs.push(err_var.clone());
+        }
         yields_vars.insert(String::new(), tmp);
     } else if has_error_pos {
         for y in &lang.yields {
             if y.is_error {
-                err_var = format!("{prefix}{}", pascal(&y.name));
-                lhs.push(err_var.clone());
+                let v = format!("{prefix}{}", pascal(&y.name));
+                err_var = Some(v.clone());
+                lhs.push(v);
             } else {
                 let v = format!("{prefix}{}", pascal(&y.name));
                 lhs.push(v.clone());
@@ -457,7 +465,9 @@ fn build_call(
             lhs.push(v.clone());
             yields_vars.insert(y.name.clone(), v);
         }
-        lhs.push(err_var.clone());
+        if let Some(err_var) = &err_var {
+            lhs.push(err_var.clone());
+        }
     }
 
     CallResult {
@@ -512,16 +522,18 @@ pub(super) fn call_assign(
     );
 
     let mut out = built.stmt;
-    out.push_str(&error_block(
-        r.refs,
-        r.module,
-        r.config,
-        lib,
-        &lang.errors,
-        &format!("{}.{}", call.ns, call.func),
-        &built.err_var,
-        &|expr| format!("return nil, {expr}"),
-    ));
+    if let Some(err_var) = &built.err_var {
+        out.push_str(&error_block(
+            r.refs,
+            r.module,
+            r.config,
+            lib,
+            &lang.errors,
+            &format!("{}.{}", call.ns, call.func),
+            err_var,
+            &|expr| format!("return nil, {expr}"),
+        ));
+    }
 
     match &lang.returns {
         None => {

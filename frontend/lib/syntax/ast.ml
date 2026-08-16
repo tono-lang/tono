@@ -220,6 +220,11 @@ type extern_lang_body = {
   elb_returns : returns_lit option;
   elb_errors : error_map_entry list;
   elb_sync : bool;
+  (* Marks a call with no error return (Go's own convention: every call is
+     fallible by default, `(value, error)`; this opts a single-return
+     foreign function like [uuid.NewString() string] out of that shape).
+     Other targets ignore it the same way Go ignores [sync]. *)
+  elb_infallible : bool;
   elb_span : Span.span;
 }
 

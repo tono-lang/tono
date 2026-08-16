@@ -177,7 +177,14 @@ pub(super) fn client_decls(
     bound: &[BoundExtension<'_>],
 ) -> Vec<Decl> {
     let mut methods = String::new();
-    let mut refs = vec![import("context", "context")];
+    // An entry with no operations declares an empty mock interface, which
+    // never spells `context.Context` anywhere in its own text; importing it
+    // unconditionally would leave that file with an unused import.
+    let mut refs = if entry.operations.is_empty() {
+        Vec::new()
+    } else {
+        vec![import("context", "context")]
+    };
     for op in entry.operations {
         let (sig, sig_refs) = method_signature(op, config);
         refs.extend(sig_refs);
