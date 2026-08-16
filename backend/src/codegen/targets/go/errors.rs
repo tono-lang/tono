@@ -19,11 +19,11 @@ use crate::codegen::taxonomy::TaxonomyLiveness;
 use crate::codegen::tree::Decl;
 use crate::ir::{Module, Shape};
 
-/// The anonymous marker interface a bound hook's boundary wrapper matches with
-/// `errors.As` to tell an SDK-emitted error (preserve it as-is) from a foreign
-/// one (wrap it as a ContractError). Every generated error value carries the
-/// unexported `sdkError()` method, so only this package's types satisfy it and
-/// the taxonomy stays sealed.
+/// The anonymous marker interface a bound extension's boundary wrapper
+/// matches with `errors.As` to tell an SDK-emitted error (preserve it as-is)
+/// from a foreign one (wrap it as a ContractError). Every generated error
+/// value carries the unexported `sdkError()` method, so only this package's
+/// types satisfy it and the taxonomy stays sealed.
 pub const SDK_ERROR_MARKER: &str = "interface{ sdkError() }";
 
 /// The unexported marker method that makes a generated error value part of the
@@ -197,7 +197,7 @@ fn taxonomy_decls(sealed: bool, liveness: &TaxonomyLiveness) -> Vec<Decl> {
                 )),
                 error_method(
                     &n.contract,
-                    "\"contract hook '\" + e.ContractName + \"' failed\"",
+                    "\"contract '\" + e.ContractName + \"' failed\"",
                 ),
                 unwrap_method(&n.contract),
             ],

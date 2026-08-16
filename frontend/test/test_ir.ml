@@ -526,16 +526,6 @@ let shape_suite =
 
 (* ── Extensions ────────────────────────────────────────────────────────── *)
 
-let hook_ext : Ir.extension =
-  {
-    ext_name = "before_request";
-    ext_kind = Ir.Hook;
-    ext_sig = None;
-    ext_raw = false;
-    ext_bindings = [ ("ts", "ext/ts/auth.ts#addBearer") ];
-    ext_conformance = None;
-  }
-
 let contract_ext : Ir.extension =
   {
     ext_name = "sign_request";
@@ -579,7 +569,6 @@ let impl_ext : Ir.extension =
 
 let extension_suite =
   [
-    roundtrip_extension "hook (no signature)" hook_ext;
     roundtrip_extension "contract (signature + conformance)" contract_ext;
     roundtrip_extension "constraint" constraint_ext;
     roundtrip_extension "impl (raw)" impl_ext;
@@ -603,7 +592,7 @@ let sample_model : Ir.model =
               service_shape;
             ];
           operations = [ operation_shape ];
-          extensions = [ hook_ext; contract_ext; constraint_ext ];
+          extensions = [ contract_ext; constraint_ext; impl_ext ];
           ext_libs = [];
           tests = [];
         };
@@ -647,21 +636,21 @@ let negative_suite =
     decode_fails "extension unknown kind" ~decode:Ir_json.decode_extension
       (`Assoc [ ("name", `String "x"); ("kind", `String "bogus") ]);
     decode_fails "extension missing name" ~decode:Ir_json.decode_extension
-      (`Assoc [ ("kind", `String "hook") ]);
+      (`Assoc [ ("kind", `String "constraint") ]);
     decode_fails "extension missing kind" ~decode:Ir_json.decode_extension
       (`Assoc [ ("name", `String "x") ]);
   ]
 
-(* A minimal hook decodes with the optional fields defaulted: no signature, no
-   bindings, no conformance. *)
+(* A minimal constraint decodes with the optional fields defaulted: no
+   signature, no bindings, no conformance. *)
 let extension_decode_defaults () =
   match
     Ir_json.decode_extension
-      (`Assoc [ ("name", `String "before_request"); ("kind", `String "hook") ])
+      (`Assoc [ ("name", `String "luhn"); ("kind", `String "constraint") ])
   with
   | Error e -> Alcotest.failf "minimal extension should decode: %s" e
   | Ok e ->
-      Alcotest.(check string) "name" "before_request" e.ext_name;
+      Alcotest.(check string) "name" "luhn" e.ext_name;
       Alcotest.(check bool) "no signature" true (e.ext_sig = None);
       Alcotest.(check bool) "no bindings" true (e.ext_bindings = []);
       Alcotest.(check bool) "no conformance" true (e.ext_conformance = None)

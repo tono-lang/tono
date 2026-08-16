@@ -214,7 +214,7 @@ fn taxonomy_decls(module: &Module, n: &ErrorNames, liveness: &TaxonomyLiveness) 
     if liveness.contract {
         root_variants.push(format!("    Contract({}),\n", n.contract));
         display_arms.push(format!(
-            "            {root}::Contract(e) => write!(f, \"contract hook '{{}}' failed\", e.contract_name),\n",
+            "            {root}::Contract(e) => write!(f, \"contract '{{}}' failed\", e.contract_name),\n",
             root = n.root
         ));
     }

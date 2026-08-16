@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The baseline IR: one structure with an `i64` amount.
-const BASELINE: &str = r#"{"tono_ir_version":18,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const BASELINE: &str = r#"{"tono_ir_version":19,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// The current IR: `amount` retyped to a string, a wire break.
-const RETYPED: &str = r#"{"tono_ir_version":18,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const RETYPED: &str = r#"{"tono_ir_version":19,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))
@@ -200,21 +200,21 @@ fn a_mistyped_flag_is_rejected_not_swallowed_as_the_ir_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An entry with one wire operation, and `extensions` holding a `before_request`
-/// hook bound for TypeScript when `bound` is set.
+/// An entry with one wire operation, and `extensions` holding a `validate_ping`
+/// constraint bound for TypeScript when `bound` is set.
 fn entry_model_json(bound: bool) -> String {
     let extensions = if bound {
-        r#"[{"name":"before_request","kind":"hook","bindings":{"typescript":"ext/ts/a.ts#hook"}}]"#
+        r#"[{"name":"validate_ping","kind":"constraint","bindings":{"typescript":"ext/ts/a.ts#validate"}}]"#
     } else {
         "[]"
     };
     format!(
-        r#"{{"tono_ir_version":18,"modules":[{{"name":"notes","shapes":[{{"id":"notes#client","kind":"entry","fields":[{{"name":"endpoint","target":{{"prim":"string"}}}}],"operations":[{{"id":"notes#client.ping","kind":"operation","input":null,"output":null,"errors":[],"traits":[],"wire":{{"method":"GET","uri":{{"template":[{{"lit":"/x"}}]}},"bindings":{{}},"response_bindings":{{}},"success":[200],"endpoint":{{"field":["endpoint"]}}}}}}]}}],"operations":[],"extensions":{extensions}}}]}}"#
+        r#"{{"tono_ir_version":19,"modules":[{{"name":"notes","shapes":[{{"id":"notes#client","kind":"entry","fields":[{{"name":"endpoint","target":{{"prim":"string"}}}}],"operations":[{{"id":"notes#client.ping","kind":"operation","input":null,"output":null,"errors":[],"traits":[],"wire":{{"method":"GET","uri":{{"template":[{{"lit":"/x"}}]}},"bindings":{{}},"response_bindings":{{}},"success":[200],"endpoint":{{"field":["endpoint"]}}}}}}]}}],"operations":[],"extensions":{extensions}}}]}}"#
     )
 }
 
 #[test]
-fn dropping_a_bound_hook_reports_a_pruned_declaration_as_source_breaking() {
+fn dropping_a_bound_extension_reports_a_pruned_declaration_as_source_breaking() {
     let dir = std::env::temp_dir().join(format!("tono-breaking-{}-taxonomy", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

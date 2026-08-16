@@ -7,21 +7,18 @@ fn package_text(usage: &Usage) -> String {
 }
 
 #[test]
-fn a_bare_usage_emits_a_transport_with_no_retry_timeout_or_hook_piece() {
+fn a_bare_usage_emits_a_transport_with_no_retry_or_timeout_piece() {
     let out = package_text(&Usage::default());
     // Send is the single attempt itself: no loop, no policy fields, no seams.
     assert!(out.contains("func Send(ctx context.Context, native *http.Client, canonical support.HTTPTransport, req Request) Outcome {"));
-    assert!(!out.contains("HookErr"));
     assert!(!out.contains("for attempt"));
     assert!(!out.contains("sendOnce"));
     assert!(!out.contains("type Retry struct"));
     assert!(!out.contains("type Timing struct"));
-    assert!(!out.contains("type Hooks struct"));
     assert!(!out.contains("backoffDelay"));
     assert!(!out.contains("rand.Float64"));
     assert!(!out.contains("Timeout"));
     assert!(!out.contains("WithTimeout"));
-    assert!(!out.contains("BeforeRequest"));
     // The attempt still copies headers fresh and classifies a dispatch
     // failure as a transport outcome.
     assert!(out.contains("headers := make(map[string]string, len(req.Headers))"));
@@ -43,9 +40,8 @@ fn retry_usage_wraps_the_attempt_in_the_backoff_loop() {
     // The timing seam defaults to the real clock and jitter.
     assert!(out.contains("random = rand.Float64"));
     assert!(out.contains("sleep = sleepContext"));
-    // Still no timeout or hook piece.
+    // Still no timeout piece.
     assert!(!out.contains("Timeout"));
-    assert!(!out.contains("type Hooks struct"));
 }
 
 #[test]
@@ -59,23 +55,6 @@ fn timeout_usage_bounds_the_dispatch_with_a_context_deadline() {
     assert!(out.contains("if req.Timeout > 0 {"));
     assert!(out.contains("attemptCtx, cancel = context.WithTimeout(ctx, req.Timeout)"));
     assert!(out.contains("response, err := dispatch(attemptCtx, native, canonical, request)"));
-}
-
-#[test]
-fn hook_usage_invokes_the_slots_around_the_dispatch() {
-    let usage = Usage {
-        hooks: true,
-        ..Usage::default()
-    };
-    let out = package_text(&usage);
-    assert!(out.contains("type Hooks struct"));
-    assert!(out.contains("Hooks *Hooks"));
-    assert!(out.contains("if req.Hooks != nil && req.Hooks.BeforeRequest != nil {"));
-    assert!(out.contains("if req.Hooks != nil && req.Hooks.AfterResponse != nil {"));
-    // A hook failure rides its own outcome field, raw, never as a transport
-    // failure; the retrying loop returns it before classifying.
-    assert!(out.contains("return Outcome{HookErr: err}"));
-    assert!(out.contains("HookErr error"));
 }
 
 #[test]
@@ -135,12 +114,12 @@ fn usage_is_read_off_the_wire_bindings() {
         modules: vec![entry_module(false, false)],
     };
     let usage = usage_of(&model);
-    assert!(!usage.retry && !usage.timeout && !usage.hooks);
+    assert!(!usage.retry && !usage.timeout);
 
     let model = crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![entry_module(true, false), entry_module(false, true)],
     };
     let usage = usage_of(&model);
-    assert!(usage.retry && usage.timeout && !usage.hooks);
+    assert!(usage.retry && usage.timeout);
 }

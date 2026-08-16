@@ -11,7 +11,7 @@ and any divergence breaks the build.
 The top-level document is:
 
 ```json
-{ "tono_ir_version": 16, "modules": [ /* module objects */ ] }
+{ "tono_ir_version": 19, "modules": [ /* module objects */ ] }
 ```
 
 `tono_ir_version` is a single monotonic integer, not a semantic version. It is
@@ -222,8 +222,8 @@ the string (`"/notes/{.x}/{id}"`).
 ## FFI library declarations (v14)
 
 The module `ext_libs` array is the new `ext <name> { ... }` library-block
-form, distinct from the legacy `extensions` table above (hook/contract/
-constraint/impl). One entry per `ext` block:
+form, distinct from the legacy `extensions` table above (contract/constraint/
+impl). One entry per `ext` block:
 
 ```json
 { "name": "companyconfig",

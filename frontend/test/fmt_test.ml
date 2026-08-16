@@ -105,12 +105,12 @@ op create_charge(charge: charge): charge @errors(not_found)
     (Ir_json.to_canonical_string (Ir_json.encode_module m1))
     (Ir_json.to_canonical_string (Ir_json.encode_module m2))
 
-(* Every extension kind prints to the one canonical layout, and re-parsing
-   that layout yields the same IR (printer <-> parser round-trip over ext). *)
+(* Every remaining extension kind prints to the one canonical layout, and
+   re-parsing that layout yields the same IR (printer <-> parser round-trip
+   over ext). *)
 let ext_layout () =
   let src =
     {|
-ext hook before_request { ts: "ext/ts/auth.ts#addBearer"  rust: "ext/rust/a.rs#f" }
 ext contract   sign_request  (canonical_request) -> string {
   ts: "ext/ts/sign.ts#signRequest" conformance: "vectors/sign.json" }
 ext constraint luhn (string) -> bool { ts: "ext/ts/luhn.ts#isLuhn" }
@@ -118,12 +118,7 @@ ext impl   client.save   raw { go: "ext/go/s.go#Save"  ts: "ext/ts/s.ts#save" }
 |}
   in
   let expected =
-    {|ext hook before_request {
-  ts: "ext/ts/auth.ts#addBearer"
-  rust: "ext/rust/a.rs#f"
-}
-
-ext contract sign_request (canonical_request) -> string {
+    {|ext contract sign_request (canonical_request) -> string {
   ts: "ext/ts/sign.ts#signRequest"
   conformance: "vectors/sign.json"
 }
@@ -147,6 +142,23 @@ ext impl client.save raw {
     "same IR"
     (Ir_json.to_canonical_string (Ir_json.encode_module m1))
     (Ir_json.to_canonical_string (Ir_json.encode_module m2))
+
+(* A hook still prints to the canonical layout even though the typechecker
+   rejects it: a stale file with 'ext hook' should still fmt cleanly while
+   the user migrates it to 'ext <lib> { extern ... }'. *)
+let hook_still_prints () =
+  let src =
+    {|ext hook before_request { ts: "ext/ts/auth.ts#addBearer"  rust: "ext/rust/a.rs#f" }
+|}
+  in
+  let expected =
+    {|ext hook before_request {
+  ts: "ext/ts/auth.ts#addBearer"
+  rust: "ext/rust/a.rs#f"
+}
+|}
+  in
+  Alcotest.(check string) "hook still prints" expected (fmt src)
 
 (* The entry model in one file: stacked value sources, a derived field with a
    template and a catalog pipeline, a selection table with every arm shape, a
@@ -372,6 +384,7 @@ let () =
           Alcotest.test_case "op swallows following traits" `Quick
             op_swallows_following_traits;
           Alcotest.test_case "ext layout" `Quick ext_layout;
+          Alcotest.test_case "hook still prints" `Quick hook_still_prints;
           Alcotest.test_case "entry layout" `Quick entry_layout;
           Alcotest.test_case "entry IR equivalent" `Quick entry_ir_equivalent;
           Alcotest.test_case "ext binding escapes" `Quick ext_binding_escapes;

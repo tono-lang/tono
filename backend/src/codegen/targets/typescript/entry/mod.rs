@@ -5,12 +5,10 @@
 //! object, resolves every declared source chain top-down, parses env values by
 //! the field's type at the boundary (the error names the variable and the
 //! type), lowers a match selection to a `switch`, decodes a structured source
-//! strictly, composes a config through `@bind`, runs the bound `client_init`
-//! hook over the resolved `Settings` (bespoke wins, by mutation), and
-//! validates last. Each operation method resolves its own `wire` binding's
-//! ref positions (endpoint, headers, timeout, retry) against the resolved
-//! fields directly and builds the request inline; no runtime interprets a
-//! descriptor.
+//! strictly, composes a config through `@bind`, and validates last. Each
+//! operation method resolves its own `wire` binding's ref positions
+//! (endpoint, headers, timeout, retry) against the resolved fields directly
+//! and builds the request inline; no runtime interprets a descriptor.
 
 use std::collections::BTreeSet;
 
@@ -19,7 +17,7 @@ use crate::codegen::conventions::{
     deprecated_of, doc_of, field_ident, rename_of, type_ident_from_id, wire_key,
 };
 use crate::codegen::entries::{companion_name, op_local_name, plan, EntryModel, FieldShape};
-use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
+use crate::codegen::extensions::{impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_binding};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
@@ -246,7 +244,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let mut helpers = Helpers::default();
     let mut decls = Vec::new();
     decls.extend(config_interfaces(module, config));
-    decls.extend(transport_hook_wrappers(&bound, module));
     // A bound contract/constraint gets its boundary wrapper here too, or the
     // binding would go silently unused.
     let mut contract_refs = Vec::new();
@@ -258,7 +255,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     if !contracts.is_empty() {
         decls.push(Decl::raw_with(contracts, contract_refs));
     }
-    decls.extend(client_init_wrapper(&bound, &entries, multi, module));
     decls.extend(plan::output_decode_decls(
         &entries,
         module,
@@ -321,14 +317,7 @@ fn op_method(
     let en = error_names();
     let name = method_name(op, config);
     let (input, output) = crate::codegen::ops::op_io(op);
-    let has_on_error = hook_binding(bound, "on_error").is_some();
-    let throw = |expr: String| {
-        if has_on_error {
-            format!("throw wrapOnError({expr});")
-        } else {
-            format!("throw {expr};")
-        }
-    };
+    let throw = |expr: String| format!("throw {expr};");
 
     let (param, input_expr) = match input {
         Some(t) => {
@@ -401,8 +390,6 @@ fn op_method(
         throw(format!("new {}(outcome.status, outcome.body)", en.api))
     };
     let success_block = decode::success_block(output, module, &ret, &throw, refs);
-    let before_request_bound = hook_binding(bound, "before_request").is_some();
-    let after_response_bound = hook_binding(bound, "after_response").is_some();
     let http_method = wire.method.clone();
     // The frontend guarantees an endpoint/@header/path-template/@retry field
     // reference resolves to a value already sitting, typed, on the resolved
@@ -430,8 +417,6 @@ fn op_method(
         &success_block,
         &en.transport,
         &throw,
-        before_request_bound,
-        after_response_bound,
         &field_expr,
         timeout_field_expr,
         &param_access,

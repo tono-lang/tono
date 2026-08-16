@@ -1,35 +1,27 @@
 import tono.http
 import tono.errors
 
-@doc("A tiny API whose auth is bespoke: client_init sets the header from Settings.")
+@doc("A tiny API whose auth is bespoke: the bearer header is built entirely from declared fields.")
 pub struct account {
   id: uuid
   email: string
 }
 
-@doc("The SDK entry: the token and endpoint resolve at construction.")
+@doc("The SDK entry: the token and endpoint resolve at construction, the header derives from the token.")
 pub struct client {
-  api_token: string @env("API_TOKEN")
+  api_token: string @env("API_TOKEN") @length(min: 1)
+  auth_header: string @format("Bearer {.api_token}")
   endpoint: string @env("AUTH_ENDPOINT") @default("https://api.example.com")
 
   op get_account(): account
     @http(method: "GET", path: "/account", endpoint: .endpoint)
+    @header("Authorization", .auth_header)
 }
 
-// Auth is 100% bespoke (there is no built-in scheme). The client_init hook
-// receives the resolved Settings (the entry's declared fields plus the
-// transport slots) and writes the Authorization header once, at construction:
-// the token comes off Settings, never read from the environment by hand.
-// before_request stays available for per-request work (signing, refresh).
-ext hook client_init {
-  go: "ext/go/auth.go#ApplyBearer"
-  ts: "ext/ts/auth.ts#applyBearer"
-}
-
-// Bespoke request work is exactly what generated round-trip checks cannot
-// verify; the oracle sits outside the generator: with the transport stubbed,
-// the request on the wire must carry the header the hook wrote.
-test "the bearer header written by client_init reaches the wire" {
+// Auth is 100% bespoke (there is no built-in scheme), but this scheme needs
+// no bespoke code at all: @format derives the header from the declared
+// token, and @header attaches it to every request. No FFI, no ext block.
+test "the bearer header derived from the token reaches the wire" {
   c: client { api_token: "sk-123" }
   s: stub c.get_account.http: http.response {
     status: 200,
@@ -41,7 +33,7 @@ test "the bearer header written by client_init reaches the wire" {
   expect s.requests: [http.request { method: "GET", path: "/account", headers: { "authorization": "Bearer sk-123", .. }, .. }]
 }
 
-test "construction rejects an empty token" {
+test "construction rejects a missing token" {
   c: client { api_token: "" }
-  expect c: errors.contract { name: "client_init" }
+  expect c: errors.config { field: "api_token" }
 }

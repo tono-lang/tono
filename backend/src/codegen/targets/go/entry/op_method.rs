@@ -3,8 +3,8 @@
 //! off the resolved Settings, and `op_method_decl` itself (the wire call or
 //! the bespoke `impl` fallback). Split out of `entry` (this crate's own
 //! `mod.rs`) to keep it under the file-size ceiling; `use super::*` reaches
-//! the parent's helpers (`discriminator_name`, `hook_wrapper_name`,
-//! `entry_field_ident`, the `decode`/`transport`/`ext`/`impl_op` submodules)
+//! the parent's helpers (`discriminator_name`, `entry_field_ident`, the
+//! `decode`/`transport`/`ext`/`impl_op` submodules)
 //! the same way a sibling of `mod.rs` always has.
 
 use super::*;
@@ -132,15 +132,8 @@ pub(super) fn op_method_decl(
 ) -> Decl {
     let en = error_names();
     let (sig, mut refs) = method_signature(op, config);
-    let has_on_error = hook_binding(bound, "on_error").is_some();
     let (input, output) = crate::codegen::ops::op_io(op);
-    let fail = |expr: String| {
-        if has_on_error {
-            format!("{}({expr})", hook_wrapper_name("on_error"))
-        } else {
-            expr
-        }
-    };
+    let fail = |expr: String| expr;
     let (zero_decl, ret_zero) = zero_of(output);
     // The zero value and the decode both name the output type in opaque text.
     if let Some(t) = output {
@@ -236,8 +229,6 @@ pub(super) fn op_method_decl(
         &fail,
         &mut refs,
     );
-    let module_hooks = hook_binding(bound, "before_request").is_some()
-        || hook_binding(bound, "after_response").is_some();
     let call = transport::OpCall {
         wire,
         module,
@@ -248,7 +239,6 @@ pub(super) fn op_method_decl(
         api_error: &en.api,
         transport_error: &en.transport,
         success_block: &success,
-        module_hooks,
         retry_expr: wire
             .retry
             .as_deref()

@@ -3,18 +3,18 @@
    with no conformance reference refuses to emit); this pass owns the structural
    rules the IR alone cannot express:
 
-   - a hook must fill one of the four closed lifecycle slots, and only those
-     (TC0027);
-   - a hook declares no signature (its slot fixes it) while a contract requires
-     one, and an impl takes the signature of the operation it names (TC0029);
+   - a hook is rejected outright: the lifecycle it used to fill is gone,
+     replaced by the declarative `ext <lib> { extern ... }` FFI model, and the
+     diagnostic names the substitute for the slot it tried to fill (TC0027);
+   - a contract requires a typed signature, and an impl takes the signature of
+     the operation it names and declares none (TC0029);
    - the raw response form is an impl affordance: on any other kind it would be
      accepted and then silently ignored (TC0052);
    - a binding must target a supported language (TC0028);
    - an extension must carry at least one binding, or it is inert (TC0030);
    - a binding value must be a "file#symbol" reference so the generator can
      resolve the bound symbol (TC0031);
-   - two extensions must not share a name (a duplicate hook slot would silently
-     shadow the first) (TC0032);
+   - two extensions must not share a name (TC0032);
    - a language must be bound at most once per extension: two bindings for one
      language lower into a JSON object with a duplicate key, and the Rust serde
      mirror (a map) keeps only the last, silently dropping a binding and breaking
@@ -22,9 +22,34 @@
 
 let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 
-(* The closed hook lifecycle. Nothing else may be a hook. *)
-let hook_slots =
-  [ "client_init"; "before_request"; "after_response"; "on_error" ]
+(* The substitute named in the migration diagnostic for each of the four
+   lifecycle slots the hook mechanism used to fill (RFC-0023, "Remoção dos
+   hooks"). A name outside this table gets the generic message below: nothing
+   in a hook's name can be valid anymore, so unlike the closed-slot check this
+   replaced, this list only drives which substitute to name. *)
+let hook_slot_substitutes =
+  [
+    ( "client_init",
+      "read external config through a field with an 'extern' call, or build a \
+       header from a field via @format + @header" );
+    ( "before_request",
+      "bind an external value to a trait argument, e.g. \
+       @header(\"Authorization\", mylib.sign(.request))" );
+    ("after_response", "a declared projection in the op's 'extern returns:'");
+    ("on_error", "'errors:' in the ext language block plus @errors on the op");
+  ]
+
+let hook_removed_message (slot : string) : string =
+  match List.assoc_opt slot hook_slot_substitutes with
+  | Some substitute ->
+      Printf.sprintf
+        "the '%s' hook is removed; the lifecycle it filled no longer exists. \
+         Use %s"
+        slot substitute
+  | None ->
+      Printf.sprintf
+        "hooks are removed; libraries are integrated via 'ext <lib> { extern \
+         ... }', not lifecycle slots"
 
 (* The languages a binding may target: the five backends plus the two short
    aliases the toolchain accepts. *)
@@ -46,26 +71,10 @@ let check_raw ekind eraw : Diagnostic.t list =
 let check_kind (d : Ast.decl) ekind ekind_span esig : Diagnostic.t list =
   match ekind with
   | Ast.EHook ->
-      let slot_diag =
-        if List.mem d.Ast.dname hook_slots then []
-        else
-          [
-            err Error_codes.ext_unknown_hook_slot d.dname_span
-              "unknown hook slot '%s'; the lifecycle is closed to client_init, \
-               before_request, after_response, on_error"
-              d.dname;
-          ]
-      in
-      let sig_diag =
-        match esig with
-        | Some _ ->
-            [
-              err Error_codes.ext_signature_rule ekind_span
-                "a hook fills a fixed lifecycle slot and declares no signature";
-            ]
-        | None -> []
-      in
-      slot_diag @ sig_diag
+      [
+        err Error_codes.ext_hook_removed d.dname_span "%s"
+          (hook_removed_message d.Ast.dname);
+      ]
   | Ast.EContract ->
       if esig = None then
         [

@@ -5,10 +5,10 @@
 //! descriptor blob and the `Execute()` call into the hand-written HTTP
 //! runtime.
 //!
-//! Poda by use is per operation: the `Timeout`, `Retry`, `Timing`, and `Hooks`
-//! fields of the request literal appear only when the operation (or its
-//! module) declares the piece, so a plain operation's method carries no trace
-//! of any of them.
+//! Poda by use is per operation: the `Timeout`, `Retry`, and `Timing` fields
+//! of the request literal appear only when the operation (or its module)
+//! declares the piece, so a plain operation's method carries no trace of any
+//! of them.
 
 use std::collections::BTreeSet;
 
@@ -43,7 +43,7 @@ pub(super) type ParamAccess<'a> = &'a dyn Fn(&str) -> Option<(String, FieldKind)
 
 /// Everything one operation's call needs from its surroundings. The spellings
 /// (`fail`, `field_access`, `field_kind`) stay closures so this module never
-/// re-derives casing or hook routing.
+/// re-derives casing.
 pub(super) struct OpCall<'a> {
     pub wire: &'a WireBinding,
     pub module: &'a Module,
@@ -56,9 +56,6 @@ pub(super) struct OpCall<'a> {
     pub transport_error: &'a str,
     /// The decode tail (returns or fails), at method depth.
     pub success_block: &'a str,
-    /// Whether this module binds a request lifecycle hook, which is what puts
-    /// a `hooks` field on the client.
-    pub module_hooks: bool,
     /// The resolved `@retry` maximum as an `int` expression.
     pub retry_expr: Option<String>,
     /// The pre-converted `@timeout` read (a client field).
@@ -647,9 +644,6 @@ pub(super) fn op_call(
     if call.retry_expr.is_some() {
         fields.push(("Timing", "c.timing".to_string()));
     }
-    if call.module_hooks {
-        fields.push(("Hooks", "c.hooks".to_string()));
-    }
     if let Some(retry) = retry_field(call, &mut reached) {
         fields.push(("Retry", retry));
     }
@@ -657,16 +651,6 @@ pub(super) fn op_call(
         .iter()
         .map(|(name, value)| format!("\t\t{name}: {value},\n"))
         .collect();
-    // A hook's own failure propagates raw; the check exists only where a hook
-    // is bound, so a hook-free module's methods carry no dead error channel.
-    let hook_check = if call.module_hooks {
-        format!(
-            "\tif outcome.HookErr != nil {{\n\t\treturn {ret_zero}{fail_hook}\n\t}}\n",
-            fail_hook = fail("outcome.HookErr".to_string()),
-        )
-    } else {
-        String::new()
-    };
     let request = reached.slot("Request");
     // A call-valued header/body reads the request once it exists: it patches
     // in right here, materialized as its own variable so the call has
@@ -705,7 +689,6 @@ pub(super) fn op_call(
     };
     out.push_str(&format!(
         "\toutcome := {send}(ctx, c.settings.HTTPClient, c.settings.Transport, {send_arg})\n\
-         {hook_check}\
          \tif outcome.Cause != nil {{\n\t\treturn {ret_zero}{fail_transport}\n\t}}\n",
         send = reached.slot("Send"),
         fail_transport = fail(format!(

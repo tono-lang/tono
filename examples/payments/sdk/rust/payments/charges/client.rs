@@ -10,13 +10,11 @@ use crate::support::{ClientOptions, Duration, HttpRequest, HttpTransport};
 
 use crate::payments::charges::types::*;
 
-/// Settings are the resolved construction values of the client entry:
-/// bespoke `client_init` code may overwrite any field (bespoke wins) and
-/// set transport through the slots. Exactly one transport slot may be
-/// set: `client` (native `reqwest`, present only with the crate's
-/// default-on `reqwest` feature) or `transport` (canonical). `headers`
-/// are the base request headers (bespoke auth writes here); a declared
-/// `@header` wins only where nothing else set the name.
+/// Settings are the resolved construction values of the client entry.
+/// Exactly one transport slot may be set: `client` (native `reqwest`,
+/// present only with the crate's default-on `reqwest` feature) or
+/// `transport` (canonical). `headers` are the base request headers; a
+/// declared `@header` wins only where nothing else set the name.
 pub(crate) struct Settings {
     pub api_key: String,
     pub endpoint: String,
@@ -80,15 +78,15 @@ impl ClientBuilder {
         self
     }
 
-    /// Resolves the declared sources top-down, runs client_init on top
-    /// (bespoke wins), then the declared validation.
+    /// Resolves the declared sources top-down, then the declared
+    /// validation.
     pub fn build(self) -> Result<Client, TonoError> {
         self.build_with_transport(None)
     }
 
     /// `build` plus the transport seam the generated tests construct through:
-    /// a `Some` transport replaces whatever construction resolved, after
-    /// client_init ran, so a test answers canonically without a server.
+    /// a `Some` transport replaces whatever construction resolved, so a
+    /// test answers canonically without a server.
     pub(crate) fn build_with_transport(
         self,
         transport: Option<HttpTransport>,

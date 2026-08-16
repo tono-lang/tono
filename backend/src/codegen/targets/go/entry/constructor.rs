@@ -1,6 +1,6 @@
 //! The generated constructor: source resolution in dependency order, the
-//! client_init bridge, the consumed-chain requires, declared validation,
-//! and the frozen runtime values.
+//! consumed-chain requires, declared validation, and the frozen runtime
+//! values.
 
 use std::collections::HashMap;
 
@@ -27,22 +27,21 @@ pub(super) fn overridable_fields<'a>(entry: &'a EntryModel<'a>) -> Vec<&'a Entry
 }
 
 /// The generated constructor. The body follows the declared order exactly:
-/// sources resolve top-down, `client_init` runs over the result (bespoke
-/// wins), the consumed chains and declared constraints validate last, and the
-/// resolved values are frozen into the runtime options.
+/// sources resolve top-down, then the consumed chains and declared
+/// constraints validate last, and the resolved values are frozen into the
+/// runtime options.
 ///
 /// With `test_seam`, the whole body moves into an unexported variant taking a
 /// transport, and the public constructor delegates with none: a generated test
-/// runs the real construction path (resolution, client_init, validation) and
-/// only the transport is swapped, after bespoke code ran, so the test sees
-/// exactly the request the SDK would send.
+/// runs the real construction path (resolution, validation) and only the
+/// transport is swapped, so the test sees exactly the request the SDK would
+/// send.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn new_decl(
     entry: &EntryModel<'_>,
     n: &Names,
     module: &Module,
     config: &CasingConfig,
-    bound: &[BoundExtension<'_>],
     helpers: &mut Helpers,
     multi: bool,
     test_seam: bool,
@@ -132,21 +131,11 @@ pub(super) fn new_decl(
         r.body.push_str(&fields);
     }
 
-    // client_init runs over the resolved Settings; bespoke wins.
-    if hook_binding(bound, "client_init").is_some() && !multi {
-        push_gap(&mut body);
-        body.push_str(&format!(
-            "\tif err := {}(&s); err != nil {{\n\t\treturn nil, err\n\t}}\n",
-            hook_wrapper_name("client_init")
-        ));
-    }
-
     // Consumed chains must hold a value once construction finishes; an absent
     // one reports the chain at this single point instead of failing the first
-    // call obscurely. Every check reads the resolved value (client_init ran
-    // already, bespoke wins), so the error var only decorates the error. The
-    // selection of which fields need a check lives in the shared plan; this
-    // target only spells each check (and pulls the errors import it needs).
+    // call obscurely. The selection of which fields need a check lives in the
+    // shared plan; this target only spells each check (and pulls the errors
+    // import it needs).
     {
         let mut r = Resolver {
             entry,
@@ -175,11 +164,10 @@ pub(super) fn new_decl(
         }
         let member = crate::codegen::entries::field_as_member(field);
         for line in validation::guard_lines(&[member], &GoVal, "s.", config, LANG) {
-            // The check reads the value bespoke left in place (client_init ran
-            // already, bespoke wins), so presence is judged off the value
-            // itself, never the declared chain's error var. A numeric zero can
-            // be a legitimately resolved value, so its guard only skips when the
-            // chain reported absent AND the bridge left the zero in place.
+            // Presence is judged off the resolved value itself, never the
+            // declared chain's error var. A numeric zero can be a
+            // legitimately resolved value, so its guard only skips when the
+            // chain reported absent AND left the zero in place.
             let guard = match plan::presence_kind(field, entry, module) {
                 plan::Presence::Always => line.condition.clone(),
                 plan::Presence::String => format!(
@@ -273,30 +261,6 @@ pub(super) fn new_decl(
         client_fields.push(format!("{ident}: {ident}"));
     }
 
-    if hook_binding(bound, "before_request").is_some()
-        || hook_binding(bound, "after_response").is_some()
-    {
-        let mut slots = Vec::new();
-        if hook_binding(bound, "before_request").is_some() {
-            slots.push(format!(
-                "BeforeRequest: {}",
-                hook_wrapper_name("before_request")
-            ));
-        }
-        if hook_binding(bound, "after_response").is_some() {
-            slots.push(format!(
-                "AfterResponse: {}",
-                hook_wrapper_name("after_response")
-            ));
-        }
-        refs.push(super::shared_symbol("Hooks"));
-        client_fields.push(format!(
-            "hooks: &{hooks}{{{slots}}}",
-            hooks = super::shared_slot("Hooks"),
-            slots = slots.join(", "),
-        ));
-    }
-
     if test_seam {
         body.push_str(
             "\tif canonical != nil {\n\t\ts.Transport = canonical\n\t\ts.HTTPClient = nil\n\t}\n",
@@ -319,8 +283,7 @@ pub(super) fn new_decl(
 
     let doc = format!(
         "// {new_fn} constructs {client}: positional @arg values, options for @with,\n\
-         // declared sources resolved top-down, client_init on top (bespoke wins),\n\
-         // then the declared validation.\n",
+         // declared sources resolved top-down, then the declared validation.\n",
         new_fn = n.new_fn,
         client = n.client,
     );
@@ -371,10 +334,10 @@ pub(super) fn new_decl(
              \treturn {seam_fn}(nil{pass_call})\n\
              }}\n\n\
              // {seam_fn} is {new_fn} plus the seams the generated tests use: a non-nil\n\
-             // canonical transport replaces whatever construction resolved, after\n\
-             // client_init ran; a non-nil field override skips that field's own real\n\
-             // `extern` construction call outright, so a hermetic test never reaches\n\
-             // the real library, not just avoids calling it at runtime.\n\
+             // canonical transport replaces whatever construction resolved; a non-nil\n\
+             // field override skips that field's own real `extern` construction call\n\
+             // outright, so a hermetic test never reaches the real library, not just\n\
+             // avoids calling it at runtime.\n\
              func {seam_fn}(canonical {transport}{seam_params}) (*{client}, error) {{\n{body}}}",
             new_fn = n.new_fn,
             client = n.client,

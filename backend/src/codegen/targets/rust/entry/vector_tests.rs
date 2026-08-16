@@ -242,6 +242,15 @@ fn with_fn_name(ctx: &TestCtx<'_>, f: &EntryField) -> String {
     ))
 }
 
+/// Whether this entry's construction itself is async: true whenever a
+/// declared field resolves through an `extern` call, which `constructor.rs`
+/// already lowers to an `async fn new`/`new_with_transport` (an arbitrary
+/// third-party symbol is always awaited, mirroring every other async-lowered
+/// leaf this target emits).
+fn construction_is_async(ctx: &TestCtx<'_>) -> bool {
+    ctx.entry.declared().iter().any(|f| f.call.is_some())
+}
+
 /// The construction expression of one test, from the pinned construction
 /// values: `@arg` fields positionally, `@with` fields through the builder. A
 /// stubbed test goes through the transport seam; anything else through the
@@ -395,10 +404,10 @@ fn invoke_block(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
 /// One hermetic test: serialize on the env lock, pin the environment, stub
 /// the transport, build the client through the real construction path, run
 /// the call, assert. A construction-only test just constructs and asserts its
-/// outcome (construction is synchronous, so it needs no runtime); a stubbed
-/// transport only attaches to an `@http` operation, so a stubbed call is
-/// always async and rides the tokio runtime the consuming crate's dev profile
-/// already carries.
+/// outcome; it stays synchronous unless construction itself is async (an
+/// `extern`-call field). A stubbed transport only attaches to an `@http`
+/// operation, so a stubbed call is always async and rides the tokio runtime
+/// the consuming crate's dev profile already carries.
 fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Decl {
     let mut refs = Vec::new();
     let mut body =
@@ -418,8 +427,13 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Decl {
         refs.push(super::support_symbol("HttpResponse"));
         refs.push(super::support_symbol("HttpTransport"));
         body.push_str(&transport_block(&answers));
+        let await_ = if construction_is_async(ctx) {
+            ".await"
+        } else {
+            ""
+        };
         body.push_str(&format!(
-            "    let c = {expr}.expect(\"construct client\");\n",
+            "    let c = {expr}{await_}.expect(\"construct client\");\n",
             expr = construction_expr(ctx, true),
         ));
         body.push_str(&invoke_block(ctx, &mut refs));
@@ -436,15 +450,25 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Decl {
             refs,
         )
     } else {
-        // Construction-only: the outcome pattern reads the construction error.
+        // Construction-only: the outcome pattern reads the construction
+        // error. Synchronous unless an `extern`-call field makes
+        // construction itself async, in which case the test rides the same
+        // tokio runtime the stubbed-call branch above does.
+        let is_async = construction_is_async(ctx);
+        let await_ = if is_async { ".await" } else { "" };
         body.push_str(&format!(
-            "    let result = {expr};\n",
+            "    let result = {expr}{await_};\n",
             expr = construction_expr(ctx, false),
         ));
         body.push_str(&outcome_asserts(ctx, false));
+        let (attr, effect) = if is_async {
+            ("#[tokio::test]", "async ")
+        } else {
+            ("#[test]", "")
+        };
         Decl::raw_with(
             format!(
-                "#[test]\nfn {name}() {{\n{body}}}",
+                "{attr}\n{effect}fn {name}() {{\n{body}}}",
                 name = test_fn_name(ctx.test, false),
             ),
             refs,
@@ -458,14 +482,20 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Decl {
 fn live_test_decl(ctx: &TestCtx<'_>) -> Decl {
     let mut refs = Vec::new();
     let op = ctx.test.op.expect("a live test has a call");
-    let is_async = wire_binding(op).is_some() || effect_of(op) == Effect::Async;
+    let is_async =
+        wire_binding(op).is_some() || effect_of(op) == Effect::Async || construction_is_async(ctx);
     let (attr, effect) = if is_async {
         ("#[tokio::test]", "async ")
     } else {
         ("#[test]", "")
     };
+    let construct_await = if construction_is_async(ctx) {
+        ".await"
+    } else {
+        ""
+    };
     let mut body = format!(
-        "    let c = {expr}.expect(\"construct client\");\n",
+        "    let c = {expr}{construct_await}.expect(\"construct client\");\n",
         expr = construction_expr(ctx, false),
     );
     body.push_str(&invoke_block(ctx, &mut refs));

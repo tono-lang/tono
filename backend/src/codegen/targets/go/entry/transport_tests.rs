@@ -33,7 +33,6 @@ fn base_wire() -> WireBinding {
 struct Case {
     wire: WireBinding,
     discriminator: Option<&'static str>,
-    module_hooks: bool,
     retry_expr: Option<String>,
     timeout_expr: Option<String>,
     /// Param members the target can resolve through typed field access
@@ -51,7 +50,6 @@ impl Case {
         Case {
             wire,
             discriminator: None,
-            module_hooks: false,
             retry_expr: None,
             timeout_expr: None,
             resolved_params: Vec::new(),
@@ -84,7 +82,6 @@ impl Case {
             api_error: "APIError",
             transport_error: "TransportError",
             success_block: "\treturn out, nil",
-            module_hooks: self.module_hooks,
             retry_expr: self.retry_expr.clone(),
             timeout_expr: self.timeout_expr.clone(),
         };
@@ -101,18 +98,16 @@ impl Case {
 }
 
 #[test]
-fn a_plain_operation_carries_no_retry_timeout_or_hook_piece() {
+fn a_plain_operation_carries_no_retry_or_timeout_piece() {
     let out = Case::new(base_wire()).text();
     assert!(out.contains(
         "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));
     assert!(out.contains("Method: \"POST\","));
-    assert!(!out.contains("HookErr"));
     assert!(out.contains("requestURL := c.settings.endpoint + \"/charges\""));
     assert!(!out.contains("Retry"));
     assert!(!out.contains("Timing"));
     assert!(!out.contains("Timeout"));
-    assert!(!out.contains("Hooks"));
     // The all-body input marshals directly; no record indirection.
     assert!(out.contains("body, err := json.Marshal(input)"));
     assert!(!out.contains("EncodeRecord"));
@@ -151,16 +146,6 @@ fn a_timeout_operation_reads_the_preconverted_client_field() {
     case.timeout_expr = Some("c.timeoutDuration".into());
     let out = case.text();
     assert!(out.contains("Timeout: c.timeoutDuration,"));
-}
-
-#[test]
-fn a_bound_module_hook_rides_the_request() {
-    let mut case = Case::new(base_wire());
-    case.module_hooks = true;
-    let out = case.text();
-    assert!(out.contains("Hooks: c.hooks,"));
-    // The hook-failure check exists exactly where a hook is bound.
-    assert!(out.contains("if outcome.HookErr != nil {"));
 }
 
 #[test]

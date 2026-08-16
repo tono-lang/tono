@@ -415,22 +415,14 @@ let trait_items : CompletionItem.t list =
         ~detail ())
     Hover_docs.trait_docs
 
-(* The lifecycle slots come from the checker's own table, so completion can
-   only ever offer what the typechecker accepts. *)
-let slot_items : CompletionItem.t list =
-  List.map
-    (fun s ->
-      CompletionItem.create ~label:s ~kind:CompletionItemKind.EnumMember
-        ~detail:"lifecycle slot" ())
-    Check_ext.hook_slots
-
-(* The extension kinds the parser accepts after `ext`. *)
+(* The extension kinds a declared extension can validly be. `hook` still
+   parses (see Check_ext, which rejects it with a migration message), but it
+   is never a valid kind to write, so completion never offers it. *)
 let ext_kind_items : CompletionItem.t list =
   List.map
     (fun (k, detail) ->
       CompletionItem.create ~label:k ~kind:CompletionItemKind.Keyword ~detail ())
     [
-      ("hook", "lifecycle extension");
       ("contract", "bespoke contract");
       ("constraint", "bespoke constraint");
       ("impl", "bespoke operation implementation");
@@ -494,8 +486,8 @@ let is_ident_char c =
   || c = '_'
 
 (* The line prefix before the cursor picks the context: a trailing `@` wants a
-   trait, `ext hook` wants a lifecycle slot, a trailing `:` wants a type
-   (member types), and an open non-trait paren wants a type too (op input,
+   trait, a trailing `:` wants a type (member types), and an open non-trait
+   paren wants a type too (op input,
    variant payload). Anything else gets the flat list. *)
 let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
     CompletionItem.t list =
@@ -526,11 +518,6 @@ let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
     List.filter
       (fun w -> w <> "")
       (String.split_on_char ' ' (String.trim before))
-  in
-  let hook_context =
-    match words with
-    | [ "ext"; "hook" ] | [ "pub"; "ext"; "hook" ] -> true
-    | _ -> false
   in
   let ext_kind_context =
     match words with [ "ext" ] | [ "pub"; "ext" ] -> true | _ -> false
@@ -570,7 +557,6 @@ let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
   in
   if catalog_context then str_catalog_items
   else if after_at then trait_items
-  else if hook_context then slot_items
   else if ext_kind_context then ext_kind_items
   else if impl_context then entry_op_items file
   else if ref_context then field_items file off

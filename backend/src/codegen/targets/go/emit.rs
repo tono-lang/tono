@@ -34,7 +34,7 @@ use crate::ir::{Module, ShapeKind};
 
 /// The branded well-known types (distinct named string types, so they
 /// serialize exactly as their inner value while staying distinct in code),
-/// plus the transport shapes a bespoke hook types against.
+/// plus the canonical transport shapes.
 pub fn well_known_decls() -> Vec<Decl> {
     let mut decls: Vec<Decl> = ["Timestamp", "LocalDate", "Duration"]
         .iter()
@@ -298,10 +298,10 @@ mod tests {
 
     #[test]
     fn an_entry_with_an_unbound_wire_operation_has_no_live_contract() {
-        // Unlike Rust, Go's HTTP-op glue only routes through ContractError when
-        // an `on_error` hook is bound (`fail()` in `entry/mod.rs` passes the raw
-        // error straight through otherwise), so this genuinely never constructs
-        // one.
+        // Unlike Rust, Go's HTTP-op glue never wraps a transport/decode/API
+        // failure into ContractError; that category only exists when a bound
+        // extension can produce one, so a module with no extensions never
+        // constructs it.
         let mut wire = wire_binding("GET");
         wire.endpoint = Some(crate::ir::WireValue::Field(vec!["ep".into()]));
         let op = crate::ir::Shape {

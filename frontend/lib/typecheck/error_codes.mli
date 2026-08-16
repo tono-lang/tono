@@ -37,11 +37,12 @@ val not_exported : string
 val module_cycle : string
 val duplicate_import : string
 
-(* Extension-model checks: an unknown hook slot, an unsupported binding language,
-   a kind/signature-shape violation, an extension with no binding, a binding that
-   is not a "file#symbol" reference, a duplicate extension name, and a language
-   bound twice within one extension (which would collapse to one wire key). *)
-val ext_unknown_hook_slot : string
+(* Extension-model checks: a hook (removed, see error_codes.ml), an unsupported
+   binding language, a kind/signature-shape violation, an extension with no
+   binding, a binding that is not a "file#symbol" reference, a duplicate
+   extension name, and a language bound twice within one extension (which
+   would collapse to one wire key). *)
+val ext_hook_removed : string
 val ext_binding_language_invalid : string
 val ext_signature_rule : string
 val ext_binding_missing : string

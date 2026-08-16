@@ -1,9 +1,9 @@
 //! The generated constructor (a builder's `build` or a plain `new`): source
-//! resolution in dependency order, the `client_init` bridge, the
-//! consumed-chain requires, declared validation, the eager `@timeout`
-//! millisecond conversion, and the transport slots frozen into
-//! `ClientOptions`. Split out of `mod.rs` to stay under this repo's per-file
-//! line ceiling; `construction_decls` is `mod.rs`'s only caller.
+//! resolution in dependency order, the consumed-chain requires, declared
+//! validation, the eager `@timeout` millisecond conversion, and the transport
+//! slots frozen into `ClientOptions`. Split out of `mod.rs` to stay under this
+//! repo's per-file line ceiling; `construction_decls` is `mod.rs`'s only
+//! caller.
 
 use std::collections::BTreeMap;
 
@@ -57,10 +57,9 @@ impl validation::ValSyntax for RustVal {
 /// With `test_seam`, the whole construction body moves into a `pub(crate)`
 /// variant taking an `Option<Transport>`, and the public entry point
 /// delegates with `None`: a generated test runs the real construction path
-/// (resolution, client_init, validation) and only the transport is swapped,
-/// after bespoke code ran, so the test sees exactly the request the SDK
-/// would send. `pub(crate)` suffices because the generated test file is a
-/// `#[cfg(test)]` module of the same crate.
+/// (resolution, validation) and only the transport is swapped, so the test
+/// sees exactly the request the SDK would send. `pub(crate)` suffices because
+/// the generated test file is a `#[cfg(test)]` module of the same crate.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn construction_decls(
     entry: &EntryModel<'_>,
@@ -113,10 +112,10 @@ pub(super) fn construction_decls(
         format!(
             // An entry whose ops read no settings field directly (every wire
             // position a literal) never reads `settings` back after
-            // construction; a bespoke `ext impl` op or lifecycle hook does.
-            // `dead_code` is silenced per entry rather than omitting the
-            // field, so its shape stays uniform across entries regardless of
-            // which ops happen to need it.
+            // construction; a bespoke `ext impl` op does. `dead_code` is
+            // silenced per entry rather than omitting the field, so its shape
+            // stays uniform across entries regardless of which ops happen to
+            // need it.
             "{doc}pub struct {client} {{\n    #[allow(dead_code)]\n    settings: {settings},\n    options: ClientOptions,\n{timeout_field_decls}{seam_field_decls}}}",
             client = n.client,
             settings = n.settings,
@@ -134,7 +133,6 @@ pub(super) fn construction_decls(
         n,
         module,
         config,
-        bound,
         helpers,
         multi,
         "self.",
@@ -147,7 +145,6 @@ pub(super) fn construction_decls(
         n,
         module,
         config,
-        bound,
         helpers,
         multi,
         "",
@@ -171,7 +168,7 @@ pub(super) fn construction_decls(
             })
             .collect();
         let doc = format!(
-            "    /// Constructs {client}: the declared sources resolve top-down,\n    /// client_init runs on top (bespoke wins), then the declared validation.\n",
+            "    /// Constructs {client}: the declared sources resolve top-down, then\n    /// the declared validation.\n",
             client = n.client,
         );
         let constructors = if test_seam {
@@ -182,7 +179,7 @@ pub(super) fn construction_decls(
             let comma = if params.is_empty() { "" } else { ", " };
             refs.push(support_symbol("HttpTransport"));
             format!(
-                "{doc}    pub {effect}fn new({params}) -> Result<Self, TonoError> {{\n        Self::new_with_transport(None{comma}{pass}){awaited}\n    }}\n\n    /// `new` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) {effect}fn new_with_transport(transport: Option<HttpTransport>{comma}{params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
+                "{doc}    pub {effect}fn new({params}) -> Result<Self, TonoError> {{\n        Self::new_with_transport(None{comma}{pass}){awaited}\n    }}\n\n    /// `new` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, so a test\n    /// answers canonically without a server.\n    pub(crate) {effect}fn new_with_transport(transport: Option<HttpTransport>{comma}{params}) -> Result<Self, TonoError> {{\n{body}\n    }}\n",
                 params = params.join(", "),
                 pass = pass.join(", "),
                 body = indent(&plain_body, 2),
@@ -243,11 +240,11 @@ pub(super) fn construction_decls(
             })
             .collect();
 
-        let build_doc = "    /// Resolves the declared sources top-down, runs client_init on top\n    /// (bespoke wins), then the declared validation.\n";
+        let build_doc = "    /// Resolves the declared sources top-down, then the declared\n    /// validation.\n";
         let build_fns = if test_seam {
             refs.push(support_symbol("HttpTransport"));
             format!(
-                "{build_doc}    pub {effect}fn build(self) -> Result<{client}, TonoError> {{\n        self.build_with_transport(None){awaited}\n    }}\n\n    /// `build` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, after\n    /// client_init ran, so a test answers canonically without a server.\n    pub(crate) {effect}fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
+                "{build_doc}    pub {effect}fn build(self) -> Result<{client}, TonoError> {{\n        self.build_with_transport(None){awaited}\n    }}\n\n    /// `build` plus the transport seam the generated tests construct through:\n    /// a `Some` transport replaces whatever construction resolved, so a\n    /// test answers canonically without a server.\n    pub(crate) {effect}fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<{client}, TonoError> {{\n{body}\n    }}\n",
                 client = n.client,
                 body = indent(&body, 2),
             )
@@ -311,11 +308,11 @@ struct BodyCtx<'a> {
 }
 
 /// The full resolution body shared by the builder's `build` and the
-/// plain-constructor `new`: zero the draft, resolve every field, bridge
-/// `client_init`, run the consumed-chain requires and the declared
-/// validation, convert each `@timeout` path to milliseconds eagerly (a
-/// malformed duration fails construction, not the first call), and freeze
-/// the transport slots into `ClientOptions`. `arg_prefix` is `"self."` when
+/// plain-constructor `new`: zero the draft, resolve every field, run the
+/// consumed-chain requires and the declared validation, convert each
+/// `@timeout` path to milliseconds eagerly (a malformed duration fails
+/// construction, not the first call), and freeze the transport slots into
+/// `ClientOptions`. `arg_prefix` is `"self."` when
 /// reading an `@arg` value off a builder (`build(self)` consumes it) or
 /// empty when reading it off a bare function parameter (`new`'s own
 /// arguments) — the only place the two entry points differ. With
@@ -327,7 +324,6 @@ fn resolution_body(
     n: &Names,
     module: &Module,
     config: &CasingConfig,
-    bound: &[BoundExtension<'_>],
     helpers: &mut Helpers,
     multi: bool,
     arg_prefix: &'static str,
@@ -370,17 +366,6 @@ fn resolution_body(
         if !fields.is_empty() {
             plan::push_gap(r.body);
             r.body.push_str(&fields);
-        }
-    }
-
-    if !multi {
-        if let Some(b) = hook_binding(bound, "client_init") {
-            refs.push(Symbol::imported(b.symbol, use_path(b.module), b.symbol));
-            plan::push_gap(&mut body);
-            body.push_str(&format!(
-                "if let Err(e) = {sym}(&mut s) {{\n    return Err(match e.downcast::<TonoError>() {{\n        Ok(declared) => *declared,\n        Err(other) => TonoError::Contract(ContractError {{ contract_name: \"client_init\".to_string(), cause: other }}),\n    }});\n}}\n",
-                sym = b.symbol,
-            ));
         }
     }
 

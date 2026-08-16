@@ -416,14 +416,6 @@ fn retry_or_throw(
     )
 }
 
-/// One lifecycle hook invocation, or nothing when the slot is unbound.
-fn hook_line(indent_str: &str, bound: bool, slot: &str, var: &str) -> String {
-    if !bound {
-        return String::new();
-    }
-    format!("{indent_str}if (this.hooks.{slot}) {var} = await this.hooks.{slot}({var});\n")
-}
-
 /// One operation's transport call, replacing the descriptor-plus-`execute()`
 /// call. Built once as a single "attempt" block, indented one level deeper
 /// and wrapped in a retry loop when `wire.retry` is declared; a non-retrying
@@ -441,8 +433,6 @@ pub(super) fn op_call(
     success_block: &str,
     transport_error: &str,
     throw: &dyn Fn(String) -> String,
-    before_request_bound: bool,
-    after_response_bound: bool,
     field_expr: &dyn Fn(&[String]) -> String,
     timeout_field_expr: &dyn Fn(&[String]) -> String,
     param_access: ParamAccess<'_>,
@@ -494,10 +484,11 @@ pub(super) fn op_call(
             "    if (!hasHeader(headers, \"content-type\")) headers[\"content-type\"] = \"application/json\";\n",
         );
     }
-    // A fresh `headers` copy per request literal: a `before_request` hook may
-    // mutate the object it receives in place rather than returning a new one,
-    // and a retried attempt must not see a prior attempt's mutation (the
-    // runtime this replaces rebuilds headers fresh on every attempt).
+    // A fresh `headers` copy per request literal: a call-valued header/body
+    // below may mutate the object it receives in place rather than returning
+    // a new one, and a retried attempt must not see a prior attempt's
+    // mutation (the runtime this replaces rebuilds headers fresh on every
+    // attempt).
     let request_literal = format!(
         "{{ method: {}, url, headers: {{ ...headers }}, {body_field} }}",
         js_str(method)
@@ -527,9 +518,7 @@ pub(super) fn op_call(
     let d = if has_retry { "      " } else { "    " };
     // A call-valued header/body reads the request once it exists, so it
     // patches in right here: after the declared values are folded into
-    // `request` (the next line), before it is sent -- the same slot
-    // `before_request` occupies, and right before it, so a hook still sees
-    // the signed header/body.
+    // `request` (the next line), right before it is sent.
     let mut call_request_lines = call_header_lines(
         wire,
         module,
@@ -550,22 +539,16 @@ pub(super) fn op_call(
         "request",
         refs,
     ));
-    let request_kw = if before_request_bound || !call_request_lines.is_empty() {
-        "let"
-    } else {
+    let request_kw = if call_request_lines.is_empty() {
         "const"
+    } else {
+        "let"
     };
     let mut attempt = String::new();
     attempt.push_str(&format!(
         "{d}{request_kw} request: HttpRequest = {request_literal};\n"
     ));
     attempt.push_str(&call_request_lines);
-    attempt.push_str(&hook_line(
-        d,
-        before_request_bound,
-        "before_request",
-        "request",
-    ));
     push_gap(&mut attempt);
     attempt.push_str(&format!("{d}let response: HttpResponse;\n"));
     attempt.push_str(&format!("{d}try {{\n"));
@@ -578,12 +561,6 @@ pub(super) fn op_call(
         &transport_throw,
     ));
     attempt.push_str(&format!("{d}}}\n"));
-    attempt.push_str(&hook_line(
-        d,
-        after_response_bound,
-        "after_response",
-        "response",
-    ));
     // `outcome` is the name `success_block`/`error_line` (built in decode.rs)
     // reads `.status`/`.body` off — a name shared with the raw-bespoke impl
     // path, whose own `outcome` is a genuinely different shape (`{success,

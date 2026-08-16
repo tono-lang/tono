@@ -14,12 +14,10 @@ import (
 	"time"
 )
 
-// Settings are the resolved construction values of the client entry,
-// handed to the client_init hook before validation: bespoke code may
-// overwrite any field (bespoke wins) and set transport through the slots.
+// Settings are the resolved construction values of the client entry.
 // Exactly one transport slot may be set: HTTPClient (native) or Transport
-// (canonical). Headers are the base request headers (bespoke auth writes
-// here); a declared @header wins only where nothing else set the name.
+// (canonical). Headers are the base request headers; a declared @header
+// wins only where nothing else set the name.
 type Settings struct {
 	APIKey     string
 	Endpoint   string
@@ -94,17 +92,16 @@ func resolveSettingMaxRetries(with *int32) int32 {
 }
 
 // New constructs Client: positional @arg values, options for @with,
-// declared sources resolved top-down, client_init on top (bespoke wins),
-// then the declared validation.
+// declared sources resolved top-down, then the declared validation.
 func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	return newWithTransport(nil, apiKey, opts...)
 }
 
 // newWithTransport is New plus the seams the generated tests use: a non-nil
-// canonical transport replaces whatever construction resolved, after
-// client_init ran; a non-nil field override skips that field's own real
-// `extern` construction call outright, so a hermetic test never reaches
-// the real library, not just avoids calling it at runtime.
+// canonical transport replaces whatever construction resolved; a non-nil
+// field override skips that field's own real `extern` construction call
+// outright, so a hermetic test never reaches the real library, not just
+// avoids calling it at runtime.
 func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...ClientOption) (*Client, error) {
 	w := clientOptions{}
 	for _, opt := range opts {

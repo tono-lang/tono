@@ -91,7 +91,7 @@ fn the_entry_class_replaces_the_generic_client_surface() {
     // object; the Settings expose the resolved fields and transport slots.
     assert!(out.contains("export class Client {"));
     // The resolved settings are private (as Go's client field is unexported):
-    // immutable to the consumer once construction and the hook have run.
+    // immutable to the consumer once construction has run.
     assert!(out.contains("private readonly settings: Settings;"));
     assert!(!out.contains("  readonly settings: Settings;"));
     assert!(out.contains("constructor(apiKey: string, config: ClientConfig = {}) {"));
@@ -139,30 +139,6 @@ fn the_resolution_mirrors_the_go_spelling() {
     assert!(out.contains(
         "this.options = { fetch: s.fetch, transport: s.transport, headers: s.headers };"
     ));
-}
-
-#[test]
-fn the_settings_bridge_wires_client_init_by_mutation() {
-    let mut module = with_descriptors(fixture_module());
-    module.extensions = vec![crate::ir::Extension {
-        name: "client_init".into(),
-        kind: crate::ir::ExtKind::Hook,
-        signature: None,
-        raw: false,
-        bindings: [("ts".to_string(), "ext/ts/init.ts#initSettings".to_string())]
-            .into_iter()
-            .collect(),
-        conformance: None,
-    }];
-    let out = text(&module);
-    assert!(out.contains("function wrapClientInit(settings: Settings): void {"));
-    assert!(out.contains("initSettings(settings);"));
-    assert!(out.contains("wrapClientInit(s);"));
-    assert!(out.contains("throw new ContractError(\"client_init\", e);"));
-    // Bridge before validation: init runs before the consumed-chain check.
-    let init = out.find("wrapClientInit(s);").unwrap();
-    let require = out.find("throw new ConfigError(\"endpoint <- \"").unwrap();
-    assert!(init < require);
 }
 
 #[test]
@@ -735,10 +711,6 @@ fn an_operation_with_no_retry_or_timeout_declares_neither() {
     assert!(!out.contains("httpSendWithTimeout"));
     assert!(!out.contains("timeoutMs"));
     assert!(out.contains("await httpSend(this.options, request, undefined);"));
-    // No hook is bound (the fixture's default extensions are empty), so no
-    // hook invocation is emitted either.
-    assert!(!out.contains("this.hooks.before_request"));
-    assert!(!out.contains("this.hooks.after_response"));
 }
 
 /// A retrying operation's declared-error path must retry only while the

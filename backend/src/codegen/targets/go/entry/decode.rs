@@ -29,9 +29,9 @@ pub(super) struct Payload<'a> {
 }
 
 /// The tail of a client method: decode the payload into `output` and return it,
-/// or return the mapped decode failure. `fail` routes an error expression
-/// through the bound `on_error` hook when the module has one; `refs` collects
-/// the imports the emitted code needs.
+/// or return the mapped decode failure. `fail` turns an error expression into
+/// the caller's own `return` statement; `refs` collects the imports the
+/// emitted code needs.
 ///
 /// A structured output decodes leniently on what the contract promises:
 /// required members must be present (a zero value is not absence) and the shape

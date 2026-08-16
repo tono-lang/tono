@@ -11,7 +11,7 @@
 # differential check.
 #
 # The bearer example's generated Vitest suite runs here too: it asserts the
-# Authorization header the TypeScript client_init hook writes.
+# Authorization header the declared @format + @header chain writes.
 #
 # Everything happens in a throwaway directory, so nothing leaks into the repo.
 set -euo pipefail
@@ -83,14 +83,11 @@ echo "vitest (hermetic + live)..."
 
 echo "auth-bearer vitest..."
 # The bearer example's generated test asserts the Authorization header the
-# TypeScript client_init hook writes; running it here reuses the runtimes this
-# script already compiled into node_modules.
+# declared @format + @header chain writes; no bespoke ext/ runtime is needed.
 "$frontend" compile "$root/examples/auth-bearer/auth.tono" --module auth >"$work/auth-ir.json"
 "$tono" gen --target typescript --out "$work/auth-sdk" "$work/auth-ir.json"
-mkdir -p "$work/auth-ts/node_modules"
+mkdir -p "$work/auth-ts"
 cp -R "$work/auth-sdk/typescript/." "$work/auth-ts/"
-cp -R "$root/examples/auth-bearer/ext" "$work/auth-ts/ext"
-cp -R "$work/ts/node_modules/@tono" "$work/auth-ts/node_modules/@tono"
 (cd "$work/auth-ts" && "$vitest" run --root .)
 
 echo "generated tests pass in go and typescript"

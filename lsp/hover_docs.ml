@@ -248,9 +248,7 @@ let trait_docs : (string * string) list =
     (fun (name, i) -> (name, trait_doc_text i))
     (trait_registry @ str_catalog)
 
-(* Construct hover texts. The hook slot list is rendered from the exact table
-   the typechecker enforces (Check_ext.hook_slots): the enumerated semantics
-   must never grow a second hand-written copy. *)
+(* Construct hover texts. *)
 let construct_doc (word : string) : string option =
   match word with
   | "struct" ->
@@ -276,14 +274,9 @@ let construct_doc (word : string) : string option =
       Some "Brings another module's declarations into dot-qualified scope."
   | "ext" ->
       Some
-        "A bespoke extension point (hook, contract, constraint, or impl), \
-         bound per language to a file#symbol reference."
-  | "hook" ->
-      Some
-        (Printf.sprintf
-           "Fills a fixed lifecycle slot (%s), bound per language to a \
-            file#symbol reference. Hooks take no signature."
-           (String.concat ", " Check_ext.hook_slots))
+        "A bespoke extension point (contract, constraint, or impl), bound per \
+         language to a file#symbol reference. Libraries are integrated \
+         declaratively instead, via 'ext <lib> { extern ... }'."
   | "contract" ->
       Some
         "A bespoke function with a typed signature; emission is gated on a \

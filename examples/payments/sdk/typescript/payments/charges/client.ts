@@ -41,12 +41,10 @@ import {
   validateCharge,
 } from "./types";
 
-// Settings are the resolved construction values of the client entry,
-// handed to the client_init hook before validation: bespoke code may
-// overwrite any field (bespoke wins) and set transport through the slots.
+// Settings are the resolved construction values of the client entry.
 // Exactly one transport slot may be set: fetch (native) or transport
-// (canonical). headers are the base request headers (bespoke auth writes
-// here); a declared @header wins only where nothing else set the name.
+// (canonical). headers are the base request headers; a declared @header
+// wins only where nothing else set the name.
 export interface Settings {
   apiKey: string;
   endpoint: string;
@@ -88,8 +86,8 @@ function resolveSettingMaxRetries(withValue: number | undefined): number {
 // The payments SDK entry: the construction surface and its operations.
 // Client is the generated SDK client the client entry declares. The
 // constructor takes the @arg values positionally and the @with values as a
-// config object; construction resolves the declared sources, runs the
-// client_init bridge, validates, and freezes the runtime options.
+// config object; construction resolves the declared sources, validates,
+// and freezes the runtime options.
 export class Client {
   private readonly settings: Settings;
   private readonly options: ClientOptions;

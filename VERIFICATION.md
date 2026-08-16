@@ -12,7 +12,7 @@ is strong on the hand-written (bespoke) seam.
 | Types / serialization | property (round-trip + idempotence) | light | `frontend/test/test_property.ml` (QCheck), `backend/tests/property_ir.rs` (proptest) |
 | Calculus | golden | light | `frontend/test/calculus_test.ml` |
 | Bespoke (codecs + error taxonomy) | golden + differential + **mutation** | **strong** | `backend/tests/conformance.rs`, `.cargo/mutants.toml` |
-| User bespoke (ext impls, hooks, live API) | conformance vectors -> generated native tests | opt-in per operation | `examples/*/vectors/*.json`, emitted `*_test.go` / `*.test.ts` / `*_test.rs` |
+| User bespoke (ext impls, live API) | conformance vectors -> generated native tests | opt-in per operation | `examples/*/vectors/*.json`, emitted `*_test.go` / `*.test.ts` / `*_test.rs` |
 | HTTP transport (entry client) | codegen snapshot | review | `backend/src/codegen/targets/*/entry/transport*.rs`, `backend/tests/snapshot_codegen.rs` |
 | Runtime parity (retry/timeout/errors) | shared behavior vectors | breaks build | `runtimes/parity/vectors.json`; TypeScript, Go, and Rust all drive a generated SDK compiled from `runtimes/parity/spec.tono` (`scripts/run-parity.sh`) |
 | Generator (codegen) | snapshot | review | `backend/tests/snapshot_codegen.rs` |
@@ -41,8 +41,8 @@ Run: `cargo test --test conformance` (needs the Go/Node toolchains).
 
 ## Generated native tests (user bespoke)
 
-What only the user can get wrong (their `ext impl` code, their hooks, their real
-API) has its oracle outside the generator, so it is not covered by round-trips.
+What only the user can get wrong (their `ext impl` code, their real API) has
+its oracle outside the generator, so it is not covered by round-trips.
 A conformance vector declares "with this input, with this point mocked, expect
 this outcome"; the generator turns it into native test files beside the client
 (`go test`, Vitest, `cargo test`), wiring the declared mock through seams the

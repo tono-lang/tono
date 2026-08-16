@@ -201,7 +201,7 @@ fn taxonomy_decls(liveness: &TaxonomyLiveness) -> Vec<Decl> {
         decls.push(category(
             &n.contract,
             "readonly contractName: string, readonly cause: unknown",
-            "\"contract hook failed\"",
+            "\"contract failed\"",
         ));
     }
     if liveness.api {

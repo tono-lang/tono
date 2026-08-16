@@ -1,12 +1,11 @@
 //! Boundary-wrapping glue for bespoke extensions in the Go target.
 //!
-//! Go has no concrete HTTP client yet (that lands with the Go runtime), so there
-//! is no transport point to invoke lifecycle hooks at. What the Go target can
-//! emit today is the typed boundary wrapper a bound contract needs: it calls the
-//! bound symbol and, on the error path, returns a `ContractError` unless the
-//! error is already one (avoiding a double wrap). The concrete client will call
-//! these wrappers, and carry the fuller declared-error pass-through, once it
-//! exists.
+//! Go has no concrete HTTP client yet (that lands with the Go runtime). What
+//! the Go target can emit today is the typed boundary wrapper a bound
+//! contract needs: it calls the bound symbol and, on the error path, returns
+//! a `ContractError` unless the error is already one (avoiding a double
+//! wrap). The concrete client will call these wrappers, and carry the fuller
+//! declared-error pass-through, once it exists.
 
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::extensions::bound_extensions;
@@ -15,15 +14,14 @@ use crate::codegen::syntax::render_type;
 use crate::codegen::targets::go::render::GoRules;
 use crate::codegen::targets::go::types::type_expr_of;
 use crate::codegen::tree::Decl;
-use crate::ir::{ExtKind, Module};
+use crate::ir::Module;
 
 /// The binding-language key the Go target reads.
 const BINDING_LANGS: [&str; 1] = ["go"];
 
 /// Whether the module binds any bespoke Go code. That is what puts a boundary
-/// in the package (a contract wrapper, a bound operation, a hook wrapper), and
-/// the boundary is the only thing that has to tell an SDK error from a foreign
-/// one.
+/// in the package (a contract wrapper, a bound operation), and the boundary
+/// is the only thing that has to tell an SDK error from a foreign one.
 pub fn binds_bespoke(module: &Module) -> bool {
     !bound_extensions(module, &BINDING_LANGS).is_empty()
 }
@@ -39,12 +37,10 @@ fn exported(name: &str) -> String {
 }
 
 /// One boundary wrapper per bound contract/constraint that declares a typed
-/// signature. Hooks are skipped: their input/output are runtime types the Go
-/// runtime has not introduced yet.
+/// signature.
 pub fn wrapper_decls(module: &Module) -> Vec<Decl> {
     bound_extensions(module, &BINDING_LANGS)
         .iter()
-        .filter(|e| e.kind != ExtKind::Hook)
         .filter_map(|e| {
             let sig = e.signature?;
             // The wrapper's signature types are same-package (no cross-module
@@ -163,13 +159,5 @@ mod tests {
         assert!(!taxonomy.contains("sdkError()"));
         // The categories themselves are unchanged: only the marker goes.
         assert!(taxonomy.contains("type ContractError struct {"));
-    }
-
-    #[test]
-    fn a_hook_emits_no_go_wrapper() {
-        let mut ext = contract("before_request", "ext/go/a.go#F");
-        ext.kind = ExtKind::Hook;
-        ext.signature = None;
-        assert!(wrapper_decls(&module_with(ext)).is_empty());
     }
 }

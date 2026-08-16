@@ -80,7 +80,7 @@ pub use crate::ir_tests_model::*;
 /// v18 added a declared test's `extern_stubs`: a stub for an `extern` FFI
 /// call (free function or opaque-handle method), not tied to one client/op
 /// like the existing HTTP/impl stub.
-pub const TONO_IR_VERSION: u32 = 18;
+pub const TONO_IR_VERSION: u32 = 19;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -586,22 +586,20 @@ pub struct Shape {
     pub traits: Vec<Trait>,
 }
 
-/// A bespoke extension bound to per-language source files. `Hook` fills a fixed
-/// lifecycle slot (its `name` is the slot); `Contract`/`Constraint` are named
-/// with a typed signature; `Impl` implements the operation its `name` points at
-/// (bare, or `entry.op` when the bare name would be ambiguous) and takes that
-/// operation's signature. Serializes as the lowercase word under a `kind` key.
+/// A bespoke extension bound to per-language source files. `Contract`/`Constraint`
+/// are named with a typed signature; `Impl` implements the operation its `name`
+/// points at (bare, or `entry.op` when the bare name would be ambiguous) and
+/// takes that operation's signature. Serializes as the lowercase word under a
+/// `kind` key.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExtKind {
-    Hook,
     Contract,
     Constraint,
     Impl,
 }
 
-/// A contract/constraint boundary: the input and output type refs. Hooks omit
-/// it (their slot fixes the signature).
+/// A contract/constraint boundary: the input and output type refs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Signature {
     pub input: Tref,

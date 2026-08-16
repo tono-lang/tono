@@ -314,20 +314,6 @@ let project_symbols (p : project) ~(query : string) :
 
 (* --- code actions --- *)
 
-let levenshtein (a : string) (b : string) : int =
-  let la = String.length a and lb = String.length b in
-  let prev = Array.init (lb + 1) Fun.id in
-  let cur = Array.make (lb + 1) 0 in
-  for i = 1 to la do
-    cur.(0) <- i;
-    for j = 1 to lb do
-      let cost = if a.[i - 1] = b.[j - 1] then 0 else 1 in
-      cur.(j) <- min (min (cur.(j - 1) + 1) (prev.(j) + 1)) (prev.(j - 1) + cost)
-    done;
-    Array.blit cur 0 prev 0 (lb + 1)
-  done;
-  prev.(lb)
-
 let last_segment (m : string) : string =
   match List.rev (String.split_on_char '.' m) with x :: _ -> x | [] -> m
 
@@ -382,28 +368,6 @@ let project_code_actions (p : project) ~(module_ : string) ~(range : Range.t) :
                       [ (e.pe_id, import_edit other.pe_module) ] )
                 else None)
               p.entries
-          else if d.code = Some Error_codes.ext_unknown_hook_slot then
-            let bad = span_text d.span in
-            let best =
-              List.fold_left
-                (fun acc slot ->
-                  let dist = levenshtein bad slot in
-                  match acc with
-                  | Some (_, d0) when d0 <= dist -> acc
-                  | _ -> Some (slot, dist))
-                None Check_ext.hook_slots
-            in
-            match best with
-            | None -> []
-            | Some (slot, _) ->
-                [
-                  ( "change to '" ^ slot ^ "'",
-                    [
-                      ( e.pe_id,
-                        TextEdit.create ~newText:slot
-                          ~range:(range_of_span ~text:e.pe_text d.span) );
-                    ] );
-                ]
           else [])
         (project_module_fdiags p module_)
 

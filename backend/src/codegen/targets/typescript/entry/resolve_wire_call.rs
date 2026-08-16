@@ -122,9 +122,7 @@ fn call_wire_stmt(
 /// once the request is fully assembled (the declared values already folded
 /// in, see `transport::declared_header_lines`), so the call's own
 /// `.request` argument (`request_var`) is the complete, already-built
-/// request -- method, path, headers, and body -- matching the same slot
-/// the `before_request` hook occupies (right before it, so a hook still
-/// sees the signed header).
+/// request -- method, path, headers, and body -- right before it is sent.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn call_header_lines(
     wire: &WireBinding,

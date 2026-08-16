@@ -9,9 +9,8 @@
 //! top-down (explicit value wins over the chain, `@default` is the last
 //! resort), parses env values by the field's type at the boundary, lowers a
 //! match selection to Rust's own `match`, decodes a structured source
-//! strictly, composes a config through `@bind`, runs the bound `client_init`
-//! hook over the resolved `Settings` (bespoke wins), validates last, and
-//! freezes the transport slots into `ClientOptions`. An operation's wire
+//! strictly, composes a config through `@bind`, validates last, and freezes
+//! the transport slots into `ClientOptions`. An operation's wire
 //! positions (endpoint, headers, timeout, retry) read the typed resolved
 //! `Settings` directly at the call site — there is no runtime value bag and
 //! no descriptor left to interpret.
@@ -30,7 +29,7 @@ use std::collections::BTreeSet;
 use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::conventions::{deprecated_of, doc_of, rename_of, type_ident_from_id, wire_key};
 use crate::codegen::entries::{companion_name, op_local_name, plan, EntryModel};
-use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
+use crate::codegen::extensions::{impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, effect_of, op_io, wire_binding, Effect};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
@@ -510,8 +509,7 @@ pub(super) fn field_doc(traits: &[Trait], indent_str: &str) -> String {
 /// One `use crate::...` path for a bound bespoke symbol's file: `ext/rust/
 /// sign.rs` becomes `ext::rust::sign` (the render engine prepends `crate::`
 /// through the normal Symbol import machinery this returns a module path
-/// for). Shared by `constructor` (the `client_init` hook) and `impl_op` (a
-/// bespoke op's bound symbol).
+/// for). Used by `impl_op` for a bespoke op's bound symbol.
 pub(super) fn use_path(module: &str) -> String {
     module
         .strip_suffix(".rs")
@@ -653,8 +651,6 @@ fn op_method(
             has_declared_errors: !declared_errors(op, module).is_empty(),
             discriminator: &discriminator,
             success_block: &success,
-            before_request: hook_binding(bound, "before_request"),
-            after_response: hook_binding(bound, "after_response"),
             timeout_field,
         },
         &fields,

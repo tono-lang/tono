@@ -91,7 +91,7 @@ pub fn derive(module: &Module, langs: &[&str]) -> TaxonomyLiveness {
 }
 
 /// Whether the module can construct a `ContractError` for this target: it
-/// binds a hook or a typed contract/constraint/impl, an entry has a
+/// binds a typed contract/constraint/impl, an entry has a
 /// bespoke (non-wire) operation this target has no binding for at all (which
 /// always falls back to the "operation has no implementation" `ContractError`
 /// regardless of whether anything else is bound), or an entry field resolves
@@ -139,11 +139,9 @@ fn wire_binding_has_call(wire: &WireBinding) -> bool {
 /// generated body (`rust/entry/mod.rs::op_method`) contains a
 /// `Runtime::execute(...).map_err(...)` match arm that wraps any downcast
 /// failure into `ContractError`. That text is emitted the same way for every
-/// wire-op entry method regardless of whether *this* module binds a hook for
-/// it — only whether the arm is reachable at runtime depends on the binding
-/// (the runtime's `hooks` field is `Some` only when a `before_request`/
-/// `after_response` hook is bound); the reference itself is unconditional.
-/// See [`has_wire_entry_op`]. Shared by the Rust emitter and `compat.rs` (a
+/// wire-op entry method regardless of whether *this* module binds anything
+/// at all; the reference itself is unconditional. See [`has_wire_entry_op`].
+/// Shared by the Rust emitter and `compat.rs` (a
 /// pruned-declaration breaking change has to apply the same rule the emitter
 /// does, or it would flag a category as newly-dead that Rust still emits
 /// unconditionally).

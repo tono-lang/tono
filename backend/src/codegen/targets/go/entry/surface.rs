@@ -45,8 +45,7 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
 }
 
 /// The `Settings` struct: every resolved entry field plus the transport slots
-/// the bespoke `client_init` hook may fill (native client or canonical
-/// transport, and the base headers a bespoke auth writes into).
+/// (native client or canonical transport) and the base request headers.
 pub(super) fn settings_decl(
     entry: &EntryModel<'_>,
     n: &Names,
@@ -68,12 +67,10 @@ pub(super) fn settings_decl(
         ));
     }
     let text = format!(
-        "// {settings} are the resolved construction values of the {entry} entry,\n\
-         // handed to the client_init hook before validation: bespoke code may\n\
-         // overwrite any field (bespoke wins) and set transport through the slots.\n\
+        "// {settings} are the resolved construction values of the {entry} entry.\n\
          // Exactly one transport slot may be set: HTTPClient (native) or Transport\n\
-         // (canonical). Headers are the base request headers (bespoke auth writes\n\
-         // here); a declared @header wins only where nothing else set the name.\n\
+         // (canonical). Headers are the base request headers; a declared @header\n\
+         // wins only where nothing else set the name.\n\
          type {settings} struct {{\n{fields}\n\tHTTPClient *http.Client\n\tTransport  {transport}\n\tHeaders    map[string]string\n}}",
         settings = n.settings,
         entry = entry.name,
@@ -167,15 +164,10 @@ fn is_foreign_handle(t: &Tref, module: &Module) -> bool {
 
 /// The client struct, its mock interface (one method per operation, `ctx`
 /// first), and the compile-time conformance assertion. Besides the resolved
-/// settings the struct carries only what this entry's operations declare: the
-/// bound hooks, one pre-converted field per distinct `@timeout` path, and the
-/// retry backoff's timing seam.
-pub(super) fn client_decls(
-    entry: &EntryModel<'_>,
-    n: &Names,
-    config: &CasingConfig,
-    bound: &[BoundExtension<'_>],
-) -> Vec<Decl> {
+/// settings the struct carries only what this entry's operations declare: one
+/// pre-converted field per distinct `@timeout` path, and the retry backoff's
+/// timing seam.
+pub(super) fn client_decls(entry: &EntryModel<'_>, n: &Names, config: &CasingConfig) -> Vec<Decl> {
     let mut methods = String::new();
     // An entry with no operations declares an empty mock interface, which
     // never spells `context.Context` anywhere in its own text; importing it
@@ -192,12 +184,6 @@ pub(super) fn client_decls(
     }
     let mut struct_fields = format!("\tsettings {settings}\n", settings = n.settings);
     let mut struct_refs = Vec::new();
-    if hook_binding(bound, "before_request").is_some()
-        || hook_binding(bound, "after_response").is_some()
-    {
-        struct_fields.push_str(&format!("\thooks *{}\n", shared_slot("Hooks")));
-        struct_refs.push(super::shared_symbol("Hooks"));
-    }
     for path in timeout_paths(entry).values() {
         struct_fields.push_str(&format!(
             "\t// {ident} is the operation @timeout, converted once at construction.\n\
@@ -319,10 +305,9 @@ pub(super) fn entry_type_decls(
     module: &Module,
     config: &CasingConfig,
     multi: bool,
-    bound: &[BoundExtension<'_>],
 ) -> Vec<Decl> {
     let mut decls = vec![settings_decl(entry, n, config, module)];
     decls.extend(option_decls(entry, n, multi, module));
-    decls.extend(client_decls(entry, n, config, bound));
+    decls.extend(client_decls(entry, n, config));
     decls
 }

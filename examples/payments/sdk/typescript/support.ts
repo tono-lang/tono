@@ -5,16 +5,13 @@ export type Timestamp = string & { readonly __brand: "Timestamp" };
 export type Duration = string & { readonly __brand: "Duration" };
 
 // HttpResponse is the response the runtime reads before classifying it.
-// An after_response hook may return a mutated copy.
 export interface HttpResponse {
   status: number;
   headers: Record<string, string>;
   body: string;
 }
 
-// HttpRequest is the request the runtime builds before sending it. A
-// before_request hook receives this and may return a mutated copy (set an
-// auth header, sign the body).
+// HttpRequest is the request the runtime builds before sending it.
 export interface HttpRequest {
   method: string;
   url: string;
@@ -34,7 +31,7 @@ export type HttpTransport = (
 // ClientOptions is what the caller supplies once, shared across every
 // operation. Exactly one transport slot may be set: fetch (native) or
 // transport (canonical); setting both is a construction error. No slot
-// ships its own auth; a bespoke hook sets an auth header through headers.
+// ships its own auth; a declared @header sets one through headers.
 export interface ClientOptions {
   readonly fetch?: typeof fetch;
   readonly transport?: HttpTransport;

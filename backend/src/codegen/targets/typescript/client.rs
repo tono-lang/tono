@@ -1,5 +1,5 @@
 //! Shared TypeScript codegen helpers the entry client reuses: the
-//! import-specifier spelling every bound symbol (hook, contract, impl)
+//! import-specifier spelling every bound symbol (contract, constraint, impl)
 //! resolves through, and the boundary wrapper a bound contract/constraint
 //! gets so its binding is never silently unused.
 //!
@@ -15,7 +15,7 @@ use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
 use crate::codegen::targets::typescript::render::TsRules;
 use crate::codegen::targets::typescript::types::type_expr_of;
-use crate::ir::{ExtKind, Module};
+use crate::ir::Module;
 
 /// A self-module type symbol, imported from the types file via the serde file's
 /// companion redirect (mirrors `errors.rs`).
@@ -62,20 +62,16 @@ fn contract_wrapper_name(name: &str) -> String {
 /// Emit a boundary wrapper for each bound contract/constraint that declares a
 /// signature, mirroring the Rust/Go glue: it calls the bound symbol and turns any
 /// non-declared failure into a `ContractError` while a declared error passes
-/// through. Hooks are handled by the entry's own `transport_hook_wrappers`
-/// (their fixed slots carry runtime-typed signatures); a contract/constraint
-/// carries a user-typed one, so without this a ts-bound contract would
-/// generate no code and its binding would be silently unused.
+/// through. Without this a ts-bound contract would generate no code and its
+/// binding would be silently unused.
 pub(crate) fn contract_wrappers(
     bound: &[BoundExtension<'_>],
     module: &Module,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let n = error_names();
-    let contracts: Vec<&BoundExtension<'_>> = bound
-        .iter()
-        .filter(|e| e.kind != ExtKind::Hook && e.signature.is_some())
-        .collect();
+    let contracts: Vec<&BoundExtension<'_>> =
+        bound.iter().filter(|e| e.signature.is_some()).collect();
     if contracts.is_empty() {
         return String::new();
     }
@@ -118,7 +114,7 @@ pub(crate) fn contract_wrappers(
 mod tests {
     use super::*;
     use crate::codegen::extensions::bound_extensions;
-    use crate::ir::{Prim, Signature, Tref};
+    use crate::ir::{ExtKind, Prim, Signature, Tref};
 
     fn contract(name: &str, target: &str) -> crate::ir::Extension {
         crate::ir::Extension {
@@ -156,7 +152,6 @@ mod tests {
 
         assert!(out.contains("function wrappedSignRequest(input: string): string {"));
         assert!(out.contains("return signRequest(input);"));
-        // The pass-through-vs-wrap idiom, same as the hook wrappers.
         assert!(out.contains("if (e instanceof TonoError) throw e;"));
         assert!(out.contains("throw new ContractError(\"sign_request\", e);"));
     }

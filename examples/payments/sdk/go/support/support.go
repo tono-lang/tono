@@ -9,9 +9,7 @@ type Timestamp string
 type Duration string
 
 // HTTPRequest is the request the generated transport builds before sending
-// it. A before_request hook receives it and may return a mutated copy (set
-// an auth header, sign the body). Body is nil when the request carries no
-// body.
+// it. Body is nil when the request carries no body.
 type HTTPRequest struct {
 	Method  string
 	URL     string
@@ -21,7 +19,7 @@ type HTTPRequest struct {
 
 // HTTPResponse is the response the generated transport reads before
 // classifying it. Header keys are lowercased (HTTP header names are
-// case-insensitive). An after_response hook may return a mutated copy.
+// case-insensitive).
 type HTTPResponse struct {
 	Status  int
 	Headers map[string]string

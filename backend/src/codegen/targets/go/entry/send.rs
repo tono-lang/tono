@@ -1,23 +1,22 @@
 //! The emitted `internal/transport` package: the struct-request `Send` every
-//! generated operation drives, plus the public `support` shapes a bespoke hook
-//! types against. Replaces the descriptor-plus-`Execute()` call into the
-//! hand-written HTTP runtime: the generated SDK carries its own transport and
-//! imports nothing for it.
+//! generated operation drives, plus the public `support` shapes the canonical
+//! transport slot types against. Replaces the descriptor-plus-`Execute()`
+//! call into the hand-written HTTP runtime: the generated SDK carries its own
+//! transport and imports nothing for it.
 //!
 //! Poda by use happens at two granularities. The helper functions the clients
 //! call by name (`FormatScalar`, `AppendQuery`, ...) are pruned SDK-wide by
-//! the usual root-group mechanism. The retry loop, the per-attempt deadline,
-//! and the hook slots live inside `Send`'s own text and inside `Request`'s
-//! own fields, where reachability cannot see them, so those are gated at
-//! emission by [`Usage`]: an SDK that never declares `@retry`, `@timeout`, or
-//! a request hook gets a transport with none of those pieces in it.
+//! the usual root-group mechanism. The retry loop and the per-attempt
+//! deadline live inside `Send`'s own text and inside `Request`'s own fields,
+//! where reachability cannot see them, so those are gated at emission by
+//! [`Usage`]: an SDK that never declares `@retry` or `@timeout` gets a
+//! transport with none of those pieces in it.
 
-use crate::codegen::extensions::hook_binding;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{Model, ShapeKind};
 
-use super::{import, support_symbol, BINDING_LANGS};
+use super::{import, support_symbol};
 
 /// Which optional transport pieces any entry in the model actually uses. The
 /// emitted `Send`/`Request` text carries only these; an operation that skips a
@@ -26,7 +25,6 @@ use super::{import, support_symbol, BINDING_LANGS};
 pub(crate) struct Usage {
     pub retry: bool,
     pub timeout: bool,
-    pub hooks: bool,
 }
 
 impl Usage {
@@ -37,12 +35,11 @@ impl Usage {
         Usage {
             retry: true,
             timeout: true,
-            hooks: true,
         }
     }
 }
 
-/// Read the model's actual usage off the wire bindings and the bound hooks.
+/// Read the model's actual usage off the wire bindings.
 pub(crate) fn usage_of(model: &Model) -> Usage {
     let mut usage = Usage::default();
     for module in &model.modules {
@@ -56,12 +53,6 @@ pub(crate) fn usage_of(model: &Model) -> Usage {
                     usage.timeout |= w.timeout.is_some();
                 }
             }
-        }
-        if let Some((_, _, bound)) =
-            crate::codegen::entries::plan::entry_setup(module, &BINDING_LANGS)
-        {
-            usage.hooks |= hook_binding(&bound, "before_request").is_some()
-                || hook_binding(&bound, "after_response").is_some();
         }
     }
     usage
@@ -77,17 +68,14 @@ pub(super) fn decl_table(rows: Vec<(&str, &str, Vec<Symbol>)>) -> Vec<Decl> {
 }
 
 /// The public, bespoke-facing transport shapes (the SDK's `support` package):
-/// the request/response a bound `before_request`/`after_response` hook types
-/// against, and the canonical transport slot a `client_init` hook (or a
-/// generated test) installs.
+/// the request/response the canonical transport slot (installed directly, or
+/// by a generated test) exchanges.
 pub(crate) fn support_decls() -> Vec<Decl> {
     decl_table(vec![
         (
             "HTTPRequest",
             "// HTTPRequest is the request the generated transport builds before sending\n\
-             // it. A before_request hook receives it and may return a mutated copy (set\n\
-             // an auth header, sign the body). Body is nil when the request carries no\n\
-             // body.\n\
+             // it. Body is nil when the request carries no body.\n\
              type HTTPRequest struct {\n\
              \tMethod  string\n\
              \tURL     string\n\
@@ -100,7 +88,7 @@ pub(crate) fn support_decls() -> Vec<Decl> {
             "HTTPResponse",
             "// HTTPResponse is the response the generated transport reads before\n\
              // classifying it. Header keys are lowercased (HTTP header names are\n\
-             // case-insensitive). An after_response hook may return a mutated copy.\n\
+             // case-insensitive).\n\
              type HTTPResponse struct {\n\
              \tStatus  int\n\
              \tHeaders map[string]string\n\
@@ -158,13 +146,6 @@ fn request_decl(u: &Usage) -> Decl {
              \t// Timing is the clock behind the retry backoff; the zero value uses the\n\
              \t// real clock and jitter.\n\
              \tTiming Timing\n",
-        );
-    }
-    if u.hooks {
-        fields.push_str(
-            "\t// Hooks are the bound lifecycle slots, invoked around every attempt;\n\
-             \t// nil skips them.\n\
-             \tHooks *Hooks\n",
         );
     }
     Decl::raw_providing(
@@ -270,82 +251,38 @@ fn retry_decls() -> Vec<Decl> {
     ])
 }
 
-fn hooks_decl() -> Decl {
-    Decl::raw_providing(
-        "Hooks",
-        "// Hooks are the lifecycle slots the generated client binds around the\n\
-         // transport, invoked once per attempt. A hook error propagates raw: it is\n\
-         // never misreported as a transport failure and is never retried.\n\
-         type Hooks struct {\n\
-         \tBeforeRequest func(ctx context.Context, req support.HTTPRequest) (support.HTTPRequest, error)\n\
-         \tAfterResponse func(ctx context.Context, res support.HTTPResponse) (support.HTTPResponse, error)\n\
-         }"
-        .to_string(),
-        vec![
-            import("context", "context"),
-            support_symbol("HTTPRequest"),
-            support_symbol("HTTPResponse"),
-        ],
-    )
-}
-
-fn outcome_decl(u: &Usage) -> Decl {
-    let hook_err = if u.hooks {
-        "\t// HookErr is a lifecycle hook's own failure, carried raw: the generated\n\
-         \t// client propagates it as-is, and it is never misreported as a transport\n\
-         \t// failure and never retried.\n\
-         \tHookErr error\n"
-    } else {
-        ""
-    };
+fn outcome_decl() -> Decl {
     Decl::raw_providing(
         "Outcome",
-        format!(
-            "// Outcome is the raw result of one call: a response's status, headers, and\n\
-             // body, or the transport failure that prevented one (Cause non-nil). The\n\
-             // generated client maps it onto its own error taxonomy; this package stays\n\
-             // taxonomy-free so every module can share it.\n\
-             type Outcome struct {{\n\
-             \tStatus  int\n\
-             \tHeaders map[string]string\n\
-             \tBody    string\n\
-             \tCause   error\n\
-             {hook_err}}}"
-        ),
+        "// Outcome is the raw result of one call: a response's status, headers, and\n\
+         // body, or the transport failure that prevented one (Cause non-nil). The\n\
+         // generated client maps it onto its own error taxonomy; this package stays\n\
+         // taxonomy-free so every module can share it.\n\
+         type Outcome struct {\n\
+         \tStatus  int\n\
+         \tHeaders map[string]string\n\
+         \tBody    string\n\
+         \tCause   error\n\
+         }"
+        .to_string(),
         Vec::new(),
     )
 }
 
-/// One attempt's body: the fresh header copy, the hook slots, the per-attempt
-/// deadline, and the dispatch. Shared between the retrying `Send` (where it is
-/// the `sendOnce` helper) and the non-retrying one (where it is `Send` whole).
+/// One attempt's body: the fresh header copy, the per-attempt deadline, and
+/// the dispatch. Shared between the retrying `Send` (where it is the
+/// `sendOnce` helper) and the non-retrying one (where it is `Send` whole).
 fn attempt_body(u: &Usage) -> String {
     let mut out = String::new();
-    // A fresh copy per attempt: a hook may mutate the headers it receives in
-    // place, and a retried attempt must not inherit that.
     out.push_str(
         "\theaders := make(map[string]string, len(req.Headers))\n\
          \tfor name, value := range req.Headers {\n\t\theaders[name] = value\n\t}\n\
          \trequest := support.HTTPRequest{Method: req.Method, URL: req.URL, Headers: headers, Body: req.Body}\n",
     );
-    if u.hooks {
-        out.push_str(
-            "\tif req.Hooks != nil && req.Hooks.BeforeRequest != nil {\n\
-             \t\thooked, err := req.Hooks.BeforeRequest(ctx, request)\n\
-             \t\tif err != nil {\n\t\t\treturn Outcome{HookErr: err}\n\t\t}\n\
-             \t\trequest = hooked\n\
-             \t}\n",
-        );
-    }
     if u.timeout {
-        let why = if u.hooks {
-            "\t// The deadline covers the dispatch (transport call and body read) only,\n\
-             \t// starting after the BeforeRequest hook so a slow hook does not eat into\n\
-             \t// the attempt.\n"
-        } else {
-            "\t// The deadline covers the dispatch (transport call and body read) only.\n"
-        };
-        out.push_str(why);
+        out.push_str(
+            "\t// The deadline covers the dispatch (transport call and body read) only.\n",
+        );
         out.push_str(
             "\tattemptCtx := ctx\n\
              \tif req.Timeout > 0 {\n\
@@ -359,15 +296,6 @@ fn attempt_body(u: &Usage) -> String {
         out.push_str("\tresponse, err := dispatch(ctx, native, canonical, request)\n");
     }
     out.push_str("\tif err != nil {\n\t\treturn Outcome{Cause: err}\n\t}\n");
-    if u.hooks {
-        out.push_str(
-            "\tif req.Hooks != nil && req.Hooks.AfterResponse != nil {\n\
-             \t\thooked, err := req.Hooks.AfterResponse(ctx, response)\n\
-             \t\tif err != nil {\n\t\t\treturn Outcome{HookErr: err}\n\t\t}\n\
-             \t\tresponse = hooked\n\
-             \t}\n",
-        );
-    }
     out.push_str(
         "\treturn Outcome{Status: response.Status, Headers: response.Headers, Body: response.Body}\n",
     );
@@ -390,43 +318,30 @@ fn send_refs() -> Vec<Symbol> {
 /// `sendOnce`; without, it is the single attempt itself, under the same name
 /// and signature either way.
 fn send_decls(u: &Usage) -> Vec<Decl> {
-    let hook_doc = if u.hooks {
-        "// around the hook slots. A hook's own failure comes back as\n\
-         // Outcome.HookErr, raw: never retried, never misreported as a transport\n\
-         // failure.\n"
-    } else {
-        "// against the configured transport.\n"
-    };
     if !u.retry {
         return vec![Decl::raw_providing(
             "Send",
             format!(
                 "// Send performs one operation call: one attempt, dispatched\n\
-                 {hook_doc}\
+                 // against the configured transport.\n\
                  func Send{SEND_SIG} {{\n{body}}}",
                 body = attempt_body(u),
             ),
             send_refs(),
         )];
     }
-    let hook_bail = if u.hooks {
-        "\t\tif outcome.HookErr != nil {\n\t\t\treturn outcome\n\t\t}\n"
-    } else {
-        ""
-    };
     vec![
         Decl::raw_providing(
             "Send",
             format!(
                 "// Send performs one operation call: per attempt, one dispatch\n\
-                 {hook_doc}\
+                 // against the configured transport.\n\
                  // A retryable outcome (a transport failure, or an error response\n\
                  // Retry.When accepts) repeats up to Retry.Max times, with exponential\n\
                  // full-jitter backoff between attempts.\n\
                  func Send{SEND_SIG} {{\n\
                  \tfor attempt := 0; ; attempt++ {{\n\
                  \t\toutcome := sendOnce(ctx, native, canonical, req)\n\
-                 {hook_bail}\
                  \t\tif attempt >= req.Retry.Max || !retryable(outcome, req) {{\n\t\t\treturn outcome\n\t\t}}\n\
                  \t\tif err := retryDelay(ctx, attempt, req.Timing); err != nil {{\n\
                  \t\t\t// The caller gave up while we were waiting to retry: surface the\n\
@@ -456,10 +371,7 @@ pub(crate) fn internal_helpers(u: &Usage) -> Vec<Decl> {
     if u.retry {
         decls.extend(retry_decls());
     }
-    if u.hooks {
-        decls.push(hooks_decl());
-    }
-    decls.push(outcome_decl(u));
+    decls.push(outcome_decl());
     decls.extend(send_decls(u));
     decls.push(super::assembly::dispatch_decl());
     decls.extend(super::assembly::assembly_decls());

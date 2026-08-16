@@ -154,8 +154,9 @@ pub fn presence_kind(field: &EntryField, entry: &EntryModel, module: &Module) ->
 /// The consumed-chain requires: for every consumed field path, whether a
 /// post-construction presence check is needed and of which kind. The selection
 /// (skip guaranteed scalars, bools, and non-string decoded members) is shared;
-/// each target spells the comparison and the error. Runs after `client_init`, so
-/// every check reads the resolved value and the error-value only decorates it.
+/// each target spells the comparison and the error. Runs after every field
+/// resolves, so every check reads the resolved value and the error-value
+/// only decorates it.
 pub fn build_requires(entry: &EntryModel, module: &Module, e: &mut dyn Emitter) -> Stmt {
     let mut out: Vec<Stmt> = Vec::new();
     for path in entry.consumed_field_paths() {

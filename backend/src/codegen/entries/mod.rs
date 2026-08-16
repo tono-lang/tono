@@ -438,9 +438,9 @@ impl<'a> EntryModel<'a> {
     /// The field paths the entry's operations consume through their protocol
     /// traits: the `@http` endpoint reference, `{.field}` path placeholders,
     /// `@header` value references, and the `@timeout`/`@retry` references.
-    /// These must hold a value once construction finishes (after `client_init`
-    /// ran), so the constructor reports an absent one with its chain instead of
-    /// letting the first call fail obscurely.
+    /// These must hold a value once construction finishes, so the constructor
+    /// reports an absent one with its chain instead of letting the first call
+    /// fail obscurely.
     pub fn consumed_field_paths(&self) -> Vec<Vec<String>> {
         let mut out: Vec<Vec<String>> = Vec::new();
         let mut push = |path: Option<Vec<String>>| {

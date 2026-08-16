@@ -74,20 +74,20 @@ fn entry(id: &str, operations: Vec<Shape>) -> Shape {
     }
 }
 
-/// A `before_request` hook bound for TypeScript only, so the flip this drives
-/// is isolated to the `typescript` target: the binding table only has a
+/// A `constraint` bound for TypeScript only, so the flip this drives is
+/// isolated to the `typescript` target: the binding table only has a
 /// `typescript` key, so `bound_extensions` finds nothing for `go` in either
 /// model (Go's Contract liveness does not move). Rust's Contract liveness for
 /// a wire-op entry is always true regardless of this binding (see
 /// `taxonomy::derive_rust_entry`), so it does not move either, for a
 /// different reason.
-fn ts_before_request_hook() -> Extension {
+fn ts_only_constraint() -> Extension {
     Extension {
-        name: "before_request".into(),
-        kind: ExtKind::Hook,
+        name: "validate_ping".into(),
+        kind: ExtKind::Constraint,
         signature: None,
         raw: false,
-        bindings: [("typescript".to_string(), "ext/ts/a.ts#hook".to_string())]
+        bindings: [("typescript".to_string(), "ext/ts/a.ts#validate".to_string())]
             .into_iter()
             .collect(),
         conformance: None,
@@ -95,10 +95,10 @@ fn ts_before_request_hook() -> Extension {
 }
 
 #[test]
-fn dropping_the_only_bound_hook_prunes_contract_for_typescript_only() {
+fn dropping_the_only_bound_extension_prunes_contract_for_typescript_only() {
     let baseline = model(
         vec![entry("notes#client", vec![wire_op("notes#client.ping")])],
-        vec![ts_before_request_hook()],
+        vec![ts_only_constraint()],
     );
     let current = model(
         vec![entry("notes#client", vec![wire_op("notes#client.ping")])],
@@ -127,7 +127,7 @@ fn dropping_the_only_bound_hook_prunes_contract_for_typescript_only() {
 fn a_module_with_nothing_pruned_reports_no_taxonomy_change() {
     let baseline = model(
         vec![entry("notes#client", vec![wire_op("notes#client.ping")])],
-        vec![ts_before_request_hook()],
+        vec![ts_only_constraint()],
     );
     let current = baseline.clone();
     let report = diff(&baseline, &current);
@@ -144,7 +144,7 @@ fn a_removed_module_is_not_double_reported_by_the_taxonomy_pass() {
     // modules present on both sides, so it must add nothing extra here.
     let baseline = model(
         vec![entry("notes#client", vec![wire_op("notes#client.ping")])],
-        vec![ts_before_request_hook()],
+        vec![ts_only_constraint()],
     );
     let current = tono_backend::ir::Model {
         tono_ir_version: 6,

@@ -24,14 +24,12 @@ impl std::fmt::Display for Duration {
 /// canonical transport's call, the retry sleep seam).
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
-/// The error a transport attempt (or a lifecycle hook) fails with; the
-/// generated client classifies it into its own error taxonomy.
+/// The error a transport attempt fails with; the generated client
+/// classifies it into its own error taxonomy.
 pub type HttpError = Box<dyn std::error::Error + Send + Sync>;
 
 /// HttpRequest is the request the generated client builds before sending
-/// it. A before_request hook receives it and may return a mutated copy
-/// (set an auth header, sign the body). `body` is `None` when the
-/// request carries no body.
+/// it. `body` is `None` when the request carries no body.
 #[derive(Clone, Debug)]
 pub struct HttpRequest {
     pub method: String,
@@ -42,7 +40,7 @@ pub struct HttpRequest {
 
 /// HttpResponse is the response the generated client reads before
 /// classifying it. Header keys are lowercased (HTTP header names are
-/// case-insensitive). An after_response hook may return a mutated copy.
+/// case-insensitive).
 #[derive(Clone, Debug)]
 pub struct HttpResponse {
     pub status: u16,
@@ -63,8 +61,8 @@ pub type HttpTransport = std::sync::Arc<
 /// set: `client` (native `reqwest`, present only with the crate's
 /// default-on `reqwest` feature) or `transport` (canonical); setting
 /// both is a construction error, and with the feature off the
-/// canonical slot is required. No slot ships its own auth; a bespoke
-/// hook sets an auth header through `headers`.
+/// canonical slot is required. No slot ships its own auth; a declared
+/// `@header` sets one through `headers`.
 pub struct ClientOptions {
     #[cfg(feature = "reqwest")]
     pub client: Option<reqwest::Client>,

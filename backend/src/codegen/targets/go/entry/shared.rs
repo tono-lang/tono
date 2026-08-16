@@ -16,8 +16,7 @@ pub fn shared_groups() -> Vec<(&'static str, Vec<Decl>)> {
 }
 
 /// The SDK-root groups shaped by what the model actually uses: a model with no
-/// `@retry`, `@timeout`, or request hook anywhere gets a transport without
-/// those pieces.
+/// `@retry` or `@timeout` anywhere gets a transport without those pieces.
 pub fn shared_groups_for(model: &crate::ir::Model) -> Vec<(&'static str, Vec<Decl>)> {
     shared_groups_with(&send::usage_of(model))
 }
