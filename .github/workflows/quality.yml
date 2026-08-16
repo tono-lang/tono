@@ -43,7 +43,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # Tree, every commit in the PR, branch name, PR title and body. The PR
+      # fields go through env, never inline, so their text is data to the
+      # shell rather than script.
       - name: Check for internal doc references
+        env:
+          BASE_REF: origin/${{ github.base_ref || 'main' }}
+          PR_BRANCH: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: bash scripts/check-internal-doc-refs.sh
 
   unused-deps:
