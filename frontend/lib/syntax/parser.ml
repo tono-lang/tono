@@ -598,8 +598,8 @@ let parse_decl st : Ast.decl option =
              there to skip. *)
           P.error st (P.peek_ahead st 1).span
             (Printf.sprintf
-               "'%s' is a reserved primitive type name, not a library name: \
-                a library cannot currently be named '%s'"
+               "'%s' is a reserved primitive type name, not a library name: a \
+                library cannot currently be named '%s'"
                s s);
           (match (P.peek_ahead st 2).kind with
           | Token.LBrace ->

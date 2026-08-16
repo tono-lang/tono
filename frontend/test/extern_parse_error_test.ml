@@ -517,8 +517,7 @@ let () =
             `Quick library_named_like_legacy_kind_is_a_single_diagnostic;
           Alcotest.test_case "library named like a primitive type" `Quick
             library_named_like_a_primitive;
-          Alcotest.test_case
-            "primitive collision is a single diagnostic" `Quick
+          Alcotest.test_case "primitive collision is a single diagnostic" `Quick
             library_named_like_a_primitive_is_a_single_diagnostic;
         ] );
     ]
