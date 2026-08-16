@@ -489,6 +489,7 @@ fn module_with_sign_extern() -> Module {
                 returns: None,
                 errors: vec![],
                 sync: true,
+                infallible: false,
             }],
         }],
     }];

@@ -117,6 +117,37 @@ fn find_lib_and_find_extern_miss_cleanly_when_unresolved() {
     assert!(ext::find_extern(&lib, "nope").is_none());
 }
 
+/// A handle method with no `returns:` at all (`handle_lib`'s own "send",
+/// unlike the appendix fixture's, which always projects): the adapter's
+/// bare-call-result path, exercised directly rather than through the full
+/// `emit` pipeline the appendix test already covers for the `returns:`
+/// case.
+#[test]
+fn handle_adapter_decl_returns_the_bare_call_result_with_no_returns_projection() {
+    let module = bare_module();
+    let lib = handle_lib("bus", "publisher");
+    let handle = &lib.types[0];
+    let decl = ext::handle_adapter_decl(&module, &go_casing(), &lib, handle)
+        .expect("send is a Go-bound method");
+    let text = rendered(&[decl], &GoRules::default());
+    assert!(text.contains(":= a.real.Send(topic)"), "{text}");
+    assert!(text.contains("return sendResult, nil"), "{text}");
+}
+
+/// A handle whose only method declares no Go binding at all (a `ts`-only
+/// method on an otherwise Go-bound lib): nothing to adapt or fake, so both
+/// the interface and its adapter are `None` rather than an empty `interface
+/// {}`/`struct {}` pair.
+#[test]
+fn a_handle_with_no_go_bound_method_yields_neither_interface_nor_adapter() {
+    let module = bare_module();
+    let mut lib = handle_lib("bus", "publisher");
+    lib.types[0].methods[0].langs[0].lang = "ts".into();
+    let handle = &lib.types[0];
+    assert!(ext::handle_adapter_decl(&module, &go_casing(), &lib, handle).is_none());
+    assert!(ext::handle_iface_decl(&lib, handle).is_none());
+}
+
 fn bare_module() -> Module {
     Module {
         name: "m".into(),
@@ -153,6 +184,7 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
                     returns: None,
                     errors: vec![],
                     sync: false,
+                    infallible: false,
                 }],
             }],
         }],

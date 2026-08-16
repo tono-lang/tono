@@ -589,6 +589,29 @@ let parse_decl st : Ast.decl option =
               skip_balanced_braces st;
               None
           | _ -> Some (parse_ext st ~pub ~dtraits))
+      | Token.Prim s ->
+          (* A primitive type name can never be a legal library name (every
+             foreign form the ext block declares shares the tono type
+             vocabulary), unlike the kind-word case above, which is only a
+             collision when a legacy '{' follows. This one is unconditional,
+             so name it and recover the same way: skip the block when one is
+             there to skip. *)
+          P.error st (P.peek_ahead st 1).span
+            (Printf.sprintf
+               "'%s' is a reserved primitive type name, not a library name: a \
+                library cannot currently be named '%s'"
+               s s);
+          (match (P.peek_ahead st 2).kind with
+          | Token.LBrace ->
+              ignore (P.advance st);
+              (* 'ext' *)
+              ignore (P.advance st);
+              (* primitive name *)
+              skip_balanced_braces st
+          | _ ->
+              ignore (P.advance st);
+              ignore (P.advance st));
+          None
       | Token.Ident n ->
           ignore (P.advance st);
           (* 'ext' *)

@@ -155,6 +155,7 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
                     r#type: "overloaded".into(),
                 }],
                 sync: false,
+                infallible: false,
             }],
         }],
     );
@@ -184,6 +185,7 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
                 returns: None,
                 errors: vec![],
                 sync: false,
+                infallible: false,
             }],
         }],
     );
@@ -502,6 +504,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                 }),
                 errors: vec![],
                 sync: false,
+                infallible: false,
             }],
         }],
     );

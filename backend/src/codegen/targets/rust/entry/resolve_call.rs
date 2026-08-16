@@ -343,6 +343,7 @@ mod tests {
                     returns: None,
                     errors: vec![],
                     sync: false,
+                    infallible: false,
                 }],
             }],
         }];
@@ -385,6 +386,7 @@ mod tests {
                     returns: None,
                     errors: vec![],
                     sync: true,
+                    infallible: false,
                 }],
             }],
         }];
@@ -427,6 +429,7 @@ mod tests {
                         returns: None,
                         errors: vec![],
                         sync: false,
+                        infallible: false,
                     }],
                 }],
             }];
@@ -512,6 +515,7 @@ mod tests {
                         r#type: "overloaded".into(),
                     }],
                     sync: false,
+                    infallible: false,
                 }],
             }],
         }];
@@ -650,6 +654,7 @@ mod tests {
                         returns: None,
                         errors: vec![],
                         sync: false,
+                        infallible: false,
                     }],
                 }],
             },
@@ -707,6 +712,7 @@ mod tests {
                         returns: None,
                         errors: vec![],
                         sync: false,
+                        infallible: false,
                     }],
                 }],
             },

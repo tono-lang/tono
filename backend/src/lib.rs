@@ -2,6 +2,7 @@
 pub mod codegen;
 pub mod compat;
 mod compat_entry;
+pub mod compat_ext;
 mod compat_shape;
 pub mod config;
 pub mod ir;

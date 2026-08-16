@@ -143,6 +143,29 @@ let library_named_like_legacy_kind_is_a_single_diagnostic () =
   in
   Alcotest.(check int) "exactly one diagnostic" 1 (List.length ds)
 
+(* A primitive type name (the lexer's own reserved keyword, not an ordinary
+   identifier) can never be a legal library name either, and the collision
+   is unconditional (unlike the kind-word case above, which is only
+   ambiguous with the legacy grammar): "ext uuid { ... }" is the exact case
+   a reviewer hit while binding github.com/google/uuid. *)
+let library_named_like_a_primitive () =
+  let ds = file_diags {|ext uuid { go: "github.com/google/uuid" }|} in
+  Alcotest.(check bool)
+    "names the primitive collision" true
+    (has_message ~sub:"is a reserved primitive type name" ds)
+
+let library_named_like_a_primitive_is_a_single_diagnostic () =
+  let ds =
+    file_diags
+      {|ext string {
+         go: "example.com/mylib"
+         extern load(): string {
+           go { call: "Load"() }
+         }
+       }|}
+  in
+  Alcotest.(check int) "exactly one diagnostic" 1 (List.length ds)
+
 (* A regular top-level shape (not a foreign struct/opaque type inside an
    'ext' library) named 'error' would collide the same way: a 'yields:'
    position naming it can only ever read the reserved sentinel, never a
@@ -492,5 +515,9 @@ let () =
             library_named_like_legacy_kind;
           Alcotest.test_case "reserved-word collision is a single diagnostic"
             `Quick library_named_like_legacy_kind_is_a_single_diagnostic;
+          Alcotest.test_case "library named like a primitive type" `Quick
+            library_named_like_a_primitive;
+          Alcotest.test_case "primitive collision is a single diagnostic" `Quick
+            library_named_like_a_primitive_is_a_single_diagnostic;
         ] );
     ]

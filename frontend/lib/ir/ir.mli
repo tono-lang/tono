@@ -260,6 +260,7 @@ type extern_lang = {
   el_returns : returns_lit option;
   el_errors : error_binding list;
   el_sync : bool;
+  el_infallible : bool;
 }
 
 type extern_param = { xp_name : string; xp_type : tref }

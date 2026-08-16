@@ -22,7 +22,9 @@ static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
-use tono_backend::codegen::targets::go::entry::ext_fixtures::rfc0023_appendix_model;
+use tono_backend::codegen::targets::go::entry::ext_fixtures::{
+    infallible_extern_model, rfc0023_appendix_model,
+};
 use tono_backend::codegen::targets::go::types::go_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
 use tono_backend::ir::Model;
@@ -39,12 +41,20 @@ fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests/go-ext")
 }
 
+/// The appendix fixture's `require`/`replace` lines: the two `ext` library
+/// import paths pointed at the stand-in packages under `fixtures/`.
+const APPENDIX_GO_MOD_DEPS: &str = "require tono-ext-fixture/companyconfig v0.0.0\n\
+     require tono-ext-fixture/companybus v0.0.0\n\n\
+     replace tono-ext-fixture/companyconfig => ../fixtures/companyconfig\n\
+     replace tono-ext-fixture/companybus => ../fixtures/companybus\n";
+
 /// Generate the model for Go, gofmt every file, and write it under
-/// `codegen-tests/go-ext/sdk/`, alongside a `go.mod` pointing the two `ext`
-/// library import paths at the stand-in packages under `fixtures/` (via
-/// `replace`, the same mechanism a real consumer's own `go.mod` would use
-/// for a private/internal dependency).
-fn write_sdk(model: &Model) -> PathBuf {
+/// `codegen-tests/go-ext/sdk/`, alongside a `go.mod` whose `mod_deps`
+/// (`require`/`replace` lines) point each `ext` library import path at its
+/// stand-in package under `fixtures/` (via `replace`, the same mechanism a
+/// real consumer's own `go.mod` would use for a private/internal
+/// dependency).
+fn write_sdk(model: &Model, mod_deps: &str) -> PathBuf {
     let dir = fixtures_dir().join("sdk");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create sdk dir");
@@ -75,12 +85,7 @@ fn write_sdk(model: &Model) -> PathBuf {
 
     std::fs::write(
         dir.join("go.mod"),
-        "module tono-ext-fixture/sdk\n\n\
-         go 1.21\n\n\
-         require tono-ext-fixture/companyconfig v0.0.0\n\
-         require tono-ext-fixture/companybus v0.0.0\n\n\
-         replace tono-ext-fixture/companyconfig => ../fixtures/companyconfig\n\
-         replace tono-ext-fixture/companybus => ../fixtures/companybus\n",
+        format!("module tono-ext-fixture/sdk\n\ngo 1.21\n\n{mod_deps}"),
     )
     .unwrap();
     dir
@@ -97,7 +102,7 @@ fn the_rfc_appendix_generates_go_that_compiles_against_the_real_libraries() {
         return;
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&rfc0023_appendix_model());
+    let dir = write_sdk(&rfc0023_appendix_model(), APPENDIX_GO_MOD_DEPS);
     let build = Command::new("go")
         .arg("build")
         .arg("./...")
@@ -129,7 +134,7 @@ fn a_field_the_library_does_not_have_breaks_the_go_build() {
         return;
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&rfc0023_appendix_model());
+    let dir = write_sdk(&rfc0023_appendix_model(), APPENDIX_GO_MOD_DEPS);
     let config_go = fixtures_dir().join("fixtures/companyconfig/config.go");
     let original = std::fs::read_to_string(&config_go).unwrap();
     let broken = original.replace("Host", "Address");
@@ -178,7 +183,7 @@ fn the_rfc_appendix_declared_tests_pass_hermetically() {
         return;
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&rfc0023_appendix_model());
+    let dir = write_sdk(&rfc0023_appendix_model(), APPENDIX_GO_MOD_DEPS);
     let test = Command::new("go")
         .arg("test")
         .arg("./...")
@@ -198,5 +203,41 @@ fn the_rfc_appendix_declared_tests_pass_hermetically() {
     assert!(
         out.contains("PASS"),
         "expected at least one passing test:\n{out}"
+    );
+}
+
+/// A single-return foreign function with no error, matching a real API like
+/// `uuid.NewString() string`, declared `infallible` and bound with no
+/// `yields:` at all. Before the fix this always destructured two Go values
+/// regardless of the real function's own arity, so the generated SDK failed
+/// to build with "assignment mismatch: 2 variables but idgen.NewString
+/// returns 1 value".
+#[test]
+fn an_infallible_single_return_extern_builds() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
+        return;
+    }
+    if !have("go", "version") || !have("gofmt", "-h") {
+        eprintln!("skipping: Go toolchain (go/gofmt) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk(
+        &infallible_extern_model(),
+        "require tono-ext-fixture/idgen v0.0.0\n\n\
+         replace tono-ext-fixture/idgen => ../fixtures/idgen\n",
+    );
+    let build = Command::new("go")
+        .arg("build")
+        .arg("./...")
+        .current_dir(&dir)
+        .output()
+        .expect("run go build");
+    assert!(
+        build.status.success(),
+        "generated Go failed to build:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
     );
 }

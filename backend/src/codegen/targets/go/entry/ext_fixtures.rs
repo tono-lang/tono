@@ -96,8 +96,35 @@ pub fn go_extern(
             returns,
             errors,
             sync: false,
+            infallible: false,
         }],
     }
+}
+
+/// The same shape as [`go_extern`], marked `infallible`: a foreign function
+/// with no error return, like `uuid.NewString() string`.
+#[allow(clippy::too_many_arguments)]
+pub fn go_extern_infallible(
+    name: &str,
+    params: Vec<ExternParam>,
+    ret: Tref,
+    symbol: &str,
+    call_args: Vec<CallArg>,
+    yields: Vec<YieldsPos>,
+    returns: Option<ReturnsLit>,
+) -> ExternDecl {
+    let mut decl = go_extern(
+        name,
+        params,
+        ret,
+        symbol,
+        call_args,
+        yields,
+        returns,
+        vec![],
+    );
+    decl.langs[0].infallible = true;
+    decl
 }
 
 /// An `ext` block declaring only a Go module path, for the common case
@@ -527,5 +554,61 @@ pub fn rfc0023_appendix_model() -> Model {
     Model {
         tono_ir_version: TONO_IR_VERSION,
         modules: vec![rfc0023_appendix_module()],
+    }
+}
+
+/// A minimal repro of a real single-return Go function bound as `extern`:
+/// `idgen.NewString() string` (no error, matching `uuid.NewString`), marked
+/// `infallible`, with no `yields:` at all (the zero-yields path is one of
+/// the two shapes the Go emitter used to always destructure as two values
+/// regardless of the real function's own arity).
+pub fn infallible_extern_module() -> Module {
+    let id_field = {
+        let mut f = field("id", string_t(), vec![]);
+        f.call = Some(EntryCall {
+            ns: "idgen".into(),
+            func: "new_id".into(),
+            args: vec![],
+        });
+        f
+    };
+    let entry = Shape {
+        id: "n#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![id_field],
+            operations: vec![],
+        },
+        traits: vec![],
+    };
+    let idgen = go_ext_lib(
+        "idgen",
+        "tono-ext-fixture/idgen",
+        vec![],
+        vec![],
+        vec![go_extern_infallible(
+            "new_id",
+            vec![],
+            string_t(),
+            "NewString",
+            vec![],
+            vec![],
+            None,
+        )],
+    );
+    Module {
+        name: "n".into(),
+        shapes: vec![entry],
+        operations: vec![],
+        extensions: vec![],
+        ext_libs: vec![idgen],
+        tests: vec![],
+    }
+}
+
+/// [`infallible_extern_module`], wrapped in a `Model`.
+pub fn infallible_extern_model() -> Model {
+    Model {
+        tono_ir_version: TONO_IR_VERSION,
+        modules: vec![infallible_extern_module()],
     }
 }

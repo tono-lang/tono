@@ -252,6 +252,7 @@ mod tests {
                         returns: None,
                         errors: vec![],
                         sync,
+                        infallible: false,
                     }],
                 }],
             }],

@@ -287,6 +287,56 @@ fn root_is_detected_from_an_existing_tono_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn fresh_init_scaffolds_a_commented_ext_section() {
+    let dir = tmpdir("ext-fresh");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/demo.tono"),
+        "ext companyconfig {\n  go: \"github.com/company/config\"\n  ts: \"@company/config\"\n}\n",
+    )
+    .unwrap();
+
+    let (ok, _, stderr) = init(&dir, &["--yes", "--target", "rust"]);
+    assert!(ok, "init failed: {stderr}");
+
+    let manifest = std::fs::read_to_string(dir.join("tono.toml")).unwrap();
+    assert!(manifest.contains("# [ext.companyconfig]"), "{manifest}");
+    assert!(manifest.contains("# go = \"\""), "{manifest}");
+    assert!(manifest.contains("# ts = \"\""), "{manifest}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn update_mode_does_not_duplicate_an_already_declared_ext_section() {
+    let dir = tmpdir("ext-update");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/demo.tono"),
+        "ext companyconfig {\n  go: \"github.com/company/config\"\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("tono.toml"),
+        "[project]\nroot = \"src\"\n\n[target.rust]\nenabled = true\nout = \"dist/rust\"\n\n[ext.companyconfig]\ngo = \"v1.4.2\"\n",
+    )
+    .unwrap();
+
+    let (ok, _, stderr) = init(&dir, &["--yes", "--target", "rust"]);
+    assert!(ok, "init failed: {stderr}");
+
+    let manifest = std::fs::read_to_string(dir.join("tono.toml")).unwrap();
+    assert_eq!(
+        manifest.matches("[ext.companyconfig]").count(),
+        1,
+        "{manifest}"
+    );
+    assert!(manifest.contains("go = \"v1.4.2\""), "{manifest}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // Every IR fixture literal in this file embeds a bare version number; a
 // stale one fails with a decode error far from this assertion. Catch it
 // here instead: the same bump every past IR version change forgot.

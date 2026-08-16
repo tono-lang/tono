@@ -101,16 +101,18 @@ pub(in super::super) fn handle_adapter_decl(
         );
         let mut body = format!("\tvar zero {ret_ty}\n");
         body.push_str(&built.stmt);
-        body.push_str(&error_block(
-            &mut refs,
-            module,
-            config,
-            lib,
-            &lang.errors,
-            &format!("{}.{}.{}", lib.name, handle.name, m.name),
-            &built.err_var,
-            &|expr| format!("return zero, {expr}"),
-        ));
+        if let Some(err_var) = &built.err_var {
+            body.push_str(&error_block(
+                &mut refs,
+                module,
+                config,
+                lib,
+                &lang.errors,
+                &format!("{}.{}.{}", lib.name, handle.name, m.name),
+                err_var,
+                &|expr| format!("return zero, {expr}"),
+            ));
+        }
         match &lang.returns {
             None => {
                 let value = built
