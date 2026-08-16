@@ -160,9 +160,9 @@ let decode_arm_value j =
   match j with
   | `String "subject" -> Ok Ir.Arm_subject
   | `String other -> err "unknown arm value %S" other
-  | _ ->
+  | _ -> (
       let* kvs = as_assoc j in
-      (match kvs with
+      match kvs with
       | [ ("field", v) ] ->
           let* p = decode_path v in
           Ok (Ir.Arm_field p)
