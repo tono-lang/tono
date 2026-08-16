@@ -157,6 +157,57 @@ pub(super) fn build_switch(
     }
 }
 
+/// A plain field-path read for a reason-tracking arm (top-level match): a
+/// guaranteed head reads straight through, a deferred one wraps the field's
+/// own error from the head's when absent. Shared by [`ArmValue::Field`] and
+/// the non-indexed fallback of [`ArmValue::Subject`] in [`build_arm`], since
+/// `._` without a map index is just an ordinary reference to the subject's
+/// own path.
+fn field_read_arm(
+    field: &EntryField,
+    entry: &EntryModel,
+    e: &mut dyn Emitter,
+    dest: &str,
+    path: &[String],
+) -> Stmt {
+    let head = path.first().cloned().unwrap_or_default();
+    let expr = e.path_read(path);
+    if entry.field_guaranteed(&head) {
+        Stmt::Leaf(e.assign_expr(dest, &expr))
+    } else {
+        Stmt::If {
+            arms: vec![(
+                e.cond_err_present(&head),
+                Stmt::Leaf(e.wrap_from(&field.name, &head)),
+            )],
+            otherwise: Some(Box::new(Stmt::Leaf(e.assign_expr(dest, &expr)))),
+        }
+    }
+}
+
+/// The config-member counterpart of [`field_read_arm`]: no reason tracking, so
+/// a deferred head just skips the assignment instead of wrapping an error.
+fn member_field_read_arm(
+    entry: &EntryModel,
+    e: &mut dyn Emitter,
+    dest: &str,
+    path: &[String],
+) -> Stmt {
+    let head = path.first().cloned().unwrap_or_default();
+    let expr = e.path_read(path);
+    if entry.field_guaranteed(&head) {
+        Stmt::Leaf(e.assign_expr(dest, &expr))
+    } else {
+        Stmt::If {
+            arms: vec![(
+                e.cond_err_absent(&head),
+                Stmt::Leaf(e.assign_expr(dest, &expr)),
+            )],
+            otherwise: None,
+        }
+    }
+}
+
 /// A scalar match arm: a literal, a sibling read (deferred if that sibling is),
 /// or an inline source chain.
 fn build_arm(
@@ -169,21 +220,7 @@ fn build_arm(
 ) -> Stmt {
     match value {
         ArmValue::Lit(v) => Stmt::Leaf(e.assign_default(field, v, dest)),
-        ArmValue::Field(path) => {
-            let head = path.first().cloned().unwrap_or_default();
-            let expr = e.path_read(path);
-            if entry.field_guaranteed(&head) {
-                Stmt::Leaf(e.assign_expr(dest, &expr))
-            } else {
-                Stmt::If {
-                    arms: vec![(
-                        e.cond_err_present(&head),
-                        Stmt::Leaf(e.wrap_from(&field.name, &head)),
-                    )],
-                    otherwise: Some(Box::new(Stmt::Leaf(e.assign_expr(dest, &expr)))),
-                }
-            }
-        }
+        ArmValue::Field(path) => field_read_arm(field, entry, e, dest, path),
         ArmValue::Sources(sources) => {
             let stub = arm_sources(field, sources);
             if guaranteed {
@@ -210,19 +247,7 @@ fn build_arm(
                 Stmt::Leaf(e.assign_expr(dest, &expr))
             } else {
                 let path = select.map(|s| s.subject.clone()).unwrap_or_default();
-                let head = path.first().cloned().unwrap_or_default();
-                let expr = e.path_read(&path);
-                if entry.field_guaranteed(&head) {
-                    Stmt::Leaf(e.assign_expr(dest, &expr))
-                } else {
-                    Stmt::If {
-                        arms: vec![(
-                            e.cond_err_present(&head),
-                            Stmt::Leaf(e.wrap_from(&field.name, &head)),
-                        )],
-                        otherwise: Some(Box::new(Stmt::Leaf(e.assign_expr(dest, &expr)))),
-                    }
-                }
+                field_read_arm(field, entry, e, dest, &path)
             }
         }
     }
@@ -239,21 +264,7 @@ fn build_member_arm(
 ) -> Stmt {
     match value {
         ArmValue::Lit(v) => Stmt::Leaf(e.assign_default(member, v, dest)),
-        ArmValue::Field(path) => {
-            let head = path.first().cloned().unwrap_or_default();
-            let expr = e.path_read(path);
-            if entry.field_guaranteed(&head) {
-                Stmt::Leaf(e.assign_expr(dest, &expr))
-            } else {
-                Stmt::If {
-                    arms: vec![(
-                        e.cond_err_absent(&head),
-                        Stmt::Leaf(e.assign_expr(dest, &expr)),
-                    )],
-                    otherwise: None,
-                }
-            }
-        }
+        ArmValue::Field(path) => member_field_read_arm(entry, e, dest, path),
         ArmValue::Sources(sources) => Stmt::Leaf(Leaf(
             e.chain_guaranteed(&arm_sources(member, sources), dest),
         )),
@@ -264,19 +275,7 @@ fn build_member_arm(
                 Stmt::Leaf(e.assign_expr(dest, &expr))
             } else {
                 let path = select.map(|s| s.subject.clone()).unwrap_or_default();
-                let head = path.first().cloned().unwrap_or_default();
-                let expr = e.path_read(&path);
-                if entry.field_guaranteed(&head) {
-                    Stmt::Leaf(e.assign_expr(dest, &expr))
-                } else {
-                    Stmt::If {
-                        arms: vec![(
-                            e.cond_err_absent(&head),
-                            Stmt::Leaf(e.assign_expr(dest, &expr)),
-                        )],
-                        otherwise: None,
-                    }
-                }
+                member_field_read_arm(entry, e, dest, &path)
             }
         }
     }
