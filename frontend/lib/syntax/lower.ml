@@ -635,7 +635,9 @@ let lower_ext ~resolve ~diags (d : Ast.decl) : Ir.extension =
   | Ast.DExt { ekind; esig; eraw; ebindings; econformance; _ } ->
       let ext_kind =
         match ekind with
-        | Ast.EHook -> Ir.Hook
+        | Ast.EHook ->
+            (* [lower_file] filters hook decls out before calling [lower_ext]. *)
+            assert false
         | Ast.EContract -> Ir.Contract
         | Ast.EConstraint -> Ir.Constraint
         | Ast.EImpl -> Ir.Impl
@@ -676,6 +678,10 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
   List.iter
     (fun (d : Ast.decl) ->
       match d.dkind with
+      (* A hook is always rejected by [Check_ext] (it carries no valid
+         lifecycle anymore), so it lowers to no IR extension at all; the IR's
+         [ext_kind] never needs to represent one. *)
+      | Ast.DExt { ekind = Ast.EHook; _ } -> ()
       | Ast.DExt _ -> exts_rev := lower_ext ~resolve ~diags d :: !exts_rev
       | Ast.DExtLib _ ->
           ext_libs_rev := lower_ext_lib ~resolve ~diags d :: !ext_libs_rev

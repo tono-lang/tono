@@ -80,12 +80,11 @@ fn call_wire_bare_expr(
 }
 
 /// The `errors:` mapping for a wire-position call. A mapped sentinel would
-/// ideally construct the declared error type the RFC's `errors:` line
-/// names, the same category a bespoke hook's declared error reaches; the
+/// ideally construct the declared error type the `errors:` line names; the
 /// `errors:` grammar only names a sentinel -> type, with no field mapping
 /// to build an arbitrary shape from a raw error string, so every failure
 /// here -- mapped or not -- currently reaches `Contract`, naming the
-/// extern, mirroring `hook_lines`'s own unmapped fallback.
+/// extern.
 fn wire_call_error_wrap(call: &WireCall) -> String {
     let contract_name = format!("{}.{}", call.ns, call.fn_name);
     format!(
@@ -137,9 +136,8 @@ pub(super) fn call_wire_json_expr(
 /// `request_headers` entry: run once the request is fully assembled (the
 /// declared values already folded in, see `transport::declared_header_lines`),
 /// so the call's own `.request` argument (`request_var`) is the complete,
-/// already-built request -- method, path, headers, and body -- matching
-/// the same slot the `before_request` hook occupies (right before it, so a
-/// hook still sees the signed header).
+/// already-built request -- method, path, headers, and body -- right before
+/// it is sent.
 pub(super) fn call_header_lines(
     wire: &WireBinding,
     module: &Module,

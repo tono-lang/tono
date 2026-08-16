@@ -168,7 +168,7 @@ let gen_shape : Ir.shape G.t =
   ({ id; kind; traits } : Ir.shape)
 
 let gen_ext_kind : Ir.ext_kind G.t =
-  G.oneof_list [ Ir.Hook; Ir.Contract; Ir.Constraint; Ir.Impl ]
+  G.oneof_list [ Ir.Contract; Ir.Constraint; Ir.Impl ]
 
 let gen_ext_sig : Ir.ext_sig G.t =
   let+ input = gen_tref and+ output = gen_tref in

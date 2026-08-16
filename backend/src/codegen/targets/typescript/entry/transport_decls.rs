@@ -8,22 +8,19 @@ use crate::codegen::tree::Decl;
 use super::support_symbol;
 
 /// The public, bespoke-facing transport types (`Group::root_support()`): the
-/// request/response shapes a bound `before_request`/`after_response` hook
-/// type-checks against, plus the construction-time `ClientOptions`/`Hooks`.
+/// request/response shapes a canonical transport type-checks against, plus
+/// the construction-time `ClientOptions`.
 pub(crate) fn http_support_decls() -> Vec<Decl> {
     vec![
         Decl::raw_providing(
             "HttpResponse",
             "// HttpResponse is the response the runtime reads before classifying it.\n\
-             // An after_response hook may return a mutated copy.\n\
              export interface HttpResponse {\n  status: number;\n  headers: Record<string, string>;\n  body: string;\n}",
             Vec::new(),
         ),
         Decl::raw_providing(
             "HttpRequest",
-            "// HttpRequest is the request the runtime builds before sending it. A\n\
-             // before_request hook receives this and may return a mutated copy (set an\n\
-             // auth header, sign the body).\n\
+            "// HttpRequest is the request the runtime builds before sending it.\n\
              export interface HttpRequest {\n  method: string;\n  url: string;\n  headers: Record<string, string>;\n  body: string | undefined;\n}",
             Vec::new(),
         ),
@@ -41,17 +38,9 @@ pub(crate) fn http_support_decls() -> Vec<Decl> {
             "// ClientOptions is what the caller supplies once, shared across every\n\
              // operation. Exactly one transport slot may be set: fetch (native) or\n\
              // transport (canonical); setting both is a construction error. No slot\n\
-             // ships its own auth; a bespoke hook sets an auth header through headers.\n\
+             // ships its own auth; a declared @header sets one through headers.\n\
              export interface ClientOptions {\n  readonly fetch?: typeof fetch;\n  readonly transport?: HttpTransport;\n  readonly headers?: Readonly<Record<string, string>>;\n}",
             vec![support_symbol("HttpTransport")],
-        ),
-        Decl::raw_providing(
-            "Hooks",
-            "// Hooks are the lifecycle slots the generated client invokes around the\n\
-             // transport. A hook that throws propagates raw; the generated wrapper is\n\
-             // what turns it into a ContractError.\n\
-             export interface Hooks {\n  readonly before_request?: (req: HttpRequest) => HttpRequest | Promise<HttpRequest>;\n  readonly after_response?: (res: HttpResponse) => HttpResponse | Promise<HttpResponse>;\n}",
-            vec![support_symbol("HttpRequest"), support_symbol("HttpResponse")],
         ),
     ]
 }
@@ -133,8 +122,8 @@ pub(crate) fn internal_helpers() -> Vec<Decl> {
         ),
         Decl::raw_providing(
             "headerRecord",
-            "// headerRecord collects a Headers object into a plain record so a hook can\n\
-             // read and rewrite it without a live Headers instance.\n\
+            "// headerRecord collects a Headers object into a plain record the\n\
+             // generated client can read without a live Headers instance.\n\
              export function headerRecord(headers: Headers): Record<string, string> {\n\
              \x20 const record: Record<string, string> = {};\n\
              \x20 headers.forEach((value, key) => {\n\

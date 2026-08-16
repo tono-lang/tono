@@ -210,8 +210,6 @@ fn the_method_assembles_the_request_and_maps_the_outcome_onto_the_taxonomy() {
     assert!(serde.contains(
         "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));
-    // No hook is bound, so no dead hook-error check is emitted.
-    assert!(!serde.contains("HookErr"));
     // @timeout reads the pre-converted client field the constructor built.
     assert!(serde.contains("Timeout: c.timeoutDuration,"));
     assert!(serde.contains("d, err := time.ParseDuration(string(s.Timeout))"));
@@ -254,7 +252,6 @@ fn an_operation_with_no_retry_or_timeout_declares_neither() {
     assert!(!serde.contains("Timeout:"));
     assert!(!serde.contains("timeoutDuration"));
     assert!(!serde.contains("time.ParseDuration"));
-    assert!(!serde.contains("Hooks"));
     assert!(serde.contains(
         "outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{"
     ));

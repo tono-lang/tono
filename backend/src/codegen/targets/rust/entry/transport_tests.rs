@@ -429,7 +429,7 @@ fn retry_or_collapses_to_the_bare_failure_without_retry() {
 }
 
 #[test]
-fn op_call_without_retry_timeout_or_hooks_carries_no_trace_of_them() {
+fn op_call_without_retry_or_timeout_carries_no_trace_of_them() {
     let w = wire();
     let mut refs = Vec::new();
     let out = with_ctx(|ctx| {
@@ -441,8 +441,6 @@ fn op_call_without_retry_timeout_or_hooks_carries_no_trace_of_them() {
                 has_declared_errors: false,
                 discriminator: "decode_x_error",
                 success_block: "Ok(())",
-                before_request: None,
-                after_response: None,
                 timeout_field: None,
             },
             ctx,
@@ -476,8 +474,6 @@ fn op_call_with_retry_and_timeout_wraps_the_attempt_in_a_loop() {
                 has_declared_errors: true,
                 discriminator: "decode_x_error",
                 success_block: "Ok(())",
-                before_request: None,
-                after_response: None,
                 timeout_field: Some("timeout_ms".into()),
             },
             ctx,

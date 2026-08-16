@@ -319,20 +319,21 @@ let service_api : Ir.model =
       ];
   }
 
-(* Example: the bespoke extension table. A lifecycle hook (no signature), a
-   signing contract (typed signature plus a mandatory conformance reference), and
-   a custom constraint, each bound to per-language source files. *)
+(* Example: the bespoke extension table. An operation impl (no signature, its
+   name points at the operation it implements), a signing contract (typed
+   signature plus a mandatory conformance reference), and a custom
+   constraint, each bound to per-language source files. *)
 let extension_model : Ir.model =
-  let before_request : Ir.extension =
+  let process_charge : Ir.extension =
     {
-      ext_name = "before_request";
-      ext_kind = Ir.Hook;
+      ext_name = "process_charge";
+      ext_kind = Ir.Impl;
       ext_sig = None;
       ext_raw = false;
       ext_bindings =
         [
-          ("ts", "ext/ts/auth.ts#addBearer");
-          ("rust", "ext/rust/auth.rs#add_bearer");
+          ("ts", "ext/ts/charge.ts#processCharge");
+          ("rust", "ext/rust/charge.rs#process_charge");
         ];
       ext_conformance = None;
     }
@@ -369,7 +370,7 @@ let extension_model : Ir.model =
           mod_name = "payments";
           shapes = [];
           operations = [];
-          extensions = [ before_request; sign_request; luhn ];
+          extensions = [ process_charge; sign_request; luhn ];
           ext_libs = [];
           tests = [];
         };

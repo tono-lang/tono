@@ -1,8 +1,8 @@
 //! The request-assembly half of the emitted `internal/transport` package:
 //! the helpers the generated call sites name to build a URL, layer headers,
 //! and encode a body, plus the raw dispatch behind one attempt. Split from
-//! [`super::send`] (which owns the call policy: Send, retry, timeout, hooks)
-//! along that seam, so each half stays readable on its own.
+//! [`super::send`] (which owns the call policy: Send, retry, timeout) along
+//! that seam, so each half stays readable on its own.
 
 use crate::codegen::tree::Decl;
 

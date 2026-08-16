@@ -30,27 +30,26 @@ pub struct client {
 }
 `;
 
-const BESPOKE_AUTH = `@doc("A tiny API whose auth is bespoke: client_init sets the header from Settings.")
+const BESPOKE_AUTH = `@doc("A tiny API whose auth is bespoke: the bearer header is built entirely from declared fields.")
 pub struct account {
   id: uuid
   email: string
 }
 
-@doc("The SDK entry: the token and endpoint resolve at construction.")
+@doc("The SDK entry: the token and endpoint resolve at construction, the header derives from the token.")
 pub struct client {
-  api_token: string @env("API_TOKEN")
+  api_token: string @env("API_TOKEN") @length(min: 1)
+  auth_header: string @format("Bearer {.api_token}")
   endpoint: string @env("AUTH_ENDPOINT") @default("https://api.example.com")
 
   op get_account(): account
     @http(method: "GET", path: "/account", endpoint: .endpoint)
+    @header("Authorization", .auth_header)
 }
 
-// Auth is 100% bespoke (there is no built-in scheme). The client_init hook
-// receives the resolved Settings and writes the Authorization header once,
-// at construction; here only the TypeScript implementation is declared.
-ext hook client_init {
-  ts: "ext/ts/auth.ts#applyBearer"
-}
+// Auth is 100% bespoke (there is no built-in scheme), but this scheme needs
+// no bespoke code at all: @format derives the header from the declared
+// token, and @header attaches it to every request.
 `;
 
 export interface Example {
@@ -61,7 +60,7 @@ export interface Example {
 export const EXAMPLES: Example[] = [
   { name: "Payment methods", source: PAYMENTS },
   { name: "HTTP client", source: HTTP_CLIENT },
-  { name: "Bespoke auth (ext hook)", source: BESPOKE_AUTH },
+  { name: "Bespoke auth", source: BESPOKE_AUTH },
 ];
 
 export const DEFAULT_EXAMPLE = EXAMPLES[0];

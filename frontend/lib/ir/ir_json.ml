@@ -74,8 +74,11 @@
    is rejected at typecheck).
    v18 added a test's "extern_stubs" table: a declared test can now stub an
    "ext"/"extern" FFI free function or opaque-handle method, alongside the
-   existing client/op "stubs" table. *)
-let current_ir_version = 18
+   existing client/op "stubs" table.
+   v19 dropped the "hook" extension kind: the lifecycle it filled is gone,
+   replaced entirely by the declarative "ext"/"extern" FFI model v14-v18
+   added; a hook is now rejected at typecheck and never reaches the IR. *)
+let current_ir_version = 19
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -220,7 +223,6 @@ and encode_shape (s : Ir.shape) : Ir.json =
     @ [ ("traits", `List (List.map encode_trait s.traits)) ])
 
 let encode_ext_kind = function
-  | Ir.Hook -> "hook"
   | Ir.Contract -> "contract"
   | Ir.Constraint -> "constraint"
   | Ir.Impl -> "impl"
@@ -394,7 +396,6 @@ and decode_shape j =
 let decode_ext_kind j =
   let* s = as_string j in
   match s with
-  | "hook" -> Ok Ir.Hook
   | "contract" -> Ok Ir.Contract
   | "constraint" -> Ok Ir.Constraint
   | "impl" -> Ok Ir.Impl

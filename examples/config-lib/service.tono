@@ -1,0 +1,78 @@
+import tono.http
+import tono.errors
+
+// A third-party config library the SDK integrates with declaratively: no
+// bespoke code, just the shape of the call and how its return projects into
+// the tono-facing type. The `ext` block names where the library lives per
+// target; each language block declares the real call, its foreign return
+// shape, and the projection into `app_config`.
+ext configlib {
+  go: "github.com/example/configlib"
+  ts: "@example/configlib"
+  rust: "configlib"
+
+  struct go_config { Host: string, DevHost: string, Env: string, Token: string }
+  struct ts_config { host: string, token: string }
+  struct rust_config { host: string, dev_host: string, env: string, token: string }
+
+  extern load(service: string, region: string): app_config {
+    go {
+      call: "Load"(service, region)
+      yields: (cfg: go_config)
+      returns: app_config {
+        endpoint: match .cfg.Env { "prod" => .cfg.Host, _ => .cfg.DevHost }
+        token: .cfg.Token
+      }
+    }
+    ts {
+      call: "load"(service, region)
+      yields: (cfg: ts_config)
+      returns: app_config { endpoint: .cfg.host, token: .cfg.token }
+    }
+    rust {
+      call: "load"(service, region)
+      yields: (cfg: rust_config)
+      returns: app_config {
+        endpoint: match .cfg.env { "prod" => .cfg.host, _ => .cfg.dev_host }
+        token: .cfg.token
+      }
+    }
+  }
+}
+
+struct app_config { endpoint: string, token: string }
+
+@doc("A tiny API whose config comes from an external library, not the environment.")
+pub struct account {
+  id: uuid
+  email: string
+}
+
+@doc("The SDK entry: the config resolves at construction from the external library.")
+pub struct client {
+  service: string @env("SERVICE_NAME") @default("accounts")
+  region: string @arg
+
+  config: app_config = configlib.load(.service, .region)
+  auth: string @format("Bearer {.config.token}")
+
+  op get_account(): account
+    @http(method: "GET", path: "/account", endpoint: .config.endpoint)
+    @header("Authorization", .auth)
+}
+
+// The library is never installed for this test: `stub configlib.load`
+// answers the call declaratively, and the assertions prove the projection
+// (endpoint, token) reached the request exactly as declared.
+test "the config from the library becomes the endpoint and the header" {
+  stub configlib.load: app_config { endpoint: "https://x.test", token: "t0" }
+  c: client { region: "us-east" }
+  s: stub c.get_account.http: http.response {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: "{\"id\":\"5f3a0e6e-8f2a-4f7e-9c1d-2b4a6d8e0f12\",\"email\":\"ada@example.com\"}"
+  }
+  got: c.get_account()
+  expect got: account { id: "5f3a0e6e-8f2a-4f7e-9c1d-2b4a6d8e0f12", email: "ada@example.com" }
+  expect s.requests: [http.request { method: "GET", path: "/account", headers: { "authorization": "Bearer t0", .. }, .. }]
+}

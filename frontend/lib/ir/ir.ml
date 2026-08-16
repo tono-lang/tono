@@ -252,22 +252,24 @@ and enum_value = {
 }
 
 (* A bespoke extension: logic that does not fit the pure calculus, bound to a
-   per-language source file. [Hook] fills a fixed lifecycle slot (its name is the
-   slot); [Contract] and [Constraint] are named with a typed signature; [Impl]
-   implements the operation its name points at, taking that operation's signature.
-   The binding is the escape hatch; conformance gates a contract at emit time. *)
-type ext_kind = Hook | Contract | Constraint | Impl
+   per-language source file. [Contract] and [Constraint] are named with a typed
+   signature; [Impl] implements the operation its name points at, taking that
+   operation's signature. The binding is the escape hatch; conformance gates a
+   contract at emit time. A hook never reaches the IR: [Check_ext] rejects it
+   before lowering, and [Lower]'s [lower_file] drops it rather than lowering
+   it into an extension. *)
+type ext_kind = Contract | Constraint | Impl
 
-(* The typed boundary of a contract/constraint. Hooks and impls omit it: a hook's
-   signature is fixed by its slot, an impl's by the operation it names. Signature
-   refs are stored verbatim, not resolved against user shapes
-   (binding-vs-signature validation is deferred). *)
+(* The typed boundary of a contract/constraint. An impl omits it: its
+   signature is the operation it names. Signature refs are stored verbatim,
+   not resolved against user shapes (binding-vs-signature validation is
+   deferred). *)
 type ext_sig = { input : tref; output : tref }
 
 type extension = {
   ext_name : string;
-      (* slot name for a hook, the operation name (bare or "entry.op") for an
-         impl, otherwise the contract name *)
+      (* the operation name (bare or "entry.op") for an impl, otherwise the
+         contract/constraint name *)
   ext_kind : ext_kind;
   ext_sig : ext_sig option;
   ext_raw : bool;

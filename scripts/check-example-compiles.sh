@@ -45,7 +45,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 EOF
 # A driver that constructs the generated entry client, points it at a local
 # in-process server (via the entry's declared @env override, the only
-# construction-time hook this entry exposes), and drives one real op call
+# construction-time seam this entry exposes), and drives one real op call
 # through the hand-written Rust HTTP runtime end to end: request assembly
 # (header binding, endpoint ref), the transport call, and response decoding
 # (including a cross-module union field, same as the Go verify driver).
@@ -297,6 +297,7 @@ EOF
 
 echo "typescript..."
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"
+vitest="$root/backend/codegen-tests/typescript/node_modules/.bin/vitest"
 # The TypeScript SDK is a nested tree (a file per module) split into types and
 # serde modules; a tsconfig compiles every generated module together so
 # cross-module and serde imports resolve, closing the Protocol/Target seam end
@@ -406,12 +407,12 @@ EOF
 
 echo "auth-bearer..."
 # The recipe is source only, so its Settings bridge only exists after a
-# regeneration; this is its compile gate: frontend -> gen -> hook -> tsc.
+# regeneration; this is its compile gate: frontend -> gen -> tsc. No bespoke
+# code is copied in: the header derives entirely from @format + @header.
 #
-# Go is built too even though the hook is bound for TypeScript only: this entry
-# is the one whose fields resolve from the environment with nothing consuming
-# them declaratively, which is exactly the shape that used to emit a Go
-# constructor that would not compile.
+# Go is built too: this entry is the one whose fields resolve from the
+# environment with nothing consuming them declaratively, which is exactly the
+# shape that used to emit a Go constructor that would not compile.
 frontend="$root/_build/default/frontend/bin/tono_frontend.exe"
 if [ ! -x "$frontend" ]; then
     (cd "$root" && opam exec -- dune build frontend/bin/tono_frontend.exe)
@@ -420,14 +421,10 @@ mkdir -p "$work/auth"
 "$frontend" compile "$root/examples/auth-bearer/auth.tono" --module auth >"$work/auth/ir.json"
 "$root/target/debug/tono" gen --target go,typescript --out "$work/auth/out" \
     --go-module example.com/auth "$work/auth/ir.json"
-# The Go hook is called unqualified from inside the generated package, so the
-# bespoke file lands there before the build (the client_init wrapper names it).
-cp "$root/examples/auth-bearer/ext/go/auth.go" "$work/auth/out/go/auth/bespoke.go"
 (cd "$work/auth/out/go" && go mod init example.com/auth >/dev/null 2>&1 \
     && go mod tidy >/dev/null \
     && go build ./...)
 (cd "$work/auth/out/go" && go test ./...)
-cp -R "$root/examples/auth-bearer/ext" "$work/auth/out/typescript/"
 cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
 {
   "compilerOptions": {
@@ -444,5 +441,70 @@ cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
 }
 EOF
 (cd "$work/auth/out/typescript" && "$tsc" -p tsconfig.json)
+
+echo "config-lib..."
+# The `ext <lib> { extern ... }` FFI recipe: a config field constructed by a
+# declarative call into a third-party library, exercised for real against a
+# stand-in package per target (under ext/), the way a real dependency would
+# be pinned. Every generated declared test stubs the library call
+# (`stub configlib.load`), so this also proves each target's construction
+# override for an extern-call field, not just that the SDK compiles.
+mkdir -p "$work/config-lib"
+"$frontend" compile "$root/examples/config-lib/service.tono" --module configsvc >"$work/config-lib/ir.json"
+"$root/target/debug/tono" gen --target go,typescript,rust --out "$work/config-lib/out" \
+    --go-module example.com/configsvc "$work/config-lib/ir.json"
+
+(cd "$work/config-lib/out/go" && go mod init example.com/configsvc >/dev/null 2>&1 \
+    && cat >>go.mod <<EOF
+require github.com/example/configlib v0.0.0
+replace github.com/example/configlib => $root/examples/config-lib/ext/go
+EOF
+    go mod tidy >/dev/null \
+    && go build ./...)
+(cd "$work/config-lib/out/go" && go test ./...)
+
+mkdir -p "$work/config-lib/rust-sdk/src"
+cp -R "$work/config-lib/out/rust/." "$work/config-lib/rust-sdk/src/"
+cat >"$work/config-lib/rust-sdk/Cargo.toml" <<EOF
+[package]
+name = "example_configsvc"
+version = "0.0.0"
+edition = "2021"
+[lib]
+name = "example_configsvc"
+path = "src/lib.rs"
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+configlib = { path = "$root/examples/config-lib/ext/rust" }
+[features]
+default = ["reqwest"]
+reqwest = ["dep:reqwest"]
+[workspace]
+EOF
+(cd "$work/config-lib/rust-sdk" && cargo build --quiet && cargo test --quiet)
+
+mkdir -p "$work/config-lib/out/typescript/node_modules/@example"
+cp -R "$root/examples/config-lib/ext/ts/configlib" "$work/config-lib/out/typescript/node_modules/@example/"
+cat >"$work/config-lib/out/typescript/tsconfig.json" <<EOF
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2020",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM"],
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["**/*.test.ts"]
+}
+EOF
+(cd "$work/config-lib/out/typescript" && "$tsc" -p tsconfig.json)
+(cd "$work/config-lib/out/typescript" && "$vitest" run)
 
 echo "all generated SDKs compile"

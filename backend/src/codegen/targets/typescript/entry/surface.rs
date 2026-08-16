@@ -1,9 +1,7 @@
 //! The entry type surface: the construction-only config interfaces, the
-//! Settings and config-object interfaces, the descriptor constants, and
-//! the hook wrappers.
+//! Settings and config-object interfaces, and the descriptor constants.
 
 use super::*;
-use crate::codegen::targets::typescript::client::import_specifier;
 
 /// The construction-only config interfaces (they never cross the wire, so the
 /// regular type emission skips them).
@@ -35,8 +33,7 @@ pub(super) fn config_interfaces(module: &Module, config: &CasingConfig) -> Vec<D
         .collect()
 }
 
-/// The Settings interface: every resolved field plus the transport slots the
-/// bespoke `client_init` hook may fill.
+/// The Settings interface: every resolved field plus the transport slots.
 pub(super) fn settings_interface(
     entry: &EntryModel<'_>,
     n: &Names,
@@ -56,12 +53,10 @@ pub(super) fn settings_interface(
     }
     Decl::raw_with(
         format!(
-            "// {settings} are the resolved construction values of the {entry} entry,\n\
-             // handed to the client_init hook before validation: bespoke code may\n\
-             // overwrite any field (bespoke wins) and set transport through the slots.\n\
+            "// {settings} are the resolved construction values of the {entry} entry.\n\
              // Exactly one transport slot may be set: fetch (native) or transport\n\
-             // (canonical). headers are the base request headers (bespoke auth writes\n\
-             // here); a declared @header wins only where nothing else set the name.\n\
+             // (canonical). headers are the base request headers; a declared @header\n\
+             // wins only where nothing else set the name.\n\
              export interface {settings} {{\n{fields}  fetch?: typeof fetch;\n  transport?: HttpTransport;\n  headers: Record<string, string>;\n}}",
             settings = n.settings,
             entry = entry.name,
@@ -154,92 +149,6 @@ pub(super) fn discriminator_decls_for(
             }
         })
         .collect()
-}
-
-/// The runtime-facing hook wrappers (`before_request`/`after_response`) an
-/// entry's transport calls before/after the request.
-pub(super) fn transport_hook_wrappers(bound: &[BoundExtension<'_>], module: &Module) -> Vec<Decl> {
-    let en = error_names();
-    let mut decls = Vec::new();
-    for (slot, ty, wrapper) in [
-        ("before_request", "HttpRequest", "wrapBeforeRequest"),
-        ("after_response", "HttpResponse", "wrapAfterResponse"),
-    ] {
-        let Some(b) = hook_binding(bound, slot) else {
-            continue;
-        };
-        decls.push(Decl::raw_with(
-            format!(
-                "async function {wrapper}(x: {ty}): Promise<{ty}> {{\n  try {{\n    return await {sym}(x);\n  }} catch (e) {{\n    // A declared SDK error passes through typed; anything else is bespoke\n    // failure surfaced as a ContractError.\n    if (e instanceof {root}) throw e;\n    throw new {contract}(\"{slot}\", e);\n  }}\n}}",
-                sym = b.symbol,
-                root = en.root,
-                contract = en.contract,
-            ),
-            vec![
-                Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
-                support_symbol(ty),
-                module_symbol(&en.root, module),
-                module_symbol(&en.contract, module),
-            ],
-        ));
-    }
-    if let Some(b) = hook_binding(bound, "on_error") {
-        decls.push(Decl::raw_with(
-            format!(
-                "function wrapOnError(err: {root}): {root} {{\n  try {{\n    return {sym}(err);\n  }} catch (e) {{\n    if (e instanceof {root}) throw e;\n    throw new {contract}(\"on_error\", e);\n  }}\n}}",
-                root = en.root,
-                contract = en.contract,
-                sym = b.symbol,
-            ),
-            vec![
-                Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
-                module_symbol(&en.root, module),
-                module_symbol(&en.contract, module),
-            ],
-        ));
-    }
-    decls
-}
-
-/// The `client_init` boundary wrapper for entries: the bespoke symbol mutates
-/// the resolved Settings in place (single-entry modules only: the bespoke
-/// symbol has one signature).
-pub(super) fn client_init_wrapper(
-    bound: &[BoundExtension<'_>],
-    entries: &[EntryModel<'_>],
-    multi: bool,
-    module: &Module,
-) -> Vec<Decl> {
-    let Some(b) = hook_binding(bound, "client_init") else {
-        return Vec::new();
-    };
-    if multi {
-        return Vec::new();
-    }
-    let Some(entry) = entries.first() else {
-        return Vec::new();
-    };
-    let en = error_names();
-    let n = names(entry, multi);
-    vec![Decl::raw_with(
-        format!(
-            "// The client_init bridge: bespoke code runs over the resolved Settings\n\
-             // (bespoke wins) before validation.\n\
-             export function wrapClientInit(settings: {settings}): void {{\n  try {{\n    {sym}(settings);\n  }} catch (e) {{\n    if (e instanceof {root}) throw e;\n    throw new {contract}(\"client_init\", e);\n  }}\n}}",
-            settings = n.settings,
-            sym = b.symbol,
-            root = en.root,
-            contract = en.contract,
-        ),
-        vec![
-            Symbol::imported(b.symbol, import_specifier(b.module, &module.name), b.symbol),
-            module_symbol(&en.root, module),
-            module_symbol(&en.contract, module),
-            // The resolved Settings are the entry's, so the bridge imports them
-            // from its group.
-            module_symbol(&n.settings, module),
-        ],
-    )]
 }
 
 pub(super) fn apply_transforms(

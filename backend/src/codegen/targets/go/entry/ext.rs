@@ -353,8 +353,7 @@ pub(super) fn declared_error_literal(
 /// declared order; anything else (including no `errors:` at all) becomes a
 /// `ContractError` naming the extern. `ret` turns a built error expression
 /// into the caller's own `return` statement (a construction call always
-/// returns `nil, err`; an op method returns its own zero value, routed
-/// through the op's `on_error` hook when one is bound).
+/// returns `nil, err`; an op method returns its own zero value).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn error_block(
     refs: &mut Vec<Symbol>,
@@ -570,9 +569,9 @@ pub(super) fn call_assign(
 /// field's declared opaque-handle method, in place of the transport.
 /// Shares the call/yields/errors/returns machinery with [`call_assign`]; the
 /// receiver is a foreign handle field instead of an `ext` namespace, the
-/// failure path returns the op's own zero value (through `on_error` when
-/// bound) instead of `nil, err`, and a `Ref` argument can read either an
-/// entry field or the op's own declared parameter.
+/// failure path returns the op's own zero value instead of `nil, err`, and a
+/// `Ref` argument can read either an entry field or the op's own declared
+/// parameter.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn impl_call_body(
     entry: &EntryModel<'_>,

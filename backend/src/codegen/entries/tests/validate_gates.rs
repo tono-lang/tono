@@ -32,29 +32,6 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
     )
     .unwrap_err();
     assert!(err.contains("transport slot"), "{err}");
-    // client_init cannot bridge two Settings types.
-    let hook = crate::ir::Extension {
-        name: "client_init".into(),
-        kind: crate::ir::ExtKind::Hook,
-        signature: None,
-        raw: false,
-        bindings: [("go".to_string(), "ext/go/i.go#I".to_string())]
-            .into_iter()
-            .collect(),
-        conformance: None,
-    };
-    let err = validate_entries(
-        &model(
-            vec![
-                entry_shape("m#client", vec![]),
-                entry_shape("m#admin", vec![]),
-            ],
-            vec![hook],
-        ),
-        &[TargetKind::Go],
-    )
-    .unwrap_err();
-    assert!(err.contains("client_init"), "{err}");
     // A loose op and an entry op sharing a local name would collide.
     let entry_op = Shape {
         id: "m#sdk.save".into(),
@@ -321,47 +298,20 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
 }
 
 #[test]
-fn a_mixed_module_with_a_ts_client_init_binding_is_rejected() {
-    let hook = crate::ir::Extension {
-        name: "client_init".into(),
-        kind: crate::ir::ExtKind::Hook,
-        signature: None,
-        raw: false,
-        bindings: [("ts".to_string(), "ext/ts/i.ts#init".to_string())]
-            .into_iter()
-            .collect(),
-        conformance: None,
-    };
-    let loose_op = Shape {
-        id: "m#other".into(),
-        kind: ShapeKind::Operation {
-            input_name: None,
-            input: None,
-            output: None,
-            errors: vec![],
-            wire: None,
-            impl_call: None,
-        },
-        traits: vec![],
-    };
+fn a_loose_operation_with_a_wire_binding_is_rejected() {
+    // A loose (non-entry) operation carrying a wire binding is rejected
+    // outright: entries are the only supported HTTP client surface.
     let mut m = crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![Module {
             tests: vec![],
             name: "m".into(),
             shapes: vec![entry_shape("m#sdk", vec![])],
-            operations: vec![loose_op],
-            extensions: vec![hook],
+            operations: vec![],
+            extensions: vec![],
             ext_libs: vec![],
         }],
     };
-    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
-    assert!(err.contains("mixes loose operations"), "{err}");
-    m.modules[0].extensions.clear();
-    m.modules[0].operations.clear();
-    assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
-    // A loose (non-entry) operation carrying a wire binding is rejected
-    // outright: entries are the only supported HTTP client surface.
     let wire_loose_op = Shape {
         id: "m#ping".into(),
         kind: ShapeKind::Operation {

@@ -74,21 +74,6 @@ fn push_impl_extension(module: &mut Module, name: &str, raw: bool, binding: &str
     });
 }
 
-/// Binds a lifecycle hook extension (`client_init`, `before_request`,
-/// `after_response`) for the Rust target only.
-fn push_hook_extension(module: &mut Module, slot: &str, binding: &str) {
-    module.extensions.push(Extension {
-        name: slot.into(),
-        kind: ExtKind::Hook,
-        signature: None,
-        raw: false,
-        bindings: [("rust".to_string(), binding.to_string())]
-            .into_iter()
-            .collect(),
-        conformance: None,
-    });
-}
-
 /// A single-entry module: `@arg api_key`, `@env`/`@default` `client_name`
 /// and `endpoint`, one `@http` op declaring a retryable coded error. Shared
 /// with the conformance-vector tests (`conformance_tests`), which layer
@@ -530,88 +515,6 @@ fn a_raw_bespoke_impl_with_a_declared_output_decodes_the_success_body() {
     // per-type shared decoder (the same one `create_charge`'s protocol path
     // calls) rather than an inline probe repeated at this call site.
     assert!(out.contains("decode_charge(&raw_body)"));
-}
-
-#[test]
-fn a_client_init_hook_runs_after_source_resolution_and_its_error_is_guarded() {
-    let mut module = simple_entry_module();
-    module.extensions.push(Extension {
-        name: "client_init".into(),
-        kind: ExtKind::Hook,
-        signature: None,
-        raw: false,
-        bindings: [(
-            "rust".to_string(),
-            "ext/rust/init.rs#init_client".to_string(),
-        )]
-        .into_iter()
-        .collect(),
-        conformance: None,
-    });
-    let out = text(&module);
-    assert!(out.contains(
-        "if let Err(e) = init_client(&mut s) {\n            return Err(match e.downcast::<TonoError>() {\n                Ok(declared) => *declared,\n                Err(other) => TonoError::Contract(ContractError { contract_name: \"client_init\".to_string(), cause: other }),\n            });\n        }"
-    ));
-}
-
-#[test]
-fn with_no_hooks_bound_the_ops_invoke_no_hook_at_all() {
-    let module = simple_entry_module();
-    let out = text(&module);
-    assert!(!out.contains("before_request"));
-    assert!(!out.contains("after_response"));
-}
-
-#[test]
-fn a_before_request_hook_is_called_inline_leaving_after_response_unset() {
-    let mut module = simple_entry_module();
-    push_hook_extension(
-        &mut module,
-        "before_request",
-        "ext/rust/sign.rs#sign_request",
-    );
-    let out = text(&module);
-    // The bespoke symbol is awaited directly on the built request, and its
-    // failure classifies at the call site under the slot's name.
-    assert!(out.contains("let request = match sign_request(request).await {"));
-    assert!(out.contains(
-        "TonoError::Contract(ContractError { contract_name: \"before_request\".to_string(), cause: other }),"
-    ));
-    assert!(!out.contains("after_response"));
-}
-
-#[test]
-fn an_after_response_hook_is_called_inline_leaving_before_request_unset() {
-    let mut module = simple_entry_module();
-    push_hook_extension(
-        &mut module,
-        "after_response",
-        "ext/rust/log.rs#log_response",
-    );
-    let out = text(&module);
-    assert!(out.contains("let response = match log_response(response).await {"));
-    assert!(out.contains(
-        "TonoError::Contract(ContractError { contract_name: \"after_response\".to_string(), cause: other }),"
-    ));
-    assert!(!out.contains("before_request"));
-}
-
-#[test]
-fn both_lifecycle_request_hooks_bound_together_wire_both_slots() {
-    let mut module = simple_entry_module();
-    push_hook_extension(
-        &mut module,
-        "before_request",
-        "ext/rust/sign.rs#sign_request",
-    );
-    push_hook_extension(
-        &mut module,
-        "after_response",
-        "ext/rust/log.rs#log_response",
-    );
-    let out = text(&module);
-    assert!(out.contains("let request = match sign_request(request).await {"));
-    assert!(out.contains("let response = match log_response(response).await {"));
 }
 
 #[test]

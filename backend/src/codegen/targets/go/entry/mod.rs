@@ -5,8 +5,7 @@
 //! resort), parses env values by the field's type at the boundary (the error
 //! names the variable and the type), lowers a match selection to a `switch`,
 //! decodes a structured source strictly, composes a config through `@bind`,
-//! runs the bound `client_init` hook over the resolved `Settings` (bespoke
-//! wins), and validates last. Each operation method reads the typed resolved
+//! and validates last. Each operation method reads the typed resolved
 //! `Settings` directly and drives the SDK's own emitted transport (see
 //! [`send`] and [`transport`]); no runtime package and no values bag exist.
 
@@ -18,7 +17,7 @@ use crate::codegen::conventions::{
 };
 use crate::codegen::entries::plan;
 use crate::codegen::entries::{companion_name, op_local_name, ref_is_enum, EntryModel};
-use crate::codegen::extensions::{hook_binding, impl_binding, BoundExtension};
+use crate::codegen::extensions::{impl_binding, BoundExtension};
 use crate::codegen::ops::{declared_errors, error_names, wire_binding};
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::syntax::render_type;
@@ -50,8 +49,8 @@ fn camel(name: &str) -> String {
 }
 
 /// A reference to a declaration of the SDK's shared (public) support group:
-/// the transport shapes a bespoke hook types against live there, beside the
-/// branded well-known types.
+/// the canonical transport shapes live there, beside the branded well-known
+/// types.
 pub(super) fn support_symbol(name: &str) -> Symbol {
     Symbol::imported(name, crate::codegen::group::ROOT_SUPPORT, name)
 }
@@ -335,7 +334,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let mut helpers = Helpers::default();
     let mut shared = surface::config_structs(module, config);
     shared.extend(handle_iface_decls(module, config));
-    shared.extend(hook_wrapper_decls(&bound, &entries, multi));
     shared.extend(plan::output_decode_decls(
         &entries,
         module,
@@ -346,13 +344,12 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     for entry in &entries {
         let n = names(entry, multi);
         // The constructor comes right after the type.
-        let mut decls = surface::entry_type_decls(entry, &n, module, config, multi, &bound);
+        let mut decls = surface::entry_type_decls(entry, &n, module, config, multi);
         decls.extend(new_decl(
             entry,
             &n,
             module,
             config,
-            &bound,
             &mut helpers,
             multi,
             tested.contains(entry.name),
@@ -425,96 +422,6 @@ fn discriminator_decls_for(
             }
         })
         .collect()
-}
-
-/// The bound-hook boundary wrappers. `client_init` receives the entry's
-/// `Settings` (single-entry modules only: the bespoke symbol has one
-/// signature); `before_request`/`after_response` carry the runtime shapes;
-/// `on_error` maps the outgoing error.
-fn hook_wrapper_decls(
-    bound: &[BoundExtension<'_>],
-    entries: &[EntryModel<'_>],
-    multi: bool,
-) -> Vec<Decl> {
-    let en = error_names();
-    let mut decls = Vec::new();
-    let wrap = |slot: &str, call: &str, sig: &str, ret: &str| {
-        format!(
-            "func {name}{sig} {{\n\
-             \t{ret}err := {call}\n\
-             \tif err != nil {{\n\
-             \t\tvar known {marker}\n\
-             \t\tif errors.As(err, &known) {{\n\t\t\treturn {out}err\n\t\t}}\n\
-             \t\treturn {out}&{contract}{{ContractName: \"{slot}\", Cause: err}}\n\
-             \t}}\n\
-             \treturn {out}nil\n\
-             }}",
-            name = hook_wrapper_name(slot),
-            contract = en.contract,
-            marker = super::errors::SDK_ERROR_MARKER,
-            out = if ret.is_empty() { "" } else { "out, " },
-            ret = if ret.is_empty() { "" } else { "out, " },
-        )
-    };
-    if let Some(b) = hook_binding(bound, "client_init") {
-        if !multi {
-            if let Some(entry) = entries.first() {
-                let n = names(entry, multi);
-                decls.push(Decl::raw_with(
-                    format!(
-                        "// {name} is the boundary wrapper for the client_init hook: bespoke\n\
-                         // code runs over the resolved Settings (bespoke wins) before validation.\n\
-                         // The bespoke {sym} lives in this package (drop {module} into it).\n\
-                         {body}",
-                        name = hook_wrapper_name("client_init"),
-                        sym = b.symbol,
-                        module = b.module,
-                        body = wrap(
-                            "client_init",
-                            &format!("{}(s)", b.symbol),
-                            &format!("(s *{}) error", n.settings),
-                            ""
-                        ),
-                    ),
-                    vec![import("errors", "errors")],
-                ));
-            }
-        }
-    }
-    for (slot, var, shape) in [
-        ("before_request", "req", "HTTPRequest"),
-        ("after_response", "res", "HTTPResponse"),
-    ] {
-        if let Some(b) = hook_binding(bound, slot) {
-            let shape_slot = shared_slot(shape);
-            decls.push(Decl::raw_with(
-                wrap(
-                    slot,
-                    &format!("{}(ctx, {var})", b.symbol),
-                    &format!("(ctx context.Context, {var} {shape_slot}) ({shape_slot}, error)"),
-                    "out",
-                ),
-                vec![
-                    import("errors", "errors"),
-                    import("context", "context"),
-                    support_symbol(shape),
-                ],
-            ));
-        }
-    }
-    if let Some(b) = hook_binding(bound, "on_error") {
-        decls.push(Decl::raw(format!(
-            "// {name} maps every error leaving the SDK through the bound on_error hook.\n\
-             func {name}(err error) error {{\n\treturn {sym}(err)\n}}",
-            name = hook_wrapper_name("on_error"),
-            sym = b.symbol,
-        )));
-    }
-    decls
-}
-
-fn hook_wrapper_name(slot: &str) -> String {
-    camel(&format!("{slot}_hook"))
 }
 
 mod assembly;

@@ -12,7 +12,7 @@
 //! The bound symbol lives in the generated package: Go's last path segment is
 //! often not an importable package name, so the binding path is a "drop this
 //! file here" instruction, and the call is unqualified. This mirrors how bound
-//! contracts and hooks are called.
+//! contracts are called.
 
 use crate::codegen::conventions::doc_of;
 use crate::codegen::entries::op_local_name;

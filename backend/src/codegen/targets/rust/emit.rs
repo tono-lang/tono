@@ -403,10 +403,10 @@ mod tests {
         assert!(types.contains("pub struct DecodeError"));
         assert!(types.contains("pub struct APIError"));
         assert!(types.contains("pub enum APIFailure"));
-        // No hook is bound, but the entry runtime call's catch-all match arm
-        // (`entry/mod.rs::op_method`) wraps any downcast failure into
+        // No extension is bound, but the entry runtime call's catch-all match
+        // arm (`entry/mod.rs::op_method`) wraps any downcast failure into
         // ContractError as unconditional generated text for every wire-op
-        // entry method, regardless of whether this module binds a hook (see
+        // entry method, regardless of whether this module binds one (see
         // `taxonomy::derive_rust_entry`).
         assert!(types.contains("pub struct ContractError"));
         assert!(!types.contains("pub struct Violation"));

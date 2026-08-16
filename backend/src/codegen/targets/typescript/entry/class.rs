@@ -5,10 +5,9 @@
 //! on its own.
 
 use super::{
-    access, cast_string, config_error, err_var, field_camel_ren, hook_binding, module_symbol,
-    op_method, presence_guard, rename_of, support_symbol, timeout_field_name, ts_type, type_refs,
-    zero_value, BoundExtension, CasingConfig, Decl, EntryModel, FieldShape, Helpers, Module, Names,
-    Resolver,
+    access, cast_string, config_error, err_var, field_camel_ren, module_symbol, op_method,
+    presence_guard, rename_of, support_symbol, timeout_field_name, ts_type, type_refs, zero_value,
+    BoundExtension, CasingConfig, Decl, EntryModel, FieldShape, Helpers, Module, Names, Resolver,
 };
 use crate::codegen::entries::plan;
 use crate::codegen::entries::ValuePath;
@@ -80,9 +79,9 @@ fn ctor_params<'a>(entry: &EntryModel<'a>, n: &Names) -> (Vec<String>, Vec<&'a E
 }
 
 /// The resolution body: the mutable `Settings` draft, every declared source
-/// chain in dependency order, the `client_init` bridge, and the
-/// consumed-chain presence requires. Everything here still targets `s.*`
-/// regardless of sync vs async, since the draft is a local, not `this`.
+/// chain in dependency order, and the consumed-chain presence requires.
+/// Everything here still targets `s.*` regardless of sync vs async, since the
+/// draft is a local, not `this`.
 fn resolve_body(
     entry: &EntryModel<'_>,
     module: &Module,
@@ -130,16 +129,8 @@ fn resolve_body(
     (body, resolve_fns)
 }
 
-fn client_init_line(bound: &[BoundExtension<'_>], multi: bool, body: &mut String) {
-    if hook_binding(bound, "client_init").is_some() && !multi {
-        plan::push_gap(body);
-        body.push_str("    wrapClientInit(s);\n");
-    }
-}
-
 /// Consumed chains must hold a value once construction finishes. The shared
-/// plan picks which fields need a check (`client_init` ran already, bespoke
-/// wins, so each check reads the resolved value); this target spells them.
+/// plan picks which fields need a check; this target spells them.
 #[allow(clippy::too_many_arguments)]
 fn requires_block(
     entry: &EntryModel<'_>,
@@ -169,12 +160,11 @@ fn requires_block(
     }
 }
 
-/// One declared-validation guard's condition, read off the value bespoke
-/// left in place (`client_init` ran already, bespoke wins), so presence is
-/// judged off the value itself, never the declared chain's error var. A
-/// numeric zero can be a legitimately resolved value, so its guard only
-/// skips when the chain reported absent AND the bridge left the zero in
-/// place.
+/// One declared-validation guard's condition, read off the field's resolved
+/// value, so presence is judged off the value itself, never the declared
+/// chain's error var. A numeric zero can be a legitimately resolved value, so
+/// its guard only skips when the chain reported absent AND the resolved
+/// value is still zero.
 fn guard_condition(
     field: &EntryField,
     config: &CasingConfig,
@@ -211,8 +201,8 @@ fn guard_condition(
     }
 }
 
-/// Declared validation runs last, over what bespoke left in place: one guard
-/// per constraint, collected into a single `violations` throw.
+/// Declared validation runs last, over every field's resolved value: one
+/// guard per constraint, collected into a single `violations` throw.
 fn validation_guards_block(
     entry: &EntryModel<'_>,
     module: &Module,
@@ -382,24 +372,6 @@ fn options_assign_line(is_async: bool) -> &'static str {
     }
 }
 
-fn hooks_field_block(bound: &[BoundExtension<'_>], refs: &mut Vec<Symbol>) -> String {
-    let mut slots = Vec::new();
-    if hook_binding(bound, "before_request").is_some() {
-        slots.push("before_request: wrapBeforeRequest".to_string());
-    }
-    if hook_binding(bound, "after_response").is_some() {
-        slots.push("after_response: wrapAfterResponse".to_string());
-    }
-    if slots.is_empty() {
-        return String::new();
-    }
-    refs.push(support_symbol("Hooks"));
-    format!(
-        "  private readonly hooks: Hooks = {{ {} }};\n",
-        slots.join(", ")
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn methods_block(
     n: &Names,
@@ -434,8 +406,8 @@ fn methods_block(
 
 /// The construction seam the generated tests use, emitted only when the
 /// entry declares tests so the shipped surface stays clean. The real
-/// construction path runs first (resolution, `client_init`, validation),
-/// then the canonical transport replaces whatever construction resolved, so
+/// construction path runs first (resolution, validation), then the
+/// canonical transport replaces whatever construction resolved, so
 /// a test answers canonically without a server. `ClientOptions` spells its
 /// slots readonly, so the swap goes through a mutable view of the frozen
 /// options object (the object itself is a plain literal).
@@ -502,7 +474,6 @@ struct ClassParts<'a> {
     settings: &'a str,
     params: String,
     timeout_field_decls: String,
-    hooks_field: String,
     body: String,
     for_test: String,
     methods: String,
@@ -510,8 +481,8 @@ struct ClassParts<'a> {
 
 const CTOR_DOC: &str =
     "// constructor takes the @arg values positionally and the @with values as a\n\
-     // config object; construction resolves the declared sources, runs the\n\
-     // client_init bridge, validates, and freezes the runtime options.\n";
+     // config object; construction resolves the declared sources, validates,\n\
+     // and freezes the runtime options.\n";
 
 fn sync_class_text(p: &ClassParts<'_>) -> String {
     format!(
@@ -521,14 +492,12 @@ fn sync_class_text(p: &ClassParts<'_>) -> String {
          \x20 private readonly settings: {settings};\n\
          \x20 private readonly options: ClientOptions;\n\
          {timeout_field_decls}\
-         {hooks_field}\
          \x20 constructor({params}) {{\n{body}  }}\n\n{for_test}{methods}}}",
         doc = p.doc,
         client = p.client,
         entry_name = p.entry_name,
         settings = p.settings,
         timeout_field_decls = p.timeout_field_decls,
-        hooks_field = p.hooks_field,
         params = p.params,
         body = p.body,
         for_test = p.for_test,
@@ -566,7 +535,6 @@ fn async_class_text(p: &ClassParts<'_>, timeout_field_names: &[String]) -> Strin
          \x20 private readonly settings: {settings};\n\
          \x20 private readonly options: ClientOptions;\n\
          {timeout_field_decls}\
-         {hooks_field}\
          \x20 private constructor({ctor_params}) {{\n{ctor_body}  }}\n\n\
          \x20 static async create({params}): Promise<{client}> {{\n{body}    return new {client}({create_return});\n  }}\n\n\
          {for_test}{methods}}}",
@@ -575,7 +543,6 @@ fn async_class_text(p: &ClassParts<'_>, timeout_field_names: &[String]) -> Strin
         entry_name = p.entry_name,
         settings = p.settings,
         timeout_field_decls = p.timeout_field_decls,
-        hooks_field = p.hooks_field,
         params = p.params,
         body = p.body,
         for_test = p.for_test,
@@ -611,7 +578,6 @@ pub(super) fn class_decl(
     let (params, args) = ctor_params(entry, n);
 
     let (mut body, mut resolve_fns) = resolve_body(entry, module, config, helpers, multi, n);
-    client_init_line(bound, multi, &mut body);
     requires_block(
         entry,
         module,
@@ -631,7 +597,6 @@ pub(super) fn class_decl(
 
     let timeouts = timeout_fields_block(entry, module, config, helpers, is_async, &mut body);
     body.push_str(options_assign_line(is_async));
-    let hooks_field = hooks_field_block(bound, &mut refs);
     let methods = methods_block(
         n,
         entry,
@@ -653,7 +618,6 @@ pub(super) fn class_decl(
         settings: &n.settings,
         params: params.join(", "),
         timeout_field_decls: timeouts.decls,
-        hooks_field,
         body,
         for_test,
         methods,

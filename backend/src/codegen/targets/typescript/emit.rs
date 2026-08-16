@@ -293,8 +293,8 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     attach_text_refs(&mut internal_decls, &runtime_helper_refs());
 
     // What the codec group declares as opaque text (the codecs, the resolution
-    // helpers, the bound-hook wrappers) is what an entry group calls, so those
-    // names are what its imports are recovered from.
+    // helpers, the bound-contract wrappers) is what an entry group calls, so
+    // those names are what its imports are recovered from.
     let codec_names: Vec<(String, String)> = exported_in_text(&codec_decls)
         .into_iter()
         .chain(crate::codegen::imports::declared_symbols(&codec_decls))

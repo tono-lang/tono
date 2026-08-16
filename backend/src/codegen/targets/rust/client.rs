@@ -1,11 +1,10 @@
 //! Boundary-wrapping glue for bespoke extensions in the Rust target.
 //!
-//! Rust has no concrete HTTP client yet (that lands with the Rust runtime), so
-//! there is no transport point to invoke lifecycle hooks at. What the Rust target
-//! can emit today is the typed boundary wrapper a bound contract needs: it calls
-//! the bound symbol and maps a non-declared failure to a `ContractError` while a
-//! declared `TonoError` passes through. The concrete client will call these
-//! wrappers once it exists.
+//! Rust has no concrete HTTP client yet (that lands with the Rust runtime).
+//! What the Rust target can emit today is the typed boundary wrapper a bound
+//! contract needs: it calls the bound symbol and maps a non-declared failure
+//! to a `ContractError` while a declared `TonoError` passes through. The
+//! concrete client will call these wrappers once it exists.
 
 use crate::codegen::extensions::bound_extensions;
 use crate::codegen::ops::error_names;
@@ -14,7 +13,7 @@ use crate::codegen::syntax::render_type;
 use crate::codegen::targets::rust::render::RustRules;
 use crate::codegen::targets::rust::types::type_expr_of;
 use crate::codegen::tree::Decl;
-use crate::ir::{ExtKind, Module};
+use crate::ir::Module;
 
 /// The binding-language key the Rust target reads.
 const BINDING_LANGS: [&str; 1] = ["rust"];
@@ -32,13 +31,11 @@ fn use_path(module: &str) -> String {
 }
 
 /// One boundary wrapper per bound contract/constraint that declares a typed
-/// signature. Hooks are skipped: their input/output are runtime types the Rust
-/// runtime has not introduced yet.
+/// signature.
 pub fn wrapper_decls(module: &Module) -> Vec<Decl> {
     let n = error_names();
     bound_extensions(module, &BINDING_LANGS)
         .iter()
-        .filter(|e| e.kind != ExtKind::Hook)
         .filter_map(|e| {
             let sig = e.signature?;
             let input = render_type(&type_expr_of(&sig.input), &RustRules::default());
@@ -118,15 +115,6 @@ mod tests {
         assert!(out.contains("Ok(declared) => *declared,"));
         assert!(out.contains("Err(other) => TonoError::Contract(ContractError {"));
         assert!(out.contains("contract_name: \"sign_request\".to_string(),"));
-    }
-
-    #[test]
-    fn a_hook_emits_no_rust_wrapper() {
-        // A hook's input/output are runtime types Rust does not have yet.
-        let mut ext = contract("before_request", "ext/rust/a.rs#f");
-        ext.kind = ExtKind::Hook;
-        ext.signature = None;
-        assert!(wrapper_decls(&module_with(ext)).is_empty());
     }
 
     #[test]

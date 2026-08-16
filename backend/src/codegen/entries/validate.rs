@@ -566,39 +566,6 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                 module.name
             ));
         }
-        // client_init bridges one Settings type; with several entries the
-        // bespoke symbol cannot have both signatures, and skipping it
-        // silently would drop declared behavior. Only the languages whose
-        // targets emit the bridge count: a binding for another language does
-        // not block this generation.
-        let client_init_bound = module.extensions.iter().any(|e| {
-            e.kind == crate::ir::ExtKind::Hook
-                && e.name == "client_init"
-                && ["go", "ts", "typescript"]
-                    .iter()
-                    .any(|lang| e.bindings.contains_key(*lang))
-        });
-        if entries.len() > 1 && client_init_bound {
-            return Err(format!(
-                "module {}: client_init is bound but the module declares {} entries; the hook bridges one Settings type, so keep one entry per module (or drop the binding)",
-                module.name,
-                entries.len()
-            ));
-        }
-        // In a mixed module the loose-op TypeScript client already owns the
-        // client_init wrapper (with its own signature); two bridges cannot
-        // share one bespoke symbol.
-        let ts_client_init = module.extensions.iter().any(|e| {
-            e.kind == crate::ir::ExtKind::Hook
-                && e.name == "client_init"
-                && (e.bindings.contains_key("ts") || e.bindings.contains_key("typescript"))
-        });
-        if !module.operations.is_empty() && ts_client_init {
-            return Err(format!(
-                "module {}: client_init is bound for TypeScript but the module mixes loose operations with an entry; move the loose operations into the entry (the loose client and the entry bridge cannot share the hook)",
-                module.name
-            ));
-        }
         // An entry named after another entry's generated companion (its
         // Settings/Config/Option/API types) would emit two same-named types.
         let mut companions: Vec<(String, &str)> = Vec::new();

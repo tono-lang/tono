@@ -224,6 +224,13 @@ pub fn shape_has_checks(shape: &crate::ir::Shape) -> bool {
         crate::ir::ShapeKind::Structure { params, members } if params.is_empty() => {
             members.iter().any(|m| !member_checks(m).is_empty())
         }
+        // An entry/config field carries its constraints the same way a plain
+        // member does; validation runs after construction resolves them.
+        crate::ir::ShapeKind::Entry { fields, .. } | crate::ir::ShapeKind::Config { fields } => {
+            fields
+                .iter()
+                .any(|f| !member_checks(&crate::codegen::entries::field_as_member(f)).is_empty())
+        }
         _ => false,
     }
 }

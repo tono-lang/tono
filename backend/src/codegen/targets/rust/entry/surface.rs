@@ -38,7 +38,7 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
 }
 
 /// The `Settings` struct: every resolved entry field plus the transport
-/// slots the bespoke `client_init` hook may fill.
+/// slots.
 pub(super) fn settings_struct_decl(
     entry: &EntryModel<'_>,
     n: &Names,
@@ -58,13 +58,11 @@ pub(super) fn settings_struct_decl(
     }
     refs.push(support_symbol("HttpTransport"));
     let text = format!(
-        "/// {settings} are the resolved construction values of the {entry} entry:\n\
-         /// bespoke `client_init` code may overwrite any field (bespoke wins) and\n\
-         /// set transport through the slots. Exactly one transport slot may be\n\
-         /// set: `client` (native `reqwest`, present only with the crate's\n\
-         /// default-on `reqwest` feature) or `transport` (canonical). `headers`\n\
-         /// are the base request headers (bespoke auth writes here); a declared\n\
-         /// `@header` wins only where nothing else set the name.\n\
+        "/// {settings} are the resolved construction values of the {entry} entry.\n\
+         /// Exactly one transport slot may be set: `client` (native `reqwest`,\n\
+         /// present only with the crate's default-on `reqwest` feature) or\n\
+         /// `transport` (canonical). `headers` are the base request headers; a\n\
+         /// declared `@header` wins only where nothing else set the name.\n\
          pub(crate) struct {settings} {{\n\
          {fields}    #[cfg(feature = \"reqwest\")]\n\
          \x20   pub client: Option<reqwest::Client>,\n\

@@ -19,9 +19,9 @@ use crate::ir::{Module, Shape, ShapeKind, Tref};
 use super::module_symbol;
 
 /// The tail of a client method: decode `outcome.body` into `output` and return
-/// it, or throw the mapped decode failure. `throw` routes an error expression
-/// through the bound `on_error` hook when the module has one; `refs` collects
-/// the imports the emitted code needs.
+/// it, or throw the mapped decode failure. `throw` turns an error expression
+/// into the emitted `throw` statement; `refs` collects the imports the
+/// emitted code needs.
 ///
 /// A structured output decodes leniently on what the contract promises:
 /// required members must be present (undefined/null is absence) and the shape

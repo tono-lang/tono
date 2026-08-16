@@ -19,12 +19,10 @@ use crate::codegen::entries::wire::{
     body_reads_record, has_query, needs_record, needs_record_for_reads, success_test_expr,
 };
 use crate::codegen::entries::EntryModel;
-use crate::codegen::extensions::BoundExtension;
 use crate::codegen::symbol::Symbol;
 use crate::ir::{Module, Prim, TemplatePart, Tref, WireBinding, WireResponsePart, WireValue};
 
 use super::resolve_wire_call::{call_body_stmt, call_header_lines};
-use super::use_path;
 
 /// Everything a settings-field read needs: the entry (for `@rename` and the
 /// path's declared type) and the target casing. The read is typed (the
@@ -524,27 +522,6 @@ fn retry_or(has_retry: bool, extra_cond: Option<&str>, fail: &str) -> String {
     )
 }
 
-/// One lifecycle hook invocation, or nothing when the slot is unbound: the
-/// bespoke symbol is called directly (it is already an `async fn` over the
-/// support shapes), and its failure classifies exactly like every other
-/// bespoke boundary (a declared `TonoError` passes through, anything else
-/// wraps into the Contract category under the slot's name).
-fn hook_lines(
-    slot: &str,
-    var: &str,
-    binding: Option<&BoundExtension<'_>>,
-    refs: &mut Vec<Symbol>,
-) -> String {
-    let Some(b) = binding else {
-        return String::new();
-    };
-    refs.push(Symbol::imported(b.symbol, use_path(b.module), b.symbol));
-    format!(
-        "let {var} = match {sym}({var}).await {{\n    Ok({var}) => {var},\n    Err(cause) => {{\n        return Err(match cause.downcast::<TonoError>() {{\n            Ok(declared) => *declared,\n            Err(other) => TonoError::Contract(ContractError {{ contract_name: {slot:?}.to_string(), cause: other }}),\n        }});\n    }}\n}};\n",
-        sym = b.symbol,
-    )
-}
-
 /// What [`op_call`] needs beyond the wire binding itself.
 pub(super) struct OpCall<'a> {
     pub wire: &'a WireBinding,
@@ -556,8 +533,6 @@ pub(super) struct OpCall<'a> {
     /// The `Result` expression of the success path (built by `decode`), read
     /// against `outcome.body`.
     pub success_block: &'a str,
-    pub before_request: Option<&'a BoundExtension<'a>>,
-    pub after_response: Option<&'a BoundExtension<'a>>,
     /// The already-converted milliseconds field for the op's `@timeout` path.
     pub timeout_field: Option<String>,
 }
@@ -659,9 +634,7 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     };
     // A call-valued @header/@body reads the request once it exists, so it
     // patches in right here: after the declared values are folded into
-    // `request` (this line), before it is sent -- the same slot
-    // `before_request` occupies, and right before it, so a hook still sees
-    // the signed header/body.
+    // `request` (this line), right before it is sent.
     let call_request_lines = call_header_lines(wire, fields.module, fields, "request")
         + &call_body_stmt(wire, fields.module, fields, "request").unwrap_or_default();
     let request_binding = if call_request_lines.is_empty() {
@@ -669,20 +642,14 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
     } else {
         "let mut request"
     };
-    // A fresh headers copy per attempt: a before_request hook (or a
-    // call-valued header/body above) may rewrite the map/body it receives,
-    // and a retried attempt must not see a prior attempt's rewrite.
+    // A fresh headers copy per attempt: a call-valued header/body above may
+    // rewrite the map/body it receives, and a retried attempt must not see a
+    // prior attempt's rewrite.
     let mut attempt = format!(
         "{request_binding} = HttpRequest {{ method: {method}.to_string(), url: url.clone(), headers: headers.clone(), {body_field} }};\n",
         method = rust_str(call.method),
     );
     attempt.push_str(&call_request_lines);
-    attempt.push_str(&hook_lines(
-        "before_request",
-        "request",
-        call.before_request,
-        refs,
-    ));
     push_gap(&mut attempt);
     let transport_fail = "Err(TonoError::Transport(TransportError { cause }))".to_string();
     let transport_arm = if has_retry {
@@ -697,28 +664,15 @@ pub(super) fn op_call(call: &OpCall<'_>, fields: &FieldCtx<'_>, refs: &mut Vec<S
         format!("Err(cause) => return {transport_fail},\n")
     };
     let fold = !wire.response_bindings.is_empty();
-    let needs_response_name = fold || call.after_response.is_some();
-    let bind = if needs_response_name {
-        "response"
-    } else {
-        "outcome"
-    };
+    let bind = if fold { "response" } else { "outcome" };
     attempt.push_str(&format!(
         "let {bind} = match {send_call}.await {{\n    Ok(response) => response,\n{arm}}};\n",
         arm = super::indent(&transport_arm, 1),
-    ));
-    attempt.push_str(&hook_lines(
-        "after_response",
-        "response",
-        call.after_response,
-        refs,
     ));
     if fold {
         refs.push(super::shared_symbol("parse_json_object"));
         refs.push(super::support_symbol("HttpResponse"));
         attempt.push_str(&response_fold_lines(wire));
-    } else if needs_response_name {
-        attempt.push_str("let outcome = response;\n");
     }
     push_gap(&mut attempt);
     // A one-expression success block returns bare; a multi-statement one

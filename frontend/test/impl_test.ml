@@ -144,11 +144,11 @@ let typed_impl_needs_no_error_code () =
 
 let raw_outside_impl () =
   Alcotest.(check (list string))
-    "raw on a hook" [ "TC0052" ]
+    "raw on a constraint" [ "TC0052" ]
     (codes
        (impl_entry
           "ext impl save { go: \"ext/go/s.go#Save\" }\n\
-           ext hook before_request raw { ts: \"ext/ts/a.ts#f\" }"))
+           ext constraint luhn raw (string) -> bool { ts: \"ext/ts/l.ts#f\" }"))
 
 (* An op's own "impl .field.method(args)" body (RFC-0023) and an "ext impl"
    are two more of the three implementation sources; binding both to the same

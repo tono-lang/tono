@@ -511,6 +511,26 @@ fn wrap_extern_stubs(ctx: &TestCtx<'_>, body: String, refs: &mut Vec<Symbol>) ->
     wrapped
 }
 
+/// Whether this entry's construction is async: true whenever a declared
+/// field resolves through an `extern` call, which forces the class's own
+/// constructor private and construction through `static async create`/
+/// `forTest` instead (see `class.rs::class_decl`'s `is_async`).
+fn construction_is_async(ctx: &TestCtx<'_>) -> bool {
+    ctx.entry.fields.iter().any(|f| f.call.is_some())
+}
+
+/// The bare (non-`forTest`) construction expression for a test: `new
+/// Client(args)` when construction is synchronous, or `await
+/// Client.create(args)` when an `extern`-call field makes the constructor
+/// private and construction async (same distinction `class_decl` draws).
+fn construction_expr(ctx: &TestCtx<'_>, args: &str) -> String {
+    if construction_is_async(ctx) {
+        format!("await {client}.create({args})", client = ctx.n.client)
+    } else {
+        format!("new {client}({args})", client = ctx.n.client)
+    }
+}
+
 /// One hermetic test: pin the environment, install the declared stub, build
 /// the client through the real construction path, run the call, assert. A
 /// construction-only test just constructs and asserts its outcome.
@@ -536,8 +556,13 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
                 } else {
                     format!("{{ transport }}, {args}")
                 };
+                let await_ = if construction_is_async(ctx) {
+                    "await "
+                } else {
+                    ""
+                };
                 format!(
-                    "{setup}const c = {client}.forTest({seam_call});\n{invoke}",
+                    "{setup}const c = {await_}{client}.forTest({seam_call});\n{invoke}",
                     setup = transport_block(&answers),
                     client = ctx.n.client,
                     invoke = invoke_and_expect(ctx, refs),
@@ -582,8 +607,8 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
                     ""
                 };
                 let inner = format!(
-                    "const c = new {client}({args});\n{invoke}",
-                    client = ctx.n.client,
+                    "const c = {construct};\n{invoke}",
+                    construct = construction_expr(ctx, &args),
                     invoke = invoke_and_expect(ctx, refs),
                 );
                 // The seam is module state, so the swap is restored however
@@ -599,13 +624,12 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
     } else {
         // Construction-only: the outcome pattern reads the construction error.
         match ctx.test.outcome {
-            None | Some(TestPattern::Ok(_)) => format!(
-                "new {client}({args});\n",
-                client = ctx.n.client,
-            ),
+            None | Some(TestPattern::Ok(_)) => {
+                format!("{};\n", construction_expr(ctx, &args))
+            }
             Some(pattern) => format!(
-                "let caught: unknown;\ntry {{\n  new {client}({args});\n}} catch (e) {{\n  caught = e;\n}}\n{asserts}",
-                client = ctx.n.client,
+                "let caught: unknown;\ntry {{\n  {construct};\n}} catch (e) {{\n  caught = e;\n}}\n{asserts}",
+                construct = construction_expr(ctx, &args),
                 asserts = failure_asserts(ctx, pattern, refs),
             ),
         }
@@ -662,9 +686,8 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
 fn live_case(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
     refs.push(module_symbol(&ctx.n.client, ctx.module));
     let body = format!(
-        "const c = new {client}({args});\n{invoke}",
-        client = ctx.n.client,
-        args = construction_args(ctx),
+        "const c = {construct};\n{invoke}",
+        construct = construction_expr(ctx, &construction_args(ctx)),
         invoke = invoke_and_expect(ctx, refs),
     );
     format!(

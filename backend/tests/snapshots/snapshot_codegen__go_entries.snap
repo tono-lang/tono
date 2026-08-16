@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 181
+assertion_line: 183
 expression: "render_sdk(entries_module(), TargetKind::Go, Some(\"example.com/sdk\"))"
 ---
 // ==== go/internal/transport/transport.go ====
@@ -417,12 +417,10 @@ import (
 	"time"
 )
 
-// Settings are the resolved construction values of the client entry,
-// handed to the client_init hook before validation: bespoke code may
-// overwrite any field (bespoke wins) and set transport through the slots.
+// Settings are the resolved construction values of the client entry.
 // Exactly one transport slot may be set: HTTPClient (native) or Transport
-// (canonical). Headers are the base request headers (bespoke auth writes
-// here); a declared @header wins only where nothing else set the name.
+// (canonical). Headers are the base request headers; a declared @header
+// wins only where nothing else set the name.
 type Settings struct {
 	APIKey string
 	// Names the caller.
@@ -521,8 +519,7 @@ func resolveSettingMaxRetries(with *int32) int32 {
 }
 
 // New constructs Client: positional @arg values, options for @with,
-// declared sources resolved top-down, client_init on top (bespoke wins),
-// then the declared validation.
+// declared sources resolved top-down, then the declared validation.
 func New(apiKey string, opts ...ClientOption) (*Client, error) {
 	w := clientOptions{}
 	for _, opt := range opts {
@@ -776,9 +773,7 @@ import "context"
 type Duration string
 
 // HTTPRequest is the request the generated transport builds before sending
-// it. A before_request hook receives it and may return a mutated copy (set
-// an auth header, sign the body). Body is nil when the request carries no
-// body.
+// it. Body is nil when the request carries no body.
 type HTTPRequest struct {
 	Method  string
 	URL     string
@@ -788,7 +783,7 @@ type HTTPRequest struct {
 
 // HTTPResponse is the response the generated transport reads before
 // classifying it. Header keys are lowercased (HTTP header names are
-// case-insensitive). An after_response hook may return a mutated copy.
+// case-insensitive).
 type HTTPResponse struct {
 	Status  int
 	Headers map[string]string

@@ -13,8 +13,8 @@ fn plain(name: &str, text: &str) -> Decl {
 }
 
 /// The public, bespoke-facing transport types (`Group::root_support()`): the
-/// request/response shapes a bound `before_request`/`after_response` hook and
-/// a canonical transport type against, plus the frozen `ClientOptions`.
+/// request/response shapes a canonical transport type against, plus the
+/// frozen `ClientOptions`.
 pub(crate) fn http_support_decls() -> Vec<Decl> {
     let mut decls: Vec<Decl> = [
         (
@@ -25,16 +25,14 @@ pub(crate) fn http_support_decls() -> Vec<Decl> {
         ),
         (
             "HttpError",
-            "/// The error a transport attempt (or a lifecycle hook) fails with; the\n\
-             /// generated client classifies it into its own error taxonomy.\n\
+            "/// The error a transport attempt fails with; the generated client\n\
+             /// classifies it into its own error taxonomy.\n\
              pub type HttpError = Box<dyn std::error::Error + Send + Sync>;",
         ),
         (
             "HttpRequest",
             "/// HttpRequest is the request the generated client builds before sending\n\
-             /// it. A before_request hook receives it and may return a mutated copy\n\
-             /// (set an auth header, sign the body). `body` is `None` when the\n\
-             /// request carries no body.\n\
+             /// it. `body` is `None` when the request carries no body.\n\
              #[derive(Clone, Debug)]\n\
              pub struct HttpRequest {\n    pub method: String,\n    pub url: String,\n    pub headers: std::collections::HashMap<String, String>,\n    pub body: Option<String>,\n}",
         ),
@@ -42,7 +40,7 @@ pub(crate) fn http_support_decls() -> Vec<Decl> {
             "HttpResponse",
             "/// HttpResponse is the response the generated client reads before\n\
              /// classifying it. Header keys are lowercased (HTTP header names are\n\
-             /// case-insensitive). An after_response hook may return a mutated copy.\n\
+             /// case-insensitive).\n\
              #[derive(Clone, Debug)]\n\
              pub struct HttpResponse {\n    pub status: u16,\n    pub headers: std::collections::HashMap<String, String>,\n    pub body: String,\n}",
         ),
@@ -71,8 +69,8 @@ pub(crate) fn http_support_decls() -> Vec<Decl> {
          /// set: `client` (native `reqwest`, present only with the crate's\n\
          /// default-on `reqwest` feature) or `transport` (canonical); setting\n\
          /// both is a construction error, and with the feature off the\n\
-         /// canonical slot is required. No slot ships its own auth; a bespoke\n\
-         /// hook sets an auth header through `headers`.\n\
+         /// canonical slot is required. No slot ships its own auth; a declared\n\
+         /// `@header` sets one through `headers`.\n\
          pub struct ClientOptions {\n    #[cfg(feature = \"reqwest\")]\n    pub client: Option<reqwest::Client>,\n    pub transport: Option<HttpTransport>,\n    pub headers: std::collections::HashMap<String, String>,\n}",
         vec![super::support_symbol("HttpTransport")],
     ));

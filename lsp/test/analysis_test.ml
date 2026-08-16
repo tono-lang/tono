@@ -241,11 +241,14 @@ let hover_keyword () =
     "explains the construct" true
     (contains v "record shape")
 
-let hover_hook_word_lists_the_lifecycle () =
+(* The 'ext' construct hover no longer documents a lifecycle: hooks are
+   removed, so its prose points at the ext/extern FFI model instead. *)
+let hover_ext_word_no_longer_lists_a_lifecycle () =
   let src = "ext hook before_request {\n  ts: \"ext/a.ts#f\"\n}" in
-  let v = hover_value src (pos 0 5) in
+  let v = hover_value src (pos 0 1) in
   Alcotest.(check bool)
-    "slots come from the checker table" true (contains v "client_init")
+    "no lifecycle slot in the hover" false (contains v "client_init");
+  Alcotest.(check bool) "points at extern" true (contains v "extern")
 
 let hover_primitive () =
   let v = hover_value two_shapes (pos 1 18) in
@@ -277,10 +280,15 @@ let completion_after_at () =
   Alcotest.(check bool) "offers traits" true (List.mem "http" labels);
   Alcotest.(check bool) "no shapes here" false (List.mem "s" labels)
 
-let completion_hook_slots () =
-  let labels = completion_labels "ext hook " (pos 0 9) in
-  Alcotest.(check int) "exactly the lifecycle" 4 (List.length labels);
-  Alcotest.(check bool) "a real slot" true (List.mem "before_request" labels)
+(* No lifecycle-slot completion is offered anymore: 'hook' does not appear
+   among the extension kinds after 'ext', and there is no slot-name position
+   to complete after it. *)
+let completion_no_hook_slots_offered () =
+  let labels = completion_labels "ext " (pos 0 4) in
+  Alcotest.(check bool) "no hook kind" false (List.mem "hook" labels);
+  Alcotest.(check bool)
+    "contract kind offered" true
+    (List.mem "contract" labels)
 
 let completion_type_position () =
   let labels = completion_labels "struct s { x: " (pos 0 14) in
@@ -387,8 +395,9 @@ let completion_after_catalog_separator () =
 
 let completion_after_ext_offers_kinds () =
   let labels = completion_labels "ext " (pos 0 4) in
-  Alcotest.(check int) "exactly the kinds" 4 (List.length labels);
-  Alcotest.(check bool) "impl among them" true (List.mem "impl" labels)
+  Alcotest.(check int) "exactly the kinds" 3 (List.length labels);
+  Alcotest.(check bool) "impl among them" true (List.mem "impl" labels);
+  Alcotest.(check bool) "hook is not" false (List.mem "hook" labels)
 
 let completion_after_ext_impl_offers_entry_ops () =
   let src = entry_src ^ "\next impl " in
@@ -479,8 +488,8 @@ let () =
           Alcotest.test_case "type ref shows target" `Quick
             hover_type_ref_shows_target_decl;
           Alcotest.test_case "keyword" `Quick hover_keyword;
-          Alcotest.test_case "hook lifecycle" `Quick
-            hover_hook_word_lists_the_lifecycle;
+          Alcotest.test_case "ext no longer lists a lifecycle" `Quick
+            hover_ext_word_no_longer_lists_a_lifecycle;
           Alcotest.test_case "primitive" `Quick hover_primitive;
           Alcotest.test_case "nullable marker" `Quick hover_nullable_marker;
           Alcotest.test_case "trait contract" `Quick hover_trait_contract;
@@ -495,7 +504,8 @@ let () =
       ( "completion context",
         [
           Alcotest.test_case "after @" `Quick completion_after_at;
-          Alcotest.test_case "hook slots" `Quick completion_hook_slots;
+          Alcotest.test_case "no hook slots offered" `Quick
+            completion_no_hook_slots_offered;
           Alcotest.test_case "type position" `Quick completion_type_position;
           Alcotest.test_case "op input" `Quick
             completion_op_input_is_a_type_position;

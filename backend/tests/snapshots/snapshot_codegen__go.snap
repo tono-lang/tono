@@ -133,7 +133,7 @@ type ContractError struct {
 	Cause        error
 }
 
-func (e *ContractError) Error() string { return "contract hook '" + e.ContractName + "' failed" }
+func (e *ContractError) Error() string { return "contract '" + e.ContractName + "' failed" }
 
 func (e *ContractError) Unwrap() error { return e.Cause }
 

@@ -5,14 +5,6 @@
 
 use crate::ir::{ExtKind, ExternStubTarget, Model, Module, Shape, ShapeKind, Signature};
 
-/// The four closed lifecycle hook slots, in invocation order.
-pub const HOOK_SLOTS: [&str; 4] = [
-    "client_init",
-    "before_request",
-    "after_response",
-    "on_error",
-];
-
 /// Split a binding reference `ext/ts/sign.ts#signRequest` into its module path
 /// and its symbol. Returns `None` when the `#` separator is absent.
 pub fn parse_binding(reference: &str) -> Option<(&str, &str)> {
@@ -58,16 +50,6 @@ pub fn bound_extensions<'a>(module: &'a Module, langs: &[&str]) -> Vec<BoundExte
         .collect()
 }
 
-/// The binding for a specific lifecycle hook slot, if this language provides one.
-pub fn hook_binding<'a>(
-    bound: &'a [BoundExtension<'a>],
-    slot: &str,
-) -> Option<&'a BoundExtension<'a>> {
-    bound
-        .iter()
-        .find(|e| e.kind == ExtKind::Hook && e.name == slot)
-}
-
 /// The names an `ext impl` may write to reach the operation with this id. The
 /// frontend accepts the bare operation name and, for an entry operation, the
 /// qualified `entry.op` form; both reduce to the local part of the shape id.
@@ -109,10 +91,7 @@ fn entry_operations(module: &Module) -> Vec<&Shape> {
 /// more than one language must be covered by a declared test whose call
 /// exercises the operation: nothing else proves the implementations agree, and
 /// the whole point of a multi-language binding is that they do. A
-/// hook/constraint is lighter and needs neither. An unknown hook slot cannot
-/// reach here: `HookSlot` is not part of the wire (the frontend validates the
-/// closed lifecycle), and an unrecognized `kind` fails to decode before
-/// generation.
+/// `constraint` is lighter and needs neither.
 pub fn validate_extensions(model: &Model) -> Result<(), String> {
     for module in &model.modules {
         for ext in &module.extensions {
@@ -135,7 +114,7 @@ pub fn validate_extensions(model: &Model) -> Result<(), String> {
                         ));
                     }
                 }
-                ExtKind::Hook | ExtKind::Constraint => {}
+                ExtKind::Constraint => {}
             }
         }
         for lib in &module.ext_libs {
@@ -501,12 +480,9 @@ mod tests {
     }
 
     #[test]
-    fn a_hook_or_constraint_without_conformance_passes() {
-        // Hooks and constraints are lighter; a conformance reference is optional.
-        let model = model_with(vec![
-            binding("before_request", ExtKind::Hook, "ext/ts/a.ts#f"),
-            binding("luhn", ExtKind::Constraint, "ext/ts/l.ts#h"),
-        ]);
+    fn a_constraint_without_conformance_passes() {
+        // A constraint is lighter than a contract; a conformance reference is optional.
+        let model = model_with(vec![binding("luhn", ExtKind::Constraint, "ext/ts/l.ts#h")]);
         assert!(validate_extensions(&model).is_ok());
     }
 

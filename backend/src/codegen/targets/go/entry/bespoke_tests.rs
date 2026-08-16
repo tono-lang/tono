@@ -1,7 +1,7 @@
-//! The bespoke-boundary half of the Go entry tests: bound hooks, the wrappers
-//! they are called through, an operation whose body is a bound `impl`, and the
-//! native tests conformance vectors generate. Split from the construction and
-//! resolution tests so each file stays within the repo size gate.
+//! The bespoke-boundary half of the Go entry tests: an operation whose body
+//! is a bound `impl`, and the native tests conformance vectors generate.
+//! Split from the construction and resolution tests so each file stays
+//! within the repo size gate.
 
 use std::collections::BTreeMap;
 
@@ -14,53 +14,6 @@ use crate::codegen::test_support::{
 use crate::ir::{
     HttpAnswer, StubAnswer, StubDep, TestConstruction, TestDecl, TestExpect, TestPattern, TestStub,
 };
-
-#[test]
-fn bound_hooks_wire_the_settings_bridge_and_the_transport_slots() {
-    let mut module = fixture_module();
-    module.extensions = vec![
-        crate::ir::Extension {
-            name: "client_init".into(),
-            kind: crate::ir::ExtKind::Hook,
-            signature: None,
-            raw: false,
-            bindings: [("go".to_string(), "ext/go/init.go#InitSettings".to_string())]
-                .into_iter()
-                .collect(),
-            conformance: None,
-        },
-        crate::ir::Extension {
-            name: "before_request".into(),
-            kind: crate::ir::ExtKind::Hook,
-            signature: None,
-            raw: false,
-            bindings: [("go".to_string(), "ext/go/auth.go#AddBearer".to_string())]
-                .into_iter()
-                .collect(),
-            conformance: None,
-        },
-    ];
-    let serde = entry_text(&module);
-    // client_init runs over the resolved Settings, after sources and
-    // before validation; a bespoke failure is a ContractError.
-    assert!(serde.contains("func clientInitHook(s *Settings) error {"));
-    assert!(serde.contains("if err := clientInitHook(&s); err != nil {"));
-    assert!(serde.contains("ContractError{ContractName: \"client_init\", Cause: err}"));
-    // The mutually exclusive transport slots are rejected at construction.
-    assert!(serde.contains("if s.HTTPClient != nil && s.Transport != nil {"));
-    assert!(serde.contains(
-        "errors.New(\"Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both\")"
-    ));
-    // before_request rides the client once, typed against the support shapes.
-    assert!(serde.contains("func beforeRequestHook(ctx context.Context, req support.HTTPRequest) (support.HTTPRequest, error) {"));
-    assert!(serde.contains("hooks: &transport.Hooks{BeforeRequest: beforeRequestHook}"));
-    // The hook order lands in the emitted text: init before the requires.
-    let init = serde.find("clientInitHook(&s)").unwrap();
-    let require = serde
-        .find("&ConfigError{Message: \"endpoint <- \"")
-        .unwrap();
-    assert!(init < require);
-}
 
 /// An `ext impl` binding for the fixture's `save_note`, typed or raw.
 fn impl_ext(raw: bool) -> crate::ir::Extension {
@@ -144,7 +97,7 @@ fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
     assert!(text.contains(
         "func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...ClientOption) (*Client, error) {"
     ));
-    // The override lands after client_init and validation, so the test
+    // The override lands after source resolution and validation, so the test
     // transport wins over anything bespoke.
     assert!(text.contains(
         "if canonical != nil {\n\t\ts.Transport = canonical\n\t\ts.HTTPClient = nil\n\t}"
@@ -317,50 +270,4 @@ fn two_entries_with_tests_share_the_package_without_redefining_symbols() {
             .collect()
     };
     assert!(funcs(&client).is_disjoint(&funcs(&admin)));
-}
-
-#[test]
-fn the_unimplemented_op_error_passes_through_the_bound_on_error_hook() {
-    let mut module = fixture_module();
-    module.extensions = vec![crate::ir::Extension {
-        name: "on_error".into(),
-        kind: crate::ir::ExtKind::Hook,
-        signature: None,
-        raw: false,
-        bindings: [("go".to_string(), "ext/go/err.go#MapError".to_string())]
-            .into_iter()
-            .collect(),
-        conformance: None,
-    }];
-    let serde = entry_text(&module);
-    assert!(serde.contains(
-        "return zero, onErrorHook(&ContractError{ContractName: \"save_note\", Cause: errors.New(\"operation has no implementation for Go\")})"
-    ));
-}
-
-#[test]
-fn after_response_and_on_error_hooks_get_boundary_wrappers() {
-    let mut module = fixture_module();
-    let hook = |name: &str, binding: &str| crate::ir::Extension {
-        name: name.into(),
-        kind: crate::ir::ExtKind::Hook,
-        signature: None,
-        raw: false,
-        bindings: [("go".to_string(), binding.to_string())]
-            .into_iter()
-            .collect(),
-        conformance: None,
-    };
-    module.extensions = vec![
-        hook("after_response", "ext/go/log.go#LogResponse"),
-        hook("on_error", "ext/go/err.go#MapError"),
-    ];
-    let serde = entry_text(&module);
-    assert!(serde.contains("func afterResponseHook(ctx context.Context, res support.HTTPResponse) (support.HTTPResponse, error) {"));
-    assert!(serde.contains("func onErrorHook(err error) error {"));
-    // The wrapper preserves any generated SDK error (marker interface), wrapping
-    // only a foreign one as a ContractError. It no longer keeps just
-    // *ContractError.
-    assert!(serde.contains("var known interface{ sdkError() }"));
-    assert!(serde.contains("if errors.As(err, &known) {"));
 }

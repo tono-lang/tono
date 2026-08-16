@@ -70,8 +70,15 @@ fn call_arg_expr(r: &mut Resolver<'_, '_>, lib: &ExtLib, arg: &CallArg) -> Strin
         // The DAG resolves every real argument to a `Ref` path into the
         // entry before codegen ever sees it; a bare `Param` only arises for
         // a logical parameter no `call_args` position renamed away, so this
-        // reads the same-named field as a best effort.
-        CallArg::Param(name) => format!("{}{}.clone()", r.arg_prefix, field_snake(name, r.config)),
+        // reads the same-named field as a best effort. `r.arg_prefix` names
+        // how to read a caller-supplied constructor argument (`self.` for a
+        // builder, empty for a plain function parameter), not how to read an
+        // already-resolved sibling field off the local `s: Settings`, so
+        // this goes through `path_expr` exactly like `Ref` does rather than
+        // `arg_prefix`, which would emit a bare, undeclared identifier here.
+        CallArg::Param(name) => {
+            format!("({}).clone()", r.path_expr(std::slice::from_ref(name)))
+        }
         // Cloned, not moved: `s` (the composed settings struct) is still
         // read later (the frozen `ClientOptions`, `Client { settings: s,
         // .. }`), the same "copy, don't move a sibling" rule every other

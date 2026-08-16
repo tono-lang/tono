@@ -126,8 +126,8 @@ fn seeds(module: &Module) -> Vec<String> {
         .chain(module.operations.iter())
         .map(|s| s.id.clone())
         .chain(
-            // A bespoke boundary's signature is part of the surface a hook or a
-            // contract is written against, so its types are exposed too.
+            // A bespoke contract's signature is part of the surface it is
+            // written against, so its types are exposed too.
             module.extensions.iter().flat_map(|e| {
                 e.signature
                     .iter()
