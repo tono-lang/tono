@@ -29,6 +29,7 @@
   protocol_http_test
   entries_test
   entries_edge_test
+  entries_map_index_test
   entries_call_test
   entries_position_test
   request_value_test
