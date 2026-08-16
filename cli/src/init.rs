@@ -371,7 +371,7 @@ fn render_manifest(
 ) -> String {
     let mut out = String::new();
     out.push_str(
-        "# tono project manifest (RFC-0016). Auto-discovered by gen/check/breaking\n\
+        "# tono project manifest. Auto-discovered by gen/check/breaking\n\
          # by walking up from the working directory; no --config flag needed once\n\
          # this file exists.\n\
          \n\
@@ -497,7 +497,7 @@ const MAX_SCAN_DEPTH: usize = 8;
 /// `cwd`. `None` when nothing is found (an empty project) or matches sit
 /// under more than one directory (ambiguous; the manifest's own default of
 /// `.` is left in place rather than guessing). `project.root` has no
-/// consumer today (RFC-0011's module-qualification work is separate), so
+/// consumer today (the module-qualification work is separate), so
 /// this stays a lightweight nicety rather than a hardened, symlink-aware
 /// walker: the depth bound alone already guarantees termination.
 fn detect_root(cwd: &Path) -> Option<String> {

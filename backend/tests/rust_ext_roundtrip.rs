@@ -41,7 +41,7 @@ fn root_dir() -> PathBuf {
 /// sdk/src/`, alongside a `Cargo.toml` pointing the `companyconfig` `ext`
 /// library import at the stand-in crate under `fixtures/` via a path
 /// dependency (the same mechanism a real consumer's own `Cargo.toml` would
-/// use once the dependency itself is declared, TASK-132).
+/// use once the manifest can declare the dependency itself).
 fn write_sdk(model: &Model) -> PathBuf {
     let dir = root_dir().join("sdk");
     let _ = std::fs::remove_dir_all(&dir);

@@ -107,7 +107,7 @@ val http_code_invalid : string
    rule). *)
 val trait_position_invalid : string
 
-(* The "ext"/"extern" FFI library block (RFC-0023, see error_codes.ml for the
+(* The "ext"/"extern" FFI library block (see error_codes.ml for the
    rule commentary). Internal consistency of a call's arity/types against the
    declared logical signature, of a returns: projection against a yields:
    name, and of an errors: sentinel against a declared error; plus the
@@ -127,7 +127,7 @@ val ext_lib_module_path_conflict : string
 val extern_duplicate_name : string
 val extern_lang_no_module : string
 
-(* An op's own "impl .field.method(args)" body (RFC-0023): the receiver is
+(* An op's own "impl .field.method(args)" body: the receiver is
    not an entry field whose type is a declared opaque handle; the method is
    not one of that handle's declared "extern" methods; the argument count
    disagrees with the method's declared logical parameters, or an argument

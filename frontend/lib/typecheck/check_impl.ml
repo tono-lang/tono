@@ -147,7 +147,7 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
       (impl_decls decls)
   in
   (* A third implementation source, alongside @http and "ext impl": the op's
-     own "impl .field.method(args)" body (RFC-0023). It lives on the op
+     own "impl .field.method(args)" body. It lives on the op
      itself, not as a separate decl, so it needs no [op_sites] lookup. *)
   let inline_impl (s : op_site) : Ast.op_impl option =
     match s.op.Ast.dkind with Ast.DOp { oimpl; _ } -> oimpl | _ -> None

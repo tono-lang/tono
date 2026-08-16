@@ -152,7 +152,7 @@ let http_code_invalid = "TC0068"
    does not cover it. *)
 let trait_position_invalid = "TC0069"
 
-(* The "ext"/"extern" FFI library block (RFC-0023). A call: arg names a
+(* The "ext"/"extern" FFI library block. A call: arg names a
    parameter the extern's logical signature never declared; a ctor literal
    projected into a foreign struct disagrees in field name or type with the
    parameter it forwards. A yields: position nothing in returns:/errors:
@@ -179,7 +179,7 @@ let ext_lib_module_path_conflict = "TC0079"
 let extern_duplicate_name = "TC0080"
 let extern_lang_no_module = "TC0081"
 
-(* An op's own "impl .field.method(args)" body (RFC-0023). The receiver does
+(* An op's own "impl .field.method(args)" body. The receiver does
    not resolve to an entry field whose type is a declared opaque handle; the
    method is not one of that handle's declared "extern" methods; the
    argument list disagrees in count with the method's declared logical

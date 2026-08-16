@@ -1,5 +1,5 @@
 (* Internal-consistency typecheck for the "ext"/"extern" FFI library block
-   (RFC-0023): call arity/types against the declared logical signature,
+   (the ext/extern FFI library block): call arity/types against the declared logical signature,
    yields:/returns:/errors: closure, and the cross-file closed accounting of
    one "ext" split across several .tono files. See check_ext_lib.ml for the
    rule-by-rule commentary. Never verifies that a declared foreign symbol

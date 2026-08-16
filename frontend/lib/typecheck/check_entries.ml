@@ -99,7 +99,7 @@ let check_source_combinations ~in_config (m : Ast.member) : Diagnostic.t list =
     | Some (Ast.MCall ce)
       when (not (has "arg"))
            (* @with is not a competing source here: paired with a call value
-              it is the RFC-0023 injectable-handle idiom (decision G) --
+              it is the ext/extern injectable-handle idiom --
               the caller may supply the value, construction is the fallback
               -- not a source that would leave the call's own value dead. *)
            && (List.exists
@@ -468,7 +468,7 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
         in
         (* An extern call's own argument refs: `.request` is rejected outright
            (it is only built once the request is assembled, at a protocol
-           trait argument, RFC-0023 decision M); any other unresolved ref is
+           trait argument); any other unresolved ref is
            the ordinary unknown-field diagnostic. *)
         let call_arg_diags =
           match m.mvalue with

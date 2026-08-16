@@ -105,13 +105,13 @@ async fn main() {
             headers.to_ascii_lowercase().contains("x-api-key: test-key"),
             "declared header did not resolve from the client values: {headers}"
         );
-        // i64 rides the wire as a string (ADR-0006), not a bare JSON number.
+        // i64 rides the wire as a string, not a bare JSON number.
         assert!(
             body.contains("\"amount\":\"1000\""),
             "request body missing the bound member: {body}"
         );
 
-        // i64/u64 ride the wire as strings (ADR-0006), not bare JSON numbers.
+        // i64/u64 ride the wire as strings, not bare JSON numbers.
         let response_body = "{\"id\":\"c1\",\"amount\":\"1000\",\"fee\":\"0\",\"receipt\":\"aGk=\",\"currency\":\"usd\",\
              \"tags\":[],\"metadata\":{},\"created\":\"2024-01-01T00:00:00Z\",\"status\":\"active\",\
              \"method\":{\"kind\":\"card\",\"last4\":\"4242\"}}";

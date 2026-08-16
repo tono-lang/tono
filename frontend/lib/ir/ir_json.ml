@@ -60,7 +60,7 @@
    extern-call source, and a call argument gained "lit"/"list"/"call"
    variants for ctor-field values.
    v15 added an operation's optional "impl_call": a third implementation
-   source (RFC-0023's own "impl .field.method(args)" op body), alongside a
+   source (the op's own "impl .field.method(args)" body), alongside a
    protocol's "wire" and a legacy "ext impl" extension. It reuses the "lit"
    call-argument variant v14 introduced for ctor-field values, now also
    reachable as a bare call argument (e.g. the "notes" in
@@ -130,7 +130,7 @@ let as_list = Ir_json_base.as_list
 let as_string = Ir_json_base.as_string
 let as_int = Ir_json_base.as_int
 
-(* An op's own "impl .field.method(args)" body (RFC-0023): [recv] mirrors
+(* An op's own "impl .field.method(args)" body: [recv] mirrors
    [entry_call]'s "ns"/"fn" shape, but as a field path rather than a bare "ext"
    namespace, since the receiver is an entry field. *)
 let encode_op_impl_call (c : Ir.op_impl_call) : Ir.json =

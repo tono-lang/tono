@@ -103,8 +103,8 @@ let ext_duplicate_language () =
        "ext constraint luhn (string) -> bool { ts: \"ext/ts/a.ts#f\" ts: \
         \"ext/ts/b.ts#g\" }")
 
-(* Each of the four removed lifecycle slots names its own substitute (RFC-0023,
-   "Remoção dos hooks"); an unrecognized hook name gets the generic pointer to
+(* Each of the four removed lifecycle slots names its own substitute (the ext/extern
+   FFI model replaced the hooks); an unrecognized hook name gets the generic pointer to
    the ext/extern FFI model instead. *)
 let ext_hook_message_names_substitute () =
   let hint_of src =

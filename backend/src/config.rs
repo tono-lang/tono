@@ -1,5 +1,5 @@
 //! The project manifest: one `tono.toml` at the root, with global defaults and
-//! per-target overrides (RFC-0016 / ADR-0026).
+//! per-target overrides.
 //!
 //! Parsing has two layers. The `Raw*` structs mirror the TOML surface verbatim
 //! (every field optional, unknown keys rejected) so `serde` reports malformed
@@ -11,8 +11,8 @@
 //! defaults every documented key), but only `enabled`, `out`, and the casing
 //! overrides drive behavior today. `package`, `lang_version`, `module_mapping`,
 //! `module_remap`, and the `compat` severities are carried through so a project
-//! can declare them, but their effect belongs to the module-mapping (RFC-0011)
-//! and compat-check (RFC-0012) work and is applied there, not here.
+//! can declare them, but their effect belongs to the module-mapping
+//! and compat-check work and is applied there, not here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -46,7 +46,7 @@ pub fn normalize_ext_lang(lang: &str) -> &str {
     }
 }
 
-/// Global project settings. `root` anchors the qualified module names (RFC-0011)
+/// Global project settings. `root` anchors the qualified module names
 /// and defaults to the manifest's own directory (`.`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {
@@ -54,7 +54,7 @@ pub struct Project {
     pub root: PathBuf,
 }
 
-/// Compat-check settings (RFC-0012). Parsed and defaulted here; the checker that
+/// Compat-check settings. Parsed and defaulted here; the checker that
 /// consumes them is separate work.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Compat {
@@ -76,7 +76,7 @@ pub enum Severity {
 }
 
 /// Whether a nested module maps to a nested sub-package/namespace or is flattened
-/// into one (RFC-0011). Parsed and carried; the mapping itself is separate work.
+/// into one. Parsed and carried; the mapping itself is separate work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleMapping {
     Nested,
@@ -203,7 +203,7 @@ struct RawTarget {
 
 // --- resolution -------------------------------------------------------------
 
-/// The RFC-0012 default severity for each break level.
+/// The compat-check default severity for each break level.
 const DEFAULT_BASELINE: &str = "git:last-tag";
 
 fn resolve(raw: RawManifest) -> Result<Config, String> {
@@ -259,7 +259,7 @@ fn resolve(raw: RawManifest) -> Result<Config, String> {
 }
 
 /// Map a manifest target key to its generatable kind. `python`/`java` are known
-/// (RFC-0016 lists them) but not yet generatable, so they resolve to `None`;
+/// (the manifest format lists them) but not yet generatable, so they resolve to `None`;
 /// truly unknown names are an error.
 fn generatable_kind(name: &str) -> Result<Option<TargetKind>, String> {
     match name {
@@ -383,7 +383,7 @@ fn case_style(target: &str, key: &str, value: &str) -> Result<CaseStyle, String>
 mod tests {
     use super::*;
 
-    /// The RFC-0016 example, trimmed to the three generatable targets, parses
+    /// The reference manifest example, trimmed to the three generatable targets, parses
     /// with every field mapped through.
     const FULL: &str = r#"
 [project]

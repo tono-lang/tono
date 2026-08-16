@@ -337,7 +337,7 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
   }
 
 (* op_impl ::= "impl" "." name ("." name)+ "(" call_arg ("," call_arg)* ")"
-   — an op's own bespoke body (RFC-0023): a call into a declared opaque
+   — an op's own bespoke body: a call into a declared opaque
    handle's method. "impl" is a contextual keyword here (only recognized
    right after an op's traits, exactly like "impl" after "ext" in the legacy
    grammar); a field or parameter genuinely named "impl" is not ambiguous in

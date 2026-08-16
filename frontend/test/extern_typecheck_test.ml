@@ -1,6 +1,6 @@
 open Tono_frontend
 
-(* Typecheck coverage for the "ext"/"extern" FFI library block (RFC-0023):
+(* Typecheck coverage for the "ext"/"extern" FFI library block:
    per-extern call/yields/returns/errors closure ([Check_ext_lib.check_decls]),
    the foreign-role wire/surface boundary ([Roles.Foreign] +
    [Check_entries.boundary_ty]), and the cross-file closed accounting
@@ -52,7 +52,7 @@ let line_of code src =
 
 (* ── Member grammar: a trait may lead or trail the "=" value ────────────── *)
 
-(* RFC-0023's injectable-handle idiom spells the trait before the value
+(* The ext/extern injectable-handle idiom spells the trait before the value
    ("field: type @with = ns.fn(args)"); every other member value form in the
    language spells it after ("field: type = match ... @trait"). Both must
    parse to the same [mtraits], since nothing else in the checker
@@ -573,20 +573,20 @@ let lang_block_without_module () =
    coverage have their own test file, [ext_lib_collisions_test.ml], split out
    to stay under the file-size cap.
 
-   The op's own "impl .field.method(args)" body (RFC-0023) has its own test
+   The op's own "impl .field.method(args)" body has its own test
    file, [op_impl_test.ml], for the same reason. *)
 
-(* ── The RFC-0023 appendix example compiles clean ────────────────────────── *)
+(* ── The ext/extern reference example compiles clean ────────────────────── *)
 
-(* A verbatim transcription of RFC-0023's own appendix, with one adjustment
-   unrelated to this task's checker: "overloaded" gains @status (TC0015, a
-   pre-existing rule independent of ext/extern; the RFC's own appendix text
-   omits it). Both syntax gaps found while building this feature are closed:
+(* A verbatim transcription of the ext/extern design's reference example,
+   with one adjustment unrelated to this checker: "overloaded" gains @status
+   (TC0015, a pre-existing rule independent of ext/extern; the original
+   example omits it). Both syntax gaps found while building this feature are closed:
    the member grammar accepts a trait on either side of the "=" value (the
    "bus" field's own "@with = ns.fn(...)"), and "publish"'s own
    "impl .bus.send(...)" op body parses and typechecks against "publisher"'s
    declared "send" method. *)
-let rfc_appendix =
+let reference_example =
   {|import tono.http
 
 ext companyconfig {
@@ -681,9 +681,9 @@ pub struct client {
 }
 |}
 
-let rfc_appendix_clean () =
-  Alcotest.(check int) "parses clean" 0 (parse_diag_count rfc_appendix);
-  let codes = compile_codes rfc_appendix in
+let reference_example_clean () =
+  Alcotest.(check int) "parses clean" 0 (parse_diag_count reference_example);
+  let codes = compile_codes reference_example in
   Alcotest.(check (list string)) "no diagnostics" [] codes
 
 let () =
@@ -745,6 +745,7 @@ let () =
           Alcotest.test_case "lang block without module" `Quick
             lang_block_without_module;
         ] );
-      ( "rfc-0023-appendix",
-        [ Alcotest.test_case "compiles clean" `Quick rfc_appendix_clean ] );
+      ( "reference-example",
+        [ Alcotest.test_case "compiles clean" `Quick reference_example_clean ]
+      );
     ]

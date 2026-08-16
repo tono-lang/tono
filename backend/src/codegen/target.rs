@@ -1,6 +1,6 @@
 //! The target seam.
 //!
-//! A language backend supplies two things (per RFC-0005 / RFC-0006): a *Symbol
+//! A language backend supplies two things: a *Symbol
 //! table* — how IR types map to language symbols and declarations — and *render
 //! rules* — how the shared component tree turns into the language's surface
 //! syntax. The [`Target`] trait is the Symbol table; [`RenderRules`] is the

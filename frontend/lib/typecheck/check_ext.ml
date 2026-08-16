@@ -23,8 +23,8 @@
 let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 
 (* The substitute named in the migration diagnostic for each of the four
-   lifecycle slots the hook mechanism used to fill (RFC-0023, "Remoção dos
-   hooks"). A name outside this table gets the generic message below: nothing
+   lifecycle slots the hook mechanism used to fill (the ext/extern FFI model replaced the
+   hooks). A name outside this table gets the generic message below: nothing
    in a hook's name can be valid anymore, so unlike the closed-slot check this
    replaced, this list only drives which substitute to name. *)
 let hook_slot_substitutes =

@@ -150,7 +150,7 @@ let raw_outside_impl () =
           "ext impl save { go: \"ext/go/s.go#Save\" }\n\
            ext constraint luhn raw (string) -> bool { ts: \"ext/ts/l.ts#f\" }"))
 
-(* An op's own "impl .field.method(args)" body (RFC-0023) and an "ext impl"
+(* An op's own "impl .field.method(args)" body and an "ext impl"
    are two more of the three implementation sources; binding both to the same
    op is the same conflict as @http plus an impl. *)
 let op_impl_conflicts_with_ext_impl () =

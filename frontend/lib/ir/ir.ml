@@ -85,7 +85,7 @@ and shape_kind =
       errors : tref list;
       wire : wire_binding option;
       impl_call : op_impl_call option;
-          (* the op's own "impl .field.method(args)" body (RFC-0023); see
+          (* the op's own "impl .field.method(args)" body; see
              ir.mli for the full rule commentary. No backend reads it yet. *)
     }
     (* tref, so an operation can reference an applied generic directly *)

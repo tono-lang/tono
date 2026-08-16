@@ -448,7 +448,7 @@ let value_position_diags ~allow_input (arg : Ast.trait_arg) span :
           "expected a string literal/template or a field reference";
       ]
 
-(* ── An op's own "impl .field.method(args)" body (RFC-0023) ─────────────── *)
+(* ── An op's own "impl .field.method(args)" body ──────────────────────── *)
 
 (* The declared opaque type a foreign role's qualified name points at.
    [Roles.classify] only says a "qualifier.name" pair is Foreign; resolving

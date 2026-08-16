@@ -336,7 +336,7 @@ fn sweep_dir(
     Ok(())
 }
 
-/// Build a target's module-mapping config from its manifest entry. RFC-0016 says
+/// Build a target's module-mapping config from its manifest entry. The manifest format says
 /// the most specific remap wins, so the table is ordered longest-prefix-first
 /// before the engine's first-match rule sees it. `package` becomes the Go module
 /// path; other targets ignore it.

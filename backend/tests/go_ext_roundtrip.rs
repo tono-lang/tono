@@ -23,7 +23,7 @@ static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::go::entry::ext_fixtures::{
-    infallible_extern_model, rfc0023_appendix_model,
+    infallible_extern_model, reference_example_model,
 };
 use tono_backend::codegen::targets::go::types::go_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
@@ -102,7 +102,7 @@ fn the_rfc_appendix_generates_go_that_compiles_against_the_real_libraries() {
         return;
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&rfc0023_appendix_model(), APPENDIX_GO_MOD_DEPS);
+    let dir = write_sdk(&reference_example_model(), APPENDIX_GO_MOD_DEPS);
     let build = Command::new("go")
         .arg("build")
         .arg("./...")
@@ -134,7 +134,7 @@ fn a_field_the_library_does_not_have_breaks_the_go_build() {
         return;
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&rfc0023_appendix_model(), APPENDIX_GO_MOD_DEPS);
+    let dir = write_sdk(&reference_example_model(), APPENDIX_GO_MOD_DEPS);
     let config_go = fixtures_dir().join("fixtures/companyconfig/config.go");
     let original = std::fs::read_to_string(&config_go).unwrap();
     let broken = original.replace("Host", "Address");
@@ -183,7 +183,7 @@ fn the_rfc_appendix_declared_tests_pass_hermetically() {
         return;
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&rfc0023_appendix_model(), APPENDIX_GO_MOD_DEPS);
+    let dir = write_sdk(&reference_example_model(), APPENDIX_GO_MOD_DEPS);
     let test = Command::new("go")
         .arg("test")
         .arg("./...")

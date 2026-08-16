@@ -82,7 +82,7 @@ fn appendix_setup_with_tests(
 
 #[test]
 fn a_field_with_no_matching_stub_pushes_a_nil_override_for_every_field() {
-    let module = ext_fixtures::rfc0023_appendix_module();
+    let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config) = appendix_setup(&module);
     let construction = TestConstruction {
         binding: "c".into(),
@@ -111,7 +111,7 @@ fn a_field_with_no_matching_stub_pushes_a_nil_override_for_every_field() {
 
 #[test]
 fn a_plain_free_fn_stub_decodes_a_literal_into_an_override_var() {
-    let module = ext_fixtures::rfc0023_appendix_module();
+    let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config) = appendix_setup(&module);
     let construction = TestConstruction {
         binding: "c".into(),
@@ -152,7 +152,7 @@ fn a_plain_free_fn_stub_decodes_a_literal_into_an_override_var() {
 
 #[test]
 fn a_foreign_handle_stub_builds_a_fake_and_an_unstubbed_method_panics() {
-    let module = ext_fixtures::rfc0023_appendix_module();
+    let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[0]);
     let mut refs = Vec::new();
@@ -169,7 +169,7 @@ fn a_foreign_handle_stub_builds_a_fake_and_an_unstubbed_method_panics() {
 
 #[test]
 fn a_stubbed_handle_method_renders_the_canned_value_answer() {
-    let module = ext_fixtures::rfc0023_appendix_module();
+    let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let mut refs = Vec::new();
@@ -186,7 +186,7 @@ fn a_stubbed_handle_method_renders_the_canned_value_answer() {
 /// itself Go-only, so a non-`go` method never reaches the generated file.
 #[test]
 fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
-    let module = ext_fixtures::rfc0023_appendix_module();
+    let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[0]);
     let lib = ExtLib {
@@ -225,7 +225,7 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
 
 #[test]
 fn fake_method_body_renders_the_declared_error_answer() {
-    let module = ext_fixtures::rfc0023_appendix_module();
+    let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let ret = Tref::Ref {
@@ -246,7 +246,7 @@ fn fake_method_body_renders_the_declared_error_answer() {
 
 #[test]
 fn fake_method_body_renders_the_contract_dead_letter_answer() {
-    let module = ext_fixtures::rfc0023_appendix_module();
+    let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let ret = Tref::Ref {
@@ -261,7 +261,7 @@ fn fake_method_body_renders_the_contract_dead_letter_answer() {
 
 #[test]
 fn fake_method_body_renders_the_defensive_http_dead_branch() {
-    let module = ext_fixtures::rfc0023_appendix_module();
+    let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let ret = Tref::Ref {

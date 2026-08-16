@@ -81,7 +81,7 @@ and shape_kind =
           (* tref so an operation can apply a generic directly *)
       wire : wire_binding option;
       impl_call : op_impl_call option;
-          (* the op's own "impl .field.method(args)" body (RFC-0023): a third
+          (* the op's own "impl .field.method(args)" body: a third
              implementation source alongside [wire] and a legacy "ext impl"
              extension. Resolving the receiver against a declared opaque
              handle and the method against its declared "extern" is a
