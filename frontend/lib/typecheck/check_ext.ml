@@ -49,7 +49,7 @@ let hook_removed_message (slot : string) : string =
   | None ->
       Printf.sprintf
         "hooks are removed; libraries are integrated via 'ext <lib> { extern \
-         ... }' (RFC-0023), not lifecycle slots"
+         ... }', not lifecycle slots"
 
 (* The languages a binding may target: the five backends plus the two short
    aliases the toolchain accepts. *)
