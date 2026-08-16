@@ -308,81 +308,79 @@ let ext_lib_docs : (string * string) list =
     );
   ]
 
-(* Construct hover texts. *)
+(* The construct hover texts: the reserved words and the words the parser
+   reads by position, one entry each. Checked against [Syntax_vocab] by
+   [construct_docs_cover_the_parser_vocabulary], in both directions, so a
+   construct the compiler gains hovers with something to say and one it loses
+   stops being advertised. *)
+let construct_docs : (string * string) list =
+  [
+    ( "struct",
+      "A record shape: named members with types, serialized as an object." );
+    ( "enum",
+      "An open enumeration: strict on encode, lenient on decode (an unknown \
+       value is carried, never a failure)." );
+    ( "union",
+      "A tagged sum: every variant carries a payload and travels internally \
+       tagged by the discriminator field." );
+    ( "op",
+      "An operation: input and output shapes plus traits (transport, errors, \
+       effect)." );
+    ( "map",
+      "A homogeneous map type, map[K]V. Keys that cannot be object keys can \
+       escape to a pairs array with @entries." );
+    ("pub", "Exports the declaration across module boundaries.");
+    ("import", "Brings another module's declarations into dot-qualified scope.");
+    ( "as",
+      "Renames an import locally: import a.b as c makes the module reachable \
+       as c." );
+    ( "ext",
+      "Two forms. 'ext <lib> { ... }' integrates a third-party library \
+       declaratively: the module path per language, its foreign shapes, and \
+       the extern functions and opaque handles that call into it. 'ext \
+       contract|constraint|impl' declares a bespoke extension point bound per \
+       language to a file#symbol reference." );
+    ( "contract",
+      "A bespoke function with a typed signature; emission is gated on a \
+       conformance spec." );
+    ("constraint", "A bespoke validation predicate attached at the boundary.");
+    ( "impl",
+      "Implements the operation it names with bespoke sources, taking that \
+       operation's signature. Add 'raw' to return an outcome the generated \
+       glue decodes and discriminates." );
+    ( "raw",
+      "The bound symbol returns an outcome (success flag, code, body) and the \
+       generated glue decodes it into the declared output or discriminates the \
+       failure by its code." );
+    ( "test",
+      "A declared test, generated as a native test file per target (go test, \
+       Vitest, cargo test): named bindings construct the entry, stub its \
+       declared dependencies, call operations, and expect outcomes. A test \
+       with every dependency stubbed is hermetic; one touching a real \
+       dependency lands in the opt-in live suite." );
+    ( "stub",
+      "Substitutes a declared dependency of one operation on one client \
+       binding: `.http` (from @http) answers with http.response, `.impl` (from \
+       ext impl) answers with the operation's own types. The binding records \
+       what crossed the dependency (`s.requests`)." );
+    ( "expect",
+      "Asserts a binding's outcome against a pattern: the output shape, a \
+       declared error, or a tono.errors shape. `..` frees unnamed fields, \
+       `any` asserts presence, `None` asserts absence." );
+    ( "match",
+      Printf.sprintf
+        "A selection table over a field reference: literal patterns, one arm \
+         each, exhaustive (a `_` wildcard covers the rest). Arms yield a \
+         reference, a literal, or a stack of sources (%s). No nesting, no \
+         comparators, no expressions."
+        (String.concat "/"
+           (List.map (fun s -> "@" ^ s) Entry_scope.source_names)) );
+  ]
+
 let construct_doc (word : string) : string option =
-  match word with
-  | "struct" ->
-      Some "A record shape: named members with types, serialized as an object."
-  | "enum" ->
-      Some
-        "An open enumeration: strict on encode, lenient on decode (an unknown \
-         value is carried, never a failure)."
-  | "union" ->
-      Some
-        "A tagged sum: every variant carries a payload and travels internally \
-         tagged by the discriminator field."
-  | "op" ->
-      Some
-        "An operation: input and output shapes plus traits (transport, errors, \
-         effect)."
-  | "map" ->
-      Some
-        "A homogeneous map type, map[K]V. Keys that cannot be object keys can \
-         escape to a pairs array with @entries."
-  | "pub" -> Some "Exports the declaration across module boundaries."
-  | "import" ->
-      Some "Brings another module's declarations into dot-qualified scope."
-  | "ext" ->
-      Some
-        "Two forms. 'ext <lib> { ... }' integrates a third-party library \
-         declaratively: the module path per language, its foreign shapes, and \
-         the extern functions and opaque handles that call into it. 'ext \
-         contract|constraint|impl' declares a bespoke extension point bound \
-         per language to a file#symbol reference."
-  | "contract" ->
-      Some
-        "A bespoke function with a typed signature; emission is gated on a \
-         conformance spec."
-  | "constraint" ->
-      Some "A bespoke validation predicate attached at the boundary."
-  | "impl" ->
-      Some
-        "Implements the operation it names with bespoke sources, taking that \
-         operation's signature. Add 'raw' to return an outcome the generated \
-         glue decodes and discriminates."
-  | "raw" ->
-      Some
-        "The bound symbol returns an outcome (success flag, code, body) and \
-         the generated glue decodes it into the declared output or \
-         discriminates the failure by its code."
-  | "test" ->
-      Some
-        "A declared test, generated as a native test file per target (go test, \
-         Vitest, cargo test): named bindings construct the entry, stub its \
-         declared dependencies, call operations, and expect outcomes. A test \
-         with every dependency stubbed is hermetic; one touching a real \
-         dependency lands in the opt-in live suite."
-  | "stub" ->
-      Some
-        "Substitutes a declared dependency of one operation on one client \
-         binding: `.http` (from @http) answers with http.response, `.impl` \
-         (from ext impl) answers with the operation's own types. The binding \
-         records what crossed the dependency (`s.requests`)."
-  | "expect" ->
-      Some
-        "Asserts a binding's outcome against a pattern: the output shape, a \
-         declared error, or a tono.errors shape. `..` frees unnamed fields, \
-         `any` asserts presence, `None` asserts absence."
-  | "match" ->
-      Some
-        (Printf.sprintf
-           "A selection table over a field reference: literal patterns, one \
-            arm each, exhaustive (a `_` wildcard covers the rest). Arms yield \
-            a reference, a literal, or a stack of sources (%s). No nesting, no \
-            comparators, no expressions."
-           (String.concat "/"
-              (List.map (fun s -> "@" ^ s) Entry_scope.source_names)))
-  | w -> List.assoc_opt w ext_lib_docs
+  match List.assoc_opt word construct_docs with
+  | Some doc -> Some doc
+  | None -> List.assoc_opt word ext_lib_docs
 
 (* Primitive and marker hover: the wire decisions that most surprise SDK
    consumers belong right under the cursor. *)

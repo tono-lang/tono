@@ -382,28 +382,9 @@ let definition_at ~(uri : DocumentUri.t) ~(text : string) ~(file : Ast.file)
           Some (Location.create ~uri ~range:(range_of_span ~text d.dname_span))
       | None -> None)
 
-(* The primitive keywords the lexer recognizes (kept in sync with
-   [Tono_frontend]'s lowering); offered as completions alongside declared
-   names. *)
-let primitives =
-  [
-    "bool";
-    "string";
-    "bytes";
-    "float";
-    "timestamp";
-    "date";
-    "duration";
-    "uuid";
-    "i8";
-    "i16";
-    "i32";
-    "i64";
-    "u8";
-    "u16";
-    "u32";
-    "u64";
-  ]
+(* The primitive keywords, read from the lexer's own table so completion can
+   never offer a name the lexer will not recognize. *)
+let primitives = Lexer.prims
 
 let decl_items (file : Ast.file) : CompletionItem.t list =
   List.map

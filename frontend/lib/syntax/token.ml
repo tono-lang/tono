@@ -37,6 +37,23 @@ type kind =
 
 type t = { kind : kind; span : Span.span }
 
+(* The reserved words, each with the token it lexes to. The lexer classifies
+   through this table and [Syntax_vocab] enumerates it, so the editor's word
+   set is read from the same list the lexer applies. *)
+let keywords : (string * kind) list =
+  [
+    ("struct", KwStruct);
+    ("enum", KwEnum);
+    ("union", KwUnion);
+    ("op", KwOp);
+    ("map", KwMap);
+    ("pub", KwPub);
+    ("import", KwImport);
+    ("as", KwAs);
+    ("ext", KwExt);
+    ("test", KwTest);
+  ]
+
 (* A human label for diagnostics, e.g. "expected ':', found '{'". *)
 let describe (k : kind) : string =
   match k with

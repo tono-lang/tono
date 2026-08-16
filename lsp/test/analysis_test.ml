@@ -436,6 +436,44 @@ let trait_docs_cover_the_compiler_vocabulary () =
   Alcotest.(check (list string)) "every known trait is documented" [] missing;
   Alcotest.(check (list string)) "nothing documented is unknown" [] extra
 
+(* The editor's construct vocabulary is the parser's, in both directions: a
+   reserved or positional word with no doc would hover blank and complete
+   without prose, and a documented word the parser does not read would be
+   advertised as syntax. The ext library block has its own contract in
+   analysis_ext_test; this one covers everything else. *)
+let construct_docs_cover_the_parser_vocabulary () =
+  let documented = List.map fst Tono_lsp_lib.Hover_docs.construct_docs in
+  let missing =
+    List.filter
+      (fun w -> not (List.mem w documented))
+      Tono_frontend.Syntax_vocab.constructs
+  in
+  let extra =
+    List.filter
+      (fun w -> not (Tono_frontend.Syntax_vocab.is_construct w))
+      documented
+  in
+  Alcotest.(check (list string))
+    "every construct the parser reads is documented" [] missing;
+  Alcotest.(check (list string))
+    "nothing documented is outside the parser's vocabulary" [] extra;
+  List.iter
+    (fun w ->
+      Alcotest.(check bool)
+        ("construct_doc reaches " ^ w)
+        true
+        (Option.is_some (Tono_lsp_lib.Hover_docs.construct_doc w)))
+    Tono_frontend.Syntax_vocab.constructs
+
+(* Every primitive the lexer recognizes has a wire note under the cursor. *)
+let primitive_docs_cover_the_lexer () =
+  let missing =
+    List.filter
+      (fun p -> Option.is_none (Tono_lsp_lib.Hover_docs.primitive_doc p))
+      Tono_frontend.Lexer.prims
+  in
+  Alcotest.(check (list string)) "every primitive is documented" [] missing
+
 let () =
   Alcotest.run "analysis"
     [
@@ -443,6 +481,10 @@ let () =
         [
           Alcotest.test_case "trait docs cover the compiler" `Quick
             trait_docs_cover_the_compiler_vocabulary;
+          Alcotest.test_case "construct docs cover the parser" `Quick
+            construct_docs_cover_the_parser_vocabulary;
+          Alcotest.test_case "primitive docs cover the lexer" `Quick
+            primitive_docs_cover_the_lexer;
         ] );
       ( "diagnostics",
         [

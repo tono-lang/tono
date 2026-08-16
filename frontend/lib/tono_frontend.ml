@@ -19,6 +19,7 @@ module Check_ext = Check_ext
 module Check_ext_lib = Check_ext_lib
 module Check_request_value = Check_request_value
 module Ext_lib_vocab = Ext_lib_vocab
+module Syntax_vocab = Syntax_vocab
 module Check_entries = Check_entries
 module Entry_scope = Entry_scope
 module Protocol_http = Protocol_http
