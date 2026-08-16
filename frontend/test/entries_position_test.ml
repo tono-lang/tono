@@ -440,7 +440,10 @@ let source_marker_args_diagnosed () =
   has "struct s { a: string @default(\"x\", \"y\"), op ping() }"
     "@default takes a single value"
 
-let null_pattern_decodes_as_wildcard () =
+(* An explicit JSON "pattern": null is the mandatory "null" arm of an
+   optional subject, distinct from an absent "pattern" key (the wildcard). *)
+let null_pattern_decodes_as_null_arm () =
+  let null_marker = `Assoc [ ("null", `Bool true) ] in
   match
     Ir_json.decode_select
       (`Assoc
@@ -450,12 +453,28 @@ let null_pattern_decodes_as_wildcard () =
              `List
                [
                  `Assoc
-                   [ ("pattern", `Null); ("value", `Assoc [ ("lit", `Null) ]) ];
+                   [
+                     ("pattern", null_marker);
+                     ("value", `Assoc [ ("lit", `Null) ]);
+                   ];
                ] );
          ])
   with
+  | Ok { arms = [ { arm_pattern = Some p; _ } ]; _ } when p = null_marker -> ()
+  | Ok _ -> Alcotest.fail "null pattern did not decode as the null arm"
+  | Error e -> Alcotest.failf "decode failed: %s" e
+
+let absent_pattern_decodes_as_wildcard () =
+  match
+    Ir_json.decode_select
+      (`Assoc
+         [
+           ("subject", `List [ `String "v" ]);
+           ("arms", `List [ `Assoc [ ("value", `Assoc [ ("lit", `Null) ]) ] ]);
+         ])
+  with
   | Ok { arms = [ { arm_pattern = None; _ } ]; _ } -> ()
-  | Ok _ -> Alcotest.fail "null pattern did not collapse to the wildcard"
+  | Ok _ -> Alcotest.fail "an absent pattern must decode as the wildcard"
   | Error e -> Alcotest.failf "decode failed: %s" e
 
 (* ── Nested boundaries, typed arms, loose header shapes ────────────────── *)
@@ -645,8 +664,10 @@ let () =
             duplicate_trait_is_a_warning;
           Alcotest.test_case "source marker args" `Quick
             source_marker_args_diagnosed;
-          Alcotest.test_case "null pattern wildcard" `Quick
-            null_pattern_decodes_as_wildcard;
+          Alcotest.test_case "null pattern decodes as null arm" `Quick
+            null_pattern_decodes_as_null_arm;
+          Alcotest.test_case "absent pattern decodes as wildcard" `Quick
+            absent_pattern_decodes_as_wildcard;
         ] );
       ( "silent-drop",
         [

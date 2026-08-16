@@ -212,3 +212,20 @@ let param_shadows_field = "TC0086"
    place. The entry-field-construction side of the same reserved name is
    [field_ref_request]. *)
 let request_value_invalid = "TC0087"
+
+(* A map-index key (the "[.seg]" in "map[.seg]") does not resolve, or its
+   type does not match the map's declared key type. *)
+let map_index_key_invalid = "TC0088"
+
+(* A match subject typed T? (optional, from a map index or an otherwise
+   nullable field) must include exactly one "null" arm; it is missing here. *)
+let match_missing_null_arm = "TC0089"
+
+(* A "null" pattern arm on a match whose subject is not optional: "null" is
+   only meaningful when the subject can be absent. *)
+let match_null_arm_not_optional = "TC0090"
+
+(* "._" (the match subject shorthand) used somewhere other than a match
+   arm's value position, or inside the "null" arm's value (where the subject
+   is by definition absent, so there is nothing for "._" to name). *)
+let match_subject_ref_invalid = "TC0091"
