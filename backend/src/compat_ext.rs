@@ -320,4 +320,55 @@ mod tests {
         let out = diff_ext_versions(&baseline, &current);
         assert!(out.is_empty(), "{out:?}");
     }
+
+    #[test]
+    fn a_removed_pin_from_the_baseline_side_is_not_reported() {
+        let mut baseline = BTreeMap::new();
+        baseline.insert(
+            "companyconfig".to_string(),
+            BTreeMap::from([
+                ("go".to_string(), "v1.4.2".to_string()),
+                ("ts".to_string(), "^3.1.0".to_string()),
+            ]),
+        );
+        baseline.insert(
+            "companybus".to_string(),
+            BTreeMap::from([("go".to_string(), "v0.1.0".to_string())]),
+        );
+        // Current drops the "ts" pin and the whole "companybus" ext entirely.
+        let current = BTreeMap::from([(
+            "companyconfig".to_string(),
+            BTreeMap::from([("go".to_string(), "v1.4.2".to_string())]),
+        )]);
+
+        let out = diff_ext_versions(&baseline, &current);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn a_removed_extern_is_not_reported_by_the_call_shape_diff() {
+        // Removing the whole `extern` (not just a lang binding) is not this
+        // pass's concern: the extern's own params/return leaving the surface
+        // is covered by the ordinary shape diff elsewhere, not here.
+        let base = model(base_module());
+        let mut changed = base_module();
+        changed.ext_libs[0].externs.clear();
+        let curr = model(changed);
+
+        let mut out = Vec::new();
+        diff_ext_libs(&base, &curr, &mut out);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn a_removed_ext_lib_is_not_reported_by_the_call_shape_diff() {
+        let base = model(base_module());
+        let mut changed = base_module();
+        changed.ext_libs.clear();
+        let curr = model(changed);
+
+        let mut out = Vec::new();
+        diff_ext_libs(&base, &curr, &mut out);
+        assert!(out.is_empty(), "{out:?}");
+    }
 }

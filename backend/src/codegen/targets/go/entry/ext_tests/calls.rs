@@ -116,6 +116,26 @@ fn the_appendix_module_wires_the_call_handle_and_impl_call() {
     assert!(text.contains("return publishOut, nil"));
 }
 
+/// The `infallible` marker's own repro: a single-return foreign function
+/// (`idgen.NewString() string`, matching `uuid.NewString`) with no `yields:`
+/// at all, the zero-yields path that always destructured two Go values
+/// before the fix regardless of the real function's own arity. Checked here
+/// through the full `emit` pipeline (the same style as the appendix test
+/// above); `go_ext_roundtrip.rs`'s `an_infallible_single_return_extern_builds`
+/// proves the stronger claim (`go build` against a real package) but only
+/// runs with a Go toolchain installed and skips under coverage
+/// instrumentation, so this is what keeps the fix covered either way.
+#[test]
+fn an_infallible_extern_assigns_a_single_value_with_no_error_check() {
+    let module = crate::codegen::targets::go::entry::ext_fixtures::infallible_extern_module();
+    let text = entry_text(&module);
+    assert!(
+        text.contains("idResult := idgen.NewString()\n\ts.ID = idResult\n"),
+        "{text}"
+    );
+    assert!(!text.contains("idErr"), "{text}");
+}
+
 // --- defensive fallbacks, exercised directly ---------------------------
 
 /// A declared extern with no module path for `lang` (the "no Go binding"

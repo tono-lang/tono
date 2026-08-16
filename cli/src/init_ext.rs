@@ -149,4 +149,37 @@ mod tests {
         scan_text("pub struct client { name: string }\n", &mut m);
         assert!(m.is_empty());
     }
+
+    #[test]
+    fn a_block_whose_brace_is_not_on_the_same_line_is_missed() {
+        // Documented limitation: the scan only recognizes `ext <name> {` with
+        // the opening brace on the same line.
+        let mut m = BTreeMap::new();
+        scan_text(
+            "ext companyconfig\n{\n  go: \"github.com/company/config\"\n}\n",
+            &mut m,
+        );
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn a_block_closed_on_the_same_line_records_the_name_with_no_langs() {
+        let mut m = BTreeMap::new();
+        scan_text("ext empty { }\n", &mut m);
+        let langs = m.get("empty").expect("the name is still recorded");
+        assert!(langs.is_empty());
+    }
+
+    #[test]
+    fn a_bare_ext_keyword_with_nothing_after_it_is_ignored() {
+        let mut m = BTreeMap::new();
+        scan_text("ext \n", &mut m);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn scan_ext_names_on_a_missing_root_is_empty() {
+        let found = scan_ext_names(Path::new("/no/such/tono-init-ext-test-root"));
+        assert!(found.is_empty());
+    }
 }
