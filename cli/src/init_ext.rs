@@ -1,12 +1,12 @@
-//! `tono init`'s best-effort scan for `ext` blocks (RFC-0023), so a fresh or
-//! updated manifest can scaffold a commented `[ext.<name>]` section instead of
+//! `tono init`'s best-effort scan for `ext` blocks, so a fresh or updated
+//! manifest can scaffold a commented `[ext.<name>]` section instead of
 //! leaving the user to discover the requirement from a failed `tono gen`.
 //!
 //! This is a text scan, not a parse: `init` has no frontend/IR access, and
 //! getting the language keys wrong here only means a slightly wrong comment,
 //! not a build break. The real gate is `tono gen`'s validation against the
 //! compiled model. A block whose opening `{` is not on the same line as
-//! `ext <name>` is missed; every RFC-0023 example writes it that way.
+//! `ext <name>` is missed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -98,7 +98,7 @@ fn collect_tono_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 /// one-line edit per language.
 pub fn ext_block(name: &str, langs: &BTreeSet<String>) -> String {
     let mut out = format!(
-        "\n# Pin the version of \"{name}\" for each target that uses it (RFC-0023).\n\
+        "\n# Pin the version of \"{name}\" for each target that uses it.\n\
          # [ext.{name}]\n"
     );
     for lang in langs {

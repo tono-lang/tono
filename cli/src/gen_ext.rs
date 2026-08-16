@@ -1,4 +1,4 @@
-//! Ext dependency versions (RFC-0023): the pinned `[ext.<name>]` version each
+//! Ext dependency versions: the pinned `[ext.<name>]` version each
 //! enabled target needs, and merging that dependency into the native manifest
 //! (`go.mod`, `Cargo.toml`, `package.json`) `gen` writes into.
 //!

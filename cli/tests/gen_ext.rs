@@ -1,4 +1,4 @@
-//! End-to-end checks for RFC-0023 ext dependency versions: `tono gen` emits
+//! End-to-end checks for ext dependency versions: `tono gen` emits
 //! the pinned `[ext.<name>]` version into each target's native manifest, and
 //! refuses to generate for an enabled target with no pin.
 

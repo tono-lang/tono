@@ -1,4 +1,4 @@
-//! Compatibility diffing for RFC-0023's `ext`/`extern` FFI blocks.
+//! Compatibility diffing for `ext`/`extern` FFI library blocks.
 //!
 //! Two things escape the ordinary shape/entry diff entirely, because neither
 //! shows up in the tono-facing signature the rest of the checker compares:
@@ -52,9 +52,9 @@ pub fn diff_ext_libs(baseline: &Model, current: &Model, out: &mut Vec<Change>) {
 }
 
 /// Every `extern` an `ext` block declares, free functions and opaque-handle
-/// methods alike, keyed the same way `stub <ext>.<name>` / `stub
-/// <ext>.<type>.<method>` already qualify them (RFC-0023's test-stub
-/// grammar), so a method and a free function of the same name never collide.
+/// methods alike, keyed the same way the declared-test stub grammar already
+/// qualifies them (`stub <ext>.<name>` / `stub <ext>.<type>.<method>`), so a
+/// method and a free function of the same name never collide.
 fn named_externs(lib: &ExtLib) -> BTreeMap<String, &ExternDecl> {
     let mut named = BTreeMap::new();
     for decl in &lib.externs {

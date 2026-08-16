@@ -29,7 +29,7 @@ pub struct Config {
     pub compat: Compat,
     /// Enabled and generatable targets only, ordered Rust, Go, TypeScript.
     pub targets: Vec<ResolvedTarget>,
-    /// `[ext.<name>]` pinned versions (RFC-0023): ext name -> normalized lang
+    /// `[ext.<name>]` pinned versions: ext name -> normalized lang
     /// key ("go"/"rust"/"ts") -> version string. Carried through verbatim; the
     /// target/model-aware checks (missing pin, compat) live where the model
     /// is available, not here.
@@ -162,8 +162,8 @@ struct RawManifest {
     compat: RawCompat,
     #[serde(default)]
     target: BTreeMap<String, RawTarget>,
-    /// `[ext.<name>]`: pinned version per language for an FFI library
-    /// (RFC-0023). Kept as a bare string map here; validating that a key is a
+    /// `[ext.<name>]`: pinned version per language for an FFI library.
+    /// Kept as a bare string map here; validating that a key is a
     /// known lang belongs to the target/model-aware check in `gen`.
     #[serde(default)]
     ext: BTreeMap<String, BTreeMap<String, String>>,
