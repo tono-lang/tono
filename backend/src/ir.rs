@@ -80,7 +80,7 @@ pub use crate::ir_tests_model::*;
 /// v18 added a declared test's `extern_stubs`: a stub for an `extern` FFI
 /// call (free function or opaque-handle method), not tied to one client/op
 /// like the existing HTTP/impl stub.
-pub const TONO_IR_VERSION: u32 = 19;
+pub const TONO_IR_VERSION: u32 = 20;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -351,9 +351,14 @@ pub enum ArmValue {
     Field(Vec<String>),
     Lit(Value),
     Sources(Vec<Source>),
+    /// "._": the match subject itself, narrowed non-optional. A payload-less
+    /// variant serializes as a bare tag string ("subject"), which the OCaml
+    /// mirror's encoder/decoder match exactly for round-trip.
+    Subject,
 }
 
-/// One arm of a match selection; an absent `pattern` is the wildcard arm.
+/// One arm of a match selection; an absent `pattern` is the wildcard arm, a
+/// present JSON `null` the mandatory "null" arm of an optional subject.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectArm {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,10 +366,14 @@ pub struct SelectArm {
     pub value: ArmValue,
 }
 
-/// The selection table of `field: T = match .subject { ... }`.
+/// The selection table of `field: T = match .subject { ... }`. `subject_index`,
+/// when present, is a single-level map-index key path applied to `subject`
+/// (".cfg.by_segment[.seg]"), making the subject optional.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Select {
     pub subject: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_index: Option<Vec<String>>,
     #[serde(default)]
     pub arms: Vec<SelectArm>,
 }

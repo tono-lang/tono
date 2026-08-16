@@ -78,7 +78,7 @@
    v19 dropped the "hook" extension kind: the lifecycle it filled is gone,
    replaced entirely by the declarative "ext"/"extern" FFI model v14-v18
    added; a hook is now rejected at typecheck and never reaches the IR. *)
-let current_ir_version = 19
+let current_ir_version = 20
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

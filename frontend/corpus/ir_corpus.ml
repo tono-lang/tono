@@ -488,6 +488,7 @@ let entries_client : Ir.model =
                   ~select:
                     {
                       Ir.subject = [ "endpoint_version" ];
+                      subject_index = None;
                       arms =
                         [
                           {

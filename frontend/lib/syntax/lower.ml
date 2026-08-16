@@ -287,6 +287,11 @@ let lower_pattern : Ast.match_pattern -> Ir.json option = function
   | Ast.PName "false" -> Some (`Bool false)
   | Ast.PName n -> Some (`String n) (* an enum case name *)
   | Ast.PWildcard -> None
+  (* Not a bare JSON `null`: Rust's serde treats a present `null` on an
+     `Option<Value>` field the same as an absent field (both decode to
+     [None]), which would collapse this back into the wildcard on that
+     side. A marker object survives the round-trip on both sides. *)
+  | Ast.PNull -> Some (`Assoc [ ("null", `Bool true) ])
 
 let lower_arm_value ~diags : Ast.arm_value -> Ir.arm_value = function
   | Ast.AVRef r -> Ir.Arm_field r.segs
@@ -295,6 +300,7 @@ let lower_arm_value ~diags : Ast.arm_value -> Ir.arm_value = function
   | Ast.AVName "true" -> Ir.Arm_lit (`Bool true)
   | Ast.AVName "false" -> Ir.Arm_lit (`Bool false)
   | Ast.AVName n -> Ir.Arm_lit (`String n)
+  | Ast.AVSubject _ -> Ir.Arm_subject
   | Ast.AVSources traits ->
       Ir.Arm_sources
         (List.filter_map
@@ -311,6 +317,8 @@ let lower_arm_value ~diags : Ast.arm_value -> Ir.arm_value = function
 let lower_select ~diags (fm : Ast.field_match) : Ir.select =
   {
     Ir.subject = fm.subject.segs;
+    subject_index =
+      Option.map (fun (idx : Ast.ref_path) -> idx.Ast.segs) fm.subject.Ast.index;
     arms =
       List.map
         (fun (a : Ast.match_arm) ->
