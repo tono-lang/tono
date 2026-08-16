@@ -36,8 +36,8 @@ export function hasHeader(
   return Object.keys(headers).some((key) => key.toLowerCase() === lower);
 }
 
-// headerRecord collects a Headers object into a plain record so a hook can
-// read and rewrite it without a live Headers instance.
+// headerRecord collects a Headers object into a plain record the
+// generated client can read without a live Headers instance.
 export function headerRecord(headers: Headers): Record<string, string> {
   const record: Record<string, string> = {};
   headers.forEach((value, key) => {

@@ -152,7 +152,7 @@ impl std::fmt::Display for TonoError {
             TonoError::Transport(_) => write!(f, "transport failure"),
             TonoError::Api(_) => write!(f, "api error"),
             TonoError::Decode(_) => write!(f, "response body did not match the declared schema"),
-            TonoError::Contract(e) => write!(f, "contract hook '{}' failed", e.contract_name),
+            TonoError::Contract(e) => write!(f, "contract '{}' failed", e.contract_name),
             TonoError::Config(e) => write!(f, "{}", e.message),
         }
     }

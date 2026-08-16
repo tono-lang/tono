@@ -18,6 +18,7 @@
   file_test
   golden_test
   typecheck_test
+  typecheck_ext_test
   trait_positions_test
   impl_test
   module_test
