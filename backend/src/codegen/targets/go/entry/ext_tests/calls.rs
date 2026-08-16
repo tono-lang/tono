@@ -53,6 +53,17 @@ fn a_versioned_go_module_path_still_selects_by_the_ext_lib_name() {
 }
 
 #[test]
+fn the_reference_example_model_wraps_the_module_with_its_declared_tests() {
+    // The Go roundtrip test consumes this wrapper but skips itself under
+    // coverage (it needs a Go toolchain), so the shape it relies on is
+    // pinned here: one module, current IR version, both declared tests.
+    let model = crate::codegen::targets::go::entry::ext_fixtures::reference_example_model();
+    assert_eq!(model.tono_ir_version, crate::ir::TONO_IR_VERSION);
+    assert_eq!(model.modules.len(), 1);
+    assert_eq!(model.modules[0].tests.len(), 2);
+}
+
+#[test]
 fn the_appendix_module_wires_the_call_handle_and_impl_call() {
     // The exact fixture the go_ext_roundtrip integration test also `go
     // build`s against real libraries (shared via
