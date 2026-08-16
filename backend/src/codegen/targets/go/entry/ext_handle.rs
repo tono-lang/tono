@@ -71,6 +71,14 @@ pub(in super::super) fn handle_adapter_decl(
     let real_ty = handle_go_type(lib, &handle.name)?;
     let adapter_ty = handle_adapter_ident(&lib.name, &handle.name);
     let mut refs = Vec::new();
+    // The `real` field's own type names the foreign package directly (unlike
+    // every other position this handle reaches, which is spelled as tono's
+    // generated interface); the adapter decl is the one place that import is
+    // actually used, so it is registered here rather than wherever the
+    // storage-typed interface spelling is pushed instead.
+    if let Some(sym) = handle_symbol(lib) {
+        refs.push(sym);
+    }
     let mut methods = String::new();
     for m in &handle.methods {
         let Some(lang) = go_lang(m) else { continue };

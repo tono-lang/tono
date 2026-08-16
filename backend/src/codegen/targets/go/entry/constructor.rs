@@ -62,10 +62,16 @@ pub(super) fn new_decl(
     let params: Vec<String> = args
         .iter()
         .map(|f| {
+            // The storage-typed spelling ([`field_go_type_storage`]), not
+            // the plain `go_type`: an `@arg` field's type reaches the
+            // Settings struct verbatim, so its constructor parameter has to
+            // name the exact same type the field is declared with (a
+            // foreign opaque handle is tono's own generated interface
+            // there, never the real package's local-looking type name).
             format!(
                 "{} {}",
                 plan::arg_camel(&f.name, &f.traits, LANG),
-                go_type(&f.target)
+                field_go_type_storage(&f.target, module)
             )
         })
         .collect();

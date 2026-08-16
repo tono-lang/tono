@@ -7,7 +7,8 @@ use super::{
 };
 use crate::codegen::output::TargetKind;
 use crate::ir::{
-    EntryField, Module, ShapeKind, Source, Tref, WireBinding, WireCall, WireCallArg, WireValue,
+    CallArg, EntryField, Module, ShapeKind, Source, Tref, WireBinding, WireCall, WireCallArg,
+    WireValue,
 };
 
 /// The requested targets that cannot emit an extern-call field source, by
@@ -43,6 +44,65 @@ fn unsupported_by(targets: &[TargetKind], capable: fn(TargetKind) -> bool) -> Op
         .map(|t| t.dir())
         .collect();
     (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// The sibling field a `CallArg::Ref` path names, recursively unwrapping the
+/// argument shapes a foreign call's own arguments can nest in (a struct
+/// literal's fields, a list's items): every `Ref` anywhere in a call's own
+/// argument tree ultimately reads a sibling field, so all of them share this
+/// one check.
+fn ref_paths(args: &[CallArg], out: &mut Vec<Vec<String>>) {
+    for a in args {
+        match a {
+            CallArg::Ref(path) => out.push(path.clone()),
+            CallArg::List(items) => ref_paths(items, out),
+            CallArg::Ctor(ctor) => {
+                let fields: Vec<CallArg> = ctor.fields.values().cloned().collect();
+                ref_paths(&fields, out);
+            }
+            CallArg::Param(_) | CallArg::Lit(_) | CallArg::Call(_) => {}
+        }
+    }
+}
+
+/// A field's own `= ns.fn(args)` call cannot forward a sibling field that is
+/// itself an *injected* (not tono-constructed) foreign handle. A handle
+/// field this generator constructed (`field.call`) always stores its result
+/// wrapped in the generated adapter, so a target's own emitter can unwrap it
+/// back to the real value another foreign call declares its parameter as
+/// (see `go/entry/ext.rs::sibling_path_expr`). A handle field sourced from
+/// `@arg`/`@with` instead holds whatever value the caller supplied, which is
+/// not guaranteed to be that adapter (or even the real library's own
+/// concrete type) at all, so no target's emitter can safely unwrap it: the
+/// combination is rejected here, at generation time, naming both fields and
+/// the call, rather than reaching the target compiler as an error about a
+/// type the author never wrote (or, if a target's emitter were to guess at
+/// unwrapping it anyway, panicking at runtime on a valid caller-supplied
+/// value).
+fn injected_handle_forwarded_to_another_call(
+    module: &Module,
+    declared: &[&EntryField],
+    field: &EntryField,
+) -> Result<(), String> {
+    let Some(call) = &field.call else {
+        return Ok(());
+    };
+    let mut paths = Vec::new();
+    ref_paths(&call.args, &mut paths);
+    for path in paths {
+        let Some(head) = path.first() else { continue };
+        let Some(sibling) = declared.iter().find(|f| f.name == *head) else {
+            continue;
+        };
+        let is_handle = ref_id(&sibling.target).is_some_and(|id| is_foreign_ref(module, id));
+        if is_handle && sibling.call.is_none() {
+            return Err(format!(
+                "{} = {}.{}(..): argument {:?} names field {}, an injected foreign handle with no construction call of its own; only a handle this generator itself constructed can be forwarded into another extern call",
+                field.name, call.ns, call.func, head, sibling.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A field's `= ns.fn(args)` source must resolve to a declared `extern` that
@@ -554,6 +614,8 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                 // says the target can emit calls, not that this call names a
                 // declared extern with a binding for it.
                 call_resolves(module, field, targets)
+                    .map_err(|e| format!("module {}: entry {} {}", module.name, entry.name, e))?;
+                injected_handle_forwarded_to_another_call(module, &declared, field)
                     .map_err(|e| format!("module {}: entry {} {}", module.name, entry.name, e))?;
             }
         }

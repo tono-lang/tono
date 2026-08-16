@@ -612,3 +612,8 @@ pub fn infallible_extern_model() -> Model {
         modules: vec![infallible_extern_module()],
     }
 }
+
+// Split out to keep this file under the file-size ceiling.
+#[path = "ext_fixtures_compose.rs"]
+mod ext_fixtures_compose;
+pub use ext_fixtures_compose::{composed_handles_model, composed_handles_module};
