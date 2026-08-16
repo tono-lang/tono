@@ -103,12 +103,7 @@ let lsp_diagnostics (src : string) : Diagnostic.t list =
 
 (* --- surface AST navigation --- *)
 
-(* End-inclusive: editors place the caret at a token's end constantly, and
-   the convention (rust-analyzer, gopls) is that the position equal to the
-   range end still resolves the token to its left. The grammar separates
-   names with punctuation, so end-of-one is never start-of-another name. *)
-let contains (s : Span.span) (off : int) : bool =
-  s.start.offset <= off && off <= s.finish.offset
+let contains = Analysis_ext.contains
 
 let decl_word (d : Ast.decl) : string =
   match d.dkind with
@@ -316,9 +311,25 @@ let token_hover ~markdown ~text (off : int) : Hover.t option =
   in
   go false false toks
 
-(* Hover, most specific first: a declaration name, a member name, a type
-   reference (which shows the full target declaration), a trait, then the
-   token layer (keywords, primitives, the ? marker). *)
+(* The ext library block's contextual words (extern, call:, sync, ...) and
+   the leading-dot `.request` reference, resolved by their position in the
+   token stream. Checked before the trait layer because `.request` sits
+   inside a trait's argument list. *)
+let ext_word_hover ~markdown ~text (off : int) : Hover.t option =
+  let toks, _ = Lexer.tokenize text in
+  match Analysis_ext.word_at toks off with
+  | None -> None
+  | Some w ->
+      let t = List.find (fun (t : Token.t) -> contains t.span off) toks in
+      Option.map
+        (fun prose ->
+          mk_hover ~markdown ~text ~code:w ~prose:(Some prose) t.span)
+        (Hover_docs.construct_doc w)
+
+(* Hover, most specific first: a declaration name, a member name, an extern
+   or handle name, a type reference (which shows the full target
+   declaration), an ext block word, a trait, then the token layer (keywords,
+   primitives, the ? marker). *)
 let hover_at ~(markdown : bool) ~(text : string) ~(file : Ast.file)
     (pos : Position.t) : Hover.t option =
   let off = offset_of_position text pos in
@@ -332,22 +343,33 @@ let hover_at ~(markdown : bool) ~(text : string) ~(file : Ast.file)
       match member_at file off with
       | Some m -> Some (member_hover ~markdown ~text m)
       | None -> (
-          match
-            List.find_opt (fun (_n, sp) -> contains sp off) (file_ty_refs file)
-          with
-          | Some (name, sp) -> (
-              match find_decl file name with
-              | Some d -> Some (decl_hover ~markdown ~text d sp)
-              | None ->
-                  Some (mk_hover ~markdown ~text ~code:name ~prose:None sp))
+          (* An extern or opaque handle declared inside an ext block, shown
+             as the fmt printer writes it, like any declaration. *)
+          match Analysis_ext.named_at file off with
+          | Some (code, sp) ->
+              Some (mk_hover ~markdown ~text ~code ~prose:None sp)
           | None -> (
               match
                 List.find_opt
-                  (fun (t : Ast.trait) -> contains t.Ast.tspan off)
-                  (file_traits file)
+                  (fun (_n, sp) -> contains sp off)
+                  (file_ty_refs file)
               with
-              | Some t -> trait_hover ~markdown ~text t
-              | None -> token_hover ~markdown ~text off)))
+              | Some (name, sp) -> (
+                  match find_decl file name with
+                  | Some d -> Some (decl_hover ~markdown ~text d sp)
+                  | None ->
+                      Some (mk_hover ~markdown ~text ~code:name ~prose:None sp))
+              | None -> (
+                  match ext_word_hover ~markdown ~text off with
+                  | Some h -> Some h
+                  | None -> (
+                      match
+                        List.find_opt
+                          (fun (t : Ast.trait) -> contains t.Ast.tspan off)
+                          (file_traits file)
+                      with
+                      | Some t -> trait_hover ~markdown ~text t
+                      | None -> token_hover ~markdown ~text off)))))
 
 let definition_at ~(uri : DocumentUri.t) ~(text : string) ~(file : Ast.file)
     (pos : Position.t) : Location.t option =
@@ -427,6 +449,34 @@ let ext_kind_items : CompletionItem.t list =
       ("constraint", "bespoke constraint");
       ("impl", "bespoke operation implementation");
     ]
+
+(* The words of an ext library block, offered by frame: what may open a
+   declaration in an ext body, the fields (as `word:`) and markers of a
+   language block, the lone `extern` of a handle body. The prose is the
+   hover's, so the two never drift. *)
+let ext_word_item ?(suffix = "") (word : string) : CompletionItem.t =
+  let documentation =
+    Option.map (fun d -> `String d) (Hover_docs.construct_doc word)
+  in
+  CompletionItem.create ~label:word ~kind:CompletionItemKind.Keyword
+    ~detail:"ext block" ~insertText:(word ^ suffix) ?documentation ()
+
+let ext_frame_items (frame : Analysis_ext.frame) : CompletionItem.t list option
+    =
+  let open Analysis_ext in
+  match frame with
+  | Ext ->
+      Some
+        (List.map ext_word_item
+           ("struct" :: Tono_frontend.Ext_lib_vocab.block_words))
+  | Type -> Some [ ext_word_item "extern" ]
+  | Lang ->
+      Some
+        (List.map
+           (ext_word_item ~suffix:": ")
+           Tono_frontend.Ext_lib_vocab.lang_fields
+        @ List.map ext_word_item Tono_frontend.Ext_lib_vocab.lang_markers)
+  | Extern | Other -> None
 
 (* The @str:: catalog, offered after the separator. *)
 let str_catalog_items : CompletionItem.t list =
@@ -549,6 +599,24 @@ let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
     && before.[n - 1] = '.'
     && (n = 1 || not (is_ident_char before.[n - 2]))
   in
+  (* `ns.` right after an identifier: a call site naming an ext's externs or a
+     handle field's methods. Anything else after such a dot is a path or a
+     module qualifier and gets no list. *)
+  let call_ns =
+    let n = String.length before in
+    if n > 1 && before.[n - 1] = '.' && is_ident_char before.[n - 2] then
+      let rec back i =
+        if i > 0 && is_ident_char before.[i - 1] then back (i - 1) else i
+      in
+      Some (String.sub before (back (n - 1)) (n - 1 - back (n - 1)))
+    else None
+  in
+  let ext_frame =
+    match call_ns with
+    | Some _ -> None
+    | None ->
+        ext_frame_items (Analysis_ext.frame_at (fst (Lexer.tokenize text)) off)
+  in
   let type_context =
     if unclosed_parens > 0 then not (String.contains before '@')
     else
@@ -557,10 +625,15 @@ let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
   in
   if catalog_context then str_catalog_items
   else if after_at then trait_items
+  else if Option.is_some call_ns then
+    Analysis_ext.call_items
+      ~fields:(enclosing_fields file off)
+      file (Option.get call_ns)
   else if ext_kind_context then ext_kind_items
   else if impl_context then entry_op_items file
   else if ref_context then field_items file off
   else if type_context then (keyword_item "map" :: prim_items) @ decl_items file
+  else if Option.is_some ext_frame then Option.get ext_frame
   else
     (* Keywords only where a declaration can begin: a blank prefix offers the
        starters, a lone `pub` offers what may follow it. Anywhere else they
@@ -663,7 +736,9 @@ let member_symbols ~(text : string) (d : Ast.decl) : DocumentSymbol.t list =
           leaf ~text ~kind:SymbolKind.EnumMember ~name:v.Ast.vname
             ~span:v.vname_span)
         variants
-  | Ast.DOp _ | Ast.DExt _ | Ast.DExtLib _ | Ast.DTest _ -> []
+  | Ast.DExtLib { body; _ } ->
+      Analysis_ext.symbols ~range:(range_of_span ~text) body
+  | Ast.DOp _ | Ast.DExt _ | Ast.DTest _ -> []
 
 let decl_symbol_kind (d : Ast.decl) : SymbolKind.t =
   match d.dkind with
