@@ -16,3 +16,9 @@ val print_trait : Ast.trait -> string
    member exactly as `tono fmt` writes it. *)
 val print_member : Ast.member -> string
 val print_file : Ast.file -> string
+
+(* One extern declaration (a free function or an opaque handle's method) and
+   one opaque handle, each with its language blocks, as written inside an
+   ext body at [indent]. Exposed so tooling renders them as `tono fmt` does. *)
+val print_extern : indent:string -> Ast.extern_decl -> string
+val print_opaque_type : indent:string -> Ast.opaque_type -> string

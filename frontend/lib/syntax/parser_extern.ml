@@ -342,7 +342,9 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
         infallible := true;
         go ()
     | _ ->
-        P.error st (P.peek st).span "unexpected token in a language block";
+        P.error st (P.peek st).span
+          (Printf.sprintf "unexpected token in a language block: expected %s"
+             (Ext_lib_vocab.quoted Ext_lib_vocab.lang_body_words));
         ignore (P.advance st);
         go ()
   in
@@ -514,7 +516,11 @@ let parse_ext_lib_body ~parse_type ~parse_type_no_error st : Ast.ext_lib_body =
         langs := parse_lang_path st :: !langs;
         go ()
     | _ ->
-        P.error st (P.peek st).span "unexpected token in an ext block";
+        P.error st (P.peek st).span
+          (Printf.sprintf
+             "unexpected token in an ext block: expected a language path, \
+              'struct', or %s"
+             (Ext_lib_vocab.quoted Ext_lib_vocab.block_words));
         ignore (P.advance st);
         go ()
   in

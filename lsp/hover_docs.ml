@@ -3,14 +3,17 @@
    [Analysis], which decides *where* the cursor is; this module holds no
    position logic and never touches a span.
 
-   Every enumerated vocabulary here is rendered from the checker that enforces
-   it (hook slots, the @str:: catalog, the value sources), so the editor can
-   never explain a form the compiler does not accept. *)
+   Every enumerated vocabulary here is rendered from the checker or grammar
+   that enforces it (the @str:: catalog, the value sources, the ext block's
+   words), so the editor can never explain a form the compiler does not
+   accept. *)
 
 module Ast = Tono_frontend.Ast
 module Check_ext = Tono_frontend.Check_ext
 module Check_entries = Tono_frontend.Check_entries
 module Entry_scope = Tono_frontend.Entry_scope
+module Ext_lib_vocab = Tono_frontend.Ext_lib_vocab
+module Check_request_value = Tono_frontend.Check_request_value
 
 (* The trait contracts surfaced on hover, offered after `@`, and expanded by
    signature help: one table, three consumers, so the documented keys can
@@ -248,6 +251,63 @@ let trait_docs : (string * string) list =
     (fun (name, i) -> (name, trait_doc_text i))
     (trait_registry @ str_catalog)
 
+(* The "ext" library block: the contextual words the parser recognizes by
+   position ([Ext_lib_vocab]), each with its contract. Consumed by hover and
+   by completion inside a block, and checked against the vocabulary by
+   [ext_lib_docs_cover_the_grammar]. The `.request` entry renders where the
+   reference is legal from the checker that enforces it, so the two never
+   disagree. *)
+let ext_lib_docs : (string * string) list =
+  [
+    ( "extern",
+      "A foreign function the SDK calls: a tono-facing signature (typed \
+       parameters and a return type) plus one language block per target, each \
+       declaring the real call and how its result becomes the declared return. \
+       Free in an ext body, or a method inside a 'type' handle." );
+    ( "type",
+      "An opaque foreign handle: a value the library returns and the SDK only \
+       passes back to it. Its members are extern methods; it never serializes \
+       and never crosses the wire." );
+    ( "call",
+      "The foreign symbol and the argument order it takes, e.g. call: \
+       \"Load\"(service, region). Arguments are the extern's parameters, \
+       literals, or a foreign struct literal. Required in every language \
+       block." );
+    ( "yields",
+      "Names what the call returns, position by position, so returns: can \
+       project from it (e.g. yields: (cfg: go_config)). Also declares \
+       positions outside the target's convention; the reserved '"
+      ^ Ext_lib_vocab.error_sentinel
+      ^ "' type marks the error position, at most once. Omit it when the \
+         result already is the declared return type." );
+    ( "returns",
+      "Builds the extern's declared return type from the yields: names, as \
+       every struct literal does: returns: app_config { endpoint: .cfg.Host }. \
+       A field takes a reference or a match over one." );
+    ( "errors",
+      "Maps a foreign error sentinel to a declared error shape: errors: { \
+       \"ErrBusy\" => overloaded }. An unmapped failure surfaces as the \
+       generic contract error." );
+    ( "sync",
+      "The call blocks and is not awaited. Only meaningful in targets that \
+       await extern calls by default (Rust, TypeScript); Go ignores it, since \
+       every Go call is already synchronous." );
+    ( "infallible",
+      "The call returns a single value with no error position. Only meaningful \
+       in Go, whose convention makes every call (value, error); the other \
+       targets ignore it, since their error travels in the type or is thrown."
+    );
+    ( Ext_lib_vocab.request_ref,
+      Printf.sprintf
+        "The canonical request, already assembled (method, path, headers, \
+         body), read-only. Exists only as an argument to an extern call inside \
+         %s; nowhere else, since there the request is not built yet (not in \
+         construction, not in @http, @query, @timeout, or @retry)."
+        (String.concat "/"
+           (List.map (fun t -> "@" ^ t) Check_request_value.request_trait_names))
+    );
+  ]
+
 (* Construct hover texts. *)
 let construct_doc (word : string) : string option =
   match word with
@@ -274,9 +334,11 @@ let construct_doc (word : string) : string option =
       Some "Brings another module's declarations into dot-qualified scope."
   | "ext" ->
       Some
-        "A bespoke extension point (contract, constraint, or impl), bound per \
-         language to a file#symbol reference. Libraries are integrated \
-         declaratively instead, via 'ext <lib> { extern ... }'."
+        "Two forms. 'ext <lib> { ... }' integrates a third-party library \
+         declaratively: the module path per language, its foreign shapes, and \
+         the extern functions and opaque handles that call into it. 'ext \
+         contract|constraint|impl' declares a bespoke extension point bound \
+         per language to a file#symbol reference."
   | "contract" ->
       Some
         "A bespoke function with a typed signature; emission is gated on a \
@@ -320,7 +382,7 @@ let construct_doc (word : string) : string option =
             comparators, no expressions."
            (String.concat "/"
               (List.map (fun s -> "@" ^ s) Entry_scope.source_names)))
-  | _ -> None
+  | w -> List.assoc_opt w ext_lib_docs
 
 (* Primitive and marker hover: the wire decisions that most surprise SDK
    consumers belong right under the cursor. *)
