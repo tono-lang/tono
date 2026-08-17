@@ -442,15 +442,22 @@ let check_instance_collisions (decls : Ast.decl list) : Diagnostic.t list =
               match t.Ast.opq_instance with
               | None -> None
               | Some i ->
+                  (* Keyed by the declaring "ext" too: the foreign name is
+                     the library's own, not the user's, so two different
+                     libraries that each export a "Source" are not the same
+                     instantiation and must not collide. *)
                   let key =
-                    (i.Ast.oi_foreign_name, Printer.print_ty i.Ast.oi_arg)
+                    ( d.Ast.dname,
+                      i.Ast.oi_foreign_name,
+                      Printer.print_ty i.Ast.oi_arg )
                   in
                   if Hashtbl.mem seen key then
+                    let _, foreign_name, arg = key in
                     Some
                       (err Error_codes.instance_duplicate i.Ast.oi_span
-                         "the instantiation of '%s' with '%s' is already \
+                         "the instantiation of '%s.%s' with '%s' is already \
                           declared elsewhere in this module"
-                         i.Ast.oi_foreign_name (snd key))
+                         d.Ast.dname foreign_name arg)
                   else (
                     Hashtbl.add seen key ();
                     None))

@@ -471,6 +471,23 @@ let parse_opaque_instance ~parse_type st : Ast.opaque_instance =
   let arg_span_start = (P.peek st).span in
   let arg = parse_type st in
   let close = P.expect st Token.RParen "')' to close the instantiation" in
+  (* An instantiation names exactly one foreign name and one type argument;
+     a second argument (or any other stray token) is not a distinct error
+     per token, so skip to the close paren or the type body instead of
+     cascading into "expected '{' to open the type body" and then "a type
+     body may only contain 'extern' methods" once per leftover token. *)
+  (match close with
+  | Some _ -> ()
+  | None ->
+      let rec skip () =
+        match (P.peek st).kind with
+        | Token.RParen -> ignore (P.advance st)
+        | Token.LBrace | Token.RBrace | Token.Eof -> ()
+        | _ ->
+            ignore (P.advance st);
+            skip ()
+      in
+      skip ());
   {
     Ast.oi_foreign_name = foreign_name;
     oi_foreign_span = nt.span;

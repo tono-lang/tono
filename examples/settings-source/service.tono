@@ -6,8 +6,8 @@
 ext settingskit {
   go: "github.com/example/settingskit"
 
-  type env_source("Source", settings) {
-    extern get(): settings {
+  type env_source("Source", app_settings) {
+    extern get(): app_settings {
       go { call: "Get"() }
     }
   }
@@ -17,7 +17,7 @@ ext settingskit {
   }
 }
 
-struct settings {
+struct app_settings {
   endpoint: string
   token: string
 }
@@ -29,6 +29,6 @@ pub struct client {
 
   source: settingskit.env_source @with = settingskit.new_env_source(.service, .region)
 
-  op ping(): settings
+  op ping(): app_settings
     impl .source.get()
 }

@@ -429,6 +429,27 @@ let opaque_type_instance_missing_paren () =
          type source("Source", settings { extern get(): settings { go { call: "Get"() } } }
        }|})
 
+(* An instantiation names exactly one argument; a second one is diagnosed
+   once, at the stray comma, not cascaded into a diagnostic per leftover
+   token (the recovery skips to the close paren instead of falling through
+   into "expected '{' to open the type body"). *)
+let opaque_type_instance_extra_argument () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go: "example.com/mylib"
+         type source("Source", settings, flags) {
+           extern get(): settings { go { call: "Get"() } }
+         }
+       }
+       struct settings { endpoint: string }
+       struct flags { enabled: bool }|}
+  in
+  Alcotest.(check int) "one diagnostic, not a cascade" 1 (List.length ds);
+  Alcotest.(check bool)
+    "names the close paren" true
+    (has_message ~sub:"')' to close the instantiation" ds)
+
 let ext_lib_body_junk () =
   nonempty "junk directly in an ext lib body" (file_diags {|ext mylib { @ }|})
 
@@ -539,6 +560,8 @@ let () =
             opaque_type_instance_missing_comma;
           Alcotest.test_case "instance missing paren" `Quick
             opaque_type_instance_missing_paren;
+          Alcotest.test_case "instance extra argument" `Quick
+            opaque_type_instance_extra_argument;
         ] );
       ( "ext lib",
         [
