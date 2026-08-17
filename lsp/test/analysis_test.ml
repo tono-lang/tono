@@ -87,11 +87,50 @@ let hover_decl () =
     "prints the full declaration" true
     (contains v "struct point {")
 
+(* Line 3: "  e: string = match .by_segment[.seg] { null => \"x\" _ => ._ }". *)
+let map_index_match =
+  "pub struct client {\n\
+  \  by_segment: map[string]string @env(\"BS\")\n\
+  \  seg: string @env(\"SEG\")\n\
+  \  e: string = match .by_segment[.seg] { null => \"x\" _ => ._ }\n\
+   }"
+
+let hover_map_index_key () =
+  let v = hover_value map_index_match (pos 3 33) in
+  Alcotest.(check bool)
+    "names the map-indexed subject" true
+    (contains v ".by_segment[.seg]")
+
+let hover_null_arm () =
+  let v = hover_value map_index_match (pos 3 41) in
+  Alcotest.(check bool)
+    "explains the absence arm" true (contains v "absence arm")
+
+let hover_subject_ref () =
+  let v = hover_value map_index_match (pos 3 58) in
+  Alcotest.(check bool)
+    "explains '._'" true
+    (contains v "refers back to the match subject")
+
 let completion_labels (src : string) (p : Position.t) : string list =
   let file = Analysis.parse src in
   List.map
     (fun (c : CompletionItem.t) -> c.label)
     (Analysis.completions ~text:src ~file p)
+
+(* Cursor right after the "." on "_ => .", the arm value of the map-indexed
+   match's non-null arm. *)
+let map_index_arm_value_ref =
+  "pub struct client {\n\
+  \  by_segment: map[string]string @env(\"BS\")\n\
+  \  seg: string @env(\"SEG\")\n\
+  \  e: string = match .by_segment[.seg] { null => \"x\" _ => . }\n\
+   }"
+
+let completions_offer_subject_ref_in_an_indexed_arm () =
+  let labels = completion_labels map_index_arm_value_ref (pos 3 58) in
+  Alcotest.(check bool)
+    "'_' offered alongside sibling fields" true (List.mem "_" labels)
 
 let completions_list () =
   let labels = completion_labels two_shapes (pos 0 0) in
@@ -498,9 +537,14 @@ let () =
           Alcotest.test_case "definition resolves" `Quick definition_resolves;
           Alcotest.test_case "definition miss" `Quick definition_miss;
           Alcotest.test_case "hover decl" `Quick hover_decl;
+          Alcotest.test_case "hover map index key" `Quick hover_map_index_key;
+          Alcotest.test_case "hover null arm" `Quick hover_null_arm;
+          Alcotest.test_case "hover subject ref" `Quick hover_subject_ref;
           Alcotest.test_case "completions" `Quick completions_list;
           Alcotest.test_case "completion keywords" `Quick
             completions_offer_declaration_keywords;
+          Alcotest.test_case "completion subject ref in indexed arm" `Quick
+            completions_offer_subject_ref_in_an_indexed_arm;
           Alcotest.test_case "offset roundtrip" `Quick offset_roundtrip;
         ] );
       ( "workspace",
