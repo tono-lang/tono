@@ -83,7 +83,7 @@ pub(super) fn ext_swap_fn_name(n: &Names, field: &EntryField) -> String {
     )
 }
 
-fn json_literal(v: &serde_json::Value) -> String {
+pub(super) fn json_literal(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
@@ -118,7 +118,7 @@ fn json_literal(v: &serde_json::Value) -> String {
 /// with an empty `(params, site_args)`, so a stray `Param` inside it (which
 /// the grammar never produces) fails loudly instead of silently matching the
 /// outer template's parameters.
-fn render_arg(
+pub(super) fn render_arg(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
     arg: &CallArg,
@@ -168,7 +168,7 @@ fn render_arg(
 /// call's raw result: the head (the `yields:` position name itself) becomes
 /// `raw`, the rest stays verbatim (a foreign struct's own field names, never
 /// cased).
-fn foreign_path_expr(yields_name: &str, path: &[String]) -> String {
+pub(super) fn foreign_path_expr(yields_name: &str, path: &[String]) -> String {
     let (head, rest) = path
         .split_first()
         .unwrap_or_else(|| panic!("a returns: value has no path segments"));
@@ -183,7 +183,7 @@ fn foreign_path_expr(yields_name: &str, path: &[String]) -> String {
     }
 }
 
-fn arm_value_expr(yields_name: &str, value: &ArmValue) -> String {
+pub(super) fn arm_value_expr(yields_name: &str, value: &ArmValue) -> String {
     match value {
         ArmValue::Field(path) => foreign_path_expr(yields_name, path),
         ArmValue::Lit(v) => json_literal(v),
@@ -205,7 +205,7 @@ fn arm_value_expr(yields_name: &str, value: &ArmValue) -> String {
 /// statement-level `switch` (`plan::Stmt::Switch`) does elsewhere in this
 /// target. The subject and every arm read off the same awaited raw result
 /// `returns:`'s bare-field case does.
-fn select_expr(yields_name: &str, select: &Select) -> String {
+pub(super) fn select_expr(yields_name: &str, select: &Select) -> String {
     let subject = foreign_path_expr(yields_name, &select.subject);
     let mut arms = String::new();
     for arm in &select.arms {
@@ -222,7 +222,7 @@ fn select_expr(yields_name: &str, select: &Select) -> String {
 }
 
 /// A `returns:` field's value, projected off the single bound `yields` name.
-fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> String {
+pub(super) fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> String {
     match value {
         ReturnsValue::Field(path) => foreign_path_expr(yields_name, path),
         ReturnsValue::Select(select) => select_expr(yields_name, select),

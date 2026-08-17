@@ -381,6 +381,7 @@ fn methods_block(
     bound: &[BoundExtension<'_>],
     timeout_field_by_path: &BTreeMap<String, String>,
     refs: &mut Vec<Symbol>,
+    helpers: &mut Helpers,
 ) -> String {
     // The already-converted, already-validated millisecond value for a
     // `@timeout` field path, read off its private field rather than
@@ -398,6 +399,7 @@ fn methods_block(
             bound,
             &timeout_field_expr,
             refs,
+            helpers,
         ));
         methods.push('\n');
     }
@@ -605,6 +607,7 @@ pub(super) fn class_decl(
         bound,
         &timeouts.by_path,
         &mut refs,
+        helpers,
     );
     let for_test = for_test_block(n, entry, &args, &params, is_async, has_tests, &mut refs);
 

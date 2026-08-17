@@ -347,6 +347,211 @@ fn appendix_model() -> Model {
     }
 }
 
+/// A worked example of an operation implemented as a call into a foreign
+/// handle's own method (`impl .bus.send(..)`), standing in for the wire
+/// protocol entirely: `notify`'s whole body is the handle call, projecting
+/// a `yields`/`returns` pair and mapping a declared sentinel, exercising
+/// both an op-input-parameter argument and a sibling-field argument.
+fn handle_call_model() -> Model {
+    let ack_t = Tref::Ref {
+        id: "hc#ack".into(),
+        args: vec![],
+    };
+    let send = ExternDecl {
+        name: "send".into(),
+        params: vec![
+            ExternParam {
+                name: "topic".into(),
+                r#type: Tref::Prim(Prim::String),
+            },
+            ExternParam {
+                name: "body".into(),
+                r#type: Tref::Prim(Prim::String),
+            },
+        ],
+        r#return: ack_t.clone(),
+        langs: vec![ExternLang {
+            lang: "ts".into(),
+            symbol: "send".into(),
+            call_args: vec![
+                CallArg::Param("topic".into()),
+                CallArg::Param("body".into()),
+            ],
+            yields: vec![YieldsPos {
+                name: "ack".into(),
+                r#type: Some(Tref::Ref {
+                    id: "companybus#raw_ack".into(),
+                    args: vec![],
+                }),
+                is_error: false,
+            }],
+            returns: Some(ReturnsLit {
+                r#type: ack_t.clone(),
+                fields: vec![ReturnsField {
+                    name: "ok".into(),
+                    value: ReturnsValue::Field(vec!["ack".into(), "ok".into()]),
+                }],
+            }),
+            errors: vec![tono_backend::ir::ErrorBinding {
+                sentinel: "BUSY".into(),
+                r#type: "overloaded".into(),
+            }],
+            sync: false,
+            infallible: false,
+            ctx: false,
+        }],
+    };
+    let companybus = ExtLib {
+        name: "companybus".into(),
+        langs: vec![LangPath {
+            lang: "ts".into(),
+            path: "@company/bus".into(),
+        }],
+        structs: vec![ForeignStruct {
+            name: "raw_ack".into(),
+            fields: vec![tono_backend::ir::ForeignField {
+                name: "ok".into(),
+                r#type: Tref::Prim(Prim::Bool),
+            }],
+        }],
+        types: vec![OpaqueType {
+            name: "publisher".into(),
+            instance: None,
+            methods: vec![send],
+        }],
+        externs: vec![ExternDecl {
+            name: "connect".into(),
+            params: vec![
+                ExternParam {
+                    name: "endpoint".into(),
+                    r#type: Tref::Prim(Prim::String),
+                },
+                ExternParam {
+                    name: "token".into(),
+                    r#type: Tref::Prim(Prim::String),
+                },
+            ],
+            r#return: Tref::Ref {
+                id: "companybus#publisher".into(),
+                args: vec![],
+            },
+            langs: vec![ExternLang {
+                lang: "ts".into(),
+                symbol: "connect".into(),
+                call_args: vec![
+                    CallArg::Param("endpoint".into()),
+                    CallArg::Param("token".into()),
+                ],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: false,
+                infallible: false,
+                ctx: false,
+            }],
+        }],
+    };
+
+    let endpoint = ef(
+        "endpoint",
+        Tref::Prim(Prim::String),
+        vec![Source::Arg],
+        None,
+    );
+    let token = ef("token", Tref::Prim(Prim::String), vec![Source::Arg], None);
+    let topic = ef("topic", Tref::Prim(Prim::String), vec![Source::Arg], None);
+    let mut bus = ef(
+        "bus",
+        Tref::Ref {
+            id: "companybus#publisher".into(),
+            args: vec![],
+        },
+        vec![Source::With],
+        Some(EntryCall {
+            ns: "companybus".into(),
+            func: "connect".into(),
+            args: vec![
+                CallArg::Ref(vec!["endpoint".into()]),
+                CallArg::Ref(vec!["token".into()]),
+            ],
+        }),
+    );
+    bus.sources = vec![Source::With];
+
+    let ack_shape = Shape {
+        id: "hc#ack".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![tono_backend::ir::Member {
+                name: "ok".into(),
+                target: Tref::Prim(Prim::Bool),
+                required: true,
+                default: None,
+                constraints: vec![],
+                traits: vec![],
+            }],
+        },
+        traits: vec![],
+    };
+    let notify_input = Shape {
+        id: "hc#notify_input".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![tono_backend::ir::Member {
+                name: "body".into(),
+                target: Tref::Prim(Prim::String),
+                required: true,
+                default: None,
+                constraints: vec![],
+                traits: vec![],
+            }],
+        },
+        traits: vec![],
+    };
+    let notify = Shape {
+        id: "hc#client.notify".into(),
+        kind: ShapeKind::Operation {
+            input: Some(Tref::Ref {
+                id: "hc#notify_input".into(),
+                args: vec![],
+            }),
+            input_name: Some("msg".into()),
+            output: Some(ack_t),
+            errors: vec![],
+            wire: None,
+            impl_call: Some(tono_backend::ir::OpImplCall {
+                recv: vec!["bus".into()],
+                method: "send".into(),
+                args: vec![
+                    CallArg::Ref(vec!["topic".into()]),
+                    CallArg::Ref(vec!["msg".into(), "body".into()]),
+                ],
+            }),
+        },
+        traits: vec![],
+    };
+    let client = Shape {
+        id: "hc#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![endpoint, token, topic, bus],
+            operations: vec![notify],
+        },
+        traits: vec![],
+    };
+    let module = Module {
+        tests: vec![],
+        name: "hc".into(),
+        shapes: vec![ack_shape, notify_input, client],
+        operations: vec![],
+        extensions: vec![],
+        ext_libs: vec![companybus],
+    };
+    Model {
+        tono_ir_version: TONO_IR_VERSION,
+        modules: vec![module],
+    }
+}
+
 /// Generate the model for TypeScript, prettier-format every file (falling
 /// back to the raw text when prettier is not installed, same as the CLI
 /// does), and write it under `codegen-tests/ts-ext/sdk/`, alongside a
@@ -411,6 +616,32 @@ fn the_rfc_appendix_generates_typescript_that_compiles_against_the_real_librarie
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = write_sdk(&appendix_model());
+    let build = Command::new("tsc")
+        .arg("-p")
+        .arg("tsconfig.json")
+        .current_dir(&dir)
+        .output()
+        .expect("run tsc");
+    assert!(
+        build.status.success(),
+        "generated TypeScript failed to type-check:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+#[test]
+fn an_op_implemented_as_a_handle_method_call_compiles_against_the_real_library() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test ts_ext_roundtrip`");
+        return;
+    }
+    if !have("tsc", "--version") {
+        eprintln!("skipping: TypeScript toolchain (tsc) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk(&handle_call_model());
     let build = Command::new("tsc")
         .arg("-p")
         .arg("tsconfig.json")
