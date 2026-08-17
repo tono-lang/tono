@@ -1,8 +1,5 @@
+use super::super::test_prelude::*;
 use super::*;
-use crate::codegen::targets::typescript::entry::emit;
-use crate::codegen::targets::typescript::types::ts_casing;
-use crate::codegen::targets::typescript::TsRules;
-use crate::codegen::test_support::{member, rendered, structure};
 use crate::ir::{
     ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExtLib, ExternDecl,
     ExternLang as IrExternLang, ForeignField, ForeignStruct, LangPath, OpImplCall, OpaqueType,

@@ -470,6 +470,8 @@ mod resolve;
 mod resolve_wire_call;
 mod surface;
 #[cfg(test)]
+mod test_prelude;
+#[cfg(test)]
 mod tests;
 pub(crate) mod transport;
 pub(crate) mod transport_decls;
