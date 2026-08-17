@@ -17,12 +17,13 @@ use std::sync::Mutex;
 
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
+use tono_backend::codegen::targets::typescript::entry::ext_fixtures::ef;
 use tono_backend::codegen::targets::typescript::types::ts_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
 use tono_backend::ir::{
-    CallArg, CallCtor, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam,
-    ForeignField, ForeignStruct, LangPath, Model, Module, OpaqueType, Prim, ReturnsField,
-    ReturnsLit, ReturnsValue, Shape, ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
+    CallArg, CallCtor, EntryCall, ExtLib, ExternDecl, ExternLang, ExternParam, ForeignField,
+    ForeignStruct, LangPath, Model, Module, OpaqueType, Prim, ReturnsField, ReturnsLit,
+    ReturnsValue, Shape, ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
 };
 
 /// Both tests write into the same `codegen-tests/ts-ext/` tree (the sdk
@@ -40,21 +41,6 @@ fn have(tool: &str, probe: &str) -> bool {
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests/ts-ext")
-}
-
-fn ef(name: &str, target: Tref, sources: Vec<Source>, call: Option<EntryCall>) -> EntryField {
-    EntryField {
-        name: name.into(),
-        target,
-        sources,
-        format: None,
-        transforms: vec![],
-        select: None,
-        call,
-        binds: vec![],
-        constraints: vec![],
-        traits: vec![],
-    }
 }
 
 fn string_field(name: &str) -> ForeignField {
@@ -357,50 +343,10 @@ fn handle_call_model() -> Model {
         id: "hc#ack".into(),
         args: vec![],
     };
-    let send = ExternDecl {
-        name: "send".into(),
-        params: vec![
-            ExternParam {
-                name: "topic".into(),
-                r#type: Tref::Prim(Prim::String),
-            },
-            ExternParam {
-                name: "body".into(),
-                r#type: Tref::Prim(Prim::String),
-            },
-        ],
-        r#return: ack_t.clone(),
-        langs: vec![ExternLang {
-            lang: "ts".into(),
-            symbol: "send".into(),
-            call_args: vec![
-                CallArg::Param("topic".into()),
-                CallArg::Param("body".into()),
-            ],
-            yields: vec![YieldsPos {
-                name: "ack".into(),
-                r#type: Some(Tref::Ref {
-                    id: "companybus#raw_ack".into(),
-                    args: vec![],
-                }),
-                is_error: false,
-            }],
-            returns: Some(ReturnsLit {
-                r#type: ack_t.clone(),
-                fields: vec![ReturnsField {
-                    name: "ok".into(),
-                    value: ReturnsValue::Field(vec!["ack".into(), "ok".into()]),
-                }],
-            }),
-            errors: vec![tono_backend::ir::ErrorBinding {
-                sentinel: "BUSY".into(),
-                r#type: "overloaded".into(),
-            }],
-            sync: false,
-            infallible: false,
-            ctx: false,
-        }],
-    };
+    let send = tono_backend::codegen::targets::typescript::entry::ext_fixtures::send_method(
+        "hc#ack",
+        "companybus#raw_ack",
+    );
     let companybus = ExtLib {
         name: "companybus".into(),
         langs: vec![LangPath {

@@ -463,6 +463,7 @@ mod checks;
 mod class;
 mod decode;
 mod ext_call;
+pub mod ext_fixtures;
 mod ext_handle_call;
 mod impl_op;
 mod resolve;

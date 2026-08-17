@@ -8,7 +8,7 @@
 //! extern-fn call must happen at this call site instead of once behind an
 //! interface. This module shares that machinery (`ext_call::render_arg`,
 //! `foreign_path_expr`, `arm_value_expr`, `select_expr`,
-//! `returns_value_expr`, `sentinel_error_class`) and only replaces the
+//! `returns_value_expr`, `sentinel_switch`) and only replaces the
 //! invocation target: a method call on the (narrowed) handle value instead
 //! of an imported free function.
 //!
@@ -30,7 +30,7 @@ use crate::codegen::symbol::Symbol;
 use crate::ir::{ExternLang, ExternParam, Module, OpImplCall};
 
 use super::checks::field_path_expr;
-use super::ext_call::{render_arg, returns_value_expr, sentinel_error_class};
+use super::ext_call::{render_arg, returns_value_expr, sentinel_switch};
 use super::module_symbol;
 use std::collections::BTreeSet;
 
@@ -156,22 +156,7 @@ pub(super) fn impl_call_body(
         }
     };
 
-    let mut cases = String::new();
-    for eb in &lang.errors {
-        let class_name = sentinel_error_class(&eb.r#type);
-        sentinel_types.insert(eb.r#type.clone());
-        refs.push(module_symbol(&class_name, module));
-        cases.push_str(&format!(
-            "      case {sentinel:?}: {throw}\n",
-            sentinel = eb.sentinel,
-            throw = throw(format!("new {class_name}(e)")),
-        ));
-    }
-    let switch = if cases.is_empty() {
-        String::new()
-    } else {
-        format!("  switch (e instanceof Error ? e.message : String(e)) {{\n{cases}  }}\n",)
-    };
+    let switch = sentinel_switch(&lang.errors, module, refs, sentinel_types, throw);
 
     let en = error_names();
     format!(

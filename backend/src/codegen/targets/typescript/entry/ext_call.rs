@@ -354,27 +354,49 @@ fn call_body(
         }
     };
 
-    let mut cases = String::new();
-    for eb in &lang.errors {
-        let class_name = sentinel_error_class(&eb.r#type);
-        sentinel_types.insert(eb.r#type.clone());
-        refs.push(module_symbol(&class_name, module));
-        cases.push_str(&format!(
-            "      case {sentinel:?}: throw new {class_name}(e);\n",
-            sentinel = eb.sentinel,
-        ));
-    }
-    let switch = if cases.is_empty() {
-        String::new()
-    } else {
-        format!("  switch (e instanceof Error ? e.message : String(e)) {{\n{cases}  }}\n",)
-    };
+    let switch = sentinel_switch(&lang.errors, module, refs, sentinel_types, &|expr| {
+        format!("throw {expr};")
+    });
 
     format!(
         "try {{\n  const raw = await {symbol}({args});\n  {assign}\n}} catch (e) {{\n{switch}  throw new {contract}({call_name:?}, e);\n}}",
         symbol = lang.symbol,
         contract = error_names().contract,
     )
+}
+
+/// The `catch (e) { switch (...) { ... } }` block mapping every declared
+/// sentinel to its typed error class, shared by a free extern-fn call's own
+/// seam ([`call_body`]) and an op's own handle-method call
+/// (`ext_handle_call::impl_call_body`): identical shape, the only
+/// difference being how the caller wants a matched case to exit (`throw`
+/// here, `throw` there too but composed with the caller's own `throw`
+/// closure so the caller's overall statement style stays in one place).
+/// Empty when `errors` is empty, so a call with no declared sentinel adds no
+/// dead `switch`.
+pub(super) fn sentinel_switch(
+    errors: &[crate::ir::ErrorBinding],
+    module: &Module,
+    refs: &mut Vec<Symbol>,
+    sentinel_types: &mut BTreeSet<String>,
+    throw: &dyn Fn(String) -> String,
+) -> String {
+    let mut cases = String::new();
+    for eb in errors {
+        let class_name = sentinel_error_class(&eb.r#type);
+        sentinel_types.insert(eb.r#type.clone());
+        refs.push(module_symbol(&class_name, module));
+        cases.push_str(&format!(
+            "      case {sentinel:?}: {t}\n",
+            sentinel = eb.sentinel,
+            t = throw(format!("new {class_name}(e)")),
+        ));
+    }
+    if cases.is_empty() {
+        String::new()
+    } else {
+        format!("  switch (e instanceof Error ? e.message : String(e)) {{\n{cases}  }}\n")
+    }
 }
 
 /// The per-field seam bindings of an entry's extern-call fields: one mutable

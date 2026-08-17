@@ -9,20 +9,7 @@ use crate::ir::{
 };
 use std::collections::BTreeMap;
 
-fn ef(name: &str, target: Tref, sources: Vec<Source>, call: Option<EntryCall>) -> EntryField {
-    EntryField {
-        name: name.into(),
-        target,
-        sources,
-        format: None,
-        transforms: vec![],
-        select: None,
-        call,
-        binds: vec![],
-        constraints: vec![],
-        traits: vec![],
-    }
-}
+use super::super::ext_fixtures::ef;
 
 /// A single-language (`ts`) module path, the shape every `ExtLib` in this
 /// file declares.

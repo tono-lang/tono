@@ -10,20 +10,7 @@ use crate::ir::{
     Tref, YieldsPos,
 };
 
-fn ef(name: &str, target: Tref, sources: Vec<Source>, call: Option<EntryCall>) -> EntryField {
-    EntryField {
-        name: name.into(),
-        target,
-        sources,
-        format: None,
-        transforms: vec![],
-        select: None,
-        call,
-        binds: vec![],
-        constraints: vec![],
-        traits: vec![],
-    }
-}
+use super::super::ext_fixtures::ef;
 
 fn string_param(name: &str) -> ExternParam {
     ExternParam {
@@ -44,49 +31,11 @@ fn string_field(name: &str) -> ForeignField {
 /// `ping` is a bare pass-through (no `yields`), `status` projects through a
 /// `match`.
 fn bus_lib() -> ExtLib {
-    let ack_t = Tref::Ref {
-        id: "m#ack".into(),
-        args: vec![],
-    };
     let status_t = Tref::Ref {
         id: "m#status".into(),
         args: vec![],
     };
-    let send = ExternDecl {
-        name: "send".into(),
-        params: vec![string_param("topic"), string_param("body")],
-        r#return: ack_t.clone(),
-        langs: vec![IrExternLang {
-            lang: "ts".into(),
-            symbol: "send".into(),
-            call_args: vec![
-                CallArg::Param("topic".into()),
-                CallArg::Param("body".into()),
-            ],
-            yields: vec![YieldsPos {
-                name: "ack".into(),
-                r#type: Some(Tref::Ref {
-                    id: "bus#raw_ack".into(),
-                    args: vec![],
-                }),
-                is_error: false,
-            }],
-            returns: Some(ReturnsLit {
-                r#type: ack_t.clone(),
-                fields: vec![ReturnsField {
-                    name: "ok".into(),
-                    value: ReturnsValue::Field(vec!["ack".into(), "ok".into()]),
-                }],
-            }),
-            errors: vec![crate::ir::ErrorBinding {
-                sentinel: "BUSY".into(),
-                r#type: "overloaded".into(),
-            }],
-            sync: false,
-            infallible: false,
-            ctx: false,
-        }],
-    };
+    let send = super::super::ext_fixtures::send_method("m#ack", "bus#raw_ack");
     let ping = ExternDecl {
         name: "ping".into(),
         params: vec![],
