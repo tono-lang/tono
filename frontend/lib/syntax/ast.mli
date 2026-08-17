@@ -182,9 +182,18 @@ type extern_decl = {
   ed_span : Span.span;
 }
 
+type opaque_instance = {
+  oi_foreign_name : string;
+  oi_foreign_span : Span.span;
+  oi_arg : ty;
+  oi_arg_span : Span.span;
+  oi_span : Span.span;
+}
+
 type opaque_type = {
   opq_name : string;
   opq_name_span : Span.span;
+  opq_instance : opaque_instance option;
   opq_methods : extern_decl list;
   opq_span : Span.span;
 }

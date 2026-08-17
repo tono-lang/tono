@@ -229,3 +229,9 @@ let match_null_arm_not_optional = "TC0090"
    arm's value position, or inside the "null" arm's value (where the subject
    is by definition absent, so there is nothing for "._" to name). *)
 let match_subject_ref_invalid = "TC0091"
+
+(* An opaque foreign type's instantiation clause (the foreign name plus
+   argument in "type Name(\"Foreign\", Arg) { ... }") is declared more than
+   once with the same foreign name and argument, across a module's "ext"
+   library blocks. *)
+let instance_duplicate = "TC0092"

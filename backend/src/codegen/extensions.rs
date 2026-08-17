@@ -524,6 +524,7 @@ mod tests {
                 structs: vec![],
                 types: vec![OpaqueType {
                     name: "Publisher".into(),
+                    instance: None,
                     methods: vec![ExternDecl {
                         name: "send".into(),
                         params: vec![],

@@ -1,0 +1,34 @@
+// A third-party settings source library that is generic over the value it
+// resolves: `Source[T]` in the real Go package. The `type` declaration below
+// names the instantiation (the foreign "Source" name plus the tono argument
+// it is monomorphized with), so the emitted Go names the concrete type
+// argument instead of leaving it for the compiler to infer.
+ext settingskit {
+  go: "github.com/example/settingskit"
+
+  type env_source("Source", settings) {
+    extern get(): settings {
+      go { call: "Get"() }
+    }
+  }
+
+  extern new_env_source(service: string, region: string): env_source {
+    go { call: "NewEnvSource"(service, region) }
+  }
+}
+
+struct settings {
+  endpoint: string
+  token: string
+}
+
+@doc("An SDK entry whose settings resolve from an external, generic source.")
+pub struct client {
+  service: string @env("SERVICE_NAME") @default("orders")
+  region: string @arg
+
+  source: settingskit.env_source @with = settingskit.new_env_source(.service, .region)
+
+  op ping(): settings
+    impl .source.get()
+}

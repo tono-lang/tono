@@ -4,11 +4,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const IR: &str = r#"{"tono_ir_version":20,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const IR: &str = r#"{"tono_ir_version":21,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// A contract extension with no conformance reference: the generator must refuse
 /// to emit (AC-4). Everything else is well-formed.
-const IR_UNCONFORMANT_CONTRACT: &str = r#"{"tono_ir_version":20,"modules":[{"name":"demo","shapes":[],"operations":[],"extensions":[{"name":"sign","kind":"contract","bindings":{"ts":"ext/ts/s.ts#sign"},"signature":{"input":{"prim":"string"},"output":{"prim":"string"}}}]}]}"#;
+const IR_UNCONFORMANT_CONTRACT: &str = r#"{"tono_ir_version":21,"modules":[{"name":"demo","shapes":[],"operations":[],"extensions":[{"name":"sign","kind":"contract","bindings":{"ts":"ext/ts/s.ts#sign"},"signature":{"input":{"prim":"string"},"output":{"prim":"string"}}}]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))
@@ -176,7 +176,7 @@ fn unknown_command_fails() {
 
 /// A single dotted module, so the sub-package mapping and the config hooks have
 /// something to place under a directory.
-const DOTTED_IR: &str = r#"{"tono_ir_version":20,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const DOTTED_IR: &str = r#"{"tono_ir_version":21,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// Run `tono gen` with the given extra args, feeding `DOTTED_IR` on stdin.
 fn gen_dotted(out: &Path, extra: &[&str]) {
@@ -231,7 +231,7 @@ fn gen_module_remap_rewrites_the_prefix() {
 }
 
 /// Two modules where one references the other across the boundary.
-const TWO_MODULE_IR: &str = r#"{"tono_ir_version":20,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]},{"name":"payments.charge","shapes":[{"id":"payments.charge#Charge","kind":"structure","params":[],"members":[{"name":"total","required":true,"target":{"ref":"payments.common#Money","args":[]},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const TWO_MODULE_IR: &str = r#"{"tono_ir_version":21,"modules":[{"name":"payments.common","shapes":[{"id":"payments.common#Money","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]},{"name":"payments.charge","shapes":[{"id":"payments.charge#Charge","kind":"structure","params":[],"members":[{"name":"total","required":true,"target":{"ref":"payments.common#Money","args":[]},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// Run `tono gen --target go` with the given extra args, feeding `TWO_MODULE_IR`.
 fn gen_two_module_go(out: &Path, extra: &[&str]) -> bool {
@@ -262,7 +262,7 @@ fn gen_multi_module_go_needs_a_module_path() {
 // --- manifest mode ----------------------------------------------------------
 
 /// A module with a multi-word field, so a casing override is observable.
-const CASING_IR: &str = r#"{"tono_ir_version":20,"modules":[{"name":"demo","shapes":[{"id":"demo#Event","kind":"structure","params":[],"members":[{"name":"created_at","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const CASING_IR: &str = r#"{"tono_ir_version":21,"modules":[{"name":"demo","shapes":[{"id":"demo#Event","kind":"structure","params":[],"members":[{"name":"created_at","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// Run `tono gen <extra>` from `cwd`, feeding `ir` on stdin; returns the output.
 /// The write ignores a broken pipe: a manifest error makes the CLI exit before it
@@ -642,7 +642,7 @@ fn an_unparsable_package_json_stops_generation_untouched() {
 
 /// An entry whose module declares tests inline in the IR: one hermetic test
 /// stubbing the op's http dependency and one live test with no stub.
-const IR_WITH_TESTS: &str = r#"{"tono_ir_version":20,"modules":[{"name":"demo","shapes":[{"id":"demo#client","kind":"entry","fields":[{"name":"endpoint","target":{"prim":"string"},"sources":["with",{"default":"https://example.com"}]}],"operations":[{"id":"demo#client.ping","kind":"operation","input":null,"output":{"prim":"string"},"errors":[],"traits":[],"wire":{"method":"GET","uri":{"template":[{"lit":"/ping"}]},"response_bindings":{},"success":[200],"endpoint":{"field":["endpoint"]}}}]}],"operations":[],"tests":[{"name":"answers","constructions":[{"binding":"c","entry":"client","values":{}}],"stubs":[{"binding":"s","client":"c","op":"ping","dep":"http","answers":[{"status":200,"headers":{},"body":"\"pong\""}]}],"calls":[{"binding":"got","client":"c","op":"ping"}],"expects":[{"subject":"got","pattern":{"eq":"pong"}}]},{"name":"answers for real","constructions":[{"binding":"c","entry":"client","values":{}}],"stubs":[],"calls":[{"binding":"got","client":"c","op":"ping"}],"expects":[{"subject":"got","pattern":{"eq":"pong"}}]}]}]}"#;
+const IR_WITH_TESTS: &str = r#"{"tono_ir_version":21,"modules":[{"name":"demo","shapes":[{"id":"demo#client","kind":"entry","fields":[{"name":"endpoint","target":{"prim":"string"},"sources":["with",{"default":"https://example.com"}]}],"operations":[{"id":"demo#client.ping","kind":"operation","input":null,"output":{"prim":"string"},"errors":[],"traits":[],"wire":{"method":"GET","uri":{"template":[{"lit":"/ping"}]},"response_bindings":{},"success":[200],"endpoint":{"field":["endpoint"]}}}]}],"operations":[],"tests":[{"name":"answers","constructions":[{"binding":"c","entry":"client","values":{}}],"stubs":[{"binding":"s","client":"c","op":"ping","dep":"http","answers":[{"status":200,"headers":{},"body":"\"pong\""}]}],"calls":[{"binding":"got","client":"c","op":"ping"}],"expects":[{"subject":"got","pattern":{"eq":"pong"}}]},{"name":"answers for real","constructions":[{"binding":"c","entry":"client","values":{}}],"stubs":[],"calls":[{"binding":"got","client":"c","op":"ping"}],"expects":[{"subject":"got","pattern":{"eq":"pong"}}]}]}]}"#;
 
 #[test]
 fn gen_emits_native_tests_from_declared_tests() {

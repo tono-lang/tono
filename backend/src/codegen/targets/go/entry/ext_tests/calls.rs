@@ -303,6 +303,85 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
     assert!(out.contains("s.Config = configBody"));
 }
 
+/// The RFC/ADR's motivating case: a free extern constructing an instantiated
+/// opaque handle (`NewEnvSource(...)` returning `cfgkit#source`, `source`
+/// declaring `instance: {foreign_name: "Source", arg: notes#settings}`)
+/// carries the type argument on the constructor call itself, not just on
+/// the concrete type it assigns into.
+#[test]
+fn call_assign_names_the_type_argument_on_a_generic_constructor() {
+    let lib = ExtLib {
+        name: "cfgkit".into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: "example.com/cfgkit".into(),
+        }],
+        structs: vec![],
+        types: vec![OpaqueType {
+            name: "source".into(),
+            instance: Some(Instance {
+                foreign_name: "Source".into(),
+                arg: Tref::Ref {
+                    id: "notes#settings".into(),
+                    args: vec![],
+                },
+            }),
+            methods: vec![],
+        }],
+        externs: vec![ExternDecl {
+            name: "new_env_source".into(),
+            params: vec![],
+            r#return: Tref::Ref {
+                id: "cfgkit#source".into(),
+                args: vec![],
+            },
+            langs: vec![ExternLang {
+                lang: "go".into(),
+                symbol: "NewEnvSource".into(),
+                call_args: vec![],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: false,
+                infallible: false,
+            }],
+        }],
+    };
+    let call = EntryCall {
+        ns: "cfgkit".into(),
+        func: "new_env_source".into(),
+        args: vec![],
+    };
+    let mut source_field = field(
+        "source",
+        Tref::Ref {
+            id: "cfgkit#source".into(),
+            args: vec![],
+        },
+        vec![],
+    );
+    source_field.call = Some(call.clone());
+    let mut module = bare_module();
+    module.ext_libs = vec![lib];
+    module.shapes.push(Shape {
+        id: "m#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![source_field.clone()],
+            operations: vec![],
+        },
+        traits: vec![],
+    });
+    // `call_assign` alone (unlike the full `emit` pipeline) does not resolve
+    // the argument's slot markers into their final text; strip them so this
+    // asserts the same thing `handle_go_type_spells_the_foreign_name_with_an_
+    // explicit_type_argument` above already proves for the slot form itself.
+    let out: String = call_assign_for(&module, &source_field)
+        .chars()
+        .filter(|c| *c != '\u{1}')
+        .collect();
+    assert!(out.contains("cfgkit.NewEnvSource[Settings]()"), "{out}");
+}
+
 /// A single-field entry named `bus`, targeting the declared handle, with
 /// every other field the fixture needs alongside it.
 fn module_with_bus_field(ext_libs: Vec<ExtLib>, other_fields: Vec<EntryField>) -> Module {

@@ -247,11 +247,26 @@ type extern_decl = {
   ed_span : Span.span;
 }
 
+(* [type name("ForeignName", Arg) { ... }] — declares which instantiation of
+   a foreign generic type this opaque handle names: the foreign type's own
+   name (a string, so the origin stays visible) and the tono type argument
+   it is monomorphized with. Absent for a foreign type that is not generic;
+   the handle then keeps being written as [type name { ... }] and its
+   foreign identifier is derived from [opq_name] itself, as before. *)
+type opaque_instance = {
+  oi_foreign_name : string;
+  oi_foreign_span : Span.span;
+  oi_arg : ty;
+  oi_arg_span : Span.span;
+  oi_span : Span.span;
+}
+
 (* [type name { extern ... }] — an opaque foreign handle whose only members
    are extern methods; never serializes, never crosses the wire. *)
 type opaque_type = {
   opq_name : string;
   opq_name_span : Span.span;
+  opq_instance : opaque_instance option;
   opq_methods : extern_decl list;
   opq_span : Span.span;
 }

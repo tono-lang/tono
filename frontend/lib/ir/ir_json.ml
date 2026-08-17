@@ -77,8 +77,12 @@
    existing client/op "stubs" table.
    v19 dropped the "hook" extension kind: the lifecycle it filled is gone,
    replaced entirely by the declarative "ext"/"extern" FFI model v14-v18
-   added; a hook is now rejected at typecheck and never reaches the IR. *)
-let current_ir_version = 20
+   added; a hook is now rejected at typecheck and never reaches the IR.
+   v21 added an opaque type's optional "instance": which instantiation of a
+   foreign generic type the handle names (the foreign type's own name, plus
+   the tono argument it is monomorphized with). Absent for a foreign type
+   that is not generic. *)
+let current_ir_version = 21
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

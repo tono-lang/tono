@@ -185,9 +185,33 @@ pub(super) fn foreign_handle<'a>(t: &Tref, module: &'a Module) -> Option<(&'a Ex
 /// the target compiler is expected to grade: a library whose real exported
 /// identifier differs fails `go build`, which is the intended failure mode,
 /// not a generation-time crash.
-pub(super) fn handle_go_type(lib: &ExtLib, type_name: &str) -> Option<String> {
+///
+/// A generic handle (`handle.instance` set) spells the *foreign* name
+/// instead of the handle's own tono name (two handles can instantiate the
+/// same foreign generic differently, so they cannot share an identifier),
+/// with the instantiation argument appended as a type argument; the
+/// argument's own Go spelling and import go through the same `go_type`/
+/// `push_type_symbols` every other declared type reaches codegen through,
+/// never hand-formatted. `refs` collects the argument's import when one is
+/// present; a non-generic handle needs none.
+pub(super) fn handle_go_type(
+    lib: &ExtLib,
+    handle: &OpaqueType,
+    refs: &mut Vec<Symbol>,
+) -> Option<String> {
     lib_go_path(lib)?;
-    Some(format!("*{}.{}", lib_ident(&lib.name), pascal(type_name)))
+    let base = match &handle.instance {
+        Some(inst) => pascal(&inst.foreign_name),
+        None => pascal(&handle.name),
+    };
+    let type_arg = handle.instance.as_ref().map(|inst| {
+        push_type_symbols(&inst.arg, refs);
+        go_type(&inst.arg)
+    });
+    Some(match type_arg {
+        Some(arg) => format!("*{}.{base}[{arg}]", lib_ident(&lib.name)),
+        None => format!("*{}.{base}", lib_ident(&lib.name)),
+    })
 }
 
 /// The import a foreign handle field's type needs, alongside its spelling.
@@ -455,13 +479,19 @@ struct CallResult {
 /// `callee` is what `lang.symbol` is called on: the lib's package selector
 /// for a free function, or the receiver's own read expression for a method.
 /// `var_prefix` names every generated variable (the field's own name, or the
-/// op's), so two calls sharing a scope never collide.
+/// op's), so two calls sharing a scope never collide. `type_arg` is a
+/// generic constructor's own explicit type argument (`NewEnvSource[Settings]`
+/// rather than `NewEnvSource`, when the callee returns an instantiated
+/// opaque handle) -- `None` for every other call, including a method call,
+/// which never spells one: Go infers a method's type parameters from its
+/// receiver.
 #[allow(clippy::too_many_arguments)]
 fn build_call(
     refs: &mut Vec<Symbol>,
     lib: &ExtLib,
     lang: &ExternLang,
     callee: &str,
+    type_arg: Option<&str>,
     decl_params: &[ExternParam],
     call_args_src: &[CallArg],
     var_prefix: &str,
@@ -472,7 +502,11 @@ fn build_call(
         .iter()
         .map(|a| call_arg_expr(refs, lib, a, decl_params, call_args_src, ref_expr))
         .collect();
-    let call_expr = format!("{callee}.{}({})", lang.symbol, call_args.join(", "));
+    let symbol = match type_arg {
+        Some(arg) => format!("{}[{arg}]", lang.symbol),
+        None => lang.symbol.clone(),
+    };
+    let call_expr = format!("{callee}.{symbol}({})", call_args.join(", "));
 
     let prefix = camel(var_prefix);
     let has_error_pos = has_error_position(lang);
@@ -553,6 +587,17 @@ pub(super) fn call_assign(
         return format!("// {:?} declares no Go module path\n{dest} = nil", call.ns);
     };
 
+    // A constructor's own return type instantiates the field's declared
+    // handle, so the type argument comes from the *field's* target, not
+    // from `decl` (a free extern's declared logical return is the same for
+    // every instantiation; only the field it constructs pins one down).
+    let type_arg = foreign_handle(&field.target, r.module).and_then(|(handle_lib, type_name)| {
+        let handle = handle_lib.types.iter().find(|t| t.name == type_name)?;
+        let inst = handle.instance.as_ref()?;
+        push_type_symbols(&inst.arg, r.refs);
+        Some(go_type(&inst.arg))
+    });
+
     let (entry, module, config) = (r.entry, r.module, r.config);
     let mut ref_expr = move |path: &[String]| sibling_path_expr(entry, module, config, path);
     let built = build_call(
@@ -560,6 +605,7 @@ pub(super) fn call_assign(
         lib,
         lang,
         &alias,
+        type_arg.as_deref(),
         &decl.params,
         &call.args,
         &field.name,

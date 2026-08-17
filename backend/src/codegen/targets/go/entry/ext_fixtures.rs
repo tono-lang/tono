@@ -385,6 +385,7 @@ pub fn reference_example_module() -> Module {
         }],
         vec![OpaqueType {
             name: "publisher".into(),
+            instance: None,
             methods: vec![go_extern(
                 "send",
                 vec![

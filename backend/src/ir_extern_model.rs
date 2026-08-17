@@ -266,11 +266,23 @@ pub struct ForeignStruct {
     pub fields: Vec<ForeignField>,
 }
 
+/// Which instantiation of a foreign generic type an opaque handle names: the
+/// foreign type's own name (kept distinct from the handle's own tono name,
+/// since two handles can instantiate the same foreign generic differently),
+/// and the tono argument it is monomorphized with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Instance {
+    pub foreign_name: String,
+    pub arg: Tref,
+}
+
 /// An opaque foreign handle whose only members are extern methods; never
 /// serializes, never crosses the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpaqueType {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<Instance>,
     #[serde(default)]
     pub methods: Vec<ExternDecl>,
 }

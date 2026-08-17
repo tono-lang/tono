@@ -72,6 +72,12 @@ ext companybus {
     go { call: "Connect"(endpoint, token) }
     ts { call: "connect"(endpoint, token) }
   }
+
+  type ack_source("Source", ack) {
+    extern get(): ack {
+      go { call: "Get"() }
+    }
+  }
 }
 
 ext companyauth {

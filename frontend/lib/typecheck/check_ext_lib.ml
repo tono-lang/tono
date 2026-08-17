@@ -414,6 +414,50 @@ let is_foreign_name (decls : Ast.decl list) (name : string) : bool =
       | _ -> false)
     decls
 
+(* ── Instantiation clauses ("type Name(\"Foreign\", Arg) { ... }") ──────── *)
+
+(* The argument must be a tono type already declared in this module: never a
+   foreign name (a foreign struct/opaque type is not "known" here, so it
+   falls through to an ordinary unresolved-name diagnostic, TC0001), and
+   never a type parameter (there is none to be in scope at module level). *)
+let check_instance_arg ~(tbl : Symtab.t) (t : Ast.opaque_type) :
+    Diagnostic.t list =
+  match t.Ast.opq_instance with
+  | None -> []
+  | Some i ->
+      Resolve.resolve_ty ~params:[] ~tbl ~qualified:Resolve.no_imports
+        i.Ast.oi_arg
+
+(* The same instantiation (foreign name + argument) declared twice across a
+   module's "ext" library blocks: two tono types would both claim to be the
+   same monomorphization, which the emitter cannot tell apart. *)
+let check_instance_collisions (decls : Ast.decl list) : Diagnostic.t list =
+  let seen = Hashtbl.create 8 in
+  List.concat_map
+    (fun (d : Ast.decl) ->
+      match d.Ast.dkind with
+      | Ast.DExtLib { body; _ } ->
+          List.filter_map
+            (fun (t : Ast.opaque_type) ->
+              match t.Ast.opq_instance with
+              | None -> None
+              | Some i ->
+                  let key =
+                    (i.Ast.oi_foreign_name, Printer.print_ty i.Ast.oi_arg)
+                  in
+                  if Hashtbl.mem seen key then
+                    Some
+                      (err Error_codes.instance_duplicate i.Ast.oi_span
+                         "the instantiation of '%s' with '%s' is already \
+                          declared elsewhere in this module"
+                         i.Ast.oi_foreign_name (snd key))
+                  else (
+                    Hashtbl.add seen key ();
+                    None))
+            body.Ast.elib_types
+      | _ -> [])
+    decls
+
 (* ── Per-module entry point ────────────────────────────────────────────── *)
 
 let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
@@ -435,10 +479,14 @@ let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
                 List.concat_map (check_extern ~tbl structs) t.Ast.opq_methods)
               body.Ast.elib_types
           in
-          free_diags @ method_diags
+          let instance_diags =
+            List.concat_map (check_instance_arg ~tbl) body.Ast.elib_types
+          in
+          free_diags @ method_diags @ instance_diags
       | _ -> [])
     decls
   @ check_foreign_name_collisions ~tbl decls
+  @ check_instance_collisions decls
 
 (* ── Cross-file closed accounting (decision K) ─────────────────────────── *)
 

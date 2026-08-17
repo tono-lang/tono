@@ -91,12 +91,23 @@ let encode_extern_decl (e : Ir.extern_decl) : Ir.json =
       ("langs", `List (List.map encode_extern_lang e.x_langs));
     ]
 
-let encode_opaque_type (t : Ir.opaque_type) : Ir.json =
+let encode_opaque_instance (i : Ir.opaque_instance) : Ir.json =
   `Assoc
     [
-      ("name", `String t.opq_name);
-      ("methods", `List (List.map encode_extern_decl t.opq_methods));
+      ("foreign_name", `String i.inst_foreign_name);
+      ("arg", encode_tref i.inst_arg);
     ]
+
+let encode_opaque_type (t : Ir.opaque_type) : Ir.json =
+  `Assoc
+    ([
+       ("name", `String t.opq_name);
+       ("methods", `List (List.map encode_extern_decl t.opq_methods));
+     ]
+    @
+    match t.opq_instance with
+    | None -> []
+    | Some i -> [ ("instance", encode_opaque_instance i) ])
 
 let encode_ext_lib (l : Ir.ext_lib) : Ir.json =
   `Assoc
@@ -335,12 +346,35 @@ let rec decode_extern_decl j =
     ({ Ir.x_name = name; x_params = params; x_return = ret; x_langs = langs }
       : Ir.extern_decl)
 
+and decode_opaque_instance j =
+  let* kvs = as_assoc j in
+  let* foreign_name =
+    match List.assoc_opt "foreign_name" kvs with
+    | Some v -> as_string v
+    | None -> err "opaque instance is missing foreign_name"
+  in
+  let* arg =
+    match List.assoc_opt "arg" kvs with
+    | Some v -> decode_tref v
+    | None -> err "opaque instance is missing arg"
+  in
+  Ok
+    ({ Ir.inst_foreign_name = foreign_name; inst_arg = arg }
+      : Ir.opaque_instance)
+
 and decode_opaque_type j =
   let* kvs = as_assoc j in
   let* name =
     match List.assoc_opt "name" kvs with
     | Some v -> as_string v
     | None -> err "opaque type is missing name"
+  in
+  let* instance =
+    match List.assoc_opt "instance" kvs with
+    | None -> Ok None
+    | Some v ->
+        let* i = decode_opaque_instance v in
+        Ok (Some i)
   in
   let* methods =
     match List.assoc_opt "methods" kvs with
@@ -349,7 +383,9 @@ and decode_opaque_type j =
         let* xs = as_list v in
         map_result decode_extern_decl xs
   in
-  Ok ({ Ir.opq_name = name; opq_methods = methods } : Ir.opaque_type)
+  Ok
+    ({ Ir.opq_name = name; opq_instance = instance; opq_methods = methods }
+      : Ir.opaque_type)
 
 let decode_ext_lib j =
   let* kvs = as_assoc j in

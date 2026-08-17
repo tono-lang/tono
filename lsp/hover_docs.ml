@@ -267,7 +267,11 @@ let ext_lib_docs : (string * string) list =
     ( "type",
       "An opaque foreign handle: a value the library returns and the SDK only \
        passes back to it. Its members are extern methods; it never serializes \
-       and never crosses the wire." );
+       and never crosses the wire. type Name(\"Foreign\", Arg) { ... } names \
+       which instantiation of a foreign generic type the handle declares: the \
+       foreign type's own name as a string, plus the already-declared tono \
+       type it is monomorphized with. Omit the clause for a foreign type that \
+       is not generic." );
     ( "call",
       "The foreign symbol and the argument order it takes, e.g. call: \
        \"Load\"(service, region). Arguments are the extern's parameters, \

@@ -157,6 +157,7 @@ pub fn composed_handles_module() -> Module {
         }],
         vec![OpaqueType {
             name: "resource".into(),
+            instance: None,
             methods: vec![get_method],
         }],
         vec![

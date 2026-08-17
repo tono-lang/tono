@@ -12,7 +12,7 @@ use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::rendered;
 use crate::ir::{
-    CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang, LangPath,
+    CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang, Instance, LangPath,
     OpImplCall, OpaqueType, Shape, ShapeKind, Tref, YieldsPos,
 };
 
@@ -88,17 +88,68 @@ fn foreign_handle_is_none_when_the_lib_declares_no_such_type() {
 #[test]
 fn handle_go_type_spells_a_pointer_to_the_pascal_cased_name() {
     let lib = handle_lib("bus", "publisher");
+    let mut refs = Vec::new();
     assert_eq!(
-        ext::handle_go_type(&lib, "publisher"),
+        ext::handle_go_type(&lib, &lib.types[0], &mut refs),
         Some("*bus.Publisher".to_string())
     );
+}
+
+/// The motivating case from the RFC/ADR: a handle instantiating a foreign
+/// generic type spells the *foreign* name (not the tono handle name), with
+/// the argument's own type registered so its import reaches the file the
+/// same way any other declared type's does. The argument itself renders as
+/// a slot (its final text is only decided when the whole declaration is
+/// rendered, see [`handle_adapter_decl_names_the_real_instantiated_type`]
+/// below), so this only proves the base identifier and that an import was
+/// registered, not the final byte-for-byte spelling.
+#[test]
+fn handle_go_type_spells_the_foreign_name_with_an_explicit_type_argument() {
+    let mut lib = handle_lib("cfgkit", "env_source");
+    lib.types[0].instance = Some(Instance {
+        foreign_name: "Source".into(),
+        arg: Tref::Ref {
+            id: "notes#settings".into(),
+            args: vec![],
+        },
+    });
+    let mut refs = Vec::new();
+    let ty = ext::handle_go_type(&lib, &lib.types[0], &mut refs).expect("go module path is set");
+    assert!(ty.starts_with("*cfgkit.Source["), "{ty}");
+    assert!(
+        !refs.is_empty(),
+        "the argument's own import must be registered"
+    );
+}
+
+/// A constructor call returning an instantiated handle carries the type
+/// argument on the call itself (`NewEnvSource[Settings](...)`, not
+/// `NewEnvSource(...)`): Go cannot infer it from the call site the way it
+/// can for a method call on an already-typed receiver.
+#[test]
+fn handle_adapter_decl_names_the_real_instantiated_type() {
+    let module = bare_module();
+    let mut lib = handle_lib("cfgkit", "env_source");
+    lib.types[0].instance = Some(Instance {
+        foreign_name: "Source".into(),
+        arg: Tref::Ref {
+            id: "notes#settings".into(),
+            args: vec![],
+        },
+    });
+    let handle = &lib.types[0];
+    let decl = ext::handle_adapter_decl(&module, &go_casing(), &lib, handle)
+        .expect("send is a Go-bound method");
+    let text = rendered(&[decl], &GoRules::default());
+    assert!(text.contains("real *cfgkit.Source[Settings]"), "{text}");
 }
 
 #[test]
 fn handle_go_type_is_none_without_a_go_module_path() {
     let mut lib = handle_lib("bus", "publisher");
     lib.langs.clear();
-    assert!(ext::handle_go_type(&lib, "publisher").is_none());
+    let mut refs = Vec::new();
+    assert!(ext::handle_go_type(&lib, &lib.types[0], &mut refs).is_none());
     assert!(ext::handle_symbol(&lib).is_none());
 }
 
@@ -172,6 +223,7 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: type_name.into(),
+            instance: None,
             methods: vec![ExternDecl {
                 name: "send".into(),
                 params: vec![ext_param("topic", string_t())],
