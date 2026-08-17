@@ -22,7 +22,15 @@ pub struct client {
 
 struct pong { ok: bool }
 
-test "a segment present in the map wins over the plain endpoint" {
+// http.request's declared pattern only exposes method/path/body, not the
+// resolved endpoint (check_test_patterns.ml), so these two cases cannot
+// assert which arm of the match actually won: swapping them still passes.
+// What they do prove is that both arms construct and resolve without a
+// ConfigError (the totality guarantee: indexing a map can never fail at
+// runtime, present or absent segment alike) and the call still completes.
+// Asserting the winning endpoint declaratively needs the request pattern to
+// carry it, which it does not yet.
+test "construction resolves with the segment present in the map" {
   c: client { by_segment: { "prod": "https://prod.example.com" }, seg: "prod" }
   s: stub c.ping.http: http.response { status: 200, headers: {}, body: "{\"ok\":true}" }
   got: c.ping()
@@ -30,7 +38,7 @@ test "a segment present in the map wins over the plain endpoint" {
   expect s.requests: [http.request { method: "GET", path: "/ping", .. }]
 }
 
-test "a segment absent from the map falls back to the plain endpoint" {
+test "construction resolves with the segment absent from the map" {
   c: client { by_segment: { "staging": "https://staging.example.com" }, seg: "prod" }
   s: stub c.ping.http: http.response { status: 200, headers: {}, body: "{\"ok\":true}" }
   got: c.ping()

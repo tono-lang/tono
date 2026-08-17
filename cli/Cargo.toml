@@ -48,6 +48,12 @@ ratatui = { version = "0.30", optional = true }
 # and the official grammars of the generated languages (the TypeScript queries
 # extend the JavaScript ones, hence both). tree-sitter-tono is not on crates.io,
 # so it is pinned to a rev; bump deliberately when the grammar evolves.
+#
+# PROVISIONAL: the current tree-sitter-tono rev below is a PR branch head
+# (tono-lang/tree-sitter-tono#16), not a commit on that repo's default
+# branch. Re-pin to the commit the PR merge produces before merging the
+# tono-side PR that depends on it; a branch head can be rebased, force-pushed,
+# or deleted out from under this pin.
 tree-sitter-highlight = { version = "0.26.11", optional = true }
 tree-sitter-rust = { version = "0.24.2", optional = true }
 tree-sitter-go = { version = "0.25.0", optional = true }

@@ -43,11 +43,15 @@ below.
 
 ## The generated tests
 
-The two `test` blocks in `service.tono` cover both arms: a segment present
-in the map wins over the plain endpoint, and a segment absent from the map
-falls back to it. Construction supplies `by_segment`/`seg` directly (a map
-literal, same as any other declared test value), so nothing depends on the
-environment.
+The two `test` blocks in `service.tono` construct with the segment present
+and with it absent, proving both arms resolve without a `ConfigError`
+(indexing a map can never fail at runtime, either way). They do not assert
+which endpoint the request actually carried: the declared `http.request`
+pattern exposes only `method`, `path`, and `body`, not the resolved
+endpoint, so there is no declarative way yet to distinguish the two arms'
+outcomes from a test. Construction supplies `by_segment`/`seg` directly (a
+map literal, same as any other declared test value), so nothing depends on
+the environment.
 
 ## Regenerating
 
