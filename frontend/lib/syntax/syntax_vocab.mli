@@ -6,7 +6,7 @@
 val keywords : string list
 
 (* The words the parser recognizes only in position (contract, constraint,
-   impl, raw, match, stub, expect). *)
+   impl, raw, match, stub, expect, null). *)
 val contextual : string list
 
 (* [keywords @ contextual]. *)

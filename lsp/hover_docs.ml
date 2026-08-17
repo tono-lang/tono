@@ -372,15 +372,43 @@ let construct_docs : (string * string) list =
         "A selection table over a field reference: literal patterns, one arm \
          each, exhaustive (a `_` wildcard covers the rest). Arms yield a \
          reference, a literal, or a stack of sources (%s). No nesting, no \
-         comparators, no expressions."
+         comparators, no expressions. The subject may also be a map field \
+         indexed by another field (`by_segment[.seg]`), which resolves to an \
+         optional value; a `null` arm is then mandatory."
         (String.concat "/"
            (List.map (fun s -> "@" ^ s) Entry_scope.source_names)) );
+    ( "null",
+      "The mandatory absence arm on a match whose subject is optional (a \
+       map-indexed field can always miss its key). Exactly one `null` arm is \
+       required when the subject is `T?`, and none is allowed when it is not."
+    );
   ]
 
 let construct_doc (word : string) : string option =
   match List.assoc_opt word construct_docs with
   | Some doc -> Some doc
   | None -> List.assoc_opt word ext_lib_docs
+
+(* The two forms of the map-indexed match that are not single reserved words,
+   so they sit outside [construct_docs]'s bijection with [Syntax_vocab]: the
+   indexed subject itself and "._" in an arm's value position. Resolved by
+   AST span in Analysis, not by word lookup, since neither names a fixed
+   token position (the subject is an entire [field_reference], and "_" is an
+   ordinary identifier everywhere else it appears). *)
+let match_form_docs : (string * string) list =
+  [
+    ( "map_index",
+      "Indexes a map field by another in-scope field's value, resolving to the \
+       map's value type wrapped optional (`T?`): the key may not be in the \
+       map. The enclosing match's mandatory `null` arm is what handles that." );
+    ( "subject_ref",
+      "'._' refers back to the match subject, in a non-`null` arm's value \
+       position, narrowed to the subject's underlying type (never optional \
+       there: the `null` arm has already handled absence)." );
+  ]
+
+let match_form_doc (name : string) : string option =
+  List.assoc_opt name match_form_docs
 
 (* Primitive and marker hover: the wire decisions that most surprise SDK
    consumers belong right under the cursor. *)

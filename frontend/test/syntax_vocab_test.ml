@@ -54,6 +54,12 @@ let snippet_for = function
       \  v: string @env(\"V\")\n\
       \  e: string = match .v { \"a\" => \"x\" _ => \"y\" }\n\
        }"
+  | "null" ->
+      "pub struct client {\n\
+      \  by_segment: map[string]string @env(\"BS\")\n\
+      \  seg: string @env(\"SEG\")\n\
+      \  e: string = match .by_segment[.seg] { null => \"x\" _ => ._ }\n\
+       }"
   | "stub" ->
       "test \"t\" {\n\
       \  c: client { }\n\

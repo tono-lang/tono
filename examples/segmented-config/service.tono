@@ -1,0 +1,47 @@
+import tono.http
+import tono.errors
+
+// A segmented endpoint config: the client picks the endpoint for its own
+// segment out of a map, falling back to the plain endpoint when the segment
+// has no override. Indexing a map by another field's value resolves to an
+// optional value (the key may not be there), so the match requires a `null`
+// arm; the other arm reads the looked-up value back through `._`, narrowed
+// to a plain string there since the `null` arm already covers absence.
+pub struct client {
+  by_segment: map[string]string @env("BY_SEGMENT")
+  seg: string @env("SEGMENT") @default("prod")
+  endpoint: string @env("ENDPOINT") @default("https://api.example.com")
+
+  segmented_endpoint: string = match .by_segment[.seg] {
+    null => .endpoint
+    _ => ._
+  }
+
+  op ping(): pong @http(method: "GET", path: "/ping", endpoint: .segmented_endpoint)
+}
+
+struct pong { ok: bool }
+
+// http.request's declared pattern only exposes method/path/body, not the
+// resolved endpoint (check_test_patterns.ml), so these two cases cannot
+// assert which arm of the match actually won: swapping them still passes.
+// What they do prove is that both arms construct and resolve without a
+// ConfigError (the totality guarantee: indexing a map can never fail at
+// runtime, present or absent segment alike) and the call still completes.
+// Asserting the winning endpoint declaratively needs the request pattern to
+// carry it, which it does not yet.
+test "construction resolves with the segment present in the map" {
+  c: client { by_segment: { "prod": "https://prod.example.com" }, seg: "prod" }
+  s: stub c.ping.http: http.response { status: 200, headers: {}, body: "{\"ok\":true}" }
+  got: c.ping()
+  expect got: pong { ok: true }
+  expect s.requests: [http.request { method: "GET", path: "/ping", .. }]
+}
+
+test "construction resolves with the segment absent from the map" {
+  c: client { by_segment: { "staging": "https://staging.example.com" }, seg: "prod" }
+  s: stub c.ping.http: http.response { status: 200, headers: {}, body: "{\"ok\":true}" }
+  got: c.ping()
+  expect got: pong { ok: true }
+  expect s.requests: [http.request { method: "GET", path: "/ping", .. }]
+}
