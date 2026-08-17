@@ -23,7 +23,7 @@ static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::go::entry::ext_fixtures::{
-    composed_handles_model, infallible_extern_model, reference_example_model,
+    composed_handles_model, ctx_extern_model, infallible_extern_model, reference_example_model,
 };
 use tono_backend::codegen::targets::go::types::go_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
@@ -361,6 +361,41 @@ fn an_infallible_single_return_extern_builds() {
         &infallible_extern_model(),
         "require tono-ext-fixture/idgen v0.0.0\n\n\
          replace tono-ext-fixture/idgen => ../fixtures/idgen\n",
+    );
+    let build = Command::new("go")
+        .arg("build")
+        .arg("./...")
+        .current_dir(&dir)
+        .output()
+        .expect("run go build");
+    assert!(
+        build.status.success(),
+        "generated Go failed to build:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+/// A foreign handle's `ctx`-marked method call builds against a real
+/// library whose method takes `context.Context` as its first parameter
+/// (Go's own idiom): proves the generated interface, adapter, and op-body
+/// call site all agree on the added `ctx` parameter well enough to compile,
+/// not just to render matching text.
+#[test]
+fn a_ctx_marked_handle_method_builds() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
+        return;
+    }
+    if !have("go", "version") || !have("gofmt", "-h") {
+        eprintln!("skipping: Go toolchain (go/gofmt) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk(
+        &ctx_extern_model(),
+        "require tono-ext-fixture/svc v0.0.0\n\n\
+         replace tono-ext-fixture/svc => ../fixtures/svc\n",
     );
     let build = Command::new("go")
         .arg("build")

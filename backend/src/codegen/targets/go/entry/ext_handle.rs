@@ -15,15 +15,16 @@ use super::*;
 /// [`handle_adapter_decl`], whose interface method and adapter method
 /// signatures must render byte-for-byte the same so the adapter actually
 /// satisfies the interface.
-fn method_signature(m: &ExternDecl, refs: &mut Vec<Symbol>) -> (Vec<String>, String) {
-    let params: Vec<String> = m
-        .params
-        .iter()
-        .map(|p| {
-            push_type_symbols(&p.r#type, refs);
-            format!("{} {}", camel(&p.name), go_type(&p.r#type))
-        })
-        .collect();
+fn method_signature(m: &ExternDecl, lang: &ExternLang, refs: &mut Vec<Symbol>) -> (Vec<String>, String) {
+    let mut params: Vec<String> = Vec::new();
+    if lang.ctx {
+        refs.push(import("context", "context"));
+        params.push("ctx context.Context".to_string());
+    }
+    params.extend(m.params.iter().map(|p| {
+        push_type_symbols(&p.r#type, refs);
+        format!("{} {}", camel(&p.name), go_type(&p.r#type))
+    }));
     push_type_symbols(&m.r#return, refs);
     (params, go_type(&m.r#return))
 }
@@ -75,14 +76,17 @@ pub(in super::super) fn handle_adapter_decl(
     // every other position this handle reaches, which is spelled as tono's
     // generated interface); the adapter decl is the one place that import is
     // actually used, so it is registered here rather than wherever the
-    // storage-typed interface spelling is pushed instead.
+    // storage-typed interface spelling is pushed instead. This also covers a
+    // handle with no declared `errors:` mapping at all: previously the import
+    // only got pushed as a side effect of an error-sentinel reference, so a
+    // handle with no such mapping compiled to an undefined package selector.
     if let Some(sym) = handle_symbol(lib) {
         refs.push(sym);
     }
     let mut methods = String::new();
     for m in &handle.methods {
         let Some(lang) = go_lang(m) else { continue };
-        let (params, ret_ty) = method_signature(m, &mut refs);
+        let (params, ret_ty) = method_signature(m, lang, &mut refs);
         // The adapter's own parameters are exactly the method's declared
         // params, so a `Param` argument in the real call template resolves
         // to the adapter's own identically-named parameter.
@@ -176,7 +180,7 @@ pub(in super::super) fn handle_iface_decl(lib: &ExtLib, handle: &OpaqueType) -> 
     let mut methods = String::new();
     for m in &handle.methods {
         let Some(lang) = go_lang(m) else { continue };
-        let (params, ret_ty) = method_signature(m, &mut refs);
+        let (params, ret_ty) = method_signature(m, lang, &mut refs);
         methods.push_str(&format!(
             "\t{}({}) ({}, error)\n",
             lang.symbol,

@@ -168,6 +168,7 @@ type extern_lang_body = {
   elb_errors : error_map_entry list;
   elb_sync : bool;
   elb_infallible : bool;
+  elb_ctx : bool;
   elb_span : Span.span;
 }
 

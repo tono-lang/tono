@@ -355,6 +355,7 @@ mod tests {
                     errors: vec![],
                     sync: false,
                     infallible: false,
+                    ctx: false,
                 }],
             }],
         }];
@@ -398,6 +399,7 @@ mod tests {
                     errors: vec![],
                     sync: true,
                     infallible: false,
+                    ctx: false,
                 }],
             }],
         }];
@@ -441,6 +443,7 @@ mod tests {
                         errors: vec![],
                         sync: false,
                         infallible: false,
+                        ctx: false,
                     }],
                 }],
             }];
@@ -527,6 +530,7 @@ mod tests {
                     }],
                     sync: false,
                     infallible: false,
+                    ctx: false,
                 }],
             }],
         }];
@@ -667,6 +671,7 @@ mod tests {
                         errors: vec![],
                         sync: false,
                         infallible: false,
+                        ctx: false,
                     }],
                 }],
             },
@@ -725,6 +730,7 @@ mod tests {
                         errors: vec![],
                         sync: false,
                         infallible: false,
+                        ctx: false,
                     }],
                 }],
             },

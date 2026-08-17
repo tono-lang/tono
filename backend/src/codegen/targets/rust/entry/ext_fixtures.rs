@@ -187,6 +187,7 @@ pub fn rust_ext_fixture_model() -> Model {
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     };

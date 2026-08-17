@@ -225,6 +225,7 @@ mod tests {
                         errors: vec![],
                         sync: false,
                         infallible: false,
+                        ctx: false,
                     }],
                 }],
             }],
@@ -297,6 +298,7 @@ mod tests {
                     errors: vec![],
                     sync: false,
                     infallible: false,
+                    ctx: false,
                 }],
             }],
         }];

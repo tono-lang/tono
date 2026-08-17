@@ -161,3 +161,7 @@ val match_subject_ref_invalid : string
 (* An opaque foreign type's instantiation clause declared more than once
    with the same foreign name and argument (see error_codes.ml). *)
 val instance_duplicate : string
+
+(* The `ctx` marker on a language block that is not a foreign handle's own
+   method (see error_codes.ml for the rule). *)
+val extern_ctx_on_free_call : string

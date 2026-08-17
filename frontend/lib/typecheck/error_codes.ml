@@ -235,3 +235,8 @@ let match_subject_ref_invalid = "TC0091"
    once with the same foreign name and argument, across a module's "ext"
    library blocks. *)
 let instance_duplicate = "TC0092"
+
+(* The `ctx` marker on a language block that is not a foreign handle's own
+   method: it has no idiomatic scope to receive the target's cancellation/
+   deadline context outside a handle method call. *)
+let extern_ctx_on_free_call = "TC0093"

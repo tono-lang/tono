@@ -69,6 +69,7 @@ let lib_src =
         returns: ack { id: .a.ID, accepted: .a.OK }
         errors: { "ErrBusy" => overloaded }
         infallible
+        ctx
       }
       rust {
         call: "publish"(topic)
@@ -108,7 +109,8 @@ let hover_construct_words () =
   check "returns:" "declared return type";
   check "errors:" "error sentinel";
   check "sync" "not awaited";
-  check "infallible" "single value with no error position"
+  check "infallible" "single value with no error position";
+  check "ctx" "cancellation"
 
 let hover_request_reference () =
   let v = hover_value lib_src (at lib_src ".request") in
@@ -194,6 +196,7 @@ let parser_accepts_the_vocabulary () =
                "errors: { \"E\" => ack }";
                "sync";
                "infallible";
+               "ctx";
              ])));
   match diags (block [ "call: \"F\"(a)"; "bogus" ]) with
   | [] -> Alcotest.fail "a stray word must be diagnosed"

@@ -77,7 +77,8 @@ let encode_extern_lang (l : Ir.extern_lang) : Ir.json =
     @ (if l.el_errors = [] then []
        else [ ("errors", `List (List.map encode_error_binding l.el_errors)) ])
     @ (if l.el_sync then [ ("sync", `Bool true) ] else [])
-    @ if l.el_infallible then [ ("infallible", `Bool true) ] else [])
+    @ (if l.el_infallible then [ ("infallible", `Bool true) ] else [])
+    @ if l.el_ctx then [ ("ctx", `Bool true) ] else [])
 
 let encode_extern_param (p : Ir.extern_param) : Ir.json =
   `Assoc [ ("name", `String p.xp_name); ("type", encode_tref p.xp_type) ]
@@ -289,6 +290,7 @@ let decode_extern_lang j =
   let* infallible =
     match get "infallible" with None -> Ok false | Some v -> as_bool v
   in
+  let* ctx = match get "ctx" with None -> Ok false | Some v -> as_bool v in
   Ok
     ({
        el_lang = lang;
@@ -299,6 +301,7 @@ let decode_extern_lang j =
        el_errors = errors;
        el_sync = sync;
        el_infallible = infallible;
+       el_ctx = ctx;
      }
       : Ir.extern_lang)
 

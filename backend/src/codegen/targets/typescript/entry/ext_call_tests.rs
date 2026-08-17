@@ -156,6 +156,7 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
                 }],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     );
@@ -187,6 +188,7 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     );
@@ -507,6 +509,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     );

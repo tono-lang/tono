@@ -97,6 +97,7 @@ pub fn go_extern(
             errors,
             sync: false,
             infallible: false,
+            ctx: false,
         }],
     }
 }
@@ -124,6 +125,26 @@ pub fn go_extern_infallible(
         vec![],
     );
     decl.langs[0].infallible = true;
+    decl
+}
+
+/// The same shape as [`go_extern`], marked `ctx`: a foreign handle's own
+/// method call that receives the target's cancellation/deadline context in
+/// its idiomatic position (Go: `ctx context.Context` as the first
+/// parameter).
+#[allow(clippy::too_many_arguments)]
+pub fn go_extern_ctx(
+    name: &str,
+    params: Vec<ExternParam>,
+    ret: Tref,
+    symbol: &str,
+    call_args: Vec<CallArg>,
+    yields: Vec<YieldsPos>,
+    returns: Option<ReturnsLit>,
+    errors: Vec<ErrorBinding>,
+) -> ExternDecl {
+    let mut decl = go_extern(name, params, ret, symbol, call_args, yields, returns, errors);
+    decl.langs[0].ctx = true;
     decl
 }
 
@@ -612,6 +633,101 @@ pub fn infallible_extern_model() -> Model {
     Model {
         tono_ir_version: TONO_IR_VERSION,
         modules: vec![infallible_extern_module()],
+    }
+}
+
+/// A minimal repro of the `ctx` marker: a foreign handle with one `ctx`-
+/// marked method, reached through an op's own `impl .conn.get(args)` body
+/// (the one construct the marker is legal on). The handle's own construction
+/// call is a plain, unmarked free extern, matching the frontend gate that
+/// only a handle method may carry `ctx`.
+pub fn ctx_extern_module() -> Module {
+    let conn_field = {
+        let mut f = field(
+            "conn",
+            Tref::Ref {
+                id: "svc#conn".into(),
+                args: vec![],
+            },
+            vec![],
+        );
+        f.call = Some(EntryCall {
+            ns: "svc".into(),
+            func: "connect".into(),
+            args: vec![],
+        });
+        f
+    };
+    let get_op = Shape {
+        id: "c#client.get".into(),
+        kind: ShapeKind::Operation {
+            input: Some(string_t()),
+            input_name: Some("id".into()),
+            output: Some(string_t()),
+            errors: vec![],
+            wire: None,
+            impl_call: Some(OpImplCall {
+                recv: vec!["conn".into()],
+                method: "get".into(),
+                args: vec![call_ref(&["id"])],
+            }),
+        },
+        traits: vec![],
+    };
+    let entry = Shape {
+        id: "c#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![conn_field],
+            operations: vec![get_op],
+        },
+        traits: vec![],
+    };
+    let svc = go_ext_lib(
+        "svc",
+        "tono-ext-fixture/svc",
+        vec![],
+        vec![OpaqueType {
+            name: "conn".into(),
+            methods: vec![go_extern_ctx(
+                "get",
+                vec![ext_param("id", string_t())],
+                string_t(),
+                "Get",
+                vec![CallArg::Param("id".into())],
+                vec![],
+                None,
+                vec![],
+            )],
+        }],
+        vec![go_extern(
+            "connect",
+            vec![],
+            Tref::Ref {
+                id: "svc#conn".into(),
+                args: vec![],
+            },
+            "Connect",
+            vec![],
+            vec![],
+            None,
+            vec![],
+        )],
+    );
+    Module {
+        name: "c".into(),
+        shapes: vec![entry],
+        operations: vec![],
+        extensions: vec![],
+        ext_libs: vec![svc],
+        tests: vec![],
+    }
+}
+
+/// [`ctx_extern_module`], wrapped in a `Model`.
+pub fn ctx_extern_model() -> Model {
+    Model {
+        tono_ir_version: TONO_IR_VERSION,
+        modules: vec![ctx_extern_module()],
     }
 }
 

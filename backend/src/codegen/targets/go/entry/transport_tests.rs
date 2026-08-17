@@ -475,6 +475,7 @@ fn module_with_sign_extern() -> Module {
                 errors: vec![],
                 sync: true,
                 infallible: false,
+                ctx: false,
             }],
         }],
     }];

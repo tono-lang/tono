@@ -38,6 +38,7 @@ fn a_versioned_go_module_path_still_selects_by_the_ext_lib_name() {
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     };
@@ -147,6 +148,34 @@ fn an_infallible_extern_assigns_a_single_value_with_no_error_check() {
     assert!(!text.contains("idErr"), "{text}");
 }
 
+/// The `ctx` marker's own repro: a foreign handle's `ctx`-marked method call
+/// threads a `ctx context.Context` parameter through all three Go call
+/// sites that must agree byte-for-byte (the generated interface, the
+/// adapter satisfying it, and the op body reaching through it), while its
+/// own unmarked construction call (the `svc.connect()` free extern) stays
+/// untouched, proving the marker never leaks beyond the one call site it
+/// was set on.
+#[test]
+fn a_ctx_marked_handle_method_threads_context_through_every_call_site() {
+    let module = crate::codegen::targets::go::entry::ext_fixtures::ctx_extern_module();
+    let text = entry_text(&module);
+
+    assert!(
+        text.contains("type svcConnIface interface {\n\tGet(ctx context.Context, id string) (string, error)\n}"),
+        "{text}"
+    );
+    assert!(
+        text.contains("func (a *svcConnIfaceAdapter) Get(ctx context.Context, id string) (string, error) {"),
+        "{text}"
+    );
+    assert!(text.contains(":= a.real.Get(ctx, id)"), "{text}");
+    assert!(text.contains("c.settings.conn.Get(ctx, input)"), "{text}");
+    assert!(
+        text.contains(":= svc.Connect()\n"),
+        "the unmarked construction call stays exactly as today: {text}"
+    );
+}
+
 // --- defensive fallbacks, exercised directly ---------------------------
 
 /// A declared extern with no module path for `lang` (the "no Go binding"
@@ -173,6 +202,7 @@ fn lib_missing(lib_langs: Vec<LangPath>, fn_name: &str, fn_lang: &str) -> ExtLib
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     }
@@ -321,6 +351,7 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     };

@@ -230,6 +230,13 @@ pub struct ExternLang {
     /// reads it, the same way only Rust's reads `sync`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub infallible: bool,
+    /// The call receives the target's own cancellation/deadline context in
+    /// its idiomatic position (Go: `ctx context.Context` as the first
+    /// parameter). Only meaningful on a foreign handle's own method call
+    /// (the frontend rejects it elsewhere); a target with no equivalent
+    /// convention ignores it the same way Go ignores `sync`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ctx: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -418,6 +425,7 @@ mod tests {
             errors: vec![],
             sync: false,
             infallible: false,
+            ctx: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(!json.contains("sync"));
@@ -436,6 +444,7 @@ mod tests {
             errors: vec![],
             sync: true,
             infallible: false,
+            ctx: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(json.contains(r#""sync":true"#));
@@ -454,6 +463,7 @@ mod tests {
             errors: vec![],
             sync: false,
             infallible: false,
+            ctx: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(!json.contains("infallible"));
@@ -472,9 +482,48 @@ mod tests {
             errors: vec![],
             sync: false,
             infallible: true,
+            ctx: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(json.contains(r#""infallible":true"#));
+        let back: ExternLang = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, lang);
+    }
+
+    #[test]
+    fn extern_lang_ctx_omits_the_flag_when_false() {
+        let lang = ExternLang {
+            lang: "go".into(),
+            symbol: "Get".into(),
+            call_args: vec![],
+            yields: vec![],
+            returns: None,
+            errors: vec![],
+            sync: false,
+            infallible: false,
+            ctx: false,
+        };
+        let json = serde_json::to_string(&lang).unwrap();
+        assert!(!json.contains("ctx"));
+        let back: ExternLang = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, lang);
+    }
+
+    #[test]
+    fn extern_lang_ctx_serializes_true_and_round_trips() {
+        let lang = ExternLang {
+            lang: "go".into(),
+            symbol: "Get".into(),
+            call_args: vec![],
+            yields: vec![],
+            returns: None,
+            errors: vec![],
+            sync: false,
+            infallible: false,
+            ctx: true,
+        };
+        let json = serde_json::to_string(&lang).unwrap();
+        assert!(json.contains(r#""ctx":true"#));
         let back: ExternLang = serde_json::from_str(&json).unwrap();
         assert_eq!(back, lang);
     }

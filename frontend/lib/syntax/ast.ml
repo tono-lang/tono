@@ -231,6 +231,12 @@ type extern_lang_body = {
      foreign function like [uuid.NewString() string] out of that shape).
      Other targets ignore it the same way Go ignores [sync]. *)
   elb_infallible : bool;
+  (* Opts the call into receiving the target's own cancellation/deadline
+     context in its idiomatic position (Go: `ctx context.Context` as the
+     first parameter). Only meaningful on a foreign handle's own method
+     call; targets that have not landed the equivalent convention ignore
+     it the same way Go ignores [sync]. *)
+  elb_ctx : bool;
   elb_span : Span.span;
 }
 
