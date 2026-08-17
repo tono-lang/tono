@@ -235,6 +235,7 @@ fn simple_go_lib(lib_name: &str, fn_name: &str, symbol: &str, return_ty: Tref) -
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     }

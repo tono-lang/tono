@@ -14,8 +14,7 @@ let check src =
   tc
 
 let has code src =
-  List.mem code
-    (List.filter_map (fun (d : Diagnostic.t) -> d.code) (check src))
+  List.mem code (List.filter_map (fun (d : Diagnostic.t) -> d.code) (check src))
 
 let ctx_marker_on_handle_method_ok () =
   let src =
@@ -43,8 +42,8 @@ let ctx_marker_on_handle_method_ok () =
 struct ack { accepted: bool }
 |}
   in
-  Alcotest.(check bool) "no ctx diagnostic on a handle method" false
-    (has "TC0093" src)
+  Alcotest.(check bool)
+    "no ctx diagnostic on a handle method" false (has "TC0093" src)
 
 let ctx_marker_on_free_extern_rejected () =
   let src =
@@ -66,8 +65,8 @@ let ctx_marker_on_free_extern_rejected () =
 struct app_config { endpoint: string }
 |}
   in
-  Alcotest.(check bool) "ctx on a free extern call is rejected" true
-    (has "TC0093" src)
+  Alcotest.(check bool)
+    "ctx on a free extern call is rejected" true (has "TC0093" src)
 
 let () =
   Alcotest.run "ctx_marker"

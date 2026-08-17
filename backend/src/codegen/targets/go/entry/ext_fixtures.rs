@@ -688,6 +688,7 @@ pub fn ctx_extern_module() -> Module {
         vec![],
         vec![OpaqueType {
             name: "conn".into(),
+            instance: None,
             methods: vec![go_extern_ctx(
                 "get",
                 vec![ext_param("id", string_t())],
