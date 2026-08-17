@@ -243,8 +243,18 @@ impl). One entry per `ext` block:
 - An `extern_decl` is `{"name", "params": [{"name","type"}], "return": <tref>,
   "langs": [<extern_lang>]}`.
 - An `extern_lang` (one per language block) is
-  `{"lang", "symbol", "call_args": [<call_arg>], "yields"?, "returns"?, "errors"?}`.
-  `yields`/`errors` are omitted when empty; `returns` when absent. A
+  `{"lang", "symbol", "call_args": [<call_arg>], "yields"?, "returns"?, "errors"?,
+  "sync"?, "infallible"?, "ctx"?}`.
+  `yields`/`errors` are omitted when empty; `returns` when absent. `sync`,
+  `infallible`, and `ctx` are bare opt-in markers, each omitted when `false`
+  and present as `true` otherwise: `sync` marks a call that blocks rather
+  than awaits (meaningful only where a target awaits extern calls by
+  default), `infallible` marks a call with no error return (meaningful only
+  in Go), and `ctx` marks a call that receives the target's own
+  cancellation/deadline context in its idiomatic position (meaningful only
+  on a foreign handle's own method call; Go prepends `ctx context.Context`
+  as the first parameter). A target that has no equivalent convention
+  ignores the marker it does not read. A
   `yields` position is `{"name", "type"?, "is_error"?}` -- `type` is absent
   and `is_error` is `true` only for the reserved `error` sentinel, never for
   an ordinary omitted type. `returns` is

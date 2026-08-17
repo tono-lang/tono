@@ -502,6 +502,7 @@ mod tests {
                     errors: vec![],
                     sync: false,
                     infallible: false,
+                    ctx: false,
                 })
                 .collect::<Vec<_>>()
         };

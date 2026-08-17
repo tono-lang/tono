@@ -301,6 +301,14 @@ let ext_lib_docs : (string * string) list =
        in Go, whose convention makes every call (value, error); the other \
        targets ignore it, since their error travels in the type or is thrown."
     );
+    ( "ctx",
+      "The call receives the target's own cancellation/deadline context in its \
+       idiomatic position. Only valid on a foreign handle's own method call: \
+       Go prepends ctx context.Context as the first parameter. Rust/TypeScript \
+       do not read this marker yet, but they cannot reach this call site at \
+       all today either (a separate gate refuses the whole handle-method call \
+       for them); once a target lands that call, it decides its own convention \
+       for ctx before it starts reading the marker." );
     ( Ext_lib_vocab.request_ref,
       Printf.sprintf
         "The canonical request, already assembled (method, path, headers, \

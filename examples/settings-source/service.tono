@@ -8,7 +8,10 @@ ext settingskit {
 
   type env_source("Source", app_settings) {
     extern get(): app_settings {
-      go { call: "Get"() }
+      go {
+        call: "Get"()
+        ctx
+      }
     }
   }
 

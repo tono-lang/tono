@@ -302,9 +302,25 @@ let check_param_consumption (params : Ast.extern_param list)
              p.Ast.ep_name b.Ast.elb_lang))
     params
 
-let check_extern ~(tbl : Symtab.t)
-    (structs : (string, Ast.foreign_struct) Hashtbl.t) (e : Ast.extern_decl) :
+(* The [ctx] marker only has an idiomatic slot to fill on a foreign handle's
+   own method call (Go's generated op signatures already carry [ctx
+   context.Context] in scope there); a free/library extern (including a
+   field's own construction call) has no such call site, so marking it
+   there is rejected rather than silently ignored. *)
+let check_ctx_marker_scope ~(is_method : bool) (b : Ast.extern_lang_body) :
     Diagnostic.t list =
+  if b.Ast.elb_ctx && not is_method then
+    [
+      err Error_codes.extern_ctx_on_free_call b.Ast.elb_span
+        "'ctx' only applies to a foreign handle's own method call; the '%s' \
+         binding here has no idiomatic scope to receive it"
+        b.Ast.elb_lang;
+    ]
+  else []
+
+let check_extern ~(tbl : Symtab.t)
+    (structs : (string, Ast.foreign_struct) Hashtbl.t) ~(is_method : bool)
+    (e : Ast.extern_decl) : Diagnostic.t list =
   let declared_param_names =
     List.map (fun (p : Ast.extern_param) -> p.Ast.ep_name) e.Ast.ed_params
   in
@@ -326,7 +342,8 @@ let check_extern ~(tbl : Symtab.t)
       @ check_returns_type e.Ast.ed_return b
       @ check_returns_refs b
       @ check_error_sentinels ~tbl b
-      @ check_param_consumption e.Ast.ed_params b)
+      @ check_param_consumption e.Ast.ed_params b
+      @ check_ctx_marker_scope ~is_method b)
     e.Ast.ed_langs
 
 (* ── Foreign-name collisions (not a silent Roles.classify overwrite) ────── *)
@@ -478,12 +495,16 @@ let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
               Hashtbl.replace structs s.Ast.fs_name s)
             body.Ast.elib_structs;
           let free_diags =
-            List.concat_map (check_extern ~tbl structs) body.Ast.elib_externs
+            List.concat_map
+              (check_extern ~tbl structs ~is_method:false)
+              body.Ast.elib_externs
           in
           let method_diags =
             List.concat_map
               (fun (t : Ast.opaque_type) ->
-                List.concat_map (check_extern ~tbl structs) t.Ast.opq_methods)
+                List.concat_map
+                  (check_extern ~tbl structs ~is_method:true)
+                  t.Ast.opq_methods)
               body.Ast.elib_types
           in
           let instance_diags =

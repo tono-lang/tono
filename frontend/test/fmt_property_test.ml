@@ -627,7 +627,8 @@ let gen_extern_lang_body =
       ]
   and+ errors = G.list_size (G.int_range 0 2) gen_error_map_entry
   and+ sync = G.bool
-  and+ infallible = G.bool in
+  and+ infallible = G.bool
+  and+ ctx = G.bool in
   {
     Ast.elb_lang = lang;
     elb_lang_span = dspan;
@@ -639,6 +640,7 @@ let gen_extern_lang_body =
     elb_errors = errors;
     elb_sync = sync;
     elb_infallible = infallible;
+    elb_ctx = ctx;
     elb_span = dspan;
   }
 

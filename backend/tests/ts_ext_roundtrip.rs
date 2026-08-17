@@ -146,6 +146,7 @@ fn appendix_model() -> Model {
                 }],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     };
@@ -189,6 +190,7 @@ fn appendix_model() -> Model {
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     };

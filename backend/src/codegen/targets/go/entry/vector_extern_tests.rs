@@ -215,6 +215,7 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     };

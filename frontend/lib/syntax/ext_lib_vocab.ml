@@ -16,7 +16,7 @@ let lang_fields = [ "call"; "yields"; "returns"; "errors" ]
 
 (* The bare markers of a language block, each opting a call out of one
    target's convention. *)
-let lang_markers = [ "sync"; "infallible" ]
+let lang_markers = [ "sync"; "infallible"; "ctx" ]
 let lang_body_words = lang_fields @ lang_markers
 
 (* The reserved yields: position type, valid nowhere else. *)

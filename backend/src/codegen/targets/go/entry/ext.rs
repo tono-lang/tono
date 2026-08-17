@@ -497,11 +497,14 @@ fn build_call(
     var_prefix: &str,
     ref_expr: &mut dyn FnMut(&[String]) -> String,
 ) -> CallResult {
-    let call_args: Vec<String> = lang
+    let mut call_args: Vec<String> = lang
         .call_args
         .iter()
         .map(|a| call_arg_expr(refs, lib, a, decl_params, call_args_src, ref_expr))
         .collect();
+    if lang.ctx {
+        call_args.insert(0, "ctx".to_string());
+    }
     let symbol = match type_arg {
         Some(arg) => format!("{}[{arg}]", lang.symbol),
         None => lang.symbol.clone(),
@@ -720,11 +723,14 @@ pub(super) fn impl_call_body(
         }
         _ => field_path_expr(entry, module, config, path, "c.settings"),
     };
-    let call_args: Vec<String> = lang
+    let mut call_args: Vec<String> = lang
         .call_args
         .iter()
         .map(|a| call_arg_expr(refs, lib, a, &decl.params, &call.args, &mut ref_expr))
         .collect();
+    if lang.ctx {
+        call_args.insert(0, "ctx".to_string());
+    }
     let prefix = camel(op_name);
     let out_var = format!("{prefix}Out");
     let err_var = format!("{prefix}Err");

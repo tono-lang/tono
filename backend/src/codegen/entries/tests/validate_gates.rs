@@ -394,6 +394,14 @@ fn a_target_that_cannot_emit_an_extern_handle_call_is_named_and_refused() {
     assert!(err.contains("rust cannot emit that call yet"), "{err}");
 }
 
+// The `ctx` marker only has an idiomatic call site on a foreign handle's own
+// method call, and this gate rejects any op whose own body reaches such a
+// call (`impl_call: Some(..)`) for a target that cannot emit it, entirely
+// from the op's own structure -- it never inspects the extern's own `ctx`
+// flag. So `ctx` cannot bypass it: the test above already proves every
+// handle-method call is refused for TypeScript/Rust regardless of any
+// marker on the extern it calls into.
+
 /// A handle lib declaring one opaque type and one free constructor that
 /// returns it, so a field can either construct the handle (`field.call`) or
 /// be injected as one (`@arg`, no `call`).
@@ -423,6 +431,7 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
                 errors: vec![],
                 sync: false,
                 infallible: false,
+                ctx: false,
             }],
         }],
     }

@@ -4,11 +4,13 @@
 // give the generated SDK something real, generic, to compile against.
 package settingskit
 
+import "context"
+
 type Source[T any] struct {
 	value T
 }
 
-func (s *Source[T]) Get() (T, error) {
+func (s *Source[T]) Get(ctx context.Context) (T, error) {
 	return s.value, nil
 }
 

@@ -354,6 +354,10 @@ struct app_config { endpoint: string }
   in
   Alcotest.(check bool) "param unconsumed" true (has "TC0078" src)
 
+(* TC0088 ('ctx' only applies to a foreign handle's own method call) has its
+   own test file, [ctx_marker_test.ml], for the same file-size-cap reason
+   noted below for [ext_lib_collisions_test.ml]/[op_impl_test.ml]. *)
+
 (* ── Foreign-role boundary (TC0034): never wire, op input/output, surface ─ *)
 
 let foreign_struct_as_op_output () =
