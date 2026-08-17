@@ -178,6 +178,38 @@ fn lib_missing(lib_langs: Vec<LangPath>, fn_name: &str, fn_lang: &str) -> ExtLib
     }
 }
 
+/// An `ExtLib` with a single Go-bound free extern (no params, no yields, no
+/// returns projection, no errors mapping): the shared shape every plain
+/// constructor-call test below builds on, so only what actually varies
+/// between them (the lib/extern names, the symbol, the return type) shows up
+/// at each call site.
+fn simple_go_lib(lib_name: &str, fn_name: &str, symbol: &str, return_ty: Tref) -> ExtLib {
+    ExtLib {
+        name: lib_name.into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: format!("company/{lib_name}"),
+        }],
+        structs: vec![],
+        types: vec![],
+        externs: vec![ExternDecl {
+            name: fn_name.into(),
+            params: vec![],
+            r#return: return_ty,
+            langs: vec![ExternLang {
+                lang: "go".into(),
+                symbol: symbol.into(),
+                call_args: vec![],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: false,
+                infallible: false,
+            }],
+        }],
+    }
+}
+
 /// A one-entry module whose single field carries `call`, plus the field
 /// itself: the shared shape every `call_assign` case below builds a
 /// `Resolver` over.
@@ -310,56 +342,33 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
 /// the concrete type it assigns into.
 #[test]
 fn call_assign_names_the_type_argument_on_a_generic_constructor() {
-    let lib = ExtLib {
-        name: "cfgkit".into(),
-        langs: vec![LangPath {
-            lang: "go".into(),
-            path: "example.com/cfgkit".into(),
-        }],
-        structs: vec![],
-        types: vec![OpaqueType {
-            name: "source".into(),
-            instance: Some(Instance {
-                foreign_name: "Source".into(),
-                arg: Tref::Ref {
-                    id: "notes#settings".into(),
-                    args: vec![],
-                },
-            }),
-            methods: vec![],
-        }],
-        externs: vec![ExternDecl {
-            name: "new_env_source".into(),
-            params: vec![],
-            r#return: Tref::Ref {
-                id: "cfgkit#source".into(),
+    let source_ref = Tref::Ref {
+        id: "cfgkit#source".into(),
+        args: vec![],
+    };
+    let mut lib = simple_go_lib(
+        "cfgkit",
+        "new_env_source",
+        "NewEnvSource",
+        source_ref.clone(),
+    );
+    lib.types = vec![OpaqueType {
+        name: "source".into(),
+        instance: Some(Instance {
+            foreign_name: "Source".into(),
+            arg: Tref::Ref {
+                id: "notes#settings".into(),
                 args: vec![],
             },
-            langs: vec![ExternLang {
-                lang: "go".into(),
-                symbol: "NewEnvSource".into(),
-                call_args: vec![],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-            }],
-        }],
-    };
+        }),
+        methods: vec![],
+    }];
     let call = EntryCall {
         ns: "cfgkit".into(),
         func: "new_env_source".into(),
         args: vec![],
     };
-    let mut source_field = field(
-        "source",
-        Tref::Ref {
-            id: "cfgkit#source".into(),
-            args: vec![],
-        },
-        vec![],
-    );
+    let mut source_field = field("source", source_ref, vec![]);
     source_field.call = Some(call.clone());
     let mut module = bare_module();
     module.ext_libs = vec![lib];
