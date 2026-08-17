@@ -4,9 +4,10 @@ use crate::codegen::targets::typescript::types::ts_casing;
 use crate::codegen::targets::typescript::TsRules;
 use crate::codegen::test_support::{member, rendered, structure};
 use crate::ir::{
-    ArmValue, CallCtor, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang as IrExternLang,
-    ForeignField, ForeignStruct, LangPath, OpImplCall, OpaqueType, Prim, ReturnsField, ReturnsLit,
-    ReturnsValue, Select, SelectArm, Shape, ShapeKind, Source, Tref, YieldsPos,
+    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExtLib, ExternDecl,
+    ExternLang as IrExternLang, ForeignField, ForeignStruct, LangPath, OpImplCall, OpaqueType,
+    Prim, ReturnsField, ReturnsLit, ReturnsValue, Select, SelectArm, Shape, ShapeKind, Source,
+    Tref, YieldsPos,
 };
 
 fn ef(name: &str, target: Tref, sources: Vec<Source>, call: Option<EntryCall>) -> EntryField {

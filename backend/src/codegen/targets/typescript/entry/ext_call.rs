@@ -109,6 +109,19 @@ pub(super) fn json_literal(v: &serde_json::Value) -> String {
     }
 }
 
+/// [`render_arg`]'s own default `Ref` resolution: a sibling entry field read
+/// off `s`, the seam function's own parameter. A handle-method call site
+/// (`ext_handle_call.rs`) reads off a different root and also recognizes the
+/// op's own input parameter, so that call site supplies its own resolver
+/// instead of this default.
+pub(super) fn field_ref(
+    entry: &EntryModel<'_>,
+    config: &crate::codegen::casing::CasingConfig,
+    path: &[String],
+) -> String {
+    field_path_expr(entry, config, path, "s")
+}
+
 /// Render one node of a `ts` language block's `call_args` template, purely
 /// from (entry, config): `Resolver::path_read` is itself a pure function of
 /// exactly those two things (`field_path_expr`), so this needs no `Resolver`
@@ -117,13 +130,16 @@ pub(super) fn json_literal(v: &serde_json::Value) -> String {
 /// for it (positional against `params`); the substituted value is rendered
 /// with an empty `(params, site_args)`, so a stray `Param` inside it (which
 /// the grammar never produces) fails loudly instead of silently matching the
-/// outer template's parameters.
+/// outer template's parameters. `ref_expr` resolves a `Ref` leaf: the two
+/// call sites (a free extern-fn field and an op's own handle-method call)
+/// read a `Ref`'s root differently, so this is the one seam they don't share.
 pub(super) fn render_arg(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
     arg: &CallArg,
     params: &[ExternParam],
     site_args: &[CallArg],
+    ref_expr: &dyn Fn(&EntryModel<'_>, &crate::codegen::casing::CasingConfig, &[String]) -> String,
 ) -> String {
     match arg {
         CallArg::Param(name) => {
@@ -136,15 +152,15 @@ pub(super) fn render_arg(
             let site = site_args.get(idx).unwrap_or_else(|| {
                 panic!("extern call site is missing an argument for parameter {name:?}")
             });
-            render_arg(entry, config, site, &[], &[])
+            render_arg(entry, config, site, &[], &[], ref_expr)
         }
-        CallArg::Ref(path) => field_path_expr(entry, config, path, "s"),
+        CallArg::Ref(path) => ref_expr(entry, config, path),
         CallArg::Lit(v) => json_literal(v),
         CallArg::List(items) => format!(
             "[{}]",
             items
                 .iter()
-                .map(|i| render_arg(entry, config, i, params, site_args))
+                .map(|i| render_arg(entry, config, i, params, site_args, ref_expr))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -152,7 +168,10 @@ pub(super) fn render_arg(
             "{{ {} }}",
             fields
                 .iter()
-                .map(|(k, v)| format!("{k}: {}", render_arg(entry, config, v, params, site_args)))
+                .map(|(k, v)| format!(
+                    "{k}: {}",
+                    render_arg(entry, config, v, params, site_args, ref_expr)
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -299,7 +318,9 @@ fn call_body(
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
         for a in &lang.call_args {
-            parts.push(render_arg(entry, config, a, l.params, &call.args));
+            parts.push(render_arg(
+                entry, config, a, l.params, &call.args, &field_ref,
+            ));
         }
         parts.join(", ")
     };

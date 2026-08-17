@@ -27,10 +27,10 @@
 use crate::codegen::entries::EntryModel;
 use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
-use crate::ir::{CallArg, ExternLang, ExternParam, Module, OpImplCall};
+use crate::ir::{ExternLang, ExternParam, Module, OpImplCall};
 
 use super::checks::field_path_expr;
-use super::ext_call::{returns_value_expr, sentinel_error_class};
+use super::ext_call::{render_arg, returns_value_expr, sentinel_error_class};
 use super::module_symbol;
 use std::collections::BTreeSet;
 
@@ -111,11 +111,15 @@ pub(super) fn impl_call_body(
 
     refs.push(module_symbol(&error_names().contract, module));
 
+    let ref_expr =
+        |entry: &EntryModel<'_>, config: &crate::codegen::casing::CasingConfig, path: &[String]| {
+            handle_call_ref_expr(entry, config, path, input_name)
+        };
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
         for a in &lang.call_args {
-            parts.push(render_call_arg(
-                entry, config, a, l.params, &call.args, input_name,
+            parts.push(render_arg(
+                entry, config, a, l.params, &call.args, &ref_expr,
             ));
         }
         parts.join(", ")
@@ -177,73 +181,32 @@ pub(super) fn impl_call_body(
     )
 }
 
-/// [`ext_call::render_arg`]'s counterpart for a handle-method call site: a
-/// `Ref` here reads either the op's own declared input parameter (its head
-/// matching `input_name`, the same recognition Go's `ref_expr` closure in
+/// [`ext_call::render_arg`]'s `Ref` resolver for a handle-method call site:
+/// the op's own declared input parameter (its head matching `input_name`,
+/// the same recognition Go's `ref_expr` closure in
 /// `go/entry/ext.rs::impl_call_body` performs) or a sibling entry field off
-/// `this.settings`, instead of `ext_call.rs`'s seam-function parameter `s`.
-/// Every other `CallArg` variant matches `ext_call::render_arg` exactly.
-fn render_call_arg(
+/// `this.settings`, instead of `ext_call.rs`'s default (a sibling field off
+/// the seam function's own parameter `s`).
+fn handle_call_ref_expr(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
-    arg: &CallArg,
-    params: &[ExternParam],
-    site_args: &[CallArg],
+    path: &[String],
     input_name: Option<&str>,
 ) -> String {
-    match arg {
-        CallArg::Param(name) => {
-            let idx = params
-                .iter()
-                .position(|p| &p.name == name)
-                .unwrap_or_else(|| {
-                    panic!("extern call template references undeclared parameter {name:?}")
-                });
-            let site = site_args.get(idx).unwrap_or_else(|| {
-                panic!("extern call site is missing an argument for parameter {name:?}")
-            });
-            render_call_arg(entry, config, site, &[], &[], input_name)
-        }
-        CallArg::Ref(path) => match path.split_first() {
-            Some((head, rest)) if Some(head.as_str()) == input_name => {
-                if rest.is_empty() {
-                    "input".to_string()
-                } else {
-                    let mut out = "input".to_string();
-                    for seg in rest {
-                        out.push('.');
-                        out.push_str(&super::field_camel(seg, config));
-                    }
-                    out
+    match path.split_first() {
+        Some((head, rest)) if Some(head.as_str()) == input_name => {
+            if rest.is_empty() {
+                "input".to_string()
+            } else {
+                let mut out = "input".to_string();
+                for seg in rest {
+                    out.push('.');
+                    out.push_str(&super::field_camel(seg, config));
                 }
+                out
             }
-            _ => field_path_expr(entry, config, path, "this.settings"),
-        },
-        CallArg::Lit(v) => super::ext_call::json_literal(v),
-        CallArg::List(items) => format!(
-            "[{}]",
-            items
-                .iter()
-                .map(|i| render_call_arg(entry, config, i, params, site_args, input_name))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        CallArg::Ctor(crate::ir::CallCtor { fields, .. }) => format!(
-            "{{ {} }}",
-            fields
-                .iter()
-                .map(|(k, v)| format!(
-                    "{k}: {}",
-                    render_call_arg(entry, config, v, params, site_args, input_name)
-                ))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        CallArg::Call(_) => {
-            unimplemented!(
-                "a nested extern call used as a handle-method call's argument is not supported yet"
-            )
         }
+        _ => field_path_expr(entry, config, path, "this.settings"),
     }
 }
 
