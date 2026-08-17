@@ -442,6 +442,38 @@ cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
 EOF
 (cd "$work/auth/out/typescript" && "$tsc" -p tsconfig.json)
 
+echo "segmented-config..."
+# The map-indexed match recipe: a field indexed by another field's value
+# (`by_segment[.seg]`), its mandatory `null` arm, and `._` reading the
+# looked-up value back. Compiled the same way as auth-bearer (frontend ->
+# gen -> go build/test, tsc); both declared tests supply the map/key
+# directly as construction values, so nothing depends on the environment.
+mkdir -p "$work/segmented"
+"$frontend" compile "$root/examples/segmented-config/service.tono" --module segmentedconfig >"$work/segmented/ir.json"
+"$root/target/debug/tono" gen --target go,typescript --out "$work/segmented/out" \
+    --go-module example.com/segmentedconfig "$work/segmented/ir.json"
+(cd "$work/segmented/out/go" && go mod init example.com/segmentedconfig >/dev/null 2>&1 \
+    && go mod tidy >/dev/null \
+    && go build ./...)
+(cd "$work/segmented/out/go" && go test ./...)
+cat >"$work/segmented/out/typescript/tsconfig.json" <<EOF
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2020",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM"],
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["**/*.test.ts"]
+}
+EOF
+(cd "$work/segmented/out/typescript" && "$tsc" -p tsconfig.json)
+(cd "$work/segmented/out/typescript" && "$vitest" run)
+
 echo "config-lib..."
 # The `ext <lib> { extern ... }` FFI recipe: a config field constructed by a
 # declarative call into a third-party library, exercised for real against a
