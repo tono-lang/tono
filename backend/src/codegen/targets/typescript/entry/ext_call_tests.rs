@@ -156,28 +156,9 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
             instance: None,
             methods: vec![],
         }],
-        vec![ExternDecl {
-            name: "connect".into(),
-            params: vec![string_param("endpoint"), string_param("token")],
-            r#return: Tref::Ref {
-                id: "companybus#publisher".into(),
-                args: vec![],
-            },
-            langs: vec![IrExternLang {
-                lang: "ts".into(),
-                symbol: "connect".into(),
-                call_args: vec![
-                    CallArg::Param("endpoint".into()),
-                    CallArg::Param("token".into()),
-                ],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-            }],
-        }],
+        vec![super::super::ext_fixtures::connect_publisher_extern(
+            "companybus#publisher",
+        )],
     );
     vec![companyconfig, companybus]
 }

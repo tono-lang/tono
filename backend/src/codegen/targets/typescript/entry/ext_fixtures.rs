@@ -5,8 +5,8 @@
 //! is built once instead of drifting apart as two copies.
 
 use crate::ir::{
-    EntryCall, EntryField, ErrorBinding, ExternDecl, ExternLang, ExternParam, Prim, ReturnsField,
-    ReturnsLit, ReturnsValue, Source, Tref, YieldsPos,
+    CallArg, EntryCall, EntryField, ErrorBinding, ExternDecl, ExternLang, ExternParam, OpImplCall,
+    Prim, ReturnsField, ReturnsLit, ReturnsValue, Source, Tref, YieldsPos,
 };
 
 /// An entry field, built from exactly the parts a worked `ext` example
@@ -56,8 +56,8 @@ pub fn send_method(ack_id: &str, raw_ack_id: &str) -> ExternDecl {
             lang: "ts".into(),
             symbol: "send".into(),
             call_args: vec![
-                crate::ir::CallArg::Param("topic".into()),
-                crate::ir::CallArg::Param("body".into()),
+                CallArg::Param("topic".into()),
+                CallArg::Param("body".into()),
             ],
             yields: vec![YieldsPos {
                 name: "ack".into(),
@@ -82,5 +82,60 @@ pub fn send_method(ack_id: &str, raw_ack_id: &str) -> ExternDecl {
             infallible: false,
             ctx: false,
         }],
+    }
+}
+
+/// A handle constructor `connect(endpoint, token) -> publisher`, `ts`
+/// binding: a bare construction (no `yields`), the shape a real injectable
+/// handle field's own `field.call` exercises. `publisher_id` is the
+/// caller's own module-qualified id for the opaque handle type.
+pub fn connect_publisher_extern(publisher_id: &str) -> ExternDecl {
+    ExternDecl {
+        name: "connect".into(),
+        params: vec![
+            ExternParam {
+                name: "endpoint".into(),
+                r#type: Tref::Prim(Prim::String),
+            },
+            ExternParam {
+                name: "token".into(),
+                r#type: Tref::Prim(Prim::String),
+            },
+        ],
+        r#return: Tref::Ref {
+            id: publisher_id.into(),
+            args: vec![],
+        },
+        langs: vec![ExternLang {
+            lang: "ts".into(),
+            symbol: "connect".into(),
+            call_args: vec![
+                CallArg::Param("endpoint".into()),
+                CallArg::Param("token".into()),
+            ],
+            yields: vec![],
+            returns: None,
+            errors: vec![],
+            sync: false,
+            infallible: false,
+            ctx: false,
+        }],
+    }
+}
+
+/// An op's own body: a call into the `bus` field's `send` method, reading
+/// a sibling `topic` field and the op's own declared input parameter's
+/// `body` member as its two arguments -- the shape [`send_method`]'s own
+/// `params`/`call_args` expect. Shared by this module's own unit tests and
+/// the external `ts_ext_roundtrip.rs` compiled-vector check, both of which
+/// pair a `send_method` handle with an op implemented exactly this way.
+pub fn send_op_impl_call() -> OpImplCall {
+    OpImplCall {
+        recv: vec!["bus".into()],
+        method: "send".into(),
+        args: vec![
+            CallArg::Ref(vec!["topic".into()]),
+            CallArg::Ref(vec!["msg".into(), "body".into()]),
+        ],
     }
 }

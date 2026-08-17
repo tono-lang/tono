@@ -241,14 +241,7 @@ fn publish_op() -> Shape {
             }),
             errors: vec![],
             wire: None,
-            impl_call: Some(OpImplCall {
-                recv: vec!["bus".into()],
-                method: "send".into(),
-                args: vec![
-                    CallArg::Ref(vec!["topic".into()]),
-                    CallArg::Ref(vec!["msg".into(), "body".into()]),
-                ],
-            }),
+            impl_call: Some(super::super::ext_fixtures::send_op_impl_call()),
         },
         traits: vec![],
     }

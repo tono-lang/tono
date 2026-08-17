@@ -17,7 +17,9 @@ use std::sync::Mutex;
 
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
-use tono_backend::codegen::targets::typescript::entry::ext_fixtures::ef;
+use tono_backend::codegen::targets::typescript::entry::ext_fixtures::{
+    self, connect_publisher_extern, ef, send_op_impl_call,
+};
 use tono_backend::codegen::targets::typescript::types::ts_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
 use tono_backend::ir::{
@@ -41,6 +43,26 @@ fn have(tool: &str, probe: &str) -> bool {
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests/ts-ext")
+}
+
+/// A structure shape with a single required member, the shape both
+/// `hc#ack` and `hc#notify_input` need.
+fn single_member_shape(id: &str, member_name: &str, target: Tref) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![tono_backend::ir::Member {
+                name: member_name.into(),
+                target,
+                required: true,
+                default: None,
+                constraints: vec![],
+                traits: vec![],
+            }],
+        },
+        traits: vec![],
+    }
 }
 
 fn string_field(name: &str) -> ForeignField {
@@ -148,37 +170,7 @@ fn appendix_model() -> Model {
             instance: None,
             methods: vec![],
         }],
-        externs: vec![ExternDecl {
-            name: "connect".into(),
-            params: vec![
-                ExternParam {
-                    name: "endpoint".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-                ExternParam {
-                    name: "token".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-            ],
-            r#return: Tref::Ref {
-                id: "companybus#publisher".into(),
-                args: vec![],
-            },
-            langs: vec![ExternLang {
-                lang: "ts".into(),
-                symbol: "connect".into(),
-                call_args: vec![
-                    CallArg::Param("endpoint".into()),
-                    CallArg::Param("token".into()),
-                ],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-            }],
-        }],
+        externs: vec![connect_publisher_extern("companybus#publisher")],
     };
 
     let service = ef("service", Tref::Prim(Prim::String), vec![Source::Arg], None);
@@ -343,10 +335,7 @@ fn handle_call_model() -> Model {
         id: "hc#ack".into(),
         args: vec![],
     };
-    let send = tono_backend::codegen::targets::typescript::entry::ext_fixtures::send_method(
-        "hc#ack",
-        "companybus#raw_ack",
-    );
+    let send = ext_fixtures::send_method("hc#ack", "companybus#raw_ack");
     let companybus = ExtLib {
         name: "companybus".into(),
         langs: vec![LangPath {
@@ -365,37 +354,7 @@ fn handle_call_model() -> Model {
             instance: None,
             methods: vec![send],
         }],
-        externs: vec![ExternDecl {
-            name: "connect".into(),
-            params: vec![
-                ExternParam {
-                    name: "endpoint".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-                ExternParam {
-                    name: "token".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-            ],
-            r#return: Tref::Ref {
-                id: "companybus#publisher".into(),
-                args: vec![],
-            },
-            langs: vec![ExternLang {
-                lang: "ts".into(),
-                symbol: "connect".into(),
-                call_args: vec![
-                    CallArg::Param("endpoint".into()),
-                    CallArg::Param("token".into()),
-                ],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-            }],
-        }],
+        externs: vec![connect_publisher_extern("companybus#publisher")],
     };
 
     let endpoint = ef(
@@ -424,36 +383,8 @@ fn handle_call_model() -> Model {
     );
     bus.sources = vec![Source::With];
 
-    let ack_shape = Shape {
-        id: "hc#ack".into(),
-        kind: ShapeKind::Structure {
-            params: vec![],
-            members: vec![tono_backend::ir::Member {
-                name: "ok".into(),
-                target: Tref::Prim(Prim::Bool),
-                required: true,
-                default: None,
-                constraints: vec![],
-                traits: vec![],
-            }],
-        },
-        traits: vec![],
-    };
-    let notify_input = Shape {
-        id: "hc#notify_input".into(),
-        kind: ShapeKind::Structure {
-            params: vec![],
-            members: vec![tono_backend::ir::Member {
-                name: "body".into(),
-                target: Tref::Prim(Prim::String),
-                required: true,
-                default: None,
-                constraints: vec![],
-                traits: vec![],
-            }],
-        },
-        traits: vec![],
-    };
+    let ack_shape = single_member_shape("hc#ack", "ok", Tref::Prim(Prim::Bool));
+    let notify_input = single_member_shape("hc#notify_input", "body", Tref::Prim(Prim::String));
     let notify = Shape {
         id: "hc#client.notify".into(),
         kind: ShapeKind::Operation {
@@ -465,14 +396,7 @@ fn handle_call_model() -> Model {
             output: Some(ack_t),
             errors: vec![],
             wire: None,
-            impl_call: Some(tono_backend::ir::OpImplCall {
-                recv: vec!["bus".into()],
-                method: "send".into(),
-                args: vec![
-                    CallArg::Ref(vec!["topic".into()]),
-                    CallArg::Ref(vec!["msg".into(), "body".into()]),
-                ],
-            }),
+            impl_call: Some(send_op_impl_call()),
         },
         traits: vec![],
     };
@@ -550,18 +474,30 @@ fn write_sdk(model: &Model) -> PathBuf {
     dir
 }
 
-#[test]
-fn the_rfc_appendix_generates_typescript_that_compiles_against_the_real_libraries() {
+/// Whether this run must skip a `tsc`-backed test: under `cargo-llvm-cov`
+/// (the instrumented binary confuses `tsc`'s own module resolution) or when
+/// no TypeScript toolchain is on `PATH` at all. Every test below shares this
+/// same escape hatch, since the verification model throughout this file is
+/// the target compiler, not a Rust assertion.
+fn skip_tsc_test() -> bool {
     if std::env::var_os("CARGO_LLVM_COV").is_some() {
         eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test ts_ext_roundtrip`");
-        return;
+        return true;
     }
     if !have("tsc", "--version") {
         eprintln!("skipping: TypeScript toolchain (tsc) not available");
-        return;
+        return true;
     }
+    false
+}
+
+/// Generate `model`'s TypeScript and assert it type-checks against the real
+/// stand-in libraries under `fixtures/`, holding `FIXTURE_LOCK` for the
+/// duration (both `tsc`-backed positive checks in this file write into the
+/// same `codegen-tests/ts-ext/sdk/` tree, so they cannot run concurrently).
+fn assert_generates_and_compiles(model: &Model) {
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&appendix_model());
+    let dir = write_sdk(model);
     let build = Command::new("tsc")
         .arg("-p")
         .arg("tsconfig.json")
@@ -577,29 +513,19 @@ fn the_rfc_appendix_generates_typescript_that_compiles_against_the_real_librarie
 }
 
 #[test]
+fn the_rfc_appendix_generates_typescript_that_compiles_against_the_real_libraries() {
+    if skip_tsc_test() {
+        return;
+    }
+    assert_generates_and_compiles(&appendix_model());
+}
+
+#[test]
 fn an_op_implemented_as_a_handle_method_call_compiles_against_the_real_library() {
-    if std::env::var_os("CARGO_LLVM_COV").is_some() {
-        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test ts_ext_roundtrip`");
+    if skip_tsc_test() {
         return;
     }
-    if !have("tsc", "--version") {
-        eprintln!("skipping: TypeScript toolchain (tsc) not available");
-        return;
-    }
-    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&handle_call_model());
-    let build = Command::new("tsc")
-        .arg("-p")
-        .arg("tsconfig.json")
-        .current_dir(&dir)
-        .output()
-        .expect("run tsc");
-    assert!(
-        build.status.success(),
-        "generated TypeScript failed to type-check:\n{}\n{}",
-        String::from_utf8_lossy(&build.stdout),
-        String::from_utf8_lossy(&build.stderr)
-    );
+    assert_generates_and_compiles(&handle_call_model());
 }
 
 /// Declaring a field the library does not actually have must break the
@@ -609,12 +535,7 @@ fn an_op_implemented_as_a_handle_method_call_compiles_against_the_real_library()
 /// access no longer type-checks, without touching the generator at all.
 #[test]
 fn a_field_the_library_does_not_have_breaks_the_typescript_check() {
-    if std::env::var_os("CARGO_LLVM_COV").is_some() {
-        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test ts_ext_roundtrip`");
-        return;
-    }
-    if !have("tsc", "--version") {
-        eprintln!("skipping: TypeScript toolchain (tsc) not available");
+    if skip_tsc_test() {
         return;
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
