@@ -143,7 +143,9 @@ pub fn go_extern_ctx(
     returns: Option<ReturnsLit>,
     errors: Vec<ErrorBinding>,
 ) -> ExternDecl {
-    let mut decl = go_extern(name, params, ret, symbol, call_args, yields, returns, errors);
+    let mut decl = go_extern(
+        name, params, ret, symbol, call_args, yields, returns, errors,
+    );
     decl.langs[0].ctx = true;
     decl
 }

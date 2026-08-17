@@ -15,7 +15,11 @@ use super::*;
 /// [`handle_adapter_decl`], whose interface method and adapter method
 /// signatures must render byte-for-byte the same so the adapter actually
 /// satisfies the interface.
-fn method_signature(m: &ExternDecl, lang: &ExternLang, refs: &mut Vec<Symbol>) -> (Vec<String>, String) {
+fn method_signature(
+    m: &ExternDecl,
+    lang: &ExternLang,
+    refs: &mut Vec<Symbol>,
+) -> (Vec<String>, String) {
     let mut params: Vec<String> = Vec::new();
     if lang.ctx {
         refs.push(import("context", "context"));

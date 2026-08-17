@@ -165,7 +165,9 @@ fn a_ctx_marked_handle_method_threads_context_through_every_call_site() {
         "{text}"
     );
     assert!(
-        text.contains("func (a *svcConnIfaceAdapter) Get(ctx context.Context, id string) (string, error) {"),
+        text.contains(
+            "func (a *svcConnIfaceAdapter) Get(ctx context.Context, id string) (string, error) {"
+        ),
         "{text}"
     );
     assert!(text.contains(":= a.real.Get(ctx, id)"), "{text}");
