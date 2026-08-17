@@ -43,6 +43,9 @@ let encode_arm_value (v : Ir.arm_value) : Ir.json =
   | Ir.Arm_lit j -> `Assoc [ ("lit", j) ]
   | Ir.Arm_sources ss ->
       `Assoc [ ("sources", `List (List.map encode_source ss)) ]
+  (* The unit-variant shape Rust's externally-tagged serde default gives a
+     payload-less enum case: a bare tag string, not an object. *)
+  | Ir.Arm_subject -> `String "subject"
 
 let encode_select (s : Ir.select) : Ir.json =
   let arm (a : Ir.select_arm) =
@@ -51,9 +54,13 @@ let encode_select (s : Ir.select) : Ir.json =
       @ [ ("value", encode_arm_value a.arm_value) ])
   in
   `Assoc
-    [
-      ("subject", encode_path s.subject); ("arms", `List (List.map arm s.arms));
-    ]
+    ([
+       ("subject", encode_path s.subject); ("arms", `List (List.map arm s.arms));
+     ]
+    @
+    match s.subject_index with
+    | None -> []
+    | Some idx -> [ ("subject_index", encode_path idx) ])
 
 let encode_bind (b : Ir.bind) : Ir.json =
   `Assoc
@@ -150,17 +157,21 @@ let decode_template_part j =
   | _ -> err "template part must be a single lit, field, param, or input key"
 
 let decode_arm_value j =
-  let* kvs = as_assoc j in
-  match kvs with
-  | [ ("field", v) ] ->
-      let* p = decode_path v in
-      Ok (Ir.Arm_field p)
-  | [ ("lit", v) ] -> Ok (Ir.Arm_lit v)
-  | [ ("sources", v) ] ->
-      let* xs = as_list v in
-      let* ss = map_result decode_source xs in
-      Ok (Ir.Arm_sources ss)
-  | _ -> err "arm value must be a single field, lit, or sources key"
+  match j with
+  | `String "subject" -> Ok Ir.Arm_subject
+  | `String other -> err "unknown arm value %S" other
+  | _ -> (
+      let* kvs = as_assoc j in
+      match kvs with
+      | [ ("field", v) ] ->
+          let* p = decode_path v in
+          Ok (Ir.Arm_field p)
+      | [ ("lit", v) ] -> Ok (Ir.Arm_lit v)
+      | [ ("sources", v) ] ->
+          let* xs = as_list v in
+          let* ss = map_result decode_source xs in
+          Ok (Ir.Arm_sources ss)
+      | _ -> err "arm value must be a single field, lit, or sources key")
 
 let decode_select j =
   let* kvs = as_assoc j in
@@ -169,17 +180,20 @@ let decode_select j =
     | Some v -> decode_path v
     | None -> err "select is missing subject"
   in
+  let* subject_index =
+    match List.assoc_opt "subject_index" kvs with
+    | None -> Ok None
+    | Some v ->
+        let* p = decode_path v in
+        Ok (Some p)
+  in
   let decode_arm aj =
     let* akvs = as_assoc aj in
     let* () = ensure_only [ "pattern"; "value" ] akvs in
-    (* A present null collapses to the wildcard: patterns are scalar literals,
-       and the Rust mirror's Option maps null to absent, so both sides must
-       read the two spellings identically. *)
-    let pattern =
-      match List.assoc_opt "pattern" akvs with
-      | Some `Null | None -> None
-      | p -> p
-    in
+    (* Absent means the wildcard arm; the mandatory "null" pattern of an
+       optional subject is [Lower]'s {"null": true} marker, never a bare
+       JSON null (see [Lower.lower_pattern] for why). *)
+    let pattern = List.assoc_opt "pattern" akvs in
     let* value =
       match List.assoc_opt "value" akvs with
       | Some v -> decode_arm_value v
@@ -194,7 +208,7 @@ let decode_select j =
         let* xs = as_list v in
         map_result decode_arm xs
   in
-  Ok ({ subject; arms } : Ir.select)
+  Ok ({ subject; subject_index; arms } : Ir.select)
 
 let decode_bind j =
   let* kvs = as_assoc j in

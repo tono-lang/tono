@@ -152,7 +152,12 @@ let enum_errors () =
   nonempty "junk in body" (decl_diags Parser.parse_enum "enum e { a : i64 }");
   (* A payload on an enum case is the union author's mistake; it is diagnosed. *)
   nonempty "case payload rejected"
-    (decl_diags Parser.parse_enum "enum e { a(i64) }")
+    (decl_diags Parser.parse_enum "enum e { a(i64) }");
+  (* A case named 'null' would be unreachable: the match parser always reads
+     a bare 'null' token as the optional-subject absence pattern, regardless
+     of which enum it matches. *)
+  nonempty "'null' case name rejected"
+    (decl_diags Parser.parse_enum "enum e { null, a }")
 
 let contains ~sub s =
   let n = String.length sub and m = String.length s in

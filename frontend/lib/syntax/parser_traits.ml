@@ -8,7 +8,7 @@ module P = Parser_state
 
 (* ref ::= "." name ("." name)*  — a field reference, possibly a path into a
    structured field. The caller has already seen the leading dot. *)
-let parse_ref_path st : Ast.ref_path =
+let rec parse_ref_path st : Ast.ref_path =
   let d0 = P.advance st in
   (* '.' *)
   let seg () =
@@ -30,7 +30,30 @@ let parse_ref_path st : Ast.ref_path =
     | _ -> (List.rev acc, last)
   in
   let segs, last = more [ first ] fspan in
-  { Ast.segs; ref_span = Span.merge d0.span last }
+  { Ast.segs; index = None; ref_span = Span.merge d0.span last }
+
+(* Same grammar as [parse_ref_path], plus an optional trailing "[" ref "]"
+   single-level map index, e.g. ".cfg.by_segment[.seg]". Kept separate from
+   [parse_ref_path] rather than folded into it: a map index is only
+   meaningful where the whole path is resolved as a unit against current
+   scope (today, only a match subject), not at every ref-path use site
+   (trait args, call args, ...). *)
+and parse_indexed_ref_path st : Ast.ref_path =
+  let base = parse_ref_path st in
+  match (P.peek st).kind with
+  | Token.LBracket ->
+      ignore (P.advance st);
+      let index = parse_ref_path st in
+      let close = P.expect st Token.RBracket "']' to close a map index" in
+      let finish =
+        match close with Some c -> c.span | None -> index.Ast.ref_span
+      in
+      {
+        base with
+        Ast.index = Some index;
+        ref_span = Span.merge base.Ast.ref_span finish;
+      }
+  | _ -> base
 
 (* A trait-argument value (the part after "key:"): a scalar, a
    "[" v ("," v)* "]" list literal, e.g. @http(code: [200, 207]), a
@@ -291,11 +314,11 @@ let parse_field_match st : Ast.field_match =
   (* 'match' *)
   let subject =
     match (P.peek st).kind with
-    | Token.Dot -> parse_ref_path st
+    | Token.Dot -> parse_indexed_ref_path st
     | _ ->
         P.error st (P.peek st).span
           "expected a field reference (.name) as the match subject";
-        { Ast.segs = []; ref_span = (P.peek st).span }
+        { Ast.segs = []; index = None; ref_span = (P.peek st).span }
   in
   ignore (P.expect st Token.LBrace "'{' to open the match body");
   let parse_pattern () =
@@ -310,6 +333,9 @@ let parse_field_match st : Ast.field_match =
     | Token.Ident "_" ->
         ignore (P.advance st);
         (Ast.PWildcard, t.span)
+    | Token.Ident "null" ->
+        ignore (P.advance st);
+        (Ast.PNull, t.span)
     | Token.Ident n ->
         ignore (P.advance st);
         (Ast.PName n, t.span)
@@ -323,7 +349,9 @@ let parse_field_match st : Ast.field_match =
     match t.kind with
     | Token.Dot ->
         let r = parse_ref_path st in
-        (Ast.AVRef r, r.ref_span)
+        if r.Ast.segs = [ "_" ] && r.Ast.index = None then
+          (Ast.AVSubject r.Ast.ref_span, r.ref_span)
+        else (Ast.AVRef r, r.ref_span)
     | Token.Str s ->
         ignore (P.advance st);
         (Ast.AVString s, t.span)

@@ -334,6 +334,8 @@ let arm_stacks_only_sources () =
     (entry
        "  v: string @env(\"V\")\n  x: string = match .v { _ => @doc(\"no\") }")
 
+(* Map-index/null/"._" match coverage lives in entries_map_index_test.ml. *)
+
 (* ── Typecheck: structured sources, boundaries, protocol positions ─────── *)
 
 let path_into_structured_source () =

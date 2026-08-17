@@ -451,6 +451,7 @@ fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     let mut module = fixture_module();
     let mut choice = bare_entry_field("choice", Tref::Prim(Prim::String), vec![]);
     choice.select = Some(crate::ir::Select {
+        subject_index: None,
         subject: vec!["client_name".into()],
         arms: vec![crate::ir::SelectArm {
             pattern: Some(serde_json::json!("demo")),
@@ -487,6 +488,7 @@ fn transforms_apply_to_chain_and_match_resolved_values() {
     let mut picked = bare_entry_field("picked", Tref::Prim(Prim::String), vec![]);
     picked.transforms = vec!["upper".into()];
     picked.select = Some(crate::ir::Select {
+        subject_index: None,
         subject: vec!["client_name".into()],
         arms: vec![
             crate::ir::SelectArm {

@@ -182,13 +182,19 @@ and wire_binding = {
 
 (* The selection table of [field: T = match .subject { ... }]. A pattern is a
    scalar JSON literal; [None] is the wildcard arm. *)
-and select = { subject : string list; arms : select_arm list }
+and select = {
+  subject : string list;
+  subject_index : string list option;
+  arms : select_arm list;
+}
+
 and select_arm = { arm_pattern : json option; arm_value : arm_value }
 
 and arm_value =
   | Arm_field of string list
   | Arm_lit of json
   | Arm_sources of source list
+  | Arm_subject
 
 (* One @bind(target, .source) at a composition point: the composed config's
    field being bound, and the entry field path feeding it. *)

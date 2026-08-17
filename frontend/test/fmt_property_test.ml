@@ -19,7 +19,8 @@ let rec erase_ty = function
   | Ast.TNullable (t, _) -> Ast.TNullable (erase_ty t, dspan)
   | Ast.TError _ -> Ast.TError dspan
 
-let erase_ref (r : Ast.ref_path) = { r with Ast.ref_span = dspan }
+let rec erase_ref (r : Ast.ref_path) =
+  { r with Ast.ref_span = dspan; index = Option.map erase_ref r.Ast.index }
 
 (* A trait argument can carry a reference or a call expression, both of which
    carry spans of their own; a call argument's own ctor field values are the
@@ -70,6 +71,7 @@ let erase_op_impl (oi : Ast.op_impl) : Ast.op_impl =
 let erase_arm_value = function
   | Ast.AVRef r -> Ast.AVRef (erase_ref r)
   | Ast.AVSources ts -> Ast.AVSources (List.map erase_trait ts)
+  | Ast.AVSubject _ -> Ast.AVSubject dspan
   | (Ast.AVString _ | Ast.AVInt _ | Ast.AVName _) as v -> v
 
 let erase_match (fm : Ast.field_match) =
@@ -314,7 +316,7 @@ let gen_ty = gen_ty 2
 
 let gen_ref =
   let+ segs = G.list_size (G.int_range 1 3) gen_lname in
-  { Ast.segs; ref_span = dspan }
+  { Ast.segs; index = None; ref_span = dspan }
 
 let gen_string =
   G.oneof_list

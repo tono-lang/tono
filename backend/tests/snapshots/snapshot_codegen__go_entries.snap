@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 183
+assertion_line: 224
 expression: "render_sdk(entries_module(), TargetKind::Go, Some(\"example.com/sdk\"))"
 ---
 // ==== go/internal/transport/transport.go ====
@@ -436,6 +436,8 @@ type Settings struct {
 	Settings conf
 	Creds Credentials
 	Labels map[string]string
+	Seg string
+	BySegment string
 
 	HTTPClient *http.Client
 	Transport  support.HTTPTransport
@@ -520,7 +522,7 @@ func resolveSettingMaxRetries(with *int32) int32 {
 
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, then the declared validation.
-func New(apiKey string, opts ...ClientOption) (*Client, error) {
+func New(apiKey string, seg string, opts ...ClientOption) (*Client, error) {
 	w := clientOptions{}
 	for _, opt := range opts {
 		opt(&w)
@@ -623,6 +625,24 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		labelsErr = &ConfigError{Message: "env SERVICE_LABELS: empty"}
 	}
 
+	s.Seg = seg
+
+	var bySegmentErr error
+	if labelsErr != nil {
+		bySegmentErr = &ConfigError{Message: "labels <- " + labelsErr.Error(), Cause: labelsErr}
+	} else {
+		bySegmentV, bySegmentOk := s.Labels[s.Seg]
+		if bySegmentOk {
+			s.BySegment = bySegmentV
+		} else {
+			if endpointErr != nil {
+				bySegmentErr = &ConfigError{Message: "endpoint <- " + endpointErr.Error(), Cause: endpointErr}
+			} else {
+				s.BySegment = s.Endpoint
+			}
+		}
+	}
+
 	if s.Endpoint == "" {
 		if endpointErr == nil {
 			return nil, &ConfigError{Message: "endpoint: no value"}
@@ -638,7 +658,7 @@ func New(apiKey string, opts ...ClientOption) (*Client, error) {
 		return nil, &ValidationError{Violations: violations}
 	}
 	_ = credsErr
-	_ = labelsErr
+	_ = bySegmentErr
 	timeoutDuration := time.Duration(0)
 	{
 		d, err := time.ParseDuration(string(s.Timeout))

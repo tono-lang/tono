@@ -328,8 +328,9 @@ let ext_word_hover ~markdown ~text (off : int) : Hover.t option =
 
 (* Hover, most specific first: a declaration name, a member name, an extern
    or handle name, a type reference (which shows the full target
-   declaration), an ext block word, a trait, then the token layer (keywords,
-   primitives, the ? marker). *)
+   declaration), a map-indexed match form (subject index, "null", "._"), an
+   ext block word, a trait, then the token layer (keywords, primitives, the ?
+   marker). *)
 let hover_at ~(markdown : bool) ~(text : string) ~(file : Ast.file)
     (pos : Position.t) : Hover.t option =
   let off = offset_of_position text pos in
@@ -360,16 +361,20 @@ let hover_at ~(markdown : bool) ~(text : string) ~(file : Ast.file)
                   | None ->
                       Some (mk_hover ~markdown ~text ~code:name ~prose:None sp))
               | None -> (
-                  match ext_word_hover ~markdown ~text off with
-                  | Some h -> Some h
+                  match Analysis_match.hover_at file off with
+                  | Some (code, prose, span) ->
+                      Some (mk_hover ~markdown ~text ~code ~prose span)
                   | None -> (
-                      match
-                        List.find_opt
-                          (fun (t : Ast.trait) -> contains t.Ast.tspan off)
-                          (file_traits file)
-                      with
-                      | Some t -> trait_hover ~markdown ~text t
-                      | None -> token_hover ~markdown ~text off)))))
+                      match ext_word_hover ~markdown ~text off with
+                      | Some h -> Some h
+                      | None -> (
+                          match
+                            List.find_opt
+                              (fun (t : Ast.trait) -> contains t.Ast.tspan off)
+                              (file_traits file)
+                          with
+                          | Some t -> trait_hover ~markdown ~text t
+                          | None -> token_hover ~markdown ~text off))))))
 
 let definition_at ~(uri : DocumentUri.t) ~(text : string) ~(file : Ast.file)
     (pos : Position.t) : Location.t option =
@@ -503,12 +508,24 @@ let enclosing_fields (file : Ast.file) (off : int) : Ast.member list =
     [] file.Ast.decls
 
 let field_items (file : Ast.file) (off : int) : CompletionItem.t list =
-  List.map
-    (fun (m : Ast.member) ->
-      CompletionItem.create ~label:m.Ast.mname ~kind:CompletionItemKind.Field
-        ~detail:(Printer.print_ty m.Ast.mtype)
-        ())
-    (enclosing_fields file off)
+  let fields =
+    List.map
+      (fun (m : Ast.member) ->
+        CompletionItem.create ~label:m.Ast.mname ~kind:CompletionItemKind.Field
+          ~detail:(Printer.print_ty m.Ast.mtype)
+          ())
+      (enclosing_fields file off)
+  in
+  if Analysis_match.in_indexed_arm_value file off then
+    CompletionItem.create ~label:"_" ~kind:CompletionItemKind.Variable
+      ~detail:"the match subject, narrowed"
+      ?documentation:
+        (Option.map
+           (fun d -> `String d)
+           (Hover_docs.match_form_doc "subject_ref"))
+      ()
+    :: fields
+  else fields
 
 let is_ident_char c =
   (c >= 'a' && c <= 'z')

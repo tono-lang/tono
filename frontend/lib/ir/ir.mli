@@ -158,14 +158,24 @@ and wire_binding = {
 }
 
 (* The selection table of [field: T = match .subject { ... }]; a pattern is a
-   scalar JSON literal, [None] the wildcard arm. *)
-and select = { subject : string list; arms : select_arm list }
+   scalar JSON literal, [None] the wildcard arm, the {"null": true} marker
+   object the mandatory null arm of an optional subject (never a bare JSON
+   null, which a mirrored [Option] would collapse back into the wildcard). [subject_index], when present, names a
+   single-level map-index key path applied to [subject] (".cfg.by_segment[.seg]"),
+   making the subject optional. *)
+and select = {
+  subject : string list;
+  subject_index : string list option;
+  arms : select_arm list;
+}
+
 and select_arm = { arm_pattern : json option; arm_value : arm_value }
 
 and arm_value =
   | Arm_field of string list
   | Arm_lit of json
   | Arm_sources of source list
+  | Arm_subject (* "._": the match subject itself, narrowed non-optional *)
 
 (* One @bind(target, .source) at a composition point. *)
 and bind = { bind_field : string; bind_source : string list }

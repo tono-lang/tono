@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 175
+assertion_line: 216
 expression: "render_sdk(entries_module(), TargetKind::Rust, None)"
 ---
 // ==== rust/env.rs ====
@@ -447,6 +447,8 @@ pub(crate) struct Settings {
     pub settings: Conf,
     pub creds: Credentials,
     pub labels: std::collections::HashMap<String, String>,
+    pub seg: String,
+    pub by_segment: String,
     #[cfg(feature = "reqwest")]
     pub client: Option<reqwest::Client>,
     pub transport: Option<HttpTransport>,
@@ -498,6 +500,7 @@ fn resolve_setting_max_retries(with: Option<i32>) -> i32 {
 
 pub struct ClientBuilder {
     api_key: String,
+    seg: String,
     client_name: Option<String>,
     timeout: Option<Duration>,
     max_retries: Option<i32>,
@@ -522,7 +525,7 @@ impl ClientBuilder {
     /// validation.
     pub fn build(self) -> Result<Client, TonoError> {
         let mut s = Settings {
-            api_key: String::new(), client_name: String::new(), client_key: String::new(), endpoint_env: String::new(), endpoint_version: String::new(), endpoint_v1: String::new(), endpoint_v2: String::new(), endpoint: String::new(), timeout: Duration(String::new()), max_retries: 0, settings: Conf { api_key: String::new(), region: String::new(), }, creds: Credentials { token: String::new(), account_id: String::new(), }, labels: std::collections::HashMap::new(),
+            api_key: String::new(), client_name: String::new(), client_key: String::new(), endpoint_env: String::new(), endpoint_version: String::new(), endpoint_v1: String::new(), endpoint_v2: String::new(), endpoint: String::new(), timeout: Duration(String::new()), max_retries: 0, settings: Conf { api_key: String::new(), region: String::new(), }, creds: Credentials { token: String::new(), account_id: String::new(), }, labels: std::collections::HashMap::new(), seg: String::new(), by_segment: String::new(),
             #[cfg(feature = "reqwest")]
             client: None,
             transport: None,
@@ -615,6 +618,22 @@ impl ClientBuilder {
             } else {
                 labels_err = Some(ConfigError { message: "env SERVICE_LABELS: empty".to_string() });
             }
+            s.seg = self.seg;
+            let mut by_segment_err: Option<ConfigError> = None;
+            if labels_err.is_some() {
+                by_segment_err = labels_err.as_ref().map(|e| ConfigError { message: format!("labels <- {}", e.message) });
+            } else {
+                let by_segment_v = s.labels.get(&s.seg);
+                if let Some(by_segment_v) = by_segment_v {
+                    s.by_segment = (by_segment_v).clone();
+                } else {
+                    if endpoint_err.is_some() {
+                        by_segment_err = endpoint_err.as_ref().map(|e| ConfigError { message: format!("endpoint <- {}", e.message) });
+                    } else {
+                        s.by_segment = (s.endpoint).clone();
+                    }
+                }
+            }
         if s.endpoint == String::new() {
             let reason = endpoint_err.as_ref().map(|err| err.message.clone()).unwrap_or_else(|| "no value".to_string());
             return Err(TonoError::Config(ConfigError { message: format!("endpoint <- {}", reason) }));
@@ -627,7 +646,7 @@ impl ClientBuilder {
             return Err(TonoError::Validation(ValidationError { violations }));
         }
         let _ = &creds_err;
-        let _ = &labels_err;
+        let _ = &by_segment_err;
         let timeout_ms = match parse_duration_ms(&s.timeout.0) {
             Ok(ms) => ms,
             Err(_) => {
@@ -651,8 +670,8 @@ impl ClientBuilder {
 impl Client {
     /// The entry point of the builder: the @arg values positionally,
     /// @with values configured through `.with_*` before `.build()`.
-    pub fn builder(api_key: String) -> ClientBuilder {
-        ClientBuilder { api_key, client_name: None, timeout: None, max_retries: None }
+    pub fn builder(api_key: String, seg: String) -> ClientBuilder {
+        ClientBuilder { api_key, seg, client_name: None, timeout: None, max_retries: None }
     }
     pub async fn save_note(&self, input: Note) -> Result<Note, TonoError> {
         let record = serde_json::to_value(&input).map_err(|e| TonoError::Config(ConfigError { message: format!("input serialization: {e}") }))?;

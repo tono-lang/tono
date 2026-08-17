@@ -150,3 +150,10 @@ val param_shadows_field : string
 (* `.request` used outside a @header/@query/@body extern-call argument (see
    error_codes.ml for the rule). *)
 val request_value_invalid : string
+
+(* Map-index key resolution/type mismatch, missing/misplaced mandatory
+   "null" match arm, and misplaced "._" (see error_codes.ml for the rules). *)
+val map_index_key_invalid : string
+val match_missing_null_arm : string
+val match_null_arm_not_optional : string
+val match_subject_ref_invalid : string

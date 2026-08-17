@@ -488,6 +488,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                     fields: vec![ReturnsField {
                         name: "endpoint".into(),
                         value: ReturnsValue::Select(Select {
+                            subject_index: None,
                             subject: vec!["cfg".into(), "Env".into()],
                             arms: vec![
                                 SelectArm {

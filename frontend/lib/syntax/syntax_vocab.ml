@@ -12,7 +12,7 @@
 let keywords : string list = List.map fst Token.keywords
 
 let contextual : string list =
-  [ "contract"; "constraint"; "impl"; "raw"; "match"; "stub"; "expect" ]
+  [ "contract"; "constraint"; "impl"; "raw"; "match"; "stub"; "expect"; "null" ]
 
 let constructs : string list = keywords @ contextual
 let is_construct (word : string) : bool = List.mem word constructs

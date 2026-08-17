@@ -16,7 +16,11 @@ type ty =
 (* A field reference written [.a] or a path [.a.b]: the segments after the
    leading dot, in order. Refs are resolved against the enclosing entry (or
    config) by the typechecker; the parser only records the path. *)
-type ref_path = { segs : string list; ref_span : Span.span }
+type ref_path = {
+  segs : string list;
+  index : ref_path option;
+  ref_span : Span.span;
+}
 
 type trait_arg =
   | AString of string
@@ -76,6 +80,7 @@ type match_pattern =
   | PInt of int
   | PName of string
   | PWildcard
+  | PNull
 
 (* What a selected arm yields: another field, a literal, or a stack of value
    sources ([@env]/[@default]) resolved in place. *)
@@ -85,6 +90,7 @@ type arm_value =
   | AVInt of int
   | AVName of string
   | AVSources of trait list
+  | AVSubject of Span.span
 
 type match_arm = {
   pat : match_pattern;

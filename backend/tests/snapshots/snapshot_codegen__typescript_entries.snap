@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 191
+assertion_line: 232
 expression: "render_sdk(entries_module(), TargetKind::TypeScript, None)"
 ---
 // ==== typescript/env.ts ====
@@ -322,6 +322,8 @@ export interface Settings {
   settings: Conf;
   creds: Credentials;
   labels: Record<string, string>;
+  seg: string;
+  bySegment: string;
   fetch?: typeof fetch;
   transport?: HttpTransport;
   headers: Record<string, string>;
@@ -370,8 +372,8 @@ export class Client {
   private readonly settings: Settings;
   private readonly options: ClientOptions;
   private readonly timeoutMs: number;
-  constructor(apiKey: string, config: ClientConfig = {}) {
-    const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, headers: {} };
+  constructor(apiKey: string, seg: string, config: ClientConfig = {}) {
+    const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, seg: "", bySegment: "", headers: {} };
 
     s.apiKey = apiKey;
 
@@ -507,6 +509,24 @@ export class Client {
       labelsErr = undefined;
     } else {
       labelsErr = new ConfigError("env SERVICE_LABELS: empty");
+    }
+
+    s.seg = seg;
+
+    let bySegmentErr: ConfigError | undefined;
+    if (labelsErr !== undefined) {
+      bySegmentErr = new ConfigError(`labels <- ${labelsErr.message}`, labelsErr);
+    } else {
+      const bySegmentV = s.labels[s.seg];
+      if (bySegmentV !== undefined) {
+        s.bySegment = bySegmentV;
+      } else {
+        if (endpointErr !== undefined) {
+          bySegmentErr = new ConfigError(`endpoint <- ${endpointErr.message}`, endpointErr);
+        } else {
+          s.bySegment = s.endpoint;
+        }
+      }
     }
 
     if (s.endpoint === "") {

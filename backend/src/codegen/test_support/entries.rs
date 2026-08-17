@@ -107,6 +107,7 @@ pub fn entries_matrix_module() -> Module {
     fields.push(derived);
     let mut picked = ef("picked", Tref::Prim(Prim::String), vec![]);
     picked.select = Some(Select {
+        subject_index: None,
         subject: vec!["naming".into()],
         arms: vec![
             SelectArm {
@@ -130,6 +131,7 @@ pub fn entries_matrix_module() -> Module {
     fields.push(picked);
     let mut sure_pick = ef("sure_pick", Tref::Prim(Prim::String), vec![]);
     sure_pick.select = Some(Select {
+        subject_index: None,
         subject: vec!["sure_name".into()],
         arms: vec![SelectArm {
             pattern: Some(json!("base")),
@@ -477,6 +479,7 @@ pub fn with_derived_config_members(module: &mut Module) {
     push_config_member(module, label);
     let mut size = bare_entry_field("size", Tref::Prim(Prim::String), vec![]);
     size.select = Some(crate::ir::Select {
+        subject_index: None,
         subject: vec!["client_name".into()],
         arms: vec![crate::ir::SelectArm {
             pattern: Some(serde_json::json!("demo")),
@@ -491,6 +494,7 @@ pub fn with_derived_config_members(module: &mut Module) {
 pub fn with_member_select_on_absent_subject(module: &mut Module) {
     let mut zone = bare_entry_field("zone", Tref::Prim(Prim::String), vec![]);
     zone.select = Some(crate::ir::Select {
+        subject_index: None,
         subject: vec!["endpoint".into()],
         arms: vec![
             crate::ir::SelectArm {

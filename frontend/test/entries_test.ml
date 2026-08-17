@@ -145,7 +145,7 @@ let lowered_entry () =
         (field "client_key").ef_transforms;
       (* selection *)
       (match (field "endpoint").ef_select with
-      | Some { subject; arms } ->
+      | Some { subject; subject_index = _; arms } ->
           Alcotest.(check (list string))
             "subject" [ "endpoint_version" ] subject;
           Alcotest.(check int) "arms" 3 (List.length arms);
@@ -216,8 +216,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_19 () =
-  Alcotest.(check int) "wire version" 19 Ir_json.current_ir_version
+let version_is_20 () =
+  Alcotest.(check int) "wire version" 20 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -588,7 +588,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 19" `Quick version_is_19;
+          Alcotest.test_case "version 20" `Quick version_is_20;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",
