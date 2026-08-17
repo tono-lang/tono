@@ -47,6 +47,36 @@ pub fn diff_ext_libs(baseline: &Model, current: &Model, out: &mut Vec<Change>) {
                 &named_externs(curr_lib),
                 out,
             );
+            diff_instances(&module.name, lib, curr_lib, out);
+        }
+    }
+}
+
+/// An opaque type's instantiation (the foreign name and argument it
+/// monomorphizes) changing, appearing, or disappearing between two versions
+/// of the same handle: the emitted Go type spelling
+/// (`*pkg.Source[Settings]`) changes with it, so generated consumer code
+/// that names the concrete type no longer compiles.
+fn diff_instances(module: &str, lib: &ExtLib, curr_lib: &ExtLib, out: &mut Vec<Change>) {
+    let curr_types: BTreeMap<&str, &crate::ir_extern_model::OpaqueType> = curr_lib
+        .types
+        .iter()
+        .map(|t| (t.name.as_str(), t))
+        .collect();
+    for ty in &lib.types {
+        let Some(curr_ty) = curr_types.get(ty.name.as_str()) else {
+            continue;
+        };
+        if ty.instance != curr_ty.instance {
+            out.push(Change {
+                key: format!("ext-instance {module}::{}.{}", lib.name, ty.name),
+                category: Category::SourceBreaking,
+                detail: format!(
+                    "{}.{}: the foreign instantiation changed; the emitted concrete \
+                     type no longer matches generated consumer code that names it",
+                    lib.name, ty.name
+                ),
+            });
         }
     }
 }
@@ -253,6 +283,7 @@ mod tests {
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "publisher".into(),
+            instance: None,
             methods: vec![ExternDecl {
                 name: "send".into(),
                 params: vec![],
@@ -278,6 +309,50 @@ mod tests {
         diff_ext_libs(&base, &curr, &mut out);
         assert_eq!(out.len(), 1);
         assert!(out[0].key.contains("publisher.send@go"), "{}", out[0].key);
+    }
+
+    #[test]
+    fn a_changed_instantiation_is_source_breaking() {
+        let mut m = base_module();
+        m.ext_libs[0].externs.clear();
+        m.ext_libs[0].types = vec![OpaqueType {
+            name: "env_source".into(),
+            instance: Some(crate::ir_extern_model::Instance {
+                foreign_name: "Source".into(),
+                arg: tref("settings"),
+            }),
+            methods: vec![],
+        }];
+        let base = model(m.clone());
+        let mut changed = m;
+        changed.ext_libs[0].types[0].instance.as_mut().unwrap().arg = tref("other_settings");
+        let curr = model(changed);
+
+        let mut out = Vec::new();
+        diff_ext_libs(&base, &curr, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].category, Category::SourceBreaking);
+        assert!(out[0].key.contains("env_source"), "{}", out[0].key);
+    }
+
+    #[test]
+    fn an_unchanged_instantiation_draws_no_diagnostic() {
+        let mut m = base_module();
+        m.ext_libs[0].externs.clear();
+        m.ext_libs[0].types = vec![OpaqueType {
+            name: "env_source".into(),
+            instance: Some(crate::ir_extern_model::Instance {
+                foreign_name: "Source".into(),
+                arg: tref("settings"),
+            }),
+            methods: vec![],
+        }];
+        let base = model(m.clone());
+        let curr = model(m);
+
+        let mut out = Vec::new();
+        diff_ext_libs(&base, &curr, &mut out);
+        assert!(out.is_empty(), "{out:?}");
     }
 
     #[test]

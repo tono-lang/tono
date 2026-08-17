@@ -404,6 +404,7 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
         structs: vec![],
         types: vec![OpaqueType {
             name: handle.into(),
+            instance: None,
             methods: vec![],
         }],
         externs: vec![ExternDecl {

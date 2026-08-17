@@ -397,6 +397,59 @@ let opaque_type_missing_brace () =
   nonempty "opaque type body never closed"
     (file_diags {|ext mylib { go: "example.com/mylib" type publisher |})
 
+let opaque_type_instance_missing_string () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go: "example.com/mylib"
+         type source(settings) { extern get(): settings { go { call: "Get"() } } }
+       }|}
+  in
+  Alcotest.(check bool)
+    "names the missing foreign name string" true
+    (has_message ~sub:"foreign type's name as a string" ds)
+
+let opaque_type_instance_missing_comma () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go: "example.com/mylib"
+         type source("Source" settings) { extern get(): settings { go { call: "Get"() } } }
+       }|}
+  in
+  Alcotest.(check bool)
+    "names the missing comma" true
+    (has_message ~sub:"',' between the foreign name and the argument" ds)
+
+let opaque_type_instance_missing_paren () =
+  nonempty "instantiation clause never closed"
+    (file_diags
+       {|ext mylib {
+         go: "example.com/mylib"
+         type source("Source", settings { extern get(): settings { go { call: "Get"() } } }
+       }|})
+
+(* An instantiation names exactly one argument; a second one is diagnosed
+   once, at the stray comma, not cascaded into a diagnostic per leftover
+   token (the recovery skips to the close paren instead of falling through
+   into "expected '{' to open the type body"). *)
+let opaque_type_instance_extra_argument () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go: "example.com/mylib"
+         type source("Source", settings, flags) {
+           extern get(): settings { go { call: "Get"() } }
+         }
+       }
+       struct settings { endpoint: string }
+       struct flags { enabled: bool }|}
+  in
+  Alcotest.(check int) "one diagnostic, not a cascade" 1 (List.length ds);
+  Alcotest.(check bool)
+    "names the close paren" true
+    (has_message ~sub:"')' to close the instantiation" ds)
+
 let ext_lib_body_junk () =
   nonempty "junk directly in an ext lib body" (file_diags {|ext mylib { @ }|})
 
@@ -501,6 +554,14 @@ let () =
           Alcotest.test_case "missing name" `Quick opaque_type_missing_name;
           Alcotest.test_case "body junk" `Quick opaque_type_body_junk;
           Alcotest.test_case "missing brace" `Quick opaque_type_missing_brace;
+          Alcotest.test_case "instance missing string" `Quick
+            opaque_type_instance_missing_string;
+          Alcotest.test_case "instance missing comma" `Quick
+            opaque_type_instance_missing_comma;
+          Alcotest.test_case "instance missing paren" `Quick
+            opaque_type_instance_missing_paren;
+          Alcotest.test_case "instance extra argument" `Quick
+            opaque_type_instance_extra_argument;
         ] );
       ( "ext lib",
         [

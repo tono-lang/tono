@@ -158,6 +158,7 @@ fn appendix_model() -> Model {
         structs: vec![],
         types: vec![OpaqueType {
             name: "publisher".into(),
+            instance: None,
             methods: vec![],
         }],
         externs: vec![ExternDecl {

@@ -141,6 +141,14 @@ and lower_opaque_type ~lower_type ~lower_select ~resolve ~diags
     (t : Ast.opaque_type) : Ir.opaque_type =
   {
     Ir.opq_name = t.opq_name;
+    opq_instance =
+      Option.map
+        (fun (i : Ast.opaque_instance) ->
+          {
+            Ir.inst_foreign_name = i.oi_foreign_name;
+            inst_arg = lower_type ~params:[] ~resolve ~diags i.oi_arg;
+          })
+        t.opq_instance;
     opq_methods =
       List.map
         (lower_extern ~lower_type ~lower_select ~resolve ~diags)

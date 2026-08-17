@@ -441,6 +441,8 @@ pub struct client {
     "no boundary diagnostics" []
     (List.filter (String.equal "TC0034") (codes src))
 
+(* Foreign generic type instantiation: see extern_instance_test.ml. *)
+
 (* A yields: position with no returns: at all (not merely one that omits a
    ref to this position) still has nothing to consume it. *)
 let yields_with_no_returns_at_all_is_dead () =

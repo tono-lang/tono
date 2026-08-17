@@ -450,9 +450,58 @@ let parse_extern ~parse_type ~parse_type_no_error st : Ast.extern_decl =
       Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
   }
 
-(* type ::= "type" name "{" extern+ "}"  -- an opaque foreign handle; "type"
-   is a contextual keyword here (not a lexer keyword), like "extern"/"call"/
-   "yields"/"returns"/"errors". *)
+(* instance ::= "(" string "," type ")"  -- declares which instantiation of a
+   foreign generic type this opaque handle names: the foreign type's own
+   name (a string, so the origin stays visible) and the tono argument it is
+   monomorphized with. *)
+let parse_opaque_instance ~parse_type st : Ast.opaque_instance =
+  let open_p = P.expect st Token.LParen "'(' to open the instantiation" in
+  let nt = P.peek st in
+  let foreign_name =
+    match nt.kind with
+    | Token.Str s ->
+        ignore (P.advance st);
+        s
+    | _ ->
+        P.error st nt.span "expected the foreign type's name as a string";
+        ""
+  in
+  ignore
+    (P.expect st Token.Comma "',' between the foreign name and the argument");
+  let arg_span_start = (P.peek st).span in
+  let arg = parse_type st in
+  let close = P.expect st Token.RParen "')' to close the instantiation" in
+  (* An instantiation names exactly one foreign name and one type argument;
+     a second argument (or any other stray token) is not a distinct error
+     per token, so skip to the close paren or the type body instead of
+     cascading into "expected '{' to open the type body" and then "a type
+     body may only contain 'extern' methods" once per leftover token. *)
+  (match close with
+  | Some _ -> ()
+  | None ->
+      let rec skip () =
+        match (P.peek st).kind with
+        | Token.RParen -> ignore (P.advance st)
+        | Token.LBrace | Token.RBrace | Token.Eof -> ()
+        | _ ->
+            ignore (P.advance st);
+            skip ()
+      in
+      skip ());
+  {
+    Ast.oi_foreign_name = foreign_name;
+    oi_foreign_span = nt.span;
+    oi_arg = arg;
+    oi_arg_span = arg_span_start;
+    oi_span =
+      Span.merge
+        (match open_p with Some t -> t.span | None -> nt.span)
+        (match close with Some t -> t.span | None -> arg_span_start);
+  }
+
+(* type ::= "type" name instance? "{" extern+ "}"  -- an opaque foreign
+   handle; "type" is a contextual keyword here (not a lexer keyword), like
+   "extern"/"call"/"yields"/"returns"/"errors". *)
 let parse_opaque_type ~parse_type ~parse_type_no_error st : Ast.opaque_type =
   let kw = P.advance st in
   (* 'type' *)
@@ -467,6 +516,11 @@ let parse_opaque_type ~parse_type ~parse_type_no_error st : Ast.opaque_type =
         ""
   in
   check_not_error_name st "opaque type" name nt.span;
+  let instance =
+    match (P.peek st).kind with
+    | Token.LParen -> Some (parse_opaque_instance ~parse_type st)
+    | _ -> None
+  in
   ignore (P.expect st Token.LBrace "'{' to open the type body");
   let rec methods acc =
     match (P.peek st).kind with
@@ -484,6 +538,7 @@ let parse_opaque_type ~parse_type ~parse_type_no_error st : Ast.opaque_type =
   {
     Ast.opq_name = name;
     opq_name_span = nt.span;
+    opq_instance = instance;
     opq_methods = ms;
     opq_span =
       Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);

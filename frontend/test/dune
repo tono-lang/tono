@@ -12,6 +12,7 @@
   extern_test
   extern_ir_decode_test
   extern_typecheck_test
+  extern_instance_test
   ext_lib_collisions_test
   op_impl_test
   decl_test

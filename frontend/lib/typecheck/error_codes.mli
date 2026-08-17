@@ -157,3 +157,7 @@ val map_index_key_invalid : string
 val match_missing_null_arm : string
 val match_null_arm_not_optional : string
 val match_subject_ref_invalid : string
+
+(* An opaque foreign type's instantiation clause declared more than once
+   with the same foreign name and argument (see error_codes.ml). *)
+val instance_duplicate : string

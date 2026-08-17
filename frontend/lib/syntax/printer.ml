@@ -458,7 +458,16 @@ let print_extern ~indent (e : Ast.extern_decl) : string =
 
 let print_opaque_type ~indent (t : Ast.opaque_type) : string =
   let inner = indent ^ "  " in
-  braced_at ~indent ("type " ^ t.Ast.opq_name)
+  let instance =
+    match t.Ast.opq_instance with
+    | None -> ""
+    | Some i ->
+        "("
+        ^ escaped_string i.Ast.oi_foreign_name
+        ^ ", " ^ print_ty i.Ast.oi_arg ^ ")"
+  in
+  braced_at ~indent
+    ("type " ^ t.Ast.opq_name ^ instance)
     (List.map (print_extern ~indent:inner) t.Ast.opq_methods)
 
 (* Sections (lang paths, structs, opaque types, free externs) are separated

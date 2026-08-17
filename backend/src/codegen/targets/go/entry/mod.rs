@@ -132,7 +132,7 @@ fn config_type_ident(id: &str) -> String {
 /// unexported name, spelling a foreign opaque handle as a pointer
 /// to the real package's assumed exported type, while every other type keeps
 /// its normal (wire) spelling.
-fn field_go_type(t: &Tref, module: &Module) -> String {
+fn field_go_type(t: &Tref, module: &Module, refs: &mut Vec<Symbol>) -> String {
     if let Tref::Ref { id, .. } = t {
         if module
             .shapes
@@ -142,8 +142,11 @@ fn field_go_type(t: &Tref, module: &Module) -> String {
             return config_type_ident(id);
         }
         if let Some((lib, type_name)) = ext::foreign_handle(t, module) {
-            if let Some(ty) = ext::handle_go_type(lib, &type_name) {
-                return ty;
+            let handle = lib.types.iter().find(|ty| ty.name == type_name);
+            if let Some(handle) = handle {
+                if let Some(ty) = ext::handle_go_type(lib, handle, refs) {
+                    return ty;
+                }
             }
         }
     }

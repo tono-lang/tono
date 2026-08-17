@@ -106,7 +106,7 @@ pub(super) fn option_decls(
             let carrier_ty = if is_foreign_handle(&f.target, module) {
                 field_go_type_storage(&f.target, module)
             } else {
-                format!("*{}", field_go_type(&f.target, module))
+                format!("*{}", field_go_type(&f.target, module, &mut carrier_refs))
             };
             format!("\t{} {carrier_ty}\n", camel(&f.name))
         })
@@ -129,7 +129,7 @@ pub(super) fn option_decls(
         // @deprecated lines follow as continuation.
         let mut option_refs = Vec::new();
         push_field_type_symbols(&f.target, module, &mut option_refs);
-        let ty = field_go_type(&f.target, module);
+        let ty = field_go_type(&f.target, module, &mut option_refs);
         let assign = match ext::foreign_handle(&f.target, module) {
             // The real concrete value never satisfies the field's own
             // generated interface directly (its methods return the foreign

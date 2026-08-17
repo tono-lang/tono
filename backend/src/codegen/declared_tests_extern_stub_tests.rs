@@ -30,6 +30,7 @@ fn ext_libs() -> Vec<crate::ir::ExtLib> {
             structs: vec![],
             types: vec![OpaqueType {
                 name: "Publisher".into(),
+                instance: None,
                 methods: vec![ExternDecl {
                     name: "send".into(),
                     params: vec![],

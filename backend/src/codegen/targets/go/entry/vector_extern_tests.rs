@@ -201,6 +201,7 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
     };
     let handle = OpaqueType {
         name: "publisher".into(),
+        instance: None,
         methods: vec![crate::ir::ExternDecl {
             name: "send".into(),
             params: vec![],

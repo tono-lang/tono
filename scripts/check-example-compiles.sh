@@ -539,4 +539,24 @@ EOF
 (cd "$work/config-lib/out/typescript" && "$tsc" -p tsconfig.json)
 (cd "$work/config-lib/out/typescript" && "$vitest" run)
 
+echo "settings-source..."
+# The foreign-generic-instantiation recipe: an opaque handle names which
+# instantiation of a foreign generic type it declares
+# (type env_source("Source", app_settings) { ... }), so the emitted Go names
+# the concrete type argument (*settingskit.Source[AppSettings],
+# settingskit.NewEnvSource[AppSettings](...)) instead of leaving it for the
+# compiler to infer, against a real (if stand-in) generic Go package.
+mkdir -p "$work/settings-source"
+"$frontend" compile "$root/examples/settings-source/service.tono" --module settingssource >"$work/settings-source/ir.json"
+"$root/target/debug/tono" gen --target go --out "$work/settings-source/out" \
+    --go-module example.com/settingssource "$work/settings-source/ir.json"
+(cd "$work/settings-source/out/go" && go mod init example.com/settingssource >/dev/null 2>&1 \
+    && cat >>go.mod <<EOF
+require github.com/example/settingskit v0.0.0
+replace github.com/example/settingskit => $root/examples/settings-source/ext/go
+EOF
+    go mod tidy >/dev/null \
+    && go build ./...)
+(cd "$work/settings-source/out/go" && go test ./...)
+
 echo "all generated SDKs compile"

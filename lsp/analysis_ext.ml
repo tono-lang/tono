@@ -233,8 +233,15 @@ let symbols ~(range : Span.span -> Range.t) (b : Ast.ext_lib_body) :
              s.Ast.fs_fields) )
   in
   let type_sym (t : Ast.opaque_type) =
+    let name =
+      match t.Ast.opq_instance with
+      | None -> t.Ast.opq_name
+      | Some i ->
+          Printf.sprintf "%s (%s[%s])" t.Ast.opq_name i.Ast.oi_foreign_name
+            (Printer.print_ty i.Ast.oi_arg)
+    in
     ( t.Ast.opq_span.Span.start.offset,
-      node ~kind:SymbolKind.Class ~name:t.Ast.opq_name ~span:t.Ast.opq_name_span
+      node ~kind:SymbolKind.Class ~name ~span:t.Ast.opq_name_span
         ~children:(List.map (fun e -> snd (extern_sym e)) t.Ast.opq_methods) )
   in
   List.map struct_sym b.Ast.elib_structs

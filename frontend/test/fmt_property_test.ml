@@ -187,10 +187,20 @@ let erase_extern_decl (e : Ast.extern_decl) =
     ed_span = dspan;
   }
 
+let erase_opaque_instance (i : Ast.opaque_instance) =
+  {
+    i with
+    Ast.oi_foreign_span = dspan;
+    oi_arg = erase_ty i.Ast.oi_arg;
+    oi_arg_span = dspan;
+    oi_span = dspan;
+  }
+
 let erase_opaque_type (t : Ast.opaque_type) =
   {
     t with
     Ast.opq_name_span = dspan;
+    opq_instance = Option.map erase_opaque_instance t.Ast.opq_instance;
     opq_methods = List.map erase_extern_decl t.Ast.opq_methods;
     opq_span = dspan;
   }
@@ -650,12 +660,27 @@ let gen_extern_decl =
     ed_span = dspan;
   }
 
+let gen_opaque_instance =
+  let+ foreign_name = gen_string and+ arg = gen_ty in
+  {
+    Ast.oi_foreign_name = foreign_name;
+    oi_foreign_span = dspan;
+    oi_arg = arg;
+    oi_arg_span = dspan;
+    oi_span = dspan;
+  }
+
+let gen_opt_opaque_instance =
+  G.oneof [ G.return None; G.map Option.some gen_opaque_instance ]
+
 let gen_opaque_type =
   let+ name = gen_tname
+  and+ instance = gen_opt_opaque_instance
   and+ methods = G.list_size (G.int_range 0 1) gen_extern_decl in
   {
     Ast.opq_name = name;
     opq_name_span = dspan;
+    opq_instance = instance;
     opq_methods = methods;
     opq_span = dspan;
   }

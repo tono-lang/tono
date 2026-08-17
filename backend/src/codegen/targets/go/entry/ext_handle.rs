@@ -68,9 +68,9 @@ pub(in super::super) fn handle_adapter_decl(
     lib: &ExtLib,
     handle: &OpaqueType,
 ) -> Option<Decl> {
-    let real_ty = handle_go_type(lib, &handle.name)?;
     let adapter_ty = handle_adapter_ident(&lib.name, &handle.name);
     let mut refs = Vec::new();
+    let real_ty = handle_go_type(lib, handle, &mut refs)?;
     // The `real` field's own type names the foreign package directly (unlike
     // every other position this handle reaches, which is spelled as tono's
     // generated interface); the adapter decl is the one place that import is
@@ -102,6 +102,7 @@ pub(in super::super) fn handle_adapter_decl(
             lib,
             lang,
             "a.real",
+            None,
             &m.params,
             &identity_args,
             &m.name,

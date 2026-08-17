@@ -80,7 +80,11 @@ pub use crate::ir_tests_model::*;
 /// v18 added a declared test's `extern_stubs`: a stub for an `extern` FFI
 /// call (free function or opaque-handle method), not tied to one client/op
 /// like the existing HTTP/impl stub.
-pub const TONO_IR_VERSION: u32 = 20;
+/// v21 added `OpaqueType::instance`: which instantiation of a foreign
+/// generic type the handle names (the foreign type's own name, plus the
+/// tono argument it is monomorphized with). Absent for a non-generic
+/// foreign type.
+pub const TONO_IR_VERSION: u32 = 21;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
