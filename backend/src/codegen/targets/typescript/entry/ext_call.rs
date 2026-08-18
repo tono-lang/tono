@@ -25,8 +25,7 @@
 //! left as a clear generation-time panic rather than silently wrong output:
 //! `CallArg::Call` (a nested extern call used as another call's argument).
 //! An opaque handle's own methods (`type publisher { extern send(..) }`,
-//! invoked from an op's `impl`) are a different call site that no codegen
-//! consumes yet.
+//! invoked from an op's `impl`) are a different call site: `ext_handle_call`.
 //!
 //! ## The declared-test stub seam
 //!
@@ -55,7 +54,9 @@
 
 use std::collections::BTreeSet;
 
-use super::{field_camel, field_ts_type, module_symbol, pascal, Helpers, Names, Resolver};
+use super::{
+    field_camel, field_ts_type, foreign_handle, module_symbol, pascal, Helpers, Names, Resolver,
+};
 use crate::codegen::entries::EntryModel;
 use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
@@ -83,7 +84,7 @@ pub(super) fn ext_swap_fn_name(n: &Names, field: &EntryField) -> String {
     )
 }
 
-fn json_literal(v: &serde_json::Value) -> String {
+pub(super) fn json_literal(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
@@ -109,6 +110,19 @@ fn json_literal(v: &serde_json::Value) -> String {
     }
 }
 
+/// [`render_arg`]'s own default `Ref` resolution: a sibling entry field read
+/// off `s`, the seam function's own parameter. A handle-method call site
+/// (`ext_handle_call.rs`) reads off a different root and also recognizes the
+/// op's own input parameter, so that call site supplies its own resolver
+/// instead of this default.
+pub(super) fn field_ref(
+    entry: &EntryModel<'_>,
+    config: &crate::codegen::casing::CasingConfig,
+    path: &[String],
+) -> String {
+    field_path_expr(entry, config, path, "s")
+}
+
 /// Render one node of a `ts` language block's `call_args` template, purely
 /// from (entry, config): `Resolver::path_read` is itself a pure function of
 /// exactly those two things (`field_path_expr`), so this needs no `Resolver`
@@ -117,13 +131,16 @@ fn json_literal(v: &serde_json::Value) -> String {
 /// for it (positional against `params`); the substituted value is rendered
 /// with an empty `(params, site_args)`, so a stray `Param` inside it (which
 /// the grammar never produces) fails loudly instead of silently matching the
-/// outer template's parameters.
-fn render_arg(
+/// outer template's parameters. `ref_expr` resolves a `Ref` leaf: the two
+/// call sites (a free extern-fn field and an op's own handle-method call)
+/// read a `Ref`'s root differently, so this is the one seam they don't share.
+pub(super) fn render_arg(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
     arg: &CallArg,
     params: &[ExternParam],
     site_args: &[CallArg],
+    ref_expr: &dyn Fn(&EntryModel<'_>, &crate::codegen::casing::CasingConfig, &[String]) -> String,
 ) -> String {
     match arg {
         CallArg::Param(name) => {
@@ -136,15 +153,15 @@ fn render_arg(
             let site = site_args.get(idx).unwrap_or_else(|| {
                 panic!("extern call site is missing an argument for parameter {name:?}")
             });
-            render_arg(entry, config, site, &[], &[])
+            render_arg(entry, config, site, &[], &[], ref_expr)
         }
-        CallArg::Ref(path) => field_path_expr(entry, config, path, "s"),
+        CallArg::Ref(path) => ref_expr(entry, config, path),
         CallArg::Lit(v) => json_literal(v),
         CallArg::List(items) => format!(
             "[{}]",
             items
                 .iter()
-                .map(|i| render_arg(entry, config, i, params, site_args))
+                .map(|i| render_arg(entry, config, i, params, site_args, ref_expr))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -152,7 +169,10 @@ fn render_arg(
             "{{ {} }}",
             fields
                 .iter()
-                .map(|(k, v)| format!("{k}: {}", render_arg(entry, config, v, params, site_args)))
+                .map(|(k, v)| format!(
+                    "{k}: {}",
+                    render_arg(entry, config, v, params, site_args, ref_expr)
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -168,7 +188,7 @@ fn render_arg(
 /// call's raw result: the head (the `yields:` position name itself) becomes
 /// `raw`, the rest stays verbatim (a foreign struct's own field names, never
 /// cased).
-fn foreign_path_expr(yields_name: &str, path: &[String]) -> String {
+pub(super) fn foreign_path_expr(yields_name: &str, path: &[String]) -> String {
     let (head, rest) = path
         .split_first()
         .unwrap_or_else(|| panic!("a returns: value has no path segments"));
@@ -183,7 +203,7 @@ fn foreign_path_expr(yields_name: &str, path: &[String]) -> String {
     }
 }
 
-fn arm_value_expr(yields_name: &str, value: &ArmValue) -> String {
+pub(super) fn arm_value_expr(yields_name: &str, value: &ArmValue) -> String {
     match value {
         ArmValue::Field(path) => foreign_path_expr(yields_name, path),
         ArmValue::Lit(v) => json_literal(v),
@@ -205,7 +225,7 @@ fn arm_value_expr(yields_name: &str, value: &ArmValue) -> String {
 /// statement-level `switch` (`plan::Stmt::Switch`) does elsewhere in this
 /// target. The subject and every arm read off the same awaited raw result
 /// `returns:`'s bare-field case does.
-fn select_expr(yields_name: &str, select: &Select) -> String {
+pub(super) fn select_expr(yields_name: &str, select: &Select) -> String {
     let subject = foreign_path_expr(yields_name, &select.subject);
     let mut arms = String::new();
     for arm in &select.arms {
@@ -222,7 +242,7 @@ fn select_expr(yields_name: &str, select: &Select) -> String {
 }
 
 /// A `returns:` field's value, projected off the single bound `yields` name.
-fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> String {
+pub(super) fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> String {
     match value {
         ReturnsValue::Field(path) => foreign_path_expr(yields_name, path),
         ReturnsValue::Select(select) => select_expr(yields_name, select),
@@ -299,7 +319,9 @@ fn call_body(
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
         for a in &lang.call_args {
-            parts.push(render_arg(entry, config, a, l.params, &call.args));
+            parts.push(render_arg(
+                entry, config, a, l.params, &call.args, &field_ref,
+            ));
         }
         parts.join(", ")
     };
@@ -310,6 +332,17 @@ fn call_body(
     // gives this target); `validate_entries` guarantees at most one
     // non-error position, which is the only one worth projecting.
     let assign = match lang.yields.iter().find(|y| !y.is_error) {
+        // No yields: the extern's own construction result already is the
+        // logical value (see the module doc). For a foreign-handle field
+        // that "already is" now has a real generated interface to be, so
+        // the seam narrows the honestly-`unknown` raw result into it here,
+        // once, at the exact tono-declared construction boundary -- not a
+        // reusable projection, just this one field trusting the frontend's
+        // own guarantee that this call's declared logical type is the
+        // field's own declared type.
+        None if foreign_handle(&field.target, module) => {
+            format!("return raw as {};", field_ts_type(&field.target, module))
+        }
         None => "return raw;".to_string(),
         Some(y) => {
             let returns = lang.returns.as_ref().unwrap_or_else(|| {
@@ -333,27 +366,49 @@ fn call_body(
         }
     };
 
-    let mut cases = String::new();
-    for eb in &lang.errors {
-        let class_name = sentinel_error_class(&eb.r#type);
-        sentinel_types.insert(eb.r#type.clone());
-        refs.push(module_symbol(&class_name, module));
-        cases.push_str(&format!(
-            "      case {sentinel:?}: throw new {class_name}(e);\n",
-            sentinel = eb.sentinel,
-        ));
-    }
-    let switch = if cases.is_empty() {
-        String::new()
-    } else {
-        format!("  switch (e instanceof Error ? e.message : String(e)) {{\n{cases}  }}\n",)
-    };
+    let switch = sentinel_switch(&lang.errors, module, refs, sentinel_types, &|expr| {
+        format!("throw {expr};")
+    });
 
     format!(
         "try {{\n  const raw = await {symbol}({args});\n  {assign}\n}} catch (e) {{\n{switch}  throw new {contract}({call_name:?}, e);\n}}",
         symbol = lang.symbol,
         contract = error_names().contract,
     )
+}
+
+/// The `catch (e) { switch (...) { ... } }` block mapping every declared
+/// sentinel to its typed error class, shared by a free extern-fn call's own
+/// seam ([`call_body`]) and an op's own handle-method call
+/// (`ext_handle_call::impl_call_body`): identical shape, the only
+/// difference being how the caller wants a matched case to exit (`throw`
+/// here, `throw` there too but composed with the caller's own `throw`
+/// closure so the caller's overall statement style stays in one place).
+/// Empty when `errors` is empty, so a call with no declared sentinel adds no
+/// dead `switch`.
+pub(super) fn sentinel_switch(
+    errors: &[crate::ir::ErrorBinding],
+    module: &Module,
+    refs: &mut Vec<Symbol>,
+    sentinel_types: &mut BTreeSet<String>,
+    throw: &dyn Fn(String) -> String,
+) -> String {
+    let mut cases = String::new();
+    for eb in errors {
+        let class_name = sentinel_error_class(&eb.r#type);
+        sentinel_types.insert(eb.r#type.clone());
+        refs.push(module_symbol(&class_name, module));
+        cases.push_str(&format!(
+            "      case {sentinel:?}: {t}\n",
+            sentinel = eb.sentinel,
+            t = throw(format!("new {class_name}(e)")),
+        ));
+    }
+    if cases.is_empty() {
+        String::new()
+    } else {
+        format!("  switch (e instanceof Error ? e.message : String(e)) {{\n{cases}  }}\n")
+    }
 }
 
 /// The per-field seam bindings of an entry's extern-call fields: one mutable

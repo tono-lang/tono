@@ -17,12 +17,14 @@ use std::sync::Mutex;
 
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
+use tono_backend::codegen::targets::typescript::entry::ext_fixtures::{
+    self, connect_publisher_extern, ef, send_op_impl_call,
+};
 use tono_backend::codegen::targets::typescript::types::ts_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
 use tono_backend::ir::{
-    CallArg, CallCtor, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam,
-    ForeignField, ForeignStruct, LangPath, Model, Module, OpaqueType, Prim, ReturnsField,
-    ReturnsLit, ReturnsValue, Shape, ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
+    CallArg, EntryCall, ExtLib, ForeignField, ForeignStruct, LangPath, Model, Module, OpaqueType,
+    Prim, Shape, ShapeKind, Source, Tref, TONO_IR_VERSION,
 };
 
 /// Both tests write into the same `codegen-tests/ts-ext/` tree (the sdk
@@ -42,17 +44,22 @@ fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("codegen-tests/ts-ext")
 }
 
-fn ef(name: &str, target: Tref, sources: Vec<Source>, call: Option<EntryCall>) -> EntryField {
-    EntryField {
-        name: name.into(),
-        target,
-        sources,
-        format: None,
-        transforms: vec![],
-        select: None,
-        call,
-        binds: vec![],
-        constraints: vec![],
+/// A structure shape with a single required member, the shape both
+/// `hc#ack` and `hc#notify_input` need.
+fn single_member_shape(id: &str, member_name: &str, target: Tref) -> Shape {
+    Shape {
+        id: id.into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![tono_backend::ir::Member {
+                name: member_name.into(),
+                target,
+                required: true,
+                default: None,
+                constraints: vec![],
+                traits: vec![],
+            }],
+        },
         traits: vec![],
     }
 }
@@ -73,9 +80,6 @@ fn string_field(name: &str) -> ForeignField {
 /// `send` method is not exercised by an operation: no target's codegen
 /// consumes an op's own `impl .field.method(..)` body yet.
 fn appendix_model() -> Model {
-    let mut load_ctor_fields = std::collections::BTreeMap::new();
-    load_ctor_fields.insert("region".to_string(), CallArg::Param("region".into()));
-    load_ctor_fields.insert("service".to_string(), CallArg::Param("service".into()));
     let companyconfig = ExtLib {
         name: "companyconfig".into(),
         langs: vec![LangPath {
@@ -93,62 +97,7 @@ fn appendix_model() -> Model {
             },
         ],
         types: vec![],
-        externs: vec![ExternDecl {
-            name: "load".into(),
-            params: vec![
-                ExternParam {
-                    name: "service".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-                ExternParam {
-                    name: "region".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-            ],
-            r#return: Tref::Ref {
-                id: "main#app_config".into(),
-                args: vec![],
-            },
-            langs: vec![ExternLang {
-                lang: "ts".into(),
-                symbol: "load".into(),
-                call_args: vec![CallArg::Ctor(CallCtor {
-                    name: "ts_opts".into(),
-                    fields: load_ctor_fields,
-                })],
-                yields: vec![YieldsPos {
-                    name: "cfg".into(),
-                    r#type: Some(Tref::Ref {
-                        id: "companyconfig#ts_config".into(),
-                        args: vec![],
-                    }),
-                    is_error: false,
-                }],
-                returns: Some(ReturnsLit {
-                    r#type: Tref::Ref {
-                        id: "main#app_config".into(),
-                        args: vec![],
-                    },
-                    fields: vec![
-                        ReturnsField {
-                            name: "endpoint".into(),
-                            value: ReturnsValue::Field(vec!["cfg".into(), "host".into()]),
-                        },
-                        ReturnsField {
-                            name: "token".into(),
-                            value: ReturnsValue::Field(vec!["cfg".into(), "token".into()]),
-                        },
-                    ],
-                }),
-                errors: vec![tono_backend::ir::ErrorBinding {
-                    sentinel: "BUSY".into(),
-                    r#type: "overloaded".into(),
-                }],
-                sync: false,
-                infallible: false,
-                ctx: false,
-            }],
-        }],
+        externs: vec![ext_fixtures::load_config_extern("main#app_config")],
     };
     let companybus = ExtLib {
         name: "companybus".into(),
@@ -162,74 +111,13 @@ fn appendix_model() -> Model {
             instance: None,
             methods: vec![],
         }],
-        externs: vec![ExternDecl {
-            name: "connect".into(),
-            params: vec![
-                ExternParam {
-                    name: "endpoint".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-                ExternParam {
-                    name: "token".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-            ],
-            r#return: Tref::Ref {
-                id: "companybus#publisher".into(),
-                args: vec![],
-            },
-            langs: vec![ExternLang {
-                lang: "ts".into(),
-                symbol: "connect".into(),
-                call_args: vec![
-                    CallArg::Param("endpoint".into()),
-                    CallArg::Param("token".into()),
-                ],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-            }],
-        }],
+        externs: vec![connect_publisher_extern("companybus#publisher")],
     };
 
     let service = ef("service", Tref::Prim(Prim::String), vec![Source::Arg], None);
     let region = ef("region", Tref::Prim(Prim::String), vec![Source::Arg], None);
-    let config = ef(
-        "config",
-        Tref::Ref {
-            id: "main#app_config".into(),
-            args: vec![],
-        },
-        vec![],
-        Some(EntryCall {
-            ns: "companyconfig".into(),
-            func: "load".into(),
-            args: vec![
-                CallArg::Ref(vec!["service".into()]),
-                CallArg::Ref(vec!["region".into()]),
-            ],
-        }),
-    );
-    let mut bus = ef(
-        "bus",
-        Tref::Ref {
-            id: "companybus#publisher".into(),
-            args: vec![],
-        },
-        vec![Source::With],
-        Some(EntryCall {
-            ns: "companybus".into(),
-            func: "connect".into(),
-            args: vec![
-                CallArg::Ref(vec!["config".into(), "endpoint".into()]),
-                CallArg::Ref(vec!["config".into(), "token".into()]),
-            ],
-        }),
-    );
-    bus.sources = vec![Source::With];
+    let (config, bus) =
+        ext_fixtures::appendix_config_and_bus_fields("main#app_config", "companybus#publisher");
 
     let app_config = Shape {
         id: "main#app_config".into(),
@@ -347,6 +235,146 @@ fn appendix_model() -> Model {
     }
 }
 
+/// A worked example of an operation implemented as a call into a foreign
+/// handle's own method (`impl .bus.send(..)`), standing in for the wire
+/// protocol entirely: `notify`'s whole body is the handle call, projecting
+/// a `yields`/`returns` pair and mapping a declared sentinel, exercising
+/// both an op-input-parameter argument and a sibling-field argument. A
+/// second op (`injected_notify`) calls the same method through an `@arg`
+/// handle instead of a constructed one, so the `tsc` check also grades the
+/// handle's own generated interface at the one boundary a caller's own
+/// value is actually checked against (the public constructor parameter),
+/// not only the SDK's own internal construction path.
+fn handle_call_model() -> Model {
+    let ack_t = Tref::Ref {
+        id: "hc#ack".into(),
+        args: vec![],
+    };
+    let send = ext_fixtures::send_method("hc#ack", "hc#raw_ack");
+    let companybus = ExtLib {
+        name: "companybus".into(),
+        langs: vec![LangPath {
+            lang: "ts".into(),
+            path: "@company/bus".into(),
+        }],
+        structs: vec![ForeignStruct {
+            name: "raw_ack".into(),
+            fields: vec![tono_backend::ir::ForeignField {
+                name: "ok".into(),
+                r#type: Tref::Prim(Prim::Bool),
+            }],
+        }],
+        types: vec![OpaqueType {
+            name: "publisher".into(),
+            instance: None,
+            methods: vec![send],
+        }],
+        externs: vec![connect_publisher_extern("companybus#publisher")],
+    };
+
+    let endpoint = ef(
+        "endpoint",
+        Tref::Prim(Prim::String),
+        vec![Source::Arg],
+        None,
+    );
+    let token = ef("token", Tref::Prim(Prim::String), vec![Source::Arg], None);
+    let topic = ef("topic", Tref::Prim(Prim::String), vec![Source::Arg], None);
+    let mut bus = ef(
+        "bus",
+        Tref::Ref {
+            id: "companybus#publisher".into(),
+            args: vec![],
+        },
+        vec![Source::With],
+        Some(EntryCall {
+            ns: "companybus".into(),
+            func: "connect".into(),
+            args: vec![
+                CallArg::Ref(vec!["endpoint".into()]),
+                CallArg::Ref(vec!["token".into()]),
+            ],
+        }),
+    );
+    bus.sources = vec![Source::With];
+    // An `@arg` handle: injected by the caller rather than constructed by
+    // this SDK, so its declared type reaches the public constructor
+    // parameter directly, not only the private field -- exactly the
+    // surface a caller's own value gets checked against.
+    let injected = ef(
+        "injected",
+        Tref::Ref {
+            id: "companybus#publisher".into(),
+            args: vec![],
+        },
+        vec![Source::Arg],
+        None,
+    );
+
+    let ack_shape = single_member_shape("hc#ack", "ok", Tref::Prim(Prim::Bool));
+    let notify_input = single_member_shape("hc#notify_input", "body", Tref::Prim(Prim::String));
+    let notify = Shape {
+        id: "hc#client.notify".into(),
+        kind: ShapeKind::Operation {
+            input: Some(Tref::Ref {
+                id: "hc#notify_input".into(),
+                args: vec![],
+            }),
+            input_name: Some("msg".into()),
+            output: Some(ack_t.clone()),
+            errors: vec![],
+            wire: None,
+            impl_call: Some(send_op_impl_call()),
+        },
+        traits: vec![],
+    };
+    // The same handle method, called through the injected field instead of
+    // the constructed one: proves an `@arg` handle's own generated
+    // interface type is what the caller is checked against, not `unknown`.
+    let injected_notify = Shape {
+        id: "hc#client.injected_notify".into(),
+        kind: ShapeKind::Operation {
+            input: Some(Tref::Ref {
+                id: "hc#notify_input".into(),
+                args: vec![],
+            }),
+            input_name: Some("msg".into()),
+            output: Some(ack_t),
+            errors: vec![],
+            wire: None,
+            impl_call: Some(tono_backend::ir::OpImplCall {
+                recv: vec!["injected".into()],
+                method: "send".into(),
+                args: vec![
+                    CallArg::Ref(vec!["topic".into()]),
+                    CallArg::Ref(vec!["msg".into(), "body".into()]),
+                ],
+            }),
+        },
+        traits: vec![],
+    };
+    let client = Shape {
+        id: "hc#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![endpoint, token, topic, bus, injected],
+            operations: vec![notify, injected_notify],
+        },
+        traits: vec![],
+    };
+    let module = Module {
+        tests: vec![],
+        name: "hc".into(),
+        shapes: vec![ack_shape, notify_input, client],
+        operations: vec![],
+        extensions: vec![],
+        ext_libs: vec![companybus],
+    };
+    Model {
+        tono_ir_version: TONO_IR_VERSION,
+        modules: vec![module],
+    }
+}
+
 /// Generate the model for TypeScript, prettier-format every file (falling
 /// back to the raw text when prettier is not installed, same as the CLI
 /// does), and write it under `codegen-tests/ts-ext/sdk/`, alongside a
@@ -399,18 +427,30 @@ fn write_sdk(model: &Model) -> PathBuf {
     dir
 }
 
-#[test]
-fn the_rfc_appendix_generates_typescript_that_compiles_against_the_real_libraries() {
+/// Whether this run must skip a `tsc`-backed test: under `cargo-llvm-cov`
+/// (the instrumented binary confuses `tsc`'s own module resolution) or when
+/// no TypeScript toolchain is on `PATH` at all. Every test below shares this
+/// same escape hatch, since the verification model throughout this file is
+/// the target compiler, not a Rust assertion.
+fn skip_tsc_test() -> bool {
     if std::env::var_os("CARGO_LLVM_COV").is_some() {
         eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test ts_ext_roundtrip`");
-        return;
+        return true;
     }
     if !have("tsc", "--version") {
         eprintln!("skipping: TypeScript toolchain (tsc) not available");
-        return;
+        return true;
     }
+    false
+}
+
+/// Generate `model`'s TypeScript and assert it type-checks against the real
+/// stand-in libraries under `fixtures/`, holding `FIXTURE_LOCK` for the
+/// duration (both `tsc`-backed positive checks in this file write into the
+/// same `codegen-tests/ts-ext/sdk/` tree, so they cannot run concurrently).
+fn assert_generates_and_compiles(model: &Model) {
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = write_sdk(&appendix_model());
+    let dir = write_sdk(model);
     let build = Command::new("tsc")
         .arg("-p")
         .arg("tsconfig.json")
@@ -425,6 +465,22 @@ fn the_rfc_appendix_generates_typescript_that_compiles_against_the_real_librarie
     );
 }
 
+#[test]
+fn the_appendix_worked_example_generates_typescript_that_compiles_against_the_real_libraries() {
+    if skip_tsc_test() {
+        return;
+    }
+    assert_generates_and_compiles(&appendix_model());
+}
+
+#[test]
+fn an_op_implemented_as_a_handle_method_call_compiles_against_the_real_library() {
+    if skip_tsc_test() {
+        return;
+    }
+    assert_generates_and_compiles(&handle_call_model());
+}
+
 /// Declaring a field the library does not actually have must break the
 /// `tsc` check: the declaration is a hypothesis the target compiler grades,
 /// not a contract `tono` itself confirms. This renames the real
@@ -432,12 +488,7 @@ fn the_rfc_appendix_generates_typescript_that_compiles_against_the_real_librarie
 /// access no longer type-checks, without touching the generator at all.
 #[test]
 fn a_field_the_library_does_not_have_breaks_the_typescript_check() {
-    if std::env::var_os("CARGO_LLVM_COV").is_some() {
-        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test ts_ext_roundtrip`");
-        return;
-    }
-    if !have("tsc", "--version") {
-        eprintln!("skipping: TypeScript toolchain (tsc) not available");
+    if skip_tsc_test() {
         return;
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());

@@ -378,19 +378,16 @@ fn a_target_that_cannot_emit_an_extern_handle_call_is_named_and_refused() {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module_of(vec![entry_with_handle_call()])],
     };
-    // Go emits an op's own extern handle-method call today; TypeScript and
-    // Rust do not, and a request naming either alongside Go must refuse the
-    // whole call, not silently drop it from just the targets that cannot
-    // render it.
+    // Go and TypeScript emit an op's own extern handle-method call today;
+    // Rust does not, and a request naming it alongside either must refuse
+    // the whole call, not silently drop it from just the targets that
+    // cannot render it.
     assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
-    let err = validate_entries(&m, &[TargetKind::TypeScript]).unwrap_err();
+    assert!(validate_entries(&m, &[TargetKind::TypeScript]).is_ok());
+    assert!(validate_entries(&m, &[TargetKind::Go, TargetKind::TypeScript]).is_ok());
+    let err = validate_entries(&m, &[TargetKind::Go, TargetKind::Rust]).unwrap_err();
     assert!(err.contains("client.publish"), "{err}");
     assert!(err.contains(".bus.send(..)"), "{err}");
-    assert!(
-        err.contains("typescript cannot emit that call yet"),
-        "{err}"
-    );
-    let err = validate_entries(&m, &[TargetKind::Go, TargetKind::Rust]).unwrap_err();
     assert!(err.contains("rust cannot emit that call yet"), "{err}");
 }
 
