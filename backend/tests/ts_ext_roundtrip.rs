@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
+use tono_backend::codegen::fixtures::handle_source::handle_source_model;
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::typescript::entry::ext_fixtures::{
@@ -416,7 +417,8 @@ fn write_sdk(model: &Model) -> PathBuf {
     "esModuleInterop": true,
     "paths": {
       "@company/config": ["../fixtures/company-config/index.ts"],
-      "@company/bus": ["../fixtures/company-bus/index.ts"]
+      "@company/bus": ["../fixtures/company-bus/index.ts"],
+      "@company/envkit": ["../fixtures/company-envkit/index.ts"]
     }
   },
   "include": ["**/*.ts"]
@@ -513,4 +515,18 @@ fn a_field_the_library_does_not_have_breaks_the_typescript_check() {
         "expected the compiler error to name the missing field:\n{}",
         String::from_utf8_lossy(&result.stdout)
     );
+}
+
+/// A field sourced from a foreign handle's method (`config: cfg =
+/// .provider.get()`) feeding several `@http` operations, an injectable
+/// second read with an argument, and an op's own `impl` body reading the
+/// same handle: the whole entry type-checks against the real stand-in
+/// library, which is what proves the seam, the receiver read off the
+/// draft, and the shared handle agree beyond rendered text.
+#[test]
+fn a_field_sourced_from_a_handle_method_compiles_against_the_real_library() {
+    if skip_tsc_test() {
+        return;
+    }
+    assert_generates_and_compiles(&handle_source_model("ts"));
 }

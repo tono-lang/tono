@@ -13,7 +13,9 @@ use crate::codegen::casing::{transform, CaseStyle, CasingConfig};
 use crate::codegen::extensions::{bound_extensions, BoundExtension};
 use crate::codegen::symbol::SymbolKind;
 use crate::codegen::tree::Decl;
-use crate::ir::{EntryCall, EntryField, EnvName, Module, Prim, Shape, Source, TemplatePart, Tref};
+use crate::ir::{
+    EntryCall, EntryField, EnvName, Module, OpImplCall, Prim, Shape, Source, TemplatePart, Tref,
+};
 
 use super::{module_entries, source_stub, EntryModel};
 
@@ -494,6 +496,15 @@ pub trait Emitter {
     fn call_assign(&mut self, field: &EntryField, call: &EntryCall, dest: &str) -> String {
         let _ = (field, call, dest);
         unimplemented!("extern-call emission for {dest} is deferred to per-target codegen")
+    }
+    /// The handle-method-call assignment itself (`dest = .recv.method(args)`
+    /// read through the already-resolved receiver field, in the target's
+    /// own call syntax): the receiver-form counterpart of
+    /// [`Emitter::call_assign`], sharing the machinery an op's own `impl`
+    /// call uses.
+    fn handle_call_assign(&mut self, field: &EntryField, call: &OpImplCall, dest: &str) -> String {
+        let _ = (field, call, dest);
+        unimplemented!("handle-method-call emission for {dest} is deferred to per-target codegen")
     }
     /// Whether an `@with` field backing a call's construction fallback
     /// was injected, as a plain boolean condition: no error

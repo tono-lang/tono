@@ -23,6 +23,7 @@ pub fn ef(name: &str, target: Tref, sources: Vec<Source>, call: Option<EntryCall
         transforms: vec![],
         select: None,
         call,
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],

@@ -88,16 +88,10 @@ fn handle_fake_decl(ctx: &TestCtx<'_>, lib: &ExtLib, handle: &OpaqueType) -> (St
         let Some(lang) = ext::go_lang(m) else {
             continue;
         };
-        let params: Vec<String> = m
-            .params
-            .iter()
-            .map(|p| {
-                push_type_symbols(&p.r#type, &mut decl_refs);
-                format!("{} {}", camel(&p.name), go_type(&p.r#type))
-            })
-            .collect();
-        push_type_symbols(&m.r#return, &mut decl_refs);
-        let ret_ty = go_type(&m.r#return);
+        // The same signature the interface and the real adapter render
+        // (`ctx context.Context` first for a `ctx`-marked binding), or the
+        // fake would not satisfy the interface.
+        let (params, ret_ty) = ext::method_signature(m, lang, &mut decl_refs);
         let stubbed = ctx.test.extern_stubs.iter().find(|s| {
             matches!(
                 &s.target,

@@ -10,12 +10,14 @@
 use super::*;
 
 /// One declared method's Go-rendered parameter list (`name Type`, in
-/// declared order) and return type, with every referenced type registered
-/// into `refs` along the way: shared by [`handle_iface_decl`] and
-/// [`handle_adapter_decl`], whose interface method and adapter method
-/// signatures must render byte-for-byte the same so the adapter actually
-/// satisfies the interface.
-fn method_signature(
+/// declared order, `ctx context.Context` first when the binding is
+/// `ctx`-marked) and return type, with every referenced type registered
+/// into `refs` along the way: shared by [`handle_iface_decl`],
+/// [`handle_adapter_decl`] and a declared test's fake handle
+/// (`vector_extern::handle_fake_decl`), whose interface, adapter and fake
+/// method signatures must render byte-for-byte the same so the adapter and
+/// the fake actually satisfy the interface.
+pub(in super::super) fn method_signature(
     m: &ExternDecl,
     lang: &ExternLang,
     refs: &mut Vec<Symbol>,
@@ -205,4 +207,78 @@ pub(in super::super) fn handle_iface_decl(lib: &ExtLib, handle: &OpaqueType) -> 
         ),
         refs,
     ))
+}
+
+/// A field's own `= .field.method(args)` construction source: a call into
+/// a sibling foreign handle's method, stored into the field's slot. The
+/// receiver field's own static type is tono's generated interface (see
+/// `field_go_type_storage`), so this is a plain interface call: its
+/// methods are already signed in logical types and whatever backs it (the
+/// real adapter, or a hermetic test's fake) already ran the
+/// `yields`/`returns`/`errors` projection once, behind the interface, the
+/// same reasoning an op's own `impl` body ([`impl_call_body`]) rests on.
+/// A failure surfaces as the constructor's own error return: the adapter
+/// has already mapped it onto the closed taxonomy.
+///
+/// A `ctx`-marked method receives `context.Background()`: the generated
+/// constructor takes no caller context (its signature is positional `@arg`
+/// values plus options), and construction is the one-shot resolution the
+/// field exists for, so there is no deadline to thread through. The
+/// method keeps its idiomatic `ctx context.Context` slot; only the value
+/// filling it is fixed here.
+pub(in super::super) fn handle_call_assign(
+    r: &mut Resolver<'_, '_>,
+    field: &EntryField,
+    call: &crate::ir::OpImplCall,
+    dest: &str,
+) -> String {
+    let Some(head) = call.recv.first() else {
+        return format!("// handle call with no receiver\n{dest} = nil\n");
+    };
+    let Some(recv_field) = r.entry.fields.iter().find(|f| f.name == *head) else {
+        return format!("// unresolved receiver field {head:?}\n{dest} = nil\n");
+    };
+    let Some((lib, handle_ty)) = foreign_handle(&recv_field.target, r.module) else {
+        return format!("// {head:?} is not a foreign handle field\n{dest} = nil\n");
+    };
+    // `foreign_handle` only answers when the lib declares the type.
+    let handle = lib
+        .types
+        .iter()
+        .find(|t| t.name == handle_ty)
+        .expect("foreign_handle resolved this type against the same lib");
+    let Some(decl) = handle.methods.iter().find(|m| m.name == call.method) else {
+        return format!(
+            "// unresolved method {:?} on {handle_ty:?}\n{dest} = nil\n",
+            call.method
+        );
+    };
+    let Some(lang) = go_lang(decl) else {
+        return format!(
+            "// {:?} declares no Go binding\n{dest} = nil\n",
+            call.method
+        );
+    };
+    let (entry, module, config) = (r.entry, r.module, r.config);
+    let recv_expr = field_path_expr(entry, module, config, &call.recv, "s");
+    let mut ref_expr = move |path: &[String]| sibling_path_expr(entry, module, config, path);
+    let mut call_args: Vec<String> = lang
+        .call_args
+        .iter()
+        .map(|a| call_arg_expr(r.refs, lib, a, &decl.params, &call.args, &mut ref_expr))
+        .collect();
+    if lang.ctx {
+        r.refs.push(import("context", "context"));
+        call_args.insert(0, "context.Background()".to_string());
+    }
+    let prefix = camel(&field.name);
+    let out_var = format!("{prefix}Out");
+    let err_var = format!("{prefix}Err");
+    format!(
+        "{out_var}, {err_var} := {recv_expr}.{}({})\n\
+         if {err_var} != nil {{\n\treturn nil, {err_var}\n}}\n\
+         {dest} = {out_var}\n",
+        lang.symbol,
+        call_args.join(", "),
+    )
 }

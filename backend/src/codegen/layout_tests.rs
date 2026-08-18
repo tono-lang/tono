@@ -379,6 +379,7 @@ fn two_entry_model() -> Model {
         transforms: vec![],
         select: None,
         call: None,
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![crate::ir::Trait {

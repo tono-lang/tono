@@ -35,13 +35,18 @@ use std::fmt::Write as _;
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::conventions::type_ident_from_id;
+use crate::codegen::entries::plan::Emitter;
 use crate::codegen::entries::EntryModel;
 use crate::ir::{
     CallArg, CallCtor, EntryCall, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpImplCall,
     OpaqueType, ReturnsField, ReturnsLit, ReturnsValue, Tref, YieldsPos,
 };
 
-use super::resolve_call::{error_match, find_extern, find_lib, find_rust_lang, json_literal};
+use super::resolve::Resolver;
+use super::resolve_call::{
+    call_arg_expr, error_match, find_extern, find_lib, find_rust_lang, json_literal, ok_assign,
+    CallScope,
+};
 use super::transport::FieldCtx;
 use super::{field_snake, pascal, rust_type, LANG};
 
@@ -140,6 +145,7 @@ pub(super) fn wrap_stored(t: &Tref, module: &Module, expr: &str) -> String {
 /// receiver field's own handle type, the method's `ExternDecl` and its
 /// `rust` language block.
 struct Lookup<'a> {
+    lib: &'a ExtLib,
     lang: &'a ExternLang,
     params: &'a [ExternParam],
 }
@@ -155,7 +161,7 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
         .unwrap_or_else(|| {
             panic!("an op's own impl call names undeclared receiver field {head:?}")
         });
-    let (_lib, handle) = foreign_handle(&field.target, module).unwrap_or_else(|| {
+    let (lib, handle) = foreign_handle(&field.target, module).unwrap_or_else(|| {
         panic!("receiver field {head:?} of an op's own impl call is not a foreign handle")
     });
     let decl = handle
@@ -170,6 +176,7 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
         });
     let lang = find_rust_lang_method(decl, &call.method);
     Lookup {
+        lib,
         lang,
         params: &decl.params,
     }
@@ -418,6 +425,68 @@ pub(super) fn impl_call_body(c: &ImplCall<'_>) -> (String, bool) {
     (body, !l.lang.sync)
 }
 
+/// A field's own `= .field.method(args)` construction source: the receiver
+/// read back off the in-progress settings draft `s` (the handle field
+/// resolved earlier in the same constructor, an `Option` slot that is
+/// diagnosed rather than unwrapped when unset), the declared call through
+/// it, and the `yields`/`returns` projection assigned into `dest` with the
+/// same `Ok`/`Err` shape a free extern call takes (`resolve_call::
+/// call_assign`), the `errors:` sentinels mapped onto the same closed
+/// taxonomy. The receiver is borrowed, never moved: reading a method
+/// leaves the handle in its slot for every later reader (an op's own `impl`
+/// body, another field), which is what lets this form coexist with them
+/// where forwarding the handle into another call could not.
+pub(super) fn handle_call_assign(
+    r: &mut Resolver<'_, '_>,
+    field: &crate::ir::EntryField,
+    call: &OpImplCall,
+    dest: &str,
+) -> String {
+    let l = lookup(r.module, r.entry, call);
+    let recv_name = call.recv.join(".");
+    let call_name = format!("{recv_name}.{}", call.method);
+    let scope = CallScope {
+        lib: l.lib,
+        params: l.params,
+        entry_args: &call.args,
+        call_name: call_name.clone(),
+    };
+    let args: Vec<String> = l
+        .lang
+        .call_args
+        .iter()
+        .map(|a| call_arg_expr(r, &scope, a))
+        .collect();
+    let stored = r.path_expr(&call.recv);
+    let awaited = if l.lang.sync { "" } else { ".await" };
+    let binding = ok_pattern(&l.lang.yields);
+    let mapped = error_match(&recv_name, &call.method, &l.lang.errors);
+    let target = field.target.clone();
+    let module = r.module;
+    let store = move |expr: &str| wrap_stored(&target, module, expr);
+    let assign = ok_assign(dest, &binding, l.lang.returns.as_ref(), &store);
+    // The outcome is bound before it is matched so the receiver borrow ends
+    // with the call: the assignment below writes another field of the same
+    // draft, which a still-live borrow of the receiver's slot would block.
+    format!(
+        "let recv = match &{stored} {{\n\
+         \x20   Some(v) => v,\n\
+         \x20   None => {{\n\
+         \x20       return Err(TonoError::Config(ConfigError {{ message: {miss:?}.to_string() }}));\n\
+         \x20   }}\n\
+         }};\n\
+         let outcome = recv.{symbol}({args}){awaited};\n\
+         match outcome {{\n    Ok({binding}) => {{ {assign} }}\n    Err(e) => {{ return Err({mapped}); }}\n}}",
+        miss = format!("{call_name}: the {recv_name} handle is not configured"),
+        symbol = l.lang.symbol,
+        args = args.join(", "),
+    )
+}
+
 #[cfg(test)]
 #[path = "ext_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ext_source_tests.rs"]
+mod source_tests;

@@ -70,15 +70,19 @@ pub(super) fn json_literal(v: &serde_json::Value) -> String {
 /// caller's own actual arguments (the entry field's `call(..)`), which a
 /// `Param` position resolves through, and the `ns.fn` name a diagnostic
 /// names.
-struct CallScope<'a> {
-    lib: &'a ExtLib,
-    params: &'a [ExternParam],
-    entry_args: &'a [CallArg],
-    call_name: String,
+pub(super) struct CallScope<'a> {
+    pub lib: &'a ExtLib,
+    pub params: &'a [ExternParam],
+    pub entry_args: &'a [CallArg],
+    pub call_name: String,
 }
 
 /// One `CallArg` as a Rust expression, in the target's own call syntax.
-fn call_arg_expr(r: &mut Resolver<'_, '_>, scope: &CallScope<'_>, arg: &CallArg) -> String {
+pub(super) fn call_arg_expr(
+    r: &mut Resolver<'_, '_>,
+    scope: &CallScope<'_>,
+    arg: &CallArg,
+) -> String {
     match arg {
         // A `call:` argument written inside the language block that names
         // a logical parameter arrives as a bare `Param` (the frontend does
@@ -292,7 +296,7 @@ fn ok_pattern(positions: &[&YieldsPos]) -> String {
 /// The `dest = ...` (or field-by-field) assignment from the `Ok(..)` binding
 /// into `dest`: a declared `returns:` projects fields one at a time, its
 /// absence assigns the whole (possibly cast) binding.
-fn ok_assign(
+pub(super) fn ok_assign(
     dest: &str,
     ok_binding: &str,
     returns: Option<&ReturnsLit>,

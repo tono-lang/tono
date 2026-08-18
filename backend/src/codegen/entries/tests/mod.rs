@@ -6,6 +6,8 @@ use serde_json::json;
 // to keep this file under the line-count gate; they reuse the fixtures below
 // through `super::*`.
 mod call;
+// The handle-method field-source tests, likewise.
+mod handle_call;
 // The `validate_entries` gate tests (generated-identifier collisions, the
 // mixed loose/entry module rules) live in their own submodule for the same
 // reason.
@@ -20,6 +22,7 @@ fn field(name: &str, sources: Vec<Source>) -> EntryField {
         transforms: vec![],
         select: None,
         call: None,
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],

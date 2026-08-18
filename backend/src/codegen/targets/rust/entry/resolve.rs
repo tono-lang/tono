@@ -241,6 +241,15 @@ impl Emitter for Resolver<'_, '_> {
         resolve_call::call_assign(self, field, call, dest)
     }
 
+    fn handle_call_assign(
+        &mut self,
+        field: &EntryField,
+        call: &crate::ir::OpImplCall,
+        dest: &str,
+    ) -> String {
+        super::ext::handle_call_assign(self, field, call, dest)
+    }
+
     /// A call-sourced field's `@with` fallback only ever reaches this leaf
     /// from the builder path (an entry with a `@with`
     /// field always builds through `ClientBuilder`, never a bare `new`), so

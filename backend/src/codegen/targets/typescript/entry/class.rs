@@ -580,7 +580,10 @@ pub(super) fn class_decl(
     has_tests: bool,
 ) -> Vec<Decl> {
     let en = error_names();
-    let is_async = entry.fields.iter().any(|f| f.call.is_some());
+    let is_async = entry
+        .fields
+        .iter()
+        .any(|f| f.call.is_some() || f.handle_call.is_some());
     let mut refs = base_refs(entry, module);
     let (params, args) = ctor_params(entry, n, module);
 

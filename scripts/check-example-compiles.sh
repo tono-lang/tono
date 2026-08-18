@@ -560,3 +560,23 @@ EOF
 (cd "$work/settings-source/out/go" && go test ./...)
 
 echo "all generated SDKs compile"
+
+echo "provider-config..."
+# The handle-method field-source recipe: a foreign provider constructed
+# once, one of its methods read into a field (`endpoints: endpoints =
+# .provider.get()`) that several `@http` operations consume through their
+# endpoint, against a real (if stand-in) Go package. The declared test stubs
+# both the constructor and the method reached at construction, so this also
+# proves the hermetic fake honours the method's `ctx` slot.
+mkdir -p "$work/provider-config"
+"$frontend" compile "$root/examples/provider-config/service.tono" --module providerconfig >"$work/provider-config/ir.json"
+"$root/target/debug/tono" gen --target go --out "$work/provider-config/out" \
+    --go-module example.com/providerconfig "$work/provider-config/ir.json"
+(cd "$work/provider-config/out/go" && go mod init example.com/providerconfig >/dev/null 2>&1 \
+    && cat >>go.mod <<EOF
+require github.com/example/envkit v0.0.0
+replace github.com/example/envkit => $root/examples/provider-config/ext/go
+EOF
+    go mod tidy >/dev/null \
+    && go build ./...)
+(cd "$work/provider-config/out/go" && go test ./...)

@@ -96,6 +96,7 @@ fn module(tests: Vec<TestDecl>) -> Module {
                         transforms: vec![],
                         select: None,
                         call: None,
+                        handle_call: None,
                         binds: vec![],
                         constraints: vec![],
                         traits: vec![],

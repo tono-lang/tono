@@ -1,0 +1,68 @@
+import tono.http
+
+// A third-party settings-provider library the SDK integrates with
+// declaratively: a provider is constructed once, and one of its methods
+// resolves the endpoints every operation of the client reads. The `ext`
+// block names where the library lives; the handle's methods declare the
+// real call, its foreign return shape, and the projection into `endpoints`.
+ext envkit {
+  go: "github.com/example/envkit"
+
+  struct go_endpoints { ReadURL: string, WriteURL: string }
+
+  type provider {
+    extern get(): endpoints {
+      go {
+        call: "Get"()
+        yields: (e: go_endpoints)
+        returns: endpoints { endpoint_read: .e.ReadURL, endpoint_write: .e.WriteURL }
+        ctx
+      }
+    }
+  }
+
+  extern new_environment_provider(name: string): provider {
+    go { call: "NewEnvironmentProvider"(name) }
+  }
+}
+
+struct endpoints {
+  endpoint_read: string
+  endpoint_write: string
+}
+
+pub struct item {
+  id: string
+  body: string
+}
+
+pub struct item_ref {
+  id: string
+}
+
+@doc("An SDK entry whose endpoints resolve once, from a provider's method, and feed every operation.")
+pub struct client {
+  provider: envkit.provider = envkit.new_environment_provider("kvs")
+  endpoints: endpoints = .provider.get()
+
+  op get(i: item_ref): item
+    @http(method: "GET", path: "/items/{.i.id}", endpoint: .endpoints.endpoint_read)
+
+  op set(i: item): item
+    @http(method: "PUT", path: "/items", endpoint: .endpoints.endpoint_write)
+    @body(.i)
+}
+
+// The library is never installed for this test: `stub envkit.new_environment_provider`
+// hands construction a fake provider, `stub envkit.provider.get` answers the
+// method the endpoints field reads, and the request assertion proves the
+// resolved endpoints reached the operation's endpoint.
+test "the provider resolves the operation endpoint once" {
+  stub envkit.new_environment_provider: envkit.provider {}
+  stub envkit.provider.get: endpoints { endpoint_read: "https://read.test", endpoint_write: "https://write.test" }
+  c: client {}
+  s: stub c.get.http: http.response { status: 200, headers: { "content-type": "application/json" }, body: "{\"id\":\"n1\",\"body\":\"hi\"}" }
+  got: c.get(item_ref { id: "n1" })
+  expect got: item { id: "n1", body: "hi" }
+  expect s.requests: [http.request { method: "GET", path: "/items/n1", .. }]
+}

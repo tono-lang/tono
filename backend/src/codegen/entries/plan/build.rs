@@ -72,18 +72,22 @@ pub fn build_field<'a>(
     }
 }
 
-/// A `= ns.fn(args)` extern-call source: a plain call is an
-/// unconditional assignment, always attempted, like a config compose or a
-/// `@default`. A call alongside `@with` tries the injected
-/// value first and falls back to the call, the same two-route shape
-/// [`chain_sequential`]'s `Source::With` arm already gives a scalar chain.
-/// The call's own spelling is a per-target leaf, deferred to codegen. `dest`
-/// is the caller's destination (a top-level field or a config member path).
+/// A `= ns.fn(args)` extern-call source, or a `= .field.method(args)`
+/// handle-method-call source: a plain call is an unconditional assignment,
+/// always attempted, like a config compose or a `@default`. A call alongside
+/// `@with` tries the injected value first and falls back to the call, the
+/// same two-route shape [`chain_sequential`]'s `Source::With` arm already
+/// gives a scalar chain. The call's own spelling is a per-target leaf,
+/// deferred to codegen. `dest` is the caller's destination (a top-level
+/// field or a config member path).
 fn build_call_field(field: &EntryField, e: &mut dyn Emitter, dest: &str) -> Stmt {
-    let Some(call) = &field.call else {
+    let assign = if let Some(call) = &field.call {
+        Stmt::Leaf(Leaf(e.call_assign(field, call, dest)))
+    } else if let Some(call) = &field.handle_call {
+        Stmt::Leaf(Leaf(e.handle_call_assign(field, call, dest)))
+    } else {
         return Stmt::Nop;
     };
-    let assign = Stmt::Leaf(Leaf(e.call_assign(field, call, dest)));
     if !field.sources.iter().any(|s| matches!(s, Source::With)) {
         return assign;
     }

@@ -1,5 +1,7 @@
-//! An op's own `impl .field.method(args)` body: a call into an entry
-//! field's declared opaque-handle method, in place of the wire protocol.
+//! A call into an entry field's declared opaque-handle method: an op's own
+//! `impl .field.method(args)` body (in place of the wire protocol), or a
+//! field's own `= .field.method(args)` construction source (a foreign
+//! resolution that feeds several operations).
 //!
 //! TypeScript has no generated adapter behind a handle-typed field (unlike
 //! Go: see `ext_handle_iface`, which types a handle field with its own
@@ -94,43 +96,56 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
     }
 }
 
-/// [`crate::codegen::targets::typescript::entry::mod::op_method`]'s branch
-/// for an operation whose own body is `impl .field.method(args)`: builds the
-/// call, projects `yields`/`returns` into the op's own declared output, and
-/// maps a declared sentinel (or any unmapped failure) onto the same
-/// `ContractError` boundary a free extern call uses.
+/// The pieces of one handle-method call site that differ between an op's
+/// own `impl` body and a field's own `= .h.m(args)` source: where the
+/// receiver is read from, how a `Ref` argument resolves, what the raw
+/// result is narrowed to when the method declares no `yields`, and how a
+/// failure leaves the block.
+struct CallSite<'a> {
+    recv_root: &'a str,
+    ref_expr:
+        &'a dyn Fn(&EntryModel<'_>, &crate::codegen::casing::CasingConfig, &[String]) -> String,
+    ret: &'a str,
+    throw: &'a dyn Fn(String) -> String,
+}
+
+/// The `try`/`catch` shape both call sites share: the call, its
+/// `yields`/`returns` projection (or the raw pass-through), and the sentinel
+/// mapping onto the same `ContractError` boundary a free extern call uses.
+/// Returns the four rendered parts (`recv.symbol(args)` expression, the
+/// `return ...;` statement, the sentinel switch, and the fallback throw)
+/// so each caller lays them out with its own indentation.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn impl_call_body(
+fn call_parts(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
     module: &Module,
-    input_name: Option<&str>,
     call: &OpImplCall,
-    ret: &str,
-    throw: &dyn Fn(String) -> String,
+    site: &CallSite<'_>,
     refs: &mut Vec<Symbol>,
     sentinel_types: &mut BTreeSet<String>,
-) -> String {
+) -> (String, String, String, String) {
     let l = lookup(module, entry, call);
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
 
-    let ref_expr =
-        |entry: &EntryModel<'_>, config: &crate::codegen::casing::CasingConfig, path: &[String]| {
-            handle_call_ref_expr(entry, config, path, input_name)
-        };
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
         for a in &lang.call_args {
             parts.push(render_arg(
-                entry, config, a, l.params, &call.args, &ref_expr,
+                entry,
+                config,
+                a,
+                l.params,
+                &call.args,
+                site.ref_expr,
             ));
         }
         parts.join(", ")
     };
 
-    let recv_expr = field_path_expr(entry, config, &call.recv, "this.settings");
+    let recv_expr = field_path_expr(entry, config, &call.recv, site.recv_root);
     let call_name = format!("{}.{}", call.recv.join("."), call.method);
 
     // Same `ts` identity as `ext_call.rs`: no yields position ever reads its
@@ -140,12 +155,11 @@ pub(super) fn impl_call_body(
     let assign = match lang.yields.iter().find(|y| !y.is_error) {
         // No yields: the interface honestly types `raw` as `unknown` (see
         // the module doc for why). `void` accepts any resolved value as-is;
-        // any other declared output narrows through the op's own return
-        // type, trusting the frontend-checked contract that this op's
-        // impl call hands back exactly what it declared, not a guess this
-        // module invents.
-        None if ret == "void" => "return raw;".to_string(),
-        None => format!("return raw as {ret};"),
+        // any other declared type narrows through the site's own return
+        // type, trusting the frontend-checked contract that this call hands
+        // back exactly what was declared, not a guess this module invents.
+        None if site.ret == "void" => "return raw;".to_string(),
+        None => format!("return raw as {};", site.ret),
         Some(y) => {
             let returns = lang.returns.as_ref().unwrap_or_else(|| {
                 panic!(
@@ -168,14 +182,79 @@ pub(super) fn impl_call_body(
         }
     };
 
-    let switch = sentinel_switch(&lang.errors, module, refs, sentinel_types, throw);
-
+    let switch = sentinel_switch(&lang.errors, module, refs, sentinel_types, site.throw);
     let en = error_names();
-    format!(
-        "  try {{\n    const raw = await {recv_expr}.{symbol}({args});\n    {assign}\n  }} catch (e) {{\n{switch}    {fallback}\n  }}",
-        symbol = lang.symbol,
-        fallback = throw(format!("new {}({call_name:?}, e)", en.contract)),
+    let fallback = (site.throw)(format!("new {}({call_name:?}, e)", en.contract));
+    (
+        format!("{recv_expr}.{}({args})", lang.symbol),
+        assign,
+        switch,
+        fallback,
     )
+}
+
+/// [`crate::codegen::targets::typescript::entry::mod::op_method`]'s branch
+/// for an operation whose own body is `impl .field.method(args)`: builds the
+/// call, projects `yields`/`returns` into the op's own declared output, and
+/// maps a declared sentinel (or any unmapped failure) onto the same
+/// `ContractError` boundary a free extern call uses.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn impl_call_body(
+    entry: &EntryModel<'_>,
+    config: &crate::codegen::casing::CasingConfig,
+    module: &Module,
+    input_name: Option<&str>,
+    call: &OpImplCall,
+    ret: &str,
+    throw: &dyn Fn(String) -> String,
+    refs: &mut Vec<Symbol>,
+    sentinel_types: &mut BTreeSet<String>,
+) -> String {
+    let ref_expr =
+        |entry: &EntryModel<'_>, config: &crate::codegen::casing::CasingConfig, path: &[String]| {
+            handle_call_ref_expr(entry, config, path, input_name)
+        };
+    let site = CallSite {
+        recv_root: "this.settings",
+        ref_expr: &ref_expr,
+        ret,
+        throw,
+    };
+    let (call_expr, assign, switch, fallback) =
+        call_parts(entry, config, module, call, &site, refs, sentinel_types);
+    format!(
+        "  try {{\n    const raw = await {call_expr};\n    {assign}\n  }} catch (e) {{\n{switch}    {fallback}\n  }}"
+    )
+}
+
+/// A field's own `= .field.method(args)` construction source, as the body
+/// of that field's module-scoped seam (see `ext_call::seam_decls`): the
+/// receiver is read off the in-progress `Settings` draft `s` (the handle
+/// field resolved earlier in the same constructor), a `Ref` argument is a
+/// sibling field off the same draft, and the raw result narrows to the
+/// field's own declared type. Ends in `return`, like a free call's seam
+/// body: the assignment itself lives at the field's own resolution point.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn handle_call_body(
+    entry: &EntryModel<'_>,
+    config: &crate::codegen::casing::CasingConfig,
+    module: &Module,
+    field: &crate::ir::EntryField,
+    call: &OpImplCall,
+    refs: &mut Vec<Symbol>,
+    sentinel_types: &mut BTreeSet<String>,
+) -> String {
+    let ret = super::field_ts_type(&field.target, module);
+    let throw = |expr: String| format!("throw {expr};");
+    let site = CallSite {
+        recv_root: "s",
+        ref_expr: &super::ext_call::field_ref,
+        ret: &ret,
+        throw: &throw,
+    };
+    let (call_expr, assign, switch, fallback) =
+        call_parts(entry, config, module, call, &site, refs, sentinel_types);
+    format!("try {{\n  const raw = await {call_expr};\n  {assign}\n}} catch (e) {{\n{switch}  {fallback}\n}}")
 }
 
 /// [`ext_call::render_arg`]'s `Ref` resolver for a handle-method call site:
@@ -210,3 +289,7 @@ fn handle_call_ref_expr(
 #[cfg(test)]
 #[path = "ext_handle_call_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ext_handle_source_tests.rs"]
+mod source_tests;

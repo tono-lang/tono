@@ -87,6 +87,7 @@ fn entry_field_ref(name: &str, target_id: &str) -> tono_backend::ir::EntryField 
         transforms: vec![],
         select: None,
         call: None,
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],

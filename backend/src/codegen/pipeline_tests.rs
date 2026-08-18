@@ -673,6 +673,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                                 transforms: vec![],
                                 select: None,
                                 call: None,
+                                handle_call: None,
                                 binds: vec![],
                                 constraints: vec![],
                                 traits: vec![],

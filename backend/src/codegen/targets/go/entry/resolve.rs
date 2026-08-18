@@ -731,6 +731,19 @@ impl Emitter for Resolver<'_, '_> {
         }
     }
 
+    /// A field's own `= .field.method(args)` handle-method-call source:
+    /// see [`super::ext::handle_call_assign`]. The receiver is a handle
+    /// field, and a declared test that fakes that handle (its own override)
+    /// already redirects this call, so the field itself carries no seam.
+    fn handle_call_assign(
+        &mut self,
+        field: &EntryField,
+        call: &crate::ir::OpImplCall,
+        dest: &str,
+    ) -> String {
+        super::ext::handle_call_assign(self, field, call, dest)
+    }
+
     fn require_numeric(&mut self, head: &str, _target: &Tref) -> String {
         format!(
             "if {err} != nil && s.{ident} == 0 {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",

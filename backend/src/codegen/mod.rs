@@ -15,6 +15,7 @@ pub mod declared_tests;
 pub mod doc;
 pub mod entries;
 pub mod extensions;
+pub mod fixtures;
 pub mod format;
 pub mod group;
 pub mod imports;
