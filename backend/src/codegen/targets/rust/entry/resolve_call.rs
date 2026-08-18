@@ -18,12 +18,13 @@
 
 use std::fmt::Write as _;
 
+use super::ext;
 use super::resolve::Resolver;
 use super::*;
 use crate::codegen::entries::plan::Emitter;
 use crate::ir::{
     ArmValue, CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang,
-    ReturnsField, ReturnsLit, ReturnsValue, Select, YieldsPos,
+    ExternParam, ReturnsField, ReturnsLit, ReturnsValue, Select, YieldsPos,
 };
 
 pub(super) fn find_lib<'a>(module: &'a Module, ns: &str) -> &'a ExtLib {
@@ -64,20 +65,63 @@ pub(super) fn json_literal(v: &serde_json::Value) -> String {
     }
 }
 
+/// The call one argument is rendered for: the declaring library (a `Ctor`
+/// names one of its structs), the extern's declared parameter list and the
+/// caller's own actual arguments (the entry field's `call(..)`), which a
+/// `Param` position resolves through, and the `ns.fn` name a diagnostic
+/// names.
+struct CallScope<'a> {
+    lib: &'a ExtLib,
+    params: &'a [ExternParam],
+    entry_args: &'a [CallArg],
+    call_name: String,
+}
+
 /// One `CallArg` as a Rust expression, in the target's own call syntax.
-fn call_arg_expr(r: &mut Resolver<'_, '_>, lib: &ExtLib, arg: &CallArg) -> String {
+fn call_arg_expr(r: &mut Resolver<'_, '_>, scope: &CallScope<'_>, arg: &CallArg) -> String {
     match arg {
-        // The DAG resolves every real argument to a `Ref` path into the
-        // entry before codegen ever sees it; a bare `Param` only arises for
-        // a logical parameter no `call_args` position renamed away, so this
-        // reads the same-named field as a best effort. `r.arg_prefix` names
-        // how to read a caller-supplied constructor argument (`self.` for a
-        // builder, empty for a plain function parameter), not how to read an
-        // already-resolved sibling field off the local `s: Settings`, so
-        // this goes through `path_expr` exactly like `Ref` does rather than
-        // `arg_prefix`, which would emit a bare, undeclared identifier here.
+        // A `call:` argument written inside the language block that names
+        // a logical parameter arrives as a bare `Param` (the frontend does
+        // not pre-resolve it to the field the caller passed), so it is
+        // substituted positionally: the caller's own actual argument at the
+        // parameter's declared position, rendered recursively. The same
+        // substitution Go's and TypeScript's own emitters perform.
         CallArg::Param(name) => {
-            format!("({}).clone()", r.path_expr(std::slice::from_ref(name)))
+            let actual = scope
+                .params
+                .iter()
+                .position(|p| p.name == *name)
+                .and_then(|i| scope.entry_args.get(i))
+                .unwrap_or_else(|| {
+                    // The frontend arity-checks an extern's `call:` args
+                    // against its declared parameters and the caller's args
+                    // against the same list, so a `Param` with no actual
+                    // argument at its position is a validator gap, never an
+                    // authoring error this leaf should paper over.
+                    panic!("extern param {name:?} has no argument at its position")
+                });
+            call_arg_expr(r, scope, actual)
+        }
+        // A foreign handle stored in its `Option` slot is moved out (a
+        // handle is not `Clone` in general: a connection, a pool, a
+        // provider), not cloned. `s` is a local the constructor owns, so
+        // `take()` on its field is sound while `s` is still read later; the
+        // slot is left unset, which is the honest state once ownership went
+        // to the callee (an op's own `impl .field.method(..)` reading it
+        // afterwards diagnoses "not configured" rather than aliasing a
+        // moved value). An unset slot here can only mean the handle's own
+        // resolution was skipped upstream, so it is diagnosed the same way
+        // the op receiver read diagnoses it instead of unwrapped.
+        CallArg::Ref(path) if ext::is_stored_wrapped(&r.path_type(path), r.module) => {
+            let miss = format!(
+                "{}: the {} handle is not configured",
+                scope.call_name,
+                path.join(".")
+            );
+            format!(
+                "match {}.take() {{ Some(v) => v, None => {{ return Err(TonoError::Config(ConfigError {{ message: {miss:?}.to_string() }})); }} }}",
+                r.path_expr(path)
+            )
         }
         // Cloned, not moved: `s` (the composed settings struct) is still
         // read later (the frozen `ClientOptions`, `Client { settings: s,
@@ -86,18 +130,20 @@ fn call_arg_expr(r: &mut Resolver<'_, '_>, lib: &ExtLib, arg: &CallArg) -> Strin
         CallArg::Ref(path) => format!("({}).clone()", r.path_expr(path)),
         CallArg::Lit(v) => json_literal(v),
         CallArg::List(items) => {
-            let rendered: Vec<String> = items.iter().map(|a| call_arg_expr(r, lib, a)).collect();
+            let rendered: Vec<String> = items.iter().map(|a| call_arg_expr(r, scope, a)).collect();
             format!("vec![{}]", rendered.join(", "))
         }
         CallArg::Ctor(CallCtor { name, fields }) => {
-            lib.structs
+            scope
+                .lib
+                .structs
                 .iter()
                 .find(|s| &s.name == name)
                 .expect("checker rejects a ctor naming an undeclared foreign struct");
             let rendered: Vec<String> = fields
                 .iter()
                 .map(|(field_name, value)| {
-                    format!("{field_name}: {}", call_arg_expr(r, lib, value))
+                    format!("{field_name}: {}", call_arg_expr(r, scope, value))
                 })
                 .collect();
             format!("{name} {{ {} }}", rendered.join(", "))
@@ -124,10 +170,16 @@ fn call_expr(r: &mut Resolver<'_, '_>, call: &EntryCall) -> String {
         .find(|l| l.lang == "rust")
         .map(|l| l.path.replace('-', "_"))
         .expect("validate::call_resolves checked a rust module path exists");
+    let scope = CallScope {
+        lib,
+        params: &decl.params,
+        entry_args: &call.args,
+        call_name: format!("{}.{}", call.ns, call.func),
+    };
     let args: Vec<String> = lang
         .call_args
         .iter()
-        .map(|a| call_arg_expr(r, lib, a))
+        .map(|a| call_arg_expr(r, &scope, a))
         .collect();
     let awaited = if lang.sync { "" } else { ".await" };
     format!(
@@ -308,459 +360,5 @@ pub(super) fn call_assign(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codegen::targets::rust::rust_casing;
-    use crate::codegen::test_support::bare_entry_field;
-    use crate::ir::{
-        CallArg, EntryCall, ExtLib, ExternDecl, ExternParam, LangPath, ReturnsField, ReturnsLit,
-        ReturnsValue, SelectArm, YieldsPos,
-    };
-
-    fn module_of(shapes: Vec<Shape>) -> Module {
-        Module {
-            name: "m".into(),
-            shapes,
-            operations: vec![],
-            extensions: vec![],
-            ext_libs: vec![],
-            tests: vec![],
-        }
-    }
-
-    fn client_shape(fields: Vec<EntryField>) -> Shape {
-        Shape {
-            id: "m#client".into(),
-            kind: ShapeKind::Entry {
-                fields,
-                operations: vec![],
-            },
-            traits: vec![],
-        }
-    }
-
-    /// A plain call field (no `yields`, no `returns`) against a lib that
-    /// declares no `errors:` mapping: `call_assign` must not panic, must
-    /// await the crate-qualified call, and must fall back to `Ok(v)`
-    /// binding straight into `dest`.
-    #[test]
-    fn a_plain_call_field_emits_an_awaited_call_with_no_projection() {
-        let region = bare_entry_field("region", Tref::Prim(Prim::String), vec![Source::Arg]);
-        let mut config = bare_entry_field("config", Tref::Prim(Prim::String), vec![]);
-        config.call = Some(EntryCall {
-            ns: "companyconfig".into(),
-            func: "load".into(),
-            args: vec![CallArg::Ref(vec!["region".into()])],
-        });
-        let mut module = module_of(vec![client_shape(vec![config, region])]);
-        module.ext_libs = vec![ExtLib {
-            name: "companyconfig".into(),
-            langs: vec![LangPath {
-                lang: "rust".into(),
-                path: "company-config".into(),
-            }],
-            structs: vec![],
-            types: vec![],
-            externs: vec![ExternDecl {
-                name: "load".into(),
-                params: vec![ExternParam {
-                    name: "region".into(),
-                    r#type: Tref::Prim(Prim::String),
-                }],
-                r#return: Tref::Prim(Prim::String),
-                langs: vec![ExternLang {
-                    lang: "rust".into(),
-                    symbol: "Client::load".into(),
-                    call_args: vec![CallArg::Ref(vec!["region".into()])],
-                    yields: vec![],
-                    returns: None,
-                    errors: vec![],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                }],
-            }],
-        }];
-        let out = entry_text(&module, &rust_casing());
-        assert!(out.contains("company_config::Client::load"), "{out}");
-        assert!(out.contains(".await"), "{out}");
-        assert!(out.contains("async fn new"), "{out}");
-    }
-
-    #[test]
-    fn a_sync_call_field_emits_without_await() {
-        let region = bare_entry_field("region", Tref::Prim(Prim::String), vec![Source::Arg]);
-        let mut config = bare_entry_field("config", Tref::Prim(Prim::String), vec![]);
-        config.call = Some(EntryCall {
-            ns: "companyconfig".into(),
-            func: "load".into(),
-            args: vec![CallArg::Ref(vec!["region".into()])],
-        });
-        let mut module = module_of(vec![client_shape(vec![config, region])]);
-        module.ext_libs = vec![ExtLib {
-            name: "companyconfig".into(),
-            langs: vec![LangPath {
-                lang: "rust".into(),
-                path: "company-config".into(),
-            }],
-            structs: vec![],
-            types: vec![],
-            externs: vec![ExternDecl {
-                name: "load".into(),
-                params: vec![ExternParam {
-                    name: "region".into(),
-                    r#type: Tref::Prim(Prim::String),
-                }],
-                r#return: Tref::Prim(Prim::String),
-                langs: vec![ExternLang {
-                    lang: "rust".into(),
-                    symbol: "Client::load".into(),
-                    call_args: vec![CallArg::Ref(vec!["region".into()])],
-                    yields: vec![],
-                    returns: None,
-                    errors: vec![],
-                    sync: true,
-                    infallible: false,
-                    ctx: false,
-                }],
-            }],
-        }];
-        let out = entry_text(&module, &rust_casing());
-        assert!(out.contains("company_config::Client::load"), "{out}");
-        assert!(!out.contains(".await"), "{out}");
-    }
-
-    /// A `@with` field backed by a call fallback builds through
-    /// `ClientBuilder`, and the injected value wins over the call: this
-    /// exercises `with_present_cond`/`with_assign` (the plain boolean
-    /// `if`/`else` the shared plan wraps a call in when `@with` is also
-    /// declared).
-    #[test]
-    fn a_with_field_backed_by_a_call_fallback_prefers_the_injected_value() {
-        let mut bus = bare_entry_field("bus", Tref::Prim(Prim::String), vec![Source::With]);
-        bus.call = Some(EntryCall {
-            ns: "companybus".into(),
-            func: "connect".into(),
-            args: vec![],
-        });
-        let module_with_lib = |mut module: Module| {
-            module.ext_libs = vec![ExtLib {
-                name: "companybus".into(),
-                langs: vec![LangPath {
-                    lang: "rust".into(),
-                    path: "company_bus".into(),
-                }],
-                structs: vec![],
-                types: vec![],
-                externs: vec![ExternDecl {
-                    name: "connect".into(),
-                    params: vec![],
-                    r#return: Tref::Prim(Prim::String),
-                    langs: vec![ExternLang {
-                        lang: "rust".into(),
-                        symbol: "connect".into(),
-                        call_args: vec![],
-                        yields: vec![],
-                        returns: None,
-                        errors: vec![],
-                        sync: false,
-                        infallible: false,
-                        ctx: false,
-                    }],
-                }],
-            }];
-            module
-        };
-        let module = module_with_lib(module_of(vec![client_shape(vec![bus])]));
-        let out = entry_text(&module, &rust_casing());
-        assert!(out.contains(".is_some()"), "{out}");
-        assert!(out.contains(".unwrap();"), "{out}");
-        assert!(out.contains("company_bus::connect()"), "{out}");
-    }
-
-    /// A call declaring `yields`/`returns`/`errors:` projects the success
-    /// binding into the declared struct fields and maps the declared
-    /// sentinel, without panicking.
-    #[test]
-    fn a_call_field_with_yields_returns_and_errors_projects_and_maps() {
-        let mut conn = bare_entry_field(
-            "conn",
-            Tref::Ref {
-                id: "m#app_config".into(),
-                args: vec![],
-            },
-            vec![],
-        );
-        conn.call = Some(EntryCall {
-            ns: "companyconfig".into(),
-            func: "load".into(),
-            args: vec![],
-        });
-        let app_config = Shape {
-            id: "m#app_config".into(),
-            kind: ShapeKind::Structure {
-                params: vec![],
-                members: vec![],
-            },
-            traits: vec![],
-        };
-        let mut module = module_of(vec![client_shape(vec![conn]), app_config]);
-        module.ext_libs = vec![ExtLib {
-            name: "companyconfig".into(),
-            langs: vec![LangPath {
-                lang: "rust".into(),
-                path: "company_config".into(),
-            }],
-            structs: vec![],
-            types: vec![],
-            externs: vec![ExternDecl {
-                name: "load".into(),
-                params: vec![],
-                r#return: Tref::Ref {
-                    id: "m#app_config".into(),
-                    args: vec![],
-                },
-                langs: vec![ExternLang {
-                    lang: "rust".into(),
-                    symbol: "Client::load".into(),
-                    call_args: vec![],
-                    yields: vec![
-                        YieldsPos {
-                            name: "cfg".into(),
-                            r#type: Some(Tref::Prim(Prim::String)),
-                            is_error: false,
-                        },
-                        YieldsPos {
-                            name: "err".into(),
-                            r#type: None,
-                            is_error: true,
-                        },
-                    ],
-                    returns: Some(ReturnsLit {
-                        r#type: Tref::Ref {
-                            id: "m#app_config".into(),
-                            args: vec![],
-                        },
-                        fields: vec![ReturnsField {
-                            name: "endpoint".into(),
-                            value: ReturnsValue::Field(vec!["cfg".into(), "Host".into()]),
-                        }],
-                    }),
-                    errors: vec![crate::ir::ErrorBinding {
-                        sentinel: "ErrBusy".into(),
-                        r#type: "overloaded".into(),
-                    }],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                }],
-            }],
-        }];
-        let out = entry_text(&module, &rust_casing());
-        assert!(out.contains("Ok(cfg)"), "{out}");
-        assert!(out.contains("endpoint: cfg.Host"), "{out}");
-        assert!(out.contains("\"ErrBusy\""), "{out}");
-        assert!(out.contains("ContractError"), "{out}");
-    }
-
-    #[test]
-    fn json_literal_covers_every_json_value_kind() {
-        assert_eq!(json_literal(&serde_json::json!("hi")), "\"hi\".to_string()");
-        assert_eq!(json_literal(&serde_json::json!(true)), "true");
-        assert_eq!(json_literal(&serde_json::json!(3)), "3");
-        assert_eq!(json_literal(&serde_json::json!(null)), "Default::default()");
-        assert_eq!(
-            json_literal(&serde_json::json!([1, 2])),
-            "serde_json::json!([1,2])"
-        );
-    }
-
-    #[test]
-    fn ok_pattern_destructures_a_tuple_for_more_than_one_position() {
-        let a = YieldsPos {
-            name: "a".into(),
-            r#type: None,
-            is_error: false,
-        };
-        let b = YieldsPos {
-            name: "b".into(),
-            r#type: None,
-            is_error: false,
-        };
-        assert_eq!(ok_pattern(&[&a]), "a");
-        assert_eq!(ok_pattern(&[&a, &b]), "(a, b)");
-    }
-
-    #[test]
-    fn select_expr_covers_a_field_arm_a_sources_arm_and_the_synthesized_default() {
-        let select = Select {
-            subject_index: None,
-            subject: vec!["cfg".into(), "env".into()],
-            arms: vec![
-                SelectArm {
-                    pattern: Some(serde_json::json!("prod")),
-                    value: ArmValue::Field(vec!["cfg".into(), "host".into()]),
-                },
-                SelectArm {
-                    pattern: Some(serde_json::json!("dev")),
-                    value: ArmValue::Sources(vec![]),
-                },
-            ],
-        };
-        let out = select_expr(&select);
-        assert!(out.contains("\"prod\" => cfg.host"), "{out}");
-        // Every declared arm carries a pattern, so the function synthesizes
-        // a trailing wildcard arm rather than leaving the match non-total.
-        assert!(out.contains("_ => cfg.env.clone()"), "{out}");
-    }
-
-    #[test]
-    fn error_match_maps_every_declared_sentinel_and_falls_back_to_contract_error() {
-        let out = error_match(
-            "companybus",
-            "send",
-            &[
-                crate::ir::ErrorBinding {
-                    sentinel: "ErrBusy".into(),
-                    r#type: "overloaded".into(),
-                },
-                crate::ir::ErrorBinding {
-                    sentinel: "ErrGone".into(),
-                    r#type: "not_found".into(),
-                },
-            ],
-        );
-        assert!(out.contains("\"ErrBusy\" =>"), "{out}");
-        assert!(out.contains("\"ErrGone\" =>"), "{out}");
-        assert!(out.contains("companybus.send"), "{out}");
-        assert!(out.contains("ContractError"), "{out}");
-    }
-
-    /// A call whose `call_args` mix every `CallArg` variant (`Param`,
-    /// `List`, `Ctor`, a nested `Call`), and whose `yields` carries two
-    /// non-error positions, exercises `call_arg_expr`'s full match and the
-    /// `ok_pattern` tuple branch together.
-    #[test]
-    fn a_call_field_with_every_call_arg_variant_and_a_nested_call_emits_without_panicking() {
-        let mut region = bare_entry_field("region", Tref::Prim(Prim::String), vec![Source::Arg]);
-        region.name = "region".into();
-        let mut token = bare_entry_field("token", Tref::Prim(Prim::String), vec![]);
-        token.call = Some(EntryCall {
-            ns: "companyauth".into(),
-            func: "sign".into(),
-            args: vec![],
-        });
-        let mut config = bare_entry_field("config", Tref::Prim(Prim::String), vec![]);
-        config.call = Some(EntryCall {
-            ns: "companyconfig".into(),
-            func: "load".into(),
-            args: vec![
-                CallArg::Param("region".into()),
-                CallArg::List(vec![CallArg::Lit(serde_json::json!(1))]),
-                CallArg::Ctor(crate::ir::CallCtor {
-                    name: "opts".into(),
-                    fields: [("retries".to_string(), CallArg::Lit(serde_json::json!(3)))]
-                        .into_iter()
-                        .collect(),
-                }),
-                CallArg::Call(Box::new(EntryCall {
-                    ns: "companyauth".into(),
-                    func: "sign".into(),
-                    args: vec![],
-                })),
-            ],
-        });
-        let mut module = module_of(vec![client_shape(vec![token, config, region])]);
-        module.ext_libs = vec![
-            ExtLib {
-                name: "companyauth".into(),
-                langs: vec![LangPath {
-                    lang: "rust".into(),
-                    path: "company-auth".into(),
-                }],
-                structs: vec![],
-                types: vec![],
-                externs: vec![ExternDecl {
-                    name: "sign".into(),
-                    params: vec![],
-                    r#return: Tref::Prim(Prim::String),
-                    langs: vec![ExternLang {
-                        lang: "rust".into(),
-                        symbol: "sign".into(),
-                        call_args: vec![],
-                        yields: vec![],
-                        returns: None,
-                        errors: vec![],
-                        sync: false,
-                        infallible: false,
-                        ctx: false,
-                    }],
-                }],
-            },
-            ExtLib {
-                name: "companyconfig".into(),
-                langs: vec![LangPath {
-                    lang: "rust".into(),
-                    path: "company_config".into(),
-                }],
-                structs: vec![crate::ir::ForeignStruct {
-                    name: "opts".into(),
-                    fields: vec![crate::ir::ForeignField {
-                        name: "retries".into(),
-                        r#type: Tref::Prim(Prim::I32),
-                    }],
-                }],
-                types: vec![],
-                externs: vec![ExternDecl {
-                    name: "load".into(),
-                    params: vec![],
-                    r#return: Tref::Prim(Prim::String),
-                    langs: vec![ExternLang {
-                        lang: "rust".into(),
-                        symbol: "Client::load".into(),
-                        call_args: vec![
-                            CallArg::Param("region".into()),
-                            CallArg::List(vec![CallArg::Lit(serde_json::json!(1))]),
-                            CallArg::Ctor(crate::ir::CallCtor {
-                                name: "opts".into(),
-                                fields: [(
-                                    "retries".to_string(),
-                                    CallArg::Lit(serde_json::json!(3)),
-                                )]
-                                .into_iter()
-                                .collect(),
-                            }),
-                            CallArg::Call(Box::new(EntryCall {
-                                ns: "companyauth".into(),
-                                func: "sign".into(),
-                                args: vec![],
-                            })),
-                        ],
-                        yields: vec![
-                            YieldsPos {
-                                name: "a".into(),
-                                r#type: Some(Tref::Prim(Prim::String)),
-                                is_error: false,
-                            },
-                            YieldsPos {
-                                name: "b".into(),
-                                r#type: Some(Tref::Prim(Prim::String)),
-                                is_error: false,
-                            },
-                        ],
-                        returns: None,
-                        errors: vec![],
-                        sync: false,
-                        infallible: false,
-                        ctx: false,
-                    }],
-                }],
-            },
-        ];
-        let out = entry_text(&module, &rust_casing());
-        assert!(out.contains("vec![1]"), "{out}");
-        assert!(out.contains("opts { retries: 3 }"), "{out}");
-        assert!(out.contains("company_auth::sign().await"), "{out}");
-        assert!(out.contains("Ok((a, b))"), "{out}");
-    }
-}
+#[path = "resolve_call_tests.rs"]
+mod tests;
