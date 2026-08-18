@@ -423,7 +423,7 @@ fn assert_generates_and_compiles(model: &Model) {
 }
 
 #[test]
-fn the_rfc_appendix_generates_typescript_that_compiles_against_the_real_libraries() {
+fn the_appendix_worked_example_generates_typescript_that_compiles_against_the_real_libraries() {
     if skip_tsc_test() {
         return;
     }

@@ -141,7 +141,7 @@ pub fn send_op_impl_call() -> OpImplCall {
     }
 }
 
-/// The RFC appendix's own `companyconfig.load(service, region) -> app_config`,
+/// The appendix worked example's own `companyconfig.load(service, region) -> app_config`,
 /// `ts` binding: a `Ctor` argument (the foreign `ts_opts` struct, its two
 /// fields substituted positionally from the op's own params), a
 /// `yields`/`returns` pair projecting the foreign `ts_config` struct's
@@ -210,7 +210,7 @@ pub fn load_config_extern(app_config_id: &str) -> ExternDecl {
     }
 }
 
-/// The RFC appendix's own `config` and `bus` entry fields: `config` a plain
+/// The appendix worked example's own `config` and `bus` entry fields: `config` a plain
 /// call into [`load_config_extern`], `bus` a `@with`-fallback call into
 /// [`connect_publisher_extern`] reading `config`'s own resolved members.
 /// `app_config_id`/`publisher_id` are the caller's own module-qualified ids,

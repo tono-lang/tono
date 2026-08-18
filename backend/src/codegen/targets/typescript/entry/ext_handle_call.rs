@@ -15,7 +15,15 @@
 //! Calling a method on an `unknown`-typed field needs a narrowing cast; with
 //! no generated interface to cast to, the cast is `any`, applied only at
 //! this one call site (the field's own declared type stays `unknown`
-//! everywhere else).
+//! everywhere else). This is tracked debt, not the intended shape: the
+//! `unknown` field type predates this module (`field_ts_type` in
+//! `entry/mod.rs`), but this module is what first makes that field
+//! *callable*, which is exactly where the missing static check would bite a
+//! caller. Closing it means TypeScript growing the same generated
+//! interface-per-handle Go already emits (`go/entry/ext_handle.rs`) and
+//! typing the field with it instead of `unknown`; out of scope here, since
+//! it changes `emits_ext_handle_types`'s own output, not just this
+//! capability.
 //!
 //! `entries::validate_entries` guarantees, before this runs, that every
 //! target in the current generation call supports `emits_ext_handle_calls`
