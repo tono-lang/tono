@@ -90,7 +90,7 @@ fn write_sdk(model: &Model) -> PathBuf {
 }
 
 #[test]
-fn the_rfc_appendix_generates_rust_that_compiles_against_the_real_crate() {
+fn the_appendix_worked_example_generates_rust_that_compiles_against_the_real_crate() {
     if std::env::var_os("CARGO_LLVM_COV").is_some() {
         eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test rust_ext_roundtrip`");
         return;
