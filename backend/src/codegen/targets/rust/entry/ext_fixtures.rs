@@ -135,6 +135,14 @@ pub fn rust_ext_fixture_model() -> Model {
         ],
     });
 
+    // Injected straight by the caller (`@arg`, no `call` of its own): the
+    // gate this exercises is the one a self-constructed handle field
+    // (`bus`, above) does not -- a foreign-handle field with no `field.call`
+    // resolves to `FieldShape::Json` (its type has no shape in
+    // `module.shapes`), not `FieldShape::Scalar`, so it reaches a different
+    // leaf of the emitter than `bus`'s own `@with` construction does.
+    let hook = entry_field("hook", ref_to("companybus#publisher"), vec![Source::Arg]);
+
     let app_config = Shape {
         id: "m#app_config".into(),
         kind: ShapeKind::Structure {
@@ -195,7 +203,7 @@ pub fn rust_ext_fixture_model() -> Model {
     let client = Shape {
         id: "m#client".into(),
         kind: ShapeKind::Entry {
-            fields: vec![service, region, config, bus],
+            fields: vec![service, region, config, bus, hook],
             operations: vec![publish_op],
         },
         traits: vec![],

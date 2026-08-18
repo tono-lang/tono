@@ -275,6 +275,14 @@ pub trait Emitter {
     fn arg_ident(&self, field: &EntryField) -> String {
         arg_camel(&field.name, &field.traits, self.lang())
     }
+    /// An `@arg` field's own assignment into its construction slot: bare by
+    /// default, since a construction slot's public and stored type are the
+    /// same everywhere except Rust's own foreign-handle case (a stored slot
+    /// wrapped in `Option`, see `rust::entry::ext::wrap_stored`), which
+    /// overrides this to route the value through that wrap.
+    fn arg_assign(&mut self, field: &EntryField, dest: &str) -> String {
+        format!("{dest} = {}{}", self.arg_ident(field), self.term())
+    }
     /// The read expression of a sibling-field path (`creds.token`).
     fn path_read(&self, path: &[String]) -> String {
         self.path_expr(path)

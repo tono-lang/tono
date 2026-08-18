@@ -55,7 +55,7 @@ pub fn decode_opening<E: Emitter>(
 ) -> Option<(String, String)> {
     let dest = e.ident(&field.name);
     if field.sources.iter().any(|s| matches!(s, Source::Arg)) {
-        out.push_str(&format!("{dest} = {}{}", e.arg_ident(field), e.term()));
+        out.push_str(&e.arg_assign(field, &dest));
         return None;
     }
     let err = e.err_ident(&field.name);

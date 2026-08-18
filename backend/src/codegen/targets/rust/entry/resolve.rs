@@ -246,16 +246,35 @@ impl Emitter for Resolver<'_, '_> {
     /// field always builds through `ClientBuilder`, never a bare `new`), so
     /// `arg_prefix` is always `"self."` here and the injected value reads
     /// off the builder's own `Option<T>` field.
+    /// A foreign handle's own slot is not `Clone` in general (a connection,
+    /// a pool, a provider typically is not), so its presence check and its
+    /// assignment cannot independently re-read and unwrap the same
+    /// `Option<T>` the way every other `@with` field type does below -- that
+    /// would require a clone. Instead the check itself binds the value
+    /// (`if let Some(v) = ..`), and [`Self::with_assign`] reads that same
+    /// binding back rather than the field again: `build`/`with_*` consume
+    /// `self` by value, so moving out of `self.<field>` here is sound, and
+    /// clippy's own `unnecessary_unwrap` is exactly the check that would
+    /// catch a regression back to the independent-reread shape.
     fn with_present_cond(&self, field: &EntryField) -> Cond {
-        Cond(format!("{}.is_some()", self.arg_read(field)))
+        if ext::is_stored_wrapped(&field.target, self.module) {
+            Cond(format!("let Some(v) = {}", self.arg_read(field)))
+        } else {
+            Cond(format!("{}.is_some()", self.arg_read(field)))
+        }
     }
 
-    /// `with_present_cond` is a plain boolean `if`, not an `if let`, so this
-    /// leaf independently re-reads and unwraps the same `Option<T>`; safe
+    /// `with_present_cond` is a plain boolean `if`, not an `if let`, for
+    /// every field type but a foreign handle (see there), so this leaf
+    /// independently re-reads and unwraps the same `Option<T>`; safe
     /// because the two always run together (the shared plan emits this leaf
     /// only inside the branch `with_present_cond` guards).
     fn with_assign(&self, field: &EntryField, dest: &str) -> Leaf {
-        let value = format!("{}.unwrap()", self.arg_take(field));
+        let value = if ext::is_stored_wrapped(&field.target, self.module) {
+            "v".to_string()
+        } else {
+            format!("{}.unwrap()", self.arg_take(field))
+        };
         Leaf(format!("{dest} = {};", self.store(field, &value)))
     }
 
@@ -265,6 +284,16 @@ impl Emitter for Resolver<'_, '_> {
     fn assign_arg(&mut self, field: &EntryField, dest: &str) -> Leaf {
         let value = self.arg_ident(field);
         Leaf(format!("{dest} = {};", self.store(field, &value)))
+    }
+
+    /// The `decode_opening`/JSON-body `@arg` assignment (a foreign-handle
+    /// field has no declared shape in `module.shapes` -- its type lives in
+    /// `ext_libs` -- so it reaches `json_body`/`decode_opening`, not
+    /// [`Self::assign_arg`]). Overridden for the same reason: the value's
+    /// stored slot may be wrapped in `Option`.
+    fn arg_assign(&mut self, field: &EntryField, dest: &str) -> String {
+        let value = self.arg_ident(field);
+        format!("{dest} = {};", self.store(field, &value))
     }
 
     fn member_dest(&self, member_name: &str) -> String {

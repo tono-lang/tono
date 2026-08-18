@@ -8,7 +8,9 @@ pub struct Ack {
     pub accepted: bool,
 }
 
-#[derive(Clone)]
+// Deliberately not `Clone`: a real handle (a connection, a pool, a
+// provider) typically is not, and the generated SDK must move it rather
+// than assume it can be cloned.
 pub struct Publisher {
     endpoint: String,
 }
