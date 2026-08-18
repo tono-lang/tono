@@ -23,9 +23,8 @@ use tono_backend::codegen::targets::typescript::entry::ext_fixtures::{
 use tono_backend::codegen::targets::typescript::types::ts_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
 use tono_backend::ir::{
-    CallArg, CallCtor, EntryCall, ExtLib, ExternDecl, ExternLang, ExternParam, ForeignField,
-    ForeignStruct, LangPath, Model, Module, OpaqueType, Prim, ReturnsField, ReturnsLit,
-    ReturnsValue, Shape, ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
+    CallArg, EntryCall, ExtLib, ForeignField, ForeignStruct, LangPath, Model, Module, OpaqueType,
+    Prim, Shape, ShapeKind, Source, Tref, TONO_IR_VERSION,
 };
 
 /// Both tests write into the same `codegen-tests/ts-ext/` tree (the sdk
@@ -81,9 +80,6 @@ fn string_field(name: &str) -> ForeignField {
 /// `send` method is not exercised by an operation: no target's codegen
 /// consumes an op's own `impl .field.method(..)` body yet.
 fn appendix_model() -> Model {
-    let mut load_ctor_fields = std::collections::BTreeMap::new();
-    load_ctor_fields.insert("region".to_string(), CallArg::Param("region".into()));
-    load_ctor_fields.insert("service".to_string(), CallArg::Param("service".into()));
     let companyconfig = ExtLib {
         name: "companyconfig".into(),
         langs: vec![LangPath {
@@ -101,62 +97,7 @@ fn appendix_model() -> Model {
             },
         ],
         types: vec![],
-        externs: vec![ExternDecl {
-            name: "load".into(),
-            params: vec![
-                ExternParam {
-                    name: "service".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-                ExternParam {
-                    name: "region".into(),
-                    r#type: Tref::Prim(Prim::String),
-                },
-            ],
-            r#return: Tref::Ref {
-                id: "main#app_config".into(),
-                args: vec![],
-            },
-            langs: vec![ExternLang {
-                lang: "ts".into(),
-                symbol: "load".into(),
-                call_args: vec![CallArg::Ctor(CallCtor {
-                    name: "ts_opts".into(),
-                    fields: load_ctor_fields,
-                })],
-                yields: vec![YieldsPos {
-                    name: "cfg".into(),
-                    r#type: Some(Tref::Ref {
-                        id: "companyconfig#ts_config".into(),
-                        args: vec![],
-                    }),
-                    is_error: false,
-                }],
-                returns: Some(ReturnsLit {
-                    r#type: Tref::Ref {
-                        id: "main#app_config".into(),
-                        args: vec![],
-                    },
-                    fields: vec![
-                        ReturnsField {
-                            name: "endpoint".into(),
-                            value: ReturnsValue::Field(vec!["cfg".into(), "host".into()]),
-                        },
-                        ReturnsField {
-                            name: "token".into(),
-                            value: ReturnsValue::Field(vec!["cfg".into(), "token".into()]),
-                        },
-                    ],
-                }),
-                errors: vec![tono_backend::ir::ErrorBinding {
-                    sentinel: "BUSY".into(),
-                    r#type: "overloaded".into(),
-                }],
-                sync: false,
-                infallible: false,
-                ctx: false,
-            }],
-        }],
+        externs: vec![ext_fixtures::load_config_extern("main#app_config")],
     };
     let companybus = ExtLib {
         name: "companybus".into(),
@@ -175,39 +116,8 @@ fn appendix_model() -> Model {
 
     let service = ef("service", Tref::Prim(Prim::String), vec![Source::Arg], None);
     let region = ef("region", Tref::Prim(Prim::String), vec![Source::Arg], None);
-    let config = ef(
-        "config",
-        Tref::Ref {
-            id: "main#app_config".into(),
-            args: vec![],
-        },
-        vec![],
-        Some(EntryCall {
-            ns: "companyconfig".into(),
-            func: "load".into(),
-            args: vec![
-                CallArg::Ref(vec!["service".into()]),
-                CallArg::Ref(vec!["region".into()]),
-            ],
-        }),
-    );
-    let mut bus = ef(
-        "bus",
-        Tref::Ref {
-            id: "companybus#publisher".into(),
-            args: vec![],
-        },
-        vec![Source::With],
-        Some(EntryCall {
-            ns: "companybus".into(),
-            func: "connect".into(),
-            args: vec![
-                CallArg::Ref(vec!["config".into(), "endpoint".into()]),
-                CallArg::Ref(vec!["config".into(), "token".into()]),
-            ],
-        }),
-    );
-    bus.sources = vec![Source::With];
+    let (config, bus) =
+        ext_fixtures::appendix_config_and_bus_fields("main#app_config", "companybus#publisher");
 
     let app_config = Shape {
         id: "main#app_config".into(),

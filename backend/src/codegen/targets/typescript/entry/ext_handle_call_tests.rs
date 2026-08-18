@@ -244,64 +244,46 @@ fn publish_op() -> Shape {
     }
 }
 
-fn heartbeat_op() -> Shape {
+/// An op with no declared input, implemented as a bare no-argument call
+/// into the `bus` handle's own `method`: the shape `heartbeat_op`,
+/// `status_op`, and `tag_op` all share, differing only in which method
+/// they call and what it returns.
+fn no_input_op(id: &str, method: &str, output: Tref) -> Shape {
     Shape {
-        id: "m#client.heartbeat".into(),
+        id: id.into(),
         kind: ShapeKind::Operation {
             input: None,
             input_name: None,
-            output: Some(Tref::Prim(Prim::String)),
+            output: Some(output),
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {
                 recv: vec!["bus".into()],
-                method: "ping".into(),
+                method: method.into(),
                 args: vec![],
             }),
         },
         traits: vec![],
     }
+}
+
+fn heartbeat_op() -> Shape {
+    no_input_op("m#client.heartbeat", "ping", Tref::Prim(Prim::String))
 }
 
 fn status_op() -> Shape {
-    Shape {
-        id: "m#client.status".into(),
-        kind: ShapeKind::Operation {
-            input: None,
-            input_name: None,
-            output: Some(Tref::Ref {
-                id: "m#status".into(),
-                args: vec![],
-            }),
-            errors: vec![],
-            wire: None,
-            impl_call: Some(OpImplCall {
-                recv: vec!["bus".into()],
-                method: "status".into(),
-                args: vec![],
-            }),
+    no_input_op(
+        "m#client.status",
+        "status",
+        Tref::Ref {
+            id: "m#status".into(),
+            args: vec![],
         },
-        traits: vec![],
-    }
+    )
 }
 
 fn tag_op() -> Shape {
-    Shape {
-        id: "m#client.tag".into(),
-        kind: ShapeKind::Operation {
-            input: None,
-            input_name: None,
-            output: Some(Tref::Prim(Prim::String)),
-            errors: vec![],
-            wire: None,
-            impl_call: Some(OpImplCall {
-                recv: vec!["bus".into()],
-                method: "tag".into(),
-                args: vec![],
-            }),
-        },
-        traits: vec![],
-    }
+    no_input_op("m#client.tag", "tag", Tref::Prim(Prim::String))
 }
 
 fn echo_op() -> Shape {

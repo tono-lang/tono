@@ -1,10 +1,9 @@
 use super::super::test_prelude::*;
 use super::*;
 use crate::ir::{
-    EntryField, ExtLib, ExternDecl, ExternLang as IrExternLang, ForeignField, ForeignStruct,
-    LangPath, OpaqueType, Prim, ReturnsField, ReturnsLit, Shape, ShapeKind, Source, Tref,
+    EntryField, ExtLib, ExternDecl, ForeignField, ForeignStruct, LangPath, OpaqueType, Prim,
+    ReturnsField, ReturnsLit, Shape, ShapeKind, Source, Tref,
 };
-use std::collections::BTreeMap;
 
 use super::super::ext_fixtures::ef;
 
@@ -79,9 +78,6 @@ fn app_config_shape() -> Shape {
 /// onto `app_config`, a declared sentinel) and `connect` (a bare handle
 /// construction, no `yields`).
 fn appendix_ext_libs() -> Vec<ExtLib> {
-    let mut load_ctor_fields = BTreeMap::new();
-    load_ctor_fields.insert("region".to_string(), CallArg::Param("region".into()));
-    load_ctor_fields.insert("service".to_string(), CallArg::Param("service".into()));
     let companyconfig = ext_lib(
         "companyconfig",
         "@company/config",
@@ -96,53 +92,9 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
             ),
         ],
         vec![],
-        vec![ExternDecl {
-            name: "load".into(),
-            params: vec![string_param("service"), string_param("region")],
-            r#return: Tref::Ref {
-                id: "m#app_config".into(),
-                args: vec![],
-            },
-            langs: vec![IrExternLang {
-                lang: "ts".into(),
-                symbol: "load".into(),
-                call_args: vec![CallArg::Ctor(CallCtor {
-                    name: "ts_opts".into(),
-                    fields: load_ctor_fields,
-                })],
-                yields: vec![crate::ir::YieldsPos {
-                    name: "cfg".into(),
-                    r#type: Some(Tref::Ref {
-                        id: "companyconfig#ts_config".into(),
-                        args: vec![],
-                    }),
-                    is_error: false,
-                }],
-                returns: Some(ReturnsLit {
-                    r#type: Tref::Ref {
-                        id: "m#app_config".into(),
-                        args: vec![],
-                    },
-                    fields: vec![
-                        ReturnsField {
-                            name: "endpoint".into(),
-                            value: ReturnsValue::Field(vec!["cfg".into(), "host".into()]),
-                        },
-                        ReturnsField {
-                            name: "token".into(),
-                            value: ReturnsValue::Field(vec!["cfg".into(), "token".into()]),
-                        },
-                    ],
-                }),
-                errors: vec![crate::ir::ErrorBinding {
-                    sentinel: "BUSY".into(),
-                    r#type: "overloaded".into(),
-                }],
-                sync: false,
-                infallible: false,
-                ctx: false,
-            }],
-        }],
+        vec![super::super::ext_fixtures::load_config_extern(
+            "m#app_config",
+        )],
     );
     let companybus = ext_lib(
         "companybus",
@@ -164,45 +116,15 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
 /// `bus` (a `@with`-fallback call onto the opaque handle,
 /// `connect`-shaped, reading `config`'s own resolved members).
 fn appendix_fields() -> Vec<EntryField> {
+    let (config, bus) = super::super::ext_fixtures::appendix_config_and_bus_fields(
+        "m#app_config",
+        "companybus#publisher",
+    );
     vec![
         ef("service", Tref::Prim(Prim::String), vec![Source::Arg], None),
         ef("region", Tref::Prim(Prim::String), vec![Source::Arg], None),
-        ef(
-            "config",
-            Tref::Ref {
-                id: "m#app_config".into(),
-                args: vec![],
-            },
-            vec![],
-            Some(EntryCall {
-                ns: "companyconfig".into(),
-                func: "load".into(),
-                args: vec![
-                    CallArg::Ref(vec!["service".into()]),
-                    CallArg::Ref(vec!["region".into()]),
-                ],
-            }),
-        ),
-        {
-            let mut bus = ef(
-                "bus",
-                Tref::Ref {
-                    id: "companybus#publisher".into(),
-                    args: vec![],
-                },
-                vec![Source::With],
-                Some(EntryCall {
-                    ns: "companybus".into(),
-                    func: "connect".into(),
-                    args: vec![
-                        CallArg::Ref(vec!["config".into(), "endpoint".into()]),
-                        CallArg::Ref(vec!["config".into(), "token".into()]),
-                    ],
-                }),
-            );
-            bus.sources = vec![Source::With];
-            bus
-        },
+        config,
+        bus,
     ]
 }
 
