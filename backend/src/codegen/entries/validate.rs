@@ -51,7 +51,7 @@ fn unsupported_by(targets: &[TargetKind], capable: fn(TargetKind) -> bool) -> Op
 /// literal's fields, a list's items): every `Ref` anywhere in a call's own
 /// argument tree ultimately reads a sibling field, so all of them share this
 /// one check.
-fn ref_paths(args: &[CallArg], out: &mut Vec<Vec<String>>) {
+pub(super) fn ref_paths(args: &[CallArg], out: &mut Vec<Vec<String>>) {
     for a in args {
         match a {
             CallArg::Ref(path) => out.push(path.clone()),
@@ -388,7 +388,7 @@ pub(crate) fn is_foreign_ref(module: &crate::ir::Module, id: &str) -> bool {
 
 /// The `Tref::Ref` id a field's target names, if it is a shape/handle
 /// reference (as opposed to a primitive, list, or map).
-fn ref_id(t: &Tref) -> Option<&str> {
+pub(super) fn ref_id(t: &Tref) -> Option<&str> {
     match t {
         Tref::Ref { id, .. } => Some(id.as_str()),
         _ => None,
@@ -500,6 +500,8 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                     }
                 }
             }
+            super::validate_ownership::forwarded_handle_has_one_reader(module, entry)
+                .map_err(|e| format!("module {}: entry {} {}", module.name, entry.name, e))?;
             let declared = entry.declared();
             for field in declared.iter().copied() {
                 if RESERVED_SLOT_FIELDS.contains(&field.name.as_str()) {

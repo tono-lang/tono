@@ -464,6 +464,18 @@ fn model_with_forwarding_call(source: EntryField, combined_args: Vec<CallArg>) -
     m
 }
 
+/// A `lib#handle` field this generator itself constructs (`primary =
+/// lib.make()`), the forwardable counterpart of [`injected_source`].
+fn constructed_primary() -> EntryField {
+    let mut primary = handle_field("primary", "lib", "handle", vec![]);
+    primary.call = Some(EntryCall {
+        ns: "lib".into(),
+        func: "make".into(),
+        args: vec![],
+    });
+    primary
+}
+
 fn injected_source() -> EntryField {
     handle_field("injected", "lib", "handle", vec![Source::Arg])
 }
@@ -490,12 +502,7 @@ fn an_injected_handle_forwarded_into_another_call_is_named_and_refused() {
 /// still validates.
 #[test]
 fn a_constructed_handle_forwarded_into_another_call_still_validates() {
-    let mut primary = handle_field("primary", "lib", "handle", vec![]);
-    primary.call = Some(EntryCall {
-        ns: "lib".into(),
-        func: "make".into(),
-        args: vec![],
-    });
+    let primary = constructed_primary();
     let m = model_with_forwarding_call(primary, vec![call_ref(&["primary"])]);
     assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
 }
@@ -527,4 +534,106 @@ fn an_injected_handle_nested_in_a_list_argument_is_still_refused() {
     let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
     assert!(err.contains("combined"), "{err}");
     assert!(err.contains("injected"), "{err}");
+}
+
+/// A constructed handle (`primary`) forwarded into `combined`'s call, plus
+/// an op whose own `impl` call names `primary` as `recv` (or as an argument
+/// when `as_arg`): the model the ownership gate grades.
+fn model_with_forwarded_and_op_read(as_arg: bool) -> crate::ir::Model {
+    let primary = constructed_primary();
+    let mut m = model_with_forwarding_call(primary, vec![call_ref(&["primary"])]);
+    let (recv, args) = if as_arg {
+        (vec!["combined".to_string()], vec![call_ref(&["primary"])])
+    } else {
+        (vec!["primary".to_string()], vec![])
+    };
+    let op = crate::ir::Shape {
+        id: "m#client.ping".into(),
+        kind: ShapeKind::Operation {
+            input_name: None,
+            input: None,
+            output: None,
+            errors: vec![],
+            wire: None,
+            impl_call: Some(crate::ir::OpImplCall {
+                recv,
+                method: "ping".into(),
+                args,
+            }),
+        },
+        traits: vec![],
+    };
+    if let ShapeKind::Entry { operations, .. } = &mut m.modules[0].shapes[0].kind {
+        operations.push(op);
+    }
+    m
+}
+
+/// A constructed handle handed on to another call is owned by that call:
+/// an op's own `impl .primary.ping()` reading the same handle afterwards
+/// would compile in Rust and then diagnose "not configured" at runtime for
+/// a handle the caller did configure (the slot was moved out), while a
+/// reference-semantics target would alias it. Refused up front, naming the
+/// forwarding call, the handle and the second reader.
+#[test]
+fn a_forwarded_handle_also_read_as_an_op_receiver_is_refused() {
+    let m = model_with_forwarded_and_op_read(false);
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("combined = lib.make(..)"), "{err}");
+    assert!(err.contains("handle primary"), "{err}");
+    assert!(
+        err.contains("operation ping impl .primary.ping(..)"),
+        "{err}"
+    );
+}
+
+/// The same handle read as an argument of an op's `impl` call instead of
+/// its receiver is the same second read.
+#[test]
+fn a_forwarded_handle_also_read_as_an_op_argument_is_refused() {
+    let m = model_with_forwarded_and_op_read(true);
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("handle primary"), "{err}");
+    assert!(
+        err.contains("operation ping impl .combined.ping(.primary)"),
+        "{err}"
+    );
+}
+
+/// Two calls each forwarding the same constructed handle: the second call
+/// would find the slot already moved out. Refused naming both calls.
+#[test]
+fn a_handle_forwarded_into_two_calls_is_refused() {
+    let primary = constructed_primary();
+    let mut m = model_with_forwarding_call(primary, vec![call_ref(&["primary"])]);
+    let mut second = handle_field("second", "lib", "handle", vec![]);
+    second.call = Some(EntryCall {
+        ns: "lib".into(),
+        func: "make".into(),
+        args: vec![call_ref(&["primary"])],
+    });
+    if let ShapeKind::Entry { fields, .. } = &mut m.modules[0].shapes[0].kind {
+        fields.push(second);
+    }
+    let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("combined = lib.make(..)"), "{err}");
+    assert!(err.contains("second = lib.make(..)"), "{err}");
+}
+
+/// The op reads the *constructed* handle (`combined`), not the one that
+/// was forwarded into it: the forwarded handle has its one reader and the
+/// spec validates. This is the shape the compiled Rust fixture uses.
+#[test]
+fn an_op_reading_the_handle_built_from_a_forwarded_one_still_validates() {
+    let mut m = model_with_forwarded_and_op_read(false);
+    if let ShapeKind::Entry { operations, .. } = &mut m.modules[0].shapes[0].kind {
+        if let ShapeKind::Operation {
+            impl_call: Some(call),
+            ..
+        } = &mut operations[0].kind
+        {
+            call.recv = vec!["combined".into()];
+        }
+    }
+    assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
 }
