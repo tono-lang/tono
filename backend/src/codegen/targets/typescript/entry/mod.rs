@@ -102,23 +102,26 @@ pub(super) fn module_symbol(name: &str, module: &Module) -> Symbol {
 }
 
 /// Whether `t` names an opaque handle declared in one of the module's own
-/// `ext` blocks: never serializes, never crosses the wire, and
-/// has no companion import (its only real type lives in the third-party
-/// module the SDK never re-exports). Rendered as `unknown` everywhere a
-/// declared type is spelled, since the SDK only ever passes the handle
-/// around, never reads it.
+/// `ext` blocks: never serializes, never crosses the wire, and has no
+/// companion import beyond its own generated interface (see
+/// [`ext_handle_iface`]; its only real value lives in the third-party
+/// module the SDK never re-exports).
 fn foreign_handle(t: &Tref, module: &Module) -> bool {
     matches!(t, Tref::Ref { id, .. } if crate::codegen::entries::is_foreign_ref(module, id))
 }
 
-/// A field's declared type, rendered for the generated surface: `unknown`
-/// for a foreign opaque handle (see [`foreign_handle`]), the ordinary
-/// [`ts_type`] spelling otherwise.
+/// A field's declared type, rendered for the generated surface: a foreign
+/// opaque handle's own generated interface name (see [`foreign_handle`],
+/// [`ext_handle_iface::handle_interface_name`]) so an injected handle is
+/// checked against the shape its own declared methods actually need,
+/// rather than accepted as `unknown`; the ordinary [`ts_type`] spelling
+/// otherwise.
 fn field_ts_type(t: &Tref, module: &Module) -> String {
-    if foreign_handle(t, module) {
-        "unknown".to_string()
-    } else {
-        ts_type(t)
+    match t {
+        Tref::Ref { id, .. } if foreign_handle(t, module) => {
+            ext_handle_iface::handle_interface_name(id)
+        }
+        _ => ts_type(t),
     }
 }
 
@@ -131,8 +134,10 @@ fn type_refs(t: &Tref, module: &Module) -> Vec<Symbol> {
         Tref::Prim(Prim::Date) => vec![support_symbol("LocalDate")],
         Tref::Prim(Prim::Duration) => vec![support_symbol("Duration")],
         Tref::Ref { id, .. } if foreign_handle(t, module) => {
-            let _ = id;
-            Vec::new()
+            vec![module_symbol(
+                &ext_handle_iface::handle_interface_name(id),
+                module,
+            )]
         }
         Tref::Ref { id, .. } => {
             // A config interface lives in this same serde file (it is part of
@@ -171,8 +176,16 @@ fn zero_value(t: &Tref, module: &Module) -> String {
         Tref::List(_) => "[]".into(),
         // A foreign handle has no shape to start from; the call the field
         // also declares is what actually produces it (see `ext_call.rs`),
-        // so the draft only needs a placeholder `unknown` accepts.
-        Tref::Ref { .. } if foreign_handle(t, module) => "undefined".into(),
+        // so the draft only needs a placeholder its own generated interface
+        // accepts. `undefined` bridges through `unknown` first: it is never
+        // assignable to a specific interface type directly, only to
+        // `unknown`/`any`, the same reason every other named-shape zero
+        // value below casts through its own type rather than assigning a
+        // bare literal.
+        Tref::Ref { id, .. } if foreign_handle(t, module) => format!(
+            "undefined as unknown as {}",
+            ext_handle_iface::handle_interface_name(id)
+        ),
         // A named shape starts from an empty object (mirroring Go's zero
         // struct); only string-branded leaves start from the empty string.
         Tref::Ref { .. } => format!("{{}} as {}", ts_type(t)),
@@ -295,6 +308,32 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     for sentinel_type in &helpers.ext_error_types {
         decls.push(ext_call::sentinel_error_decl(sentinel_type, module));
     }
+    // One interface per handle type this module's own `ext` libs declare
+    // (see `ext_handle_iface`), plus one companion type per foreign struct
+    // any of those interfaces' own methods actually returns. Every handle
+    // type is emitted regardless of whether a field or op body reaches it
+    // this generation call: correct, unreferenced TypeScript costs nothing.
+    let mut foreign_struct_ids = BTreeSet::new();
+    for lib in &module.ext_libs {
+        for handle in &lib.types {
+            decls.push(ext_handle_iface::handle_interface_decl(
+                lib,
+                handle,
+                module,
+                &mut foreign_struct_ids,
+            ));
+        }
+    }
+    for id in &foreign_struct_ids {
+        let strct = module
+            .ext_libs
+            .iter()
+            .find_map(|lib| lib.structs.iter().find(|s| format!("{}#{}", lib.name, s.name) == *id))
+            .unwrap_or_else(|| {
+                panic!("a handle method's yields position named foreign struct {id:?}, which resolved during interface generation but not here")
+            });
+        decls.push(ext_handle_iface::foreign_struct_decl(strct, module, id));
+    }
     EntryEmission {
         shared: decls,
         per_entry,
@@ -374,6 +413,7 @@ fn op_method(
                 module,
                 crate::codegen::ops::input_name(op),
                 call,
+                &ret,
                 &throw,
                 refs,
                 &mut helpers.ext_error_types,
@@ -465,6 +505,7 @@ mod decode;
 mod ext_call;
 pub mod ext_fixtures;
 mod ext_handle_call;
+mod ext_handle_iface;
 mod impl_op;
 mod resolve;
 mod resolve_wire_call;

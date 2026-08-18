@@ -339,12 +339,15 @@ fn rendered_text(module: &Module) -> String {
 }
 
 #[test]
-fn a_handle_method_call_awaits_the_cast_receiver_with_its_declared_arguments() {
+fn a_handle_method_call_awaits_the_receiver_typed_by_its_own_generated_interface() {
     let out = rendered_text(&module_with_ops(vec![publish_op()]));
     assert!(
-        out.contains(
-            "const raw = await ((this.settings.bus) as any).send(this.settings.topic, input.body);"
-        ),
+        out.contains("const raw = await this.settings.bus.send(this.settings.topic, input.body);"),
+        "{out}"
+    );
+    assert!(out.contains("export interface PublisherHandle {"), "{out}");
+    assert!(
+        out.contains("send(topic: string, body: string): Promise<RawAck>;"),
         "{out}"
     );
 }
@@ -378,13 +381,14 @@ fn an_unmapped_failure_falls_back_to_contract_error_naming_the_call() {
 }
 
 #[test]
-fn a_method_with_no_yields_returns_the_raw_result_directly() {
+fn a_method_with_no_yields_narrows_the_honestly_unknown_raw_result_to_the_op_s_own_output() {
     let out = rendered_text(&module_with_ops(vec![heartbeat_op()]));
     assert!(
-        out.contains("const raw = await ((this.settings.bus) as any).ping();"),
+        out.contains("const raw = await this.settings.bus.ping();"),
         "{out}"
     );
-    assert!(out.contains("return raw;"), "{out}");
+    assert!(out.contains("ping(): Promise<unknown>;"), "{out}");
+    assert!(out.contains("return raw as string;"), "{out}");
 }
 
 #[test]
@@ -399,9 +403,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
 fn a_call_template_s_literal_list_and_ctor_arguments_render_verbatim() {
     let out = rendered_text(&module_with_ops(vec![tag_op()]));
     assert!(
-        out.contains(
-            "await ((this.settings.bus) as any).tag(\"v1\", [\"a\", \"b\"], { k: \"v\" });"
-        ),
+        out.contains("await this.settings.bus.tag(\"v1\", [\"a\", \"b\"], { k: \"v\" });"),
         "{out}"
     );
 }
@@ -410,7 +412,7 @@ fn a_call_template_s_literal_list_and_ctor_arguments_render_verbatim() {
 fn a_bare_reference_to_the_op_s_own_input_reads_the_whole_parameter() {
     let out = rendered_text(&module_with_ops(vec![echo_op()]));
     assert!(
-        out.contains("await ((this.settings.bus) as any).echo(input);"),
+        out.contains("await this.settings.bus.echo(input);"),
         "{out}"
     );
 }

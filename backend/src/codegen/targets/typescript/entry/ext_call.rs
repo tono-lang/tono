@@ -25,8 +25,7 @@
 //! left as a clear generation-time panic rather than silently wrong output:
 //! `CallArg::Call` (a nested extern call used as another call's argument).
 //! An opaque handle's own methods (`type publisher { extern send(..) }`,
-//! invoked from an op's `impl`) are a different call site that no codegen
-//! consumes yet.
+//! invoked from an op's `impl`) are a different call site: `ext_handle_call`.
 //!
 //! ## The declared-test stub seam
 //!
@@ -55,7 +54,9 @@
 
 use std::collections::BTreeSet;
 
-use super::{field_camel, field_ts_type, module_symbol, pascal, Helpers, Names, Resolver};
+use super::{
+    field_camel, field_ts_type, foreign_handle, module_symbol, pascal, Helpers, Names, Resolver,
+};
 use crate::codegen::entries::EntryModel;
 use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
@@ -331,6 +332,17 @@ fn call_body(
     // gives this target); `validate_entries` guarantees at most one
     // non-error position, which is the only one worth projecting.
     let assign = match lang.yields.iter().find(|y| !y.is_error) {
+        // No yields: the extern's own construction result already is the
+        // logical value (see the module doc). For a foreign-handle field
+        // that "already is" now has a real generated interface to be, so
+        // the seam narrows the honestly-`unknown` raw result into it here,
+        // once, at the exact tono-declared construction boundary -- not a
+        // reusable projection, just this one field trusting the frontend's
+        // own guarantee that this call's declared logical type is the
+        // field's own declared type.
+        None if foreign_handle(&field.target, module) => {
+            format!("return raw as {};", field_ts_type(&field.target, module))
+        }
         None => "return raw;".to_string(),
         Some(y) => {
             let returns = lang.returns.as_ref().unwrap_or_else(|| {

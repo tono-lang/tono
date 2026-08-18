@@ -2,28 +2,29 @@
 //! field's declared opaque-handle method, in place of the wire protocol.
 //!
 //! TypeScript has no generated adapter behind a handle-typed field (unlike
-//! Go: see `field_ts_type` in `entry/mod.rs`, which renders a foreign
-//! handle as `unknown`), so the `yields`/`returns` projection and the
-//! sentinel-to-error mapping [`ext_call::call_body`] performs for a free
-//! extern-fn call must happen at this call site instead of once behind an
-//! interface. This module shares that machinery (`ext_call::render_arg`,
-//! `foreign_path_expr`, `arm_value_expr`, `select_expr`,
-//! `returns_value_expr`, `sentinel_switch`) and only replaces the
-//! invocation target: a method call on the (narrowed) handle value instead
-//! of an imported free function.
+//! Go: see `ext_handle_iface`, which types a handle field with its own
+//! generated interface but never projects a foreign value onto a tono
+//! logical type the way Go's adapter does), so the `yields`/`returns`
+//! projection and the sentinel-to-error mapping [`ext_call::call_body`]
+//! performs for a free extern-fn call must happen at this call site instead
+//! of once behind an interface. This module shares that machinery
+//! (`ext_call::render_arg`, `foreign_path_expr`, `arm_value_expr`,
+//! `select_expr`, `returns_value_expr`, `sentinel_switch`) and only
+//! replaces the invocation target: a method call on the receiver field
+//! instead of an imported free function.
 //!
-//! Calling a method on an `unknown`-typed field needs a narrowing cast; with
-//! no generated interface to cast to, the cast is `any`, applied only at
-//! this one call site (the field's own declared type stays `unknown`
-//! everywhere else). This is tracked debt, not the intended shape: the
-//! `unknown` field type predates this module (`field_ts_type` in
-//! `entry/mod.rs`), but this module is what first makes that field
-//! *callable*, which is exactly where the missing static check would bite a
-//! caller. Closing it means TypeScript growing the same generated
-//! interface-per-handle Go already emits (`go/entry/ext_handle.rs`) and
-//! typing the field with it instead of `unknown`; out of scope here, since
-//! it changes `emits_ext_handle_types`'s own output, not just this
-//! capability.
+//! The receiver's own generated interface (`ext_handle_iface`) already
+//! types the call with no cast needed at the call site itself. Its own
+//! return type is honest, not a guess: `unknown` unless the method's `ts`
+//! binding declares a `yields` position naming a foreign struct. A method
+//! with no `yields` therefore hands this call site an `unknown` raw
+//! result -- true to what tono actually knows -- which this op's own body
+//! narrows with `as {op's declared output type}` before returning it. This
+//! is not the adapter the interface itself deliberately avoids: it asserts
+//! nothing about the *shape* of the value (no field mapping, no
+//! projection), only that *this op*, specifically, trusts its own
+//! frontend-checked contract that a handle method with no yields hands back
+//! exactly what the op declared.
 //!
 //! `entries::validate_entries` guarantees, before this runs, that every
 //! target in the current generation call supports `emits_ext_handle_calls`
@@ -39,6 +40,7 @@ use crate::ir::{ExternLang, ExternParam, Module, OpImplCall};
 
 use super::checks::field_path_expr;
 use super::ext_call::{render_arg, returns_value_expr, sentinel_switch};
+use super::ext_handle_iface::resolve_handle;
 use super::module_symbol;
 use std::collections::BTreeSet;
 
@@ -64,18 +66,12 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
             field.name
         )
     };
-    let handle = module
-        .ext_libs
-        .iter()
-        .flat_map(|lib| lib.types.iter().map(move |t| (lib, t)))
-        .find(|(lib, t)| format!("{}#{}", lib.name, t.name) == *handle_id)
-        .map(|(_, t)| t)
-        .unwrap_or_else(|| {
-            panic!(
-                "receiver field {:?} names an unresolved foreign handle {handle_id:?} (the frontend should have rejected this)",
-                field.name
-            )
-        });
+    let (_lib, handle) = resolve_handle(handle_id, module).unwrap_or_else(|| {
+        panic!(
+            "receiver field {:?} names an unresolved foreign handle {handle_id:?} (the frontend should have rejected this)",
+            field.name
+        )
+    });
     let decl = handle.methods.iter().find(|m| m.name == call.method).unwrap_or_else(|| {
         panic!(
             "an op's own impl call names undeclared method {:?} on handle {:?} (the frontend should have rejected this)",
@@ -110,6 +106,7 @@ pub(super) fn impl_call_body(
     module: &Module,
     input_name: Option<&str>,
     call: &OpImplCall,
+    ret: &str,
     throw: &dyn Fn(String) -> String,
     refs: &mut Vec<Symbol>,
     sentinel_types: &mut BTreeSet<String>,
@@ -141,7 +138,14 @@ pub(super) fn impl_call_body(
     // this target has), and `ctx` has no idiomatic TypeScript convention to
     // occupy, so it is ignored the same way Go ignores `sync`.
     let assign = match lang.yields.iter().find(|y| !y.is_error) {
-        None => "return raw;".to_string(),
+        // No yields: the interface honestly types `raw` as `unknown` (see
+        // the module doc for why). `void` accepts any resolved value as-is;
+        // any other declared output narrows through the op's own return
+        // type, trusting the frontend-checked contract that this op's
+        // impl call hands back exactly what it declared, not a guess this
+        // module invents.
+        None if ret == "void" => "return raw;".to_string(),
+        None => format!("return raw as {ret};"),
         Some(y) => {
             let returns = lang.returns.as_ref().unwrap_or_else(|| {
                 panic!(
@@ -168,7 +172,7 @@ pub(super) fn impl_call_body(
 
     let en = error_names();
     format!(
-        "  try {{\n    const raw = await (({recv_expr}) as any).{symbol}({args});\n    {assign}\n  }} catch (e) {{\n{switch}    {fallback}\n  }}",
+        "  try {{\n    const raw = await {recv_expr}.{symbol}({args});\n    {assign}\n  }} catch (e) {{\n{switch}    {fallback}\n  }}",
         symbol = lang.symbol,
         fallback = throw(format!("new {}({call_name:?}, e)", en.contract)),
     )
