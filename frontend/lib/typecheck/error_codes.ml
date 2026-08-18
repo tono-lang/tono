@@ -126,8 +126,8 @@ let raw_error_unreachable = register "TC0053"
 let unknown_trait = register "TC0054"
 
 (* Declared tests. Every name in a test resolves backwards to a binding the
-   test declared; the stub, call, value, and pattern rules below are the closed
-   grammar of RFC-declared tests. The tono.* language modules (tono.http,
+   test declared; the stub, call, value, and pattern rules below are the
+   closed grammar of a declared test. The tono.* language modules (tono.http,
    tono.errors) provide the http/errors shapes and must be imported before use;
    the tono.* module root is reserved for the language. *)
 let test_binding_unknown = register "TC0055"

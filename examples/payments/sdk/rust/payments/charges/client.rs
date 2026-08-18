@@ -30,6 +30,7 @@ pub(crate) struct Settings {
 pub struct Client {
     #[allow(dead_code)]
     settings: Settings,
+    #[allow(dead_code)]
     options: ClientOptions,
     timeout_ms: f64,
     pub(crate) sleep: SleepFn,

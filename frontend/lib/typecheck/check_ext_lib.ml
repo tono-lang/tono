@@ -20,10 +20,9 @@
      target the "ext" declares no module path for (TC0081).
 
    Never verifies that a declared foreign symbol really exists in the target
-   library: that is the target compiler's job (RFC's degrau 2), out of scope
-   here. The foreign-role wire/surface boundary (RFC's "papel novo") lives in
-   [Roles]/[Check_entries] instead, since it reuses their existing closed-
-   boundary machinery. *)
+   library: that is the target compiler's own job, out of scope here. The
+   foreign-role wire/surface boundary lives in [Roles]/[Check_entries]
+   instead, since it reuses their existing closed-boundary machinery. *)
 
 let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 
@@ -544,7 +543,7 @@ let occurrences_by_name (files : (string * Ast.decl list) list) :
 (* A language's module path declared with two different targets across the
    group is a conflict; every declaring occurrence is flagged, each labeled
    with its own file. A repeated declaration of the *same* path is not an
-   error (the RFC only calls out a conflicting one). *)
+   error, only a conflicting one is. *)
 let check_module_paths (ext_name : string) (occs : occurrence list) :
     (string * Diagnostic.t) list =
   let entries =

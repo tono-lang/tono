@@ -1,16 +1,17 @@
 //! The IR model the round-trip test (`tests/rust_ext_roundtrip.rs`) compiles
-//! against a real stand-in crate under `codegen-tests/rust-ext/fixtures/`:
-//! the RFC appendix's `companyconfig` library (a config load with a
-//! per-field `yields`/`returns` projection and a `match`), scoped to the
-//! extern-call field source this target emits. The appendix's injectable
-//! `companybus` handle is not included: Rust does not emit a foreign
-//! opaque-handle type yet (`TargetKind::emits_ext_handle_types`), so a
-//! model exercising it would not validate for this target.
+//! against real stand-in crates under `codegen-tests/rust-ext/fixtures/`:
+//! a `companyconfig` library (a config load with a per-field
+//! `yields`/`returns` projection and a `match`), and its injectable
+//! `companybus` handle (an opaque `publisher` type constructed by a free
+//! `connect` call and driven through an op's own `impl .bus.send(..)`
+//! body) — the same two libraries the Go and TypeScript fixtures exercise,
+//! scoped to this target's own emission.
 
 use crate::ir::{
-    ArmValue, CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam,
-    ForeignField, ForeignStruct, LangPath, Member, Model, Module, Prim, ReturnsField, ReturnsLit,
-    ReturnsValue, Select, SelectArm, Shape, ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
+    ArmValue, CallArg, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternLang,
+    ExternParam, ForeignField, ForeignStruct, LangPath, Member, Model, Module, OpImplCall,
+    OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue, Select, SelectArm, Shape, ShapeKind,
+    Source, Tref, YieldsPos, TONO_IR_VERSION,
 };
 
 fn strings(names: &[&str]) -> Vec<String> {
@@ -25,9 +26,13 @@ fn ref_to(id: &str) -> Tref {
 }
 
 fn string_field(name: &str, sources: Vec<Source>) -> EntryField {
+    entry_field(name, Tref::Prim(Prim::String), sources)
+}
+
+fn entry_field(name: &str, target: Tref, sources: Vec<Source>) -> EntryField {
     EntryField {
         name: name.into(),
-        target: Tref::Prim(Prim::String),
+        target,
         sources,
         format: None,
         transforms: vec![],
@@ -40,9 +45,13 @@ fn string_field(name: &str, sources: Vec<Source>) -> EntryField {
 }
 
 fn member(name: &str) -> Member {
+    member_typed(name, Tref::Prim(Prim::String))
+}
+
+fn member_typed(name: &str, target: Tref) -> Member {
     Member {
         name: name.into(),
-        target: Tref::Prim(Prim::String),
+        target,
         required: true,
         default: None,
         constraints: vec![],
@@ -97,10 +106,14 @@ fn field_path(segments: &[&str]) -> ArmValue {
     ArmValue::Field(strings(segments))
 }
 
-/// The RFC appendix's `companyconfig.load`, scoped to the extern-call
-/// field source: an entry `config` field reads `service`/`region`, the
-/// library returns a shape whose `Env` is matched to pick `Host`/`DevHost`,
-/// and `token` reads `Credentials.Secret`.
+/// `companyconfig.load` and the `companybus` handle, combined onto one
+/// `client` entry the same way the Go and TypeScript
+/// fixtures combine them: an entry `config` field reads `service`/`region`
+/// through the free `companyconfig.load` call, the library's returned shape
+/// has its `env` matched to pick `host`/`dev_host`, `token` reads
+/// `credentials.secret`, an injectable `bus` field is constructed by the
+/// free `companybus.connect` call, and the `publish` op's own body is
+/// `impl .bus.send(topic, payload.body)`.
 pub fn rust_ext_fixture_model() -> Model {
     let service = string_field("service", vec![Source::Default(serde_json::json!("notes"))]);
     let region = string_field("region", vec![Source::Arg]);
@@ -112,6 +125,24 @@ pub fn rust_ext_fixture_model() -> Model {
         args: ref_args(&["service", "region"]),
     });
 
+    let mut bus = entry_field("bus", ref_to("companybus#publisher"), vec![Source::With]);
+    bus.call = Some(EntryCall {
+        ns: "companybus".into(),
+        func: "connect".into(),
+        args: vec![
+            CallArg::Ref(strings(&["config", "endpoint"])),
+            CallArg::Ref(strings(&["config", "token"])),
+        ],
+    });
+
+    // Injected straight by the caller (`@arg`, no `call` of its own): the
+    // gate this exercises is the one a self-constructed handle field
+    // (`bus`, above) does not -- a foreign-handle field with no `field.call`
+    // resolves to `FieldShape::Json` (its type has no shape in
+    // `module.shapes`), not `FieldShape::Scalar`, so it reaches a different
+    // leaf of the emitter than `bus`'s own `@with` construction does.
+    let hook = entry_field("hook", ref_to("companybus#publisher"), vec![Source::Arg]);
+
     let app_config = Shape {
         id: "m#app_config".into(),
         kind: ShapeKind::Structure {
@@ -121,11 +152,59 @@ pub fn rust_ext_fixture_model() -> Model {
         traits: vec![],
     };
 
+    let note = Shape {
+        id: "m#note".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![member("body")],
+        },
+        traits: vec![],
+    };
+    let ack = Shape {
+        id: "m#ack".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![
+                member("id"),
+                member_typed("accepted", Tref::Prim(Prim::Bool)),
+            ],
+        },
+        traits: vec![],
+    };
+    let overloaded = Shape {
+        id: "m#overloaded".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![member("message")],
+        },
+        traits: vec![],
+    };
+
+    let publish_op = Shape {
+        id: "m#client.publish".into(),
+        kind: ShapeKind::Operation {
+            input: Some(ref_to("m#note")),
+            input_name: Some("payload".into()),
+            output: Some(ref_to("m#ack")),
+            errors: vec![ref_to("m#overloaded")],
+            wire: None,
+            impl_call: Some(OpImplCall {
+                recv: vec!["bus".into()],
+                method: "send".into(),
+                args: vec![
+                    CallArg::Lit(serde_json::json!("notes")),
+                    CallArg::Ref(strings(&["payload", "body"])),
+                ],
+            }),
+        },
+        traits: vec![],
+    };
+
     let client = Shape {
         id: "m#client".into(),
         kind: ShapeKind::Entry {
-            fields: vec![service, region, config],
-            operations: vec![],
+            fields: vec![service, region, config, bus, hook],
+            operations: vec![publish_op],
         },
         traits: vec![],
     };
@@ -192,12 +271,94 @@ pub fn rust_ext_fixture_model() -> Model {
         }],
     };
 
+    let bus_lib = ExtLib {
+        name: "companybus".into(),
+        langs: vec![LangPath {
+            lang: "rust".into(),
+            path: "companybus".into(),
+        }],
+        structs: vec![ForeignStruct {
+            name: "Ack".into(),
+            fields: vec![
+                ForeignField {
+                    name: "id".into(),
+                    r#type: Tref::Prim(Prim::String),
+                },
+                ForeignField {
+                    name: "accepted".into(),
+                    r#type: Tref::Prim(Prim::Bool),
+                },
+            ],
+        }],
+        types: vec![OpaqueType {
+            name: "publisher".into(),
+            instance: None,
+            methods: vec![ExternDecl {
+                name: "send".into(),
+                params: string_params(&["topic", "body"]),
+                r#return: ref_to("m#ack"),
+                langs: vec![ExternLang {
+                    lang: "rust".into(),
+                    symbol: "send".into(),
+                    call_args: vec![
+                        CallArg::Lit(serde_json::json!("notes")),
+                        CallArg::Ref(strings(&["payload", "body"])),
+                    ],
+                    yields: vec![YieldsPos {
+                        name: "a".into(),
+                        r#type: Some(ref_to("companybus#Ack")),
+                        is_error: false,
+                    }],
+                    returns: Some(ReturnsLit {
+                        r#type: ref_to("m#ack"),
+                        fields: vec![
+                            ReturnsField {
+                                name: "id".into(),
+                                value: ReturnsValue::Field(strings(&["a", "id"])),
+                            },
+                            ReturnsField {
+                                name: "accepted".into(),
+                                value: ReturnsValue::Field(strings(&["a", "accepted"])),
+                            },
+                        ],
+                    }),
+                    errors: vec![ErrorBinding {
+                        sentinel: "busy".into(),
+                        r#type: "overloaded".into(),
+                    }],
+                    sync: false,
+                    infallible: false,
+                    ctx: false,
+                }],
+            }],
+        }],
+        externs: vec![ExternDecl {
+            name: "connect".into(),
+            params: string_params(&["endpoint", "token"]),
+            r#return: ref_to("companybus#publisher"),
+            langs: vec![ExternLang {
+                lang: "rust".into(),
+                symbol: "connect".into(),
+                call_args: vec![
+                    CallArg::Ref(strings(&["config", "endpoint"])),
+                    CallArg::Ref(strings(&["config", "token"])),
+                ],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: false,
+                infallible: false,
+                ctx: false,
+            }],
+        }],
+    };
+
     let module = Module {
         name: "m".into(),
-        shapes: vec![client, app_config],
+        shapes: vec![client, app_config, note, ack, overloaded],
         operations: vec![],
         extensions: vec![],
-        ext_libs: vec![ext_lib],
+        ext_libs: vec![ext_lib, bus_lib],
         tests: vec![],
     };
     Model {

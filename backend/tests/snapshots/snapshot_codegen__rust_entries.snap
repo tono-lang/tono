@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 216
 expression: "render_sdk(entries_module(), TargetKind::Rust, None)"
 ---
 // ==== rust/env.rs ====
@@ -458,6 +457,7 @@ pub(crate) struct Settings {
 pub struct Client {
     #[allow(dead_code)]
     settings: Settings,
+    #[allow(dead_code)]
     options: ClientOptions,
     timeout_ms: f64,
     pub(crate) sleep: SleepFn,

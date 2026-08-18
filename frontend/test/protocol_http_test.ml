@@ -145,8 +145,8 @@ let call_json ns fn args =
 
 let request_arg = `Assoc [ ("field", `List [ `String "request" ]) ]
 
-(* A signing extern call read as an argument to @header, the RFC's own
-   canonical example: `.request` resolves to [Cv_request], the call itself
+(* A signing extern call read as an argument to @header, the canonical
+   example: `.request` resolves to [Cv_request], the call itself
    to [Vcall]. *)
 let a_signing_call_in_a_header_resolves_to_vcall () =
   let o =

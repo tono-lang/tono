@@ -220,8 +220,8 @@ fn endpoint_expr(
         .as_ref()
         .expect("validate_entries rejects an entry @http op with no endpoint");
     // The common case (a resolved entry-field endpoint) keeps its original
-    // unwrapped spelling; the grammar's other forms (new with this task) go
-    // through the general renderer.
+    // unwrapped spelling; the grammar's other endpoint forms go through the
+    // general renderer.
     match value {
         WireValue::Field(path) => field_expr(path),
         other => wire_value_expr(other, field_expr, input_expr, param_access),

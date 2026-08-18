@@ -1,5 +1,5 @@
-//! A stand-in for the third-party config library the generated SDK
-//! integrates with (RFC appendix's `companyconfig`).
+//! A stand-in for a third-party config library the generated SDK
+//! integrates with.
 
 pub struct Creds {
     pub secret: String,

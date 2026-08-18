@@ -184,7 +184,7 @@ let op_no_output () =
       Alcotest.(check int) "no errors" 0 (List.length errors)
   | _ -> Alcotest.fail "expected an operation"
 
-(* TASK 1: the legacy unnamed parameter form (a bare type with no name) is
+(* The legacy unnamed parameter form (a bare type with no name) is
    rejected, with a diagnostic that shows the named replacement. *)
 let op_unnamed_param_rejected () =
   let _, ds = run Parser.parse_op "op fetch_note(note_ref): note" in

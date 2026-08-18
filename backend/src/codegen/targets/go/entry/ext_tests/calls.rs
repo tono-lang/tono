@@ -369,11 +369,11 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
     assert!(out.contains("s.Config = configBody"));
 }
 
-/// The RFC/ADR's motivating case: a free extern constructing an instantiated
-/// opaque handle (`NewEnvSource(...)` returning `cfgkit#source`, `source`
-/// declaring `instance: {foreign_name: "Source", arg: notes#settings}`)
-/// carries the type argument on the constructor call itself, not just on
-/// the concrete type it assigns into.
+/// The motivating case for generic handle instantiation: a free extern
+/// constructing an instantiated opaque handle (`NewEnvSource(...)` returning
+/// `cfgkit#source`, `source` declaring `instance: {foreign_name: "Source",
+/// arg: notes#settings}`) carries the type argument on the constructor call
+/// itself, not just on the concrete type it assigns into.
 #[test]
 fn call_assign_names_the_type_argument_on_a_generic_constructor() {
     let source_ref = Tref::Ref {

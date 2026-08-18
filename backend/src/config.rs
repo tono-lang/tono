@@ -499,7 +499,9 @@ enabled = false
 
     #[test]
     fn a_disabled_unsupported_target_is_fine() {
-        // The RFC example ships python/java as disabled placeholders.
+        // A not-yet-supported target stays a valid config entry as long as
+        // it is disabled, so a future target's own doc example can ship it
+        // as a placeholder.
         let cfg = Config::from_toml_str("[target.java]\nenabled = false\n").unwrap();
         assert!(cfg.targets.is_empty());
     }

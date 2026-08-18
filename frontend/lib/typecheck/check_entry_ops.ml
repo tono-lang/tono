@@ -174,8 +174,9 @@ let check_code (op : Ast.decl) : Diagnostic.t list =
    is either a reference (the whole parameter, or one of its members) or a
    ctor mapper (a known struct name applied to field: value pairs, each
    value itself a reference/literal — the same grammar @header/@query values
-   already accept; nesting a second ctor inside a field is not allowed, the
-   same "zero new expressive power" the RFC calls for). *)
+   already accept; nesting a second ctor inside a field is not allowed, so
+   the mapper adds no expressive power beyond what @header/@query already
+   have). *)
 let check_body_field_value ~ctor_name (fname, fspan, (v : Ast.trait_arg)) :
     Diagnostic.t list =
   match v with

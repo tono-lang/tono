@@ -293,12 +293,43 @@ fn ext_lib_with_handle(lib: &str, handle: &str) -> ExtLib {
     }
 }
 
+/// The same handle-declaring lib as [`ext_lib_with_handle`], plus a free
+/// constructor extern (bound for every target this codegen now emits
+/// handles for) so a `@with`/`call` field targeting the handle actually
+/// resolves end to end instead of only reaching the scoping check.
+fn ext_lib_with_handle_ctor(lib: &str, handle: &str, ctor: &str) -> ExtLib {
+    let mut l = ext_lib_with_handle(lib, handle);
+    l.externs.push(ExternDecl {
+        name: ctor.into(),
+        params: vec![],
+        r#return: Tref::Ref {
+            id: format!("{lib}#{handle}"),
+            args: vec![],
+        },
+        langs: vec!["rust", "go", "typescript"]
+            .into_iter()
+            .map(|l| ExternLang {
+                lang: l.into(),
+                symbol: "Connect".into(),
+                call_args: vec![],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: false,
+                infallible: false,
+                ctx: false,
+            })
+            .collect(),
+    });
+    l
+}
+
 /// An injectable-handle field (`bus: c.h @with = c.conn(...)`)
 /// targets an opaque type declared in the module's own `ext` block. That id
 /// lives in `ext_libs`, not `module.shapes`; the module-scoping check must
 /// recognize it as same-module instead of misreporting it as an out-of-module
-/// reference. The field still stops at the ext-block deferral (the same gate
-/// as the plain-call tests above), but for the right reason.
+/// reference. Every target this codegen emits handles for resolves the field
+/// cleanly once the constructor is bound for it.
 #[test]
 fn a_with_and_call_field_targeting_an_ext_block_handle_is_same_module() {
     let mut bus = call_field("bus", "c", "conn", vec![]);
@@ -308,21 +339,18 @@ fn a_with_and_call_field_targeting_an_ext_block_handle_is_same_module() {
         args: vec![],
     };
     let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
-    module.ext_libs = vec![ext_lib_with_handle("c", "h")];
+    module.ext_libs = vec![ext_lib_with_handle_ctor("c", "h", "conn")];
     let model = model_of(module);
-    let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
-    assert!(!err.contains("outside this module"), "{err}");
-    assert!(err.contains("ext block"), "{err}");
+    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
 }
 
 /// A plain `@arg`-injected handle field (`bus: c.h @arg`, no call at all)
-/// carries no `field.call`, so the call-source gate alone would miss it and
-/// let it reach codegen: the target emitter has no idea how to spell a
-/// foreign type, and would silently write an import path derived from the
-/// `ext` block's own name instead of its declared module path. The gate
-/// must reject on the foreign target type too, not only on a call source.
+/// carries no `field.call`. Every target this codegen emits handles for now
+/// spells the foreign target type, so this reaches codegen cleanly; only
+/// forwarding such a field into another extern call is still rejected
+/// (`an_injected_handle_forwarded_into_another_call_is_named_and_refused`).
 #[test]
-fn gen_rejects_a_plain_arg_injected_foreign_handle_field() {
+fn gen_accepts_a_plain_arg_injected_foreign_handle_field() {
     let mut bus = field("bus", vec![Source::Arg]);
     bus.target = Tref::Ref {
         id: "c#h".into(),
@@ -331,7 +359,5 @@ fn gen_rejects_a_plain_arg_injected_foreign_handle_field() {
     let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
     module.ext_libs = vec![ext_lib_with_handle("c", "h")];
     let model = model_of(module);
-    let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
-    assert!(err.contains("bus"), "{err}");
-    assert!(err.contains("ext block"), "{err}");
+    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
 }

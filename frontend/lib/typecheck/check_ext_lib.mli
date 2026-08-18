@@ -3,8 +3,8 @@
    yields:/returns:/errors: closure, and the cross-file closed accounting of
    one "ext" split across several .tono files. See check_ext_lib.ml for the
    rule-by-rule commentary. Never verifies that a declared foreign symbol
-   really exists in the target library: that is the target compiler's job
-   (RFC's degrau 2), out of scope here. *)
+   really exists in the target library: that is the target compiler's own
+   job, out of scope here. *)
 
 (* Per-module pass. [tbl] resolves an "errors:" sentinel's declared type. *)
 val check_decls : tbl:Symtab.t -> Ast.decl list -> Diagnostic.t list

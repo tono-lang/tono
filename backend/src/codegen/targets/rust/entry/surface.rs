@@ -23,7 +23,7 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
                     format!(
                         "    pub {}: {},\n",
                         field_snake(&f.name, config),
-                        rust_type(&f.target)
+                        ext::settings_field_type(&f.target, module)
                     )
                 })
                 .collect();
@@ -51,10 +51,10 @@ pub(super) fn settings_struct_decl(
         fields.push_str(&format!(
             "{doc}    pub {}: {},\n",
             field_snake_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
-            rust_type(&f.target),
+            ext::settings_field_type(&f.target, module),
             doc = field_doc(&f.traits, "    "),
         ));
-        push_type_symbols(&f.target, &module.name, &mut refs);
+        push_field_type_symbols(&f.target, module, &mut refs);
     }
     refs.push(support_symbol("HttpTransport"));
     let text = format!(

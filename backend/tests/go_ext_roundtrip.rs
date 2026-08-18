@@ -92,7 +92,7 @@ fn write_sdk(model: &Model, mod_deps: &str) -> PathBuf {
 }
 
 #[test]
-fn the_rfc_appendix_generates_go_that_compiles_against_the_real_libraries() {
+fn the_appendix_worked_example_generates_go_that_compiles_against_the_real_libraries() {
     if std::env::var_os("CARGO_LLVM_COV").is_some() {
         eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
         return;
@@ -169,11 +169,10 @@ fn a_field_the_library_does_not_have_breaks_the_go_build() {
 /// `go.mod` entirely): the always-built entry file still references
 /// `companyconfig`/`companybus` directly on the production construction
 /// path (`New`, not the seam), so removing the `require` lines still fails
-/// `go build`. Closing that gap needs the build-tag file partition the plan
-/// flags as the highest-risk remaining piece; see the task's own report for
-/// what was tried.
+/// `go build`. Closing that gap needs a build-tag file partition, the
+/// highest-risk remaining piece of that stronger claim, still open.
 #[test]
-fn the_rfc_appendix_declared_tests_pass_hermetically() {
+fn the_appendix_worked_example_declared_tests_pass_hermetically() {
     if std::env::var_os("CARGO_LLVM_COV").is_some() {
         eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
         return;

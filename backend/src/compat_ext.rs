@@ -145,8 +145,9 @@ fn diff_externs(
 
 /// Compare pinned `[ext.<name>]` versions between two manifests. Only a
 /// changed pin is reported (not an added or removed one): a fresh pin has
-/// nothing on the other side to have broken, and this mirrors the RFC's own
-/// framing ("a lib de terceiro sobe de versão").
+/// nothing on the other side to have broken, and the case this guards
+/// against is a pinned third-party library bumping version underneath the
+/// generated SDK.
 pub fn diff_ext_versions(
     baseline: &BTreeMap<String, BTreeMap<String, String>>,
     current: &BTreeMap<String, BTreeMap<String, String>>,

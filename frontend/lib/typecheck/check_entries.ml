@@ -403,8 +403,8 @@ let check_generics (d : Ast.decl) params what : Diagnostic.t list =
    bare type of a direct entry field (the composition point); a config nested
    in a list, map, or generic argument is closed like any wire position. A
    foreign opaque handle gets the same one carve-out: a bare qualified field
-   (bus: companybus.publisher) is the injectable-handle composition point the
-   RFC describes, but nested/wire uses stay closed like any config. *)
+   (bus: companybus.publisher) is the injectable-handle composition point,
+   but nested/wire uses stay closed like any config. *)
 let check_member_boundary ctx ~(container : Roles.role) (m : Ast.member) :
     Diagnostic.t list =
   match container with
