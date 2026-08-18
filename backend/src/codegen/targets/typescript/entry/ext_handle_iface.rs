@@ -37,7 +37,9 @@ fn foreign_struct_type_name(id: &str) -> String {
     pascal(local)
 }
 
-/// Resolves a module-qualified id (`"lib#name"`) to the `ExtLib` that
+/// Resolves a lib-qualified id (`"lib#name"`, the form an explicit
+/// `lib.type` reference outside the `ext` block resolves to -- see
+/// [`resolve_foreign_struct`] for the other scheme) to the `ExtLib` that
 /// declares it and its handle type, or `None` if it names no handle
 /// anywhere in the module (a broken invariant the frontend should already
 /// have rejected).
@@ -57,12 +59,27 @@ pub(super) fn resolve_handle<'m>(
 /// `None` if it names no foreign struct anywhere in the module (a `yields`
 /// position may instead name a foreign primitive or an opaque handle, which
 /// this module has nothing to render a companion type for).
-fn resolve_foreign_struct<'m>(id: &str, module: &'m Module) -> Option<&'m ForeignStruct> {
-    module.ext_libs.iter().find_map(|lib| {
-        lib.structs
-            .iter()
-            .find(|s| format!("{}#{}", lib.name, s.name) == id)
-    })
+///
+/// A bare reference written inside the `ext` block itself (`yields: (c:
+/// kit_cfg)`) resolves through the frontend's own default (unqualified)
+/// resolver, which namespaces by the *module*'s own name, not the `ext`
+/// lib's: `"{module}#{name}"`, never `"{lib}#{name}"`. That differs from a
+/// handle field's own declared type, written with an explicit qualifier
+/// outside the block (`s: kit.src`), which the frontend resolves through the
+/// *lib*-qualified path instead (`"{lib}#{name}"`, matching
+/// `entries::is_foreign_ref` and this module's own [`resolve_handle`]).
+/// Confirmed against the frontend's real emitted IR for both shapes, not
+/// inferred from source alone.
+pub(super) fn resolve_foreign_struct<'m>(
+    id: &str,
+    module: &'m Module,
+) -> Option<&'m ForeignStruct> {
+    let qualified = format!("{}#", module.name);
+    let local = id.strip_prefix(&qualified)?;
+    module
+        .ext_libs
+        .iter()
+        .find_map(|lib| lib.structs.iter().find(|s| s.name == local))
 }
 
 /// The `ts`/`typescript` language block of a declared extern, if it has

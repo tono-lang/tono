@@ -32,7 +32,7 @@ fn bus_lib() -> ExtLib {
         id: "m#status".into(),
         args: vec![],
     };
-    let send = super::super::ext_fixtures::send_method("m#ack", "bus#raw_ack");
+    let send = super::super::ext_fixtures::send_method("m#ack", "m#raw_ack");
     let ping = ExternDecl {
         name: "ping".into(),
         params: vec![],

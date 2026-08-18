@@ -239,13 +239,18 @@ fn appendix_model() -> Model {
 /// handle's own method (`impl .bus.send(..)`), standing in for the wire
 /// protocol entirely: `notify`'s whole body is the handle call, projecting
 /// a `yields`/`returns` pair and mapping a declared sentinel, exercising
-/// both an op-input-parameter argument and a sibling-field argument.
+/// both an op-input-parameter argument and a sibling-field argument. A
+/// second op (`injected_notify`) calls the same method through an `@arg`
+/// handle instead of a constructed one, so the `tsc` check also grades the
+/// handle's own generated interface at the one boundary a caller's own
+/// value is actually checked against (the public constructor parameter),
+/// not only the SDK's own internal construction path.
 fn handle_call_model() -> Model {
     let ack_t = Tref::Ref {
         id: "hc#ack".into(),
         args: vec![],
     };
-    let send = ext_fixtures::send_method("hc#ack", "companybus#raw_ack");
+    let send = ext_fixtures::send_method("hc#ack", "hc#raw_ack");
     let companybus = ExtLib {
         name: "companybus".into(),
         langs: vec![LangPath {
@@ -292,6 +297,19 @@ fn handle_call_model() -> Model {
         }),
     );
     bus.sources = vec![Source::With];
+    // An `@arg` handle: injected by the caller rather than constructed by
+    // this SDK, so its declared type reaches the public constructor
+    // parameter directly, not only the private field -- exactly the
+    // surface a caller's own value gets checked against.
+    let injected = ef(
+        "injected",
+        Tref::Ref {
+            id: "companybus#publisher".into(),
+            args: vec![],
+        },
+        vec![Source::Arg],
+        None,
+    );
 
     let ack_shape = single_member_shape("hc#ack", "ok", Tref::Prim(Prim::Bool));
     let notify_input = single_member_shape("hc#notify_input", "body", Tref::Prim(Prim::String));
@@ -303,18 +321,43 @@ fn handle_call_model() -> Model {
                 args: vec![],
             }),
             input_name: Some("msg".into()),
-            output: Some(ack_t),
+            output: Some(ack_t.clone()),
             errors: vec![],
             wire: None,
             impl_call: Some(send_op_impl_call()),
         },
         traits: vec![],
     };
+    // The same handle method, called through the injected field instead of
+    // the constructed one: proves an `@arg` handle's own generated
+    // interface type is what the caller is checked against, not `unknown`.
+    let injected_notify = Shape {
+        id: "hc#client.injected_notify".into(),
+        kind: ShapeKind::Operation {
+            input: Some(Tref::Ref {
+                id: "hc#notify_input".into(),
+                args: vec![],
+            }),
+            input_name: Some("msg".into()),
+            output: Some(ack_t),
+            errors: vec![],
+            wire: None,
+            impl_call: Some(tono_backend::ir::OpImplCall {
+                recv: vec!["injected".into()],
+                method: "send".into(),
+                args: vec![
+                    CallArg::Ref(vec!["topic".into()]),
+                    CallArg::Ref(vec!["msg".into(), "body".into()]),
+                ],
+            }),
+        },
+        traits: vec![],
+    };
     let client = Shape {
         id: "hc#client".into(),
         kind: ShapeKind::Entry {
-            fields: vec![endpoint, token, topic, bus],
-            operations: vec![notify],
+            fields: vec![endpoint, token, topic, bus, injected],
+            operations: vec![notify, injected_notify],
         },
         traits: vec![],
     };

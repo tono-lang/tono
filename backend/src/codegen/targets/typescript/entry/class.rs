@@ -5,9 +5,10 @@
 //! on its own.
 
 use super::{
-    access, cast_string, config_error, err_var, field_camel_ren, module_symbol, op_method,
-    presence_guard, rename_of, support_symbol, timeout_field_name, ts_type, type_refs, zero_value,
-    BoundExtension, CasingConfig, Decl, EntryModel, FieldShape, Helpers, Module, Names, Resolver,
+    access, cast_string, config_error, err_var, field_camel_ren, field_ts_type, module_symbol,
+    op_method, presence_guard, rename_of, support_symbol, timeout_field_name, type_refs,
+    zero_value, BoundExtension, CasingConfig, Decl, EntryModel, FieldShape, Helpers, Module, Names,
+    Resolver,
 };
 use crate::codegen::entries::plan;
 use crate::codegen::entries::ValuePath;
@@ -60,7 +61,11 @@ fn base_refs(entry: &EntryModel<'_>, module: &Module) -> Vec<Symbol> {
 /// The constructor's positional parameter list (`@arg` fields, then an
 /// optional `@with` config object), and the `@arg` fields themselves (reused
 /// by `forTest`'s pass-through call).
-fn ctor_params<'a>(entry: &EntryModel<'a>, n: &Names) -> (Vec<String>, Vec<&'a EntryField>) {
+fn ctor_params<'a>(
+    entry: &EntryModel<'a>,
+    n: &Names,
+    module: &Module,
+) -> (Vec<String>, Vec<&'a EntryField>) {
     let args = entry.args();
     let mut params: Vec<String> = args
         .iter()
@@ -68,7 +73,7 @@ fn ctor_params<'a>(entry: &EntryModel<'a>, n: &Names) -> (Vec<String>, Vec<&'a E
             format!(
                 "{}: {}",
                 plan::arg_camel(&f.name, &f.traits, LANG),
-                ts_type(&f.target)
+                field_ts_type(&f.target, module)
             )
         })
         .collect();
@@ -577,7 +582,7 @@ pub(super) fn class_decl(
     let en = error_names();
     let is_async = entry.fields.iter().any(|f| f.call.is_some());
     let mut refs = base_refs(entry, module);
-    let (params, args) = ctor_params(entry, n);
+    let (params, args) = ctor_params(entry, n, module);
 
     let (mut body, mut resolve_fns) = resolve_body(entry, module, config, helpers, multi, n);
     requires_block(

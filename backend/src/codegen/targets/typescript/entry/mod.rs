@@ -325,13 +325,9 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         }
     }
     for id in &foreign_struct_ids {
-        let strct = module
-            .ext_libs
-            .iter()
-            .find_map(|lib| lib.structs.iter().find(|s| format!("{}#{}", lib.name, s.name) == *id))
-            .unwrap_or_else(|| {
-                panic!("a handle method's yields position named foreign struct {id:?}, which resolved during interface generation but not here")
-            });
+        let strct = ext_handle_iface::resolve_foreign_struct(id, module).unwrap_or_else(|| {
+            panic!("a handle method's yields position named foreign struct {id:?}, which resolved during interface generation but not here")
+        });
         decls.push(ext_handle_iface::foreign_struct_decl(strct, module, id));
     }
     EntryEmission {
