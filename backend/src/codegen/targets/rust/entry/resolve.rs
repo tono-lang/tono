@@ -122,6 +122,14 @@ impl Resolver<'_, '_> {
         )
     }
 
+    /// A resolved value on its way into its construction slot: wrapped when
+    /// that slot is stored as an `Option` (a foreign handle, which has no
+    /// zero value in Rust -- see `ext::settings_field_type`), verbatim
+    /// otherwise.
+    fn store(&self, field: &EntryField, expr: &str) -> String {
+        ext::wrap_stored(&field.target, self.module, expr)
+    }
+
     /// The statements parsing a raw env string `v` into `dest`, by the
     /// field's declared type; a parse failure fails construction naming the
     /// variable (`label_expr`) and the type. Relative to column zero.
@@ -247,7 +255,16 @@ impl Emitter for Resolver<'_, '_> {
     /// because the two always run together (the shared plan emits this leaf
     /// only inside the branch `with_present_cond` guards).
     fn with_assign(&self, field: &EntryField, dest: &str) -> Leaf {
-        Leaf(format!("{dest} = {}.unwrap();", self.arg_take(field)))
+        let value = format!("{}.unwrap()", self.arg_take(field));
+        Leaf(format!("{dest} = {};", self.store(field, &value)))
+    }
+
+    /// An `@arg` field's own guaranteed assignment. Overridden purely to
+    /// route the value through [`Self::store`]; the spelling is otherwise
+    /// the shared plan's own.
+    fn assign_arg(&mut self, field: &EntryField, dest: &str) -> Leaf {
+        let value = self.arg_ident(field);
+        Leaf(format!("{dest} = {};", self.store(field, &value)))
     }
 
     fn member_dest(&self, member_name: &str) -> String {
@@ -381,7 +398,8 @@ impl Emitter for Resolver<'_, '_> {
     fn with_step_body(&self, field: &EntryField, dest: &str, err: &str) -> String {
         let acc = self.arg_take(field);
         format!(
-            "if let Some(v) = {acc} {{\n    {dest} = v;\n    {err} = None;\n}} else {{\n    {err} = Some({miss});\n}}",
+            "if let Some(v) = {acc} {{\n    {dest} = {v};\n    {err} = None;\n}} else {{\n    {err} = Some({miss});\n}}",
+            v = self.store(field, "v"),
             miss = self.config_error_expr("\"not configured\".to_string()", None),
         )
     }
@@ -420,8 +438,9 @@ impl Emitter for Resolver<'_, '_> {
                 Source::With => {
                     let acc = self.arg_take(field);
                     out.push_str(&format!(
-                        "{}if let Some(v) = {acc} {{\n    {dest} = v;\n}}",
+                        "{}if let Some(v) = {acc} {{\n    {dest} = {v};\n}}",
                         if first { "" } else { " else " },
+                        v = self.store(field, "v"),
                     ));
                     first = false;
                 }
@@ -512,7 +531,7 @@ impl Emitter for Resolver<'_, '_> {
         } else {
             String::new()
         };
-        format!("{dest} = {name}({arg});")
+        format!("{dest} = {};", self.store(field, &format!("{name}({arg})")))
     }
 
     /// The whole match reduces to a comparison of the Display-stringified

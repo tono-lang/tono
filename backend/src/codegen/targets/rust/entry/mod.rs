@@ -110,6 +110,19 @@ pub(super) fn push_type_symbols(t: &Tref, module_name: &str, refs: &mut Vec<Symb
     }));
 }
 
+/// The symbols an entry field's (or config member's) declared type
+/// references. A foreign handle names no declaration of this SDK's own at
+/// all -- it is spelled fully qualified against the declaring crate
+/// ([`ext::field_type`]) -- so pushing its `#`-qualified id through the
+/// ordinary nominal path would collect an import of a module that does not
+/// exist.
+pub(super) fn push_field_type_symbols(t: &Tref, module: &Module, refs: &mut Vec<Symbol>) {
+    if ext::foreign_handle(t, module).is_some() {
+        return;
+    }
+    push_type_symbols(t, &module.name, refs);
+}
+
 /// The per-entry generated names, derived once.
 pub(super) struct Names {
     pub client: String,
@@ -166,6 +179,9 @@ pub(super) fn zero_value(t: &Tref, module: &Module, config: &CasingConfig) -> St
         Tref::List(_) => "Vec::new()".into(),
         Tref::Map(_, _) => "std::collections::HashMap::new()".into(),
         Tref::Param(_) => "Default::default()".into(),
+        // A foreign handle has no zero value in Rust, so its slot is stored
+        // wrapped (`ext::settings_field_type`) and starts unset.
+        Tref::Ref { .. } if ext::is_stored_wrapped(t, module) => "None".into(),
         Tref::Ref { id, .. } => zero_ref(id, module, config),
     }
 }
@@ -609,6 +625,31 @@ fn op_method(
         .unwrap_or_default();
 
     let Some(wire) = wire_binding(op) else {
+        // No protocol binding. An op's own `impl .field.method(args)` body (a
+        // call straight into a declared opaque handle) takes priority when
+        // present, matching Go's and TypeScript's own dispatch order;
+        // otherwise the operation is implemented by bespoke sources the
+        // generator gate proved are bound for this target.
+        if let Some(call) = crate::codegen::ops::op_impl_call(op) {
+            let (body, call_is_async) = ext::impl_call_body(&ext::ImplCall {
+                entry,
+                module,
+                config,
+                call,
+                input_name: crate::codegen::ops::input_name(op),
+                has_output: output.is_some(),
+            });
+            // A handle call's own method follows the extern's `sync` flag,
+            // the same way a free extern call's `.await` does: there is no
+            // transport here to make the method async on its own.
+            let effect = if call_is_async { "async " } else { "" };
+            return format!(
+                "{doc}    pub {effect}fn {name}(&self{comma}{param}) -> Result<{ret}, TonoError> {{\n{validate_block}{body}\n    }}",
+                comma = if param.is_empty() { "" } else { ", " },
+                validate_block = indent(&validate_block, 2),
+                body = indent(&body, 2).trim_end_matches('\n'),
+            );
+        }
         let discriminator_name = surface::discriminator_fn_name(n, op);
         let discriminator =
             (!declared_errors(op, module).is_empty()).then_some(discriminator_name.as_str());
@@ -674,6 +715,7 @@ mod checks;
 mod conformance_tests;
 mod constructor;
 mod decode;
+mod ext;
 pub mod ext_fixtures;
 mod impl_op;
 mod resolve;

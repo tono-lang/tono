@@ -74,8 +74,7 @@ impl TargetKind {
     /// for it.
     pub fn emits_ext_handle_types(self) -> bool {
         match self {
-            Self::Go | Self::TypeScript => true,
-            Self::Rust => false,
+            Self::Go | Self::TypeScript | Self::Rust => true,
         }
     }
 
@@ -88,8 +87,7 @@ impl TargetKind {
     /// through validation to an emitter with no case for it.
     pub fn emits_ext_handle_calls(self) -> bool {
         match self {
-            Self::Go | Self::TypeScript => true,
-            Self::Rust => false,
+            Self::Go | Self::TypeScript | Self::Rust => true,
         }
     }
 }

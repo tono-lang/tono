@@ -373,31 +373,25 @@ fn entry_with_handle_call() -> Shape {
 }
 
 #[test]
-fn a_target_that_cannot_emit_an_extern_handle_call_is_named_and_refused() {
+fn every_target_now_accepts_an_op_own_extern_handle_call() {
     let m = crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module_of(vec![entry_with_handle_call()])],
     };
-    // Go and TypeScript emit an op's own extern handle-method call today;
-    // Rust does not, and a request naming it alongside either must refuse
-    // the whole call, not silently drop it from just the targets that
-    // cannot render it.
+    // Go, TypeScript and Rust all emit an op's own extern handle-method call
+    // now, so no combination of the three targets trips the
+    // `emits_ext_handle_calls` gate below; that gate stays in place for a
+    // future target that lands the plain call/handle-type halves before
+    // this one.
     assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
     assert!(validate_entries(&m, &[TargetKind::TypeScript]).is_ok());
-    assert!(validate_entries(&m, &[TargetKind::Go, TargetKind::TypeScript]).is_ok());
-    let err = validate_entries(&m, &[TargetKind::Go, TargetKind::Rust]).unwrap_err();
-    assert!(err.contains("client.publish"), "{err}");
-    assert!(err.contains(".bus.send(..)"), "{err}");
-    assert!(err.contains("rust cannot emit that call yet"), "{err}");
+    assert!(validate_entries(&m, &[TargetKind::Rust]).is_ok());
+    assert!(validate_entries(
+        &m,
+        &[TargetKind::Go, TargetKind::TypeScript, TargetKind::Rust]
+    )
+    .is_ok());
 }
-
-// The `ctx` marker only has an idiomatic call site on a foreign handle's own
-// method call, and this gate rejects any op whose own body reaches such a
-// call (`impl_call: Some(..)`) for a target that cannot emit it, entirely
-// from the op's own structure -- it never inspects the extern's own `ctx`
-// flag. So `ctx` cannot bypass it: the test above already proves every
-// handle-method call is refused for TypeScript/Rust regardless of any
-// marker on the extern it calls into.
 
 /// A handle lib declaring one opaque type and one free constructor that
 /// returns it, so a field can either construct the handle (`field.call`) or

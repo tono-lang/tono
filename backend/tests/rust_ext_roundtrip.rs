@@ -1,8 +1,10 @@
 //! End-to-end check that the Rust the engine emits for an `ext`/`extern`
-//! FFI extern-call field source compiles against a real crate: the model
-//! in this test exercises the RFC appendix's `companyconfig` (a config load
-//! with a per-field `yields`/`returns` projection and a `match`), scoped to
-//! what this target emits (no injectable opaque-handle field yet).
+//! FFI surface compiles against real crates: the model in this test
+//! exercises the RFC appendix's `companyconfig` (a config load with a
+//! per-field `yields`/`returns` projection and a `match`) and its
+//! `companybus` opaque handle (a field typed by an `ext` block's own `type`,
+//! constructed by a free call, and an op's own `impl .bus.send(..)` body
+//! calling through it).
 //!
 //! The verification model this test relies on is the target compiler, not a
 //! Rust assertion: the generated code reads `cfg.host`/`cfg.credentials.secret`
@@ -77,7 +79,10 @@ fn write_sdk(model: &Model) -> PathBuf {
          [dependencies]\n\
          serde = { version = \"1\", features = [\"derive\"] }\n\
          serde_json = \"1\"\n\
-         companyconfig = { path = \"../fixtures/companyconfig\" }\n\n\
+         companyconfig = { path = \"../fixtures/companyconfig\" }\n\
+         companybus = { path = \"../fixtures/companybus\" }\n\n\
+         [features]\n\
+         reqwest = []\n\n\
          [workspace]\n",
     )
     .unwrap();

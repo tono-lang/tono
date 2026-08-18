@@ -1,0 +1,10 @@
+[package]
+name = "companybus"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Detach from the backend workspace: this crate exists only as a stand-in
+# third-party library the round-trip harness compiles the generated SDK
+# against, and its coverage must not count.
+[workspace]

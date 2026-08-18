@@ -196,7 +196,17 @@ fn select_expr(select: &Select) -> String {
 /// extern, the same "declaration is a hypothesis the target build already
 /// enforces, so an unmapped failure names its origin" idiom `impl_op` uses
 /// for a bespoke operation.
-fn error_match(ns: &str, func: &str, errors: &[ErrorBinding]) -> String {
+pub(super) fn error_match(ns: &str, func: &str, errors: &[ErrorBinding]) -> String {
+    let contract_name = format!("{ns}.{func}");
+    let fallback = format!(
+        "TonoError::Contract(ContractError {{ contract_name: {contract_name:?}.to_string(), cause: e.to_string().into() }})"
+    );
+    // No declared sentinel leaves a single wildcard arm, which clippy flags
+    // as a match on nothing (`match_single_binding`): spell the fallback
+    // directly rather than routing it through a match with one arm.
+    if errors.is_empty() {
+        return fallback;
+    }
     let mut arms = String::new();
     for e in errors {
         let _ = write!(
@@ -205,10 +215,7 @@ fn error_match(ns: &str, func: &str, errors: &[ErrorBinding]) -> String {
             e.sentinel,
         );
     }
-    let contract_name = format!("{ns}.{func}");
-    format!(
-        "match e.to_string().as_str() {{ {arms}_ => TonoError::Contract(ContractError {{ contract_name: {contract_name:?}.to_string(), cause: e.to_string().into() }}), }}"
-    )
+    format!("match e.to_string().as_str() {{ {arms}_ => {fallback}, }}")
 }
 
 /// `yields`' non-error positions bound out of `Ok(..)`: a single position
@@ -231,9 +238,14 @@ fn ok_pattern(positions: &[&YieldsPos]) -> String {
 /// The `dest = ...` (or field-by-field) assignment from the `Ok(..)` binding
 /// into `dest`: a declared `returns:` projects fields one at a time, its
 /// absence assigns the whole (possibly cast) binding.
-fn ok_assign(dest: &str, ok_binding: &str, returns: Option<&ReturnsLit>) -> String {
+fn ok_assign(
+    dest: &str,
+    ok_binding: &str,
+    returns: Option<&ReturnsLit>,
+    store: &dyn Fn(&str) -> String,
+) -> String {
     let Some(returns) = returns else {
-        return format!("{dest} = {ok_binding};");
+        return format!("{dest} = {};", store(ok_binding));
     };
     let fields: Vec<String> = returns
         .fields
@@ -247,7 +259,10 @@ fn ok_assign(dest: &str, ok_binding: &str, returns: Option<&ReturnsLit>) -> Stri
         // project fields into and never reaches this branch.
         _ => String::new(),
     });
-    format!("{dest} = {ty} {{ {} }};", fields.join(", "))
+    format!(
+        "{dest} = {};",
+        store(&format!("{ty} {{ {} }}", fields.join(", ")))
+    )
 }
 
 /// The extern-call assignment: resolves `ns.fn` against the
@@ -257,7 +272,7 @@ fn ok_assign(dest: &str, ok_binding: &str, returns: Option<&ReturnsLit>) -> Stri
 /// assigns straight into `dest`.
 pub(super) fn call_assign(
     r: &mut Resolver<'_, '_>,
-    _field: &EntryField,
+    field: &EntryField,
     call: &EntryCall,
     dest: &str,
 ) -> String {
@@ -271,6 +286,13 @@ pub(super) fn call_assign(
     let yields = lang.yields.clone();
     let expr = call_expr(r, call);
 
+    // The field's own slot may be stored wrapped (a foreign handle has no
+    // zero value in Rust, so its draft starts unset); the call's result goes
+    // in through the same wrapping every other source's does.
+    let target = field.target.clone();
+    let module = r.module;
+    let store = move |expr: &str| super::ext::wrap_stored(&target, module, expr);
+
     let ok_positions: Vec<&YieldsPos> = yields.iter().filter(|y| !y.is_error).collect();
 
     let ok_pat = if yields.is_empty() {
@@ -280,7 +302,7 @@ pub(super) fn call_assign(
     };
     format!(
         "match {expr} {{\n    Ok({ok_pat}) => {{ {assign} }}\n    Err(e) => {{ return Err({mapped}); }}\n}}",
-        assign = ok_assign(dest, &ok_pat, returns.as_ref()),
+        assign = ok_assign(dest, &ok_pat, returns.as_ref(), &store),
         mapped = error_match(&ns, &func, &errors),
     )
 }

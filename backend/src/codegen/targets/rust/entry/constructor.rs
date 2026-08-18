@@ -112,11 +112,13 @@ pub(super) fn construction_decls(
         format!(
             // An entry whose ops read no settings field directly (every wire
             // position a literal) never reads `settings` back after
-            // construction; a bespoke `ext impl` op does. `dead_code` is
-            // silenced per entry rather than omitting the field, so its shape
-            // stays uniform across entries regardless of which ops happen to
-            // need it.
-            "{doc}pub struct {client} {{\n    #[allow(dead_code)]\n    settings: {settings},\n    options: ClientOptions,\n{timeout_field_decls}{seam_field_decls}}}",
+            // construction; a bespoke `ext impl` op does. An entry whose ops
+            // are all handle-method calls never touches transport at all, so
+            // `options` goes unread too. `dead_code` is silenced per entry
+            // rather than omitting either field, so the struct's shape stays
+            // uniform across entries regardless of which ops happen to need
+            // them.
+            "{doc}pub struct {client} {{\n    #[allow(dead_code)]\n    settings: {settings},\n    #[allow(dead_code)]\n    options: ClientOptions,\n{timeout_field_decls}{seam_field_decls}}}",
             client = n.client,
             settings = n.settings,
         ),
@@ -163,7 +165,7 @@ pub(super) fn construction_decls(
                 format!(
                     "{}: {}",
                     arg_snake(&f.name, &f.traits, LANG),
-                    rust_type(&f.target)
+                    ext::field_type(&f.target, module)
                 )
             })
             .collect();
@@ -209,7 +211,7 @@ pub(super) fn construction_decls(
                 format!(
                     "    {}: {},",
                     arg_snake(&f.name, &f.traits, LANG),
-                    rust_type(&f.target)
+                    ext::field_type(&f.target, module)
                 )
             })
             .collect();
@@ -217,7 +219,7 @@ pub(super) fn construction_decls(
             format!(
                 "    {}: Option<{}>,",
                 arg_snake(&f.name, &f.traits, LANG),
-                rust_type(&f.target)
+                ext::field_type(&f.target, module)
             )
         }));
         decls.push(Decl::raw(format!(
@@ -235,7 +237,7 @@ pub(super) fn construction_decls(
                 let doc = field_doc(&f.traits, "    ");
                 format!(
                     "{doc}    pub fn {fn_name}(mut self, v: {ty}) -> Self {{\n        self.{member} = Some(v);\n        self\n    }}\n",
-                    ty = rust_type(&f.target),
+                    ty = ext::field_type(&f.target, module),
                 )
             })
             .collect();
@@ -269,7 +271,7 @@ pub(super) fn construction_decls(
                 format!(
                     "{}: {}",
                     arg_snake(&f.name, &f.traits, LANG),
-                    rust_type(&f.target)
+                    ext::field_type(&f.target, module)
                 )
             })
             .collect();
