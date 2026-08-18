@@ -105,13 +105,15 @@ fn call_arg_expr(r: &mut Resolver<'_, '_>, scope: &CallScope<'_>, arg: &CallArg)
         // A foreign handle stored in its `Option` slot is moved out (a
         // handle is not `Clone` in general: a connection, a pool, a
         // provider), not cloned. `s` is a local the constructor owns, so
-        // `take()` on its field is sound while `s` is still read later; the
-        // slot is left unset, which is the honest state once ownership went
-        // to the callee (an op's own `impl .field.method(..)` reading it
-        // afterwards diagnoses "not configured" rather than aliasing a
-        // moved value). An unset slot here can only mean the handle's own
-        // resolution was skipped upstream, so it is diagnosed the same way
-        // the op receiver read diagnoses it instead of unwrapped.
+        // `take()` on its field is sound while `s` is still read later. The
+        // slot is left unset, so nothing else may read the handle after
+        // this: `entries::validate_ownership` rejects a spec whose
+        // forwarded handle has a second reader (an op receiver, another
+        // call) before any target emits, which is what makes the move
+        // total here. An unset slot at this point can only mean the
+        // handle's own resolution was skipped upstream, so it is diagnosed
+        // the same way the op receiver read diagnoses it instead of
+        // unwrapped.
         CallArg::Ref(path) if ext::is_stored_wrapped(&r.path_type(path), r.module) => {
             let miss = format!(
                 "{}: the {} handle is not configured",

@@ -19,6 +19,7 @@ mod checks;
 mod order;
 pub mod plan;
 mod validate;
+mod validate_ownership;
 pub mod wire;
 
 pub use checks::{needs_presence_guard, value_path_access, value_path_frozen_expr};
