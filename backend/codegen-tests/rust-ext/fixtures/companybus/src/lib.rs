@@ -1,7 +1,6 @@
-//! A stand-in for the third-party message-bus library the generated SDK
-//! integrates with (RFC appendix's `companybus`): a free constructor that
-//! returns an opaque handle, and a method on that handle the generated
-//! SDK's own op body calls into.
+//! A stand-in for a third-party message-bus library the generated SDK
+//! integrates with: a free constructor that returns an opaque handle, and a
+//! method on that handle the generated SDK's own op body calls into.
 
 pub struct Ack {
     pub id: String,

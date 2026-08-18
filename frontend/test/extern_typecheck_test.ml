@@ -406,7 +406,7 @@ op fetch(): bus.publisher
   in
   Alcotest.(check bool) "opaque handle as op output" true (has "TC0034" src)
 
-(* The RFC's own carve-out: a bare qualified field on an entry composes the
+(* The one carve-out: a bare qualified field on an entry composes the
    handle legally (no diagnostic). *)
 let opaque_handle_as_entry_field_ok () =
   let src =

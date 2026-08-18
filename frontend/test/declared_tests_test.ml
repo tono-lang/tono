@@ -71,7 +71,7 @@ let with_base body = base ^ "\n" ^ body
 
 (* ── The happy path ────────────────────────────────────────────────────── *)
 
-(* Every RFC form at once: construction, named http stub with a sequence,
+(* Every declared-test form at once: construction, named http stub with a sequence,
    anonymous stub, impl stub answers (output, declared error, contract), calls
    with and without input, dataflow, struct/error/taxonomy/ok patterns with
    the three marks, and request assertions with a header subset. *)

@@ -95,8 +95,9 @@ fn handle_go_type_spells_a_pointer_to_the_pascal_cased_name() {
     );
 }
 
-/// The motivating case from the RFC/ADR: a handle instantiating a foreign
-/// generic type spells the *foreign* name (not the tono handle name), with
+/// The motivating case for generic handle instantiation: a handle
+/// instantiating a foreign generic type spells the *foreign* name (not the
+/// tono handle name), with
 /// the argument's own type registered so its import reaches the file the
 /// same way any other declared type's does. The argument itself renders as
 /// a slot (its final text is only decided when the whole declaration is

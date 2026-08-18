@@ -309,8 +309,8 @@ fn url_line(wire: &WireBinding, has_query: bool, fields: &FieldCtx<'_>) -> Strin
         .expect("validate_entries rejects an entry @http op with no endpoint");
     let mut fmt = String::from("{}");
     // The common case (a resolved entry-field endpoint) keeps its original
-    // `Display`-only spelling; the grammar's other forms (new with this
-    // task) go through the general renderer.
+    // `Display`-only spelling; the grammar's other endpoint forms go
+    // through the general renderer.
     let endpoint_expr = match endpoint {
         WireValue::Field(path) => fields.display_expr(path),
         other => wire_value_expr(other, fields),

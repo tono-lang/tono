@@ -273,8 +273,8 @@ pub(super) fn call_arg_expr(
         ),
         CallArg::Ctor(ctor) => ctor_expr(refs, lib, ctor, params, entry_args, ref_expr),
         // A nested extern call as a call argument (e.g. a request-signing
-        // call read at a trait-argument site) is not exercised by the RFC
-        // appendix; deferred rather than guessed at.
+        // call read at a trait-argument site) is not exercised by any
+        // fixture yet; deferred rather than guessed at.
         CallArg::Call(_) => "nil /* nested extern-call argument: deferred */".to_string(),
     }
 }

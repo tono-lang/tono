@@ -525,7 +525,7 @@ let nullable_entry_field_rejected () =
     "nullable field" [ "TC0046" ]
     (codes (entry "  k: string? @env(\"K\")"))
 
-(* TASK 2: a nullable value interpolated into an @http path (TC0022) would
+(* A nullable value interpolated into an @http path (TC0022) would
    collapse its placeholder and leave a hole in the URL; this holds for both
    an entry field and an op parameter member. An entry field can never be
    nullable itself (TC0046), so the entry-field case reaches through a

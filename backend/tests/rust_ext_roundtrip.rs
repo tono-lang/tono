@@ -1,6 +1,6 @@
 //! End-to-end check that the Rust the engine emits for an `ext`/`extern`
 //! FFI surface compiles against real crates: the model in this test
-//! exercises the RFC appendix's `companyconfig` (a config load with a
+//! exercises a `companyconfig` library (a config load with a
 //! per-field `yields`/`returns` projection and a `match`) and its
 //! `companybus` opaque handle (a field typed by an `ext` block's own `type`,
 //! constructed by a free call, and an op's own `impl .bus.send(..)` body

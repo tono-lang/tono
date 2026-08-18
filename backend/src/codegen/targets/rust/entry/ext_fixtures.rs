@@ -1,11 +1,11 @@
 //! The IR model the round-trip test (`tests/rust_ext_roundtrip.rs`) compiles
 //! against real stand-in crates under `codegen-tests/rust-ext/fixtures/`:
-//! the RFC appendix's `companyconfig` library (a config load with a
-//! per-field `yields`/`returns` projection and a `match`), and its
-//! injectable `companybus` handle (an opaque `publisher` type constructed
-//! by a free `connect` call and driven through an op's own `impl
-//! .bus.send(..)` body) — the same two libraries the Go and TypeScript
-//! fixtures exercise, scoped to this target's own emission.
+//! a `companyconfig` library (a config load with a per-field
+//! `yields`/`returns` projection and a `match`), and its injectable
+//! `companybus` handle (an opaque `publisher` type constructed by a free
+//! `connect` call and driven through an op's own `impl .bus.send(..)`
+//! body) — the same two libraries the Go and TypeScript fixtures exercise,
+//! scoped to this target's own emission.
 
 use crate::ir::{
     ArmValue, CallArg, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternLang,
@@ -106,8 +106,8 @@ fn field_path(segments: &[&str]) -> ArmValue {
     ArmValue::Field(strings(segments))
 }
 
-/// The RFC appendix's `companyconfig.load` and `companybus` handle,
-/// combined onto one `client` entry the same way the Go and TypeScript
+/// `companyconfig.load` and the `companybus` handle, combined onto one
+/// `client` entry the same way the Go and TypeScript
 /// fixtures combine them: an entry `config` field reads `service`/`region`
 /// through the free `companyconfig.load` call, the library's returned shape
 /// has its `env` matched to pick `host`/`dev_host`, `token` reads
