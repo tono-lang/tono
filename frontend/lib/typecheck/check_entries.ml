@@ -96,18 +96,21 @@ let check_source_combinations ~in_config (m : Ast.member) : Diagnostic.t list =
             "a match is the field's only value; declare sources on the fields \
              its arms reference instead";
         ]
-    | Some (Ast.MCall ce)
+    | Some
+        ( Ast.MCall { ce_span = call_span; _ }
+        | Ast.MHandleCall { oi_span = call_span; _ } )
       when (not (has "arg"))
            (* @with is not a competing source here: paired with a call value
-              it is the ext/extern injectable-handle idiom --
-              the caller may supply the value, construction is the fallback
-              -- not a source that would leave the call's own value dead. *)
+              (a free extern or a handle method) it is the ext/extern
+              injectable idiom -- the caller may supply the value,
+              construction is the fallback -- not a source that would leave
+              the call's own value dead. *)
            && (List.exists
                  (fun (t : Ast.trait) -> not (String.equal t.Ast.tname "with"))
                  sources
               || has "format") ->
         [
-          dead ce.ce_span
+          dead call_span
             "an extern call is the field's value (with an optional @with \
              fallback slot); declare other sources on different fields instead";
         ]
@@ -432,6 +435,11 @@ let check_wire_member_metadata (m : Ast.member) : Diagnostic.t list =
           err Error_codes.source_position_invalid ce.ce_span
             "an extern call only lives on entry/config fields";
         ]
+    | Some (Ast.MHandleCall hc) ->
+        [
+          err Error_codes.source_position_invalid hc.oi_span
+            "a handle method call only lives on entry/config fields";
+        ]
     | None -> [])
   @ List.filter_map
       (fun (tr : Ast.trait) ->
@@ -451,6 +459,29 @@ let check_wire_member_metadata (m : Ast.member) : Diagnostic.t list =
         else None)
       m.Ast.mtraits
 
+(* An extern call's own argument refs: `.request` is rejected outright (it
+   is only built once the request is assembled, at a protocol trait
+   argument); any other unresolved ref is the ordinary unknown-field
+   diagnostic. *)
+let call_arg_ref_diags ctx (members : Ast.member list)
+    (refs : (string list * Span.span) list) : Diagnostic.t list =
+  List.filter_map
+    (fun (segs, span) ->
+      match segs with
+      | "request" :: _ ->
+          Some
+            (err Error_codes.field_ref_request span
+               "'.request' is not available while constructing entry fields; \
+                it exists only in a protocol trait argument, after the request \
+                is built")
+      | _ ->
+          if Option.is_some (resolve_path ctx members segs) then None
+          else
+            Some
+              (err Error_codes.field_ref_unknown span "unknown field '%s'"
+                 (path_str segs)))
+    refs
+
 let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
     (ops : Ast.decl list) : Diagnostic.t list =
   let field_diags =
@@ -466,30 +497,19 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
                      (path_str segs)))
             (member_trait_refs m)
         in
-        (* An extern call's own argument refs: `.request` is rejected outright
-           (it is only built once the request is assembled, at a protocol
-           trait argument); any other unresolved ref is
-           the ordinary unknown-field diagnostic. *)
         let call_arg_diags =
           match m.mvalue with
           | Some (Ast.MCall ce) ->
-              List.filter_map
-                (fun (segs, span) ->
-                  match segs with
-                  | "request" :: _ ->
-                      Some
-                        (err Error_codes.field_ref_request span
-                           "'.request' is not available while constructing \
-                            entry fields; it exists only in a protocol trait \
-                            argument, after the request is built")
-                  | _ ->
-                      if Option.is_some (resolve_path ctx members segs) then
-                        None
-                      else
-                        Some
-                          (err Error_codes.field_ref_unknown span
-                             "unknown field '%s'" (path_str segs)))
-                (Entry_scope.ce_refs ce)
+              call_arg_ref_diags ctx members (Entry_scope.ce_refs ce)
+          (* A handle method call's own refs (receiver and arguments) are
+             resolved by [Check_handle_call] below, with the receiver-shaped
+             messages; only the '.request' rule is shared here. *)
+          | Some (Ast.MHandleCall hc) ->
+              call_arg_ref_diags ctx members
+                (List.filter
+                   (fun (segs, _) ->
+                     match segs with "request" :: _ -> true | _ -> false)
+                   (Entry_scope.call_args_refs hc.Ast.oi_args))
           | Some (Ast.MMatch _) | None -> []
         in
         check_source_combinations ~in_config:false m
@@ -502,6 +522,8 @@ let check_entry ctx (d : Ast.decl) params (members : Ast.member list)
         @
         match m.mvalue with
         | Some (Ast.MMatch fm) -> check_match ctx members m fm
+        | Some (Ast.MHandleCall hc) ->
+            Check_handle_call.check_field_source ctx ~fields:members m hc
         (* An extern call's projection is checked against its ext block's
            declared signature; that resolution is deferred (out of scope). *)
         | Some (Ast.MCall _) | None -> [])
@@ -643,23 +665,13 @@ let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
         let call_arg_diags =
           match m.mvalue with
           | Some (Ast.MCall ce) ->
-              List.filter_map
-                (fun (segs, span) ->
-                  match segs with
-                  | "request" :: _ ->
-                      Some
-                        (err Error_codes.field_ref_request span
-                           "'.request' is not available while constructing \
-                            entry fields; it exists only in a protocol trait \
-                            argument, after the request is built")
-                  | _ ->
-                      if Option.is_some (resolve_path ctx members segs) then
-                        None
-                      else
-                        Some
-                          (err Error_codes.field_ref_unknown span
-                             "unknown field '%s'" (path_str segs)))
-                (Entry_scope.ce_refs ce)
+              call_arg_ref_diags ctx members (Entry_scope.ce_refs ce)
+          | Some (Ast.MHandleCall hc) ->
+              call_arg_ref_diags ctx members
+                (List.filter
+                   (fun (segs, _) ->
+                     match segs with "request" :: _ -> true | _ -> false)
+                   (Entry_scope.call_args_refs hc.Ast.oi_args))
           | Some (Ast.MMatch _) | None -> []
         in
         check_source_combinations ~in_config:true m
@@ -676,6 +688,11 @@ let check_config ctx (d : Ast.decl) params (members : Ast.member list) :
         @
         match m.mvalue with
         | Some (Ast.MMatch fm) -> check_match ctx members m fm
+        (* A config has no handle to call (a foreign handle only lives on
+           an entry field), so the receiver never resolves to one here and
+           the shared check says so. *)
+        | Some (Ast.MHandleCall hc) ->
+            Check_handle_call.check_field_source ctx ~fields:members m hc
         | Some (Ast.MCall _) | None -> [])
       members
   in

@@ -94,6 +94,18 @@ and encode_entry_call (c : Ir.entry_call) : Ir.json =
       ("args", `List (List.map encode_call_arg c.ec_args));
     ]
 
+(* A handle method call ([.field.method(args)]): an op's own "impl" body or
+   a field's own value source. [recv] mirrors [entry_call]'s "ns"/"fn" shape,
+   but as a field path rather than a bare "ext" namespace, since the receiver
+   is an entry field. *)
+let encode_op_impl_call (c : Ir.op_impl_call) : Ir.json =
+  `Assoc
+    [
+      ("recv", `List (List.map (fun s -> `String s) c.Ir.oic_recv));
+      ("method", `String c.Ir.oic_method);
+      ("args", `List (List.map encode_call_arg c.Ir.oic_args));
+    ]
+
 let encode_entry_field (f : Ir.entry_field) : Ir.json =
   `Assoc
     ([
@@ -112,6 +124,9 @@ let encode_entry_field (f : Ir.entry_field) : Ir.json =
     @ (match f.ef_call with
       | None -> []
       | Some c -> [ ("call", encode_entry_call c) ])
+    @ (match f.ef_handle_call with
+      | None -> []
+      | Some c -> [ ("handle_call", encode_op_impl_call c) ])
     @ [
         ("binds", `List (List.map encode_bind f.ef_binds));
         ("constraints", `List (List.map encode_constraint f.ef_constraints));
@@ -290,6 +305,22 @@ and decode_entry_call j =
   in
   Ok ({ Ir.ec_ns = ns; ec_fn = fn; ec_args = args } : Ir.entry_call)
 
+let decode_op_impl_call (j : Ir.json) : (Ir.op_impl_call, string) result =
+  let* kvs = as_assoc j in
+  match
+    ( List.assoc_opt "recv" kvs,
+      List.assoc_opt "method" kvs,
+      List.assoc_opt "args" kvs )
+  with
+  | Some recv, Some method_, Some args ->
+      let* recv_xs = as_list recv in
+      let* oic_recv = map_result as_string recv_xs in
+      let* oic_method = as_string method_ in
+      let* args_xs = as_list args in
+      let* oic_args = map_result decode_call_arg args_xs in
+      Ok ({ Ir.oic_recv; oic_method; oic_args } : Ir.op_impl_call)
+  | _ -> err "handle call must have recv, method, and args"
+
 let decode_entry_field j =
   let* kvs = as_assoc j in
   let get k = List.assoc_opt k kvs in
@@ -341,6 +372,13 @@ let decode_entry_field j =
         let* c = decode_entry_call v in
         Ok (Some c)
   in
+  let* handle_call =
+    match get "handle_call" with
+    | None -> Ok None
+    | Some v ->
+        let* c = decode_op_impl_call v in
+        Ok (Some c)
+  in
   let* binds =
     match get "binds" with
     | None -> Ok []
@@ -371,6 +409,7 @@ let decode_entry_field j =
        ef_transforms = transforms;
        ef_select = select;
        ef_call = call;
+       ef_handle_call = handle_call;
        ef_binds = binds;
        ef_constraints = constraints;
        ef_traits = traits;

@@ -357,8 +357,11 @@ let construct_docs : (string * string) list =
        conformance spec." );
     ("constraint", "A bespoke validation predicate attached at the boundary.");
     ( "impl",
-      "Implements the operation it names with bespoke sources, taking that \
-       operation's signature. Add 'raw' to return an outcome the generated \
+      "After an operation's traits, 'impl .handle.method(args)' implements it \
+       as a call into a declared opaque handle's method (the same call a field \
+       can take as its value: 'config: cfg = .handle.method(args)'). After \
+       'ext', it binds the operation it names to bespoke sources, taking that \
+       operation's signature; add 'raw' to return an outcome the generated \
        glue decodes and discriminates." );
     ( "raw",
       "The bound symbol returns an outcome (success flag, code, body) and the \

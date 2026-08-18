@@ -317,6 +317,25 @@ let completion_after_handle_field_offers_its_methods () =
   let labels = completion_labels src (pos line 16) in
   Alcotest.(check (list string)) "the handle's methods" [ "publish" ] labels
 
+(* A member sourced from a handle method (`= .link.`) reaches the same
+   call-site lookup as `impl .link.`: the receiver is the identifier before
+   the dot, whatever opened the reference. *)
+let completion_after_handle_field_source_offers_its_methods () =
+  let src = lib_src ^ "\npub struct other {\n  link: conn\n  y: ack = .link." in
+  let line = List.length (String.split_on_char '\n' src) - 1 in
+  let labels = completion_labels src (pos line 17) in
+  Alcotest.(check (list string)) "the handle's methods" [ "publish" ] labels
+
+let hover_on_a_handle_sourced_member_shows_the_call () =
+  let src =
+    lib_src
+    ^ "\npub struct other {\n  link: conn\n  y: ack = .link.publish(\"t\")\n}\n"
+  in
+  let v = hover_value src (at src "y: ack") in
+  Alcotest.(check bool)
+    "the source is in the hover" true
+    (contains v "y: ack = .link.publish(\"t\")")
+
 let completion_after_unknown_namespace_is_empty () =
   let src = lib_src ^ "\npub struct other {\n  y: ack = nothing." in
   let line = List.length (String.split_on_char '\n' src) - 1 in
@@ -363,6 +382,10 @@ let () =
             completion_after_ext_name_offers_its_externs;
           Alcotest.test_case "handle field call site" `Quick
             completion_after_handle_field_offers_its_methods;
+          Alcotest.test_case "handle-sourced member offers its methods" `Quick
+            completion_after_handle_field_source_offers_its_methods;
+          Alcotest.test_case "hover on a handle-sourced member" `Quick
+            hover_on_a_handle_sourced_member_shows_the_call;
           Alcotest.test_case "unknown namespace" `Quick
             completion_after_unknown_namespace_is_empty;
         ] );

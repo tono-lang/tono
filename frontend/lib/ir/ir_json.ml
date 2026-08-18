@@ -81,8 +81,13 @@
    v21 added an opaque type's optional "instance": which instantiation of a
    foreign generic type the handle names (the foreign type's own name, plus
    the tono argument it is monomorphized with). Absent for a foreign type
-   that is not generic. *)
-let current_ir_version = 21
+   that is not generic.
+   v22 added an entry field's optional "handle_call" (alongside "call" and
+   "select"): a field whose value source is a call into a sibling opaque
+   handle's method ([config: cfg = .provider.get()]), so one foreign
+   resolution feeds several operations. It reuses v15's "impl_call" shape
+   ("recv"/"method"/"args") in the field position. *)
+let current_ir_version = 22
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -113,8 +118,6 @@ let encode_bind = Ir_json_entry.encode_bind
 let decode_bind = Ir_json_entry.decode_bind
 let encode_entry_field = Ir_json_entry.encode_entry_field
 let decode_entry_field = Ir_json_entry.decode_entry_field
-let encode_call_arg = Ir_json_entry.encode_call_arg
-let decode_call_arg = Ir_json_entry.decode_call_arg
 let encode_ext_lib = Ir_json_extern.encode_ext_lib
 let decode_ext_lib = Ir_json_extern.decode_ext_lib
 let encode_test = Ir_json_tests.encode_test
@@ -134,32 +137,10 @@ let as_list = Ir_json_base.as_list
 let as_string = Ir_json_base.as_string
 let as_int = Ir_json_base.as_int
 
-(* An op's own "impl .field.method(args)" body: [recv] mirrors
-   [entry_call]'s "ns"/"fn" shape, but as a field path rather than a bare "ext"
-   namespace, since the receiver is an entry field. *)
-let encode_op_impl_call (c : Ir.op_impl_call) : Ir.json =
-  `Assoc
-    [
-      ("recv", `List (List.map (fun s -> `String s) c.Ir.oic_recv));
-      ("method", `String c.Ir.oic_method);
-      ("args", `List (List.map encode_call_arg c.Ir.oic_args));
-    ]
-
-let decode_op_impl_call (j : Ir.json) : (Ir.op_impl_call, string) result =
-  let* kvs = as_assoc j in
-  match
-    ( List.assoc_opt "recv" kvs,
-      List.assoc_opt "method" kvs,
-      List.assoc_opt "args" kvs )
-  with
-  | Some recv, Some method_, Some args ->
-      let* recv_xs = as_list recv in
-      let* oic_recv = map_result as_string recv_xs in
-      let* oic_method = as_string method_ in
-      let* args_xs = as_list args in
-      let* oic_args = map_result decode_call_arg args_xs in
-      Ok ({ Ir.oic_recv; oic_method; oic_args } : Ir.op_impl_call)
-  | _ -> err "op impl_call must have recv, method, and args"
+(* The handle-method-call codec lives in [Ir_json_entry] (an entry field's
+   own "handle_call" source shares it); aliased for the operation shape. *)
+let encode_op_impl_call = Ir_json_entry.encode_op_impl_call
+let decode_op_impl_call = Ir_json_entry.decode_op_impl_call
 
 (* ── Shapes, modules, and the model envelope ───────────────────────────── *)
 

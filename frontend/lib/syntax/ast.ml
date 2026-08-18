@@ -106,9 +106,30 @@ type field_match = {
   match_span : Span.span;
 }
 
-(* A member's [= ...] value: the existing selection table, or an extern call
-   (e.g. [config: app_config = companyconfig.load(.service, .region)]). *)
-type member_value = MMatch of field_match | MCall of call_expr
+(* A call into a declared opaque handle's method, [.field.method(args)]:
+   the receiver names an entry field (a declared opaque handle), the method
+   one of its declared [extern] methods. Two surface positions share the
+   node: an op's own [impl .h.m(args)] body (a third implementation source
+   for an op, alongside a protocol trait (@http) and a legacy "ext impl"
+   binding) and a member's [= .h.m(args)] value source (a foreign resolution
+   that feeds several operations, the receiver-form counterpart of
+   [= ns.fn(args)]). The closed-boundary/arity rules against the handle's
+   declared method live in the typechecker, not here. *)
+type op_impl = {
+  oi_recv : ref_path;
+  oi_method : string;
+  oi_method_span : Span.span;
+  oi_args : call_arg list;
+  oi_span : Span.span;
+}
+
+(* A member's [= ...] value: the existing selection table, an extern call
+   (e.g. [config: app_config = companyconfig.load(.service, .region)]), or a
+   handle method call (e.g. [config: app_config = .provider.get()]). *)
+type member_value =
+  | MMatch of field_match
+  | MCall of call_expr
+  | MHandleCall of op_impl
 
 type member = {
   mname : string;
@@ -381,20 +402,6 @@ type test_item =
       pattern : test_pattern;
       item_span : Span.span;
     }
-
-(* An op's own "impl .field.method(args)" body: the receiver names
-   an entry field (a declared opaque handle), the method one of its declared
-   [extern] methods. A third implementation source for an op, alongside a
-   protocol trait (@http) and a legacy "ext impl" binding; the closed-
-   boundary/arity rules against the handle's declared method live in the
-   typechecker, not here. *)
-type op_impl = {
-  oi_recv : ref_path;
-  oi_method : string;
-  oi_method_span : Span.span;
-  oi_args : call_arg list;
-  oi_span : Span.span;
-}
 
 type decl_kind =
   | DStruct of { params : string list; members : member list; ops : decl list }

@@ -85,8 +85,7 @@ and shape_kind =
              implementation source alongside [wire] and a legacy "ext impl"
              extension. Resolving the receiver against a declared opaque
              handle and the method against its declared "extern" is a
-             typechecker concern; this only carries the call structured. No
-             backend reads it yet. *)
+             typechecker concern; this only carries the call structured. *)
     }
   | Entry of { fields : entry_field list; operations : shape list }
     (* a struct with ops in its body: the SDK construction surface plus its
@@ -197,11 +196,13 @@ and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
    block named [ec_ns]. Resolving it against a declared extern is deferred. *)
 and entry_call = { ec_ns : string; ec_fn : string; ec_args : call_arg list }
 
-(* An op's own [impl .field.method(args)] body: the receiver is a field path
-   (an entry field, an opaque handle), not a bare "ext" namespace, so this
-   mirrors [entry_call] with [oic_recv : string list] in place of [ec_ns].
-   Resolving the receiver/method against a declared handle is deferred to
-   the typechecker. *)
+(* A call into an entry field's opaque handle method, [.field.method(args)]:
+   an op's own [impl] body, or a field's own [= .h.m(args)] value source
+   ([ef_handle_call] below). The receiver is a field path (an entry field,
+   an opaque handle), not a bare "ext" namespace, so this mirrors
+   [entry_call] with [oic_recv : string list] in place of [ec_ns]. Resolving
+   the receiver/method against a declared handle is deferred to the
+   typechecker. *)
 and op_impl_call = {
   oic_recv : string list;
   oic_method : string;
@@ -217,6 +218,7 @@ and entry_field = {
   ef_transforms : string list;
   ef_select : select option;
   ef_call : entry_call option;
+  ef_handle_call : op_impl_call option;
   ef_binds : bind list;
   ef_constraints : constraint_ list;
   ef_traits : trait list;
