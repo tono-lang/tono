@@ -120,6 +120,29 @@ fn param_args(names: &[&str]) -> Vec<CallArg> {
         .collect()
 }
 
+/// A free constructor extern: `name(params) -> ret`, bound to the Rust
+/// symbol of the same name, awaited, its `Ok` value assigned whole (no
+/// `yields`/`returns`/`errors:`).
+fn constructor_extern(name: &str, params: Vec<ExternParam>, ret: Tref) -> ExternDecl {
+    let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+    ExternDecl {
+        name: name.into(),
+        params: params.clone(),
+        r#return: ret,
+        langs: vec![ExternLang {
+            lang: "rust".into(),
+            symbol: name.into(),
+            call_args: param_args(&param_names),
+            yields: vec![],
+            returns: None,
+            errors: vec![],
+            sync: false,
+            infallible: false,
+            ctx: false,
+        }],
+    }
+}
+
 fn field_path(segments: &[&str]) -> ArmValue {
     ArmValue::Field(strings(segments))
 }
@@ -367,25 +390,14 @@ pub fn rust_ext_fixture_model() -> Model {
             },
         ],
         externs: vec![
-            ExternDecl {
-                name: "connect".into(),
-                params: string_params(&["endpoint", "token"]),
-                r#return: ref_to("companybus#publisher"),
-                langs: vec![ExternLang {
-                    lang: "rust".into(),
-                    symbol: "connect".into(),
-                    call_args: param_args(&["endpoint", "token"]),
-                    yields: vec![],
-                    returns: None,
-                    errors: vec![],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                }],
-            },
-            ExternDecl {
-                name: "attach".into(),
-                params: vec![
+            constructor_extern(
+                "connect",
+                string_params(&["endpoint", "token"]),
+                ref_to("companybus#publisher"),
+            ),
+            constructor_extern(
+                "attach",
+                vec![
                     ExternParam {
                         name: "source".into(),
                         r#type: ref_to("companybus#publisher"),
@@ -395,19 +407,8 @@ pub fn rust_ext_fixture_model() -> Model {
                         r#type: Tref::Prim(Prim::String),
                     },
                 ],
-                r#return: ref_to("companybus#relay"),
-                langs: vec![ExternLang {
-                    lang: "rust".into(),
-                    symbol: "attach".into(),
-                    call_args: param_args(&["source", "tag"]),
-                    yields: vec![],
-                    returns: None,
-                    errors: vec![],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                }],
-            },
+                ref_to("companybus#relay"),
+            ),
         ],
     };
 
