@@ -3,9 +3,20 @@
 //! a `companyconfig` library (a config load with a per-field
 //! `yields`/`returns` projection and a `match`), and its injectable
 //! `companybus` handle (an opaque `publisher` type constructed by a free
-//! `connect` call and driven through an op's own `impl .bus.send(..)`
-//! body) — the same two libraries the Go and TypeScript fixtures exercise,
-//! scoped to this target's own emission.
+//! `connect` call, handed by value to a second free `attach` call that
+//! builds the `relay` handle the op's own `impl .relay.send(..)` body
+//! drives) — the same two libraries the Go and TypeScript fixtures
+//! exercise, scoped to this target's own emission.
+//!
+//! Two shapes here exist to keep the emitter honest about what the frontend
+//! really sends. Every per-language `call:` argument that names a logical
+//! parameter arrives as `CallArg::Param`, never pre-resolved to a `Ref`,
+//! and `load`'s parameters (`svc`/`reg`) deliberately do not share a name
+//! with the entry fields feeding them (`service`/`region`), so a leaf that
+//! reads a same-named field instead of substituting positionally cannot
+//! compile. And `attach` takes the constructed `bus` handle by value: the
+//! stand-in `Publisher` is not `Clone`, so a leaf that clones a handle
+//! argument out of its stored `Option` slot cannot compile either.
 
 use crate::ir::{
     ArmValue, CallArg, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternLang,
@@ -102,18 +113,27 @@ fn ref_args(names: &[&str]) -> Vec<CallArg> {
         .collect()
 }
 
+fn param_args(names: &[&str]) -> Vec<CallArg> {
+    names
+        .iter()
+        .map(|n| CallArg::Param((*n).to_string()))
+        .collect()
+}
+
 fn field_path(segments: &[&str]) -> ArmValue {
     ArmValue::Field(strings(segments))
 }
 
-/// `companyconfig.load` and the `companybus` handle, combined onto one
+/// `companyconfig.load` and the `companybus` handles, combined onto one
 /// `client` entry the same way the Go and TypeScript
 /// fixtures combine them: an entry `config` field reads `service`/`region`
-/// through the free `companyconfig.load` call, the library's returned shape
-/// has its `env` matched to pick `host`/`dev_host`, `token` reads
-/// `credentials.secret`, an injectable `bus` field is constructed by the
-/// free `companybus.connect` call, and the `publish` op's own body is
-/// `impl .bus.send(topic, payload.body)`.
+/// through the free `companyconfig.load` call (whose own parameters are
+/// named `svc`/`reg`), the library's returned shape has its `env` matched
+/// to pick `host`/`dev_host`, `token` reads `credentials.secret`, an
+/// injectable `bus` field is constructed by the free `companybus.connect`
+/// call, a `relay` field is constructed by `companybus.attach(.bus,
+/// .service)` (the handle moves into the second call), and the `publish`
+/// op's own body is `impl .relay.send(topic, payload.body)`.
 pub fn rust_ext_fixture_model() -> Model {
     let service = string_field("service", vec![Source::Default(serde_json::json!("notes"))]);
     let region = string_field("region", vec![Source::Arg]);
@@ -142,6 +162,16 @@ pub fn rust_ext_fixture_model() -> Model {
     // `module.shapes`), not `FieldShape::Scalar`, so it reaches a different
     // leaf of the emitter than `bus`'s own `@with` construction does.
     let hook = entry_field("hook", ref_to("companybus#publisher"), vec![Source::Arg]);
+
+    // A constructed handle handed on to another constructor: `bus` is not
+    // `Clone`, so this only compiles if the emitter moves it out of its
+    // stored slot rather than cloning it.
+    let mut relay = entry_field("relay", ref_to("companybus#relay"), vec![]);
+    relay.call = Some(EntryCall {
+        ns: "companybus".into(),
+        func: "attach".into(),
+        args: ref_args(&["bus", "service"]),
+    });
 
     let app_config = Shape {
         id: "m#app_config".into(),
@@ -189,7 +219,7 @@ pub fn rust_ext_fixture_model() -> Model {
             errors: vec![ref_to("m#overloaded")],
             wire: None,
             impl_call: Some(OpImplCall {
-                recv: vec!["bus".into()],
+                recv: vec!["relay".into()],
                 method: "send".into(),
                 args: vec![
                     CallArg::Lit(serde_json::json!("notes")),
@@ -203,7 +233,7 @@ pub fn rust_ext_fixture_model() -> Model {
     let client = Shape {
         id: "m#client".into(),
         kind: ShapeKind::Entry {
-            fields: vec![service, region, config, bus, hook],
+            fields: vec![service, region, config, bus, hook, relay],
             operations: vec![publish_op],
         },
         traits: vec![],
@@ -226,12 +256,12 @@ pub fn rust_ext_fixture_model() -> Model {
         types: vec![],
         externs: vec![ExternDecl {
             name: "load".into(),
-            params: string_params(&["service", "region"]),
+            params: string_params(&["svc", "reg"]),
             r#return: ref_to("m#app_config"),
             langs: vec![ExternLang {
                 lang: "rust".into(),
                 symbol: "load".into(),
-                call_args: ref_args(&["service", "region"]),
+                call_args: param_args(&["svc", "reg"]),
                 yields: vec![YieldsPos {
                     name: "cfg".into(),
                     r#type: Some(ref_to("companyconfig#Config")),
@@ -290,67 +320,95 @@ pub fn rust_ext_fixture_model() -> Model {
                 },
             ],
         }],
-        types: vec![OpaqueType {
-            name: "publisher".into(),
-            instance: None,
-            methods: vec![ExternDecl {
-                name: "send".into(),
-                params: string_params(&["topic", "body"]),
-                r#return: ref_to("m#ack"),
+        types: vec![
+            OpaqueType {
+                name: "publisher".into(),
+                instance: None,
+                methods: vec![],
+            },
+            OpaqueType {
+                name: "relay".into(),
+                instance: None,
+                methods: vec![ExternDecl {
+                    name: "send".into(),
+                    params: string_params(&["topic", "body"]),
+                    r#return: ref_to("m#ack"),
+                    langs: vec![ExternLang {
+                        lang: "rust".into(),
+                        symbol: "send".into(),
+                        call_args: param_args(&["topic", "body"]),
+                        yields: vec![YieldsPos {
+                            name: "a".into(),
+                            r#type: Some(ref_to("companybus#Ack")),
+                            is_error: false,
+                        }],
+                        returns: Some(ReturnsLit {
+                            r#type: ref_to("m#ack"),
+                            fields: vec![
+                                ReturnsField {
+                                    name: "id".into(),
+                                    value: ReturnsValue::Field(strings(&["a", "id"])),
+                                },
+                                ReturnsField {
+                                    name: "accepted".into(),
+                                    value: ReturnsValue::Field(strings(&["a", "accepted"])),
+                                },
+                            ],
+                        }),
+                        errors: vec![ErrorBinding {
+                            sentinel: "busy".into(),
+                            r#type: "overloaded".into(),
+                        }],
+                        sync: false,
+                        infallible: false,
+                        ctx: false,
+                    }],
+                }],
+            },
+        ],
+        externs: vec![
+            ExternDecl {
+                name: "connect".into(),
+                params: string_params(&["endpoint", "token"]),
+                r#return: ref_to("companybus#publisher"),
                 langs: vec![ExternLang {
                     lang: "rust".into(),
-                    symbol: "send".into(),
-                    call_args: vec![
-                        CallArg::Lit(serde_json::json!("notes")),
-                        CallArg::Ref(strings(&["payload", "body"])),
-                    ],
-                    yields: vec![YieldsPos {
-                        name: "a".into(),
-                        r#type: Some(ref_to("companybus#Ack")),
-                        is_error: false,
-                    }],
-                    returns: Some(ReturnsLit {
-                        r#type: ref_to("m#ack"),
-                        fields: vec![
-                            ReturnsField {
-                                name: "id".into(),
-                                value: ReturnsValue::Field(strings(&["a", "id"])),
-                            },
-                            ReturnsField {
-                                name: "accepted".into(),
-                                value: ReturnsValue::Field(strings(&["a", "accepted"])),
-                            },
-                        ],
-                    }),
-                    errors: vec![ErrorBinding {
-                        sentinel: "busy".into(),
-                        r#type: "overloaded".into(),
-                    }],
+                    symbol: "connect".into(),
+                    call_args: param_args(&["endpoint", "token"]),
+                    yields: vec![],
+                    returns: None,
+                    errors: vec![],
                     sync: false,
                     infallible: false,
                     ctx: false,
                 }],
-            }],
-        }],
-        externs: vec![ExternDecl {
-            name: "connect".into(),
-            params: string_params(&["endpoint", "token"]),
-            r#return: ref_to("companybus#publisher"),
-            langs: vec![ExternLang {
-                lang: "rust".into(),
-                symbol: "connect".into(),
-                call_args: vec![
-                    CallArg::Ref(strings(&["config", "endpoint"])),
-                    CallArg::Ref(strings(&["config", "token"])),
+            },
+            ExternDecl {
+                name: "attach".into(),
+                params: vec![
+                    ExternParam {
+                        name: "source".into(),
+                        r#type: ref_to("companybus#publisher"),
+                    },
+                    ExternParam {
+                        name: "tag".into(),
+                        r#type: Tref::Prim(Prim::String),
+                    },
                 ],
-                yields: vec![],
-                returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-            }],
-        }],
+                r#return: ref_to("companybus#relay"),
+                langs: vec![ExternLang {
+                    lang: "rust".into(),
+                    symbol: "attach".into(),
+                    call_args: param_args(&["source", "tag"]),
+                    yields: vec![],
+                    returns: None,
+                    errors: vec![],
+                    sync: false,
+                    infallible: false,
+                    ctx: false,
+                }],
+            },
+        ],
     };
 
     let module = Module {
