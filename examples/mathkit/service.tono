@@ -1,0 +1,131 @@
+// The FFI bench. A fictional numeric library, "mathkit", declared with the
+// shapes real libraries have: in Go the handle is an interface and options
+// are variadic, in Rust every constructor returns a different concrete
+// struct, in TypeScript every constructor is a class reached with `new` and
+// compute() is synchronous. The three stand-in packages live under
+// backend/codegen-tests/{go,rust,ts}-ext/fixtures/mathkit; the numbered
+// capabilities named in the comments are the rows of the table in README.md.
+//
+// Where the language cannot express the library's shape yet, this file
+// declares the nearest form it can and lets the target compiler grade it,
+// instead of bending the library to fit. That is what keeps the bench honest.
+ext mathkit {
+  go: "tono-ext-fixture/mathkit"
+  ts: "@tono-ext-fixture/mathkit"
+  rust: "mathkit"
+
+  // Capability 7 (struct literal in call:). The Rust library takes
+  // `FormulaOptions { precision: Option<u8> }` by value and TypeScript an
+  // optional `{ precision?: number }`. A foreign struct has one name for
+  // every target (the tono one), so Rust cannot be told the type is spelled
+  // `FormulaOptions`; and there is no way to wrap a value into `Option`, so
+  // the field is declared as the bare `u8` the parameter carries.
+  struct rust_formula_options { precision: u8 }
+  struct ts_formula_options { precision: u8 }
+
+  // Capability 2 (foreign type name per language) and 3 (several concrete
+  // types for one logical handle): the instantiation names one foreign
+  // type for every target. "Calculator" is right for Go (`Calculator[T]`,
+  // the interface) and TypeScript (the interface), while Rust needs a
+  // different concrete struct per constructor (ConstantCalculator,
+  // FormulaCalculator, SeriesCalculator, FallbackCalculator).
+  //
+  // Capability 1 (handle that is an interface): in Go the constructors
+  // return the interface value itself, never a pointer to a struct.
+  type calculator("Calculator", float) {
+    // Capability 9 (synchronous in one target, asynchronous in the others):
+    // compute() blocks in TypeScript, takes a ctx in Go, is a future in Rust.
+    extern compute(): float {
+      go { call: "Compute"() ctx }
+      ts { call: "compute"() sync }
+      rust { call: "compute"() }
+    }
+  }
+
+  // Capability 8 (construction by `new`): the TypeScript constructors are
+  // classes. There is no `new` form, so the class is named as if it were a
+  // callable function; TypeScript refuses to call a class without `new`.
+  extern from_constant(value: float): calculator {
+    go { call: "FromConstant"(value) }
+    ts { call: "ConstantCalculator"(value) }
+    rust { call: "from_constant"(value) }
+  }
+
+  // Capability 4 (variadic parameter) and 6 (nested call in call:): the Go
+  // shape is `FromFormula(expr, WithPrecision(precision))`, an option built
+  // by a nested call and passed variadically. Neither is expressible, so
+  // the precision is passed positionally, the nearest form; Go refuses an
+  // integer where an Option is expected.
+  extern from_formula(expr: string, precision: u8): calculator {
+    go { call: "FromFormula"(expr, precision) }
+    ts { call: "FormulaCalculator"(expr, ts_formula_options { precision: precision }) }
+    rust { call: "from_formula"(expr, rust_formula_options { precision: precision }) }
+  }
+
+  extern from_series(values: []float): calculator {
+    go { call: "FromSeries"(values) }
+    ts { call: "SeriesCalculator"(values) }
+    rust { call: "from_series"(values) }
+  }
+
+  // Capability 5 (collection of handles as argument) and 4 again: the
+  // library takes N already-built handles (`calcs ...Calculator[T]`,
+  // `Vec<Box<dyn Calculator<T>>>`, `Calculator<T>[]`). A call argument has
+  // no list literal, so the composition is declared with a fixed arity of
+  // two, which only Go can accept (two positional values fill a variadic
+  // slot); Rust and TypeScript expect one collection.
+  extern from_fallback(strategy: string, primary: calculator, secondary: calculator): calculator {
+    go { call: "FromFallback"(strategy, primary, secondary) }
+    ts { call: "FallbackCalculator"(strategy, primary, secondary) }
+    rust { call: "from_fallback"(strategy, primary, secondary) }
+  }
+}
+
+@doc("Three calculators of different shapes, two of them composed into a fallback, feeding two operations.")
+pub struct client {
+  base: float @arg
+  expr: string @arg
+  precision: u8 @arg
+  samples: []float @arg
+
+  constant: mathkit.calculator = mathkit.from_constant(.base)
+  formula: mathkit.calculator = mathkit.from_formula(.expr, .precision)
+  series: mathkit.calculator = mathkit.from_series(.samples)
+  // Capability 10 (a handle composed and read separately): forwarding
+  // `constant` and `formula` here hands them to the fallback, so no
+  // operation below may read either of them again (single ownership,
+  // affirmed by probes/10-ownership-refused.tono). `series` is only read,
+  // never forwarded, so it stays readable.
+  combined: mathkit.calculator = mathkit.from_fallback("first", .constant, .formula)
+
+  op combined_value(): float
+    impl .combined.compute()
+
+  op series_value(): float
+    impl .series.compute()
+}
+
+// The declared tests stub every constructor and the handle method, so the
+// generated suites run without the library; the gate then runs the SDK
+// against the stand-in library for real (see scripts/check-ffi-bench.sh).
+test "the composed handle answers the operation" {
+  stub mathkit.from_constant: mathkit.calculator {}
+  stub mathkit.from_formula: mathkit.calculator {}
+  stub mathkit.from_series: mathkit.calculator {}
+  stub mathkit.from_fallback: mathkit.calculator {}
+  stub mathkit.calculator.compute: 4.5
+  c: client { base: 1.5, expr: "2 * 3", precision: 2, samples: [1.0, 2.0, 3.0] }
+  got: c.combined_value()
+  expect got: 4.5
+}
+
+test "a handle that is only read answers its own operation" {
+  stub mathkit.from_constant: mathkit.calculator {}
+  stub mathkit.from_formula: mathkit.calculator {}
+  stub mathkit.from_series: mathkit.calculator {}
+  stub mathkit.from_fallback: mathkit.calculator {}
+  stub mathkit.calculator.compute: 3.0
+  c: client { base: 1.5, expr: "2 * 3", precision: 2, samples: [1.0, 2.0, 3.0] }
+  got: c.series_value()
+  expect got: 3.0
+}

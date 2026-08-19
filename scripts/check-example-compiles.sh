@@ -580,3 +580,12 @@ EOF
     go mod tidy >/dev/null \
     && go build ./...)
 (cd "$work/provider-config/out/go" && go test ./...)
+
+echo "ffi bench..."
+# The FFI bench (examples/mathkit): one library declared with the shapes real
+# libraries have, taken through frontend, generation, the target compiler
+# against the stand-in packages, the declared tests, and a driver that runs
+# the SDK for real. Its checks are expected red until the emitters catch up;
+# examples/mathkit/gate.tsv records what each must reach, and any drift from
+# that record (regression or progress) fails here.
+scripts/check-ffi-bench.sh

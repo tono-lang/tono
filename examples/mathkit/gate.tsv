@@ -1,0 +1,21 @@
+# The FFI bench gate record: one line per check, the target it runs on, the
+# .tono it compiles, and the outcome scripts/check-ffi-bench.sh must observe.
+# A check that ends elsewhere than recorded fails the gate, in both
+# directions: a regression on a green row, and a red row that starts passing
+# (update this record and README.md together, that is the progress report).
+#
+# outcome: pass | frontend-red | gen-red | build-red | test-red | run-red | refused
+# id	target	source	expected
+bench	go	service.tono	gen-red
+bench	typescript	service.tono	gen-red
+bench	rust	service.tono	gen-red
+01-go-interface-handle	go	probes/01-go-interface-handle.tono	build-red
+02-rust-foreign-name	rust	probes/02-rust-foreign-name.tono	build-red
+03-rust-concrete-types	rust	probes/03-rust-concrete-types.tono	build-red
+04-go-variadic-options	go	probes/04-go-variadic-options.tono	build-red
+05-rust-handle-collection	rust	probes/05-rust-handle-collection.tono	build-red
+06-nested-call	go	probes/06-nested-call.tono.rejected	frontend-red
+07-rust-struct-literal	rust	probes/07-rust-struct-literal.tono	build-red
+08-ts-new-construction	typescript	probes/08-ts-new-construction.tono	build-red
+09-ts-sync-method	typescript	probes/09-ts-sync-method.tono	build-red
+10-ownership-refused	go	probes/10-ownership-refused.tono	refused

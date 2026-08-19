@@ -1,0 +1,28 @@
+// Capability 6: a nested call in call:. The Go option is a value built by
+// another call of the same library, WithPrecision(precision), passed to
+// FromFormula. This is the form the library actually has; the frontend
+// rejects it today, which is why this file does not carry the .tono
+// extension: the pinned editor grammar is only required to parse what the
+// compiler accepts. Rename it to .tono the day the frontend accepts it.
+ext mathkit {
+  go: "tono-ext-fixture/mathkit"
+
+  type calculator("Calculator", float) {
+    extern compute(): float {
+      go { call: "Compute"() ctx }
+    }
+  }
+
+  extern from_formula(expr: string, precision: u8): calculator {
+    go { call: "FromFormula"(expr, "WithPrecision"(precision)) }
+  }
+}
+
+pub struct client {
+  expr: string @arg
+  precision: u8 @arg
+  formula: mathkit.calculator = mathkit.from_formula(.expr, .precision)
+
+  op value(): float
+    impl .formula.compute()
+}

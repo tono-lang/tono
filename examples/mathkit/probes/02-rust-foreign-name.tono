@@ -1,0 +1,26 @@
+// Capability 2: the foreign type name per language. The instantiation has
+// one name for every target; "Calculator" is the interface's name in Go and
+// TypeScript, while in Rust `Calculator` is a trait and the constructor
+// returns the concrete `ConstantCalculator<T>`. Rust must be told its own
+// name, and today it cannot be.
+ext mathkit {
+  rust: "mathkit"
+
+  type calculator("Calculator", float) {
+    extern compute(): float {
+      rust { call: "compute"() }
+    }
+  }
+
+  extern from_constant(value: float): calculator {
+    rust { call: "from_constant"(value) }
+  }
+}
+
+pub struct client {
+  base: float @arg
+  constant: mathkit.calculator = mathkit.from_constant(.base)
+
+  op value(): float
+    impl .constant.compute()
+}
