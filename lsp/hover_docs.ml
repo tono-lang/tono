@@ -272,6 +272,12 @@ let ext_lib_docs : (string * string) list =
        foreign type's own name as a string, plus the already-declared tono \
        type it is monomorphized with. Omit the clause for a foreign type that \
        is not generic." );
+    ( "interface",
+      "Marks the foreign type as abstract: in Go the library declares an \
+       interface and its constructors return the interface value itself, so \
+       the generated code holds and passes it by value. Without the marker the \
+       handle is a concrete struct the library returns by pointer. Only Go \
+       spells the difference; the other targets ignore the marker." );
     ( "call",
       "The foreign symbol and the argument order it takes, e.g. call: \
        \"Load\"(service, region). Arguments are the extern's parameters, \

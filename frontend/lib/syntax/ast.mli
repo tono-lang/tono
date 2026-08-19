@@ -213,6 +213,7 @@ type opaque_type = {
   opq_name : string;
   opq_name_span : Span.span;
   opq_instance : opaque_instance option;
+  opq_interface : bool;
   opq_methods : extern_decl list;
   opq_span : Span.span;
 }

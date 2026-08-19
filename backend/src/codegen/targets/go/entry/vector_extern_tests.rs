@@ -201,6 +201,7 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
     };
     let handle = OpaqueType {
         name: "publisher".into(),
+        interface: false,
         instance: None,
         methods: vec![crate::ir::ExternDecl {
             name: "send".into(),
@@ -247,6 +248,7 @@ fn a_ctx_marked_method_fake_takes_the_context_first() {
     };
     let handle = OpaqueType {
         name: "publisher".into(),
+        interface: false,
         instance: None,
         methods: vec![crate::ir::ExternDecl {
             name: "send".into(),

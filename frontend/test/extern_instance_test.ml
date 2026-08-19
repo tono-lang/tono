@@ -158,6 +158,63 @@ let instance_absent_for_a_non_generic_handle () =
   in
   Alcotest.(check bool) "no instance diagnostics" false (has "TC0092" src)
 
+(* The "interface" marker parses in its position (after the name or the
+   instantiation clause), lands on the AST and the lowered IR, and
+   round-trips through the printer: it is declaration surface, not a trait,
+   so fmt must keep it. *)
+let interface_marker_parses_lowers_and_prints () =
+  let src =
+    {|ext calckit {
+  go: "github.com/x/calckit"
+
+  type meter("Meter", float) interface {
+    extern read(): float {
+      go { call: "Read"() }
+    }
+  }
+}
+|}
+  in
+  let file, errs = Parser.parse src in
+  Alcotest.(check int)
+    "parses clean" 0
+    (List.length
+       (List.filter
+          (fun (d : Diagnostic.t) -> d.severity = Diagnostic.Error)
+          errs));
+  let diags = ref [] in
+  let m = Lower.lower_file ~module_name:"m" ~diags file in
+  let lib = List.hd m.Ir.ext_libs in
+  let t = List.hd lib.Ir.xl_types in
+  Alcotest.(check bool) "lowered as interface" true t.Ir.opq_interface;
+  let printed = Printer.print_file file in
+  Alcotest.(check bool)
+    "marker survives printing" true
+    (contains ~sub:{|("Meter", float) interface {|} printed);
+  let reparsed, _ = Parser.parse printed in
+  let printed2 = Printer.print_file reparsed in
+  Alcotest.(check string) "idempotent" printed printed2
+
+(* Without the marker nothing changes: the handle lowers as concrete, which
+   is what every declaration written before the marker existed means. *)
+let interface_absent_lowers_as_concrete () =
+  let src =
+    {|ext bus {
+  go: "github.com/x/bus"
+
+  type publisher {
+    extern send(topic: string): string { go { call: "Send"(topic) } }
+  }
+}
+|}
+  in
+  let file, _ = Parser.parse src in
+  let diags = ref [] in
+  let m = Lower.lower_file ~module_name:"m" ~diags file in
+  let lib = List.hd m.Ir.ext_libs in
+  let t = List.hd lib.Ir.xl_types in
+  Alcotest.(check bool) "concrete by default" false t.Ir.opq_interface
+
 let () =
   Alcotest.run "extern_instance"
     [
@@ -175,5 +232,12 @@ let () =
             instance_clause_prints_idempotently;
           Alcotest.test_case "absent for non-generic" `Quick
             instance_absent_for_a_non_generic_handle;
+        ] );
+      ( "interface marker",
+        [
+          Alcotest.test_case "parses, lowers and prints" `Quick
+            interface_marker_parses_lowers_and_prints;
+          Alcotest.test_case "absent means concrete" `Quick
+            interface_absent_lowers_as_concrete;
         ] );
     ]

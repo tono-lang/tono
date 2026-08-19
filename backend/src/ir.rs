@@ -89,7 +89,10 @@ pub use crate::ir_tests_model::*;
 /// same shape as an operation's `impl_call`): a field whose value source
 /// is a call into a sibling opaque handle's method, so one foreign
 /// resolution feeds several operations.
-pub const TONO_IR_VERSION: u32 = 22;
+/// v23 added `OpaqueType::interface`: the foreign type is abstract (a Go
+/// interface, held by value), not a concrete struct held by pointer.
+/// Absent means concrete, the shape every handle had before.
+pub const TONO_IR_VERSION: u32 = 23;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

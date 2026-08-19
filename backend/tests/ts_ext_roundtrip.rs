@@ -109,6 +109,7 @@ fn appendix_model() -> Model {
         structs: vec![],
         types: vec![OpaqueType {
             name: "publisher".into(),
+            interface: false,
             instance: None,
             methods: vec![],
         }],
@@ -267,6 +268,7 @@ fn handle_call_model() -> Model {
         }],
         types: vec![OpaqueType {
             name: "publisher".into(),
+            interface: false,
             instance: None,
             methods: vec![send],
         }],

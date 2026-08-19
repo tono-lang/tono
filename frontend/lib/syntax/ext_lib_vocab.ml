@@ -17,6 +17,12 @@ let lang_fields = [ "call"; "yields"; "returns"; "errors" ]
 (* The bare markers of a language block, each opting a call out of one
    target's convention. *)
 let lang_markers = [ "sync"; "infallible"; "ctx" ]
+
+(* The bare markers of an opaque handle's own "type" header. "interface"
+   declares the foreign type is abstract (a Go interface, held by value),
+   not a concrete struct held by pointer: the two spell differently in Go
+   and nothing about a foreign name says which one it is. *)
+let type_markers = [ "interface" ]
 let lang_body_words = lang_fields @ lang_markers
 
 (* The reserved yields: position type, valid nowhere else. *)

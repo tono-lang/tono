@@ -176,6 +176,7 @@ fn bus_lib() -> ExtLib {
         ],
         types: vec![OpaqueType {
             name: "publisher".into(),
+            interface: false,
             instance: None,
             methods: vec![send, ping, status, tag, echo],
         }],

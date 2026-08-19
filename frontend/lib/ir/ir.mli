@@ -293,6 +293,7 @@ type opaque_instance = { inst_foreign_name : string; inst_arg : tref }
 type opaque_type = {
   opq_name : string;
   opq_instance : opaque_instance option;
+  opq_interface : bool;
   opq_methods : extern_decl list;
 }
 

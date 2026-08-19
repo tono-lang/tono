@@ -178,8 +178,16 @@ pub(super) fn foreign_handle<'a>(t: &Tref, module: &'a Module) -> Option<(&'a Ex
         .then(|| (lib, ty.to_string()))
 }
 
-/// The Go type spelling of a foreign opaque handle: a pointer to the real
-/// package's exported type, assumed to share its identifier with the
+/// The Go type spelling of a foreign opaque handle: the real package's
+/// exported type, held by pointer for a concrete struct (the return
+/// convention of a constructor whose methods have pointer receivers) and by
+/// value for a declared `interface` handle (`*Iface` is never the right
+/// type in Go: an interface value already carries its indirection). Every
+/// position that spells the real foreign type (a `With*` setter's parameter,
+/// the adapter's `real` field, a constructor's concrete argument) goes
+/// through here, so the pointer-or-value decision is made exactly once.
+///
+/// The exported identifier is assumed to be the
 /// handle's own canonical name Pascal-cased — the same casing convention
 /// every other nominal type in this codegen follows. This is the one guess
 /// the target compiler is expected to grade: a library whose real exported
@@ -208,9 +216,10 @@ pub(super) fn handle_go_type(
         push_type_symbols(&inst.arg, refs);
         go_type(&inst.arg)
     });
+    let ptr = if handle.interface { "" } else { "*" };
     Some(match type_arg {
-        Some(arg) => format!("*{}.{base}[{arg}]", lib_ident(&lib.name)),
-        None => format!("*{}.{base}", lib_ident(&lib.name)),
+        Some(arg) => format!("{ptr}{}.{base}[{arg}]", lib_ident(&lib.name)),
+        None => format!("{ptr}{}.{base}", lib_ident(&lib.name)),
     })
 }
 

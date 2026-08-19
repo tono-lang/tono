@@ -105,10 +105,10 @@ let encode_opaque_type (t : Ir.opaque_type) : Ir.json =
        ("name", `String t.opq_name);
        ("methods", `List (List.map encode_extern_decl t.opq_methods));
      ]
-    @
-    match t.opq_instance with
-    | None -> []
-    | Some i -> [ ("instance", encode_opaque_instance i) ])
+    @ (match t.opq_instance with
+      | None -> []
+      | Some i -> [ ("instance", encode_opaque_instance i) ])
+    @ if t.opq_interface then [ ("interface", `Bool true) ] else [])
 
 let encode_ext_lib (l : Ir.ext_lib) : Ir.json =
   `Assoc
@@ -379,6 +379,11 @@ and decode_opaque_type j =
         let* i = decode_opaque_instance v in
         Ok (Some i)
   in
+  let* interface =
+    match List.assoc_opt "interface" kvs with
+    | None -> Ok false
+    | Some v -> as_bool v
+  in
   let* methods =
     match List.assoc_opt "methods" kvs with
     | None -> Ok []
@@ -387,7 +392,12 @@ and decode_opaque_type j =
         map_result decode_extern_decl xs
   in
   Ok
-    ({ Ir.opq_name = name; opq_instance = instance; opq_methods = methods }
+    ({
+       Ir.opq_name = name;
+       opq_instance = instance;
+       opq_interface = interface;
+       opq_methods = methods;
+     }
       : Ir.opaque_type)
 
 let decode_ext_lib j =

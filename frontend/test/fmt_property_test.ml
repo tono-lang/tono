@@ -430,11 +430,13 @@ let gen_opt_opaque_instance =
 let gen_opaque_type =
   let+ name = gen_tname
   and+ instance = gen_opt_opaque_instance
+  and+ interface = G.bool
   and+ methods = G.list_size (G.int_range 0 1) gen_extern_decl in
   {
     Ast.opq_name = name;
     opq_name_span = dspan;
     opq_instance = instance;
+    opq_interface = interface;
     opq_methods = methods;
     opq_span = dspan;
   }

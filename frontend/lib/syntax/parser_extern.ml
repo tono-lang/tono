@@ -505,9 +505,12 @@ let parse_opaque_instance ~parse_type st : Ast.opaque_instance =
         (match close with Some t -> t.span | None -> arg_span_start);
   }
 
-(* type ::= "type" name instance? "{" extern+ "}"  -- an opaque foreign
-   handle; "type" is a contextual keyword here (not a lexer keyword), like
-   "extern"/"call"/"yields"/"returns"/"errors". *)
+(* type ::= "type" name instance? "interface"? "{" extern+ "}"  -- an opaque
+   foreign handle; "type" is a contextual keyword here (not a lexer keyword),
+   like "extern"/"call"/"yields"/"returns"/"errors". The "interface" marker
+   declares the foreign type is abstract (held by value in Go), which tono
+   cannot infer from a foreign name; a concrete struct handle writes
+   nothing. *)
 let parse_opaque_type ~parse_type ~parse_type_no_error st : Ast.opaque_type =
   let kw = P.advance st in
   (* 'type' *)
@@ -527,6 +530,13 @@ let parse_opaque_type ~parse_type ~parse_type_no_error st : Ast.opaque_type =
     | Token.LParen -> Some (parse_opaque_instance ~parse_type st)
     | _ -> None
   in
+  let interface =
+    match (P.peek st).kind with
+    | Token.Ident w when List.mem w Ext_lib_vocab.type_markers ->
+        ignore (P.advance st);
+        true
+    | _ -> false
+  in
   ignore (P.expect st Token.LBrace "'{' to open the type body");
   let rec methods acc =
     match (P.peek st).kind with
@@ -545,6 +555,7 @@ let parse_opaque_type ~parse_type ~parse_type_no_error st : Ast.opaque_type =
     Ast.opq_name = name;
     opq_name_span = nt.span;
     opq_instance = instance;
+    opq_interface = interface;
     opq_methods = ms;
     opq_span =
       Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);

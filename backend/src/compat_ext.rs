@@ -78,6 +78,21 @@ fn diff_instances(module: &str, lib: &ExtLib, curr_lib: &ExtLib, out: &mut Vec<C
                 ),
             });
         }
+        // The interface marker flips the emitted Go spelling between a
+        // pointer and an interface value (`*pkg.T` vs `pkg.T`), the same
+        // consumer-facing surface the instantiation rule above guards.
+        if ty.interface != curr_ty.interface {
+            out.push(Change {
+                key: format!("ext-shape {module}::{}.{}", lib.name, ty.name),
+                category: Category::SourceBreaking,
+                detail: format!(
+                    "{}.{}: the handle's foreign shape changed between concrete \
+                     and interface; the emitted type spelling (pointer vs value) \
+                     no longer matches generated consumer code that names it",
+                    lib.name, ty.name
+                ),
+            });
+        }
     }
 }
 
@@ -285,6 +300,7 @@ mod tests {
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "publisher".into(),
+            interface: false,
             instance: None,
             methods: vec![ExternDecl {
                 name: "send".into(),
@@ -320,6 +336,7 @@ mod tests {
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "env_source".into(),
+            interface: false,
             instance: Some(crate::ir_extern_model::Instance {
                 foreign_name: "Source".into(),
                 arg: tref("settings"),
@@ -339,11 +356,35 @@ mod tests {
     }
 
     #[test]
+    fn a_flipped_interface_marker_is_source_breaking() {
+        let mut m = base_module();
+        m.ext_libs[0].externs.clear();
+        m.ext_libs[0].types = vec![OpaqueType {
+            name: "meter".into(),
+            interface: false,
+            instance: None,
+            methods: vec![],
+        }];
+        let base = model(m.clone());
+        let mut changed = m;
+        changed.ext_libs[0].types[0].interface = true;
+        let curr = model(changed);
+
+        let mut out = Vec::new();
+        diff_ext_libs(&base, &curr, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].category, Category::SourceBreaking);
+        assert!(out[0].key.contains("ext-shape"), "{}", out[0].key);
+        assert!(out[0].key.contains("meter"), "{}", out[0].key);
+    }
+
+    #[test]
     fn an_unchanged_instantiation_draws_no_diagnostic() {
         let mut m = base_module();
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "env_source".into(),
+            interface: false,
             instance: Some(crate::ir_extern_model::Instance {
                 foreign_name: "Source".into(),
                 arg: tref("settings"),

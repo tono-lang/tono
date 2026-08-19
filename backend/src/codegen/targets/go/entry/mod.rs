@@ -129,9 +129,10 @@ fn config_type_ident(id: &str) -> String {
 }
 
 /// The Go type spelling of an entry field, hiding a composed config behind its
-/// unexported name, spelling a foreign opaque handle as a pointer
-/// to the real package's assumed exported type, while every other type keeps
-/// its normal (wire) spelling.
+/// unexported name, spelling a foreign opaque handle as the real package's
+/// assumed exported type (pointer or interface value, see
+/// [`ext::handle_go_type`]), while every other type keeps its normal (wire)
+/// spelling.
 fn field_go_type(t: &Tref, module: &Module, refs: &mut Vec<Symbol>) -> String {
     if let Tref::Ref { id, .. } = t {
         if module
@@ -156,7 +157,7 @@ fn field_go_type(t: &Tref, module: &Module, refs: &mut Vec<Symbol>) -> String {
 /// The Go type spelling of an entry field's own *storage* position (the
 /// Settings struct field and the `@with` carrier field): identical to
 /// [`field_go_type`] except a foreign opaque handle spells as tono's own
-/// generated interface rather than the real package's concrete pointer type,
+/// generated interface rather than the real package's own type,
 /// so a hermetic declared test can fake it without the real library. Every
 /// concrete value the field can hold (the real construction call's result, or
 /// a `@with` setter's concrete-typed argument) still satisfies the interface

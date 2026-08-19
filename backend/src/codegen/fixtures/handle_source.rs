@@ -237,6 +237,7 @@ fn envkit() -> ExtLib {
         ],
         types: vec![OpaqueType {
             name: "provider".into(),
+            interface: false,
             instance: None,
             methods: vec![
                 cfg_method("get", vec![], vec![], true),

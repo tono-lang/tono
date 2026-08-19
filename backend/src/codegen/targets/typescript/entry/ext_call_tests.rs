@@ -102,6 +102,7 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
         vec![],
         vec![OpaqueType {
             name: "publisher".into(),
+            interface: false,
             instance: None,
             methods: vec![],
         }],

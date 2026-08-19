@@ -4,6 +4,7 @@
 val block_words : string list
 val lang_fields : string list
 val lang_markers : string list
+val type_markers : string list
 val lang_body_words : string list
 val error_sentinel : string
 val request_ref : string
