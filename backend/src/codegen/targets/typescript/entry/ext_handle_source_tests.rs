@@ -7,7 +7,7 @@
 //! this module exercises the emitter's own branches directly.
 
 use super::super::test_prelude::*;
-use crate::codegen::fixtures::handle_source::handle_source_module;
+use crate::codegen::fixtures::handle_source::{handle_source_module, handle_source_test};
 use crate::ir::{Module, ShapeKind};
 
 fn rendered_text(module: &Module) -> String {
@@ -107,56 +107,11 @@ fn an_entry_whose_only_call_is_a_handle_method_source_still_constructs_asynchron
 /// method, stubbed or not, only fails loudly: the stubbed one rides the seam).
 #[test]
 fn a_handle_method_stub_on_a_field_source_swaps_that_field_s_seam() {
-    use crate::ir::{ExternStub, ExternStubTarget, StubAnswer, TestConstruction, TestDecl};
-
     let mut module = handle_source_module("ts");
-    module.tests.push(TestDecl {
-        name: "resolves the field from the stub".into(),
-        constructions: vec![TestConstruction {
-            binding: "c".into(),
-            entry: "client".into(),
-            values: Default::default(),
-        }],
-        stubs: vec![],
-        extern_stubs: vec![
-            ExternStub {
-                binding: None,
-                target: ExternStubTarget::Free {
-                    lib: "envkit".into(),
-                    fn_: "new_provider".into(),
-                },
-                answers: vec![StubAnswer::Value {
-                    value: serde_json::json!({}),
-                }],
-            },
-            ExternStub {
-                binding: None,
-                target: ExternStubTarget::Method {
-                    lib: "envkit".into(),
-                    ty: "provider".into(),
-                    method: "get".into(),
-                },
-                answers: vec![StubAnswer::Value {
-                    value: serde_json::json!({"endpoint_read": "r", "endpoint_write": "w"}),
-                }],
-            },
-            // `scoped = .provider.get_for(.region)` is reached at construction
-            // too; every reachable method must be covered for the test to plan.
-            ExternStub {
-                binding: None,
-                target: ExternStubTarget::Method {
-                    lib: "envkit".into(),
-                    ty: "provider".into(),
-                    method: "get_for".into(),
-                },
-                answers: vec![StubAnswer::Value {
-                    value: serde_json::json!({"endpoint_read": "sr", "endpoint_write": "sw"}),
-                }],
-            },
-        ],
-        calls: vec![],
-        expects: vec![],
-    });
+    module.tests.push(handle_source_test(
+        "resolves the field from the stub",
+        vec![],
+    ));
     crate::codegen::declared_tests::entry_tests(&module).expect("the test plans");
     let files = super::super::vector_tests::test_files(&module, &ts_casing());
     let hermetic = files
