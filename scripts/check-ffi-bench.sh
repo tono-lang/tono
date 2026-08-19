@@ -22,17 +22,17 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 frontend="$root/_build/default/frontend/bin/tono_frontend.exe"
-if [ ! -x "$frontend" ]; then
+if [[ ! -x "$frontend" ]]; then
     (cd "$root" && opam exec -- dune build frontend/bin/tono_frontend.exe)
 fi
 tono="$root/target/debug/tono"
-if [ ! -x "$tono" ]; then
+if [[ ! -x "$tono" ]]; then
     (cd "$root" && cargo build -p tono-cli --quiet)
 fi
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"
 vitest="$root/backend/codegen-tests/typescript/node_modules/.bin/vitest"
 for tool in "$tsc" "$vitest"; do
-    if [ ! -x "$tool" ]; then
+    if [[ ! -x "$tool" ]]; then
         echo "$(basename "$tool") is not installed; run 'npm ci' in backend/codegen-tests/typescript" >&2
         exit 1
     fi
@@ -79,13 +79,14 @@ run_check() {
     fi
 
     local driver_base="$bench/probes/$id.verify"
-    if [ "$id" = bench ]; then
+    if [[ "$id" = bench ]]; then
         driver_base="$bench/verify/verify"
     fi
     case "$target" in
     go) run_go "$dir" "$driver_base.go" ;;
     rust) run_rust "$dir" "$driver_base.rs" ;;
     typescript) run_typescript "$dir" "$driver_base.test.ts" ;;
+    *) echo "unknown-target" ;;
     esac
 }
 
@@ -111,7 +112,7 @@ GOMOD
         echo test-red
         return
     }
-    if [ ! -f "$driver" ]; then
+    if [[ ! -f "$driver" ]]; then
         echo no-driver
         return
     fi
@@ -160,7 +161,7 @@ CARGO
         echo test-red
         return
     }
-    if [ ! -f "$driver" ]; then
+    if [[ ! -f "$driver" ]]; then
         echo no-driver
         return
     fi
@@ -206,13 +207,13 @@ TSCONFIG
         echo build-red
         return
     }
-    if [ -n "$(find "$sdk" -name '*.test.ts' -not -path '*/node_modules/*' | head -1)" ]; then
+    if [[ -n "$(find "$sdk" -name '*.test.ts' -not -path '*/node_modules/*' | head -1)" ]]; then
         (cd "$sdk" && "$vitest" run) >>"$log" 2>&1 || {
             echo test-red
             return
         }
     fi
-    if [ ! -f "$driver" ]; then
+    if [[ ! -f "$driver" ]]; then
         echo no-driver
         return
     fi
@@ -227,23 +228,26 @@ TSCONFIG
 mismatches=0
 printf '%-28s %-11s %-13s %-13s\n' check target expected actual
 while IFS=$'\t' read -r id target source expected; do
-    case "$id" in "" | \#*) continue ;; esac
+    case "$id" in
+    "" | \#*) continue ;;
+    *) ;;
+    esac
     actual="$(run_check "$id" "$target" "$source")"
-    if [ "$actual" = "$expected" ]; then
+    if [[ "$actual" = "$expected" ]]; then
         verdict=""
     else
         verdict="  <-- MISMATCH"
         mismatches=$((mismatches + 1))
     fi
     printf '%-28s %-11s %-13s %-13s%s\n' "$id" "$target" "$expected" "$actual" "$verdict"
-    if [ "$actual" != pass ] || [ -n "$verdict" ]; then
+    if [[ "$actual" != pass ]] || [[ -n "$verdict" ]]; then
         # The reason a check stopped, so a red row is never a bare word: the
         # first lines of the tool that refused it.
         sed -n '1,12p' "$work/$id/log" | sed 's/^/    | /'
     fi
 done <"$bench/gate.tsv"
 
-if [ "$mismatches" -ne 0 ]; then
+if [[ "$mismatches" -ne 0 ]]; then
     echo "ffi bench: $mismatches check(s) ended elsewhere than examples/mathkit/gate.tsv records" >&2
     echo "a red row that now passes is progress: update gate.tsv and README.md together" >&2
     exit 1

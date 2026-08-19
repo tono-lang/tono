@@ -33,7 +33,7 @@ export class FormulaCalculator<T> implements Calculator<T> {
   compute(): T {
     const fields = this.expr.trim().split(/\s+/);
     if (fields.length !== 3) {
-      throw new Error(`mathkit: cannot parse ${JSON.stringify(this.expr)}`);
+      throw new TypeError(`mathkit: cannot parse ${JSON.stringify(this.expr)}`);
     }
     const a = Number(fields[0]);
     const b = Number(fields[2]);
@@ -76,7 +76,8 @@ export class SeriesCalculator<T> implements Calculator<T> {
     if (this.values.length === 0) {
       throw new Error("mathkit: empty series");
     }
-    return this.values[this.values.length - 1];
+    const [last] = this.values.slice(-1);
+    return last;
   }
 }
 
