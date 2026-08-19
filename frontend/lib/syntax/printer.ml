@@ -190,11 +190,19 @@ let print_field_match ~indent (m : Ast.field_match) : string =
       ^ String.concat "\n" (List.map arm arms)
       ^ "\n" ^ indent ^ "}"
 
+(* A handle method call, ".recv.method(args)": shared by an op's "impl" body
+   and a member's value source. *)
+let print_handle_call (hc : Ast.op_impl) : string =
+  print_ref hc.Ast.oi_recv ^ "." ^ hc.Ast.oi_method ^ "("
+  ^ String.concat ", " (List.map print_call_arg hc.Ast.oi_args)
+  ^ ")"
+
 let print_member (m : Ast.member) : string =
   "  " ^ m.Ast.mname ^ ": " ^ print_ty m.Ast.mtype
   ^ (match m.Ast.mvalue with
     | Some (Ast.MMatch fm) -> " = " ^ print_field_match ~indent:"  " fm
     | Some (Ast.MCall ce) -> " = " ^ print_call_expr ce
+    | Some (Ast.MHandleCall hc) -> " = " ^ print_handle_call hc
     | None -> "")
   ^ trailing_traits m.Ast.mtraits
 
@@ -221,10 +229,7 @@ let braced (header : string) (lines : string list) : string =
    width. They stay below, never above: whitespace is not significant, so a
    trait written above an op would bind to whatever was declared before it. *)
 let print_op_impl ~indent (oi : Ast.op_impl) : string =
-  "\n" ^ indent ^ "  impl " ^ print_ref oi.Ast.oi_recv ^ "." ^ oi.Ast.oi_method
-  ^ "("
-  ^ String.concat ", " (List.map print_call_arg oi.Ast.oi_args)
-  ^ ")"
+  "\n" ^ indent ^ "  impl " ^ print_handle_call oi
 
 let print_op ~indent (d : Ast.decl) : string =
   match d.Ast.dkind with

@@ -66,6 +66,13 @@ val member_refs : Ast.member -> (string list * Span.span) list
 (* The field references inside an extern call's own arguments, including
    ones nested in a ctor field's value. *)
 val ce_refs : Ast.call_expr -> (string list * Span.span) list
+
+(* The field references inside a call's own arguments (an extern call's or
+   a handle method call's), including ones nested in a ctor field's value. *)
+val call_args_refs : Ast.call_arg list -> (string list * Span.span) list
+
+(* A handle method call's receiver and argument refs. *)
+val hc_refs : Ast.op_impl -> (string list * Span.span) list
 val protocol_trait_names : string list
 
 (* References consumed by an operation's protocol traits. *)

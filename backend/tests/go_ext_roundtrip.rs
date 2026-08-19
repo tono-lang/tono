@@ -20,6 +20,7 @@ use std::sync::Mutex;
 /// they cannot run concurrently.
 static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
+use tono_backend::codegen::fixtures::handle_source::handle_source_model;
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::go::entry::ext_fixtures::{
@@ -55,6 +56,13 @@ const APPENDIX_GO_MOD_DEPS: &str = "require tono-ext-fixture/companyconfig v0.0.
 /// real consumer's own `go.mod` would use for a private/internal
 /// dependency).
 fn write_sdk(model: &Model, mod_deps: &str) -> PathBuf {
+    write_sdk_with(model, mod_deps, None)
+}
+
+/// [`write_sdk`] with the generated SDK's own Go module path: an entry with
+/// `@http` operations imports the shared `support` package across packages,
+/// which Go can only spell through the module path (`--go-module`).
+fn write_sdk_with(model: &Model, mod_deps: &str, go_module: Option<&str>) -> PathBuf {
     let dir = fixtures_dir().join("sdk");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create sdk dir");
@@ -62,7 +70,7 @@ fn write_sdk(model: &Model, mod_deps: &str) -> PathBuf {
     let config = CodegenConfig {
         flatten: true,
         remap: vec![],
-        go_module: None,
+        go_module: go_module.map(str::to_string),
     };
     let casing = go_casing();
     let files = generate_target(model, TargetKind::Go, &config, &casing)
@@ -395,6 +403,43 @@ fn a_ctx_marked_handle_method_builds() {
         &ctx_extern_model(),
         "require tono-ext-fixture/svc v0.0.0\n\n\
          replace tono-ext-fixture/svc => ../fixtures/svc\n",
+    );
+    let build = Command::new("go")
+        .arg("build")
+        .arg("./...")
+        .current_dir(&dir)
+        .output()
+        .expect("run go build");
+    assert!(
+        build.status.success(),
+        "generated Go failed to build:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+/// A field sourced from a foreign handle's method (`config: cfg =
+/// .provider.get()`) feeding several `@http` operations, an injectable
+/// second read with an argument, and an op's own `impl` body reading the
+/// same handle: the whole entry compiles against the real stand-in
+/// library, which is what proves the interface call, the `ctx` slot filled
+/// at construction, and the shared receiver agree beyond rendered text.
+#[test]
+fn a_field_sourced_from_a_handle_method_builds() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
+        return;
+    }
+    if !have("go", "version") || !have("gofmt", "-h") {
+        eprintln!("skipping: Go toolchain (go/gofmt) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk_with(
+        &handle_source_model("go"),
+        "require tono-ext-fixture/envkit v0.0.0\n\n\
+         replace tono-ext-fixture/envkit => ../fixtures/envkit\n",
+        Some("tono-ext-fixture/sdk/go"),
     );
     let build = Command::new("go")
         .arg("build")

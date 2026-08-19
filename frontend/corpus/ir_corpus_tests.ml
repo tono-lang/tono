@@ -28,6 +28,7 @@ let declared_tests : Ir.model =
       ef_transforms = [];
       ef_select = None;
       ef_call = None;
+      ef_handle_call = None;
       ef_binds = [];
       ef_constraints = [];
       ef_traits = [];

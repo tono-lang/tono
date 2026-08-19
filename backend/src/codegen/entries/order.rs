@@ -1,8 +1,8 @@
 //! The resolution DAG: ordering an entry's fields so every field a step reads
 //! is resolved before it. The edges are sibling references (`@env(.ref)` names,
 //! `@format` placeholders, `match` subjects/arms, `@bind` sources, extern-call
-//! argument refs), plus the reads a composed config makes through its own
-//! members.
+//! argument refs, a handle method call's receiver and argument refs), plus the
+//! reads a composed config makes through its own members.
 
 use std::collections::HashSet;
 
@@ -37,8 +37,9 @@ fn call_arg_heads<'a>(arg: &'a CallArg, out: &mut Vec<&'a str>) {
 }
 
 /// The sibling entry fields one field's resolution reads directly (its own
-/// `@env(.ref)`, `@format`, `match`, `@bind`, and extern-call argument heads),
-/// without descending into a composed config's members.
+/// `@env(.ref)`, `@format`, `match`, `@bind`, extern-call argument heads, and
+/// a handle method call's receiver and argument heads), without descending
+/// into a composed config's members.
 fn own_dep_heads(field: &EntryField) -> Vec<&str> {
     fn head(p: &[String]) -> Option<&str> {
         p.first().map(String::as_str)
@@ -73,6 +74,14 @@ fn own_dep_heads(field: &EntryField) -> Vec<&str> {
         }
     }
     if let Some(call) = &field.call {
+        for arg in &call.args {
+            call_arg_heads(arg, &mut deps);
+        }
+    }
+    // A handle method call reads its receiver (the handle field) before
+    // anything else, then its arguments.
+    if let Some(call) = &field.handle_call {
+        deps.extend(head(&call.recv));
         for arg in &call.args {
             call_arg_heads(arg, &mut deps);
         }

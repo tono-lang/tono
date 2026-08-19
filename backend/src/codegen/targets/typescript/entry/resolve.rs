@@ -322,6 +322,16 @@ impl Emitter for Resolver<'_, '_> {
         super::ext_call::call_assign(self, field, call, dest, n)
     }
 
+    fn handle_call_assign(
+        &mut self,
+        field: &EntryField,
+        call: &crate::ir::OpImplCall,
+        dest: &str,
+    ) -> String {
+        let n = self.n;
+        super::ext_call::handle_call_assign(self, field, call, dest, n)
+    }
+
     fn with_present_cond(&self, field: &EntryField) -> Cond {
         Cond(format!("{} !== undefined", self.with_access(field)))
     }

@@ -225,6 +225,57 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
     assert!(!text.contains("func ("));
 }
 
+/// A `ctx`-marked method's fake takes `ctx context.Context` first, exactly
+/// as the interface it must satisfy declares it (the same signature the
+/// real adapter renders); a fake without it would not compile against the
+/// interface, which is what a field sourced from such a method at
+/// construction time first exposed.
+#[test]
+fn a_ctx_marked_method_fake_takes_the_context_first() {
+    let module = ext_fixtures::reference_example_module();
+    let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
+    let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[0]);
+    let lib = ExtLib {
+        name: "companybus".into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: "tono-ext-fixture/companybus".into(),
+        }],
+        structs: vec![],
+        types: vec![],
+        externs: vec![],
+    };
+    let handle = OpaqueType {
+        name: "publisher".into(),
+        instance: None,
+        methods: vec![crate::ir::ExternDecl {
+            name: "send".into(),
+            params: vec![crate::ir::ExternParam {
+                name: "topic".into(),
+                r#type: Tref::Prim(Prim::String),
+            }],
+            r#return: Tref::Prim(Prim::Bool),
+            langs: vec![ExternLang {
+                lang: "go".into(),
+                symbol: "Send".into(),
+                call_args: vec![],
+                yields: vec![],
+                returns: None,
+                errors: vec![],
+                sync: false,
+                infallible: false,
+                ctx: true,
+            }],
+        }],
+    };
+    let (_ident, decl) = handle_fake_decl(&ctx, &lib, &handle);
+    let text = rendered(std::slice::from_ref(&decl), &GoRules::default());
+    assert!(
+        text.contains("Send(ctx context.Context, topic string) (bool, error) {"),
+        "{text}"
+    );
+}
+
 #[test]
 fn fake_method_body_renders_the_declared_error_answer() {
     let module = ext_fixtures::reference_example_module();

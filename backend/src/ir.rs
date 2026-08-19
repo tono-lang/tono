@@ -84,7 +84,11 @@ pub use crate::ir_tests_model::*;
 /// generic type the handle names (the foreign type's own name, plus the
 /// tono argument it is monomorphized with). Absent for a non-generic
 /// foreign type.
-pub const TONO_IR_VERSION: u32 = 21;
+/// v22 added an entry field's optional `handle_call` (`OpImplCall`, the
+/// same shape as an operation's `impl_call`): a field whose value source
+/// is a call into a sibling opaque handle's method, so one foreign
+/// resolution feeds several operations.
+pub const TONO_IR_VERSION: u32 = 22;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -406,6 +410,10 @@ pub struct EntryField {
     /// A `= ns.fn(args)` extern-call source, alongside the existing `select`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call: Option<EntryCall>,
+    /// A `= .field.method(args)` handle-method-call source: the
+    /// receiver-form counterpart of `call`, sharing the op `impl` node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle_call: Option<OpImplCall>,
     #[serde(default)]
     pub binds: Vec<Bind>,
     #[serde(default)]
@@ -508,13 +516,13 @@ impl WireBinding {
     }
 }
 
-/// An op's own `impl .field.method(args)` body: a call into an
-/// entry field's declared opaque-handle method. Mirrors `EntryCall` with
-/// `recv: Vec<String>` (a field path) in place of `ns` (a bare `ext`
-/// namespace), since the receiver is an entry field, not an extern
-/// namespace. Resolving the receiver/method against a declared handle is a
-/// typechecker concern on the frontend side; this only carries the call
-/// structured. Not yet consumed by any backend target.
+/// A call into an entry field's declared opaque-handle method,
+/// `.field.method(args)`: an op's own `impl` body, or a field's own
+/// `handle_call` value source. Mirrors `EntryCall` with `recv: Vec<String>`
+/// (a field path) in place of `ns` (a bare `ext` namespace), since the
+/// receiver is an entry field, not an extern namespace. Resolving the
+/// receiver/method against a declared handle is a typechecker concern on
+/// the frontend side; this only carries the call structured.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpImplCall {
     pub recv: Vec<String>,

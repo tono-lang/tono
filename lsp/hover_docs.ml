@@ -304,11 +304,12 @@ let ext_lib_docs : (string * string) list =
     ( "ctx",
       "The call receives the target's own cancellation/deadline context in its \
        idiomatic position. Only valid on a foreign handle's own method call: \
-       Go prepends ctx context.Context as the first parameter. Rust/TypeScript \
-       do not read this marker yet, but they cannot reach this call site at \
-       all today either (a separate gate refuses the whole handle-method call \
-       for them); once a target lands that call, it decides its own convention \
-       for ctx before it starts reading the marker." );
+       Go prepends ctx context.Context as the first parameter. In an op's own \
+       'impl' body that is the operation's ctx; in a field source ('config: \
+       cfg = .handle.method()') the constructor has no caller context, so Go \
+       passes context.Background() (no deadline, no cancellation) for that \
+       one-shot resolution. Rust and TypeScript have no equivalent convention \
+       and ignore the marker." );
     ( Ext_lib_vocab.request_ref,
       Printf.sprintf
         "The canonical request, already assembled (method, path, headers, \
@@ -357,8 +358,11 @@ let construct_docs : (string * string) list =
        conformance spec." );
     ("constraint", "A bespoke validation predicate attached at the boundary.");
     ( "impl",
-      "Implements the operation it names with bespoke sources, taking that \
-       operation's signature. Add 'raw' to return an outcome the generated \
+      "After an operation's traits, 'impl .handle.method(args)' implements it \
+       as a call into a declared opaque handle's method (the same call a field \
+       can take as its value: 'config: cfg = .handle.method(args)'). After \
+       'ext', it binds the operation it names to bespoke sources, taking that \
+       operation's signature; add 'raw' to return an outcome the generated \
        glue decodes and discriminates." );
     ( "raw",
       "The bound symbol returns an outcome (success flag, code, body) and the \

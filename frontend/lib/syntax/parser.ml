@@ -111,7 +111,77 @@ let parse_trailing_traits = Parser_traits.parse_trailing_traits
    can reuse it for a [returns:] field value; aliased locally. *)
 let parse_field_match = Parser_traits.parse_field_match
 
-(* member ::= name ":" type trait* ("=" (match | call_expr))? trait*
+(* handle_call ::= "." name ("." name)+ "(" call_arg ("," call_arg)* ")"
+   — a call into a declared opaque handle's method, shared by an op's own
+   "impl" body and a member's "= .h.m(...)" value source. The cursor sits on
+   the first '.'; [what] names the surrounding form in diagnostics ("impl"
+   or "'='") and [head_span] is the span the whole call is merged from (the
+   "impl" keyword's, or the '=' sign's). The receiver is every segment but
+   the last (".bus" in ".bus.send(...)"); the last is the method name. At
+   least two segments are required: ".send(...)" alone has no receiver to
+   resolve the method against. *)
+let parse_handle_call st ~what ~head_span : Ast.op_impl option =
+  let rec segs acc =
+    match (P.peek st).kind with
+    | Token.Dot -> (
+        ignore (P.advance st);
+        match (P.peek st).kind with
+        | Token.Ident n ->
+            let t = P.advance st in
+            segs ((n, t.span) :: acc)
+        | _ ->
+            P.error st (P.peek st).span "expected a field name after '.'";
+            List.rev acc)
+    | _ -> List.rev acc
+  in
+  match segs [] with
+  | [] ->
+      P.error st (P.peek st).span
+        (Printf.sprintf
+           "expected a field reference after %s, e.g. '%s .bus.send(...)'" what
+           what);
+      None
+  | [ (_, span) ] ->
+      P.error st span
+        (Printf.sprintf
+           "%s needs a receiver before the method, e.g. '%s .bus.send(...)' \
+            rather than '%s .send(...)'"
+           what what what);
+      None
+  | all -> (
+      let recv, (method_, method_span) =
+        match List.rev all with
+        | last :: rest -> (List.rev rest, last)
+        | [] -> assert false
+      in
+      let recv_span =
+        match recv with
+        | (_, first_span) :: _ -> Span.merge first_span method_span
+        | [] -> method_span
+      in
+      match (P.peek st).kind with
+      | Token.LParen ->
+          let args = Parser_traits.parse_call_args st in
+          Some
+            {
+              Ast.oi_recv =
+                {
+                  Ast.segs = List.map fst recv;
+                  index = None;
+                  ref_span = recv_span;
+                };
+              oi_method = method_;
+              oi_method_span = method_span;
+              oi_args = args;
+              oi_span = Span.merge head_span method_span;
+            }
+      | _ ->
+          P.error st (P.peek st).span
+            (Printf.sprintf "expected '(' after '%s .field.method'" what);
+          None)
+
+(* member ::= name ":" type trait* ("=" (match | call_expr | handle_call))?
+   trait*
    A trait may appear before the value, after it, or split across both (the
    two lists are concatenated in source order into one [mtraits]): a source
    marker paired with a call value reads naturally either way ("@with = ns.fn(...)"
@@ -137,7 +207,7 @@ let parse_member st : Ast.member =
   let mvalue =
     match (P.peek st).kind with
     | Token.Eq -> (
-        ignore (P.advance st);
+        let eq_t = P.advance st in
         match (P.peek st).kind with
         | Token.Ident "match" -> Some (Ast.MMatch (parse_field_match st))
         | Token.Ident ns -> (
@@ -149,11 +219,20 @@ let parse_member st : Ast.member =
                      (Parser_traits.parse_call_expr st ~ns ~ns_span:nst.span))
             | _ ->
                 P.error st (P.peek st).span
-                  "expected 'match' or a 'namespace.fn(...)' call after '='";
+                  "expected 'match', a 'namespace.fn(...)' call, or a \
+                   '.handle.method(...)' call after '='";
                 None)
+        (* A leading '.' is a handle method call: the receiver is a sibling
+           field (a declared opaque handle), the value is what its method
+           returns. *)
+        | Token.Dot ->
+            Option.map
+              (fun hc -> Ast.MHandleCall hc)
+              (parse_handle_call st ~what:"'='" ~head_span:eq_t.span)
         | _ ->
             P.error st (P.peek st).span
-              "expected 'match' or a 'namespace.fn(...)' call after '='";
+              "expected 'match', a 'namespace.fn(...)' call, or a \
+               '.handle.method(...)' call after '='";
             None)
     | _ -> None
   in
@@ -345,75 +424,16 @@ let parse_enum st ~pub ~dtraits : Ast.decl =
     dkind = Ast.DEnum { cases };
   }
 
-(* op_impl ::= "impl" "." name ("." name)+ "(" call_arg ("," call_arg)* ")"
-   — an op's own bespoke body: a call into a declared opaque
-   handle's method. "impl" is a contextual keyword here (only recognized
-   right after an op's traits, exactly like "impl" after "ext" in the legacy
-   grammar); a field or parameter genuinely named "impl" is not ambiguous in
-   this position since nothing else can start an op's trailing clause with
-   that identifier. The receiver is every segment but the last (".bus" in
-   ".bus.send(...)"); the last is the method name. At least two segments are
-   required: "impl .send(...)" alone has no receiver to resolve the method
-   against. *)
+(* op_impl ::= "impl" handle_call — an op's own bespoke body. "impl" is a
+   contextual keyword here (only recognized right after an op's traits,
+   exactly like "impl" after "ext" in the legacy grammar); a field or
+   parameter genuinely named "impl" is not ambiguous in this position since
+   nothing else can start an op's trailing clause with that identifier. *)
 let parse_op_impl st : Ast.op_impl option =
   match (P.peek st).kind with
-  | Token.Ident "impl" -> (
+  | Token.Ident "impl" ->
       let impl_t = P.advance st in
-      let rec segs acc =
-        match (P.peek st).kind with
-        | Token.Dot -> (
-            ignore (P.advance st);
-            match (P.peek st).kind with
-            | Token.Ident n ->
-                let t = P.advance st in
-                segs ((n, t.span) :: acc)
-            | _ ->
-                P.error st (P.peek st).span "expected a field name after '.'";
-                List.rev acc)
-        | _ -> List.rev acc
-      in
-      match segs [] with
-      | [] ->
-          P.error st (P.peek st).span
-            "expected a field reference after 'impl', e.g. 'impl \
-             .bus.send(...)'";
-          None
-      | [ (_, span) ] ->
-          P.error st span
-            "'impl' needs a receiver before the method, e.g. 'impl \
-             .bus.send(...)' rather than 'impl .send(...)'";
-          None
-      | all -> (
-          let recv, (method_, method_span) =
-            match List.rev all with
-            | last :: rest -> (List.rev rest, last)
-            | [] -> assert false
-          in
-          let recv_span =
-            match recv with
-            | (_, first_span) :: _ -> Span.merge first_span method_span
-            | [] -> method_span
-          in
-          match (P.peek st).kind with
-          | Token.LParen ->
-              let args = Parser_traits.parse_call_args st in
-              Some
-                {
-                  Ast.oi_recv =
-                    {
-                      Ast.segs = List.map fst recv;
-                      index = None;
-                      ref_span = recv_span;
-                    };
-                  oi_method = method_;
-                  oi_method_span = method_span;
-                  oi_args = args;
-                  oi_span = Span.merge impl_t.span method_span;
-                }
-          | _ ->
-              P.error st (P.peek st).span
-                "expected '(' after 'impl .field.method'";
-              None))
+      parse_handle_call st ~what:"impl" ~head_span:impl_t.span
   | _ -> None
 
 (* op ::= "op" name "(" (name ":" type)? ")" ( ":" type )? op_trait*

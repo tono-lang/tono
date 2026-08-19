@@ -51,6 +51,7 @@ pub fn field(name: &str, target: Tref, sources: Vec<Source>) -> EntryField {
         transforms: vec![],
         select: None,
         call: None,
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],

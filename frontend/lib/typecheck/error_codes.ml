@@ -15,6 +15,10 @@ let register code =
     Hashtbl.add seen code ();
     code)
 
+(* Every code registered so far, in no particular order: the uniqueness
+   test walks it to prove the table is one-code-one-meaning without knowing
+   the constants by name. *)
+let registered () = Hashtbl.fold (fun code () acc -> code :: acc) seen []
 let unknown_type = register "TC0001"
 let duplicate_shape = register "TC0002"
 
@@ -193,13 +197,14 @@ let ext_lib_module_path_conflict = register "TC0079"
 let extern_duplicate_name = register "TC0080"
 let extern_lang_no_module = register "TC0081"
 
-(* An op's own "impl .field.method(args)" body. The receiver does
-   not resolve to an entry field whose type is a declared opaque handle; the
-   method is not one of that handle's declared "extern" methods; the
-   argument list disagrees in count with the method's declared logical
-   parameters, or an argument is a bare identifier (no extern-side
-   parameter list exists to forward from in this position; only a literal
-   or a field reference is legal). *)
+(* A call into a declared opaque handle's method (an op's own "impl
+   .field.method(args)" body, or a field's own "= .field.method(args)"
+   source). The receiver does not resolve to an entry field whose type is a
+   declared opaque handle; the method is not one of that handle's declared
+   "extern" methods; the argument list disagrees in count with the method's
+   declared logical parameters, or an argument is a bare identifier (no
+   extern-side parameter list exists to forward from in this position; only
+   a literal or a field reference is legal). *)
 let op_impl_receiver_not_handle = register "TC0082"
 let op_impl_unknown_method = register "TC0083"
 let op_impl_arity_mismatch = register "TC0084"
@@ -254,3 +259,8 @@ let instance_duplicate = register "TC0092"
    method: it has no idiomatic scope to receive the target's cancellation/
    deadline context outside a handle method call. *)
 let extern_ctx_on_free_call = register "TC0093"
+
+(* A field's own "= .field.method(args)" source names a method whose
+   declared logical return is not the field's declared type: the value is
+   stored as-is, so the two must agree. *)
+let handle_call_type_mismatch = register "TC0094"

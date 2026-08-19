@@ -329,6 +329,15 @@ let lower_select ~diags (fm : Ast.field_match) : Ir.select =
         fm.arms;
   }
 
+(* A handle method call, shared by an op's own "impl" body and a field's own
+   value source: the receiver path, the method, and the arguments. *)
+let lower_handle_call (hc : Ast.op_impl) : Ir.op_impl_call =
+  {
+    Ir.oic_recv = hc.Ast.oi_recv.Ast.segs;
+    oic_method = hc.Ast.oi_method;
+    oic_args = List.map Lower_extern.lower_call_arg hc.Ast.oi_args;
+  }
+
 (* Extern call lowering lives in [Lower_extern] (shared with the ext/extern
    library block); aliased locally. *)
 let lower_call_expr = Lower_extern.lower_call_expr
@@ -388,11 +397,15 @@ let lower_entry_field ~resolve ~diags (m : Ast.member) : Ir.entry_field =
     ef_select =
       (match m.mvalue with
       | Some (Ast.MMatch fm) -> Some (lower_select ~diags fm)
-      | Some (Ast.MCall _) | None -> None);
+      | Some (Ast.MCall _ | Ast.MHandleCall _) | None -> None);
     ef_call =
       (match m.mvalue with
       | Some (Ast.MCall ce) -> Some (lower_call_expr ce)
-      | Some (Ast.MMatch _) | None -> None);
+      | Some (Ast.MMatch _ | Ast.MHandleCall _) | None -> None);
+    ef_handle_call =
+      (match m.mvalue with
+      | Some (Ast.MHandleCall hc) -> Some (lower_handle_call hc)
+      | Some (Ast.MMatch _ | Ast.MCall _) | None -> None);
     ef_binds = !binds;
     ef_constraints = !constraints;
     ef_traits = !bag;
@@ -445,13 +458,6 @@ let take_trait name (traits : Ast.trait list) =
 
 (* Lower an operation's traits and body into an Operation shape under [id].
    Shared by top-level ops and ops nested in an entry body. *)
-let lower_op_impl_call (oi : Ast.op_impl) : Ir.op_impl_call =
-  {
-    Ir.oic_recv = oi.Ast.oi_recv.Ast.segs;
-    oic_method = oi.Ast.oi_method;
-    oic_args = List.map Lower_extern.lower_call_arg oi.Ast.oi_args;
-  }
-
 let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~pname ~input ~output
     ~oimpl ~pub_trait : Ir.shape =
   let lower_opt = Option.map (lower_type ~params:[] ~resolve ~diags) in
@@ -487,7 +493,7 @@ let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~pname ~input ~output
           errors;
           wire = None;
           (* Protocol resolution happens strictly after lowering. *)
-          impl_call = Option.map lower_op_impl_call oimpl;
+          impl_call = Option.map lower_handle_call oimpl;
         };
     traits = pub_trait @ lower_bag_traits rest;
   }

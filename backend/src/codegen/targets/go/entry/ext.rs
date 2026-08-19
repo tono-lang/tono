@@ -223,7 +223,8 @@ pub(super) fn handle_symbol(lib: &ExtLib) -> Option<Symbol> {
 #[path = "ext_handle.rs"]
 mod ext_handle;
 pub(super) use ext_handle::{
-    handle_adapter_decl, handle_adapter_ident, handle_iface_decl, handle_iface_type,
+    handle_adapter_decl, handle_adapter_ident, handle_call_assign, handle_iface_decl,
+    handle_iface_type, method_signature,
 };
 
 pub(super) fn literal_of_json(v: &serde_json::Value) -> String {

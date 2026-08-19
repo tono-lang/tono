@@ -79,7 +79,25 @@ type field_match = {
   match_span : Span.span;
 }
 
-type member_value = MMatch of field_match | MCall of call_expr
+(* A call into a declared opaque handle's method, [.field.method(args)]:
+   shared by an op's own "impl" body and a member's "= .h.m(args)" value
+   source. The receiver names an entry field (a declared opaque handle), the
+   method one of its declared "extern" methods; the closed-boundary/arity
+   rules live in the typechecker, not here. *)
+type op_impl = {
+  oi_recv : ref_path;
+  oi_method : string;
+  oi_method_span : Span.span;
+  oi_args : call_arg list;
+  oi_span : Span.span;
+}
+
+(* A member's [= ...] value: a selection table, an extern call, or a handle
+   method call. *)
+type member_value =
+  | MMatch of field_match
+  | MCall of call_expr
+  | MHandleCall of op_impl
 
 type member = {
   mname : string;
@@ -284,19 +302,6 @@ type test_item =
       pattern : test_pattern;
       item_span : Span.span;
     }
-
-(* An op's own "impl .field.method(args)" body: the receiver
-   names an entry field (a declared opaque handle), the method one of its
-   declared "extern" methods. This is a third implementation source for an
-   op, alongside a protocol trait (@http) and a legacy "ext impl" binding;
-   the closed-boundary/arity rules live in the typechecker, not here. *)
-type op_impl = {
-  oi_recv : ref_path;
-  oi_method : string;
-  oi_method_span : Span.span;
-  oi_args : call_arg list;
-  oi_span : Span.span;
-}
 
 type decl_kind =
   | DStruct of { params : string list; members : member list; ops : decl list }

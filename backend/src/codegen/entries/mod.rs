@@ -19,6 +19,7 @@ mod checks;
 mod order;
 pub mod plan;
 mod validate;
+mod validate_calls;
 mod validate_ownership;
 pub mod wire;
 
@@ -63,9 +64,10 @@ pub enum FieldShape<'a> {
     Structured(&'a Shape),
     /// A map/list decoded as JSON whole; no per-member layering.
     Json,
-    /// A `= ns.fn(args)` extern-call source. Its presentation is governed by
-    /// the call, not by its target type's own shape (which may be a plain
-    /// struct or an opaque handle with no entry in `module.shapes` at all).
+    /// A `= ns.fn(args)` extern-call source, or a `= .field.method(args)`
+    /// handle-method-call source. Its presentation is governed by the call,
+    /// not by its target type's own shape (which may be a plain struct or an
+    /// opaque handle with no entry in `module.shapes` at all).
     Call,
 }
 
@@ -130,7 +132,7 @@ impl<'a> EntryModel<'a> {
 
     /// The field shape a target dispatches its resolution idiom on.
     pub fn field_shape(&self, field: &EntryField, module: &'a Module) -> FieldShape<'a> {
-        if field.call.is_some() {
+        if field.call.is_some() || field.handle_call.is_some() {
             return FieldShape::Call;
         }
         match &field.target {
@@ -273,6 +275,7 @@ pub fn source_stub(field: &EntryField, sources: Vec<Source>) -> EntryField {
         transforms: vec![],
         select: None,
         call: None,
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],
@@ -418,6 +421,11 @@ impl<'a> EntryModel<'a> {
             // reduces to the same check either way: whether the call's own
             // reads are guaranteed. `field.sources` plays no part here.
             call_args_guaranteed(&call.args, &path_guaranteed, visiting)
+        } else if let Some(call) = &field.handle_call {
+            // Same regime as a free call, plus the receiver: the handle it
+            // reads must itself be guaranteed for the call to run at all.
+            path_guaranteed(&call.recv, visiting)
+                && call_args_guaranteed(&call.args, &path_guaranteed, visiting)
         } else {
             sources_guaranteed(&field.sources)
         };

@@ -7,8 +7,7 @@ use super::{
 };
 use crate::codegen::output::TargetKind;
 use crate::ir::{
-    CallArg, EntryField, Module, ShapeKind, Source, Tref, WireBinding, WireCall, WireCallArg,
-    WireValue,
+    CallArg, Module, ShapeKind, Source, Tref, WireBinding, WireCall, WireCallArg, WireValue,
 };
 
 /// The requested targets that cannot emit an extern-call field source, by
@@ -63,121 +62,6 @@ pub(super) fn ref_paths(args: &[CallArg], out: &mut Vec<Vec<String>>) {
             CallArg::Param(_) | CallArg::Lit(_) | CallArg::Call(_) => {}
         }
     }
-}
-
-/// A field's own `= ns.fn(args)` call cannot forward a sibling field that is
-/// itself an *injected* (not tono-constructed) foreign handle. A handle
-/// field this generator constructed (`field.call`) always stores its result
-/// wrapped in the generated adapter, so a target's own emitter can unwrap it
-/// back to the real value another foreign call declares its parameter as
-/// (see `go/entry/ext.rs::sibling_path_expr`). A handle field sourced from
-/// `@arg`/`@with` instead holds whatever value the caller supplied, which is
-/// not guaranteed to be that adapter (or even the real library's own
-/// concrete type) at all, so no target's emitter can safely unwrap it: the
-/// combination is rejected here, at generation time, naming both fields and
-/// the call, rather than reaching the target compiler as an error about a
-/// type the author never wrote (or, if a target's emitter were to guess at
-/// unwrapping it anyway, panicking at runtime on a valid caller-supplied
-/// value).
-fn injected_handle_forwarded_to_another_call(
-    module: &Module,
-    declared: &[&EntryField],
-    field: &EntryField,
-) -> Result<(), String> {
-    let Some(call) = &field.call else {
-        return Ok(());
-    };
-    let mut paths = Vec::new();
-    ref_paths(&call.args, &mut paths);
-    for path in paths {
-        let Some(head) = path.first() else { continue };
-        let Some(sibling) = declared.iter().find(|f| f.name == *head) else {
-            continue;
-        };
-        let is_handle = ref_id(&sibling.target).is_some_and(|id| is_foreign_ref(module, id));
-        if is_handle && sibling.call.is_none() {
-            return Err(format!(
-                "{} = {}.{}(..): argument {:?} names field {}, an injected foreign handle with no construction call of its own; only a handle this generator itself constructed can be forwarded into another extern call",
-                field.name, call.ns, call.func, head, sibling.name
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// A field's `= ns.fn(args)` source must resolve to a declared `extern` that
-/// carries a binding for every target being generated. Without this an emitter
-/// would meet "no such ext block" or "no block for my language" as a pipeline
-/// defect -- a panic -- instead of an authoring error carrying a message.
-fn call_resolves(
-    module: &crate::ir::Module,
-    field: &EntryField,
-    targets: &[TargetKind],
-) -> Result<(), String> {
-    let Some(call) = &field.call else {
-        return Ok(());
-    };
-    let Some(lib) = module.ext_libs.iter().find(|l| l.name == call.ns) else {
-        return Err(format!(
-            "{} = {}.{}(..): no ext block named {} is declared in this module",
-            field.name, call.ns, call.func, call.ns
-        ));
-    };
-    let Some(decl) = lib.externs.iter().find(|e| e.name == call.func) else {
-        return Err(format!(
-            "{} = {}.{}(..): ext {} declares no extern named {}",
-            field.name, call.ns, call.func, call.ns, call.func
-        ));
-    };
-    for target in targets {
-        let Some(lang) = decl
-            .langs
-            .iter()
-            .find(|l| target.binding_langs().contains(&l.lang.as_str()))
-        else {
-            return Err(format!(
-                "{} = {}.{}(..): extern {} declares no {} block; {} codegen has nothing to emit",
-                field.name,
-                call.ns,
-                call.func,
-                call.func,
-                target.binding_langs()[0],
-                target.dir()
-            ));
-        };
-        // A hand-fed IR bypasses the frontend's own "every yields: position
-        // is consumed" rule (`tono gen` accepts raw IR directly), so this
-        // reasserts it at generation time: a non-error position with
-        // nothing declared to project it into would meet an emitter as a
-        // pipeline defect instead of an authoring error.
-        let projects = lang.yields.iter().any(|y| !y.is_error);
-        if projects && lang.returns.is_none() {
-            return Err(format!(
-                "{} = {}.{}(..): the {} block declares yields but no returns to project them into",
-                field.name,
-                call.ns,
-                call.func,
-                target.binding_langs()[0],
-            ));
-        }
-        // A single call expression can only ever produce one value in
-        // TypeScript (no multi-return), so a binding naming more than one
-        // non-error position has nothing to spell it as, unlike a target
-        // whose call convention returns several values at once.
-        if *target == TargetKind::TypeScript {
-            let non_error = lang.yields.iter().filter(|y| !y.is_error).count();
-            if non_error > 1 {
-                return Err(format!(
-                    "{} = {}.{}(..): the {} block names {non_error} non-error yields positions; a single TypeScript call result can only bind one",
-                    field.name,
-                    call.ns,
-                    call.func,
-                    target.binding_langs()[0],
-                ));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Every top-level `WireCall` directly on a `@header`/`@body` value (never
@@ -615,10 +499,44 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                 // when the gate above let the field through, since that gate
                 // says the target can emit calls, not that this call names a
                 // declared extern with a binding for it.
-                call_resolves(module, field, targets)
+                super::validate_calls::call_resolves(module, field, targets)
                     .map_err(|e| format!("module {}: entry {} {}", module.name, entry.name, e))?;
-                injected_handle_forwarded_to_another_call(module, &declared, field)
+                if let Some(unsupported) = &ext_handle_calls_unsupported {
+                    if let Some(call) = &field.handle_call {
+                        return Err(format!(
+                            "module {}: entry {} field {} is sourced from .{}.{}(..) (an extern handle method); {} cannot emit that call yet",
+                            module.name,
+                            entry.name,
+                            field.name,
+                            call.recv.join("."),
+                            call.method,
+                            unsupported
+                        ));
+                    }
+                }
+                super::validate_calls::handle_call_resolves(module, &declared, field, targets)
                     .map_err(|e| format!("module {}: entry {} {}", module.name, entry.name, e))?;
+                // A config has no handle of its own to call (a foreign handle
+                // only lives on an entry field), so a member sourced from
+                // one has no receiver in scope; the frontend rejects it and
+                // a hand-fed IR is rejected here rather than in a member
+                // emitter that never learned the form.
+                if let Tref::Ref { id, .. } = &field.target {
+                    if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {
+                        if let ShapeKind::Config { fields } = &shape.kind {
+                            if let Some(member) = fields.iter().find(|m| m.handle_call.is_some()) {
+                                return Err(format!(
+                                    "module {}: entry {} field {} member {} is sourced from a handle method call; a config member has no handle in scope, only an entry field does",
+                                    module.name, entry.name, field.name, member.name
+                                ));
+                            }
+                        }
+                    }
+                }
+                super::validate_calls::injected_handle_forwarded_to_another_call(
+                    module, &declared, field,
+                )
+                .map_err(|e| format!("module {}: entry {} {}", module.name, entry.name, e))?;
             }
         }
         // A module with loose operations emits the `Client` interface; an
@@ -667,8 +585,12 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
             if matches!(shape.kind, ShapeKind::Entry { .. }) {
                 continue;
             }
-            let ident = local_name(&shape.id);
-            if let Some((_, what)) = generated.iter().find(|(g, _)| g == ident) {
+            // Compared as the emitted type identifier: a shape is written in
+            // its canonical spelling (`settings`) and cased by the codegen,
+            // so `settings` next to an entry collides with the generated
+            // `Settings` exactly as a shape already spelled `Settings` does.
+            let ident = pascal_ident(local_name(&shape.id));
+            if let Some((_, what)) = generated.iter().find(|(g, _)| *g == ident) {
                 return Err(format!(
                     "module {}: shape {} collides with the {}; rename the shape",
                     module.name, ident, what

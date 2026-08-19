@@ -8,9 +8,12 @@
 //! parameter cannot be satisfied through an `Rc`/`Arc` the callee's
 //! signature does not name, and the slot is left unset once ownership went
 //! to the callee. Anything else in the entry that reads the same handle
-//! afterwards (an op's own `impl .bus.method(..)`, a second forwarding
-//! call) would compile and then diagnose "not configured" at runtime for a
-//! handle the caller did configure. A target with reference semantics
+//! afterwards (an op's own `impl .bus.method(..)`, a field sourced from
+//! `.bus.method(..)`, a second forwarding call) would compile and then
+//! diagnose "not configured" at runtime for a handle the caller did
+//! configure. Reading a method is a borrow, not a hand-over: two readers
+//! of that kind coexist, and it is only the forwarding call that claims
+//! the handle. A target with reference semantics
 //! (Go, TypeScript) would happily alias it instead, so the same spec would
 //! mean two different things by target.
 //!
@@ -24,27 +27,48 @@ use crate::ir::{EntryField, Module, ShapeKind};
 
 use super::validate::{is_foreign_ref, ref_id, ref_paths};
 
-/// One place a handle field is read from, spelled for the diagnostic.
+/// One place a handle field is read from, spelled for the diagnostic: the
+/// field's own free call or handle method call.
 fn call_site(field: &EntryField) -> String {
+    if let Some(call) = &field.call {
+        return format!("{} = {}.{}(..)", field.name, call.ns, call.func);
+    }
     let call = field
-        .call
+        .handle_call
         .as_ref()
         .expect("only a call field forwards a handle");
-    format!("{} = {}.{}(..)", field.name, call.ns, call.func)
+    format!(
+        "{} = .{}.{}(..)",
+        field.name,
+        call.recv.join("."),
+        call.method
+    )
+}
+
+/// The arguments of a call field's own call, free or handle-method: the
+/// positions a sibling handle can be forwarded through by value.
+fn call_args(field: &EntryField) -> Option<&[crate::ir::CallArg]> {
+    field
+        .call
+        .as_ref()
+        .map(|c| c.args.as_slice())
+        .or_else(|| field.handle_call.as_ref().map(|c| c.args.as_slice()))
 }
 
 /// The sibling handle fields a call field forwards by value (`Ref` head
-/// naming a foreign-handle field), each paired with the forwarding call.
+/// naming a foreign-handle field), each paired with the forwarding call. A
+/// handle method call's receiver is not among them: reading a method
+/// borrows the handle, it does not hand it on (see [`other_readers`]).
 fn forwarded_handles<'a>(
     module: &Module,
     declared: &[&'a EntryField],
     field: &'a EntryField,
 ) -> Vec<&'a EntryField> {
-    let Some(call) = &field.call else {
+    let Some(args) = call_args(field) else {
         return Vec::new();
     };
     let mut paths = Vec::new();
-    ref_paths(&call.args, &mut paths);
+    ref_paths(args, &mut paths);
     paths
         .iter()
         .filter_map(|path| path.first())
@@ -54,7 +78,8 @@ fn forwarded_handles<'a>(
 }
 
 /// Every reader of `handle` other than `owner`'s own forwarding call, each
-/// spelled for the diagnostic: another field's forwarding call, or an op's
+/// spelled for the diagnostic: another field's forwarding call, a field
+/// sourced from one of the handle's own methods (its receiver), or an op's
 /// own `impl` call reading it as receiver or argument.
 fn other_readers(
     module: &Module,
@@ -71,6 +96,11 @@ fn other_readers(
                 .any(|h| h.name == handle.name)
         {
             readers.push(call_site(field));
+        }
+        if let Some(call) = &field.handle_call {
+            if call.recv.first() == Some(&handle.name) {
+                readers.push(call_site(field));
+            }
         }
     }
     for op in entry.operations {

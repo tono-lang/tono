@@ -139,6 +139,7 @@ fn entry_field(name: &str, target_id: &str) -> crate::ir::EntryField {
         transforms: vec![],
         select: None,
         call: None,
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],

@@ -64,6 +64,7 @@ fn entry(id: &str, operations: Vec<Shape>) -> Shape {
                 transforms: vec![],
                 select: None,
                 call: None,
+                handle_call: None,
                 binds: vec![],
                 constraints: vec![],
                 traits: vec![],

@@ -127,12 +127,13 @@ val ext_lib_module_path_conflict : string
 val extern_duplicate_name : string
 val extern_lang_no_module : string
 
-(* An op's own "impl .field.method(args)" body: the receiver is
-   not an entry field whose type is a declared opaque handle; the method is
-   not one of that handle's declared "extern" methods; the argument count
-   disagrees with the method's declared logical parameters, or an argument
-   is a bare identifier (only a literal or a field reference is legal in
-   this position, since there is no extern-side parameter list to forward
+(* A call into a declared opaque handle's method (an op's "impl" body or a
+   field's "= .field.method(args)" source): the receiver is not an entry
+   field whose type is a declared opaque handle; the method is not one of
+   that handle's declared "extern" methods; the argument count disagrees
+   with the method's declared logical parameters, or an argument is a bare
+   identifier (only a literal or a field reference is legal in this
+   position, since there is no extern-side parameter list to forward
    from). *)
 val op_impl_receiver_not_handle : string
 val op_impl_unknown_method : string
@@ -165,3 +166,14 @@ val instance_duplicate : string
 (* The `ctx` marker on a language block that is not a foreign handle's own
    method (see error_codes.ml for the rule). *)
 val extern_ctx_on_free_call : string
+
+(* A field's "= .field.method(args)" source names a method whose declared
+   return is not the field's declared type. *)
+val handle_call_type_mismatch : string
+
+(* Register a code; raises [Invalid_argument] when it is already taken. Every
+   constant above goes through this, so a collision fails at load time. *)
+val register : string -> string
+
+(* Every registered code, for the uniqueness/format test. *)
+val registered : unit -> string list

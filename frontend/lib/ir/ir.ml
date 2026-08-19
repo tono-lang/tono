@@ -86,7 +86,7 @@ and shape_kind =
       wire : wire_binding option;
       impl_call : op_impl_call option;
           (* the op's own "impl .field.method(args)" body; see
-             ir.mli for the full rule commentary. No backend reads it yet. *)
+             ir.mli for the full rule commentary. *)
     }
     (* tref, so an operation can reference an applied generic directly *)
   | Entry of { fields : entry_field list; operations : shape list }
@@ -221,11 +221,13 @@ and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
    extern is deferred (out of scope; see [Ir.ext_lib]). *)
 and entry_call = { ec_ns : string; ec_fn : string; ec_args : call_arg list }
 
-(* An op's own [impl .field.method(args)] body: the receiver is a field path
-   (an entry field, an opaque handle), not a bare "ext" namespace, so this
-   mirrors [entry_call] with [oic_recv : string list] in place of [ec_ns].
-   Resolving the receiver/method against a declared handle is deferred to
-   the typechecker. *)
+(* A call into an entry field's opaque handle method, [.field.method(args)]:
+   an op's own [impl] body, or a field's own [= .h.m(args)] value source
+   ([ef_handle_call] below). The receiver is a field path (an entry field,
+   an opaque handle), not a bare "ext" namespace, so this mirrors
+   [entry_call] with [oic_recv : string list] in place of [ec_ns]. Resolving
+   the receiver/method against a declared handle is deferred to the
+   typechecker. *)
 and op_impl_call = {
   oic_recv : string list;
   oic_method : string;
@@ -242,6 +244,9 @@ and entry_field = {
   ef_transforms : string list; (* @str::* pipeline, in declared order *)
   ef_select : select option; (* [= match] selection *)
   ef_call : entry_call option; (* [= ns.fn(args)] extern-call selection *)
+  ef_handle_call : op_impl_call option;
+      (* [= .field.method(args)] handle-method-call selection: the
+         receiver-form counterpart of [ef_call], sharing the op impl's node *)
   ef_binds : bind list; (* composition bindings; config-typed fields only *)
   ef_constraints : constraint_ list;
   ef_traits : trait list;

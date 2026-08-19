@@ -160,7 +160,7 @@ construction kinds (`entry` and `config`, below).
   call-argument encoding as an "ext" library's `call:` line (see "FFI
   library declarations" below). It is a third implementation source
   alongside `wire` and a legacy `impl` extension; an operation carries at
-  most one of the three. Not yet consumed by any backend target.
+  most one of the three.
 
 ## Entries and configs (v5)
 
@@ -212,6 +212,13 @@ value sources (presence is governed by the sources):
   source: `{"ns": <string>, "fn": <string>, "args": [<call_arg>]}`. See
   "FFI library declarations" below for `call_arg` and the rest of the
   `ext`/`extern` surface it shares.
+- `handle_call` (omitted when absent, v22) is a field's `= .field.method(args)`
+  handle-method-call source: `{"recv": ["provider"], "method": "get", "args":
+  [<call_arg>]}`, the same shape as an operation's `impl_call`. The receiver
+  is a sibling entry field typed by a declared opaque handle; the field's
+  value is what the method returns, so one foreign resolution can feed
+  several operations. A field carries at most one of `select`, `call`, and
+  `handle_call`.
 - `binds` are the `@bind(target, .source)` pairs of a composed config field.
 
 A field reference inside an operation trait value is the structured object

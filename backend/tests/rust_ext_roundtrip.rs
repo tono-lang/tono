@@ -21,6 +21,7 @@ use std::sync::Mutex;
 /// cannot run concurrently.
 static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
+use tono_backend::codegen::fixtures::handle_source::handle_source_model;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::rust::entry::ext_fixtures::rust_ext_fixture_model;
 use tono_backend::codegen::targets::rust::types::rust_casing;
@@ -80,7 +81,8 @@ fn write_sdk(model: &Model) -> PathBuf {
          serde = { version = \"1\", features = [\"derive\"] }\n\
          serde_json = \"1\"\n\
          companyconfig = { path = \"../fixtures/companyconfig\" }\n\
-         companybus = { path = \"../fixtures/companybus\" }\n\n\
+         companybus = { path = \"../fixtures/companybus\" }\n\
+         envkit = { path = \"../fixtures/envkit\" }\n\n\
          [features]\n\
          reqwest = []\n\n\
          [workspace]\n",
@@ -149,5 +151,36 @@ fn a_field_the_library_does_not_have_breaks_the_rust_build() {
         String::from_utf8_lossy(&result.stderr).contains("host"),
         "expected the compiler error to name the missing field:\n{}",
         String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+/// A field sourced from a foreign handle's method (`config: cfg =
+/// .provider.get()`) feeding several `@http` operations, an injectable
+/// second read with an argument, and an op's own `impl` body reading the
+/// same handle: the whole entry compiles against the real stand-in crate,
+/// which is what proves the receiver borrow, the awaited call, and the
+/// shared (non-`Clone`) handle agree beyond rendered text.
+#[test]
+fn a_field_sourced_from_a_handle_method_compiles_against_the_real_crate() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test rust_ext_roundtrip`");
+        return;
+    }
+    if !have_cargo() {
+        eprintln!("skipping: cargo not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk(&handle_source_model("rust"));
+    let build = Command::new("cargo")
+        .arg("build")
+        .current_dir(&dir)
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "generated Rust failed to build:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
     );
 }

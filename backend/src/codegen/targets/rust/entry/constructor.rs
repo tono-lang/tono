@@ -83,7 +83,10 @@ pub(super) fn construction_decls(
     // mirroring `impl_op`'s own `is_async` gate for op methods: Rust is an
     // async-lowering target, so a construction that depends on an external
     // call takes the language's idiomatic async form.
-    let is_async = entry.declared().iter().any(|f| f.call.is_some());
+    let is_async = entry
+        .declared()
+        .iter()
+        .any(|f| f.call.is_some() || f.handle_call.is_some());
     let effect = if is_async { "async " } else { "" };
     let awaited = if is_async { ".await" } else { "" };
 

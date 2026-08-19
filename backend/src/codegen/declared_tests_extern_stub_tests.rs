@@ -64,6 +64,7 @@ fn ext_module(tests: Vec<TestDecl>) -> Module {
             func: "load".into(),
             args: vec![],
         }),
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],
@@ -79,6 +80,7 @@ fn ext_module(tests: Vec<TestDecl>) -> Module {
         transforms: vec![],
         select: None,
         call: None,
+        handle_call: None,
         binds: vec![],
         constraints: vec![],
         traits: vec![],
@@ -174,6 +176,68 @@ fn a_test_reaching_an_unstubbed_call_time_handle_method_is_rejected() {
         err.contains("reaches 'companybus.Publisher.send' during the call, which is not stubbed"),
         "unexpected error: {err}"
     );
+}
+
+/// A field sourced from the handle's own method (`ack: string =
+/// .bus.send()`) reaches that method while constructing, so a test that
+/// only constructs must stub it, and the diagnostic names the construction
+/// phase rather than the call.
+#[test]
+fn a_test_reaching_an_unstubbed_construction_time_handle_method_is_rejected() {
+    let with_field_source = |tests: Vec<TestDecl>| {
+        let mut m = ext_module(tests);
+        let ShapeKind::Entry { fields, .. } = &mut m.shapes[1].kind else {
+            panic!("expected the entry shape");
+        };
+        fields.push(crate::ir::EntryField {
+            name: "ack".into(),
+            target: Tref::Prim(Prim::String),
+            sources: vec![],
+            format: None,
+            transforms: vec![],
+            select: None,
+            call: None,
+            handle_call: Some(OpImplCall {
+                recv: vec!["bus".into()],
+                method: "send".into(),
+                args: vec![],
+            }),
+            binds: vec![],
+            constraints: vec![],
+            traits: vec![],
+        });
+        m
+    };
+    let unstubbed = test_with_externs(
+        vec![construction()],
+        vec![],
+        vec![free_extern_stub(vec![value_answer(serde_json::json!(
+            "cfg"
+        ))])],
+        vec![],
+        vec![],
+    );
+    let m = with_field_source(vec![unstubbed]);
+    let err = entry_tests(&m).unwrap_err();
+    assert!(
+        err.contains(
+            "reaches 'companybus.Publisher.send' during construction, which is not stubbed"
+        ),
+        "unexpected error: {err}"
+    );
+    let stubbed = test_with_externs(
+        vec![construction()],
+        vec![],
+        vec![
+            free_extern_stub(vec![value_answer(serde_json::json!("cfg"))]),
+            method_extern_stub(vec![value_answer(serde_json::json!("ok"))]),
+        ],
+        vec![],
+        vec![],
+    );
+    let m = with_field_source(vec![stubbed]);
+    let groups = entry_tests(&m).expect("plans clean");
+    assert_eq!(groups[0].tests[0].extern_stubs.len(), 2);
 }
 
 #[test]
