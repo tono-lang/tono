@@ -585,8 +585,12 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
             if matches!(shape.kind, ShapeKind::Entry { .. }) {
                 continue;
             }
-            let ident = local_name(&shape.id);
-            if let Some((_, what)) = generated.iter().find(|(g, _)| g == ident) {
+            // Compared as the emitted type identifier: a shape is written in
+            // its canonical spelling (`settings`) and cased by the codegen,
+            // so `settings` next to an entry collides with the generated
+            // `Settings` exactly as a shape already spelled `Settings` does.
+            let ident = pascal_ident(local_name(&shape.id));
+            if let Some((_, what)) = generated.iter().find(|(g, _)| *g == ident) {
                 return Err(format!(
                     "module {}: shape {} collides with the {}; rename the shape",
                     module.name, ident, what

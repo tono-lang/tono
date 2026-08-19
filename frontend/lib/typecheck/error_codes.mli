@@ -170,3 +170,10 @@ val extern_ctx_on_free_call : string
 (* A field's "= .field.method(args)" source names a method whose declared
    return is not the field's declared type. *)
 val handle_call_type_mismatch : string
+
+(* Register a code; raises [Invalid_argument] when it is already taken. Every
+   constant above goes through this, so a collision fails at load time. *)
+val register : string -> string
+
+(* Every registered code, for the uniqueness/format test. *)
+val registered : unit -> string list

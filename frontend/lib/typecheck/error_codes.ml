@@ -15,6 +15,10 @@ let register code =
     Hashtbl.add seen code ();
     code)
 
+(* Every code registered so far, in no particular order: the uniqueness
+   test walks it to prove the table is one-code-one-meaning without knowing
+   the constants by name. *)
+let registered () = Hashtbl.fold (fun code () acc -> code :: acc) seen []
 let unknown_type = register "TC0001"
 let duplicate_shape = register "TC0002"
 

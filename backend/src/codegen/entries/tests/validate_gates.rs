@@ -272,6 +272,23 @@ fn validation_rejects_shapes_and_args_spelling_generated_identifiers() {
     )
     .unwrap_err();
     assert!(err.contains("settings companion"), "{err}");
+    // The same shape in its canonical (snake) spelling, which is how the
+    // frontend actually names it, collides just the same: the comparison is
+    // on the emitted type identifier, not the raw id.
+    let settings_snake = Shape {
+        id: "m#settings".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![],
+        },
+        traits: vec![],
+    };
+    let err = validate_entries(
+        &model(vec![entry_shape("m#client", vec![]), settings_snake]),
+        &[TargetKind::Go],
+    )
+    .unwrap_err();
+    assert!(err.contains("settings companion"), "{err}");
     // A shape spelling the entry's own client type collides too.
     let client_type = Shape {
         id: "m#Client".into(),

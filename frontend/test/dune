@@ -17,6 +17,7 @@
   ext_lib_collisions_test
   op_impl_test
   handle_call_source_test
+  error_codes_test
   decl_test
   file_test
   golden_test
