@@ -36,9 +36,9 @@ synchronous in TypeScript.
 
 | target | where | shape kept on purpose |
 |---|---|---|
-| Go | `backend/codegen-tests/go-ext/fixtures/mathkit` | `Calculator[T]` is an interface; `FromFormula(expr, opts ...Option)` with `WithPrecision(int) Option`; `FromFallback(strategy, calcs ...Calculator[T])` |
-| Rust | `backend/codegen-tests/rust-ext/fixtures/mathkit` | `Calculator<T>` is a trait; `from_constant`, `from_formula`, `from_series`, `from_fallback` each return a different concrete struct; `FormulaOptions { precision: Option<u8> }` by value; `Vec<Box<dyn Calculator<T>>>`; no handle is `Clone` |
-| TypeScript | `backend/codegen-tests/ts-ext/fixtures/mathkit` | every constructor is a class (`new`); `FormulaOptions` is an optional object; `Calculator<T>[]`; `compute()` is synchronous |
+| Go | `ext/go` | `Calculator[T]` is an interface; `FromFormula(expr, opts ...Option)` with `WithPrecision(int) Option`; `FromFallback(strategy, calcs ...Calculator[T])` |
+| Rust | `ext/rust` | `Calculator<T>` is a trait; `from_constant`, `from_formula`, `from_series`, `from_fallback` each return a different concrete struct; `FormulaOptions { precision: Option<u8> }` by value; `Vec<Box<dyn Calculator<T>>>`; no handle is `Clone` |
+| TypeScript | `ext/ts` | every constructor is a class (`new`); `FormulaOptions` is an optional object; `Calculator<T>[]`; `compute()` is synchronous |
 
 ## Files
 
@@ -54,6 +54,8 @@ synchronous in TypeScript.
   refused at generation. `06-nested-call.tono.rejected` is written in the
   form the frontend rejects today, so it does not carry the `.tono`
   extension the editor grammar gate walks; it is renamed the day it parses.
+- `ext/`: the three stand-in libraries, next to the spec that binds them,
+  the same layout as the other examples with an `ext` block.
 - `verify/`: the drivers that run the generated SDK against the stand-in
   library for real, one per target, unreachable until the bench builds.
 - `gate.tsv`: the record of what each check must reach today. The gate

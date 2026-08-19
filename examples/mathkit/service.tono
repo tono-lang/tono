@@ -2,9 +2,9 @@
 // shapes real libraries have: in Go the handle is an interface and options
 // are variadic, in Rust every constructor returns a different concrete
 // struct, in TypeScript every constructor is a class reached with `new` and
-// compute() is synchronous. The three stand-in packages live under
-// backend/codegen-tests/{go,rust,ts}-ext/fixtures/mathkit; the numbered
-// capabilities named in the comments are the rows of the table in README.md.
+// compute() is synchronous. The three stand-in packages live under ext/;
+// the numbered capabilities named in the comments are the rows of the table
+// in README.md.
 //
 // Where the language cannot express the library's shape yet, this file
 // declares the nearest form it can and lets the target compiler grade it,

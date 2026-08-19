@@ -17,7 +17,6 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 root="$PWD"
 bench="$root/examples/mathkit"
-fixtures="$root/backend/codegen-tests"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -101,7 +100,7 @@ run_go() {
         cd "$sdk" && go mod init example.com/mathkit >/dev/null 2>&1 &&
             cat >>go.mod <<GOMOD
 require tono-ext-fixture/mathkit v0.0.0
-replace tono-ext-fixture/mathkit => $fixtures/go-ext/fixtures/mathkit
+replace tono-ext-fixture/mathkit => $bench/ext/go
 GOMOD
         go mod tidy >/dev/null 2>&1 && go build ./...
     ) >>"$log" 2>&1 || {
@@ -147,7 +146,7 @@ serde_json = "1"
 tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
-mathkit = { path = "$fixtures/rust-ext/fixtures/mathkit" }
+mathkit = { path = "$bench/ext/rust" }
 [features]
 default = ["reqwest"]
 reqwest = ["dep:reqwest"]
@@ -187,7 +186,7 @@ run_typescript() {
     local log="$dir/log"
     local sdk="$dir/out/typescript"
     mkdir -p "$sdk/node_modules/@tono-ext-fixture"
-    cp -R "$fixtures/ts-ext/fixtures/mathkit" "$sdk/node_modules/@tono-ext-fixture/"
+    cp -R "$bench/ext/ts" "$sdk/node_modules/@tono-ext-fixture/"
     cat >"$sdk/tsconfig.json" <<TSCONFIG
 {
   "compilerOptions": {
