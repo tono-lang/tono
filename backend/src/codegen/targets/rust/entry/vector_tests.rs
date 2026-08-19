@@ -8,12 +8,13 @@
 //! carries `#[ignore]` to stay out of a default `cargo test` run. A test that
 //! stubs an `.impl` dependency generates nothing here: the Rust bespoke ops
 //! expose no swappable per-operation seam, so only the transport stub and the
-//! live path can be exercised natively. A call whose own dependency is
-//! neither `.http` nor `.impl` can only be an extern handle method reached
-//! through the op's own `impl` body, which generation-time validation
-//! ([`TargetKind::emits_ext_handle_calls`]) already refuses for this target
-//! before any test file is built, so that combination never reaches this
-//! emitter.
+//! live path can be exercised natively. The same holds for a call whose own
+//! dependency is neither `.http` nor `.impl`: an extern handle method reached
+//! through the op's own `impl` body (hermetic on its `extern_stubs` coverage
+//! alone, with no call-scoped stub). This target emits that call but exposes
+//! no seam a test could swap the handle method through, so such a test also
+//! generates nothing here rather than a "hermetic" test that reaches the
+//! real library.
 //!
 //! Each generated file is a `#[cfg(test)]` module of the SDK crate itself
 //! (the module tree declares it), which is what lets it reach the
@@ -26,14 +27,15 @@ use crate::codegen::declared_tests::{self, PlannedTest};
 mod expects;
 use crate::codegen::group::Group;
 use crate::codegen::tree::ModuleFile;
-use crate::ir::{EnvName, HttpAnswer, StubAnswer, StubDep};
+use crate::ir::{EnvName, HttpAnswer, StubAnswer, StubDep, TestStub};
 use expects::{outcome_asserts, request_asserts};
 
 const BINDING_LANGS: [&str; 1] = ["rust"];
 
 /// The generated test files of a module's entries: one hermetic and one live
 /// file per entry that declares tests, and nothing at all for one that has
-/// none (or whose every hermetic test stubs an impl, which this target skips).
+/// none (or whose every hermetic test stubs an impl or rides only on extern
+/// handle-method stubs, which this target skips).
 pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFile> {
     let Some((entries, multi, _bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
         return Vec::new();
@@ -65,11 +67,13 @@ pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFi
                 live.push(live_test_decl(&ctx));
                 continue;
             }
-            // An impl-stubbed test is skipped for Rust (see module doc).
+            // An impl-stubbed test is skipped for Rust (see module doc), and
+            // so is a call hermetic only through its extern handle-method
+            // stubs (`hermetic_test_decl` yields nothing for it).
             if test.stub.is_some_and(|s| s.dep == StubDep::Impl) {
                 continue;
             }
-            hermetic.push(hermetic_test_decl(&ctx));
+            hermetic.extend(hermetic_test_decl(&ctx));
         }
         if !hermetic.is_empty() {
             let mut decls = vec![
@@ -125,7 +129,8 @@ fn hermetic_doc() -> Decl {
         "// Generated from the entry's declared tests: each one runs the real\n\
          // construction path and the real method, with only the stubbed\n\
          // transport swapped through the constructor's seam. Impl-stubbed tests\n\
-         // generate nothing for Rust: its bespoke ops expose no swappable seam."
+         // and tests riding only on extern handle-method stubs generate nothing\n\
+         // for Rust: neither has a swappable seam here."
             .to_string(),
     )
 }
@@ -407,48 +412,18 @@ fn invoke_block(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
 /// outcome; it stays synchronous unless construction itself is async (an
 /// `extern`-call field). A stubbed transport only attaches to an `@http`
 /// operation, so a stubbed call is always async and rides the tokio runtime
-/// the consuming crate's dev profile already carries.
-fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Decl {
+/// the consuming crate's dev profile already carries. `None` for a call with
+/// no call-scoped stub (hermetic only through extern handle-method stubs, see
+/// the module doc): nothing here can stand in for the handle method.
+fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Option<Decl> {
     let mut refs = Vec::new();
     let mut body =
         String::from("    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());\n");
     body.push_str(&env_pinning(ctx));
-    if ctx.test.call.is_some() {
-        let stub = ctx.test.stub.expect("a hermetic call has its stub");
-        let answers: Vec<&HttpAnswer> = stub
-            .answers
-            .iter()
-            .filter_map(|a| match a {
-                StubAnswer::Http(h) => Some(h),
-                _ => None,
-            })
-            .collect();
-        refs.push(super::support_symbol("HttpRequest"));
-        refs.push(super::support_symbol("HttpResponse"));
-        refs.push(super::support_symbol("HttpTransport"));
-        body.push_str(&transport_block(&answers));
-        let await_ = if construction_is_async(ctx) {
-            ".await"
-        } else {
-            ""
-        };
-        body.push_str(&format!(
-            "    let c = {expr}{await_}.expect(\"construct client\");\n",
-            expr = construction_expr(ctx, true),
-        ));
-        body.push_str(&invoke_block(ctx, &mut refs));
-        let has_output = ctx.test.op.and_then(|op| op_io(op).1).is_some();
-        body.push_str(&outcome_asserts(ctx, has_output));
-        if let Some(patterns) = ctx.test.requests {
-            body.push_str(&request_asserts(patterns));
-        }
-        Decl::raw_with(
-            format!(
-                "#[tokio::test]\nasync fn {name}() {{\n{body}}}",
-                name = test_fn_name(ctx.test, false),
-            ),
-            refs,
-        )
+    let (attr, effect) = if ctx.test.call.is_some() {
+        let stub = ctx.test.stub?;
+        body.push_str(&stubbed_call_body(ctx, stub, &mut refs));
+        ("#[tokio::test]", "async ")
     } else {
         // Construction-only: the outcome pattern reads the construction
         // error. Synchronous unless an `extern`-call field makes
@@ -461,19 +436,52 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Decl {
             expr = construction_expr(ctx, false),
         ));
         body.push_str(&outcome_asserts(ctx, false));
-        let (attr, effect) = if is_async {
+        if is_async {
             ("#[tokio::test]", "async ")
         } else {
             ("#[test]", "")
-        };
-        Decl::raw_with(
-            format!(
-                "{attr}\n{effect}fn {name}() {{\n{body}}}",
-                name = test_fn_name(ctx.test, false),
-            ),
-            refs,
-        )
+        }
+    };
+    Some(Decl::raw_with(
+        format!(
+            "{attr}\n{effect}fn {name}() {{\n{body}}}",
+            name = test_fn_name(ctx.test, false),
+        ),
+        refs,
+    ))
+}
+
+/// The body of a stubbed call: the transport stub, the client built through
+/// the seam, the invocation, and the outcome/request assertions.
+fn stubbed_call_body(ctx: &TestCtx<'_>, stub: &TestStub, refs: &mut Vec<Symbol>) -> String {
+    let answers: Vec<&HttpAnswer> = stub
+        .answers
+        .iter()
+        .filter_map(|a| match a {
+            StubAnswer::Http(h) => Some(h),
+            _ => None,
+        })
+        .collect();
+    refs.push(super::support_symbol("HttpRequest"));
+    refs.push(super::support_symbol("HttpResponse"));
+    refs.push(super::support_symbol("HttpTransport"));
+    let mut body = transport_block(&answers);
+    let await_ = if construction_is_async(ctx) {
+        ".await"
+    } else {
+        ""
+    };
+    body.push_str(&format!(
+        "    let c = {expr}{await_}.expect(\"construct client\");\n",
+        expr = construction_expr(ctx, true),
+    ));
+    body.push_str(&invoke_block(ctx, refs));
+    let has_output = ctx.test.op.and_then(|op| op_io(op).1).is_some();
+    body.push_str(&outcome_asserts(ctx, has_output));
+    if let Some(patterns) = ctx.test.requests {
+        body.push_str(&request_asserts(patterns));
     }
+    body
 }
 
 /// One live test: no stub and no pinned environment; construction reads the

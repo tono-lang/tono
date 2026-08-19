@@ -1,0 +1,9 @@
+[package]
+name = "settingskit"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Detach from the workspace this crate is vendored under: it is a stand-in
+# third-party library, not part of the generated SDK or its coverage.
+[workspace]

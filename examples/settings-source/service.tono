@@ -5,6 +5,8 @@
 // argument instead of leaving it for the compiler to infer.
 ext settingskit {
   go: "github.com/example/settingskit"
+  ts: "@example/settingskit"
+  rust: "settingskit"
 
   type env_source("Source", app_settings) {
     extern get(): app_settings {
@@ -12,11 +14,15 @@ ext settingskit {
         call: "Get"()
         ctx
       }
+      ts { call: "get"() }
+      rust { call: "get"() }
     }
   }
 
   extern new_env_source(service: string, region: string): env_source {
     go { call: "NewEnvSource"(service, region) }
+    ts { call: "newEnvSource"(service, region) }
+    rust { call: "new_env_source"(service, region) }
   }
 }
 
@@ -34,4 +40,16 @@ pub struct client {
 
   op ping(): app_settings
     impl .source.get()
+}
+
+// The library is never installed for this test: `stub settingskit.new_env_source`
+// hands construction a fake source, and `stub settingskit.env_source.get`
+// answers the method the operation's own body calls, so the assertion proves
+// the handle method's answer reached the operation's output.
+test "the source's settings become the operation's output" {
+  stub settingskit.new_env_source: settingskit.env_source {}
+  stub settingskit.env_source.get: app_settings { endpoint: "https://x.test", token: "t0" }
+  c: client { region: "us-east" }
+  got: c.ping()
+  expect got: app_settings { endpoint: "https://x.test", token: "t0" }
 }

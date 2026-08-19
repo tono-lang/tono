@@ -88,19 +88,20 @@ the nine gaps pass on any target.
 
 ### The bench proper (`service.tono`)
 
-The full three-target file compiles through the frontend and stops at
-generation on every target, before any capability above is reached, because
-the declared-test emitters do not carry what the bench needs:
+The full three-target file compiles through the frontend; Go stops at
+generation (its declared-test emitter does not carry what the bench needs)
+while TypeScript and Rust generate and stop at the capabilities:
 
 - Go (`bench go`, gen-red): a `[]float @arg` pinned in a test renders as
   `[]float64("")`, and four stubs of the same handle type in one test emit
   the same fake type four times.
-- TypeScript and Rust (`bench typescript`, `bench rust`, gen-red): the
-  emitter panics on `stub mathkit.calculator.compute` (a handle-method stub;
-  only Go renders one).
+- TypeScript and Rust (`bench typescript`, `bench rust`, build-red): the
+  handle-method stub generates now (the emitter used to panic on
+  `stub mathkit.calculator.compute`), so both targets reach the build and
+  stop at the capabilities the probes already report (2 and 8 first).
 
-These are not among the ten capabilities; they are the first thing the
-bench found. Once they clear, the same file will stop at the capabilities
+The Go blocker is not among the ten capabilities; it is the first thing the
+bench found. Once it clears, the Go bench too will stop at the capabilities
 the probes already report.
 
 ## Updating the record

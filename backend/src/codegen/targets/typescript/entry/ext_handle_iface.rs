@@ -85,7 +85,7 @@ pub(super) fn resolve_foreign_struct<'m>(
 /// The `ts`/`typescript` language block of a declared extern, if it has
 /// one (a handle method with no TypeScript binding at all is simply absent
 /// from the generated interface: nothing calls it from this target either).
-fn ts_lang(decl: &ExternDecl) -> Option<&crate::ir::ExternLang> {
+pub(super) fn ts_lang(decl: &ExternDecl) -> Option<&crate::ir::ExternLang> {
     decl.langs
         .iter()
         .find(|l| l.lang == "ts" || l.lang == "typescript")

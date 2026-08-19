@@ -7,7 +7,7 @@
 //! this module exercises the emitter's own branches directly.
 
 use super::super::test_prelude::*;
-use crate::codegen::fixtures::handle_source::handle_source_module;
+use crate::codegen::fixtures::handle_source::{handle_source_module, handle_source_test};
 use crate::ir::{Module, ShapeKind};
 
 fn rendered_text(module: &Module) -> String {
@@ -39,9 +39,10 @@ fn the_field_seam_reads_the_receiver_off_the_draft_and_projects_the_yields() {
     assert!(out.contains("s.scoped = await scopedExt(s);"), "{out}");
     // Construction became async because of the handle-method source alone
     // is not observable here (the free constructor call already forces
-    // it); the op reading the same handle still renders off the client.
+    // it); the op reading the same handle renders through its own seam,
+    // off the resolved settings the method hands it.
     assert!(
-        out.contains("await this.settings.provider.getFor(this.settings.region)"),
+        out.contains("return await probeHandleCall(this.settings);"),
         "{out}"
     );
     // Without a declared test there is no swapper to export.
@@ -98,4 +99,44 @@ fn an_entry_whose_only_call_is_a_handle_method_source_still_constructs_asynchron
     let out = rendered_text(&module);
     assert!(out.contains("static async create("), "{out}");
     assert!(out.contains("s.config = await configExt(s);"), "{out}");
+}
+
+/// A handle-method stub on the method a `= .provider.get()` field reads:
+/// the generated hermetic test swaps that field's own seam for the canned
+/// logical value, alongside the constructor stub's fake handle (whose every
+/// method, stubbed or not, only fails loudly: the stubbed one rides the seam).
+#[test]
+fn a_handle_method_stub_on_a_field_source_swaps_that_field_s_seam() {
+    let mut module = handle_source_module("ts");
+    module.tests.push(handle_source_test(
+        "resolves the field from the stub",
+        vec![],
+    ));
+    crate::codegen::declared_tests::entry_tests(&module).expect("the test plans");
+    let files = super::super::vector_tests::test_files(&module, &ts_casing());
+    let hermetic = files
+        .iter()
+        .find(|f| f.group.tests_of() == Some(("client", false)))
+        .expect("a hermetic test file");
+    let out = rendered(&hermetic.file.decls, &TsRules);
+    assert!(
+        out.contains("swapConfigExtForTest(async () => decodeCfg("),
+        "the field's seam must be swapped for the decoded logical answer: {out}"
+    );
+    assert!(
+        out.contains("swapProviderExtForTest(async () => ({"),
+        "{out}"
+    );
+    assert!(
+        out.contains("envkit.provider.get: no stub for this call in test"),
+        "{out}"
+    );
+    assert!(
+        out.contains("envkit.provider.get_for: no stub for this call in test"),
+        "{out}"
+    );
+    assert!(
+        out.contains("swapScopedExtForTest(async () => decodeCfg("),
+        "{out}"
+    );
 }

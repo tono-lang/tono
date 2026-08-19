@@ -455,16 +455,31 @@ fn raw_answer_body(ctx: &TestCtx<'_>, answer: &StubAnswer, refs: &mut Vec<Symbol
 }
 
 /// The typed literal of a declared error named by its shape, its fields filled
-/// from the answer's wire data.
+/// from the answer's wire data. An impl stub's error is one of the called
+/// op's own declared errors; a handle-method stub's error is a shape a
+/// sentinel of the method's `errors:` maps to (resolved by local name, the
+/// way `ext::declared_error_literal` resolves it), which may be answered in a
+/// construction-only test with no op at all.
 fn declared_error_literal(ctx: &TestCtx<'_>, shape: &str, data: &serde_json::Value) -> String {
-    let op = ctx.test.op.expect("an impl stub rides a call");
     let en = error_names();
-    let Some(err) = declared_tests::declared_error_by_shape(op, ctx.module, shape) else {
+    let shape_id = ctx
+        .test
+        .op
+        .and_then(|op| declared_tests::declared_error_by_shape(op, ctx.module, shape))
+        .map(|err| err.shape_id)
+        .or_else(|| {
+            ctx.module
+                .shapes
+                .iter()
+                .find(|s| crate::codegen::entries::local_name(&s.id) == shape)
+                .map(|s| s.id.clone())
+        });
+    let Some(shape_id) = shape_id else {
         // Unreachable when the tests passed validation.
         return format!("&{api}{{}}", api = en.api);
     };
-    let ty = crate::codegen::conventions::type_ident_from_id(&err.shape_id);
-    let members = shape_members(ctx.module, &err.shape_id);
+    let ty = crate::codegen::conventions::type_ident_from_id(&shape_id);
+    let members = shape_members(ctx.module, &shape_id);
     let fields: String = data
         .as_object()
         .map(|map| {

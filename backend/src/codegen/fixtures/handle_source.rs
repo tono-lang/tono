@@ -20,10 +20,11 @@
 use std::collections::BTreeMap;
 
 use crate::ir::{
-    CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam, ForeignField,
-    ForeignStruct, LangPath, Member, Model, Module, OpImplCall, OpaqueType, Prim, ReturnsField,
-    ReturnsLit, ReturnsValue, Shape, ShapeKind, Source, TemplatePart, Trait, Tref, WireBinding,
-    WireValue, YieldsPos, TONO_IR_VERSION,
+    CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam, ExternStub,
+    ExternStubTarget, ForeignField, ForeignStruct, LangPath, Member, Model, Module, OpImplCall,
+    OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue, Shape, ShapeKind, Source, StubAnswer,
+    TemplatePart, TestCall, TestConstruction, TestDecl, Trait, Tref, WireBinding, WireValue,
+    YieldsPos, TONO_IR_VERSION,
 };
 
 fn string_t() -> Tref {
@@ -413,5 +414,50 @@ pub fn handle_source_model(lang: &str) -> Model {
     Model {
         tono_ir_version: TONO_IR_VERSION,
         modules: vec![handle_source_module(lang)],
+    }
+}
+
+/// A declared test over [`handle_source_module`]'s `client`, hermetic on its
+/// extern stubs alone: `envkit.new_provider` (the handle's constructor) plus
+/// both handle methods reached at construction (`get` feeds `config`,
+/// `get_for` feeds `scoped`), each answering a logical `cfg` value. `calls`
+/// lets a caller also exercise an op (`probe`, whose own body reads
+/// `get_for` as well) without a call-scoped stub.
+pub fn handle_source_test(name: &str, calls: Vec<TestCall>) -> TestDecl {
+    let method_stub = |method: &str, read: &str, write: &str| ExternStub {
+        binding: None,
+        target: ExternStubTarget::Method {
+            lib: "envkit".into(),
+            ty: "provider".into(),
+            method: method.into(),
+        },
+        answers: vec![StubAnswer::Value {
+            value: serde_json::json!({"endpoint_read": read, "endpoint_write": write}),
+        }],
+    };
+    TestDecl {
+        name: name.into(),
+        constructions: vec![TestConstruction {
+            binding: "c".into(),
+            entry: "client".into(),
+            values: BTreeMap::new(),
+        }],
+        stubs: vec![],
+        extern_stubs: vec![
+            ExternStub {
+                binding: None,
+                target: ExternStubTarget::Free {
+                    lib: "envkit".into(),
+                    fn_: "new_provider".into(),
+                },
+                answers: vec![StubAnswer::Value {
+                    value: serde_json::json!({}),
+                }],
+            },
+            method_stub("get", "r", "w"),
+            method_stub("get_for", "sr", "sw"),
+        ],
+        calls,
+        expects: vec![],
     }
 }

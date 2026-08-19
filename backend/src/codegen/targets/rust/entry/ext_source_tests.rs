@@ -6,7 +6,9 @@
 //! a_field_sourced_from_a_handle_method_compiles_against_the_real_crate`;
 //! this module exercises the emitter's own branches directly.
 
-use crate::codegen::fixtures::handle_source::{handle_source_model, handle_source_module};
+use crate::codegen::fixtures::handle_source::{
+    handle_source_model, handle_source_module, handle_source_test,
+};
 use crate::codegen::pipeline::generate_target;
 use crate::codegen::targets::rust::types::rust_casing;
 use crate::codegen::{CodegenConfig, TargetKind};
@@ -95,4 +97,27 @@ fn an_entry_whose_only_call_is_a_handle_method_source_still_constructs_asynchron
         "{out}"
     );
     assert!(out.contains("let outcome = recv.get().await;"), "{out}");
+}
+
+/// A declared test calling `probe` (an op whose own body is `impl
+/// .provider.get_for(..)`), hermetic on its extern stubs alone with no
+/// call-scoped stub: this target has no seam to swap the handle method
+/// through, so the test generates nothing here (the same way an
+/// impl-stubbed test does) instead of dying on the missing stub or emitting
+/// a "hermetic" test that reaches the real library.
+#[test]
+fn a_call_hermetic_only_through_handle_method_stubs_generates_no_test_file() {
+    let mut module = handle_source_module("rust");
+    module.tests.push(handle_source_test(
+        "probes through the stub",
+        vec![crate::ir::TestCall {
+            binding: "got".into(),
+            client: "c".into(),
+            op: "probe".into(),
+            input: None,
+        }],
+    ));
+    let planned = crate::codegen::declared_tests::entry_tests(&module).expect("the test plans");
+    assert!(planned[0].tests[0].hermetic && planned[0].tests[0].stub.is_none());
+    assert!(super::super::vector_tests::test_files(&module, &rust_casing()).is_empty());
 }

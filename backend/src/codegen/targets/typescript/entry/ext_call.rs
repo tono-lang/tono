@@ -418,8 +418,8 @@ pub(super) fn sentinel_switch(
 /// resolution step used to inline directly), plus (only when the entry
 /// declares tests) the exported swapper a generated test goes through to
 /// stub that call. An op's own `impl` body reaching a handle's method is a
-/// different call site (`ext_handle_call::impl_call_body`, off the
-/// constructed client) and is not seamed here.
+/// different call site with a seam of its own
+/// (`ext_handle_call::op_seam_decls`), not seamed here.
 pub(super) fn seam_decls(
     entry: &EntryModel<'_>,
     n: &Names,
