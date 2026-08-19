@@ -347,11 +347,13 @@ pub fn rust_ext_fixture_model() -> Model {
         types: vec![
             OpaqueType {
                 name: "publisher".into(),
+                interface: false,
                 instance: None,
                 methods: vec![],
             },
             OpaqueType {
                 name: "relay".into(),
+                interface: false,
                 instance: None,
                 methods: vec![ExternDecl {
                     name: "send".into(),

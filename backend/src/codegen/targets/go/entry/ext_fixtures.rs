@@ -409,6 +409,7 @@ pub fn reference_example_module() -> Module {
         }],
         vec![OpaqueType {
             name: "publisher".into(),
+            interface: false,
             instance: None,
             methods: vec![go_extern(
                 "send",
@@ -691,6 +692,7 @@ pub fn ctx_extern_module() -> Module {
         vec![],
         vec![OpaqueType {
             name: "conn".into(),
+            interface: false,
             instance: None,
             methods: vec![go_extern_ctx(
                 "get",

@@ -388,6 +388,7 @@ fn call_assign_names_the_type_argument_on_a_generic_constructor() {
     );
     lib.types = vec![OpaqueType {
         name: "source".into(),
+        interface: false,
         instance: Some(Instance {
             foreign_name: "Source".into(),
             arg: Tref::Ref {

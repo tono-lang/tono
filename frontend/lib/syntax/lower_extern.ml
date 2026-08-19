@@ -150,6 +150,7 @@ and lower_opaque_type ~lower_type ~lower_select ~resolve ~diags
             inst_arg = lower_type ~params:[] ~resolve ~diags i.oi_arg;
           })
         t.opq_instance;
+    opq_interface = t.opq_interface;
     opq_methods =
       List.map
         (lower_extern ~lower_type ~lower_select ~resolve ~diags)

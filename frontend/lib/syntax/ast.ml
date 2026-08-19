@@ -289,11 +289,15 @@ type opaque_instance = {
 }
 
 (* [type name { extern ... }] — an opaque foreign handle whose only members
-   are extern methods; never serializes, never crosses the wire. *)
+   are extern methods; never serializes, never crosses the wire. The
+   [interface] marker declares the foreign type is abstract (a Go interface,
+   held by value), not a concrete struct held by pointer; tono cannot infer
+   that from the foreign name alone, and the two spell differently in Go. *)
 type opaque_type = {
   opq_name : string;
   opq_name_span : Span.span;
   opq_instance : opaque_instance option;
+  opq_interface : bool;
   opq_methods : extern_decl list;
   opq_span : Span.span;
 }

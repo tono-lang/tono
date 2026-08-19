@@ -398,6 +398,7 @@ fn bus_lib_with_send_bound_for(langs: &[&str]) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: "publisher".into(),
+            interface: false,
             instance: None,
             methods: vec![ExternDecl {
                 name: "send".into(),
@@ -490,6 +491,7 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
         structs: vec![],
         types: vec![OpaqueType {
             name: handle.into(),
+            interface: false,
             instance: None,
             methods: vec![ExternDecl {
                 name: "ping".into(),

@@ -87,7 +87,7 @@
    handle's method ([config: cfg = .provider.get()]), so one foreign
    resolution feeds several operations. It reuses v15's "impl_call" shape
    ("recv"/"method"/"args") in the field position. *)
-let current_ir_version = 22
+let current_ir_version = 23
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

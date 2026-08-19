@@ -284,12 +284,17 @@ pub struct Instance {
 }
 
 /// An opaque foreign handle whose only members are extern methods; never
-/// serializes, never crosses the wire.
+/// serializes, never crosses the wire. `interface` declares the foreign type
+/// is abstract (a Go interface, held by value), not a concrete struct held
+/// by pointer: nothing about a foreign name says which one it is, and the
+/// two spell differently in Go.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpaqueType {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance: Option<Instance>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub interface: bool,
     #[serde(default)]
     pub methods: Vec<ExternDecl>,
 }

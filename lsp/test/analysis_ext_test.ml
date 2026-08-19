@@ -61,7 +61,7 @@ let lib_src =
 
   struct go_ack { ID: string, OK: bool }
 
-  type conn {
+  type conn interface {
     extern publish(topic: string): ack {
       go {
         call: "Publish"(topic)
@@ -110,7 +110,8 @@ let hover_construct_words () =
   check "errors:" "error sentinel";
   check "sync" "not awaited";
   check "infallible" "single value with no error position";
-  check "ctx" "cancellation"
+  check "ctx" "cancellation";
+  check "interface" "abstract"
 
 let hover_request_reference () =
   let v = hover_value lib_src (at lib_src ".request") in
@@ -132,10 +133,10 @@ let hover_named_extern_and_handle () =
   Alcotest.(check bool)
     "prints the extern as fmt does" true
     (contains v "extern connect(endpoint: string): conn {");
-  let v = hover_value lib_src (at lib_src "conn {") in
+  let v = hover_value lib_src (at lib_src "conn interface {") in
   Alcotest.(check bool)
     "prints the handle with its methods" true
-    (contains v "type conn {" && contains v "extern publish");
+    (contains v "type conn interface {" && contains v "extern publish");
   let v = hover_value lib_src (at lib_src "publish(topic") in
   Alcotest.(check bool)
     "a method hovers like a free extern" true
@@ -159,7 +160,8 @@ let ext_construct_doc_is_present () =
    grammar does not spell. *)
 let ext_lib_docs_cover_the_grammar () =
   let grammar =
-    Vocab.block_words @ Vocab.lang_body_words @ [ Vocab.request_ref ]
+    Vocab.block_words @ Vocab.lang_body_words @ Vocab.type_markers
+    @ [ Vocab.request_ref ]
   in
   let documented = List.map fst Hover_docs.ext_lib_docs in
   let missing = List.filter (fun w -> not (List.mem w documented)) grammar in

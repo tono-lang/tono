@@ -98,11 +98,11 @@ pub(super) fn option_decls(
         .iter()
         .map(|f| {
             push_field_type_symbols(&f.target, module, &mut carrier_refs);
-            // A foreign opaque handle's Go type is already a pointer (a
-            // guess at the real package's return convention), so
-            // the carrier holds it directly; every other `@with` value gets
-            // the usual extra pointer so an unset option is distinguishable
-            // from a zero value.
+            // A foreign opaque handle's storage type is tono's generated
+            // interface, whose nil already means "unset", so the carrier
+            // holds it directly; every other `@with` value gets the usual
+            // extra pointer so an unset option is distinguishable from a
+            // zero value.
             let carrier_ty = if is_foreign_handle(&f.target, module) {
                 field_go_type_storage(&f.target, module)
             } else {

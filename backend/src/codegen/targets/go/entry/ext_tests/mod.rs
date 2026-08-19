@@ -95,6 +95,35 @@ fn handle_go_type_spells_a_pointer_to_the_pascal_cased_name() {
     );
 }
 
+/// An `interface` handle drops the pointer: the foreign type is abstract
+/// and Go holds an interface by value (`*Iface` is never the right type,
+/// it is a pointer to an interface, not the interface).
+#[test]
+fn handle_go_type_spells_an_interface_handle_by_value() {
+    let mut lib = handle_lib("bus", "publisher");
+    lib.types[0].interface = true;
+    let mut refs = Vec::new();
+    assert_eq!(
+        ext::handle_go_type(&lib, &lib.types[0], &mut refs),
+        Some("bus.Publisher".to_string())
+    );
+}
+
+/// The generic and interface markers compose: an instantiated abstract
+/// handle spells the foreign name with its type argument, still by value.
+#[test]
+fn handle_go_type_spells_an_instantiated_interface_handle_by_value() {
+    let mut lib = handle_lib("calckit", "meter");
+    lib.types[0].interface = true;
+    lib.types[0].instance = Some(Instance {
+        foreign_name: "Meter".into(),
+        arg: Tref::Prim(Prim::Float),
+    });
+    let mut refs = Vec::new();
+    let ty = ext::handle_go_type(&lib, &lib.types[0], &mut refs).expect("go module path is set");
+    assert!(ty.starts_with("calckit.Meter["), "{ty}");
+}
+
 /// The motivating case for generic handle instantiation: a handle
 /// instantiating a foreign generic type spells the *foreign* name (not the
 /// tono handle name), with
@@ -224,6 +253,7 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: type_name.into(),
+            interface: false,
             instance: None,
             methods: vec![ExternDecl {
                 name: "send".into(),

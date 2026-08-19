@@ -286,6 +286,7 @@ fn ext_lib_with_handle(lib: &str, handle: &str) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: handle.into(),
+            interface: false,
             instance: None,
             methods: vec![],
         }],

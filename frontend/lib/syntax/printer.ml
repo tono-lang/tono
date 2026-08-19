@@ -472,8 +472,9 @@ let print_opaque_type ~indent (t : Ast.opaque_type) : string =
         ^ escaped_string i.Ast.oi_foreign_name
         ^ ", " ^ print_ty i.Ast.oi_arg ^ ")"
   in
+  let marker = if t.Ast.opq_interface then " interface" else "" in
   braced_at ~indent
-    ("type " ^ t.Ast.opq_name ^ instance)
+    ("type " ^ t.Ast.opq_name ^ instance ^ marker)
     (List.map (print_extern ~indent:inner) t.Ast.opq_methods)
 
 (* Sections (lang paths, structs, opaque types, free externs) are separated

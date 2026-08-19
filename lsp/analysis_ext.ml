@@ -107,6 +107,11 @@ let word_at (toks : Token.t list) (off : int) : string option =
           | Token.Ident w when List.mem w Vocab.lang_body_words && top st = Lang
             ->
               Some w
+          (* A type-header marker sits between the handle's name and its
+             opening brace: the "type" word is still pending there. *)
+          | Token.Ident w
+            when List.mem w Vocab.type_markers && st.pending = Some "type" ->
+              Some w
           | Token.Ident w
             when String.equal w Vocab.request_ref
                  && st.prev = Some Token.Dot

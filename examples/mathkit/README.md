@@ -72,7 +72,7 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 
 | # | capability | where it shows | check | state today |
 |---|---|---|---|---|
-| 1 | a foreign handle that is an interface, not a pointer to a struct | Go `Calculator[T]` | `01-go-interface-handle` | build-red: the emitter spells `*mathkit.Calculator[float64]`, a pointer to an interface |
+| 1 | a foreign handle that is an interface, not a pointer to a struct | Go `Calculator[T]` | `01-go-interface-handle` | pass: the `interface` marker on the handle declaration drops the pointer, and the SDK holds the interface value itself |
 | 2 | the foreign type name per language | `Calculator` (Go, TS) vs `ConstantCalculator` (Rust) | `02-rust-foreign-name` | build-red: one name for every target; in Rust that name is the trait, "expected a type, found a trait" |
 | 3 | several concrete types for one logical handle | Rust: four structs, one trait | `03-rust-concrete-types` | build-red: the instantiation name is also re-cased (`Constantcalculator`), and one handle can only name one struct |
 | 4 | a variadic parameter | `opts ...Option`, `calcs ...Calculator[T]` | `04-go-variadic-options` | build-red: no variadic form; the precision passed positionally is refused ("cannot use uint8 as Option") |
@@ -83,8 +83,8 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 | 9 | a method synchronous in one target, asynchronous in the others | `compute()` in TS | `09-ts-sync-method` | build-red: blocked by 8 (the constructor is a class); the `sync` marker itself is accepted |
 | 10 | a handle composed and read separately | fallback + a read of one of its inputs | `10-ownership-refused` | refused, as intended: single ownership is the rule, and the generator names the field and both readers |
 
-Passing today: capability 10 (the one that is a rule, not a gap). Zero of
-the nine gaps pass on any target.
+Passing today: capability 1 (the `interface` marker) and capability 10 (the
+one that is a rule, not a gap). Eight gaps remain.
 
 ### The bench proper (`service.tono`)
 

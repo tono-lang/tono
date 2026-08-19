@@ -49,6 +49,7 @@ fn lib_with_handle_method() -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: "handle".into(),
+            interface: false,
             instance: None,
             methods: vec![ExternDecl {
                 name: "read".into(),

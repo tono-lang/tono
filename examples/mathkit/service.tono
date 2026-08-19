@@ -31,8 +31,9 @@ ext mathkit {
   // FormulaCalculator, SeriesCalculator, FallbackCalculator).
   //
   // Capability 1 (handle that is an interface): in Go the constructors
-  // return the interface value itself, never a pointer to a struct.
-  type calculator("Calculator", float) {
+  // return the interface value itself, never a pointer to a struct; the
+  // "interface" marker declares that shape.
+  type calculator("Calculator", float) interface {
     // Capability 9 (synchronous in one target, asynchronous in the others):
     // compute() blocks in TypeScript, takes a ctx in Go, is a future in Rust.
     extern compute(): float {

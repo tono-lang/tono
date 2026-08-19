@@ -285,6 +285,7 @@ mod tests {
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "publisher".into(),
+            interface: false,
             instance: None,
             methods: vec![ExternDecl {
                 name: "send".into(),
@@ -320,6 +321,7 @@ mod tests {
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "env_source".into(),
+            interface: false,
             instance: Some(crate::ir_extern_model::Instance {
                 foreign_name: "Source".into(),
                 arg: tref("settings"),
@@ -344,6 +346,7 @@ mod tests {
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "env_source".into(),
+            interface: false,
             instance: Some(crate::ir_extern_model::Instance {
                 foreign_name: "Source".into(),
                 arg: tref("settings"),

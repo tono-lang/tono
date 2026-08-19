@@ -36,6 +36,7 @@ fn handle_lib(lib: &str, ty: &str) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: ty.into(),
+            interface: false,
             instance: None,
             methods: vec![],
         }],
@@ -402,6 +403,7 @@ fn handle_call_model(
         structs: vec![],
         types: vec![OpaqueType {
             name: "h".into(),
+            interface: false,
             instance: None,
             methods: vec![ExternDecl {
                 name: "do_it".into(),
