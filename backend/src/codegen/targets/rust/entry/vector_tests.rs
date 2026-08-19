@@ -27,7 +27,7 @@ use crate::codegen::declared_tests::{self, PlannedTest};
 mod expects;
 use crate::codegen::group::Group;
 use crate::codegen::tree::ModuleFile;
-use crate::ir::{EnvName, HttpAnswer, StubAnswer, StubDep};
+use crate::ir::{EnvName, HttpAnswer, StubAnswer, StubDep, TestStub};
 use expects::{outcome_asserts, request_asserts};
 
 const BINDING_LANGS: [&str; 1] = ["rust"];
@@ -420,42 +420,10 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Option<Decl> {
     let mut body =
         String::from("    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());\n");
     body.push_str(&env_pinning(ctx));
-    let decl = if ctx.test.call.is_some() {
+    let (attr, effect) = if ctx.test.call.is_some() {
         let stub = ctx.test.stub?;
-        let answers: Vec<&HttpAnswer> = stub
-            .answers
-            .iter()
-            .filter_map(|a| match a {
-                StubAnswer::Http(h) => Some(h),
-                _ => None,
-            })
-            .collect();
-        refs.push(super::support_symbol("HttpRequest"));
-        refs.push(super::support_symbol("HttpResponse"));
-        refs.push(super::support_symbol("HttpTransport"));
-        body.push_str(&transport_block(&answers));
-        let await_ = if construction_is_async(ctx) {
-            ".await"
-        } else {
-            ""
-        };
-        body.push_str(&format!(
-            "    let c = {expr}{await_}.expect(\"construct client\");\n",
-            expr = construction_expr(ctx, true),
-        ));
-        body.push_str(&invoke_block(ctx, &mut refs));
-        let has_output = ctx.test.op.and_then(|op| op_io(op).1).is_some();
-        body.push_str(&outcome_asserts(ctx, has_output));
-        if let Some(patterns) = ctx.test.requests {
-            body.push_str(&request_asserts(patterns));
-        }
-        Decl::raw_with(
-            format!(
-                "#[tokio::test]\nasync fn {name}() {{\n{body}}}",
-                name = test_fn_name(ctx.test, false),
-            ),
-            refs,
-        )
+        body.push_str(&stubbed_call_body(ctx, stub, &mut refs));
+        ("#[tokio::test]", "async ")
     } else {
         // Construction-only: the outcome pattern reads the construction
         // error. Synchronous unless an `extern`-call field makes
@@ -468,20 +436,52 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Option<Decl> {
             expr = construction_expr(ctx, false),
         ));
         body.push_str(&outcome_asserts(ctx, false));
-        let (attr, effect) = if is_async {
+        if is_async {
             ("#[tokio::test]", "async ")
         } else {
             ("#[test]", "")
-        };
-        Decl::raw_with(
-            format!(
-                "{attr}\n{effect}fn {name}() {{\n{body}}}",
-                name = test_fn_name(ctx.test, false),
-            ),
-            refs,
-        )
+        }
     };
-    Some(decl)
+    Some(Decl::raw_with(
+        format!(
+            "{attr}\n{effect}fn {name}() {{\n{body}}}",
+            name = test_fn_name(ctx.test, false),
+        ),
+        refs,
+    ))
+}
+
+/// The body of a stubbed call: the transport stub, the client built through
+/// the seam, the invocation, and the outcome/request assertions.
+fn stubbed_call_body(ctx: &TestCtx<'_>, stub: &TestStub, refs: &mut Vec<Symbol>) -> String {
+    let answers: Vec<&HttpAnswer> = stub
+        .answers
+        .iter()
+        .filter_map(|a| match a {
+            StubAnswer::Http(h) => Some(h),
+            _ => None,
+        })
+        .collect();
+    refs.push(super::support_symbol("HttpRequest"));
+    refs.push(super::support_symbol("HttpResponse"));
+    refs.push(super::support_symbol("HttpTransport"));
+    let mut body = transport_block(&answers);
+    let await_ = if construction_is_async(ctx) {
+        ".await"
+    } else {
+        ""
+    };
+    body.push_str(&format!(
+        "    let c = {expr}{await_}.expect(\"construct client\");\n",
+        expr = construction_expr(ctx, true),
+    ));
+    body.push_str(&invoke_block(ctx, refs));
+    let has_output = ctx.test.op.and_then(|op| op_io(op).1).is_some();
+    body.push_str(&outcome_asserts(ctx, has_output));
+    if let Some(patterns) = ctx.test.requests {
+        body.push_str(&request_asserts(patterns));
+    }
+    body
 }
 
 /// One live test: no stub and no pinned environment; construction reads the

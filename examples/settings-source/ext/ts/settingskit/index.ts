@@ -7,9 +7,7 @@ export interface Source<T> {
   get(): Promise<T>;
 }
 
-export async function newEnvSource<T>(service: string, region: string): Promise<Source<T>> {
-  void service;
-  void region;
+export async function newEnvSource<T>(_service: string, _region: string): Promise<Source<T>> {
   return {
     get: async () => {
       throw new Error("the stand-in source resolves no value");

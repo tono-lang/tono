@@ -9,8 +9,15 @@
 //! file-size ceiling; `use super::*` reaches the parent's `TestCtx` and
 //! rendering helpers.
 
-use super::*;
-use crate::ir::{EntryField, ExternStub, ExternStubTarget, OpImplCall};
+use super::{decoded_value_expr, indent, json_text, ts_str, TestCtx};
+use crate::codegen::ops::{op_impl_call, op_io};
+use crate::codegen::symbol::Symbol;
+use crate::codegen::targets::typescript::entry::{
+    ext_call, ext_handle_call, ext_handle_iface, foreign_handle, module_symbol,
+};
+use crate::ir::{
+    EntryField, ErrorBinding, ExternStub, ExternStubTarget, OpImplCall, StubAnswer, Tref,
+};
 
 /// Every extern stub this test declares, wrapped as nested swap/restore
 /// pairs around `body`: `entries::plan` and `declared_tests::
@@ -43,51 +50,75 @@ fn stub_swaps(
     refs: &mut Vec<Symbol>,
 ) -> Vec<(String, String)> {
     match &stub.target {
-        ExternStubTarget::Free { lib, fn_ } => {
-            let Some(field) = ctx.entry.fields.iter().find(|f| {
-                f.call
-                    .as_ref()
-                    .is_some_and(|c| &c.ns == lib && &c.func == fn_)
-            }) else {
-                return Vec::new();
-            };
-            let answer = if super::super::foreign_handle(&field.target, ctx.module) {
-                fake_handle_expr(ctx, &field.target)
-            } else {
-                free_answer_expr(ctx, &field.target, stub, refs)
-            };
-            vec![(
-                super::super::ext_call::ext_swap_fn_name(ctx.n, field),
-                answer,
-            )]
-        }
+        ExternStubTarget::Free { lib, fn_ } => free_stub_swaps(ctx, stub, lib, fn_, refs),
         ExternStubTarget::Method { lib, ty, method } => {
-            let mut swaps = Vec::new();
-            for field in ctx.entry.fields.iter().copied() {
-                let Some(call) = &field.handle_call else {
-                    continue;
-                };
-                if call_targets(ctx, call, lib, ty, method) {
-                    swaps.push((
-                        super::super::ext_call::ext_swap_fn_name(ctx.n, field),
-                        method_answer_expr(ctx, call, Some(&field.target), stub, refs),
-                    ));
-                }
-            }
-            if let Some(op) = ctx.test.op {
-                if let Some(call) = crate::codegen::ops::op_impl_call(op) {
-                    if call_targets(ctx, call, lib, ty, method) {
-                        let (_, output) = op_io(op);
-                        swaps.push((
-                            super::super::ext_handle_call::op_swap_fn_name(ctx.n, op),
-                            method_answer_expr(ctx, call, output, stub, refs),
-                        ));
-                    }
-                }
-            }
-            swaps
+            method_stub_swaps(ctx, stub, lib, ty, method, refs)
         }
     }
+}
+
+/// A free extern-fn stub swaps the seam of the field that call sources: for
+/// a plain field, its decoded answer; for a foreign-handle field, a fake
+/// handle.
+fn free_stub_swaps(
+    ctx: &TestCtx<'_>,
+    stub: &ExternStub,
+    lib: &str,
+    fn_: &str,
+    refs: &mut Vec<Symbol>,
+) -> Vec<(String, String)> {
+    let Some(field) = ctx.entry.fields.iter().find(|f| {
+        f.call
+            .as_ref()
+            .is_some_and(|c| c.ns == lib && c.func == fn_)
+    }) else {
+        return Vec::new();
+    };
+    let answer = if foreign_handle(&field.target, ctx.module) {
+        fake_handle_expr(ctx, &field.target)
+    } else {
+        free_answer_expr(ctx, &field.target, stub, refs)
+    };
+    vec![(ext_call::ext_swap_fn_name(ctx.n, field), answer)]
+}
+
+/// A handle-method stub swaps every seam the method feeds: each
+/// `= .h.m()` field reading it, and the called op's own seam when the op's
+/// body is that call.
+fn method_stub_swaps(
+    ctx: &TestCtx<'_>,
+    stub: &ExternStub,
+    lib: &str,
+    ty: &str,
+    method: &str,
+    refs: &mut Vec<Symbol>,
+) -> Vec<(String, String)> {
+    let mut swaps = Vec::new();
+    for field in ctx.entry.fields.iter().copied() {
+        let Some(call) = &field.handle_call else {
+            continue;
+        };
+        if call_targets(ctx, call, lib, ty, method) {
+            swaps.push((
+                ext_call::ext_swap_fn_name(ctx.n, field),
+                method_answer_expr(ctx, call, Some(&field.target), stub, refs),
+            ));
+        }
+    }
+    let op_call = ctx
+        .test
+        .op
+        .and_then(|op| op_impl_call(op).map(|call| (op, call)));
+    if let Some((op, call)) = op_call {
+        if call_targets(ctx, call, lib, ty, method) {
+            let (_, output) = op_io(op);
+            swaps.push((
+                ext_handle_call::op_swap_fn_name(ctx.n, op),
+                method_answer_expr(ctx, call, output, stub, refs),
+            ));
+        }
+    }
+    swaps
 }
 
 /// Whether a handle-method call site (`.field.method(..)`) reaches the
@@ -106,7 +137,7 @@ fn call_targets(ctx: &TestCtx<'_>, call: &OpImplCall, lib: &str, ty: &str, metho
     let Tref::Ref { id, .. } = &field.target else {
         return false;
     };
-    super::super::ext_handle_iface::resolve_handle(id, ctx.module)
+    ext_handle_iface::resolve_handle(id, ctx.module)
         .is_some_and(|(l, handle)| l.name == lib && handle.name == ty)
 }
 
@@ -145,14 +176,14 @@ fn fake_handle_expr(ctx: &TestCtx<'_>, target: &Tref) -> String {
     let Tref::Ref { id, .. } = target else {
         return "async () => ({})".to_string();
     };
-    let Some((lib, handle)) = super::super::ext_handle_iface::resolve_handle(id, ctx.module) else {
+    let Some((lib, handle)) = ext_handle_iface::resolve_handle(id, ctx.module) else {
         return "async () => ({})".to_string();
     };
     let methods: Vec<String> = handle
         .methods
         .iter()
         .filter_map(|m| {
-            let lang = super::super::ext_handle_iface::ts_lang(m)?;
+            let lang = ext_handle_iface::ts_lang(m)?;
             Some(format!(
                 "  {sym}: async () => {{\n    throw new Error({msg});\n  }},\n",
                 sym = lang.symbol,
@@ -197,7 +228,7 @@ fn method_answer_expr(
                 .iter()
                 .any(|eb| eb.r#type == error.shape);
             if mapped {
-                let class = super::super::ext_call::sentinel_error_class(&error.shape);
+                let class = ext_call::sentinel_error_class(&error.shape);
                 refs.push(module_symbol(&class, ctx.module));
                 format!(
                     "async () => {{\n  throw new {class}({});\n}}",
@@ -219,7 +250,7 @@ fn method_answer_expr(
 /// The `errors:` bindings of the `ts` block of the handle method a call
 /// site reaches (empty when the method or its `ts` block is missing, which
 /// the frontend already rejected).
-fn ts_method_errors<'a>(ctx: &TestCtx<'a>, call: &OpImplCall) -> &'a [crate::ir::ErrorBinding] {
+fn ts_method_errors<'a>(ctx: &TestCtx<'a>, call: &OpImplCall) -> &'a [ErrorBinding] {
     let field: Option<&EntryField> = call
         .recv
         .first()
@@ -227,14 +258,14 @@ fn ts_method_errors<'a>(ctx: &TestCtx<'a>, call: &OpImplCall) -> &'a [crate::ir:
     let Some(Tref::Ref { id, .. }) = field.map(|f| &f.target) else {
         return &[];
     };
-    let Some((_, handle)) = super::super::ext_handle_iface::resolve_handle(id, ctx.module) else {
+    let Some((_, handle)) = ext_handle_iface::resolve_handle(id, ctx.module) else {
         return &[];
     };
     handle
         .methods
         .iter()
         .find(|m| m.name == call.method)
-        .and_then(super::super::ext_handle_iface::ts_lang)
+        .and_then(ext_handle_iface::ts_lang)
         .map(|lang| lang.errors.as_slice())
         .unwrap_or(&[])
 }
