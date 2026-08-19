@@ -545,10 +545,15 @@ echo "settings-source..."
 # (type env_source("Source", app_settings) { ... }), so the emitted Go names
 # the concrete type argument (*settingskit.Source[AppSettings],
 # settingskit.NewEnvSource[AppSettings](...)) instead of leaving it for the
-# compiler to infer, against a real (if stand-in) generic Go package.
+# compiler to infer, against a real (if stand-in) generic package per target.
+# The declared test stubs the handle method the operation's own `impl` body
+# calls (`stub settingskit.env_source.get`), so this also proves the hermetic
+# handle-method stub in Go (the fake handle) and TypeScript (the op's seam);
+# the Rust target generates no test for that combination (no seam to swap),
+# so its SDK only has to compile.
 mkdir -p "$work/settings-source"
 "$frontend" compile "$root/examples/settings-source/service.tono" --module settingssource >"$work/settings-source/ir.json"
-"$root/target/debug/tono" gen --target go --out "$work/settings-source/out" \
+"$root/target/debug/tono" gen --target go,typescript,rust --out "$work/settings-source/out" \
     --go-module example.com/settingssource "$work/settings-source/ir.json"
 (cd "$work/settings-source/out/go" && go mod init example.com/settingssource >/dev/null 2>&1 \
     && cat >>go.mod <<EOF
@@ -558,6 +563,50 @@ EOF
     go mod tidy >/dev/null \
     && go build ./...)
 (cd "$work/settings-source/out/go" && go test ./...)
+
+mkdir -p "$work/settings-source/rust-sdk/src"
+cp -R "$work/settings-source/out/rust/." "$work/settings-source/rust-sdk/src/"
+cat >"$work/settings-source/rust-sdk/Cargo.toml" <<EOF
+[package]
+name = "example_settingssource"
+version = "0.0.0"
+edition = "2021"
+[lib]
+name = "example_settingssource"
+path = "src/lib.rs"
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+settingskit = { path = "$root/examples/settings-source/ext/rust" }
+[features]
+default = ["reqwest"]
+reqwest = ["dep:reqwest"]
+[workspace]
+EOF
+(cd "$work/settings-source/rust-sdk" && cargo build --quiet && cargo test --quiet)
+
+mkdir -p "$work/settings-source/out/typescript/node_modules/@example"
+cp -R "$root/examples/settings-source/ext/ts/settingskit" "$work/settings-source/out/typescript/node_modules/@example/"
+cat >"$work/settings-source/out/typescript/tsconfig.json" <<EOF
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2020",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM"],
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["**/*.test.ts"]
+}
+EOF
+(cd "$work/settings-source/out/typescript" && "$tsc" -p tsconfig.json)
+(cd "$work/settings-source/out/typescript" && "$vitest" run)
 
 echo "all generated SDKs compile"
 

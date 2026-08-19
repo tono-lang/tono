@@ -96,3 +96,62 @@ fn an_entry_whose_only_call_is_a_handle_method_source_still_constructs_asynchron
     );
     assert!(out.contains("let outcome = recv.get().await;"), "{out}");
 }
+
+/// A declared test calling `probe` (an op whose own body is `impl
+/// .provider.get_for(..)`), hermetic on its extern stubs alone with no
+/// call-scoped stub: this target has no seam to swap the handle method
+/// through, so the test generates nothing here (the same way an
+/// impl-stubbed test does) instead of dying on the missing stub or emitting
+/// a "hermetic" test that reaches the real library.
+#[test]
+fn a_call_hermetic_only_through_handle_method_stubs_generates_no_test_file() {
+    use crate::ir::{
+        ExternStub, ExternStubTarget, StubAnswer, TestCall, TestConstruction, TestDecl,
+    };
+
+    let mut module = handle_source_module("rust");
+    let method_stub = |method: &str| ExternStub {
+        binding: None,
+        target: ExternStubTarget::Method {
+            lib: "envkit".into(),
+            ty: "provider".into(),
+            method: method.into(),
+        },
+        answers: vec![StubAnswer::Value {
+            value: serde_json::json!({"endpoint_read": "r", "endpoint_write": "w"}),
+        }],
+    };
+    module.tests.push(TestDecl {
+        name: "probes through the stub".into(),
+        constructions: vec![TestConstruction {
+            binding: "c".into(),
+            entry: "client".into(),
+            values: Default::default(),
+        }],
+        stubs: vec![],
+        extern_stubs: vec![
+            ExternStub {
+                binding: None,
+                target: ExternStubTarget::Free {
+                    lib: "envkit".into(),
+                    fn_: "new_provider".into(),
+                },
+                answers: vec![StubAnswer::Value {
+                    value: serde_json::json!({}),
+                }],
+            },
+            method_stub("get"),
+            method_stub("get_for"),
+        ],
+        calls: vec![TestCall {
+            binding: "got".into(),
+            client: "c".into(),
+            op: "probe".into(),
+            input: None,
+        }],
+        expects: vec![],
+    });
+    let planned = crate::codegen::declared_tests::entry_tests(&module).expect("the test plans");
+    assert!(planned[0].tests[0].hermetic && planned[0].tests[0].stub.is_none());
+    assert!(super::super::vector_tests::test_files(&module, &rust_casing()).is_empty());
+}

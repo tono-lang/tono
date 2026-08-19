@@ -3,7 +3,8 @@
 // Generated from the entry's declared tests: each one runs the real
 // construction path and the real method, with only the stubbed
 // transport swapped through the constructor's seam. Impl-stubbed tests
-// generate nothing for Rust: its bespoke ops expose no swappable seam.
+// and tests riding only on extern handle-method stubs generate nothing
+// for Rust: neither has a swappable seam here.
 
 use crate::payments::charges::types::*;
 

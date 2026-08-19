@@ -35,10 +35,14 @@
 //! lookups below still fail loudly on a broken invariant rather than
 //! silently miscompiling.
 
-use crate::codegen::entries::EntryModel;
-use crate::codegen::ops::error_names;
+use crate::codegen::entries::{op_local_name, EntryModel};
+use crate::codegen::ops::{error_names, input_name, op_impl_call, op_io, wire_binding};
 use crate::codegen::symbol::Symbol;
-use crate::ir::{ExternLang, ExternParam, Module, OpImplCall};
+use crate::codegen::syntax::render_type;
+use crate::codegen::targets::typescript::render::TsRules;
+use crate::codegen::targets::typescript::types::type_expr_of;
+use crate::codegen::tree::Decl;
+use crate::ir::{ExternLang, ExternParam, Module, OpImplCall, Shape};
 
 use super::checks::field_path_expr;
 use super::ext_call::{render_arg, returns_value_expr, sentinel_switch};
@@ -193,11 +197,13 @@ fn call_parts(
     )
 }
 
-/// [`crate::codegen::targets::typescript::entry::mod::op_method`]'s branch
-/// for an operation whose own body is `impl .field.method(args)`: builds the
-/// call, projects `yields`/`returns` into the op's own declared output, and
-/// maps a declared sentinel (or any unmapped failure) onto the same
-/// `ContractError` boundary a free extern call uses.
+/// The body of an operation whose own implementation is `impl
+/// .field.method(args)`, as the module-scoped seam the generated method
+/// goes through ([`op_seam_decls`]): builds the call off the resolved
+/// `Settings` `s` (the seam's own parameter, the same root a field's
+/// `= .h.m()` seam reads), projects `yields`/`returns` into the op's own
+/// declared output, and maps a declared sentinel (or any unmapped failure)
+/// onto the same `ContractError` boundary a free extern call uses.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn impl_call_body(
     entry: &EntryModel<'_>,
@@ -215,7 +221,7 @@ pub(super) fn impl_call_body(
             handle_call_ref_expr(entry, config, path, input_name)
         };
     let site = CallSite {
-        recv_root: "this.settings",
+        recv_root: "s",
         ref_expr: &ref_expr,
         ret,
         throw,
@@ -225,6 +231,110 @@ pub(super) fn impl_call_body(
     format!(
         "  try {{\n    const raw = await {call_expr};\n    {assign}\n  }} catch (e) {{\n{switch}    {fallback}\n  }}"
     )
+}
+
+/// The module-local binding an `impl .field.method(args)` operation's
+/// generated method calls instead of reaching the handle inline: the same
+/// mutable indirection a bespoke `ext impl` op ([`super::impl_op`]) and a
+/// free extern-fn field ([`super::ext_call`]) already have, so a declared
+/// test can stub the handle method by swapping this one binding without a
+/// fake handle whose foreign raw shape it would have to invent.
+pub(super) fn op_seam_var(n: &super::Names, op: &Shape) -> String {
+    super::camel(&format!(
+        "{}{}_handle_call",
+        n.op_prefix,
+        op_local_name(&op.id)
+    ))
+}
+
+/// The exported swapper a generated test simulates a handle-method stub
+/// through, for one operation's seam.
+pub(super) fn op_swap_fn_name(n: &super::Names, op: &Shape) -> String {
+    format!(
+        "swap{}HandleCallForTest",
+        super::pascal(&format!("{}{}", n.op_prefix, op_local_name(&op.id)))
+    )
+}
+
+/// The per-operation seam bindings of an entry's `impl .field.method(args)`
+/// operations: one mutable `let` per such op (an async function taking the
+/// resolved `Settings` and the op's own input, performing the real
+/// call/projection/error-mapping), plus (only when the entry declares tests,
+/// so the shipped surface stays clean without opt-in) the exported swapper
+/// the generated tests go through.
+pub(super) fn op_seam_decls(
+    entry: &EntryModel<'_>,
+    n: &super::Names,
+    module: &Module,
+    config: &crate::codegen::casing::CasingConfig,
+    helpers: &mut super::Helpers,
+    has_tests: bool,
+) -> Vec<Decl> {
+    let mut decls = Vec::new();
+    for op in entry.operations {
+        if wire_binding(op).is_some() {
+            continue;
+        }
+        let Some(call) = op_impl_call(op) else {
+            continue;
+        };
+        let (input, output) = op_io(op);
+        let mut refs = Vec::new();
+        let params = match input {
+            Some(t) => {
+                refs.extend(super::type_refs(t, module));
+                format!(
+                    "s: {}, input: {}",
+                    n.settings,
+                    render_type(&type_expr_of(t), &TsRules)
+                )
+            }
+            None => format!("s: {}", n.settings),
+        };
+        let arg_names = if input.is_some() { "s, input" } else { "s" };
+        if let Some(t) = output {
+            refs.extend(super::type_refs(t, module));
+        }
+        let ret = output
+            .map(|t| render_type(&type_expr_of(t), &TsRules))
+            .unwrap_or_else(|| "void".to_string());
+        let throw = |expr: String| format!("throw {expr};");
+        let body = impl_call_body(
+            entry,
+            config,
+            module,
+            input_name(op),
+            call,
+            &ret,
+            &throw,
+            &mut refs,
+            &mut helpers.ext_error_types,
+        );
+        let seam = op_seam_var(n, op);
+        let call_name = format!(".{}.{}", call.recv.join("."), call.method);
+        let mut text = format!(
+            "// {seam} is the call the generated method goes through to reach\n\
+             // {call_name} on the resolved handle (a test that simulates an outcome swaps\n\
+             // this module-local one instead).\n\
+             let {seam}: ({params}) => Promise<{ret}> = async ({arg_names}) => {{\n{body}\n}};",
+        );
+        if has_tests {
+            text.push_str(&format!(
+                "\n\n// {swap} swaps the handle-method call {local} goes through and returns the\n\
+                 // previous one; a test generated from the declared tests simulates an\n\
+                 // outcome with it and restores the real call afterwards.\n\
+                 export function {swap}(next: typeof {seam}): typeof {seam} {{\n\
+                 \x20 const prev = {seam};\n\
+                 \x20 {seam} = next;\n\
+                 \x20 return prev;\n\
+                 }}",
+                swap = op_swap_fn_name(n, op),
+                local = op_local_name(&op.id),
+            ));
+        }
+        decls.push(Decl::raw_with(text, refs));
+    }
+    decls
 }
 
 /// A field's own `= .field.method(args)` construction source, as the body
@@ -257,12 +367,12 @@ pub(super) fn handle_call_body(
     format!("try {{\n  const raw = await {call_expr};\n  {assign}\n}} catch (e) {{\n{switch}  {fallback}\n}}")
 }
 
-/// [`ext_call::render_arg`]'s `Ref` resolver for a handle-method call site:
-/// the op's own declared input parameter (its head matching `input_name`,
-/// the same recognition Go's `ref_expr` closure in
+/// [`ext_call::render_arg`]'s `Ref` resolver for an op's own handle-method
+/// call site: the op's own declared input parameter (its head matching
+/// `input_name`, the same recognition Go's `ref_expr` closure in
 /// `go/entry/ext.rs::impl_call_body` performs) or a sibling entry field off
-/// `this.settings`, instead of `ext_call.rs`'s default (a sibling field off
-/// the seam function's own parameter `s`).
+/// the seam's resolved `Settings` `s` (`ext_call.rs`'s default, reached
+/// through `field_path_expr` here since the head may also be the input).
 fn handle_call_ref_expr(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
@@ -282,7 +392,7 @@ fn handle_call_ref_expr(
                 out
             }
         }
-        _ => field_path_expr(entry, config, path, "this.settings"),
+        _ => field_path_expr(entry, config, path, "s"),
     }
 }
 

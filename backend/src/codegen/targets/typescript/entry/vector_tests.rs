@@ -7,11 +7,10 @@
 //! whose call has no stub runs against the real dependency, so it lands in the
 //! live file, gated behind `TONO_LIVE_TESTS=1` so it stays out of a default
 //! `vitest` run; a construction-only test is hermetic by nature. A call whose
-//! own dependency is neither `.http` nor `.impl` can only be an extern handle
-//! method reached through the op's own `impl` body, which generation-time
-//! validation ([`TargetKind::emits_ext_handle_calls`]) already refuses for
-//! this target before any test file is built, so that combination never
-//! reaches this emitter.
+//! own dependency is neither `.http` nor `.impl` is an extern handle method
+//! reached through the op's own `impl` body: hermetic on its `extern_stubs`
+//! coverage alone, with the handle-method stub swapping the op's own seam
+//! ([`super::ext_handle_call::op_seam_decls`]; see `vector_extern`).
 //!
 //! Unlike Go's shared package scope, each test file is its own ES module, so
 //! it imports the surface it exercises. Each test body is self-contained
@@ -38,6 +37,10 @@ use super::{field_camel_ren, literal, module_symbol, names, support_symbol, Name
 #[path = "vector_expects.rs"]
 mod expects;
 use expects::{eq_assert, failure_asserts, request_asserts, struct_asserts};
+
+#[path = "vector_extern.rs"]
+mod extern_stubs;
+use extern_stubs::wrap_extern_stubs;
 
 const BINDING_LANGS: [&str; 2] = ["ts", "typescript"];
 
@@ -441,76 +444,6 @@ fn invoke_and_expect(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
     text
 }
 
-/// The canned answer of a free extern-fn stub, as the value the seam's swap
-/// installs: a plain arrow returning the decoded value (the extern's
-/// declared `returns:`-projected logical value, or the field's own declared
-/// type -- both stub kinds only ever answer a single `Value`, matching
-/// `validate_extern_stub`'s own restriction to `StubAnswer::Value` for a
-/// free function).
-fn extern_stub_answer_expr(
-    ctx: &TestCtx<'_>,
-    target: &Tref,
-    stub: &crate::ir::ExternStub,
-    refs: &mut Vec<Symbol>,
-) -> String {
-    let value = match stub.answers.first() {
-        Some(StubAnswer::Value { value }) => value,
-        // Rejected by `validate_extern_stub`: a free-fn stub answers a plain
-        // value only.
-        _ => &serde_json::Value::Null,
-    };
-    format!(
-        "async () => {}",
-        decoded_value_expr(target, value, refs, ctx.module)
-    )
-}
-
-/// Every free extern-fn stub this test declares, wrapped as nested
-/// swap/restore pairs around `body`: `entries::plan` and
-/// `declared_tests::reachable_externs` guarantee every extern call the
-/// construction path reaches is covered by exactly one of these before
-/// generation reaches here, so this only has to spell the swap itself, not
-/// validate coverage again. A handle-method stub (`ExternStubTarget::Method`)
-/// has nothing to wrap yet: no target's codegen consumes an op's own
-/// `impl_call` body (see `ir.rs`'s note by `OpImplCall`), so a test that
-/// reaches one is unreachable through this target today.
-fn wrap_extern_stubs(ctx: &TestCtx<'_>, body: String, refs: &mut Vec<Symbol>) -> String {
-    let mut wrapped = body;
-    for stub in &ctx.test.extern_stubs {
-        let crate::ir::ExternStubTarget::Free { lib, fn_ } = &stub.target else {
-            panic!(
-                "a handle-method extern stub was planned for a TypeScript test, but no TypeScript \
-                 codegen consumes an op's own impl_call body yet"
-            );
-        };
-        let field = ctx
-            .entry
-            .fields
-            .iter()
-            .find(|f| {
-                f.call
-                    .as_ref()
-                    .is_some_and(|c| &c.ns == lib && &c.func == fn_)
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "extern stub on '{lib}.{fn_}' names no field of entry '{}'",
-                    ctx.entry.name
-                )
-            });
-        let swap = super::ext_call::ext_swap_fn_name(ctx.n, field);
-        refs.push(module_symbol(&swap, ctx.module));
-        let answer = extern_stub_answer_expr(ctx, &field.target, stub, refs);
-        wrapped = format!(
-            "const prev{Field} = {swap}({answer});\n\
-             try {{\n{inner}}} finally {{\n  {swap}(prev{Field});\n}}\n",
-            Field = super::pascal(&field.name),
-            inner = indent(&wrapped, "  "),
-        );
-    }
-    wrapped
-}
-
 /// Whether this entry's construction is async: true whenever a declared
 /// field resolves through an `extern` call, which forces the class's own
 /// constructor private and construction through `static async create`/
@@ -537,8 +470,7 @@ fn construction_expr(ctx: &TestCtx<'_>, args: &str) -> String {
 fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>) -> String {
     refs.push(module_symbol(&ctx.n.client, ctx.module));
     let args = construction_args(ctx);
-    let body = if ctx.test.call.is_some() {
-        let stub = ctx.test.stub.expect("a hermetic call has its stub");
+    let body = if let Some(stub) = ctx.test.call.and(ctx.test.stub) {
         match stub.dep {
             StubDep::Http => {
                 refs.push(support_symbol("HttpRequest"));
@@ -621,6 +553,15 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
                 )
             }
         }
+    } else if ctx.test.call.is_some() {
+        // A call with no call-scoped stub: the op's own `impl .h.m()` body,
+        // hermetic through the handle-method stub `wrap_extern_stubs`
+        // installs on the op's seam below.
+        format!(
+            "const c = {construct};\n{invoke}",
+            construct = construction_expr(ctx, &args),
+            invoke = invoke_and_expect(ctx, refs),
+        )
     } else {
         // Construction-only: the outcome pattern reads the construction error.
         match ctx.test.outcome {

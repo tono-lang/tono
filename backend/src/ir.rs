@@ -71,7 +71,8 @@ pub use crate::ir_tests_model::*;
 /// reuses the `lit` `CallArg` variant v14 introduced for ctor-field values,
 /// now also reachable as a bare call argument -- no wire-shape change
 /// there, only a new use site (`CallArg`'s codec already accepted `lit` at
-/// any position). Surface-and-IR only; no codegen consumes `impl_call` yet.
+/// any position). Surface-and-IR only at the time; every target's codegen
+/// consumes `impl_call` since.
 /// v17 added `WireValue::Call`: an extern call read as a @header/@query/
 /// @body value. Its arguments mirror `CallArg`'s `field`/`param`/`lit`/
 /// `ctor` tags, plus a reserved `request` tag for `.request`, the

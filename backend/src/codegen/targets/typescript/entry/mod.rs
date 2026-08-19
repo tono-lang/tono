@@ -289,6 +289,14 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             &mut helpers,
             has_tests,
         ));
+        own.extend(ext_handle_call::op_seam_decls(
+            entry,
+            &n,
+            module,
+            config,
+            &mut helpers,
+            has_tests,
+        ));
         own.extend(class_decl(
             entry,
             &n,
@@ -348,7 +356,6 @@ fn op_method(
     bound: &[BoundExtension<'_>],
     timeout_field_expr: &dyn Fn(&[String]) -> String,
     refs: &mut Vec<Symbol>,
-    helpers: &mut Helpers,
 ) -> String {
     let en = error_names();
     let name = method_name(op, config);
@@ -402,25 +409,23 @@ fn op_method(
         // present, matching the Go target's own dispatch order; otherwise the
         // operation is implemented by bespoke sources the frontend proved are
         // bound, and the generator gate proved are bound for this target.
-        if let Some(call) = crate::codegen::ops::op_impl_call(op) {
-            let body = ext_handle_call::impl_call_body(
-                entry,
-                config,
-                module,
-                crate::codegen::ops::input_name(op),
-                call,
-                &ret,
-                &throw,
-                refs,
-                &mut helpers.ext_error_types,
-            );
+        if crate::codegen::ops::op_impl_call(op).is_some() {
+            // The call itself lives in the op's module-scoped seam
+            // (`ext_handle_call::op_seam_decls`), so a declared test can
+            // stub the handle method by swapping that one binding.
+            let seam = ext_handle_call::op_seam_var(n, op);
+            let args = if input.is_some() {
+                "this.settings, input"
+            } else {
+                "this.settings"
+            };
             let doc = doc_of(&op.traits)
                 .map(|d| format!("  // {}\n", d.replace('\n', "\n  // ")))
                 .unwrap_or_default();
             return format!(
                 "{doc}  async {name}({param}): Promise<{ret}> {{\n\
                  {validate_block}\
-                 {body}\n\
+                 \x20   return await {seam}({args});\n\
                  \x20 }}",
             );
         }

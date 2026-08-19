@@ -382,6 +382,17 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                             unsupported
                         ));
                     }
+                    // Resolvable for the targets that will emit it: the gate
+                    // above says the target can emit such calls, not that
+                    // this method carries a binding for it.
+                    super::validate_calls::op_impl_call_resolves(
+                        module,
+                        &entry.declared(),
+                        local_name(&op.id),
+                        call,
+                        targets,
+                    )
+                    .map_err(|e| format!("module {}: entry {} {}", module.name, entry.name, e))?;
                 }
             }
             super::validate_ownership::forwarded_handle_has_one_reader(module, entry)

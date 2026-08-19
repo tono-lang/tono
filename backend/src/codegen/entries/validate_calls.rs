@@ -7,7 +7,7 @@
 
 use super::validate::{is_foreign_ref, ref_id, ref_paths};
 use crate::codegen::output::TargetKind;
-use crate::ir::{EntryField, ExternDecl, Module};
+use crate::ir::{EntryField, ExternDecl, Module, OpImplCall};
 
 /// A field's own `= ns.fn(args)` call cannot forward a sibling field that is
 /// itself an *injected* (not tono-constructed) foreign handle. A handle
@@ -116,6 +116,52 @@ pub(super) fn handle_call_resolves(
         call.recv.join("."),
         call.method
     );
+    let decl = handle_method_of(module, declared, call, &site)?;
+    // A method's declared return is spelled through the same projection an
+    // op's own `impl` output is (a logical wire type); no target spells a
+    // foreign handle in that position, so a field would compile against a
+    // type its emitter never named. Rejected here rather than at the
+    // target compiler.
+    if ref_id(&field.target).is_some_and(|id| is_foreign_ref(module, id)) {
+        return Err(format!(
+            "{site}: the field is itself a foreign handle; a handle method call only sources a field of a logical (non-handle) type, construct a handle with a free extern call instead"
+        ));
+    }
+    extern_binds_every_target(&site, &call.method, decl, targets)
+}
+
+/// An operation's own `impl .field.method(args)` body must name a foreign
+/// handle field of its entry and one of its declared methods, bound for
+/// every target being generated: the same resolution
+/// [`handle_call_resolves`] performs for a field's `= .field.method(args)`
+/// source, at the op's own call site. Without it a target whose binding the
+/// method lacks would meet "no block for my language" inside its emitter as
+/// a pipeline defect (a panic) instead of an authoring error naming the op.
+pub(super) fn op_impl_call_resolves(
+    module: &Module,
+    declared: &[&EntryField],
+    op_name: &str,
+    call: &OpImplCall,
+    targets: &[TargetKind],
+) -> Result<(), String> {
+    let site = format!(
+        "operation {op_name} impl .{}.{}(..)",
+        call.recv.join("."),
+        call.method
+    );
+    let decl = handle_method_of(module, declared, call, &site)?;
+    extern_binds_every_target(&site, &call.method, decl, targets)
+}
+
+/// The declared handle method a `.field.method(args)` call site (a field
+/// source or an op's own body) reaches: the receiver names a foreign-handle
+/// field of the entry, and the method one of that handle's own.
+fn handle_method_of<'m>(
+    module: &'m Module,
+    declared: &[&EntryField],
+    call: &OpImplCall,
+    site: &str,
+) -> Result<&'m ExternDecl, String> {
     let Some(head) = call.recv.first() else {
         return Err(format!("{site}: the handle method call has no receiver"));
     };
@@ -134,23 +180,16 @@ pub(super) fn handle_call_resolves(
             "{site}: receiver {head} is not a foreign handle field; a handle method call reads a method of a field typed by an ext block's opaque type"
         ));
     };
-    let Some(decl) = handle.methods.iter().find(|m| m.name == call.method) else {
-        return Err(format!(
-            "{site}: handle {} declares no method named {}",
-            handle.name, call.method
-        ));
-    };
-    // A method's declared return is spelled through the same projection an
-    // op's own `impl` output is (a logical wire type); no target spells a
-    // foreign handle in that position, so a field would compile against a
-    // type its emitter never named. Rejected here rather than at the
-    // target compiler.
-    if ref_id(&field.target).is_some_and(|id| is_foreign_ref(module, id)) {
-        return Err(format!(
-            "{site}: the field is itself a foreign handle; a handle method call only sources a field of a logical (non-handle) type, construct a handle with a free extern call instead"
-        ));
-    }
-    extern_binds_every_target(&site, &call.method, decl, targets)
+    handle
+        .methods
+        .iter()
+        .find(|m| m.name == call.method)
+        .ok_or_else(|| {
+            format!(
+                "{site}: handle {} declares no method named {}",
+                handle.name, call.method
+            )
+        })
 }
 
 /// The per-target half of resolving an extern call (free or method): a

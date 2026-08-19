@@ -341,10 +341,23 @@ fn rendered_text(module: &Module) -> String {
 #[test]
 fn a_handle_method_call_awaits_the_receiver_typed_by_its_own_generated_interface() {
     let out = rendered_text(&module_with_ops(vec![publish_op()]));
+    // The call itself lives in the op's module-scoped seam (read off its
+    // `Settings` parameter), and the method goes through that seam, so a
+    // declared test can stub the handle method by swapping one binding.
     assert!(
-        out.contains("const raw = await this.settings.bus.send(this.settings.topic, input.body);"),
+        out.contains("let publishHandleCall: (s: Settings, input: PublishInput) => Promise<Ack> = async (s, input) => {"),
         "{out}"
     );
+    assert!(
+        out.contains("const raw = await s.bus.send(s.topic, input.body);"),
+        "{out}"
+    );
+    assert!(
+        out.contains("return await publishHandleCall(this.settings, input);"),
+        "{out}"
+    );
+    // Without a declared test there is no swapper to export.
+    assert!(!out.contains("swapPublishHandleCallForTest"), "{out}");
     assert!(out.contains("export interface PublisherHandle {"), "{out}");
     assert!(
         out.contains("send(topic: string, body: string): Promise<RawAck>;"),
@@ -383,10 +396,7 @@ fn an_unmapped_failure_falls_back_to_contract_error_naming_the_call() {
 #[test]
 fn a_method_with_no_yields_narrows_the_honestly_unknown_raw_result_to_the_op_s_own_output() {
     let out = rendered_text(&module_with_ops(vec![heartbeat_op()]));
-    assert!(
-        out.contains("const raw = await this.settings.bus.ping();"),
-        "{out}"
-    );
+    assert!(out.contains("const raw = await s.bus.ping();"), "{out}");
     assert!(out.contains("ping(): Promise<unknown>;"), "{out}");
     assert!(out.contains("return raw as string;"), "{out}");
 }
@@ -403,7 +413,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
 fn a_call_template_s_literal_list_and_ctor_arguments_render_verbatim() {
     let out = rendered_text(&module_with_ops(vec![tag_op()]));
     assert!(
-        out.contains("await this.settings.bus.tag(\"v1\", [\"a\", \"b\"], { k: \"v\" });"),
+        out.contains("await s.bus.tag(\"v1\", [\"a\", \"b\"], { k: \"v\" });"),
         "{out}"
     );
 }
@@ -411,8 +421,124 @@ fn a_call_template_s_literal_list_and_ctor_arguments_render_verbatim() {
 #[test]
 fn a_bare_reference_to_the_op_s_own_input_reads_the_whole_parameter() {
     let out = rendered_text(&module_with_ops(vec![echo_op()]));
+    assert!(out.contains("await s.bus.echo(input);"), "{out}");
+}
+
+/// A declared test whose call is an `impl .bus.send(..)` op, hermetic
+/// through its extern stubs alone (no call-scoped stub): the generated test
+/// swaps the op's own seam for the canned logical answer, and the handle
+/// field's constructor stub installs a fake handle whose methods only fail
+/// loudly, so neither the real constructor nor the real method is reached.
+fn stubbed_publish_module(answer: crate::ir::StubAnswer) -> Module {
+    use crate::ir::{ExternStub, ExternStubTarget, TestCall, TestConstruction, TestDecl};
+    use std::collections::BTreeMap;
+
+    let mut module = module_with_ops(vec![publish_op()]);
+    module.tests = vec![TestDecl {
+        name: "publishes through the stub".into(),
+        constructions: vec![TestConstruction {
+            binding: "c".into(),
+            entry: "client".into(),
+            values: BTreeMap::from([("topic".to_string(), serde_json::json!("news"))]),
+        }],
+        stubs: vec![],
+        extern_stubs: vec![
+            ExternStub {
+                binding: None,
+                target: ExternStubTarget::Free {
+                    lib: "bus".into(),
+                    fn_: "connect".into(),
+                },
+                answers: vec![crate::ir::StubAnswer::Value {
+                    value: serde_json::json!({}),
+                }],
+            },
+            ExternStub {
+                binding: None,
+                target: ExternStubTarget::Method {
+                    lib: "bus".into(),
+                    ty: "publisher".into(),
+                    method: "send".into(),
+                },
+                answers: vec![answer],
+            },
+        ],
+        calls: vec![TestCall {
+            binding: "got".into(),
+            client: "c".into(),
+            op: "publish".into(),
+            input: Some(serde_json::json!({"body": "hi"})),
+        }],
+        expects: vec![],
+    }];
+    module
+}
+
+fn hermetic_test_text(module: &Module) -> String {
+    let files = super::super::vector_tests::test_files(module, &ts_casing());
+    let hermetic = files
+        .iter()
+        .find(|f| f.group.tests_of() == Some(("client", false)))
+        .expect("a hermetic test file");
+    rendered(&hermetic.file.decls, &TsRules)
+}
+
+#[test]
+fn a_handle_method_stub_on_the_called_op_swaps_the_op_s_seam_in_the_generated_hermetic_test() {
+    let module = stubbed_publish_module(crate::ir::StubAnswer::Value {
+        value: serde_json::json!({"ok": "yes"}),
+    });
+    let out = hermetic_test_text(&module);
     assert!(
-        out.contains("await this.settings.bus.echo(input);"),
+        out.contains("swapPublishHandleCallForTest(async () => decodeAck({\"ok\":\"yes\"}))"),
+        "the op's seam must be swapped for the decoded logical answer: {out}"
+    );
+    // The handle field's own stub installs a fake satisfying the handle
+    // interface, never a decoder the module does not have.
+    assert!(out.contains("swapBusExtForTest(async () => ({"), "{out}");
+    assert!(
+        out.contains("bus.publisher.send: no stub for this call in test"),
         "{out}"
     );
+    assert!(!out.contains("decodePublisher"), "{out}");
+    // Hermetic on the extern stubs alone: bare construction, no transport.
+    assert!(out.contains("const c = await Client.create("), "{out}");
+    assert!(!out.contains("forTest"), "{out}");
+    // And the client exports the swapper for the tested entry.
+    let client = rendered_text(&module);
+    assert!(
+        client.contains("export function swapPublishHandleCallForTest("),
+        "{client}"
+    );
+}
+
+#[test]
+fn a_handle_method_stub_answering_a_declared_sentinel_error_throws_its_typed_class() {
+    let module = stubbed_publish_module(crate::ir::StubAnswer::Error {
+        error: crate::ir::AnswerError {
+            shape: "overloaded".into(),
+            data: serde_json::json!({"message": "busy"}),
+        },
+    });
+    let out = hermetic_test_text(&module);
+    assert!(
+        out.contains("throw new OverloadedError({\"message\":\"busy\"});"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_handle_method_stub_answering_a_shape_no_ts_sentinel_maps_throws_a_plain_error() {
+    let module = stubbed_publish_module(crate::ir::StubAnswer::Error {
+        error: crate::ir::AnswerError {
+            shape: "throttled".into(),
+            data: serde_json::json!({}),
+        },
+    });
+    let out = hermetic_test_text(&module);
+    assert!(
+        out.contains("throw new Error(\"simulated throttled\");"),
+        "{out}"
+    );
+    assert!(!out.contains("ThrottledError"), "{out}");
 }

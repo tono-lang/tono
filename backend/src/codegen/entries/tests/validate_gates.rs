@@ -361,7 +361,7 @@ fn a_loose_operation_with_a_wire_binding_is_rejected() {
 
 /// An entry op whose own implementation is a call into a foreign handle's
 /// method (`impl .bus.send(..)`), named after the entry, the op, the field,
-/// and the method.
+/// and the method; `bus` is an injected `bus#publisher` handle field.
 fn entry_with_handle_call() -> Shape {
     let op = Shape {
         id: "m#client.publish".into(),
@@ -382,18 +382,54 @@ fn entry_with_handle_call() -> Shape {
     Shape {
         id: "m#client".into(),
         kind: ShapeKind::Entry {
-            fields: vec![],
+            fields: vec![handle_field("bus", "bus", "publisher", vec![Source::Arg])],
             operations: vec![op],
         },
         traits: vec![],
     }
 }
 
+/// The `bus` lib behind [`entry_with_handle_call`]: one `publisher` handle
+/// whose `send` method is bound for each of `langs`.
+fn bus_lib_with_send_bound_for(langs: &[&str]) -> ExtLib {
+    ExtLib {
+        name: "bus".into(),
+        langs: vec![],
+        structs: vec![],
+        types: vec![OpaqueType {
+            name: "publisher".into(),
+            instance: None,
+            methods: vec![ExternDecl {
+                name: "send".into(),
+                params: vec![],
+                r#return: Tref::Prim(crate::ir::Prim::String),
+                langs: langs
+                    .iter()
+                    .map(|lang| ExternLang {
+                        lang: (*lang).into(),
+                        symbol: "send".into(),
+                        call_args: vec![],
+                        yields: vec![],
+                        returns: None,
+                        errors: vec![],
+                        sync: false,
+                        infallible: false,
+                        ctx: false,
+                    })
+                    .collect(),
+            }],
+        }],
+        externs: vec![],
+    }
+}
+
 #[test]
 fn every_target_now_accepts_an_op_own_extern_handle_call() {
+    let mut module = module_of(vec![entry_with_handle_call()]);
+    module.ext_libs = vec![bus_lib_with_send_bound_for(&["go", "ts", "rust"])];
     let m = crate::ir::Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
-        modules: vec![module_of(vec![entry_with_handle_call()])],
+        modules: vec![module],
     };
     // Go, TypeScript and Rust all emit an op's own extern handle-method call
     // now, so no combination of the three targets trips the
@@ -410,7 +446,41 @@ fn every_target_now_accepts_an_op_own_extern_handle_call() {
     .is_ok());
 }
 
-/// A handle lib declaring one opaque type and one free constructor that
+/// An op's own `impl .bus.send(..)` whose method lacks a binding for a
+/// requested target is refused by name at generation time (the same
+/// resolution a `= .bus.send(..)` field source gets), instead of the
+/// target's emitter meeting the missing block as a pipeline defect.
+#[test]
+fn an_op_own_handle_call_whose_method_is_unbound_for_a_target_is_refused_by_name() {
+    let mut module = module_of(vec![entry_with_handle_call()]);
+    module.ext_libs = vec![bus_lib_with_send_bound_for(&["go"])];
+    let m = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module],
+    };
+    assert!(validate_entries(&m, &[TargetKind::Go]).is_ok());
+    for target in [TargetKind::TypeScript, TargetKind::Rust] {
+        let err = validate_entries(&m, &[TargetKind::Go, target]).unwrap_err();
+        assert!(
+            err.contains("operation client.publish impl .bus.send(..)")
+                && err.contains("extern send declares no"),
+            "{err}"
+        );
+    }
+    // The receiver must be a foreign-handle field of the entry, and the
+    // method one the handle declares.
+    let mut orphan = module_of(vec![entry_with_handle_call()]);
+    orphan.ext_libs = vec![];
+    let orphan = crate::ir::Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![orphan],
+    };
+    let err = validate_entries(&orphan, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("not a foreign handle field"), "{err}");
+}
+
+/// A handle lib declaring one opaque type (with a Go-bound `ping` method,
+/// the one the ownership cases' op reads) and one free constructor that
 /// returns it, so a field can either construct the handle (`field.call`) or
 /// be injected as one (`@arg`, no `call`).
 fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLib {
@@ -421,7 +491,22 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
         types: vec![OpaqueType {
             name: handle.into(),
             instance: None,
-            methods: vec![],
+            methods: vec![ExternDecl {
+                name: "ping".into(),
+                params: vec![],
+                r#return: Tref::Prim(crate::ir::Prim::String),
+                langs: vec![ExternLang {
+                    lang: "go".into(),
+                    symbol: "Ping".into(),
+                    call_args: vec![],
+                    yields: vec![],
+                    returns: None,
+                    errors: vec![],
+                    sync: false,
+                    infallible: false,
+                    ctx: false,
+                }],
+            }],
         }],
         externs: vec![ExternDecl {
             name: ctor.into(),

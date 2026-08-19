@@ -297,6 +297,35 @@ fn fake_method_body_renders_the_declared_error_answer() {
     assert!(body.contains("return zero, &Overloaded{Message: \"busy\", }"));
 }
 
+/// A construction-only test (no op, `planned[0].tests[0]`) can still stub
+/// a handle method reached at construction with a declared error: the
+/// error shape resolves by its local name across the module, not through a
+/// called op's own declared errors, so the fake renders instead of the
+/// generator dying on a missing op.
+#[test]
+fn fake_method_body_renders_the_declared_error_answer_in_a_construction_only_test() {
+    let module = ext_fixtures::reference_example_module();
+    let (entries, multi, n, config, planned) = appendix_setup_with_tests(&module);
+    let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[0]);
+    assert!(
+        ctx.test.op.is_none(),
+        "the fixture's first test is construction-only"
+    );
+    let ret = Tref::Ref {
+        id: "m#ack".into(),
+        args: vec![],
+    };
+    let answer = StubAnswer::Error {
+        error: AnswerError {
+            shape: "overloaded".into(),
+            data: serde_json::json!({"message": "busy"}),
+        },
+    };
+    let mut refs = Vec::new();
+    let body = fake_method_body(&ctx, &ret, &answer, &mut refs);
+    assert!(body.contains("return zero, &Overloaded{Message: \"busy\", }"));
+}
+
 #[test]
 fn fake_method_body_renders_the_contract_dead_letter_answer() {
     let module = ext_fixtures::reference_example_module();
