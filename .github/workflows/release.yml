@@ -158,6 +158,12 @@ jobs:
           cp "target/${target}/release/tono" "$stage/tono"
           cp "_build/default/frontend/bin/tono_frontend.exe" "$stage/tono-frontend"
           cp "_build/default/lsp/tono_lsp.exe" "$stage/tono-lsp"
+          # dune leaves its build artefacts read-only (555) and tar preserves
+          # the mode, so an archive member would land read-only on the user's
+          # machine and refuse to be replaced by the next upgrade. Stamped
+          # writable here so the shipped mode never depends on how a build
+          # tool happened to leave its output.
+          chmod 755 "$stage/tono" "$stage/tono-frontend" "$stage/tono-lsp"
           cp README.md LICENSE "$stage/"
           tar czf "${stage}.tar.gz" "$stage"
           shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"

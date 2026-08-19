@@ -70,9 +70,15 @@ extracted="tono-${version}-${target}"
 mkdir -p "$INSTALL_DIR"
 # tono shells out to tono-frontend, and tono-lsp is the language server
 # editors launch, so all three land side by side.
+# Removed before copying, not overwritten: an already-installed binary is
+# mode 555, and cp cannot open a read-only file for writing even for its
+# owner, so a plain copy fails with "Permission denied" on every upgrade.
+# The mode is then set outright rather than with `+x`, which would carry a
+# read-only archive member's mode through to the installed file.
 for bin in tono tono-frontend tono-lsp; do
+  rm -f "${INSTALL_DIR}/${bin}"
   cp "${extracted}/${bin}" "${INSTALL_DIR}/${bin}"
-  chmod +x "${INSTALL_DIR}/${bin}"
+  chmod 755 "${INSTALL_DIR}/${bin}"
 done
 
 echo "Installed tono ${tag} to ${INSTALL_DIR}"
