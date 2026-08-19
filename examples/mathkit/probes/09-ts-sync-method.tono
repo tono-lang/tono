@@ -1,0 +1,26 @@
+// Capability 9: a method synchronous in one target and asynchronous in the
+// others. compute() is synchronous in TypeScript (the `sync` marker) and
+// answers a value, not a Promise. This probe cannot pass before capability
+// 8 does: SeriesCalculator, like every constructor of the library, is a
+// class reached with `new`.
+ext mathkit {
+  ts: "@tono-ext-fixture/mathkit"
+
+  type calculator("Calculator", float) {
+    extern compute(): float {
+      ts { call: "compute"() sync }
+    }
+  }
+
+  extern from_series(values: []float): calculator {
+    ts { call: "SeriesCalculator"(values) }
+  }
+}
+
+pub struct client {
+  samples: []float @arg
+  series: mathkit.calculator = mathkit.from_series(.samples)
+
+  op value(): float
+    impl .series.compute()
+}

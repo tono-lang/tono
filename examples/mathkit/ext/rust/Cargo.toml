@@ -1,0 +1,10 @@
+[package]
+name = "mathkit"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Detach from the workspace this crate is vendored under: it is a stand-in
+# third-party library the FFI bench compiles the generated SDK against, not
+# part of the generated SDK or its coverage.
+[workspace]

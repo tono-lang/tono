@@ -1,0 +1,24 @@
+// Capability 1: a foreign handle that is an interface, not a pointer to a
+// struct. FromConstant returns Calculator[T] (an interface value); the
+// generated Go must hold and pass that value as is.
+ext mathkit {
+  go: "tono-ext-fixture/mathkit"
+
+  type calculator("Calculator", float) {
+    extern compute(): float {
+      go { call: "Compute"() ctx }
+    }
+  }
+
+  extern from_constant(value: float): calculator {
+    go { call: "FromConstant"(value) }
+  }
+}
+
+pub struct client {
+  base: float @arg
+  constant: mathkit.calculator = mathkit.from_constant(.base)
+
+  op value(): float
+    impl .constant.compute()
+}

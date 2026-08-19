@@ -1,0 +1,36 @@
+// Capability 10: a handle composed and read separately. `constant` is
+// forwarded into the fallback (handed over) and then read again by an
+// operation. Single ownership is the rule every target can honour, so the
+// generator must refuse this, naming the field and both readers. This probe
+// passes when generation is refused.
+ext mathkit {
+  go: "tono-ext-fixture/mathkit"
+
+  type calculator("Calculator", float) {
+    extern compute(): float {
+      go { call: "Compute"() ctx }
+    }
+  }
+
+  extern from_constant(value: float): calculator {
+    go { call: "FromConstant"(value) }
+  }
+
+  extern from_fallback(strategy: string, primary: calculator, secondary: calculator): calculator {
+    go { call: "FromFallback"(strategy, primary, secondary) }
+  }
+}
+
+pub struct client {
+  base: float @arg
+  other: float @arg
+  constant: mathkit.calculator = mathkit.from_constant(.base)
+  spare: mathkit.calculator = mathkit.from_constant(.other)
+  combined: mathkit.calculator = mathkit.from_fallback("first", .constant, .spare)
+
+  op combined_value(): float
+    impl .combined.compute()
+
+  op constant_value(): float
+    impl .constant.compute()
+}

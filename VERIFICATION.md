@@ -16,6 +16,7 @@ is strong on the hand-written (bespoke) seam.
 | HTTP transport (entry client) | codegen snapshot | review | `backend/src/codegen/targets/*/entry/transport*.rs`, `backend/tests/snapshot_codegen.rs` |
 | Runtime parity (retry/timeout/errors) | shared behavior vectors | breaks build | `runtimes/parity/vectors.json`; TypeScript, Go, and Rust all drive a generated SDK compiled from `runtimes/parity/spec.tono` (`scripts/run-parity.sh`) |
 | Generator (codegen) | snapshot | review | `backend/tests/snapshot_codegen.rs` |
+| FFI (`ext`/`extern`) against real library shapes | bench: compile and run the generated SDK against stand-in libraries, per capability, with a recorded expected outcome | breaks build on drift from the record (regression or progress) | `examples/mathkit/` (`gate.tsv`, `README.md`), `scripts/check-ffi-bench.sh` |
 | IR (frontend <-> backend) | round-trip | breaks build | `backend/tests/ir_roundtrip.rs`, `frontend/test/golden_test.ml` |
 
 Two of these are not behavior checks and sit outside the bespoke-vs-rest axis:
