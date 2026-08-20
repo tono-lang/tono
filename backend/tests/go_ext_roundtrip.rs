@@ -21,6 +21,7 @@ use std::sync::Mutex;
 static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
 use tono_backend::codegen::fixtures::handle_source::handle_source_model;
+use tono_backend::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::go::entry::ext_fixtures::{
@@ -439,6 +440,43 @@ fn a_field_sourced_from_a_handle_method_builds() {
         &handle_source_model("go"),
         "require tono-ext-fixture/envkit v0.0.0\n\n\
          replace tono-ext-fixture/envkit => ../fixtures/envkit\n",
+        Some("tono-ext-fixture/sdk/go"),
+    );
+    let build = Command::new("go")
+        .arg("build")
+        .arg("./...")
+        .current_dir(&dir)
+        .output()
+        .expect("run go build");
+    assert!(
+        build.status.success(),
+        "generated Go failed to build:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+/// One logical handle whose instantiation names a different foreign type
+/// per language: the "go" entry spells the package's own `Store[string]`,
+/// verbatim, while the Rust sibling names a `Vault<T>`. Compiling against
+/// the real stand-in package is what proves the per-language spelling
+/// resolves (the Rust half of the same claim lives in
+/// `rust_ext_roundtrip.rs`).
+#[test]
+fn a_handle_naming_its_foreign_type_per_language_builds() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
+        return;
+    }
+    if !have("go", "version") || !have("gofmt", "-h") {
+        eprintln!("skipping: Go toolchain (go/gofmt) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk_with(
+        &per_lang_handle_model("go"),
+        "require tono-ext-fixture/keepkit v0.0.0\n\n\
+         replace tono-ext-fixture/keepkit => ../fixtures/keepkit\n",
         Some("tono-ext-fixture/sdk/go"),
     );
     let build = Command::new("go")

@@ -22,6 +22,7 @@ use std::sync::Mutex;
 static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
 use tono_backend::codegen::fixtures::handle_source::handle_source_model;
+use tono_backend::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::rust::entry::ext_fixtures::rust_ext_fixture_model;
 use tono_backend::codegen::targets::rust::types::rust_casing;
@@ -82,7 +83,8 @@ fn write_sdk(model: &Model) -> PathBuf {
          serde_json = \"1\"\n\
          companyconfig = { path = \"../fixtures/companyconfig\" }\n\
          companybus = { path = \"../fixtures/companybus\" }\n\
-         envkit = { path = \"../fixtures/envkit\" }\n\n\
+         envkit = { path = \"../fixtures/envkit\" }\n\
+         keepkit = { path = \"../fixtures/keepkit\" }\n\n\
          [features]\n\
          reqwest = []\n\n\
          [workspace]\n",
@@ -172,6 +174,36 @@ fn a_field_sourced_from_a_handle_method_compiles_against_the_real_crate() {
     }
     let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = write_sdk(&handle_source_model("rust"));
+    let build = Command::new("cargo")
+        .arg("build")
+        .current_dir(&dir)
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "generated Rust failed to build:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+/// One logical handle whose instantiation names a different foreign type
+/// per language: the "rust" entry spells the crate's own `Vault<String>`,
+/// verbatim, while the Go sibling names a `Store[T]`. Compiling against the
+/// real stand-in crate is what proves the per-language spelling resolves
+/// (the Go half of the same claim lives in `go_ext_roundtrip.rs`).
+#[test]
+fn a_handle_naming_its_foreign_type_per_language_compiles_against_the_real_crate() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test rust_ext_roundtrip`");
+        return;
+    }
+    if !have_cargo() {
+        eprintln!("skipping: cargo not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = write_sdk(&per_lang_handle_model("rust"));
     let build = Command::new("cargo")
         .arg("build")
         .current_dir(&dir)
