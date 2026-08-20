@@ -5,9 +5,9 @@
 //! this module exercises the emitter's own branches directly.
 
 use super::super::ext_fixtures::rust_ext_fixture_model;
-use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use super::*;
 use crate::codegen::entries::module_entries;
+use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use crate::codegen::ops::op_impl_call;
 use crate::codegen::targets::rust::types::rust_casing;
 use crate::ir::{

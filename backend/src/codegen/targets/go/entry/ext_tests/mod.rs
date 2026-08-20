@@ -6,9 +6,9 @@
 //! exercises the emitter's own branches directly.
 
 use super::ext_fixtures::{ext_param, field, member, string_t, structure};
-use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use super::*;
 use crate::codegen::entries::module_entries;
+use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::rendered;
