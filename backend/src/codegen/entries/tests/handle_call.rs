@@ -34,6 +34,7 @@ fn go_lang(symbol: &str) -> ExternLang {
         sync: false,
         infallible: false,
         ctx: false,
+        receiver: None,
         is_new: false,
     }
 }

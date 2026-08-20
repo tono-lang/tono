@@ -276,13 +276,18 @@ let parse_errors st : Ast.error_map_entry list =
   ignore (P.expect st Token.RBrace "'}' to close the errors body");
   es
 
-(* call ::= "call" ":" string "(" call_arg ("," call_arg)* ")" *)
-let parse_call_line st : string * Span.span * Ast.call_arg list =
+(* call ::= "call" ":" (string ".")? string "(" call_arg ("," call_arg)* ")"
+   -- two quoted names joined by a dot spell a static method: the first is
+   the foreign type the call is qualified by (a receiver that is a type, not
+   a value, so it is a second string and not a reference), the second the
+   method on it. One string is a free function of the library. *)
+let parse_call_line st :
+    (string * Span.span) option * string * Span.span * Ast.call_arg list =
   ignore (P.advance st);
   (* 'call' *)
   ignore (P.expect st Token.Colon "':' after 'call'");
   let t = P.peek st in
-  let symbol =
+  let first =
     match t.kind with
     | Token.Str s ->
         ignore (P.advance st);
@@ -291,8 +296,23 @@ let parse_call_line st : string * Span.span * Ast.call_arg list =
         P.error st t.span "expected a foreign symbol string after 'call:'";
         ""
   in
+  let receiver, symbol, symbol_span =
+    match (P.peek st).kind with
+    | Token.Dot -> (
+        ignore (P.advance st);
+        let m = P.peek st in
+        match m.kind with
+        | Token.Str s ->
+            ignore (P.advance st);
+            (Some (first, t.span), s, m.span)
+        | _ ->
+            P.error st m.span
+              "expected a method name string after the receiver type in 'call:'";
+            (Some (first, t.span), "", m.span))
+    | _ -> (None, first, t.span)
+  in
   let args = Parser_traits.parse_call_args st in
-  (symbol, t.span, args)
+  (receiver, symbol, symbol_span, args)
 
 (* lang_block ::= lang "{" ("call:" | "yields:" | "returns:" | "errors:")* "}"
    -- "call:" is required; its absence is diagnosed but the rest still parses. *)
@@ -360,16 +380,18 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
   in
   go ();
   let close = P.expect st Token.RBrace "'}' to close the language block" in
-  let symbol, symbol_span, args =
+  let receiver, symbol, symbol_span, args =
     match !call with
     | Some c -> c
     | None ->
         P.error st langt.span "a language block requires a 'call:' line";
-        ("", langt.span, [])
+        (None, "", langt.span, [])
   in
   {
     Ast.elb_lang = lang;
     elb_lang_span = langt.span;
+    elb_call_receiver = Option.map fst receiver;
+    elb_call_receiver_span = Option.map snd receiver;
     elb_call_symbol = symbol;
     elb_call_symbol_span = symbol_span;
     elb_call_args = args;

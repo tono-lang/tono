@@ -51,9 +51,12 @@ export PATH="$root/backend/codegen-tests/typescript/node_modules/.bin:$PATH"
 # the same dependencies; one target directory per run compiles those once.
 export CARGO_TARGET_DIR="$work/cargo-target"
 
-# The generation-time refusal capability 10 asserts: a handle forwarded to
-# another call is owned by that call, so a second reader is refused.
-ownership_marker="is owned by that call"
+# The generation-time refusals the bench asserts, each by the phrase the
+# generator names the rule with: capability 10 (a handle forwarded to
+# another call is owned by that call, so a second reader is refused) and
+# capability 11 on Go (a static method receiver has nothing to render as,
+# Go has no static method).
+refusal_markers="is owned by that call|has no static method to call"
 
 # One check. Prints the outcome it reached to stdout; every tool log goes to
 # $work/<id>/log so a mismatch can quote it.
@@ -69,7 +72,7 @@ run_check() {
         return
     fi
     if ! "$tono" gen --target "$target" --out "$dir/out" --go-module example.com/mathkit "$dir/ir.json" >>"$log" 2>&1; then
-        if grep -q "$ownership_marker" "$log"; then
+        if grep -Eq "$refusal_markers" "$log"; then
             echo refused
         else
             echo gen-red

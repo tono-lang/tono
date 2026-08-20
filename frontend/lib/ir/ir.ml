@@ -326,6 +326,7 @@ type error_binding = { erb_sentinel : string; erb_type : string }
 (* One per-language block inside an [extern]'s body. *)
 type extern_lang = {
   el_lang : string;
+  el_receiver : string option;
   el_symbol : string;
   el_call_args : call_arg list;
   el_yields : yields_pos list; (* [] when no yields: line *)

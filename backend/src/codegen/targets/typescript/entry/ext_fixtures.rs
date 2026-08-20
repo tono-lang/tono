@@ -85,6 +85,7 @@ pub fn send_method(ack_id: &str, raw_ack_id: &str) -> ExternDecl {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     }
@@ -126,6 +127,7 @@ pub fn connect_publisher_extern(publisher_id: &str) -> ExternDecl {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     }
@@ -215,6 +217,7 @@ pub fn load_config_extern(app_config_id: &str) -> ExternDecl {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     }

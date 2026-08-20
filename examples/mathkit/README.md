@@ -61,7 +61,7 @@ synchronous in TypeScript.
 - `scripts/check-ffi-bench.sh`: the gate, called from
   `scripts/check-example-compiles.sh`.
 
-## State of the ten capabilities
+## State of the capabilities
 
 Measured by `scripts/check-ffi-bench.sh` (run it to reproduce; every row
 prints the tool output that stopped it). Outcomes: `pass` (compiles, tests
@@ -80,9 +80,10 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 | 8 | construction by `new`, not a function call | TypeScript classes | `08-ts-new-construction` | pass: the `new` marker on the language binding constructs with `new Symbol(args)` instead of calling it plainly |
 | 9 | a method synchronous in one target, asynchronous in the others | `compute()` in TS | `09-ts-sync-method` | pass: the `sync` marker now reaches the generated handle interface's own method signature, not just the call site |
 | 10 | a handle composed and read separately | fallback + a read of one of its inputs | `10-ownership-refused` | refused, as intended: single ownership is the rule, and the generator names the field and both readers |
+| 11 | a static method as the constructor: the call's receiver is the foreign type itself | `FormulaCalculator.parse(expr)` (TS), `FormulaCalculator::parse(expr)` (Rust) | `11-ts-static-method`, `11-rust-static-method`, `11-go-static-method-refused` | pass: the type is a second string before the method (`call: "FormulaCalculator"."parse"(expr)`), imported in TypeScript and qualifying the path in Rust; Go has no static method, so its generation refuses the binding naming the site (refused, as intended) |
 
-Passing today: capabilities 1, 3, 4, 5, 6, 8 and 9, plus capability 10 (the
-one that is a rule, not a gap). Two gaps remain (2 and 7, both blocked on
+Passing today: capabilities 1, 3, 4, 5, 6, 8, 9 and 11, plus capability 10
+(the one that is a rule, not a gap). Two gaps remain (2 and 7, both blocked on
 per-language foreign-type naming reaching Rust's trait scope and `Some`
 wrapping, a separate capability).
 
@@ -106,15 +107,15 @@ the probes already report.
 
 ## Call-argument shapes not covered here
 
-Three shapes a consumer raised are not part of the ten capabilities above,
-and are deliberately not attempted as a small extension of `call:`'s own
-argument grammar:
+Three shapes a consumer raised were deliberately not attempted as a small
+extension of `call:`'s own argument grammar. One of them, the static method,
+is capability 11 now: it turned out to be a third kind of call receiver
+(alongside a declared `ext` namespace, `ns.fn(..)`, and a handle field,
+`.field.method(..)`), and got its own syntax, the receiver type as a second
+string before the method. Two remain out:
 
 - **class reference** (a type naming a constructor, not a value) needs a new
   type-level construct, a typechecker change rather than an argument shape.
-- **static method** (a call whose receiver is a foreign type name) is a
-  third kind of call receiver, alongside a declared `ext` namespace
-  (`ns.fn(..)`) and a handle field (`.field.method(..)`).
 - **Map literal** as a call argument needs its own key-value collection
   shape, distinct from the list this bench's own capability 4/5 already
   added for a variadic parameter.

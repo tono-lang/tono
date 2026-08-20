@@ -95,10 +95,11 @@ fn call_wire_stmt(
         .iter()
         .find(|p| p.lang == "ts" || p.lang == "typescript")
         .expect("validate::wire_call_resolves checked a ts module path exists");
+    let (imported, callee) = super::ext_call::static_callee(lang);
     refs.push(Symbol::imported(
-        lang.symbol.clone(),
+        imported.to_string(),
         lib_path.path.clone(),
-        lang.symbol.clone(),
+        imported.to_string(),
     ));
     refs.push(module_symbol(
         &crate::codegen::ops::error_names().contract,
@@ -112,8 +113,7 @@ fn call_wire_stmt(
     let contract = crate::codegen::ops::error_names().contract;
     let contract_name = format!("{}.{}", call.ns, call.fn_name);
     format!(
-        "let {result_var};\ntry {{\n  {result_var} = await {symbol}({args});\n}} catch (e) {{\n  throw new {contract}({contract_name:?}, e);\n}}\n",
-        symbol = lang.symbol,
+        "let {result_var};\ntry {{\n  {result_var} = await {callee}({args});\n}} catch (e) {{\n  throw new {contract}({contract_name:?}, e);\n}}\n",
         args = args.join(", "),
     )
 }
@@ -234,6 +234,7 @@ mod tests {
                         sync: false,
                         infallible: false,
                         ctx: false,
+                        receiver: None,
                         is_new: false,
                     }],
                 }],
@@ -324,6 +325,31 @@ mod tests {
         assert!(out.contains("} catch (e) {"), "{out}");
         assert!(out.contains("\"companyauth.sign\""), "{out}");
         assert!(!refs.is_empty());
+    }
+
+    /// A static method in wire position imports the receiver type and calls
+    /// a member of it, the same shape a field's own construction call takes.
+    #[test]
+    fn call_wire_stmt_calls_a_static_method_on_the_imported_type() {
+        let mut module = module_with_sign_extern();
+        module.ext_libs[0].externs[0].langs[0].receiver = Some("Signer".into());
+        let mut refs = Vec::new();
+        let out = call_wire_stmt(
+            &call(),
+            &module,
+            &field_expr,
+            "input",
+            &no_param_access,
+            "request",
+            "signed0",
+            &mut refs,
+        );
+        assert!(
+            out.contains("signed0 = await Signer.sign(request);"),
+            "{out}"
+        );
+        assert!(refs.iter().any(|s| s.name == "Signer"), "{refs:?}");
+        assert!(!refs.iter().any(|s| s.name == "sign"), "{refs:?}");
     }
 
     #[test]

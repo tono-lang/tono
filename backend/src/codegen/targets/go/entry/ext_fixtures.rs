@@ -100,6 +100,7 @@ pub fn go_extern(
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     }

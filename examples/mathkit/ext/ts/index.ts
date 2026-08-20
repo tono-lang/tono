@@ -28,6 +28,13 @@ export class FormulaCalculator<T> implements Calculator<T> {
     private readonly opts?: FormulaOptions,
   ) {}
 
+  // A static constructor on the class itself, the shape many libraries use
+  // for parsing (`Type.parse(text)`): reached through the type, not through
+  // a free function and not through an instance.
+  static parse<T>(expr: string): FormulaCalculator<T> {
+    return new FormulaCalculator<T>(expr);
+  }
+
   // Evaluates "<a> <op> <b>" for number results (the only instantiation the
   // bench exercises); any other T fails loudly.
   compute(): T {

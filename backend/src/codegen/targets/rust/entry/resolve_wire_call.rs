@@ -10,7 +10,7 @@
 //! entry's, and it carries the reserved [`WireCallArg::Request`] marker for
 //! `.request` that an entry-field call's arguments never do.
 
-use super::resolve_call::{find_extern, find_lib, find_rust_lang, json_literal};
+use super::resolve_call::{find_extern, find_lib, find_rust_lang, json_literal, qualified_symbol};
 use super::transport::{rust_str, template_expr, FieldCtx};
 use crate::ir::{Module, Prim, Tref, WireBinding, WireCall, WireCallArg, WireValue};
 
@@ -73,8 +73,8 @@ fn call_wire_bare_expr(
         .collect();
     let awaited = if lang.sync { "" } else { ".await" };
     format!(
-        "{crate_ident}::{}({}){awaited}",
-        lang.symbol,
+        "{}({}){awaited}",
+        qualified_symbol(&crate_ident, lang),
         args.join(", ")
     )
 }
@@ -254,6 +254,7 @@ mod tests {
                         sync,
                         infallible: false,
                         ctx: false,
+                        receiver: None,
                         is_new: false,
                     }],
                 }],
@@ -336,6 +337,20 @@ mod tests {
             call_wire_bare_expr(&call(), &module, ctx, "request")
         });
         assert_eq!(out, "company_auth::Client::sign(request.clone()).await");
+    }
+
+    /// A static method in wire position is qualified by its receiver type
+    /// between the crate and the symbol, like a field's construction call.
+    #[test]
+    fn a_static_method_receiver_qualifies_the_wire_call_by_its_type() {
+        let mut module = module_with_extern(Tref::Prim(Prim::String), false);
+        let lang = &mut module.ext_libs[0].externs[0].langs[0];
+        lang.symbol = "sign".into();
+        lang.receiver = Some("Signer".into());
+        let out = with_ctx(&module, |ctx| {
+            call_wire_bare_expr(&call(), &module, ctx, "request")
+        });
+        assert_eq!(out, "company_auth::Signer::sign(request.clone()).await");
     }
 
     #[test]

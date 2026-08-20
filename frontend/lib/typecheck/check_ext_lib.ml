@@ -332,6 +332,32 @@ let check_ctx_marker_scope ~(is_method : bool) (b : Ast.extern_lang_body) :
     ]
   else []
 
+(* A type receiver ("Type"."method") only makes sense on a free extern: a
+   handle's own method already has its receiver (the handle), and "new"
+   constructs a type rather than calling a method on it. *)
+let check_receiver_scope ~(is_method : bool) (b : Ast.extern_lang_body) :
+    Diagnostic.t list =
+  match (b.Ast.elb_call_receiver, b.Ast.elb_call_receiver_span) with
+  | Some r, Some span ->
+      (if is_method then
+         [
+           err Error_codes.extern_receiver_on_method span
+             "'%s' names a type as the receiver of a foreign handle's own \
+              method; the handle is already the receiver of the '%s' call"
+             r b.Ast.elb_lang;
+         ]
+       else [])
+      @
+      if b.Ast.elb_new then
+        [
+          err Error_codes.extern_receiver_with_new span
+            "'new' constructs a type and a type receiver calls a static method \
+             on it; the '%s' binding cannot do both"
+            b.Ast.elb_lang;
+        ]
+      else []
+  | _ -> []
+
 let check_extern ~(tbl : Symtab.t)
     (structs : (string, Ast.foreign_struct) Hashtbl.t) ~(is_method : bool)
     (e : Ast.extern_decl) : Diagnostic.t list =
@@ -355,7 +381,8 @@ let check_extern ~(tbl : Symtab.t)
       @ check_returns_refs b
       @ check_error_sentinels ~tbl b
       @ check_param_consumption e.Ast.ed_params b
-      @ check_ctx_marker_scope ~is_method b)
+      @ check_ctx_marker_scope ~is_method b
+      @ check_receiver_scope ~is_method b)
     e.Ast.ed_langs
 
 (* ── Foreign-name collisions (not a silent Roles.classify overwrite) ────── *)

@@ -83,6 +83,7 @@ fn rust_lang(symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
         sync: false,
         infallible: false,
         ctx: false,
+        receiver: None,
         is_new: false,
     }
 }

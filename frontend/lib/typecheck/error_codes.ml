@@ -271,3 +271,13 @@ let handle_call_type_mismatch = register "TC0094"
    path for (same spirit as TC0081), or a declared language left without a
    name (the emitter for that target would have nothing to spell). *)
 let instance_names_mismatch = register "TC0095"
+
+(* A call: line whose receiver is a foreign type name (Type.method) on a
+   handle's own method: the handle is already the receiver there, so naming
+   a type as well says two receivers for one call. *)
+let extern_receiver_on_method = register "TC0096"
+
+(* A call: line with a type receiver and the "new" marker: a static method
+   is called on the type, it does not construct it, so "new" has nothing to
+   apply to. *)
+let extern_receiver_with_new = register "TC0097"

@@ -110,6 +110,7 @@ let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags
     (b : Ast.extern_lang_body) : Ir.extern_lang =
   {
     Ir.el_lang = b.elb_lang;
+    el_receiver = b.elb_call_receiver;
     el_symbol = b.elb_call_symbol;
     el_call_args = List.map lower_call_arg b.elb_call_args;
     el_yields =

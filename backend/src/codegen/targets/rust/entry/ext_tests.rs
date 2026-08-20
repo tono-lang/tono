@@ -462,6 +462,7 @@ fn handle_call_model(
                 sync: true,
                 infallible: false,
                 ctx: false,
+                receiver: None,
                 is_new: false,
             }],
         }],
@@ -499,6 +500,7 @@ fn handle_call_model(
                     sync,
                     infallible: false,
                     ctx: false,
+                    receiver: None,
                     is_new: false,
                 }],
             }],
@@ -683,4 +685,31 @@ fn the_per_language_fixture_spells_its_own_rust_name() {
     assert!(out.contains("Option<keepkit::Vault<String>>"), "{out}");
     assert!(out.contains("keepkit::open_vault("), "{out}");
     assert!(!out.contains("Store"), "{out}");
+}
+
+/// A static method (`"Type"."method"(args)`) is qualified by its type the
+/// same way a free function is by the crate: `krate::Type::method(..)`.
+#[test]
+fn a_static_method_receiver_qualifies_the_call_by_its_type() {
+    let mut model = rust_ext_fixture_model();
+    // The extern a field's own `= ns.fn(..)` source reaches, looked up the
+    // way the emitter does, so the assertion follows the fixture's shape
+    // rather than a hard-coded index.
+    let module = &model.modules[0];
+    let (ns, func) = module_entries(module)
+        .iter()
+        .flat_map(|e| e.fields.iter())
+        .find_map(|f| f.call.as_ref().map(|c| (c.ns.clone(), c.func.clone())))
+        .expect("fixture has a call-sourced field");
+    let lang = model.modules[0]
+        .ext_libs
+        .iter_mut()
+        .find(|l| l.name == ns)
+        .and_then(|l| l.externs.iter_mut().find(|e| e.name == func))
+        .and_then(|e| e.langs.iter_mut().find(|l| l.lang == "rust"))
+        .expect("fixture binds rust");
+    let symbol = lang.symbol.clone();
+    lang.receiver = Some("Loader".into());
+    let text = entry_text(&model);
+    assert!(text.contains(&format!("::Loader::{symbol}(")), "{text}");
 }

@@ -14,6 +14,7 @@
   extern_typecheck_test
   extern_instance_test
   ctx_marker_test
+  static_receiver_test
   ext_lib_collisions_test
   op_impl_test
   handle_call_source_test

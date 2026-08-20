@@ -178,3 +178,10 @@ val register : string -> string
 (* Every registered code, for the uniqueness/format test. *)
 val registered : unit -> string list
 val instance_names_mismatch : string
+
+val extern_receiver_on_method : string
+(** A call: line naming a type as receiver on a foreign handle's own method (the
+    handle is already the receiver). *)
+
+val extern_receiver_with_new : string
+(** A call: line with a type receiver and the "new" marker at once. *)

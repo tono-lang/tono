@@ -3,7 +3,7 @@
 //! Two things escape the ordinary shape/entry diff entirely, because neither
 //! shows up in the tono-facing signature the rest of the checker compares:
 //!
-//! - The FFI call shape itself (foreign symbol, argument order, `yields`,
+//! - The FFI call shape itself (receiver type, foreign symbol, argument order, `yields`,
 //!   `returns` projection, sentinel-to-error mapping). Swapping `"Load"` for
 //!   `"LoadV2"` with the arguments reordered does not touch the `extern`'s
 //!   declared params/return, so nothing else would ever notice.
@@ -146,8 +146,8 @@ fn diff_externs(
                     key: key_base,
                     category: Category::Behavioral,
                     detail: format!(
-                        "{}.{name}@{}: the foreign call binding changed (symbol, argument \
-                         order, yields, returns, or error mapping); the tono-facing \
+                        "{}.{name}@{}: the foreign call binding changed (receiver type, symbol, \
+                         argument order, yields, returns, or error mapping); the tono-facing \
                          signature and the wire are unaffected, but runtime behavior is not",
                         curr_lib.name, lang.lang
                     ),
@@ -243,6 +243,7 @@ mod tests {
                         sync: false,
                         infallible: false,
                         ctx: false,
+                        receiver: None,
                         is_new: false,
                     }],
                 }],
@@ -318,6 +319,7 @@ mod tests {
                     sync: false,
                     infallible: false,
                     ctx: false,
+                    receiver: None,
                     is_new: false,
                 }],
             }],

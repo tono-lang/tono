@@ -141,6 +141,7 @@ fn constructor_extern(name: &str, params: Vec<ExternParam>, ret: Tref) -> Extern
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     }
@@ -323,6 +324,7 @@ pub fn rust_ext_fixture_model() -> Model {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                receiver: None,
                 is_new: false,
             }],
         }],
@@ -391,6 +393,7 @@ pub fn rust_ext_fixture_model() -> Model {
                         sync: false,
                         infallible: false,
                         ctx: false,
+                        receiver: None,
                         is_new: false,
                     }],
                 }],

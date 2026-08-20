@@ -48,6 +48,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     };
@@ -91,6 +92,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     };
@@ -124,6 +126,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     };
@@ -141,6 +144,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     };
@@ -161,6 +165,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         }],
     };

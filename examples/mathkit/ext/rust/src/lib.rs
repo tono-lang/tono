@@ -74,6 +74,19 @@ impl<T: Send + Sync + 'static> Calculator<T> for FormulaCalculator<T> {
     }
 }
 
+impl<T> FormulaCalculator<T> {
+    /// An associated function on the type itself (`FormulaCalculator::parse`),
+    /// the shape many crates use for parsing, next to the free
+    /// [`from_formula`]: reached through the type, not a free function.
+    pub fn parse(expr: impl AsRef<str>) -> Result<Self, Error> {
+        Ok(FormulaCalculator {
+            expr: expr.as_ref().to_string(),
+            precision: None,
+            _marker: std::marker::PhantomData,
+        })
+    }
+}
+
 impl<T: 'static> FormulaCalculator<T> {
     fn evaluate(&self) -> Result<T, Error> {
         let fields: Vec<&str> = self.expr.split_whitespace().collect();

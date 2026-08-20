@@ -402,10 +402,13 @@ let gen_extern_lang_body =
   and+ sync = G.bool
   and+ infallible = G.bool
   and+ ctx = G.bool
-  and+ new_ = G.bool in
+  and+ new_ = G.bool
+  and+ receiver = G.option gen_string in
   {
     Ast.elb_lang = lang;
     elb_lang_span = dspan;
+    elb_call_receiver = receiver;
+    elb_call_receiver_span = Option.map (fun _ -> dspan) receiver;
     elb_call_symbol = symbol;
     elb_call_symbol_span = dspan;
     elb_call_args = args;

@@ -274,6 +274,20 @@ struct CallResult {
 /// opaque handle) -- `None` for every other call, including a method call,
 /// which never spells one: Go infers a method's type parameters from its
 /// receiver.
+/// Go has no static method: `validate_calls::static_receiver_renders`
+/// refuses a binding with a type receiver before generation, so reaching a
+/// Go call renderer with one is a pipeline defect. Panicking here beats the
+/// alternative, a method expression (`pkg.Type.Method(args)`) that compiles
+/// into a call with a different meaning.
+pub(super) fn refuse_static_receiver(lang: &ExternLang) {
+    if let Some(recv) = &lang.receiver {
+        panic!(
+            "go codegen cannot render a static method receiver ({recv}.{}); validate_calls should have refused it",
+            lang.symbol
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_call(
     refs: &mut Vec<Symbol>,
@@ -295,6 +309,7 @@ fn build_call(
     if lang.ctx {
         call_args.insert(0, "ctx".to_string());
     }
+    refuse_static_receiver(lang);
     let symbol = match type_arg {
         Some(arg) => format!("{}[{arg}]", lang.symbol),
         None => lang.symbol.clone(),

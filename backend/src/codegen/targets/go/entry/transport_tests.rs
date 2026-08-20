@@ -477,6 +477,7 @@ fn module_with_sign_extern() -> Module {
                 sync: true,
                 infallible: false,
                 ctx: false,
+                receiver: None,
                 is_new: false,
             }],
         }],

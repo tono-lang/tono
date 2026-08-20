@@ -24,3 +24,8 @@ bench	rust	service.tono	build-red
 08-ts-new-construction	typescript	probes/08-ts-new-construction.tono	pass
 09-ts-sync-method	typescript	probes/09-ts-sync-method.tono	pass
 10-ownership-refused	go	probes/10-ownership-refused.tono	refused
+# 11: the call's receiver is the foreign type itself (FormulaCalculator.parse);
+# Go has no static method, so its row passes by being refused at generation.
+11-ts-static-method	typescript	probes/11-ts-static-method.tono	pass
+11-rust-static-method	rust	probes/11-rust-static-method.tono	pass
+11-go-static-method-refused	go	probes/11-go-static-method-refused.tono	refused
