@@ -59,6 +59,7 @@ pub(super) fn ref_paths(args: &[CallArg], out: &mut Vec<Vec<String>>) {
                 let fields: Vec<CallArg> = ctor.fields.values().cloned().collect();
                 ref_paths(&fields, out);
             }
+            CallArg::SymbolCall(sc) => ref_paths(&sc.args, out),
             CallArg::Param(_) | CallArg::Lit(_) | CallArg::Call(_) => {}
         }
     }

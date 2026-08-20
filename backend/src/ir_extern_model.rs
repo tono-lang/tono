@@ -26,10 +26,14 @@ fn is_false(b: &bool) -> bool {
 
 /// One argument to an extern call: the caller's own parameter by name, a
 /// field-reference path, a struct-literal mapper, a scalar literal, a list,
-/// or a nested call (the last three only arise inside a ctor field's value,
-/// e.g. `opts { retries: 3 }`). The ctor case is a two-key object, so this
-/// does not match a uniform serde tagging mode; the codec is hand-written,
-/// mirroring `Tref`.
+/// a call into a declared extern (the last three only arise inside a ctor
+/// field's value, e.g. `opts { retries: 3 }`), or a bare foreign-symbol call
+/// nested inside a language block's own `call:` line (e.g.
+/// `WithPrecision(precision)` inside `call: "FromFormula"(expr,
+/// WithPrecision(precision))` -- legal as a top-level `call:` argument,
+/// unlike `Call`). The ctor case is a two-key object, so this does not match
+/// a uniform serde tagging mode; the codec is hand-written, mirroring
+/// `Tref`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallArg {
     Param(String),
@@ -38,12 +42,23 @@ pub enum CallArg {
     Lit(Value),
     List(Vec<CallArg>),
     Call(Box<EntryCall>),
+    SymbolCall(SymbolCall),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallCtor {
     pub name: String,
     pub fields: BTreeMap<String, CallArg>,
+}
+
+/// A bare foreign-symbol call nested inside a `call:` line's own argument
+/// list: no declared `extern` to resolve against, just a symbol string and
+/// its own argument list, recursing through `CallArg` the same way a
+/// language block's own `call:` line does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SymbolCall {
+    pub symbol: String,
+    pub args: Vec<CallArg>,
 }
 
 impl Serialize for CallArg {
@@ -80,6 +95,12 @@ impl Serialize for CallArg {
                 m.serialize_entry("fields", &c.fields)?;
                 m.end()
             }
+            CallArg::SymbolCall(sc) => {
+                let mut m = s.serialize_map(Some(2))?;
+                m.serialize_entry("symbol", &sc.symbol)?;
+                m.serialize_entry("symbol_args", &sc.args)?;
+                m.end()
+            }
         }
     }
 }
@@ -91,7 +112,7 @@ impl<'de> Deserialize<'de> for CallArg {
     }
 }
 
-const CALL_ARG_KEYS: [&str; 6] = ["param", "field", "lit", "list", "call", "ctor"];
+const CALL_ARG_KEYS: [&str; 7] = ["param", "field", "lit", "list", "call", "ctor", "symbol"];
 
 fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
     let obj = v.as_object().ok_or("expected an object")?;
@@ -151,6 +172,23 @@ fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
                 fields.insert(k.clone(), call_arg_from_value(fv)?);
             }
             Ok(CallArg::Ctor(CallCtor { name, fields }))
+        }
+        ["symbol"] => {
+            ensure_only(obj, &["symbol", "symbol_args"])?;
+            let symbol = obj["symbol"]
+                .as_str()
+                .ok_or("expected a string")?
+                .to_string();
+            let args = match obj.get("symbol_args") {
+                None => Vec::new(),
+                Some(v) => {
+                    let arr = v.as_array().ok_or("expected an array")?;
+                    arr.iter()
+                        .map(call_arg_from_value)
+                        .collect::<Result<_, _>>()?
+                }
+            };
+            Ok(CallArg::SymbolCall(SymbolCall { symbol, args }))
         }
         [] => Err("call arg object has no recognized variant key".to_string()),
         _ => Err("call arg object has multiple variant keys".to_string()),
@@ -237,12 +275,24 @@ pub struct ExternLang {
     /// convention ignores it the same way Go ignores `sync`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ctx: bool,
+    /// The foreign symbol is a class constructed with `new`, not a function
+    /// called plainly (TypeScript only; Go/Rust ignore it, neither has a
+    /// `new` distinct from an ordinary call). Named `is_new`: `new` is a
+    /// Rust keyword.
+    #[serde(rename = "new", default, skip_serializing_if = "is_false")]
+    pub is_new: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternParam {
     pub name: String,
     pub r#type: Tref,
+    /// The caller passes a collection of values for this logical parameter
+    /// (Go's `opts ...Option`, Rust's `Vec<T>`, TypeScript's `T[]`); the
+    /// call site binds a list, and each language block's own `call:`
+    /// materializes it in its own idiom (spread, `vec!`, array).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub variadic: bool,
 }
 
 /// A free function inside an `ext` block, or a method inside a `type`
@@ -375,6 +425,14 @@ mod tests {
             name: "ts_opts".into(),
             fields,
         }));
+        roundtrip(&CallArg::SymbolCall(SymbolCall {
+            symbol: "WithPrecision".into(),
+            args: vec![CallArg::Param("precision".into())],
+        }));
+        roundtrip(&CallArg::SymbolCall(SymbolCall {
+            symbol: "Bare".into(),
+            args: vec![],
+        }));
     }
 
     #[test]
@@ -403,6 +461,7 @@ mod tests {
             r#"{"list":[],"extra":1}"#,
             r#"{"call":{"ns":"n","fn":"f"},"extra":1}"#,
             r#"{"ctor":"c","fields":{},"extra":1}"#,
+            r#"{"symbol":"S","symbol_args":[],"extra":1}"#,
         ];
         for json in variants_with_a_stray_key {
             assert!(
@@ -456,6 +515,7 @@ mod tests {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(!json.contains("sync"));
@@ -475,6 +535,7 @@ mod tests {
             sync: true,
             infallible: false,
             ctx: false,
+            is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(json.contains(r#""sync":true"#));
@@ -494,6 +555,7 @@ mod tests {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(!json.contains("infallible"));
@@ -513,6 +575,7 @@ mod tests {
             sync: false,
             infallible: true,
             ctx: false,
+            is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(json.contains(r#""infallible":true"#));
@@ -532,6 +595,7 @@ mod tests {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(!json.contains("ctx"));
@@ -551,6 +615,7 @@ mod tests {
             sync: false,
             infallible: false,
             ctx: true,
+            is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(json.contains(r#""ctx":true"#));

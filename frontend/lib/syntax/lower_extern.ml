@@ -21,6 +21,13 @@ let rec lower_call_arg : Ast.call_arg -> Ir.call_arg = function
   | Ast.CaLit (Ast.LStr s, _) -> Ir.Ca_lit (`String s)
   | Ast.CaLit (Ast.LInt n, _) -> Ir.Ca_lit (`Int n)
   | Ast.CaLit (Ast.LFloat f, _) -> Ir.Ca_lit (`Float f)
+  | Ast.CaCall nc ->
+      Ir.Ca_symbol_call
+        {
+          Ir.scl_symbol = nc.nc_symbol;
+          scl_args = List.map lower_call_arg nc.nc_args;
+        }
+  | Ast.CaList (items, _) -> Ir.Ca_list (List.map lower_call_arg items)
 
 and lower_call_ctor (c : Ast.ctor_arg) : Ir.call_ctor =
   {
@@ -117,6 +124,7 @@ let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags
     el_sync = b.elb_sync;
     el_infallible = b.elb_infallible;
     el_ctx = b.elb_ctx;
+    el_new = b.elb_new;
   }
 
 let rec lower_extern ~lower_type ~lower_select ~resolve ~diags
@@ -129,6 +137,7 @@ let rec lower_extern ~lower_type ~lower_select ~resolve ~diags
           {
             Ir.xp_name = p.ep_name;
             xp_type = lower_type ~params:[] ~resolve ~diags p.ep_type;
+            xp_variadic = p.ep_variadic;
           })
         e.ed_params;
     x_return = lower_type ~params:[] ~resolve ~diags e.ed_return;

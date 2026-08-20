@@ -175,6 +175,7 @@ fn ext_lib_with_extern(lib: &str, name: &str, langs: &[&str]) -> ExtLib {
                     sync: false,
                     infallible: false,
                     ctx: false,
+                    is_new: false,
                 })
                 .collect(),
         }],
@@ -319,6 +320,7 @@ fn ext_lib_with_handle_ctor(lib: &str, handle: &str, ctor: &str) -> ExtLib {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             })
             .collect(),
     });

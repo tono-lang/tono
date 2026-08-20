@@ -92,7 +92,15 @@ pub use crate::ir_tests_model::*;
 /// v23 added `OpaqueType::interface`: the foreign type is abstract (a Go
 /// interface, held by value), not a concrete struct held by pointer.
 /// Absent means concrete, the shape every handle had before.
-pub const TONO_IR_VERSION: u32 = 24;
+/// v25 widened `call:`'s argument shapes: `CallArg` gained `SymbolCall`, a
+/// bare foreign-symbol call nested inside a `call:` line's own argument
+/// list (unlike `Call`, legal at the top level, since that is the position
+/// it exists for); `ExternParam` gained `variadic` (the caller passes a
+/// collection of values for this logical parameter, materialized per
+/// target in its own idiom); `ExternLang` gained `is_new` (wire tag `new`;
+/// the foreign symbol is constructed with TypeScript's `new` instead of
+/// called plainly).
+pub const TONO_IR_VERSION: u32 = 25;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

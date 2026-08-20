@@ -128,18 +128,19 @@ pub struct FallbackCalculator<T> {
 }
 
 /// Composes calculators the caller already built: the library takes its own
-/// handles back, boxed behind the trait, in a collection.
+/// handles back, boxed behind the trait, in a collection. `strategy` is
+/// owned (not `&str`): the collection argument is the shape capability 5
+/// exercises, and a scalar argument's own borrowed-vs-owned shape is a
+/// separate, unrelated capability the emitter does not distinguish yet
+/// (every call-argument position renders a scalar string as owned).
 pub fn from_fallback<T>(
-    strategy: &str,
+    strategy: String,
     calcs: Vec<Box<dyn Calculator<T>>>,
 ) -> Result<FallbackCalculator<T>, Error> {
     if strategy != "first" && strategy != "last" {
         return Err(Error("mathkit: unknown fallback strategy".to_string()));
     }
-    Ok(FallbackCalculator {
-        strategy: strategy.to_string(),
-        calcs,
-    })
+    Ok(FallbackCalculator { strategy, calcs })
 }
 
 /// Asks each composed calculator in turn ("first" answers the first

@@ -15,14 +15,12 @@ bench	rust	service.tono	build-red
 # concretely held type and nothing brings the trait into scope.
 02-rust-foreign-name	rust	probes/02-rust-foreign-name.tono	build-red
 03-rust-concrete-types	rust	probes/03-rust-concrete-types.tono	pass
-04-go-variadic-options	go	probes/04-go-variadic-options.tono	build-red
-# 05: the handle resolves behind the trait now; the red is the collection
-# argument (two positional values where the library expects one Vec).
-05-rust-handle-collection	rust	probes/05-rust-handle-collection.tono	build-red
-06-nested-call	go	probes/06-nested-call.tono.rejected	frontend-red
+04-go-variadic-options	go	probes/04-go-variadic-options.tono	pass
+05-rust-handle-collection	rust	probes/05-rust-handle-collection.tono	pass
+06-nested-call	go	probes/06-nested-call.tono	pass
 # 07: the handle resolves behind the trait now; the red is the struct
 # literal (the foreign options struct's own name and the Some(..) wrap).
 07-rust-struct-literal	rust	probes/07-rust-struct-literal.tono	build-red
-08-ts-new-construction	typescript	probes/08-ts-new-construction.tono	build-red
-09-ts-sync-method	typescript	probes/09-ts-sync-method.tono	build-red
+08-ts-new-construction	typescript	probes/08-ts-new-construction.tono	pass
+09-ts-sync-method	typescript	probes/09-ts-sync-method.tono	pass
 10-ownership-refused	go	probes/10-ownership-refused.tono	refused

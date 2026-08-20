@@ -11,6 +11,7 @@ use super::super::ext_fixtures::ef;
 
 fn string_param(name: &str) -> ExternParam {
     ExternParam {
+        variadic: false,
         name: name.into(),
         r#type: Tref::Prim(Prim::String),
     }
@@ -47,6 +48,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     };
     let status = ExternDecl {
@@ -89,6 +91,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     };
     // `tag` exercises `render_call_arg`'s `Lit`/`List`/`Ctor` branches
@@ -121,6 +124,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     };
     let echo = ExternDecl {
@@ -137,6 +141,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     };
     let connect = ExternDecl {
@@ -156,6 +161,7 @@ fn bus_lib() -> ExtLib {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     };
     ExtLib {

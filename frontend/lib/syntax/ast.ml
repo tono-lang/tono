@@ -51,13 +51,33 @@ and call_lit = LStr of string | LInt of int | LFloat of float
 
 (* One argument to a call expression (see [call_expr]): the caller's own
    parameter by name, a field-reference path, a struct-literal mapper — the
-   same shape [ctor_arg] already gives [@body(name { field: value })] — or a
-   bare literal. *)
+   same shape [ctor_arg] already gives [@body(name { field: value })] — a
+   bare literal, a nested foreign-symbol call ([nested_call]), or a list
+   literal (the caller's own value for a [variadic] logical parameter, e.g.
+   [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]). *)
 and call_arg =
   | CaParam of string * Span.span
   | CaRef of ref_path
   | CaCtor of ctor_arg
   | CaLit of call_lit * Span.span
+  | CaCall of nested_call
+  | CaList of call_arg list * Span.span
+
+(* A bare foreign-symbol call standing in a [call:] argument position, e.g.
+   the [WithPrecision(precision)] inside [call: "FromFormula"(expr,
+   WithPrecision(precision))]. Unlike [call_expr] ([ns.fn(args)], a
+   reference to a declared [extern] resolved against a declared [ext]
+   block), this names no tono-level declaration at all: it is the same
+   "string symbol, own argument list" shape a language block's own [call:]
+   line already has, nested one level down. Its own arguments recurse
+   through the same [call_arg] grammar, so a nested call can itself carry
+   another nested call. *)
+and nested_call = {
+  nc_symbol : string;
+  nc_symbol_span : Span.span;
+  nc_args : call_arg list;
+  nc_span : Span.span;
+}
 
 (* "ns.fn(args)": a call into an [extern] declared in the [ext] block named
    [ce_ns]. Shared by three surface positions: a member's [= ns.fn(...)]
@@ -258,10 +278,24 @@ type extern_lang_body = {
      call; targets that have not landed the equivalent convention ignore
      it the same way Go ignores [sync]. *)
   elb_ctx : bool;
+  (* Opts the call into being constructed with `new` (TypeScript's own
+     class-construction syntax) instead of called plainly. Other targets
+     ignore it: neither Go nor Rust has a `new` distinct from an ordinary
+     call. *)
+  elb_new : bool;
   elb_span : Span.span;
 }
 
-type extern_param = { ep_name : string; ep_name_span : Span.span; ep_type : ty }
+type extern_param = {
+  ep_name : string;
+  ep_name_span : Span.span;
+  ep_type : ty;
+  (* Marks this logical parameter as accepting a collection of values
+     (Go's `opts ...Option`, Rust's `Vec<T>`, TypeScript's `T[]`): the call
+     site binds a list for it, and each language's own `call:` materializes
+     it in its own idiom. *)
+  ep_variadic : bool;
+}
 
 (* [extern name(params): type { lang { ... } ... }] — a free function inside
    an [ext] block, or a method inside a [type] opaque-handle block. *)

@@ -161,7 +161,7 @@ let ext_construct_doc_is_present () =
 let ext_lib_docs_cover_the_grammar () =
   let grammar =
     Vocab.block_words @ Vocab.lang_body_words @ Vocab.type_markers
-    @ [ Vocab.request_ref ]
+    @ Vocab.param_markers @ [ Vocab.request_ref ]
   in
   let documented = List.map fst Hover_docs.ext_lib_docs in
   let missing = List.filter (fun w -> not (List.mem w documented)) grammar in

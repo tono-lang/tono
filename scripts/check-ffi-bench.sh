@@ -186,7 +186,11 @@ run_typescript() {
     local log="$dir/log"
     local sdk="$dir/out/typescript"
     mkdir -p "$sdk/node_modules/@tono-ext-fixture"
-    cp -R "$bench/ext/ts" "$sdk/node_modules/@tono-ext-fixture/"
+    # The package's own name is "@tono-ext-fixture/mathkit" (ext/ts/package.json),
+    # not "ts" (the source directory's own name): node module resolution walks
+    # node_modules/<package name>, so the copy must land under that name, not
+    # the source directory's own.
+    cp -R "$bench/ext/ts" "$sdk/node_modules/@tono-ext-fixture/mathkit"
     cat >"$sdk/tsconfig.json" <<TSCONFIG
 {
   "compilerOptions": {

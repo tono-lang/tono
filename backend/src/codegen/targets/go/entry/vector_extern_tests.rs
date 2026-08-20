@@ -217,6 +217,7 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             }],
         }],
     };
@@ -253,6 +254,7 @@ fn a_ctx_marked_method_fake_takes_the_context_first() {
         methods: vec![crate::ir::ExternDecl {
             name: "send".into(),
             params: vec![crate::ir::ExternParam {
+                variadic: false,
                 name: "topic".into(),
                 r#type: Tref::Prim(Prim::String),
             }],
@@ -267,6 +269,7 @@ fn a_ctx_marked_method_fake_takes_the_context_first() {
                 sync: false,
                 infallible: false,
                 ctx: true,
+                is_new: false,
             }],
         }],
     };

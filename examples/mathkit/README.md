@@ -51,9 +51,7 @@ synchronous in TypeScript.
 - `probes/NN-*.tono`: one small single-target file per capability, so the
   gate can report each capability on its own instead of one red for
   everything. `10-ownership-refused.tono` is the negative one: it must be
-  refused at generation. `06-nested-call.tono.rejected` is written in the
-  form the frontend rejects today, so it does not carry the `.tono`
-  extension the editor grammar gate walks; it is renamed the day it parses.
+  refused at generation.
 - `ext/`: the three stand-in libraries, next to the spec that binds them,
   the same layout as the other examples with an `ext` block.
 - `verify/`: the drivers that run the generated SDK against the stand-in
@@ -75,18 +73,18 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 | 1 | a foreign handle that is an interface, not a pointer to a struct | Go `Calculator[T]` | `01-go-interface-handle` | pass: the `interface` marker on the handle declaration drops the pointer, and the SDK holds the interface value itself |
 | 2 | the foreign type name per language | `Calculator` (Go, TS) vs `ConstantCalculator` (Rust) | `02-rust-foreign-name` | build-red, one step further: the instantiation now names the type per language (`type calculator(rust: "ConstantCalculator", float)`), verbatim, and the type resolves; what remains is that `compute` is a trait method on the concrete type and nothing brings the trait into scope |
 | 3 | several concrete types for one logical handle | Rust: four structs, one trait | `03-rust-concrete-types` | pass: the `interface` marker makes the handle the trait; Rust holds `Box<dyn Calculator<f64>>` and boxes each constructor's concrete value where it is built, so the concrete types never need a tono name |
-| 4 | a variadic parameter | `opts ...Option`, `calcs ...Calculator[T]` | `04-go-variadic-options` | build-red: no variadic form; the precision passed positionally is refused ("cannot use uint8 as Option") |
-| 5 | a collection of handles as an argument | `Vec<Box<dyn Calculator<T>>>`, `Calculator<T>[]` | `05-rust-handle-collection` | build-red: no list literal in a call argument; declared with a fixed arity of two (blocked first by 3) |
-| 6 | a nested call in `call:` | `WithPrecision(4)` inside `FromFormula` | `06-nested-call` | frontend-red: the argument grammar has no call form ("expected ')' to close call arguments") |
+| 4 | a variadic parameter | `opts ...Option`, `calcs ...Calculator[T]` | `04-go-variadic-options` | pass: the `variadic` marker on the logical parameter's type spreads a call-site list as `[]Option{...}...` |
+| 5 | a collection of handles as an argument | `Vec<Box<dyn Calculator<T>>>`, `Calculator<T>[]` | `05-rust-handle-collection` | pass: a `variadic` parameter's call-site list collects the already-built handles into the collection the library expects |
+| 6 | a nested call in `call:` | `WithPrecision(4)` inside `FromFormula` | `06-nested-call` | pass: a string immediately followed by `(` in a `call:` argument is a nested foreign-symbol call |
 | 7 | a struct literal in `call:` | `FormulaOptions { precision: 4 }` | `07-rust-struct-literal` | build-red: accepted by the frontend; Rust cannot be told the foreign struct's own name nor wrap the value in `Some` (blocked first by 3) |
-| 8 | construction by `new`, not a function call | TypeScript classes | `08-ts-new-construction` | build-red: no `new` form; "Value of type 'typeof ConstantCalculator' is not callable" |
-| 9 | a method synchronous in one target, asynchronous in the others | `compute()` in TS | `09-ts-sync-method` | build-red: blocked by 8 (the constructor is a class); the `sync` marker itself is accepted |
+| 8 | construction by `new`, not a function call | TypeScript classes | `08-ts-new-construction` | pass: the `new` marker on the language binding constructs with `new Symbol(args)` instead of calling it plainly |
+| 9 | a method synchronous in one target, asynchronous in the others | `compute()` in TS | `09-ts-sync-method` | pass: the `sync` marker now reaches the generated handle interface's own method signature, not just the call site |
 | 10 | a handle composed and read separately | fallback + a read of one of its inputs | `10-ownership-refused` | refused, as intended: single ownership is the rule, and the generator names the field and both readers |
 
-Passing today: capabilities 1 and 3 (the `interface` marker, held by value
-in Go and as a boxed trait object in Rust) and capability 10 (the one that
-is a rule, not a gap). Seven gaps remain, and capability 2's red narrowed
-from "cannot name the type" to "cannot bring the trait into scope".
+Passing today: capabilities 1, 3, 4, 5, 6, 8 and 9, plus capability 10 (the
+one that is a rule, not a gap). Two gaps remain (2 and 7, both blocked on
+per-language foreign-type naming reaching Rust's trait scope and `Some`
+wrapping, a separate capability).
 
 ### The bench proper (`service.tono`)
 

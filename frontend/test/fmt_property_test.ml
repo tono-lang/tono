@@ -182,21 +182,42 @@ let gen_ctor_arg =
     ctor_span = dspan;
   }
 
-let gen_call_arg =
-  G.oneof
-    [
-      (let+ n = gen_lname in
-       Ast.CaParam (n, dspan));
-      (let+ r = gen_ref in
-       Ast.CaRef r);
-      (let+ c = gen_ctor_arg in
-       Ast.CaCtor c);
-    ]
+(* Fuel-bounded like [gen_ty]: a nested call's own arguments recurse through
+   this same generator, so [n] caps how deep that nesting goes. *)
+let rec gen_call_arg n =
+  let base =
+    G.oneof
+      [
+        (let+ n = gen_lname in
+         Ast.CaParam (n, dspan));
+        (let+ r = gen_ref in
+         Ast.CaRef r);
+        (let+ c = gen_ctor_arg in
+         Ast.CaCtor c);
+      ]
+  in
+  if n <= 0 then base
+  else
+    G.oneof
+      [
+        base;
+        (let+ symbol = gen_string
+         and+ args = G.list_size (G.int_range 0 2) (gen_call_arg (n - 1)) in
+         Ast.CaCall
+           {
+             Ast.nc_symbol = symbol;
+             nc_symbol_span = dspan;
+             nc_args = args;
+             nc_span = dspan;
+           });
+        (let+ items = G.list_size (G.int_range 0 2) (gen_call_arg (n - 1)) in
+         Ast.CaList (items, dspan));
+      ]
 
 let gen_call_expr =
   let+ ns = gen_tname
   and+ fn = gen_lname
-  and+ args = G.list_size (G.int_range 0 2) gen_call_arg in
+  and+ args = G.list_size (G.int_range 0 2) (gen_call_arg 1) in
   {
     Ast.ce_ns = ns;
     ce_fn = fn;
@@ -212,7 +233,7 @@ let gen_call_expr =
 let gen_handle_call =
   let+ recv = gen_ref
   and+ method_ = gen_lname
-  and+ args = G.list_size (G.int_range 0 2) gen_call_arg in
+  and+ args = G.list_size (G.int_range 0 2) (gen_call_arg 1) in
   {
     Ast.oi_recv = recv;
     oi_method = method_;
@@ -362,7 +383,7 @@ let gen_error_map_entry =
 let gen_extern_lang_body =
   let+ lang = G.oneof_list [ "go"; "ts"; "rust" ]
   and+ symbol = gen_string
-  and+ args = G.list_size (G.int_range 0 2) gen_call_arg
+  and+ args = G.list_size (G.int_range 0 2) (gen_call_arg 1)
   and+ yields =
     G.oneof
       [
@@ -380,7 +401,8 @@ let gen_extern_lang_body =
   and+ errors = G.list_size (G.int_range 0 2) gen_error_map_entry
   and+ sync = G.bool
   and+ infallible = G.bool
-  and+ ctx = G.bool in
+  and+ ctx = G.bool
+  and+ new_ = G.bool in
   {
     Ast.elb_lang = lang;
     elb_lang_span = dspan;
@@ -393,12 +415,18 @@ let gen_extern_lang_body =
     elb_sync = sync;
     elb_infallible = infallible;
     elb_ctx = ctx;
+    elb_new = new_;
     elb_span = dspan;
   }
 
 let gen_extern_param =
-  let+ name = gen_lname and+ ty = gen_ty in
-  { Ast.ep_name = name; ep_name_span = dspan; ep_type = ty }
+  let+ name = gen_lname and+ ty = gen_ty and+ variadic = G.bool in
+  {
+    Ast.ep_name = name;
+    ep_name_span = dspan;
+    ep_type = ty;
+    ep_variadic = variadic;
+  }
 
 let gen_extern_decl =
   let+ name = gen_lname

@@ -140,6 +140,15 @@ and print_call_arg (a : Ast.call_arg) : string =
   | Ast.CaLit (Ast.LStr s, _) -> string_literal s
   | Ast.CaLit (Ast.LInt n, _) -> string_of_int n
   | Ast.CaLit (Ast.LFloat f, _) -> float_literal f
+  | Ast.CaCall nc -> print_nested_call nc
+  | Ast.CaList (items, _) ->
+      "[" ^ String.concat ", " (List.map print_call_arg items) ^ "]"
+
+and print_nested_call (nc : Ast.nested_call) : string =
+  string_literal nc.Ast.nc_symbol
+  ^ "("
+  ^ String.concat ", " (List.map print_call_arg nc.Ast.nc_args)
+  ^ ")"
 
 and print_call_expr (ce : Ast.call_expr) : string =
   ce.Ast.ce_ns ^ "." ^ ce.Ast.ce_fn ^ "("
@@ -444,16 +453,19 @@ let print_extern_lang_body ~indent (b : Ast.extern_lang_body) : string =
     if b.Ast.elb_infallible then [ inner ^ "infallible" ] else []
   in
   let ctx_lines = if b.Ast.elb_ctx then [ inner ^ "ctx" ] else [] in
+  let new_lines = if b.Ast.elb_new then [ inner ^ "new" ] else [] in
   braced_at ~indent b.Ast.elb_lang
-    (call_line @ sync_lines @ infallible_lines @ ctx_lines @ yields_line
-   @ returns_lines @ errors_lines)
+    (call_line @ sync_lines @ infallible_lines @ ctx_lines @ new_lines
+   @ yields_line @ returns_lines @ errors_lines)
 
 let print_extern ~indent (e : Ast.extern_decl) : string =
   let inner = indent ^ "  " in
   let params =
     String.concat ", "
       (List.map
-         (fun (p : Ast.extern_param) -> p.ep_name ^ ": " ^ print_ty p.ep_type)
+         (fun (p : Ast.extern_param) ->
+           p.Ast.ep_name ^ ": " ^ print_ty p.ep_type
+           ^ if p.ep_variadic then " variadic" else "")
          e.Ast.ed_params)
   in
   let header =

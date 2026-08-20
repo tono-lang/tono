@@ -316,6 +316,7 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
   let sync = ref false in
   let infallible = ref false in
   let ctx = ref false in
+  let new_ = ref false in
   let rec go () =
     match (P.peek st).kind with
     | Token.RBrace | Token.Eof -> ()
@@ -346,6 +347,10 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
         ignore (P.advance st);
         ctx := true;
         go ()
+    | Token.Ident "new" ->
+        ignore (P.advance st);
+        new_ := true;
+        go ()
     | _ ->
         P.error st (P.peek st).span
           (Printf.sprintf "unexpected token in a language block: expected %s"
@@ -374,12 +379,16 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
     elb_sync = !sync;
     elb_infallible = !infallible;
     elb_ctx = !ctx;
+    elb_new = !new_;
     elb_span =
       Span.merge langt.span
         (match close with Some t -> t.span | None -> langt.span);
   }
 
-(* extern_param ::= name ":" type *)
+(* extern_param ::= name ":" type "variadic"? -- the bare "variadic" marker
+   opts this logical parameter into accepting a collection of values, the
+   caller passing a list for it (Go's own `opts ...Option`, Rust's `Vec<T>`,
+   TypeScript's `T[]` each materializing it in their own idiom). *)
 let parse_extern_params ~parse_type st : Ast.extern_param list =
   ignore (P.expect st Token.LParen "'(' after the extern name");
   let one () =
@@ -394,7 +403,20 @@ let parse_extern_params ~parse_type st : Ast.extern_param list =
           ""
     in
     ignore (P.expect st Token.Colon "':' after a parameter name");
-    { Ast.ep_name = name; ep_name_span = nt.span; ep_type = parse_type st }
+    let ty = parse_type st in
+    let variadic =
+      match (P.peek st).kind with
+      | Token.Ident "variadic" ->
+          ignore (P.advance st);
+          true
+      | _ -> false
+    in
+    {
+      Ast.ep_name = name;
+      ep_name_span = nt.span;
+      ep_type = ty;
+      ep_variadic = variadic;
+    }
   in
   match (P.peek st).kind with
   | Token.RParen ->

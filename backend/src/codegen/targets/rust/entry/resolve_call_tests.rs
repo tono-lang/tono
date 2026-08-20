@@ -45,6 +45,7 @@ fn string_params(names: &[&str]) -> Vec<ExternParam> {
     names
         .iter()
         .map(|n| ExternParam {
+            variadic: false,
             name: (*n).to_string(),
             r#type: Tref::Prim(Prim::String),
         })
@@ -82,6 +83,7 @@ fn rust_lang(symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
         sync: false,
         infallible: false,
         ctx: false,
+        is_new: false,
     }
 }
 

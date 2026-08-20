@@ -202,10 +202,14 @@ and bind = { bind_field : string; bind_source : string list }
 
 (* One argument to an extern call (see [entry_call]/[extern_lang] below): the
    caller's own parameter by name, a field-reference path, a struct-literal
-   mapper, a scalar literal, a list, or a nested call -- the last three only
-   arise inside a ctor field's value (e.g. [opts { retries: 3 }]), never as a
-   bare top-level call argument. Shared by a field's own call source, a
-   language block's [call:] line, and a trait-argument call. *)
+   mapper, a scalar literal, a list, a call into a declared extern (arises
+   inside a ctor field's value, e.g. [opts { retries: 3 }], never as a bare
+   top-level call argument), or a bare foreign-symbol call nested inside a
+   language block's own [call:] line (e.g. [WithPrecision(precision)] inside
+   [call: "FromFormula"(expr, WithPrecision(precision))] -- this one *is*
+   legal as a top-level [call:] argument, since it is the position it
+   exists for). Shared by a field's own call source, a language block's
+   [call:] line, and a trait-argument call. *)
 and call_arg =
   | Ca_param of string
   | Ca_ref of string list
@@ -213,8 +217,15 @@ and call_arg =
   | Ca_lit of json
   | Ca_list of call_arg list
   | Ca_call of entry_call
+  | Ca_symbol_call of symbol_call
 
 and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
+
+(* A bare foreign-symbol call nested inside a [call:] line's own argument
+   list: no declared [extern] to resolve against, just a symbol string and
+   its own argument list, recursing through [call_arg] the same way a
+   language block's own [call:] line does. *)
+and symbol_call = { scl_symbol : string; scl_args : call_arg list }
 
 (* A field's [= ns.fn(args)] value: a call into an [extern] declared in the
    [ext] block named [ec_ns]. Resolving [ec_ns]/[ec_fn] against a declared
@@ -323,9 +334,21 @@ type extern_lang = {
   el_sync : bool;
   el_infallible : bool;
   el_ctx : bool;
+  el_new : bool;
+      (* the foreign symbol is a class constructed with [new], not a
+         function called plainly (TypeScript only; other targets ignore it
+         -- neither has a [new] distinct from an ordinary call) *)
 }
 
-type extern_param = { xp_name : string; xp_type : tref }
+type extern_param = {
+  xp_name : string;
+  xp_type : tref;
+  xp_variadic : bool;
+      (* the caller passes a collection of values for this logical
+         parameter (Go's [opts ...Option], Rust's [Vec<T>], TypeScript's
+         [T[]]); the call site binds a list, and each language block's own
+         [call:] materializes it in its own idiom (spread, [vec!], array) *)
+}
 
 (* A free function inside an [ext] block, or a method inside a [type] opaque
    handle. *)

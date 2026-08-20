@@ -64,6 +64,7 @@ pub fn call_ref(path: &[&str]) -> CallArg {
 
 pub fn ext_param(name: &str, target: Tref) -> ExternParam {
     ExternParam {
+        variadic: false,
         name: name.into(),
         r#type: target,
     }
@@ -99,6 +100,7 @@ pub fn go_extern(
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     }
 }

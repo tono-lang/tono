@@ -15,8 +15,11 @@ let block_words = [ "extern"; "type" ]
 let lang_fields = [ "call"; "yields"; "returns"; "errors" ]
 
 (* The bare markers of a language block, each opting a call out of one
-   target's convention. *)
-let lang_markers = [ "sync"; "infallible"; "ctx" ]
+   target's convention. "new" opts the call into TypeScript's own
+   class-construction syntax (`new Symbol(args)`); Go/Rust ignore it, the
+   same way every target that has no equivalent convention ignores a marker
+   it doesn't act on. *)
+let lang_markers = [ "sync"; "infallible"; "ctx"; "new" ]
 
 (* The bare markers of an opaque handle's own "type" header. "interface"
    declares the foreign type is abstract (a Go interface, held by value),
@@ -24,6 +27,12 @@ let lang_markers = [ "sync"; "infallible"; "ctx" ]
    and nothing about a foreign name says which one it is. *)
 let type_markers = [ "interface" ]
 let lang_body_words = lang_fields @ lang_markers
+
+(* The bare marker of an extern parameter's own type: the caller passes a
+   collection of values for it instead of one (Go's `opts ...Option`,
+   Rust's `Vec<T>`, TypeScript's `T[]`), each language's own `call:`
+   materializing it in its own idiom. *)
+let param_markers = [ "variadic" ]
 
 (* The reserved yields: position type, valid nowhere else. *)
 let error_sentinel = "error"

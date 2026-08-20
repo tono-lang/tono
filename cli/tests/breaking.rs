@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The baseline IR: one structure with an `i64` amount.
-const BASELINE: &str = r#"{"tono_ir_version":24,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const BASELINE: &str = r#"{"tono_ir_version":25,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 /// The current IR: `amount` retyped to a string, a wire break.
-const RETYPED: &str = r#"{"tono_ir_version":24,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
+const RETYPED: &str = r#"{"tono_ir_version":25,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"string"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))
@@ -209,7 +209,7 @@ fn entry_model_json(bound: bool) -> String {
         "[]"
     };
     format!(
-        r#"{{"tono_ir_version":24,"modules":[{{"name":"notes","shapes":[{{"id":"notes#client","kind":"entry","fields":[{{"name":"endpoint","target":{{"prim":"string"}}}}],"operations":[{{"id":"notes#client.ping","kind":"operation","input":null,"output":null,"errors":[],"traits":[],"wire":{{"method":"GET","uri":{{"template":[{{"lit":"/x"}}]}},"bindings":{{}},"response_bindings":{{}},"success":[200],"endpoint":{{"field":["endpoint"]}}}}}}]}}],"operations":[],"extensions":{extensions}}}]}}"#
+        r#"{{"tono_ir_version":25,"modules":[{{"name":"notes","shapes":[{{"id":"notes#client","kind":"entry","fields":[{{"name":"endpoint","target":{{"prim":"string"}}}}],"operations":[{{"id":"notes#client.ping","kind":"operation","input":null,"output":null,"errors":[],"traits":[],"wire":{{"method":"GET","uri":{{"template":[{{"lit":"/x"}}]}},"bindings":{{}},"response_bindings":{{}},"success":[200],"endpoint":{{"field":["endpoint"]}}}}}}]}}],"operations":[],"extensions":{extensions}}}]}}"#
     )
 }
 

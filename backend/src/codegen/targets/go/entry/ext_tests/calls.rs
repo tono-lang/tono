@@ -39,6 +39,7 @@ fn a_versioned_go_module_path_still_selects_by_the_ext_lib_name() {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             }],
         }],
     };
@@ -205,6 +206,7 @@ fn lib_missing(lib_langs: Vec<LangPath>, fn_name: &str, fn_lang: &str) -> ExtLib
                 sync: false,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             }],
         }],
     }
@@ -238,6 +240,7 @@ fn simple_go_lib(lib_name: &str, fn_name: &str, symbol: &str, return_ty: Tref) -
                 sync: false,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             }],
         }],
     }
@@ -355,6 +358,7 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             }],
         }],
     };

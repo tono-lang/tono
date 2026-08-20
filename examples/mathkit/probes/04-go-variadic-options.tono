@@ -1,26 +1,29 @@
-// Capability 4: a variadic parameter. FromFormula(expr string, opts
-// ...Option) takes functional options variadically; the value of one option
-// is built by WithPrecision(digits). Neither the variadic slot nor the
-// nested call (capability 6) is expressible, so the precision is passed
-// positionally, the nearest form, which Go refuses.
+// Capability 4 (variadic parameter) and 6 (nested call in call:): the Go
+// shape is FromFormula(expr, WithPrecision(4)), an option built by a
+// nested call and passed through a variadic logical parameter. "option" has
+// no methods of its own (WithPrecision is a free function, not one of its
+// methods); the "interface" marker still fits, since a Go func value is
+// exactly the "not a concrete struct held by pointer" shape it names.
 ext mathkit {
   go: "tono-ext-fixture/mathkit"
 
-  type calculator("Calculator", float) {
+  type calculator("Calculator", float) interface {
     extern compute(): float {
       go { call: "Compute"() ctx }
     }
   }
 
-  extern from_formula(expr: string, precision: u8): calculator {
-    go { call: "FromFormula"(expr, precision) }
+  type option interface {
+  }
+
+  extern from_formula(expr: string, opts: option variadic): calculator {
+    go { call: "FromFormula"(expr, opts) }
   }
 }
 
 pub struct client {
   expr: string @arg
-  precision: u8 @arg
-  formula: mathkit.calculator = mathkit.from_formula(.expr, .precision)
+  formula: mathkit.calculator = mathkit.from_formula(.expr, ["WithPrecision"(4)])
 
   op value(): float
     impl .formula.compute()

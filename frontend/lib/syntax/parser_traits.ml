@@ -146,15 +146,23 @@ and parse_trait_list_value st : Ast.trait_arg =
       ignore (P.expect st Token.RBracket "']' to close a list value");
       Ast.AList values
 
-(* call_arg ::= ".path" | name | name "{" field ":" value, ... "}"  — the same
-   three shapes [call:] accepts: a field-reference path, the caller's own
-   bare parameter, or a struct-literal mapper (reusing [parse_ctor_arg]). *)
+(* call_arg ::= ".path" | name | name "{" field ":" value, ... "}" | string
+   "(" call_arg, ... ")" | "[" call_arg, ... "]" — the same shapes [call:]
+   accepts: a field-reference path, the caller's own bare parameter, a
+   struct-literal mapper (reusing [parse_ctor_arg]), a nested foreign-symbol
+   call, e.g. the [WithPrecision(precision)] in [call: "FromFormula"(expr,
+   WithPrecision(precision))], or a list literal (the caller's own value for
+   a [variadic] logical parameter, e.g.
+   [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]). A
+   string not followed by "(" is an ordinary literal instead ([CaLit]). *)
 and parse_call_arg st : Ast.call_arg =
   match (P.peek st).kind with
   | Token.Dot -> Ast.CaRef (parse_ref_path st)
-  | Token.Str s ->
+  | Token.Str s -> (
       let t = P.advance st in
-      Ast.CaLit (Ast.LStr s, t.span)
+      match (P.peek st).kind with
+      | Token.LParen -> Ast.CaCall (parse_nested_call st s t.span)
+      | _ -> Ast.CaLit (Ast.LStr s, t.span))
   | Token.Int n ->
       let t = P.advance st in
       Ast.CaLit (Ast.LInt n, t.span)
@@ -169,10 +177,46 @@ and parse_call_arg st : Ast.call_arg =
           | Ast.ACtor c -> Ast.CaCtor c
           | _ -> assert false)
       | _ -> Ast.CaParam (n, nt.span))
+  | Token.LBracket -> parse_call_list st
   | _ ->
       P.error st (P.peek st).span "expected a call argument";
       ignore (P.advance st);
       Ast.CaParam ("", (P.peek st).span)
+
+(* "[" call_arg ("," call_arg)* "]" — the caller has not consumed '[' yet. *)
+and parse_call_list st : Ast.call_arg =
+  let lb = P.advance st in
+  (* '[' *)
+  match (P.peek st).kind with
+  | Token.RBracket ->
+      let rb = P.advance st in
+      Ast.CaList ([], Span.merge lb.span rb.span)
+  | _ ->
+      let first = parse_call_arg st in
+      let rec more acc =
+        match (P.peek st).kind with
+        | Token.Comma ->
+            ignore (P.advance st);
+            if (P.peek st).kind = Token.RBracket then List.rev acc
+            else more (parse_call_arg st :: acc)
+        | _ -> List.rev acc
+      in
+      let items = more [ first ] in
+      let close = P.expect st Token.RBracket "']' to close a list argument" in
+      let finish = match close with Some t -> t.span | None -> lb.span in
+      Ast.CaList (items, Span.merge lb.span finish)
+
+(* "string" "(" call_arg ("," call_arg)* ")" — the symbol has already been
+   consumed at [symbol]/[symbol_span]; the cursor sits on "(". *)
+and parse_nested_call st (symbol : string) (symbol_span : Span.span) :
+    Ast.nested_call =
+  let args = parse_call_args st in
+  {
+    Ast.nc_symbol = symbol;
+    nc_symbol_span = symbol_span;
+    nc_args = args;
+    nc_span = symbol_span;
+  }
 
 (* "(" call_arg ("," call_arg)* ")" — the caller has not consumed '(' yet.
    Used both by [call_expr] below and directly by a language block's

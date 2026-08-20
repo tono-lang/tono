@@ -40,6 +40,15 @@ and call_arg =
   | CaRef of ref_path
   | CaCtor of ctor_arg
   | CaLit of call_lit * Span.span
+  | CaCall of nested_call
+  | CaList of call_arg list * Span.span
+
+and nested_call = {
+  nc_symbol : string;
+  nc_symbol_span : Span.span;
+  nc_args : call_arg list;
+  nc_span : Span.span;
+}
 
 and call_expr = {
   ce_ns : string;
@@ -187,10 +196,16 @@ type extern_lang_body = {
   elb_sync : bool;
   elb_infallible : bool;
   elb_ctx : bool;
+  elb_new : bool;
   elb_span : Span.span;
 }
 
-type extern_param = { ep_name : string; ep_name_span : Span.span; ep_type : ty }
+type extern_param = {
+  ep_name : string;
+  ep_name_span : Span.span;
+  ep_type : ty;
+  ep_variadic : bool;
+}
 
 type extern_decl = {
   ed_name : string;

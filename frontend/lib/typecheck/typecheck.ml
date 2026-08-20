@@ -25,10 +25,11 @@ let check_module ?(qualified = Resolve.no_imports) ~(file : Ast.file)
   let constraint_diags = Check_constraints.check ~decls m in
   let op_diags = Check_operations.check_decls tbl decls in
   let ext_diags = Check_ext.check_decls decls in
-  (* The cross-file closed accounting for "ext" ([Check_ext_lib.check_project])
-     is not run here: it needs every module's decls at once, so the project
-     pipeline in [Tono_frontend] calls it directly, mirroring how [Modules.build]
-     runs outside this per-module pass. *)
+  (* The cross-file closed accounting for "ext"
+     ([Check_ext_lib_project.check_project]) is not run here: it needs every
+     module's decls at once, so the project pipeline in [Tono_frontend] calls
+     it directly, mirroring how [Modules.build] runs outside this per-module
+     pass. *)
   let ext_lib_diags = Check_ext_lib.check_decls ~tbl decls in
   let impl_diags = Check_impl.check_decls decls in
   let entry_diags = Check_entries.check_decls decls in

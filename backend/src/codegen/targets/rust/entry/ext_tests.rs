@@ -462,6 +462,7 @@ fn handle_call_model(
                 sync: true,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             }],
         }],
     };
@@ -480,6 +481,7 @@ fn handle_call_model(
             methods: vec![ExternDecl {
                 name: "do_it".into(),
                 params: vec![ExternParam {
+                    variadic: false,
                     name: "x".into(),
                     r#type: Tref::Prim(Prim::String),
                 }],
@@ -497,6 +499,7 @@ fn handle_call_model(
                     sync,
                     infallible: false,
                     ctx: false,
+                    is_new: false,
                 }],
             }],
         }],

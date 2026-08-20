@@ -1,6 +1,6 @@
-// Capability 8: construction by `new`. ConstantCalculator is a class; there
-// is no `new` form, so the class is named as if it were a callable function
-// and TypeScript refuses to call it without `new`.
+// Capability 8: construction by `new`. ConstantCalculator is a class; the
+// `new` marker opts the binding into `new Symbol(args)` instead of a plain
+// call.
 ext mathkit {
   ts: "@tono-ext-fixture/mathkit"
 
@@ -11,7 +11,7 @@ ext mathkit {
   }
 
   extern from_constant(value: float): calculator {
-    ts { call: "ConstantCalculator"(value) }
+    ts { call: "ConstantCalculator"(value) new }
   }
 }
 

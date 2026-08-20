@@ -353,6 +353,7 @@ fn call_args_guaranteed<'a>(
             .all(|v| call_args_guaranteed(std::slice::from_ref(v), path_guaranteed, visiting)),
         CallArg::List(items) => call_args_guaranteed(items, path_guaranteed, visiting),
         CallArg::Call(call) => call_args_guaranteed(&call.args, path_guaranteed, visiting),
+        CallArg::SymbolCall(sc) => call_args_guaranteed(&sc.args, path_guaranteed, visiting),
         CallArg::Param(_) | CallArg::Lit(_) => true,
     })
 }

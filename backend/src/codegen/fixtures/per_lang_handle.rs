@@ -36,6 +36,7 @@ fn plain_lang(lang: &str, symbol: &str, call_args: Vec<CallArg>, ctx: bool) -> E
         sync: false,
         infallible: false,
         ctx,
+        is_new: false,
     }
 }
 
@@ -85,6 +86,7 @@ fn keepkit() -> ExtLib {
         externs: vec![ExternDecl {
             name: "open".into(),
             params: vec![ExternParam {
+                variadic: false,
                 name: "seed".into(),
                 r#type: string_t(),
             }],
