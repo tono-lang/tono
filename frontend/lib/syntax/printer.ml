@@ -424,15 +424,22 @@ let print_errors ~indent (es : Ast.error_map_entry list) : string =
          indent ^ "  " ^ escaped_string e.em_sentinel ^ " => " ^ e.em_type)
        es)
 
-let print_call ~indent (symbol : string) (args : Ast.call_arg list) : string =
-  indent ^ "call: " ^ escaped_string symbol ^ "("
+let print_call ~indent ?receiver (symbol : string) (args : Ast.call_arg list) :
+    string =
+  let receiver =
+    match receiver with Some r -> escaped_string r ^ "." | None -> ""
+  in
+  indent ^ "call: " ^ receiver ^ escaped_string symbol ^ "("
   ^ String.concat ", " (List.map print_call_arg args)
   ^ ")"
 
 let print_extern_lang_body ~indent (b : Ast.extern_lang_body) : string =
   let inner = indent ^ "  " in
   let call_line =
-    [ print_call ~indent:inner b.Ast.elb_call_symbol b.elb_call_args ]
+    [
+      print_call ~indent:inner ?receiver:b.Ast.elb_call_receiver
+        b.elb_call_symbol b.elb_call_args;
+    ]
   in
   let yields_line =
     match b.Ast.elb_yields with

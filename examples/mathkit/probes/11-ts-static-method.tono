@@ -1,0 +1,26 @@
+// Capability 11: a static method as the constructor. The receiver of the
+// call is the foreign type itself (FormulaCalculator.parse(expr)), not a
+// free function of the library and not a handle already built: the type is
+// written as a second string before the method, and it is what the
+// generated module imports.
+ext mathkit {
+  ts: "@tono-ext-fixture/mathkit"
+
+  type calculator("Calculator", float) {
+    extern compute(): float {
+      ts { call: "compute"() sync }
+    }
+  }
+
+  extern parse(expr: string): calculator {
+    ts { call: "FormulaCalculator"."parse"(expr) sync }
+  }
+}
+
+pub struct client {
+  expr: string @arg
+  formula: mathkit.calculator = mathkit.parse(.expr)
+
+  op value(): float
+    impl .formula.compute()
+}

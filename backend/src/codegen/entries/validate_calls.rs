@@ -238,6 +238,7 @@ fn extern_binds_every_target(
                 ));
             }
         }
+        static_receiver_renders(site, *target, lang)?;
         if !target.emits_nested_extern_call_args() && contains_cross_extern_call(&lang.call_args) {
             return Err(format!(
                 "{site}: the {} block's call: line uses another declared extern's call as one of its own arguments; {} codegen cannot render that yet",
@@ -247,6 +248,27 @@ fn extern_binds_every_target(
         }
     }
     Ok(())
+}
+
+/// A `call:` line whose receiver is a foreign type name (a static method,
+/// `"Type"."method"(args)`) is rejected for a target that has nothing to
+/// spell it as (see [`TargetKind::emits_static_receiver_calls`]), naming
+/// the site and the method, before any emitter could write a method
+/// expression that compiles into the wrong call.
+pub(super) fn static_receiver_renders(
+    site: &str,
+    target: TargetKind,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    match &lang.receiver {
+        Some(recv) if !target.emits_static_receiver_calls() => Err(format!(
+            "{site}: the {} block's call: line is a static method of the foreign type {recv:?} ({recv}.{}); {} has no static method to call, bind a package function instead",
+            target.binding_langs()[0],
+            lang.symbol,
+            target.dir()
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Whether a call's own argument tree uses a cross-extern call

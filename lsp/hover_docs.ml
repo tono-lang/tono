@@ -287,8 +287,11 @@ let ext_lib_docs : (string * string) list =
       "The foreign symbol and the argument order it takes, e.g. call: \
        \"Load\"(service, region). Arguments are the extern's parameters, \
        literals, a foreign struct literal, or a nested foreign-symbol call, \
-       e.g. \"FromFormula\"(expr, \"WithPrecision\"(precision)). Required in \
-       every language block." );
+       e.g. \"FromFormula\"(expr, \"WithPrecision\"(precision)). A static \
+       method names the foreign type it is called on as a second string before \
+       the method: call: \"Formula\".\"parse\"(expr) (Rust Formula::parse, \
+       TypeScript Formula.parse on the imported type; Go has no static method \
+       and refuses it at generation). Required in every language block." );
     ( "yields",
       "Names what the call returns, position by position, so returns: can \
        project from it (e.g. yields: (cfg: go_config)). Also declares \

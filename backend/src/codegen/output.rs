@@ -104,6 +104,20 @@ impl TargetKind {
             Self::Go | Self::TypeScript => false,
         }
     }
+
+    /// Whether this target can render a `call:` line whose receiver is a
+    /// foreign type name (a static method, `"Type"."method"(args)`). Rust
+    /// qualifies the call by the type the way it does by the crate
+    /// (`krate::Type::method`); TypeScript calls a member of the imported
+    /// type (`Type.method`). Go has no static method at all (a library
+    /// exposes a package function, the plain `call:` shape), so there is
+    /// nothing correct to spell and generation refuses the binding.
+    pub fn emits_static_receiver_calls(self) -> bool {
+        match self {
+            Self::Rust | Self::TypeScript => true,
+            Self::Go => false,
+        }
+    }
 }
 
 /// A generated source file: which target produced it (so a caller knows which

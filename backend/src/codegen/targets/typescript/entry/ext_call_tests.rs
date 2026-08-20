@@ -399,6 +399,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                receiver: None,
                 is_new: false,
             }],
         }],
@@ -425,4 +426,37 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
     assert!(out.contains("case \"prod\": return raw.Host;"), "{out}");
     assert!(out.contains("default: return raw.DevHost;"), "{out}");
     assert!(out.contains("})() };"), "{out}");
+}
+
+/// A static method (`"Type"."method"(args)`) is called on the imported type:
+/// the seam imports the receiver type, not the method, and calls
+/// `Type.method(..)` through it.
+#[test]
+fn a_static_method_receiver_imports_the_type_and_calls_its_member() {
+    let mut module = appendix_module(appendix_fields());
+    let load = &mut module.ext_libs[0].externs[0].langs[0];
+    assert_eq!(load.symbol, "load");
+    load.receiver = Some("ConfigLoader".into());
+    let decls = rendered_decls(&module);
+    let seam_decl = decls
+        .iter()
+        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("let configExt")))
+        .expect("config seam decl");
+    let refs = crate::codegen::tree::item_refs(seam_decl);
+    assert!(
+        refs.iter().any(|s| s.name == "ConfigLoader"
+            && s.import
+                .as_ref()
+                .is_some_and(|i| i.module == "@company/config")),
+        "the seam must import the receiver type: {refs:?}"
+    );
+    assert!(
+        !refs.iter().any(|s| s.name == "load"),
+        "the method itself is not an import: {refs:?}"
+    );
+    let out = rendered_text(&module);
+    assert!(
+        out.contains("const raw = await ConfigLoader.load("),
+        "{out}"
+    );
 }

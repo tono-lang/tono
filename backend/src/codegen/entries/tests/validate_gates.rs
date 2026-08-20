@@ -416,6 +416,7 @@ fn bus_lib_with_send_bound_for(langs: &[&str]) -> ExtLib {
                         sync: false,
                         infallible: false,
                         ctx: false,
+                        receiver: None,
                         is_new: false,
                     })
                     .collect(),
@@ -508,6 +509,7 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
                     sync: false,
                     infallible: false,
                     ctx: false,
+                    receiver: None,
                     is_new: false,
                 }],
             }],
@@ -529,6 +531,7 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
                 sync: false,
                 infallible: false,
                 ctx: false,
+                receiver: None,
                 is_new: false,
             }],
         }],

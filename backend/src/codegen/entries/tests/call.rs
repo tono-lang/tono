@@ -175,6 +175,7 @@ fn ext_lib_with_extern(lib: &str, name: &str, langs: &[&str]) -> ExtLib {
                     sync: false,
                     infallible: false,
                     ctx: false,
+                    receiver: None,
                     is_new: false,
                 })
                 .collect(),
@@ -356,6 +357,7 @@ fn ext_lib_with_handle_ctor(lib: &str, handle: &str, ctor: &str) -> ExtLib {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                receiver: None,
                 is_new: false,
             })
             .collect(),
@@ -399,4 +401,61 @@ fn gen_accepts_a_plain_arg_injected_foreign_handle_field() {
     module.ext_libs = vec![ext_lib_with_handle("c", "h")];
     let model = model_of(module);
     assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
+}
+
+/// A `call:` line whose receiver is a foreign type name (a static method,
+/// `"Type"."method"(args)`) has a rendering in Rust (`krate::Type::method`)
+/// and TypeScript (`Type.method` on the imported type) but none in Go, which
+/// has no static method to call; Go generation refuses the binding naming
+/// the site and the type rather than emitting a method expression that
+/// compiles into the wrong call.
+#[test]
+fn a_static_method_receiver_is_refused_for_go_and_accepted_where_it_renders() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.receiver = Some("Loader".into());
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+
+    let err = super::validate_entries(&model, &[TargetKind::Go]).unwrap_err();
+    assert!(
+        err.contains("config = ns.load(..)"),
+        "names the site: {err}"
+    );
+    assert!(
+        err.contains("Loader.Load"),
+        "names the static method: {err}"
+    );
+    assert!(err.contains("go has no static method"), "{err}");
+
+    assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
+    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
+}
+
+/// The same refusal at the other place a free extern is called from: a
+/// `@header`/`@body` value computed by an extern call in wire position.
+#[test]
+fn a_static_method_receiver_in_wire_position_is_refused_for_go_only() {
+    use crate::ir::{WireCall, WireCallArg};
+    let mut module = module_of(vec![]);
+    let mut lib = ext_lib_with_extern("ns", "sign", &["go", "ts", "rust"]);
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.receiver = Some("Signer".into());
+    }
+    module.ext_libs = vec![lib];
+    let call = WireCall {
+        ns: "ns".into(),
+        fn_name: "sign".into(),
+        args: vec![WireCallArg::Request],
+    };
+    let err = super::validate::wire_call_resolves(&module, &call, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("ns.sign(..)"), "{err}");
+    assert!(err.contains("Signer.Load"), "{err}");
+    assert!(super::validate::wire_call_resolves(&module, &call, &[TargetKind::TypeScript]).is_ok());
+    assert!(super::validate::wire_call_resolves(&module, &call, &[TargetKind::Rust]).is_ok());
 }

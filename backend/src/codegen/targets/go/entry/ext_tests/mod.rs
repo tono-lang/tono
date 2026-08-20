@@ -303,6 +303,7 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
                     sync: false,
                     infallible: false,
                     ctx: false,
+                    receiver: None,
                     is_new: false,
                 }],
             }],

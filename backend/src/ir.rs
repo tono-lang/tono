@@ -100,7 +100,10 @@ pub use crate::ir_tests_model::*;
 /// target in its own idiom); `ExternLang` gained `is_new` (wire tag `new`;
 /// the foreign symbol is constructed with TypeScript's `new` instead of
 /// called plainly).
-pub const TONO_IR_VERSION: u32 = 25;
+/// v26 added `ExternLang::receiver`: the `call:` line's own receiver when
+/// it is a foreign type name (a static method, `"Type"."method"(args)`),
+/// absent for a free function of the library.
+pub const TONO_IR_VERSION: u32 = 26;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

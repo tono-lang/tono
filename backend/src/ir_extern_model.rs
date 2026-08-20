@@ -251,6 +251,15 @@ pub struct ErrorBinding {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternLang {
     pub lang: String,
+    /// The foreign type a static method is qualified by (`Type.method`),
+    /// when the call's receiver is a type name and not a value: absent for
+    /// a free function of the library. Rendered as the library namespace's
+    /// own qualification in Rust (`krate::Type::method`) and as a member of
+    /// the imported type in TypeScript (`Type.method`); Go has no static
+    /// method (a constructor is a package function, the plain call), so its
+    /// generation refuses the shape instead of guessing at one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
     pub symbol: String,
     #[serde(default)]
     pub call_args: Vec<CallArg>,
@@ -515,6 +524,7 @@ mod tests {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
@@ -535,6 +545,7 @@ mod tests {
             sync: true,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
@@ -555,6 +566,7 @@ mod tests {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
@@ -575,6 +587,7 @@ mod tests {
             sync: false,
             infallible: true,
             ctx: false,
+            receiver: None,
             is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
@@ -595,6 +608,7 @@ mod tests {
             sync: false,
             infallible: false,
             ctx: false,
+            receiver: None,
             is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();
@@ -615,6 +629,7 @@ mod tests {
             sync: false,
             infallible: false,
             ctx: true,
+            receiver: None,
             is_new: false,
         };
         let json = serde_json::to_string(&lang).unwrap();

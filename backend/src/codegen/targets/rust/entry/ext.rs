@@ -353,8 +353,8 @@ impl ArgCtx<'_> {
         };
         let args: Vec<String> = lang.call_args.iter().map(|a| inner.arg_expr(a)).collect();
         format!(
-            "{krate}::{}({}){}",
-            lang.symbol,
+            "{}({}){}",
+            super::resolve_call::qualified_symbol(&krate, lang),
             args.join(", "),
             if lang.sync { "" } else { ".await" }
         )

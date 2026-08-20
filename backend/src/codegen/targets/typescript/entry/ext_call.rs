@@ -402,16 +402,27 @@ fn call_body(
     // shape below. The surrounding seam stays `async` regardless (an entry
     // with any extern-call field is already async-constructed; this one
     // call's own expression is the only thing that changes).
+    let (_, callee) = static_callee(lang);
     let call_expr = if lang.is_new {
-        format!("new {}({args})", lang.symbol)
+        format!("new {callee}({args})")
     } else {
-        format!("await {}({args})", lang.symbol)
+        format!("await {callee}({args})")
     };
 
     format!(
         "try {{\n  const raw = {call_expr};\n  {assign}\n}} catch (e) {{\n{switch}  throw new {contract}({call_name:?}, e);\n}}",
         contract = error_names().contract,
     )
+}
+
+/// What a binding's call imports and calls: a static method
+/// (`"Type"."method"`) imports the receiver type and calls a member of it
+/// (`Type.method`); a free function imports and calls the symbol itself.
+pub(super) fn static_callee(lang: &ExternLang) -> (&str, String) {
+    match &lang.receiver {
+        Some(recv) => (recv.as_str(), format!("{recv}.{}", lang.symbol)),
+        None => (lang.symbol.as_str(), lang.symbol.clone()),
+    }
 }
 
 /// The `catch (e) { switch (...) { ... } }` block mapping every declared
@@ -492,10 +503,11 @@ pub(super) fn seam_decls(
             });
 
         let seam = ext_seam_var(n, field);
+        let (imported, _) = static_callee(l.lang);
         let mut refs = vec![Symbol::imported(
-            l.lang.symbol.clone(),
+            imported.to_string(),
             lib_path.path.clone(),
-            l.lang.symbol.clone(),
+            imported.to_string(),
         )];
         let mut sentinel_types = BTreeSet::new();
         let body = call_body(

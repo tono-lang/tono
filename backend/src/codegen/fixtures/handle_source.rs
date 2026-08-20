@@ -128,6 +128,7 @@ fn cfg_lang(
         sync: false,
         infallible: false,
         ctx,
+        receiver: None,
         is_new: false,
     }
 }
@@ -206,6 +207,7 @@ fn plain_lang(lang: &str, symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
         sync: false,
         infallible: false,
         ctx: false,
+        receiver: None,
         is_new: false,
     }
 }

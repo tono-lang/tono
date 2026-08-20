@@ -36,6 +36,7 @@ fn plain_lang(lang: &str, symbol: &str, call_args: Vec<CallArg>, ctx: bool) -> E
         sync: false,
         infallible: false,
         ctx,
+        receiver: None,
         is_new: false,
     }
 }

@@ -64,11 +64,14 @@ let encode_error_binding (e : Ir.error_binding) : Ir.json =
 
 let encode_extern_lang (l : Ir.extern_lang) : Ir.json =
   `Assoc
-    ([
-       ("lang", `String l.el_lang);
-       ("symbol", `String l.el_symbol);
-       ("call_args", `List (List.map encode_call_arg l.el_call_args));
-     ]
+    ([ ("lang", `String l.el_lang) ]
+    @ (match l.el_receiver with
+      | None -> []
+      | Some r -> [ ("receiver", `String r) ])
+    @ [
+        ("symbol", `String l.el_symbol);
+        ("call_args", `List (List.map encode_call_arg l.el_call_args));
+      ]
     @ (if l.el_yields = [] then []
        else [ ("yields", `List (List.map encode_yields_pos l.el_yields)) ])
     @ (match l.el_returns with
@@ -298,9 +301,17 @@ let decode_extern_lang j =
   in
   let* ctx = match get "ctx" with None -> Ok false | Some v -> as_bool v in
   let* new_ = match get "new" with None -> Ok false | Some v -> as_bool v in
+  let* receiver =
+    match get "receiver" with
+    | None -> Ok None
+    | Some v ->
+        let* r = as_string v in
+        Ok (Some r)
+  in
   Ok
     ({
        el_lang = lang;
+       el_receiver = receiver;
        el_symbol = symbol;
        el_call_args = call_args;
        el_yields = yields;

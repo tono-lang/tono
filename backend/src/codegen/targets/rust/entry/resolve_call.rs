@@ -42,6 +42,16 @@ pub(super) fn find_extern<'a>(lib: &'a ExtLib, func: &str) -> &'a ExternDecl {
         .expect("validate::call_resolves/wire_call_resolves checked this extern exists")
 }
 
+/// The path a binding's call is spelled at: the crate, then the receiver
+/// type when the call is a static method of it (`krate::Type::method`, the
+/// type qualifying the call the same way the crate does), then the symbol.
+pub(super) fn qualified_symbol(crate_ident: &str, lang: &ExternLang) -> String {
+    match &lang.receiver {
+        Some(recv) => format!("{crate_ident}::{recv}::{}", lang.symbol),
+        None => format!("{crate_ident}::{}", lang.symbol),
+    }
+}
+
 pub(super) fn find_rust_lang(decl: &ExternDecl) -> &ExternLang {
     decl.langs
         .iter()
@@ -209,8 +219,8 @@ fn call_expr(r: &mut Resolver<'_, '_>, call: &EntryCall) -> String {
         .collect();
     let awaited = if lang.sync { "" } else { ".await" };
     format!(
-        "{crate_ident}::{}({}){awaited}",
-        lang.symbol,
+        "{}({}){awaited}",
+        qualified_symbol(&crate_ident, lang),
         args.join(", ")
     )
 }

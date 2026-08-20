@@ -260,6 +260,8 @@ type error_map_entry = {
 type extern_lang_body = {
   elb_lang : string;
   elb_lang_span : Span.span;
+  elb_call_receiver : string option;
+  elb_call_receiver_span : Span.span option;
   elb_call_symbol : string;
   elb_call_symbol_span : Span.span;
   elb_call_args : call_arg list;

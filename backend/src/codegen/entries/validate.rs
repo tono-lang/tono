@@ -132,7 +132,7 @@ fn has_ctor_call_arg(call: &WireCall) -> bool {
 /// same rule [`call_resolves`] enforces for an entry field's own call
 /// source. Without this an emitter would meet "no such ext block" as a
 /// pipeline defect -- a panic -- instead of an authoring error.
-fn wire_call_resolves(
+pub(super) fn wire_call_resolves(
     module: &Module,
     call: &WireCall,
     targets: &[TargetKind],
@@ -150,11 +150,11 @@ fn wire_call_resolves(
         ));
     };
     for target in targets {
-        if !decl
+        let Some(lang) = decl
             .langs
             .iter()
-            .any(|l| target.binding_langs().contains(&l.lang.as_str()))
-        {
+            .find(|l| target.binding_langs().contains(&l.lang.as_str()))
+        else {
             return Err(format!(
                 "{}.{}(..): extern {} declares no {} block; {} codegen has nothing to emit",
                 call.ns,
@@ -163,7 +163,12 @@ fn wire_call_resolves(
                 target.binding_langs()[0],
                 target.dir()
             ));
-        }
+        };
+        super::validate_calls::static_receiver_renders(
+            &format!("{}.{}(..)", call.ns, call.fn_name),
+            *target,
+            lang,
+        )?;
     }
     Ok(())
 }
