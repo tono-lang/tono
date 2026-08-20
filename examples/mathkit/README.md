@@ -104,6 +104,26 @@ The Go blocker is not among the ten capabilities; it is the first thing the
 bench found. Once it clears, the Go bench too will stop at the capabilities
 the probes already report.
 
+## Call-argument shapes not covered here
+
+Three shapes a consumer raised are not part of the ten capabilities above,
+and are deliberately not attempted as a small extension of `call:`'s own
+argument grammar:
+
+- **class reference** (a type naming a constructor, not a value) needs a new
+  type-level construct, a typechecker change rather than an argument shape.
+- **static method** (a call whose receiver is a foreign type name) is a
+  third kind of call receiver, alongside a declared `ext` namespace
+  (`ns.fn(..)`) and a handle field (`.field.method(..)`).
+- **Map literal** as a call argument needs its own key-value collection
+  shape, distinct from the list this bench's own capability 4/5 already
+  added for a variadic parameter.
+
+Each is its own scoped piece of work with its own design questions, not a
+one-line addition to what nested calls and variadic parameters already
+cover; bundling them here would risk a rushed design on the parts that
+touch the type system.
+
 ## Updating the record
 
 When an emitter change makes a check end somewhere else than `gate.tsv`

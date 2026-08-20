@@ -234,6 +234,42 @@ fn an_unresolvable_call_is_diagnosed_rather_than_reaching_the_emitter() {
     assert!(err.contains("declares no go block"), "{err}");
 }
 
+/// A `call:` line whose own argument tree uses another declared extern's
+/// call (a cross-extern `ns.fn(...)`, not the bare-symbol nested form) is
+/// rejected for a target that cannot render it yet, naming that target;
+/// Rust, which already can, still passes. Without this gate the construct
+/// would reach Go/TypeScript codegen and either write wrong output (`nil`)
+/// or panic mid-generation instead of failing as a clean authoring error.
+#[test]
+fn a_cross_extern_call_as_a_call_argument_is_rejected_for_targets_that_cannot_render_it() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    let nested = CallArg::Call(Box::new(EntryCall {
+        ns: "ns".into(),
+        func: "load".into(),
+        args: vec![],
+    }));
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.call_args = vec![nested.clone()];
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+
+    let err = super::validate_entries(&model, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("go codegen cannot render that yet"), "{err}");
+
+    let err = super::validate_entries(&model, &[TargetKind::TypeScript]).unwrap_err();
+    assert!(
+        err.contains("typescript codegen cannot render that yet"),
+        "{err}"
+    );
+
+    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
+}
+
 fn model_with_a_call_sourced_field() -> crate::ir::Model {
     let config = call_field("config", "ns", "load", vec![]);
     let mut module = module_of(vec![entry_shape("m#client", vec![config])]);

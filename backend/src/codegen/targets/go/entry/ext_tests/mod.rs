@@ -414,22 +414,31 @@ fn call_arg_expr_covers_every_variant() {
         ),
         "[]any{1, 2}"
     );
-    // Nested call: deferred.
+    // A cross-extern call as a call argument: `validate_calls`'s own
+    // nested-call gate rejects this before generation reaches here (see
+    // `entries/tests/call.rs`), so reaching this arm at all is a validation
+    // bug, not an authoring one -- it panics loudly instead of writing `nil`.
     let nested = CallArg::Call(Box::new(EntryCall {
         ns: "other".into(),
         func: "sign".into(),
         args: vec![],
     }));
-    assert!(ext::call_arg_expr(
-        &mut refs,
-        &bare_module(),
-        &lib,
-        &nested,
-        &params,
-        &entry_args,
-        &mut ref_expr
-    )
-    .contains("deferred"));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &nested,
+            &params,
+            &entry_args,
+            &mut ref_expr,
+        )
+    }))
+    .is_err();
+    assert!(
+        panicked,
+        "a cross-extern call argument should panic, not render"
+    );
     // Ctor.
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("Topic".to_string(), CallArg::Lit(serde_json::json!("t")));

@@ -24,10 +24,13 @@
 //! a broken invariant rather than silently miscompiling. A bare
 //! foreign-symbol call nested inside a `call:` line's own argument list
 //! (`CallArg::SymbolCall`, e.g. `WithPrecision(precision)`) is supported.
-//! Not yet supported, left as a clear generation-time panic rather than
-//! silently wrong output: `CallArg::Call`, a *declared* cross-extern call
+//! Not yet supported: `CallArg::Call`, a *declared* cross-extern call
 //! (`ns.fn(...)`) used as another call's argument -- reachable today only
 //! from a ctor field's own value, not from `call:`'s own top level.
+//! `TargetKind::emits_nested_extern_call_args` rejects this shape at
+//! generation time before any emitter reaches it, so the panic below is
+//! genuinely unreachable in a successful `tono gen` run; it stays as a
+//! loud failure on a validation-gate bug rather than silently wrong output.
 //! An opaque handle's own methods (`type publisher { extern send(..) }`,
 //! invoked from an op's `impl`) are a different call site: `ext_handle_call`.
 //!
@@ -182,11 +185,12 @@ pub(super) fn render_arg(
         ),
         // A cross-extern call as a call argument (`ns.fn(...)` naming a
         // *declared* extern, reached today only from a ctor field's own
-        // value) is not exercised by any fixture yet; deferred rather than
-        // guessed at.
+        // value): rejected before generation reaches here, see the module
+        // doc comment.
         CallArg::Call(_) => {
-            unimplemented!(
-                "a nested extern call used as another call's argument is not supported yet"
+            panic!(
+                "a cross-extern call as a call argument reached TypeScript codegen; \
+                 validate_calls::extern_binds_every_target should have rejected it first"
             )
         }
         // A bare foreign-symbol call nested inside a `call:` line's own

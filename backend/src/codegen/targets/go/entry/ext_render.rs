@@ -94,10 +94,18 @@ pub(in super::super) fn call_arg_expr(
                 .join(", ")
         ),
         CallArg::Ctor(ctor) => ctor_expr(refs, module, lib, ctor, params, entry_args, ref_expr),
-        // A cross-extern call as a call argument (e.g. a request-signing
-        // call read at a trait-argument site) is not exercised by any
-        // fixture yet; deferred rather than guessed at.
-        CallArg::Call(_) => "nil /* nested extern-call argument: deferred */".to_string(),
+        // A cross-extern call standing as another call's own argument (e.g.
+        // a ctor field's value naming a declared extern): Go codegen has no
+        // case for it yet. `TargetKind::emits_nested_extern_call_args`
+        // rejects this shape at generation time before any emitter reaches
+        // it, so this is unreachable in a successful `tono gen` run --
+        // panicking on it (rather than emitting `nil` and letting `go
+        // build` fail somewhere else) surfaces a validation-gate bug
+        // loudly instead of miscompiling silently.
+        CallArg::Call(_) => panic!(
+            "a cross-extern call as a call argument reached Go codegen; \
+             validate_calls::extern_binds_every_target should have rejected it first"
+        ),
         // A bare foreign-symbol call nested inside a `call:` line's own
         // argument list, e.g. `WithPrecision(precision)`: no declared
         // extern to resolve against, so no yields/returns/errors

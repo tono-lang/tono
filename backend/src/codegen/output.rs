@@ -90,6 +90,20 @@ impl TargetKind {
             Self::Go | Self::TypeScript | Self::Rust => true,
         }
     }
+
+    /// Whether this target's codegen can render a cross-extern call
+    /// (`ns.fn(..)`, resolved against a declared `extern`) standing as a
+    /// ctor field's own value inside a `call:` line, e.g.
+    /// `call: "Load"(opts { token: auth.sign() })`. Separate from
+    /// [`Self::emits_ext_calls`]: a target can emit the ordinary call
+    /// before it can also render one of *its own* arguments as another
+    /// declared call. Only Rust does today.
+    pub fn emits_nested_extern_call_args(self) -> bool {
+        match self {
+            Self::Rust => true,
+            Self::Go | Self::TypeScript => false,
+        }
+    }
 }
 
 /// A generated source file: which target produced it (so a caller knows which
