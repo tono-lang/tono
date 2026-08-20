@@ -63,6 +63,10 @@ let check_request_value (op : Ast.decl) : Diagnostic.t list =
         List.concat_map
           (fun (_, _, v) -> value_diags ~allow_request v)
           c.Ast.ctor_fields
+    | Ast.CaCall nc ->
+        List.concat_map (call_arg_diags ~allow_request) nc.Ast.nc_args
+    | Ast.CaList (items, _) ->
+        List.concat_map (call_arg_diags ~allow_request) items
   in
   List.concat_map
     (fun (tr : Ast.trait) ->

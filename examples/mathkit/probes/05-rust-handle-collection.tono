@@ -1,9 +1,9 @@
 // Capability 5: a collection of handles as an argument. from_fallback takes
-// Vec<Box<dyn Calculator<T>>>, the handles the caller already built. A call
-// argument has no list literal, so the composition is declared with a fixed
-// arity of two, which Rust refuses (it expects one Vec). The handle is held
-// behind the trait (the "interface" marker), so the several concrete return
-// types are no longer in the way; the collection form is.
+// Vec<Box<dyn Calculator<T>>>, the handles the caller already built. The
+// handle is held behind the trait (the "interface" marker), so it is
+// already stored as Box<dyn Calculator<f64>>; the variadic logical
+// parameter's own list literal collects the two already-built handles into
+// exactly that Vec.
 ext mathkit {
   rust: "mathkit"
 
@@ -17,8 +17,8 @@ ext mathkit {
     rust { call: "from_constant"(value) sync }
   }
 
-  extern from_fallback(strategy: string, primary: calculator, secondary: calculator): calculator {
-    rust { call: "from_fallback"(strategy, primary, secondary) sync }
+  extern from_fallback(strategy: string, calcs: calculator variadic): calculator {
+    rust { call: "from_fallback"(strategy, calcs) sync }
   }
 }
 
@@ -27,7 +27,7 @@ pub struct client {
   other: float @arg
   primary: mathkit.calculator = mathkit.from_constant(.base)
   secondary: mathkit.calculator = mathkit.from_constant(.other)
-  combined: mathkit.calculator = mathkit.from_fallback("first", .primary, .secondary)
+  combined: mathkit.calculator = mathkit.from_fallback("first", [.primary, .secondary])
 
   op value(): float
     impl .combined.compute()

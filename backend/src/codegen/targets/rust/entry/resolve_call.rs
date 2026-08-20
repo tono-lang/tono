@@ -155,6 +155,26 @@ pub(super) fn call_arg_expr(
             format!("{name} {{ {} }}", rendered.join(", "))
         }
         CallArg::Call(nested) => call_expr(r, nested),
+        // A bare foreign-symbol call nested inside a `call:` line's own
+        // argument list, e.g. `WithPrecision(precision)`: no declared
+        // extern to resolve against, so no yields/returns/errors
+        // projection, no `.await` -- rendered as a plain synchronous,
+        // infallible call, the shape the bench's own nested calls have.
+        CallArg::SymbolCall(sc) => {
+            // The symbol lives in the same crate as the enclosing `call:`,
+            // so it is crate-qualified the same way `call_expr` qualifies a
+            // declared extern's own symbol.
+            let crate_ident = scope
+                .lib
+                .langs
+                .iter()
+                .find(|l| l.lang == "rust")
+                .map(|l| l.path.replace('-', "_"))
+                .expect("validate::call_resolves checked a rust module path exists");
+            let rendered: Vec<String> =
+                sc.args.iter().map(|a| call_arg_expr(r, scope, a)).collect();
+            format!("{crate_ident}::{}({})", sc.symbol, rendered.join(", "))
+        }
     }
 }
 

@@ -503,6 +503,7 @@ mod tests {
                     sync: false,
                     infallible: false,
                     ctx: false,
+                    is_new: false,
                 })
                 .collect::<Vec<_>>()
         };

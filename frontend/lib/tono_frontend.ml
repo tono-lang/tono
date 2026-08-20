@@ -53,7 +53,9 @@ let compile ?(module_name = "") (src : string) : Ir.module_ * Diagnostic.t list
      [Typecheck.check_module], same reasoning as [Modules.build]; a lone
      module still gets it, checking an "ext" split into several blocks
      within this one file. *)
-  let ext_lib_diags = Check_ext_lib.check_project [ ("", file.Ast.decls) ] in
+  let ext_lib_diags =
+    Check_ext_lib_project.check_project [ ("", file.Ast.decls) ]
+  in
   (m, Diagnostic.sort (parse_diags @ List.rev !diags @ tc_diags @ ext_lib_diags))
 
 (* Compile a source string straight to canonical IR JSON. Errors (not warnings)
@@ -132,7 +134,7 @@ let compile_project (files : (string * string) list) :
      diagnostics with the implicated file's name, so it is not run through
      [label] again. *)
   let ext_lib_diags =
-    Check_ext_lib.check_project
+    Check_ext_lib_project.check_project
       (List.map (fun (name, file, _) -> (name, file.Ast.decls)) parsed)
   in
   let model = { Ir.tono_ir_version = Ir_json.current_ir_version; modules } in

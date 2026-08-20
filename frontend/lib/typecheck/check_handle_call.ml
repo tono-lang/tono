@@ -55,6 +55,10 @@ let rec check_arg ctx ~fields ~pname ~pty (a : Ast.call_arg) : Diagnostic.t list
       List.concat_map
         (fun (_, _, v) -> check_trait_arg ctx ~fields ~pname ~pty v)
         c.Ast.ctor_fields
+  | Ast.CaCall nc ->
+      List.concat_map (check_arg ctx ~fields ~pname ~pty) nc.Ast.nc_args
+  | Ast.CaList (items, _) ->
+      List.concat_map (check_arg ctx ~fields ~pname ~pty) items
 
 and check_trait_arg ctx ~fields ~pname ~pty (v : Ast.trait_arg) :
     Diagnostic.t list =

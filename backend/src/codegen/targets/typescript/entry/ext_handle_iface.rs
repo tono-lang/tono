@@ -91,10 +91,15 @@ pub(super) fn ts_lang(decl: &ExternDecl) -> Option<&crate::ir::ExternLang> {
         .find(|l| l.lang == "ts" || l.lang == "typescript")
 }
 
-/// One handle method's own TS signature: `(params): Promise<Return>`. The
-/// foreign struct id a `yields` position named, when there is one, is
-/// reported back so the caller can queue its own companion type for
-/// emission.
+/// One handle method's own TS signature: `(params): Promise<Return>`, or
+/// `(params): Return` when the method's own `ts` binding carries the `sync`
+/// marker (the call blocks and answers the value directly, not a Promise —
+/// the same convention `ext_handle_call`'s own call-site rendering already
+/// honors; the interface's declared shape must agree with it, or a
+/// `new`-constructed handle typed against this interface fails to
+/// type-check even though the generated call site is correct). The foreign
+/// struct id a `yields` position named, when there is one, is reported back
+/// so the caller can queue its own companion type for emission.
 fn method_signature(
     decl: &ExternDecl,
     lang: &crate::ir::ExternLang,
@@ -126,10 +131,12 @@ fn method_signature(
     // interface member key must match it verbatim, or the generated call
     // site (`recv.{symbol}(..)`) would no longer type-check against this
     // same interface.
-    (
-        format!("{}({params}): Promise<{ret}>;", lang.symbol),
-        struct_id,
-    )
+    let ret = if lang.sync {
+        ret
+    } else {
+        format!("Promise<{ret}>")
+    };
+    (format!("{}({params}): {ret};", lang.symbol), struct_id)
 }
 
 /// A handle's own generated interface: one method per declared method

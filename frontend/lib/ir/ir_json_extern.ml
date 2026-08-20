@@ -78,10 +78,13 @@ let encode_extern_lang (l : Ir.extern_lang) : Ir.json =
        else [ ("errors", `List (List.map encode_error_binding l.el_errors)) ])
     @ (if l.el_sync then [ ("sync", `Bool true) ] else [])
     @ (if l.el_infallible then [ ("infallible", `Bool true) ] else [])
-    @ if l.el_ctx then [ ("ctx", `Bool true) ] else [])
+    @ (if l.el_ctx then [ ("ctx", `Bool true) ] else [])
+    @ if l.el_new then [ ("new", `Bool true) ] else [])
 
 let encode_extern_param (p : Ir.extern_param) : Ir.json =
-  `Assoc [ ("name", `String p.xp_name); ("type", encode_tref p.xp_type) ]
+  `Assoc
+    ([ ("name", `String p.xp_name); ("type", encode_tref p.xp_type) ]
+    @ if p.xp_variadic then [ ("variadic", `Bool true) ] else [])
 
 let encode_extern_decl (e : Ir.extern_decl) : Ir.json =
   `Assoc
@@ -294,6 +297,7 @@ let decode_extern_lang j =
     match get "infallible" with None -> Ok false | Some v -> as_bool v
   in
   let* ctx = match get "ctx" with None -> Ok false | Some v -> as_bool v in
+  let* new_ = match get "new" with None -> Ok false | Some v -> as_bool v in
   Ok
     ({
        el_lang = lang;
@@ -305,6 +309,7 @@ let decode_extern_lang j =
        el_sync = sync;
        el_infallible = infallible;
        el_ctx = ctx;
+       el_new = new_;
      }
       : Ir.extern_lang)
 
@@ -320,7 +325,14 @@ let decode_extern_param j =
     | Some v -> decode_tref v
     | None -> err "extern param is missing type"
   in
-  Ok ({ Ir.xp_name = name; xp_type = ty } : Ir.extern_param)
+  let* variadic =
+    match List.assoc_opt "variadic" kvs with
+    | None -> Ok false
+    | Some v -> as_bool v
+  in
+  Ok
+    ({ Ir.xp_name = name; xp_type = ty; xp_variadic = variadic }
+      : Ir.extern_param)
 
 let rec decode_extern_decl j =
   let* kvs = as_assoc j in

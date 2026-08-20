@@ -109,6 +109,7 @@ pub(in super::super) fn handle_adapter_decl(
         let mut ref_expr = |path: &[String]| path.first().map(|s| camel(s)).unwrap_or_default();
         let built = build_call(
             &mut refs,
+            module,
             lib,
             lang,
             "a.real",
@@ -265,7 +266,17 @@ pub(in super::super) fn handle_call_assign(
     let mut call_args: Vec<String> = lang
         .call_args
         .iter()
-        .map(|a| call_arg_expr(r.refs, lib, a, &decl.params, &call.args, &mut ref_expr))
+        .map(|a| {
+            call_arg_expr(
+                r.refs,
+                module,
+                lib,
+                a,
+                &decl.params,
+                &call.args,
+                &mut ref_expr,
+            )
+        })
         .collect();
     if lang.ctx {
         r.refs.push(import("context", "context"));

@@ -49,6 +49,16 @@ and erase_call_arg = function
   | Ast.CaRef r -> Ast.CaRef (erase_ref r)
   | Ast.CaCtor c -> Ast.CaCtor (erase_ctor c)
   | Ast.CaLit (l, _) -> Ast.CaLit (l, dspan)
+  | Ast.CaCall nc -> Ast.CaCall (erase_nested_call nc)
+  | Ast.CaList (items, _) -> Ast.CaList (List.map erase_call_arg items, dspan)
+
+and erase_nested_call (nc : Ast.nested_call) : Ast.nested_call =
+  {
+    nc with
+    Ast.nc_symbol_span = dspan;
+    nc_args = List.map erase_call_arg nc.Ast.nc_args;
+    nc_span = dspan;
+  }
 
 and erase_call_expr (ce : Ast.call_expr) : Ast.call_expr =
   {

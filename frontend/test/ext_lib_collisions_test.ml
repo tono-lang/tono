@@ -174,6 +174,105 @@ struct app_config { endpoint: string }
     "no unconsumed-param codes" []
     (List.filter (String.equal "TC0078") (codes src))
 
+(* A bare foreign-symbol call nested inside call:'s own argument list (no
+   declared extern behind it, unlike a ctor field's "ns.fn(...)"): its own
+   arguments still count as consuming this extern's logical parameters
+   ([collect_call_arg]'s own [CaCall] case), and an unknown one nested
+   inside it still diagnoses TC0070 ([unknown_param_call_arg]'s [CaCall]
+   case), including through a ctor argument nested one level deeper still
+   ([check_ctor_projection_arg]'s [CaCall] case). *)
+let nested_symbol_call_consumes_and_diagnoses_params () =
+  let src =
+    {|ext lib {
+  go: "github.com/x/y"
+
+  struct go_cfg { Host: string }
+
+  extern load(service: string, precision: i64): app_config {
+    go {
+      call: "Load"(service, "WithPrecision"(precision))
+      yields: (cfg: go_cfg)
+      returns: app_config { endpoint: .cfg.Host }
+    }
+  }
+}
+
+struct app_config { endpoint: string }
+|}
+  in
+  Alcotest.(check (list string))
+    "both params consumed" []
+    (List.filter (String.equal "TC0078") (codes src));
+  let bogus_src =
+    {|ext lib {
+  go: "github.com/x/y"
+
+  struct go_cfg { Host: string }
+
+  extern load(service: string): app_config {
+    go {
+      call: "Load"(service, "WithPrecision"(bogus))
+      yields: (cfg: go_cfg)
+      returns: app_config { endpoint: .cfg.Host }
+    }
+  }
+}
+
+struct app_config { endpoint: string }
+|}
+  in
+  Alcotest.(check bool)
+    "unknown param inside a nested call is still diagnosed" true
+    (List.mem "TC0070" (codes bogus_src))
+
+(* A "[" ... "]" list argument (the shape a variadic parameter's call site
+   binds) is walked the same way ([collect_call_arg]'s own [CaList] case): a
+   parameter forwarded only inside it still counts as consumed, and an
+   unknown one inside it still diagnoses TC0070. *)
+let list_call_arg_consumes_and_diagnoses_params () =
+  let src =
+    {|ext lib {
+  go: "github.com/x/y"
+
+  struct go_cfg { Host: string }
+
+  extern load(opts: string variadic): app_config {
+    go {
+      call: "Load"(opts)
+      yields: (cfg: go_cfg)
+      returns: app_config { endpoint: .cfg.Host }
+    }
+  }
+}
+
+struct app_config { endpoint: string }
+|}
+  in
+  Alcotest.(check (list string))
+    "the variadic param is consumed" []
+    (List.filter (String.equal "TC0078") (codes src));
+  let bogus_src =
+    {|ext lib {
+  go: "github.com/x/y"
+
+  struct go_cfg { Host: string }
+
+  extern load(): app_config {
+    go {
+      call: "Load"([bogus])
+      yields: (cfg: go_cfg)
+      returns: app_config { endpoint: .cfg.Host }
+    }
+  }
+}
+
+struct app_config { endpoint: string }
+|}
+  in
+  Alcotest.(check bool)
+    "unknown param inside a list argument is still diagnosed" true
+    (List.mem "TC0070" (codes bogus_src))
+
 let () =
   Alcotest.run "ext_lib_collisions"
     [
@@ -197,5 +296,9 @@ let () =
         [
           Alcotest.test_case "param consumed through nested ctor and list"
             `Quick param_consumed_through_nested_ctor_and_list;
+          Alcotest.test_case "nested symbol call consumes and diagnoses params"
+            `Quick nested_symbol_call_consumes_and_diagnoses_params;
+          Alcotest.test_case "list call arg consumes and diagnoses params"
+            `Quick list_call_arg_consumes_and_diagnoses_params;
         ] );
     ]

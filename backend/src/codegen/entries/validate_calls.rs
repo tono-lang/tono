@@ -238,6 +238,33 @@ fn extern_binds_every_target(
                 ));
             }
         }
+        if !target.emits_nested_extern_call_args() && contains_cross_extern_call(&lang.call_args) {
+            return Err(format!(
+                "{site}: the {} block's call: line uses another declared extern's call as one of its own arguments; {} codegen cannot render that yet",
+                target.binding_langs()[0],
+                target.dir()
+            ));
+        }
     }
     Ok(())
+}
+
+/// Whether a call's own argument tree uses a cross-extern call
+/// (`CallArg::Call`, resolved against a declared `extern`) anywhere, walked
+/// through the same nesting shapes [`ref_paths`] does (a ctor field's own
+/// value, a list's items) -- the only positions the surface grammar ever
+/// produces one in.
+fn contains_cross_extern_call(args: &[crate::ir::CallArg]) -> bool {
+    use crate::ir::CallArg;
+    args.iter().any(|a| match a {
+        CallArg::Call(_) => true,
+        CallArg::Ctor(ctor) => ctor.fields.values().any(contains_cross_extern_call_one),
+        CallArg::List(items) => contains_cross_extern_call(items),
+        CallArg::SymbolCall(sc) => contains_cross_extern_call(&sc.args),
+        CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) => false,
+    })
+}
+
+fn contains_cross_extern_call_one(arg: &crate::ir::CallArg) -> bool {
+    contains_cross_extern_call(std::slice::from_ref(arg))
 }

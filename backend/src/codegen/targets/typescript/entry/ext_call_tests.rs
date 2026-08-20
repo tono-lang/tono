@@ -36,6 +36,7 @@ fn ext_lib(
 
 fn extern_param(name: &str, r#type: Tref) -> ExternParam {
     ExternParam {
+        variadic: false,
         name: name.into(),
         r#type,
     }
@@ -398,6 +399,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             }],
         }],
     );

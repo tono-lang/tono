@@ -21,9 +21,16 @@
 //! that a projecting `yields` names a `returns`, and that a `ts` binding
 //! names at most one non-error `yields` position (a single call result has
 //! nothing to bind a second one to); the lookups below still fail loudly on
-//! a broken invariant rather than silently miscompiling. Not yet supported,
-//! left as a clear generation-time panic rather than silently wrong output:
-//! `CallArg::Call` (a nested extern call used as another call's argument).
+//! a broken invariant rather than silently miscompiling. A bare
+//! foreign-symbol call nested inside a `call:` line's own argument list
+//! (`CallArg::SymbolCall`, e.g. `WithPrecision(precision)`) is supported.
+//! Not yet supported: `CallArg::Call`, a *declared* cross-extern call
+//! (`ns.fn(...)`) used as another call's argument -- reachable today only
+//! from a ctor field's own value, not from `call:`'s own top level.
+//! `TargetKind::emits_nested_extern_call_args` rejects this shape at
+//! generation time before any emitter reaches it, so the panic below is
+//! genuinely unreachable in a successful `tono gen` run; it stays as a
+//! loud failure on a validation-gate bug rather than silently wrong output.
 //! An opaque handle's own methods (`type publisher { extern send(..) }`,
 //! invoked from an op's `impl`) are a different call site: `ext_handle_call`.
 //!
@@ -176,11 +183,30 @@ pub(super) fn render_arg(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        // A cross-extern call as a call argument (`ns.fn(...)` naming a
+        // *declared* extern, reached today only from a ctor field's own
+        // value): rejected before generation reaches here, see the module
+        // doc comment.
         CallArg::Call(_) => {
-            unimplemented!(
-                "a nested extern call used as another call's argument is not supported yet"
+            panic!(
+                "a cross-extern call as a call argument reached TypeScript codegen; \
+                 validate_calls::extern_binds_every_target should have rejected it first"
             )
         }
+        // A bare foreign-symbol call nested inside a `call:` line's own
+        // argument list, e.g. `WithPrecision(precision)`: no declared
+        // extern to resolve against, so no yields/returns/errors
+        // projection, no `await` -- rendered as a plain synchronous,
+        // infallible call, the shape the bench's own nested calls have.
+        CallArg::SymbolCall(sc) => format!(
+            "{}({})",
+            sc.symbol,
+            sc.args
+                .iter()
+                .map(|a| render_arg(entry, config, a, params, site_args, ref_expr))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -370,9 +396,20 @@ fn call_body(
         format!("throw {expr};")
     });
 
+    // `new` constructs a TypeScript class instead of calling a plain
+    // function -- always synchronous by construction (a class constructor
+    // never returns a Promise), so no `await` here, unlike the plain-call
+    // shape below. The surrounding seam stays `async` regardless (an entry
+    // with any extern-call field is already async-constructed; this one
+    // call's own expression is the only thing that changes).
+    let call_expr = if lang.is_new {
+        format!("new {}({args})", lang.symbol)
+    } else {
+        format!("await {}({args})", lang.symbol)
+    };
+
     format!(
-        "try {{\n  const raw = await {symbol}({args});\n  {assign}\n}} catch (e) {{\n{switch}  throw new {contract}({call_name:?}, e);\n}}",
-        symbol = lang.symbol,
+        "try {{\n  const raw = {call_expr};\n  {assign}\n}} catch (e) {{\n{switch}  throw new {contract}({call_name:?}, e);\n}}",
         contract = error_names().contract,
     )
 }

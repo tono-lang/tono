@@ -4,7 +4,7 @@ open Tono_frontend
    per-extern call/yields/returns/errors closure ([Check_ext_lib.check_decls]),
    the foreign-role wire/surface boundary ([Roles.Foreign] +
    [Check_entries.boundary_ty]), and the cross-file closed accounting
-   (decision K, [Check_ext_lib.check_project]). Mirrors [typecheck_test.ml]'s
+   (decision K, [Check_ext_lib_project.check_project]). Mirrors [typecheck_test.ml]'s
    [check]/[codes] helpers. *)
 
 (* Substring test for message assertions, mirroring [module_test.ml]'s helper
@@ -34,7 +34,7 @@ let codes src = List.filter_map (fun (d : Diagnostic.t) -> d.code) (check src)
 let has code src = List.mem code (codes src)
 
 (* [Typecheck.check_module] alone never runs the cross-file closed
-   accounting ([Check_ext_lib.check_project]); it needs the whole-project
+   accounting ([Check_ext_lib_project.check_project]); it needs the whole-project
    entry points, same as [Modules.build]. *)
 let compile_codes src =
   let _, ds = Tono_frontend.compile src in

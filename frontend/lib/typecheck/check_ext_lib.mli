@@ -1,10 +1,10 @@
-(* Internal-consistency typecheck for the "ext"/"extern" FFI library block
-   (the ext/extern FFI library block): call arity/types against the declared logical signature,
-   yields:/returns:/errors: closure, and the cross-file closed accounting of
-   one "ext" split across several .tono files. See check_ext_lib.ml for the
-   rule-by-rule commentary. Never verifies that a declared foreign symbol
-   really exists in the target library: that is the target compiler's own
-   job, out of scope here. *)
+(* Internal-consistency typecheck for the "ext"/"extern" FFI library block:
+   call arity/types against the declared logical signature, and
+   yields:/returns:/errors: closure. The cross-file closed accounting of one
+   "ext" split across several .tono files lives in [Check_ext_lib_project].
+   See check_ext_lib.ml for the rule-by-rule commentary. Never verifies that
+   a declared foreign symbol really exists in the target library: that is
+   the target compiler's own job, out of scope here. *)
 
 (* Per-module pass. [tbl] resolves an "errors:" sentinel's declared type. *)
 val check_decls : tbl:Symtab.t -> Ast.decl list -> Diagnostic.t list
@@ -28,13 +28,3 @@ val qualified_of : Ast.decl list -> Resolve.qualified -> Resolve.qualified
    noise. Callers thread the result into [Resolve.resolve_decls]'s
    [~known]. *)
 val is_foreign_name : Ast.decl list -> string -> bool
-
-(* The cross-file closed accounting (decision K): every module's own
-   (name, decls) pair, keyed the same way project tooling names a module.
-   Needs every module at once, so callers run it themselves alongside
-   [Typecheck.check_module] (mirroring [Modules.build]) rather than through
-   [check_decls]: [Tono_frontend.compile] with a single [("", decls)] entry
-   for a lone module, [Tono_frontend.compile_project] with the whole file
-   set. A diagnostic implicating a named file is prefixed "name: "; the ""
-   name gets no prefix. *)
-val check_project : (string * Ast.decl list) list -> Diagnostic.t list

@@ -32,6 +32,11 @@ fn call_arg_heads<'a>(arg: &'a CallArg, out: &mut Vec<&'a str>) {
                 call_arg_heads(a, out);
             }
         }
+        CallArg::SymbolCall(sc) => {
+            for a in &sc.args {
+                call_arg_heads(a, out);
+            }
+        }
         CallArg::Param(_) | CallArg::Lit(_) => {}
     }
 }

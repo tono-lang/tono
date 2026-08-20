@@ -77,6 +77,12 @@ let rec encode_call_arg (a : Ir.call_arg) : Ir.json =
   | Ir.Ca_lit v -> `Assoc [ ("lit", v) ]
   | Ir.Ca_list xs -> `Assoc [ ("list", `List (List.map encode_call_arg xs)) ]
   | Ir.Ca_call c -> `Assoc [ ("call", encode_entry_call c) ]
+  | Ir.Ca_symbol_call sc ->
+      `Assoc
+        [
+          ("symbol", `String sc.scl_symbol);
+          ("symbol_args", `List (List.map encode_call_arg sc.scl_args));
+        ]
 
 and encode_call_ctor (c : Ir.call_ctor) : Ir.json =
   `Assoc
@@ -256,12 +262,26 @@ let rec decode_call_arg j =
   | [ ("call", v) ] ->
       let* c = decode_entry_call v in
       Ok (Ir.Ca_call c)
+  | ("symbol", _) :: _ ->
+      let* symbol =
+        match List.assoc_opt "symbol" kvs with
+        | Some v -> as_string v
+        | None -> err "symbol call is missing symbol"
+      in
+      let* args =
+        match List.assoc_opt "symbol_args" kvs with
+        | None -> Ok []
+        | Some v ->
+            let* xs = as_list v in
+            map_result decode_call_arg xs
+      in
+      Ok (Ir.Ca_symbol_call { Ir.scl_symbol = symbol; scl_args = args })
   | ("ctor", _) :: _ | ("fields", _) :: _ ->
       let* c = decode_call_ctor kvs in
       Ok (Ir.Ca_ctor c)
   | _ ->
       err
-        "call arg must be a single param, field, lit, list, call, or \
+        "call arg must be a single param, field, lit, list, call, symbol, or \
          ctor/fields pair"
 
 and decode_call_ctor kvs =

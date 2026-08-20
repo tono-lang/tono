@@ -286,8 +286,9 @@ let ext_lib_docs : (string * string) list =
     ( "call",
       "The foreign symbol and the argument order it takes, e.g. call: \
        \"Load\"(service, region). Arguments are the extern's parameters, \
-       literals, or a foreign struct literal. Required in every language \
-       block." );
+       literals, a foreign struct literal, or a nested foreign-symbol call, \
+       e.g. \"FromFormula\"(expr, \"WithPrecision\"(precision)). Required in \
+       every language block." );
     ( "yields",
       "Names what the call returns, position by position, so returns: can \
        project from it (e.g. yields: (cfg: go_config)). Also declares \
@@ -321,6 +322,16 @@ let ext_lib_docs : (string * string) list =
        passes context.Background() (no deadline, no cancellation) for that \
        one-shot resolution. Rust and TypeScript have no equivalent convention \
        and ignore the marker." );
+    ( "new",
+      "The call constructs a TypeScript class with 'new' instead of calling a \
+       plain function: new Symbol(args) instead of await Symbol(args). Only \
+       meaningful in TypeScript; Go and Rust have no 'new' distinct from an \
+       ordinary call and ignore the marker." );
+    ( "variadic",
+      "This logical parameter accepts a collection of values, not one: the \
+       caller passes a list for it, and each language's own call: materializes \
+       it in its own idiom (Go's opts ...Option spread, Rust's Vec<T>, \
+       TypeScript's T[])." );
     ( Ext_lib_vocab.request_ref,
       Printf.sprintf
         "The canonical request, already assembled (method, path, headers, \

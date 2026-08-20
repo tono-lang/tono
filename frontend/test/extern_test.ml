@@ -21,7 +21,7 @@ ext companyconfig {
 
   extern load(service: string, region: string): app_config {
     go {
-      call: "Load"(service, region)
+      call: "Load"(service, "Region"(region))
       yields: (cfg: go_config, err: error)
       returns: app_config {
         endpoint: match .cfg.Env { "prod" => .cfg.Host, _ => .cfg.DevHost }
@@ -41,6 +41,15 @@ ext companyconfig {
       yields: (cfg: ts_config)
       returns: app_config { endpoint: .cfg.host, token: .cfg.token }
     }
+  }
+
+  extern with_precision(digits: i64): app_config {
+    go { call: "WithPrecision"(digits) }
+  }
+
+  extern build(seed: string, opts: app_config variadic): app_config {
+    go { call: "Build"(seed, opts) }
+    ts { call: "Build"(seed, opts) new }
   }
 }
 
@@ -110,13 +119,15 @@ pub struct client {
   region: string @arg
 
   config: app_config = companyconfig.load(.service, .region)
+  precision_opt: app_config = companyconfig.with_precision(3)
+  built: app_config = companyconfig.build(.service, [.precision_opt])
   auth: string @format("Bearer {.config.token}")
 
   bus: companybus.publisher = companybus.connect(.config.endpoint, .config.token) @with
 
   op fetch(ref: note_ref): note
     @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .config.endpoint)
-    @header("Authorization", companyauth.sign(.request))
+    @header("Authorization", companyauth.sign("Wrap"(.request)))
     @errors(not_found)
 }
 |}

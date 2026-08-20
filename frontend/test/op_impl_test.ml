@@ -255,6 +255,42 @@ pub struct client {
   in
   Alcotest.(check bool) "unknown nested ref" true (has "TC0038" src)
 
+(* A bare foreign-symbol call, or a "[" ... "]" list, standing directly as
+   one of "impl"'s own call arguments (not nested inside a ctor field): both
+   walk their own arguments the same way ([Check_handle_call.check_arg]'s
+   [CaCall]/[CaList] cases), so a ref inside either still resolves, and an
+   unknown one is still caught. *)
+let op_impl_call_arg_recurses_into_nested_call_and_list () =
+  let src =
+    bus_lib
+    ^ {|
+pub struct client {
+  endpoint: string @arg
+  bus: bus.publisher @with = bus.connect(.endpoint)
+
+  op publish(topic: string): ack
+    impl .bus.send("Wrap"(.topic), .topic)
+}
+|}
+  in
+  Alcotest.(check bool) "no unknown-field diagnostic" false (has "TC0038" src)
+
+let op_impl_call_arg_flags_unknown_ref_in_nested_call () =
+  let src =
+    bus_lib
+    ^ {|
+pub struct client {
+  endpoint: string @arg
+  bus: bus.publisher @with = bus.connect(.endpoint)
+
+  op publish(topic: string): ack
+    impl .bus.send("Wrap"(.bogus), .topic)
+}
+|}
+  in
+  Alcotest.(check bool)
+    "unknown ref inside a nested call" true (has "TC0038" src)
+
 (* "impl" alone satisfies the "must have exactly one implementation" rule;
    no TC0051 (missing) fires. *)
 let op_impl_satisfies_implementation_requirement () =
@@ -302,5 +338,9 @@ let () =
             op_impl_ctor_arg_recurses_every_shape_clean;
           Alcotest.test_case "ctor arg flags unknown nested ref" `Quick
             op_impl_ctor_arg_flags_unknown_nested_ref;
+          Alcotest.test_case "call arg recurses into nested call and list"
+            `Quick op_impl_call_arg_recurses_into_nested_call_and_list;
+          Alcotest.test_case "call arg flags unknown ref in nested call" `Quick
+            op_impl_call_arg_flags_unknown_ref_in_nested_call;
         ] );
     ]

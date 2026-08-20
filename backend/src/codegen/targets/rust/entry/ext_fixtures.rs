@@ -101,6 +101,7 @@ fn string_params(names: &[&str]) -> Vec<ExternParam> {
     names
         .iter()
         .map(|n| ExternParam {
+            variadic: false,
             name: (*n).to_string(),
             r#type: Tref::Prim(Prim::String),
         })
@@ -140,6 +141,7 @@ fn constructor_extern(name: &str, params: Vec<ExternParam>, ret: Tref) -> Extern
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     }
 }
@@ -321,6 +323,7 @@ pub fn rust_ext_fixture_model() -> Model {
                 sync: false,
                 infallible: false,
                 ctx: false,
+                is_new: false,
             }],
         }],
     };
@@ -388,6 +391,7 @@ pub fn rust_ext_fixture_model() -> Model {
                         sync: false,
                         infallible: false,
                         ctx: false,
+                        is_new: false,
                     }],
                 }],
             },
@@ -402,10 +406,12 @@ pub fn rust_ext_fixture_model() -> Model {
                 "attach",
                 vec![
                     ExternParam {
+                        variadic: false,
                         name: "source".into(),
                         r#type: ref_to("companybus#publisher"),
                     },
                     ExternParam {
+                        variadic: false,
                         name: "tag".into(),
                         r#type: Tref::Prim(Prim::String),
                     },

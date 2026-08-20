@@ -189,8 +189,13 @@ and call_arg =
   | Ca_lit of json
   | Ca_list of call_arg list
   | Ca_call of entry_call
+  | Ca_symbol_call of symbol_call
 
 and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
+
+(* A bare foreign-symbol call nested inside a [call:] line's own argument
+   list, e.g. [WithPrecision(precision)]. *)
+and symbol_call = { scl_symbol : string; scl_args : call_arg list }
 
 (* A field's [= ns.fn(args)] value: a call into an extern declared in the ext
    block named [ec_ns]. Resolving it against a declared extern is deferred. *)
@@ -275,9 +280,10 @@ type extern_lang = {
   el_sync : bool;
   el_infallible : bool;
   el_ctx : bool;
+  el_new : bool;
 }
 
-type extern_param = { xp_name : string; xp_type : tref }
+type extern_param = { xp_name : string; xp_type : tref; xp_variadic : bool }
 
 type extern_decl = {
   x_name : string;

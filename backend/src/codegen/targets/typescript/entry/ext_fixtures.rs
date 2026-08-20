@@ -45,10 +45,12 @@ pub fn send_method(ack_id: &str, raw_ack_id: &str) -> ExternDecl {
         name: "send".into(),
         params: vec![
             ExternParam {
+                variadic: false,
                 name: "topic".into(),
                 r#type: Tref::Prim(Prim::String),
             },
             ExternParam {
+                variadic: false,
                 name: "body".into(),
                 r#type: Tref::Prim(Prim::String),
             },
@@ -83,6 +85,7 @@ pub fn send_method(ack_id: &str, raw_ack_id: &str) -> ExternDecl {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     }
 }
@@ -96,10 +99,12 @@ pub fn connect_publisher_extern(publisher_id: &str) -> ExternDecl {
         name: "connect".into(),
         params: vec![
             ExternParam {
+                variadic: false,
                 name: "endpoint".into(),
                 r#type: Tref::Prim(Prim::String),
             },
             ExternParam {
+                variadic: false,
                 name: "token".into(),
                 r#type: Tref::Prim(Prim::String),
             },
@@ -121,6 +126,7 @@ pub fn connect_publisher_extern(publisher_id: &str) -> ExternDecl {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     }
 }
@@ -163,10 +169,12 @@ pub fn load_config_extern(app_config_id: &str) -> ExternDecl {
         name: "load".into(),
         params: vec![
             ExternParam {
+                variadic: false,
                 name: "service".into(),
                 r#type: Tref::Prim(Prim::String),
             },
             ExternParam {
+                variadic: false,
                 name: "region".into(),
                 r#type: Tref::Prim(Prim::String),
             },
@@ -207,6 +215,7 @@ pub fn load_config_extern(app_config_id: &str) -> ExternDecl {
             sync: false,
             infallible: false,
             ctx: false,
+            is_new: false,
         }],
     }
 }

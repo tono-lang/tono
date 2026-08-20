@@ -54,6 +54,18 @@ let legal_ctor_nested_arg () =
   Alcotest.(check bool)
     "no TC0087 for a ctor-nested call argument" false (has "TC0087" src)
 
+(* A bare foreign-symbol call nested inside the header's own call argument
+   list (no declared extern behind it, unlike "opts { ... }" above) still
+   counts as "inside the call the header's value is": [.request] read
+   through it is still legal ([Check_request_value.call_arg_diags]'s own
+   [CaCall] case). *)
+let legal_nested_call_arg () =
+  let src =
+    client {|@header("Authorization", companyauth.sign("Wrap"(.request)))|}
+  in
+  Alcotest.(check bool)
+    "no TC0087 for a call-nested call argument" false (has "TC0087" src)
+
 let illegal_bare_value () =
   let src = client {|@header("Authorization", .request)|} in
   Alcotest.(check bool) "bare .request rejected" true (has "TC0087" src)
@@ -152,6 +164,8 @@ let () =
           Alcotest.test_case "legal direct arg" `Quick legal_direct_arg;
           Alcotest.test_case "legal ctor-nested arg" `Quick
             legal_ctor_nested_arg;
+          Alcotest.test_case "legal call-nested arg" `Quick
+            legal_nested_call_arg;
           Alcotest.test_case "illegal bare value" `Quick illegal_bare_value;
           Alcotest.test_case "illegal in @http" `Quick illegal_in_http;
           Alcotest.test_case "legal header untouched by other traits" `Quick

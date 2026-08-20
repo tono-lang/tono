@@ -246,6 +246,7 @@ struct ArgCtx<'a> {
     input_name: Option<&'a str>,
     params: &'a [ExternParam],
     args: &'a [CallArg],
+    lib: &'a ExtLib,
 }
 
 impl ArgCtx<'_> {
@@ -309,6 +310,24 @@ impl ArgCtx<'_> {
                 format!("{name} {{ {} }}", rendered.join(", "))
             }
             CallArg::Call(nested) => self.nested_call_expr(nested),
+            // A bare foreign-symbol call nested inside a `call:` line's own
+            // argument list, e.g. `WithPrecision(precision)`: no declared
+            // extern to resolve against, so no yields/returns/errors
+            // projection, no `.await` -- rendered as a plain synchronous,
+            // infallible call, the shape the bench's own nested calls have.
+            CallArg::SymbolCall(sc) => {
+                let krate = crate_ident(self.lib)
+                    .expect("validate::call_resolves checked a rust module path exists");
+                format!(
+                    "{krate}::{}({})",
+                    sc.symbol,
+                    sc.args
+                        .iter()
+                        .map(|a| self.arg_expr(a))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
         }
     }
 
@@ -330,6 +349,7 @@ impl ArgCtx<'_> {
             input_name: self.input_name,
             params: &decl.params,
             args: &call.args,
+            lib,
         };
         let args: Vec<String> = lang.call_args.iter().map(|a| inner.arg_expr(a)).collect();
         format!(
@@ -427,6 +447,7 @@ pub(super) fn impl_call_body(c: &ImplCall<'_>) -> (String, bool) {
         input_name: c.input_name,
         params: l.params,
         args: &c.call.args,
+        lib: l.lib,
     };
     let args: Vec<String> = l.lang.call_args.iter().map(|a| ctx.arg_expr(a)).collect();
 

@@ -87,7 +87,11 @@
    handle's method ([config: cfg = .provider.get()]), so one foreign
    resolution feeds several operations. It reuses v15's "impl_call" shape
    ("recv"/"method"/"args") in the field position. *)
-let current_ir_version = 24
+(* v25 widened call:'s argument shapes: call_arg gained Ca_symbol_call (a
+   bare foreign-symbol call nested inside a call: line's own argument list,
+   legal at the top level unlike Ca_call), extern_param gained xp_variadic,
+   and extern_lang gained el_new. *)
+let current_ir_version = 25
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

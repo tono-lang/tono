@@ -128,6 +128,7 @@ fn cfg_lang(
         sync: false,
         infallible: false,
         ctx,
+        is_new: false,
     }
 }
 
@@ -205,6 +206,7 @@ fn plain_lang(lang: &str, symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
         sync: false,
         infallible: false,
         ctx: false,
+        is_new: false,
     }
 }
 
@@ -245,6 +247,7 @@ fn envkit() -> ExtLib {
                     "get_for",
                     vec![ExternParam {
                         name: "region".into(),
+                        variadic: false,
                         r#type: string_t(),
                     }],
                     region_arg,
@@ -256,6 +259,7 @@ fn envkit() -> ExtLib {
             name: "new_provider".into(),
             params: vec![ExternParam {
                 name: "name".into(),
+                variadic: false,
                 r#type: string_t(),
             }],
             r#return: reference("envkit#provider"),

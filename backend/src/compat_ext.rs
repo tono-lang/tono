@@ -228,6 +228,7 @@ mod tests {
                 externs: vec![ExternDecl {
                     name: "load".into(),
                     params: vec![ExternParam {
+                        variadic: false,
                         name: "service".into(),
                         r#type: tref("string"),
                     }],
@@ -242,6 +243,7 @@ mod tests {
                         sync: false,
                         infallible: false,
                         ctx: false,
+                        is_new: false,
                     }],
                 }],
             }],
@@ -316,6 +318,7 @@ mod tests {
                     sync: false,
                     infallible: false,
                     ctx: false,
+                    is_new: false,
                 }],
             }],
         }];

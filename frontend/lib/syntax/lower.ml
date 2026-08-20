@@ -135,6 +135,21 @@ and json_of_call_arg : Ast.call_arg -> Ir.json = function
   | Ast.CaLit (Ast.LStr s, _) -> `Assoc [ ("lit", `String s) ]
   | Ast.CaLit (Ast.LInt n, _) -> `Assoc [ ("lit", `Int n) ]
   | Ast.CaLit (Ast.LFloat f, _) -> `Assoc [ ("lit", `Float f) ]
+  | Ast.CaCall nc ->
+      (* A nested foreign-symbol call, e.g. [WithPrecision(precision)]
+         inside a language block's own [call:] line -- [Protocol_http] never
+         reaches this shape (a trait argument's own call has no [call:] line
+         to nest inside; [check_request_value] already rejects a bare
+         identifier there), so it is only ever read back through
+         [Lower_extern.lower_call_arg]'s IR path, never through
+         [Protocol_http]'s [call_arg_value_of]. *)
+      `Assoc
+        [
+          ("symbol", `String nc.Ast.nc_symbol);
+          ("symbol_args", `List (List.map json_of_call_arg nc.Ast.nc_args));
+        ]
+  | Ast.CaList (items, _) ->
+      `Assoc [ ("list", `List (List.map json_of_call_arg items)) ]
 
 (* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
    -> {"method":"get","path":"/x"}); any positional arg keeps the uniform array

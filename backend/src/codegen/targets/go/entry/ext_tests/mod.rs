@@ -303,6 +303,7 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
                     sync: false,
                     infallible: false,
                     ctx: false,
+                    is_new: false,
                 }],
             }],
         }],
@@ -324,6 +325,7 @@ fn call_arg_expr_covers_every_variant() {
     assert_eq!(
         ext::call_arg_expr(
             &mut refs,
+            &bare_module(),
             &lib,
             &CallArg::Param("a".into()),
             &params,
@@ -337,6 +339,7 @@ fn call_arg_expr_covers_every_variant() {
     assert_eq!(
         ext::call_arg_expr(
             &mut refs,
+            &bare_module(),
             &lib,
             &CallArg::Param("missing".into()),
             &params,
@@ -349,6 +352,7 @@ fn call_arg_expr_covers_every_variant() {
     assert_eq!(
         ext::call_arg_expr(
             &mut refs,
+            &bare_module(),
             &lib,
             &CallArg::Lit(serde_json::json!("notes")),
             &params,
@@ -360,6 +364,7 @@ fn call_arg_expr_covers_every_variant() {
     assert_eq!(
         ext::call_arg_expr(
             &mut refs,
+            &bare_module(),
             &lib,
             &CallArg::Lit(serde_json::json!(true)),
             &params,
@@ -371,6 +376,7 @@ fn call_arg_expr_covers_every_variant() {
     assert_eq!(
         ext::call_arg_expr(
             &mut refs,
+            &bare_module(),
             &lib,
             &CallArg::Lit(serde_json::json!(3)),
             &params,
@@ -382,6 +388,7 @@ fn call_arg_expr_covers_every_variant() {
     assert_eq!(
         ext::call_arg_expr(
             &mut refs,
+            &bare_module(),
             &lib,
             &CallArg::Lit(serde_json::Value::Null),
             &params,
@@ -396,24 +403,42 @@ fn call_arg_expr_covers_every_variant() {
         CallArg::Lit(serde_json::json!(2)),
     ]);
     assert_eq!(
-        ext::call_arg_expr(&mut refs, &lib, &list, &params, &entry_args, &mut ref_expr),
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &list,
+            &params,
+            &entry_args,
+            &mut ref_expr
+        ),
         "[]any{1, 2}"
     );
-    // Nested call: deferred.
+    // A cross-extern call as a call argument: `validate_calls`'s own
+    // nested-call gate rejects this before generation reaches here (see
+    // `entries/tests/call.rs`), so reaching this arm at all is a validation
+    // bug, not an authoring one -- it panics loudly instead of writing `nil`.
     let nested = CallArg::Call(Box::new(EntryCall {
         ns: "other".into(),
         func: "sign".into(),
         args: vec![],
     }));
-    assert!(ext::call_arg_expr(
-        &mut refs,
-        &lib,
-        &nested,
-        &params,
-        &entry_args,
-        &mut ref_expr
-    )
-    .contains("deferred"));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &nested,
+            &params,
+            &entry_args,
+            &mut ref_expr,
+        )
+    }))
+    .is_err();
+    assert!(
+        panicked,
+        "a cross-extern call argument should panic, not render"
+    );
     // Ctor.
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("Topic".to_string(), CallArg::Lit(serde_json::json!("t")));
@@ -421,7 +446,15 @@ fn call_arg_expr_covers_every_variant() {
         name: "publisher".into(),
         fields,
     });
-    let expr = ext::call_arg_expr(&mut refs, &lib, &ctor, &params, &entry_args, &mut ref_expr);
+    let expr = ext::call_arg_expr(
+        &mut refs,
+        &bare_module(),
+        &lib,
+        &ctor,
+        &params,
+        &entry_args,
+        &mut ref_expr,
+    );
     assert_eq!(expr, "bus.Publisher{Topic: \"t\"}");
     assert!(refs.iter().any(|s| s.name == "bus"));
 }
@@ -439,7 +472,15 @@ fn call_arg_expr_ctor_is_nil_without_a_go_module_path() {
     });
     let mut ref_expr = |_: &[String]| String::new();
     assert_eq!(
-        ext::call_arg_expr(&mut refs, &lib, &ctor, &[], &[], &mut ref_expr),
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &ctor,
+            &[],
+            &[],
+            &mut ref_expr
+        ),
         "nil"
     );
 }
