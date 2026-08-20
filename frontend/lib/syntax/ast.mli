@@ -201,9 +201,19 @@ type extern_decl = {
   ed_span : Span.span;
 }
 
+type opaque_name_entry = {
+  one_lang : string;
+  one_lang_span : Span.span;
+  one_name : string;
+  one_name_span : Span.span;
+}
+
+type opaque_names =
+  | OnShared of string * Span.span
+  | OnPerLang of opaque_name_entry list
+
 type opaque_instance = {
-  oi_foreign_name : string;
-  oi_foreign_span : Span.span;
+  oi_names : opaque_names;
   oi_arg : ty;
   oi_arg_span : Span.span;
   oi_span : Span.span;

@@ -190,10 +190,18 @@ let erase_extern_decl (e : Ast.extern_decl) =
     ed_span = dspan;
   }
 
+let erase_opaque_names = function
+  | Ast.OnShared (name, _) -> Ast.OnShared (name, dspan)
+  | Ast.OnPerLang entries ->
+      Ast.OnPerLang
+        (List.map
+           (fun (e : Ast.opaque_name_entry) ->
+             { e with Ast.one_lang_span = dspan; one_name_span = dspan })
+           entries)
+
 let erase_opaque_instance (i : Ast.opaque_instance) =
   {
-    i with
-    Ast.oi_foreign_span = dspan;
+    Ast.oi_names = erase_opaque_names i.Ast.oi_names;
     oi_arg = erase_ty i.Ast.oi_arg;
     oi_arg_span = dspan;
     oi_span = dspan;

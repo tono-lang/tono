@@ -23,16 +23,19 @@ ext mathkit {
   struct rust_formula_options { precision: u8 }
   struct ts_formula_options { precision: u8 }
 
-  // Capability 2 (foreign type name per language) and 3 (several concrete
-  // types for one logical handle): the instantiation names one foreign
-  // type for every target. "Calculator" is right for Go (`Calculator[T]`,
-  // the interface) and TypeScript (the interface), while Rust needs a
-  // different concrete struct per constructor (ConstantCalculator,
-  // FormulaCalculator, SeriesCalculator, FallbackCalculator).
+  // Capability 2 (foreign type name per language): the instantiation can
+  // name the foreign type per language (`go: "..."`, `rust: "..."`); here
+  // one shared name is right, because "Calculator" is the abstraction in
+  // all three targets (the Go interface, the TypeScript interface, the Rust
+  // trait).
   //
-  // Capability 1 (handle that is an interface): in Go the constructors
-  // return the interface value itself, never a pointer to a struct; the
-  // "interface" marker declares that shape.
+  // Capabilities 1 and 3 (handle that is an interface; several concrete
+  // types for one logical handle): the "interface" marker declares the
+  // handle is the abstraction. Go holds the interface value itself, never a
+  // pointer; Rust holds `Box<dyn Calculator<f64>>` and boxes each
+  // constructor's concrete value (ConstantCalculator, FormulaCalculator,
+  // SeriesCalculator, FallbackCalculator) where it is built, so those
+  // concrete types never need a tono name.
   type calculator("Calculator", float) interface {
     // Capability 9 (synchronous in one target, asynchronous in the others):
     // compute() blocks in TypeScript, takes a ctx in Go, is a future in Rust.

@@ -177,3 +177,4 @@ val register : string -> string
 
 (* Every registered code, for the uniqueness/format test. *)
 val registered : unit -> string list
+val instance_names_mismatch : string

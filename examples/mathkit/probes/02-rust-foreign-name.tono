@@ -1,19 +1,25 @@
-// Capability 2: the foreign type name per language. The instantiation has
-// one name for every target; "Calculator" is the interface's name in Go and
-// TypeScript, while in Rust `Calculator` is a trait and the constructor
-// returns the concrete `ConstantCalculator<T>`. Rust must be told its own
-// name, and today it cannot be.
+// Capability 2: the foreign type name per language. In Go and TypeScript
+// "Calculator" names the interface, while in Rust `Calculator` is a trait
+// and this constructor returns the concrete `ConstantCalculator<T>`. The
+// instantiation names the type per language, so a Rust-only declaration
+// spells the concrete type the library actually exports; the name resolves.
+//
+// What still fails: `compute` is a *trait* method on that concrete type,
+// and the generated code has no way to bring `mathkit::Calculator` into
+// scope (the declaration never names the trait). Holding the handle behind
+// the trait instead (the "interface" marker, probe 03) sidesteps this;
+// calling a trait method on a concretely-held handle does not compile yet.
 ext mathkit {
   rust: "mathkit"
 
-  type calculator("Calculator", float) {
+  type calculator(rust: "ConstantCalculator", float) {
     extern compute(): float {
       rust { call: "compute"() }
     }
   }
 
   extern from_constant(value: float): calculator {
-    rust { call: "from_constant"(value) }
+    rust { call: "from_constant"(value) sync }
   }
 }
 

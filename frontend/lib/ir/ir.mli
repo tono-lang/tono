@@ -288,7 +288,8 @@ type extern_decl = {
 
 type foreign_field = { fgf_name : string; fgf_type : tref }
 type foreign_struct = { fgs_name : string; fgs_fields : foreign_field list }
-type opaque_instance = { inst_foreign_name : string; inst_arg : tref }
+type instance_name = { inn_lang : string; inn_name : string }
+type opaque_instance = { inst_names : instance_name list; inst_arg : tref }
 
 type opaque_type = {
   opq_name : string;

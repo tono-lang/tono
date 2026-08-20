@@ -468,9 +468,17 @@ let print_opaque_type ~indent (t : Ast.opaque_type) : string =
     match t.Ast.opq_instance with
     | None -> ""
     | Some i ->
-        "("
-        ^ escaped_string i.Ast.oi_foreign_name
-        ^ ", " ^ print_ty i.Ast.oi_arg ^ ")"
+        let names =
+          match i.Ast.oi_names with
+          | Ast.OnShared (name, _) -> escaped_string name
+          | Ast.OnPerLang entries ->
+              String.concat ", "
+                (List.map
+                   (fun (e : Ast.opaque_name_entry) ->
+                     e.one_lang ^ ": " ^ escaped_string e.one_name)
+                   entries)
+        in
+        "(" ^ names ^ ", " ^ print_ty i.Ast.oi_arg ^ ")"
   in
   let marker = if t.Ast.opq_interface then " interface" else "" in
   braced_at ~indent

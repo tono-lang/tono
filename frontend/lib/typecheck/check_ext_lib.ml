@@ -444,39 +444,126 @@ let check_instance_arg ~(tbl : Symtab.t) (t : Ast.opaque_type) :
       Resolve.resolve_ty ~params:[] ~tbl ~qualified:Resolve.no_imports
         i.Ast.oi_arg
 
-(* The same instantiation (foreign name + argument) declared twice across a
-   module's "ext" library blocks: two tono types would both claim to be the
-   same monomorphization, which the emitter cannot tell apart. *)
+(* A keyed instantiation name list must be exactly one entry per language
+   the "ext" declares a module path for: a language named twice, a language
+   with no declared module path (same spirit as TC0081), or a declared
+   language left without a name are all diagnosed, so every target's emitter
+   has exactly one spelling to read. The shared (single-string) form is
+   exempt: it covers every language by construction. *)
+let check_instance_names (body : Ast.ext_lib_body) (t : Ast.opaque_type) :
+    Diagnostic.t list =
+  match t.Ast.opq_instance with
+  | None | Some { oi_names = Ast.OnShared _; _ } -> []
+  | Some ({ oi_names = Ast.OnPerLang entries; _ } as i) ->
+      let declared =
+        List.map (fun (lp : Ast.lang_path) -> lp.Ast.lp_lang) body.elib_langs
+      in
+      let dups =
+        List.filteri
+          (fun idx (e : Ast.opaque_name_entry) ->
+            List.exists
+              (fun (prev : Ast.opaque_name_entry) ->
+                String.equal prev.one_lang e.one_lang)
+              (List.filteri (fun j _ -> j < idx) entries))
+          entries
+      in
+      let dup_diags =
+        List.map
+          (fun (e : Ast.opaque_name_entry) ->
+            err Error_codes.instance_names_mismatch e.one_lang_span
+              "the instantiation already names its '%s' type" e.one_lang)
+          dups
+      in
+      let unknown =
+        List.filter
+          (fun (e : Ast.opaque_name_entry) ->
+            not (List.mem e.one_lang declared))
+          entries
+      in
+      let unknown_diags =
+        List.map
+          (fun (e : Ast.opaque_name_entry) ->
+            err Error_codes.instance_names_mismatch e.one_lang_span
+              "the ext declares no '%s' module path for this instantiation \
+               name to bind to"
+              e.one_lang)
+          unknown
+      in
+      let named lang =
+        List.exists
+          (fun (e : Ast.opaque_name_entry) -> String.equal e.one_lang lang)
+          entries
+      in
+      let missing = List.filter (fun lang -> not (named lang)) declared in
+      let missing_diags =
+        List.map
+          (fun lang ->
+            err Error_codes.instance_names_mismatch i.Ast.oi_span
+              "the instantiation names no '%s' type, but the ext declares a \
+               '%s' module path"
+              lang lang)
+          missing
+      in
+      dup_diags @ unknown_diags @ missing_diags
+
+(* The names an instantiation claims, one (lang, name) pair per language: the
+   shared form expands over the ext's declared languages, mirroring how
+   lowering expands it for the IR. *)
+let instance_lang_names (body : Ast.ext_lib_body) (i : Ast.opaque_instance) :
+    (string * string) list =
+  match i.Ast.oi_names with
+  | Ast.OnShared (name, _) ->
+      List.map
+        (fun (lp : Ast.lang_path) -> (lp.Ast.lp_lang, name))
+        body.elib_langs
+  | Ast.OnPerLang entries ->
+      List.map
+        (fun (e : Ast.opaque_name_entry) -> (e.one_lang, e.one_name))
+        entries
+
+(* The same instantiation (foreign name + argument, per language) declared
+   twice across a module's "ext" library blocks: two tono types would both
+   claim to be the same monomorphization, which the emitter cannot tell
+   apart. *)
 let check_instance_collisions (decls : Ast.decl list) : Diagnostic.t list =
   let seen = Hashtbl.create 8 in
   List.concat_map
     (fun (d : Ast.decl) ->
       match d.Ast.dkind with
       | Ast.DExtLib { body; _ } ->
-          List.filter_map
+          List.concat_map
             (fun (t : Ast.opaque_type) ->
               match t.Ast.opq_instance with
-              | None -> None
-              | Some i ->
-                  (* Keyed by the declaring "ext" too: the foreign name is
-                     the library's own, not the user's, so two different
-                     libraries that each export a "Source" are not the same
-                     instantiation and must not collide. *)
-                  let key =
-                    ( d.Ast.dname,
-                      i.Ast.oi_foreign_name,
-                      Printer.print_ty i.Ast.oi_arg )
+              | None -> []
+              | Some i -> (
+                  let arg = Printer.print_ty i.Ast.oi_arg in
+                  let colliding =
+                    List.filter_map
+                      (fun (lang, foreign_name) ->
+                        (* Keyed by the declaring "ext" too: the foreign name
+                           is the library's own, not the user's, so two
+                           different libraries that each export a "Source"
+                           are not the same instantiation and must not
+                           collide. *)
+                        let key = (d.Ast.dname, lang, foreign_name, arg) in
+                        if Hashtbl.mem seen key then Some (lang, foreign_name)
+                        else (
+                          Hashtbl.add seen key ();
+                          None))
+                      (instance_lang_names body i)
                   in
-                  if Hashtbl.mem seen key then
-                    let _, foreign_name, arg = key in
-                    Some
-                      (err Error_codes.instance_duplicate i.Ast.oi_span
-                         "the instantiation of '%s.%s' with '%s' is already \
-                          declared elsewhere in this module"
-                         d.Ast.dname foreign_name arg)
-                  else (
-                    Hashtbl.add seen key ();
-                    None))
+                  (* One diagnostic per instantiation, not one per language:
+                     a shared-name duplicate would otherwise repeat the same
+                     message once per declared language at the same span. *)
+                  match colliding with
+                  | [] -> []
+                  | (lang, foreign_name) :: _ ->
+                      [
+                        err Error_codes.instance_duplicate i.Ast.oi_span
+                          "the instantiation of '%s.%s' with '%s' is already \
+                           declared elsewhere in this module for '%s'"
+                          d.Ast.dname foreign_name arg lang;
+                      ]))
             body.Ast.elib_types
       | _ -> [])
     decls
@@ -509,7 +596,10 @@ let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
           let instance_diags =
             List.concat_map (check_instance_arg ~tbl) body.Ast.elib_types
           in
-          free_diags @ method_diags @ instance_diags
+          let name_diags =
+            List.concat_map (check_instance_names body) body.Ast.elib_types
+          in
+          free_diags @ method_diags @ instance_diags @ name_diags
       | _ -> [])
     decls
   @ check_foreign_name_collisions ~tbl decls

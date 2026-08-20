@@ -242,7 +242,17 @@ let symbols ~(range : Span.span -> Range.t) (b : Ast.ext_lib_body) :
       match t.Ast.opq_instance with
       | None -> t.Ast.opq_name
       | Some i ->
-          Printf.sprintf "%s (%s[%s])" t.Ast.opq_name i.Ast.oi_foreign_name
+          let foreign =
+            match i.Ast.oi_names with
+            | Ast.OnShared (name, _) -> name
+            | Ast.OnPerLang entries ->
+                String.concat ", "
+                  (List.map
+                     (fun (e : Ast.opaque_name_entry) ->
+                       e.one_lang ^ ": " ^ e.one_name)
+                     entries)
+          in
+          Printf.sprintf "%s (%s[%s])" t.Ast.opq_name foreign
             (Printer.print_ty i.Ast.oi_arg)
     in
     ( t.Ast.opq_span.Span.start.offset,

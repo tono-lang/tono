@@ -456,24 +456,61 @@ let parse_extern ~parse_type ~parse_type_no_error st : Ast.extern_decl =
       Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
   }
 
-(* instance ::= "(" string "," type ")"  -- declares which instantiation of a
-   foreign generic type this opaque handle names: the foreign type's own
-   name (a string, so the origin stays visible) and the tono argument it is
-   monomorphized with. *)
+(* instance ::= "(" names "," type ")"
+   names    ::= string | lang ":" string ("," lang ":" string)*
+   -- declares which instantiation of a foreign generic type this opaque
+   handle names: the foreign type's own name (a string, so the origin stays
+   visible) and the tono argument it is monomorphized with. One bare string
+   names the type for every language; the keyed form names it per language,
+   in the same "lang: string" shape the ext header's module paths use, for
+   the case where the targets spell the same logical type differently. *)
 let parse_opaque_instance ~parse_type st : Ast.opaque_instance =
   let open_p = P.expect st Token.LParen "'(' to open the instantiation" in
   let nt = P.peek st in
-  let foreign_name =
-    match nt.kind with
+  let parse_name_string () : string * Span.span =
+    let t = P.peek st in
+    match t.kind with
     | Token.Str s ->
         ignore (P.advance st);
-        s
+        (s, t.span)
     | _ ->
-        P.error st nt.span "expected the foreign type's name as a string";
-        ""
+        P.error st t.span "expected the foreign type's name as a string";
+        ("", t.span)
   in
-  ignore
-    (P.expect st Token.Comma "',' between the foreign name and the argument");
+  let names =
+    match nt.kind with
+    | Token.Ident _ when (P.peek_ahead st 1).kind = Token.Colon ->
+        (* Keyed entries run until the element after a comma is no longer a
+           "lang:" head; that element is the type argument. *)
+        let rec entries acc =
+          let lt = P.peek st in
+          match (lt.kind, (P.peek_ahead st 1).kind) with
+          | Token.Ident lang, Token.Colon ->
+              ignore (P.advance st);
+              ignore (P.advance st);
+              let name, name_span = parse_name_string () in
+              let entry =
+                {
+                  Ast.one_lang = lang;
+                  one_lang_span = lt.span;
+                  one_name = name;
+                  one_name_span = name_span;
+                }
+              in
+              if (P.peek st).kind = Token.Comma then (
+                ignore (P.advance st);
+                entries (entry :: acc))
+              else List.rev (entry :: acc)
+          | _ -> List.rev acc
+        in
+        Ast.OnPerLang (entries [])
+    | _ ->
+        let name, name_span = parse_name_string () in
+        ignore
+          (P.expect st Token.Comma
+             "',' between the foreign name and the argument");
+        Ast.OnShared (name, name_span)
+  in
   let arg_span_start = (P.peek st).span in
   let arg = parse_type st in
   let close = P.expect st Token.RParen "')' to close the instantiation" in
@@ -495,8 +532,7 @@ let parse_opaque_instance ~parse_type st : Ast.opaque_instance =
       in
       skip ());
   {
-    Ast.oi_foreign_name = foreign_name;
-    oi_foreign_span = nt.span;
+    Ast.oi_names = names;
     oi_arg = arg;
     oi_arg_span = arg_span_start;
     oi_span =

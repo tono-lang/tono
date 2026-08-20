@@ -273,21 +273,46 @@ pub struct ForeignStruct {
     pub fields: Vec<ForeignField>,
 }
 
+/// One language's spelling of the foreign type an opaque handle names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstanceName {
+    pub lang: String,
+    pub name: String,
+}
+
 /// Which instantiation of a foreign generic type an opaque handle names: the
-/// foreign type's own name (kept distinct from the handle's own tono name,
-/// since two handles can instantiate the same foreign generic differently),
-/// and the tono argument it is monomorphized with.
+/// foreign type's own name per language (kept distinct from the handle's own
+/// tono name, since two handles can instantiate the same foreign generic
+/// differently; per language because the same logical handle can be an
+/// interface in one target and a trait in another, each spelled by its own
+/// library), and the tono argument it is monomorphized with. The frontend
+/// expands a shared surface name to one entry per declared language, so a
+/// reader only ever looks its own language up.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
-    pub foreign_name: String,
+    #[serde(default)]
+    pub names: Vec<InstanceName>,
     pub arg: Tref,
+}
+
+impl Instance {
+    /// The foreign name this instantiation declares for one language, when
+    /// the surface named one.
+    pub fn name_for(&self, lang: &str) -> Option<&str> {
+        self.names
+            .iter()
+            .find(|n| n.lang == lang)
+            .map(|n| n.name.as_str())
+    }
 }
 
 /// An opaque foreign handle whose only members are extern methods; never
 /// serializes, never crosses the wire. `interface` declares the foreign type
-/// is abstract (a Go interface, held by value), not a concrete struct held
-/// by pointer: nothing about a foreign name says which one it is, and the
-/// two spell differently in Go.
+/// is abstract, not a concrete struct: nothing about a foreign name says
+/// which one it is, and the two hold differently per target (a Go interface
+/// is held by value, never behind `*`; a Rust trait is held as
+/// `Box<dyn Trait>`, boxed where a constructor yields one of the library's
+/// concrete types).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpaqueType {
     pub name: String,

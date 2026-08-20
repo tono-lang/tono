@@ -12,8 +12,8 @@ use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::rendered;
 use crate::ir::{
-    CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang, Instance, LangPath,
-    OpImplCall, OpaqueType, Shape, ShapeKind, Tref, YieldsPos,
+    CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang, Instance,
+    InstanceName, LangPath, OpImplCall, OpaqueType, Shape, ShapeKind, Tref, YieldsPos,
 };
 
 fn entry_text(module: &Module) -> String {
@@ -116,7 +116,10 @@ fn handle_go_type_spells_an_instantiated_interface_handle_by_value() {
     let mut lib = handle_lib("calckit", "meter");
     lib.types[0].interface = true;
     lib.types[0].instance = Some(Instance {
-        foreign_name: "Meter".into(),
+        names: vec![InstanceName {
+            lang: "go".into(),
+            name: "Meter".into(),
+        }],
         arg: Tref::Prim(Prim::Float),
     });
     let mut refs = Vec::new();
@@ -137,7 +140,10 @@ fn handle_go_type_spells_an_instantiated_interface_handle_by_value() {
 fn handle_go_type_spells_the_foreign_name_with_an_explicit_type_argument() {
     let mut lib = handle_lib("cfgkit", "env_source");
     lib.types[0].instance = Some(Instance {
-        foreign_name: "Source".into(),
+        names: vec![InstanceName {
+            lang: "go".into(),
+            name: "Source".into(),
+        }],
         arg: Tref::Ref {
             id: "notes#settings".into(),
             args: vec![],
@@ -152,6 +158,30 @@ fn handle_go_type_spells_the_foreign_name_with_an_explicit_type_argument() {
     );
 }
 
+/// The instantiation can spell a different foreign type per language: only
+/// the "go" entry reaches this emitter, and it is emitted verbatim (the
+/// library's own spelling), never folded by the casing engine.
+#[test]
+fn handle_go_type_reads_its_own_language_entry_verbatim() {
+    let mut lib = handle_lib("cfgkit", "env_source");
+    lib.types[0].instance = Some(Instance {
+        names: vec![
+            InstanceName {
+                lang: "go".into(),
+                name: "DataSource".into(),
+            },
+            InstanceName {
+                lang: "rust".into(),
+                name: "EnvSource".into(),
+            },
+        ],
+        arg: Tref::Prim(Prim::Float),
+    });
+    let mut refs = Vec::new();
+    let ty = ext::handle_go_type(&lib, &lib.types[0], &mut refs).expect("go module path is set");
+    assert!(ty.starts_with("*cfgkit.DataSource["), "{ty}");
+}
+
 /// A constructor call returning an instantiated handle carries the type
 /// argument on the call itself (`NewEnvSource[Settings](...)`, not
 /// `NewEnvSource(...)`): Go cannot infer it from the call site the way it
@@ -161,7 +191,10 @@ fn handle_adapter_decl_names_the_real_instantiated_type() {
     let module = bare_module();
     let mut lib = handle_lib("cfgkit", "env_source");
     lib.types[0].instance = Some(Instance {
-        foreign_name: "Source".into(),
+        names: vec![InstanceName {
+            lang: "go".into(),
+            name: "Source".into(),
+        }],
         arg: Tref::Ref {
             id: "notes#settings".into(),
             args: vec![],
