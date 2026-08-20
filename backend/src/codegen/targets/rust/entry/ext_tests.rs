@@ -5,6 +5,7 @@
 //! this module exercises the emitter's own branches directly.
 
 use super::super::ext_fixtures::rust_ext_fixture_model;
+use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use super::*;
 use crate::codegen::entries::module_entries;
 use crate::codegen::ops::op_impl_call;
@@ -665,4 +666,18 @@ fn impl_call_body_with_no_declared_errors_falls_back_to_contract_error() {
         "{body}"
     );
     assert!(!body.contains("match e.to_string().as_str()"), "{body}");
+}
+
+/// The shared per-language-name fixture, rendered end to end: the "rust"
+/// instantiation entry spells the crate's own `Vault<String>` verbatim in
+/// the stored slot and the constructor call, while the Go sibling of the
+/// same handle names a `Store[T]` (asserted in the Go emitter's own tests).
+/// The against-the-real-crate compile of the same model lives in
+/// `rust_ext_roundtrip.rs`, which coverage runs skip.
+#[test]
+fn the_per_language_fixture_spells_its_own_rust_name() {
+    let out = entry_text(&per_lang_handle_model("rust"));
+    assert!(out.contains("Option<keepkit::Vault<String>>"), "{out}");
+    assert!(out.contains("keepkit::open_vault("), "{out}");
+    assert!(!out.contains("Store"), "{out}");
 }

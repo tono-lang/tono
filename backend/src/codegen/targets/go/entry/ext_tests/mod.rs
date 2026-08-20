@@ -6,6 +6,7 @@
 //! exercises the emitter's own branches directly.
 
 use super::ext_fixtures::{ext_param, field, member, string_t, structure};
+use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use super::*;
 use crate::codegen::entries::module_entries;
 use crate::codegen::targets::go::types::go_casing;
@@ -511,3 +512,19 @@ fn declared_error_literal_is_a_zero_value_without_a_message_member() {
 mod calls;
 mod composed_handles;
 mod handle_source;
+
+/// The shared per-language-name fixture, rendered end to end: the "go"
+/// instantiation entry spells the package's own `Store[string]` verbatim
+/// (held by pointer, the handle is concrete) and the constructor carries
+/// the explicit type argument, while the Rust sibling of the same handle
+/// names a `Vault<T>` (asserted in the Rust emitter's own tests). The
+/// against-the-real-package build of the same model lives in
+/// `go_ext_roundtrip.rs`, which coverage runs skip.
+#[test]
+fn the_per_language_fixture_spells_its_own_go_name() {
+    let model = per_lang_handle_model("go");
+    let text = entry_text(&model.modules[0]);
+    assert!(text.contains("*keepkit.Store[string]"), "{text}");
+    assert!(text.contains("OpenStore[string]("), "{text}");
+    assert!(!text.contains("Vault"), "{text}");
+}
