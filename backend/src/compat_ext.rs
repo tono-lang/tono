@@ -338,7 +338,10 @@ mod tests {
             name: "env_source".into(),
             interface: false,
             instance: Some(crate::ir_extern_model::Instance {
-                foreign_name: "Source".into(),
+                names: vec![crate::ir_extern_model::InstanceName {
+                    lang: "go".into(),
+                    name: "Source".into(),
+                }],
                 arg: tref("settings"),
             }),
             methods: vec![],
@@ -386,7 +389,10 @@ mod tests {
             name: "env_source".into(),
             interface: false,
             instance: Some(crate::ir_extern_model::Instance {
-                foreign_name: "Source".into(),
+                names: vec![crate::ir_extern_model::InstanceName {
+                    lang: "go".into(),
+                    name: "Source".into(),
+                }],
                 arg: tref("settings"),
             }),
             methods: vec![],

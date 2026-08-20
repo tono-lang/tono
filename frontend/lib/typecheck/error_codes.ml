@@ -264,3 +264,10 @@ let extern_ctx_on_free_call = register "TC0093"
    declared logical return is not the field's declared type: the value is
    stored as-is, so the two must agree. *)
 let handle_call_type_mismatch = register "TC0094"
+
+(* A keyed instantiation name list ("type x(go: \"A\", rust: \"B\", arg)")
+   that is not exactly one entry per language the "ext" declares a module
+   path for: a language named twice, a language the ext declares no module
+   path for (same spirit as TC0081), or a declared language left without a
+   name (the emitter for that target would have nothing to spell). *)
+let instance_names_mismatch = register "TC0095"

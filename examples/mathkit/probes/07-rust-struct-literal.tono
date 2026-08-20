@@ -2,20 +2,22 @@
 // FormulaOptions { precision: Option<u8> } by value. The literal is
 // accepted by the frontend; Rust then needs the foreign struct spelled by
 // its own name (FormulaOptions, not the tono-side rust_formula_options) and
-// the value wrapped in Some(..), neither of which is expressible.
+// the value wrapped in Some(..), neither of which is expressible. The
+// handle is held behind the trait (the "interface" marker), so the concrete
+// return type is no longer in the way; the struct literal is.
 ext mathkit {
   rust: "mathkit"
 
   struct rust_formula_options { precision: u8 }
 
-  type calculator("FormulaCalculator", float) {
+  type calculator(rust: "Calculator", float) interface {
     extern compute(): float {
       rust { call: "compute"() }
     }
   }
 
   extern from_formula(expr: string, precision: u8): calculator {
-    rust { call: "from_formula"(expr, rust_formula_options { precision: precision }) }
+    rust { call: "from_formula"(expr, rust_formula_options { precision: precision }) sync }
   }
 }
 

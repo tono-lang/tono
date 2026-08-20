@@ -5,9 +5,10 @@
 //! ([`impl_call_body`]).
 //!
 //! A handle's Rust spelling is the owned concrete type the declaring crate
-//! exports (`{crate}::{Type}`), never a generated wrapper: Rust has no
-//! interface value to hide the real type behind, and an owned handle is what
-//! the caller of an `@arg`/`@with` field actually has to pass. The one guess
+//! exports (`{crate}::{Type}`), never a generated wrapper — or, for an
+//! `interface` handle, the crate's own trait held as `Box<dyn Trait>` (see
+//! [`handle_rust_type`]); an owned value is what the caller of an
+//! `@arg`/`@with` field actually has to pass either way. The one guess
 //! here is the exported identifier — the handle's own canonical name,
 //! Pascal-cased, the same convention every other nominal type in this
 //! codegen follows. A crate whose real identifier differs fails `cargo
@@ -78,27 +79,56 @@ fn crate_ident(lib: &ExtLib) -> Option<String> {
 }
 
 /// The Rust type spelling of a foreign opaque handle: the owned concrete
-/// type the declaring crate exports.
+/// type the declaring crate exports, or a boxed trait object when the
+/// handle is declared `interface`.
 ///
 /// A generic handle (`handle.instance` set) spells the *foreign* name
 /// instead of the handle's own tono name (two handles can instantiate the
 /// same foreign generic differently, so they cannot share an identifier),
-/// with the instantiation argument appended as a type argument through the
-/// same `rust_type` every other declared type reaches codegen through.
+/// picking the instantiation's own "rust" spelling when the surface named
+/// one per language, with the instantiation argument appended as a type
+/// argument through the same `rust_type` every other declared type reaches
+/// codegen through.
+///
+/// An `interface` handle names an abstraction, not a concrete type: in Rust
+/// that is a trait, and the library's constructors are free to each return
+/// a *different* concrete type implementing it. The handle is therefore
+/// held as `Box<dyn Trait>`, boxed at the construction site, so those
+/// concrete types never need a tono spelling at all: the target compiler
+/// infers each one at its own call site.
 ///
 /// `None` when the lib declares no `rust` module path at all: there is no
 /// crate to qualify the type with, so the caller falls back to the ordinary
 /// nominal spelling and lets the target compiler report the unresolved name.
 pub(super) fn handle_rust_type(lib: &ExtLib, handle: &OpaqueType) -> Option<String> {
     let krate = crate_ident(lib)?;
-    let base = match &handle.instance {
-        Some(inst) => pascal(&inst.foreign_name),
+    // The instantiation's name is the library's own spelling, written as a
+    // string exactly so the origin stays visible: it is emitted verbatim,
+    // never through the casing engine (which would fold "ConstantCalculator"
+    // into "Constantcalculator"). Only the fallback derived from the
+    // handle's own tono name is cased.
+    let base = match handle.instance.as_ref().and_then(|i| i.name_for("rust")) {
+        Some(name) => name.to_string(),
         None => pascal(&handle.name),
     };
-    Some(match &handle.instance {
+    let named = match &handle.instance {
         Some(inst) => format!("{krate}::{base}<{}>", rust_type(&inst.arg)),
         None => format!("{krate}::{base}"),
+    };
+    Some(if handle.interface {
+        format!("Box<dyn {named}>")
+    } else {
+        named
     })
+}
+
+/// Whether a construction slot holds an `interface` handle in Rust, so the
+/// concrete value a constructor yields is boxed on its way in (see
+/// [`handle_rust_type`]).
+pub(super) fn is_boxed_handle(t: &Tref, module: &Module) -> bool {
+    foreign_handle(t, module)
+        .map(|(lib, handle)| handle.interface && crate_ident(lib).is_some())
+        .unwrap_or(false)
 }
 
 /// The public Rust spelling of an entry field's declared type: a foreign
@@ -132,12 +162,28 @@ pub(super) fn is_stored_wrapped(t: &Tref, module: &Module) -> bool {
 }
 
 /// A resolved value on its way into a construction slot, wrapped when that
-/// slot is stored as an `Option` (see [`settings_field_type`]).
+/// slot is stored as an `Option` (see [`settings_field_type`]). The value is
+/// assumed to already have the slot's public type (an injected handle comes
+/// in as the `Box<dyn ...>` the parameter is typed with); a freshly
+/// *constructed* value goes through [`wrap_constructed`] instead.
 pub(super) fn wrap_stored(t: &Tref, module: &Module, expr: &str) -> String {
     if is_stored_wrapped(t, module) {
         format!("Some({expr})")
     } else {
         expr.to_string()
+    }
+}
+
+/// A value a foreign constructor (or handle method) just yielded, on its way
+/// into a construction slot: boxed first when the slot holds an `interface`
+/// handle (the constructor returns one of the library's own concrete types,
+/// and the slot holds the trait object; see [`handle_rust_type`]), then
+/// wrapped like every other stored value.
+pub(super) fn wrap_constructed(t: &Tref, module: &Module, expr: &str) -> String {
+    if is_boxed_handle(t, module) {
+        wrap_stored(t, module, &format!("Box::new({expr})"))
+    } else {
+        wrap_stored(t, module, expr)
     }
 }
 
@@ -463,7 +509,7 @@ pub(super) fn handle_call_assign(
     let mapped = error_match(&recv_name, &call.method, &l.lang.errors);
     let target = field.target.clone();
     let module = r.module;
-    let store = move |expr: &str| wrap_stored(&target, module, expr);
+    let store = move |expr: &str| wrap_constructed(&target, module, expr);
     let assign = ok_assign(dest, &binding, l.lang.returns.as_ref(), &store);
     // The outcome is bound before it is matched so the receiver borrow ends
     // with the call: the assignment below writes another field of the same

@@ -339,9 +339,15 @@ type extern_decl = {
 type foreign_field = { fgf_name : string; fgf_type : tref }
 type foreign_struct = { fgs_name : string; fgs_fields : foreign_field list }
 
+(* One language's spelling of the foreign type an opaque handle names. *)
+type instance_name = { inn_lang : string; inn_name : string }
+
 (* Which instantiation of a foreign generic type an opaque handle names: the
-   foreign type's own name, and the tono argument it is monomorphized with. *)
-type opaque_instance = { inst_foreign_name : string; inst_arg : tref }
+   foreign type's own name per language (the same logical handle can be an
+   interface in one target and a trait in another, each spelled by its own
+   library; a shared surface name is expanded to one entry per declared
+   language by lowering), and the tono argument it is monomorphized with. *)
+type opaque_instance = { inst_names : instance_name list; inst_arg : tref }
 
 (* [opq_interface] declares the foreign type is abstract (a Go interface,
    held by value), not a concrete struct held by pointer. *)

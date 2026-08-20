@@ -92,7 +92,7 @@ pub use crate::ir_tests_model::*;
 /// v23 added `OpaqueType::interface`: the foreign type is abstract (a Go
 /// interface, held by value), not a concrete struct held by pointer.
 /// Absent means concrete, the shape every handle had before.
-pub const TONO_IR_VERSION: u32 = 23;
+pub const TONO_IR_VERSION: u32 = 24;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

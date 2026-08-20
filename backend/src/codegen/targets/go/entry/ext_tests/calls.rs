@@ -390,7 +390,10 @@ fn call_assign_names_the_type_argument_on_a_generic_constructor() {
         name: "source".into(),
         interface: false,
         instance: Some(Instance {
-            foreign_name: "Source".into(),
+            names: vec![crate::ir::InstanceName {
+                lang: "go".into(),
+                name: "Source".into(),
+            }],
             arg: Tref::Ref {
                 id: "notes#settings".into(),
                 args: vec![],

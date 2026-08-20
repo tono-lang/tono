@@ -349,7 +349,7 @@ pub(super) fn call_assign(
     // in through the same wrapping every other source's does.
     let target = field.target.clone();
     let module = r.module;
-    let store = move |expr: &str| super::ext::wrap_stored(&target, module, expr);
+    let store = move |expr: &str| super::ext::wrap_constructed(&target, module, expr);
 
     let ok_positions: Vec<&YieldsPos> = yields.iter().filter(|y| !y.is_error).collect();
 

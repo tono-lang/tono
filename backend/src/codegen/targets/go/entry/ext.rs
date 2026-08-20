@@ -208,8 +208,15 @@ pub(super) fn handle_go_type(
     refs: &mut Vec<Symbol>,
 ) -> Option<String> {
     lib_go_path(lib)?;
-    let base = match &handle.instance {
-        Some(inst) => pascal(&inst.foreign_name),
+    // The instantiation's own "go" spelling wins, emitted verbatim: it is
+    // the library's spelling, written as a string exactly so the origin
+    // stays visible, and the casing engine would fold an inner capital
+    // ("DataSource" into "Datasource"). A handle whose instance somehow
+    // lacks a "go" entry (defensive: the frontend expands a shared name over
+    // every declared language) falls back to the cased tono name like a
+    // non-generic handle does.
+    let base = match handle.instance.as_ref().and_then(|i| i.name_for("go")) {
+        Some(name) => name.to_string(),
         None => pascal(&handle.name),
     };
     let type_arg = handle.instance.as_ref().map(|inst| {

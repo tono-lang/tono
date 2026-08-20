@@ -270,14 +270,19 @@ let ext_lib_docs : (string * string) list =
        and never crosses the wire. type Name(\"Foreign\", Arg) { ... } names \
        which instantiation of a foreign generic type the handle declares: the \
        foreign type's own name as a string, plus the already-declared tono \
-       type it is monomorphized with. Omit the clause for a foreign type that \
-       is not generic." );
+       type it is monomorphized with. When the targets spell that type \
+       differently, name it per language in the module-path form: type \
+       Name(go: \"GoName\", rust: \"RustName\", Arg) { ... }, one entry per \
+       declared language. Omit the clause for a foreign type that is not \
+       generic." );
     ( "interface",
-      "Marks the foreign type as abstract: in Go the library declares an \
-       interface and its constructors return the interface value itself, so \
-       the generated code holds and passes it by value. Without the marker the \
-       handle is a concrete struct the library returns by pointer. Only Go \
-       spells the difference; the other targets ignore the marker." );
+      "Marks the foreign type as abstract: the handle is the library's \
+       abstraction, not one concrete struct. In Go the constructors return the \
+       interface value itself, so the generated code holds and passes it by \
+       value; in Rust the handle is held as Box<dyn Trait> and each \
+       constructor's concrete value is boxed where it is built. Without the \
+       marker the handle is one concrete type (held by pointer in Go). \
+       TypeScript ignores the marker." );
     ( "call",
       "The foreign symbol and the argument order it takes, e.g. call: \
        \"Load\"(service, region). Arguments are the extern's parameters, \

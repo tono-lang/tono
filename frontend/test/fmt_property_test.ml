@@ -414,15 +414,27 @@ let gen_extern_decl =
     ed_span = dspan;
   }
 
-let gen_opaque_instance =
-  let+ foreign_name = gen_string and+ arg = gen_ty in
+let gen_opaque_name_entry =
+  let+ lang = gen_lname and+ name = gen_string in
   {
-    Ast.oi_foreign_name = foreign_name;
-    oi_foreign_span = dspan;
-    oi_arg = arg;
-    oi_arg_span = dspan;
-    oi_span = dspan;
+    Ast.one_lang = lang;
+    one_lang_span = dspan;
+    one_name = name;
+    one_name_span = dspan;
   }
+
+let gen_opaque_names =
+  G.oneof
+    [
+      (let+ name = gen_string in
+       Ast.OnShared (name, dspan));
+      (let+ entries = G.list_size (G.int_range 1 2) gen_opaque_name_entry in
+       Ast.OnPerLang entries);
+    ]
+
+let gen_opaque_instance =
+  let+ names = gen_opaque_names and+ arg = gen_ty in
+  { Ast.oi_names = names; oi_arg = arg; oi_arg_span = dspan; oi_span = dspan }
 
 let gen_opt_opaque_instance =
   G.oneof [ G.return None; G.map Option.some gen_opaque_instance ]

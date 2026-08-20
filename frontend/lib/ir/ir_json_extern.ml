@@ -92,10 +92,13 @@ let encode_extern_decl (e : Ir.extern_decl) : Ir.json =
       ("langs", `List (List.map encode_extern_lang e.x_langs));
     ]
 
+let encode_instance_name (n : Ir.instance_name) : Ir.json =
+  `Assoc [ ("lang", `String n.inn_lang); ("name", `String n.inn_name) ]
+
 let encode_opaque_instance (i : Ir.opaque_instance) : Ir.json =
   `Assoc
     [
-      ("foreign_name", `String i.inst_foreign_name);
+      ("names", `List (List.map encode_instance_name i.inst_names));
       ("arg", encode_tref i.inst_arg);
     ]
 
@@ -349,21 +352,35 @@ let rec decode_extern_decl j =
     ({ Ir.x_name = name; x_params = params; x_return = ret; x_langs = langs }
       : Ir.extern_decl)
 
+and decode_instance_name j =
+  let* kvs = as_assoc j in
+  let* lang =
+    match List.assoc_opt "lang" kvs with
+    | Some v -> as_string v
+    | None -> err "instance name is missing lang"
+  in
+  let* name =
+    match List.assoc_opt "name" kvs with
+    | Some v -> as_string v
+    | None -> err "instance name is missing name"
+  in
+  Ok ({ Ir.inn_lang = lang; inn_name = name } : Ir.instance_name)
+
 and decode_opaque_instance j =
   let* kvs = as_assoc j in
-  let* foreign_name =
-    match List.assoc_opt "foreign_name" kvs with
-    | Some v -> as_string v
-    | None -> err "opaque instance is missing foreign_name"
+  let* names =
+    match List.assoc_opt "names" kvs with
+    | Some v ->
+        let* xs = as_list v in
+        map_result decode_instance_name xs
+    | None -> err "opaque instance is missing names"
   in
   let* arg =
     match List.assoc_opt "arg" kvs with
     | Some v -> decode_tref v
     | None -> err "opaque instance is missing arg"
   in
-  Ok
-    ({ Ir.inst_foreign_name = foreign_name; inst_arg = arg }
-      : Ir.opaque_instance)
+  Ok ({ Ir.inst_names = names; inst_arg = arg } : Ir.opaque_instance)
 
 and decode_opaque_type j =
   let* kvs = as_assoc j in

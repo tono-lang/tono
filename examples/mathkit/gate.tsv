@@ -10,11 +10,18 @@ bench	go	service.tono	gen-red
 bench	typescript	service.tono	build-red
 bench	rust	service.tono	build-red
 01-go-interface-handle	go	probes/01-go-interface-handle.tono	pass
+# 02: the per-language name itself resolves (ConstantCalculator<f64>); the
+# red is the narrower gap left behind: compute is a trait method on the
+# concretely held type and nothing brings the trait into scope.
 02-rust-foreign-name	rust	probes/02-rust-foreign-name.tono	build-red
-03-rust-concrete-types	rust	probes/03-rust-concrete-types.tono	build-red
+03-rust-concrete-types	rust	probes/03-rust-concrete-types.tono	pass
 04-go-variadic-options	go	probes/04-go-variadic-options.tono	build-red
+# 05: the handle resolves behind the trait now; the red is the collection
+# argument (two positional values where the library expects one Vec).
 05-rust-handle-collection	rust	probes/05-rust-handle-collection.tono	build-red
 06-nested-call	go	probes/06-nested-call.tono.rejected	frontend-red
+# 07: the handle resolves behind the trait now; the red is the struct
+# literal (the foreign options struct's own name and the Some(..) wrap).
 07-rust-struct-literal	rust	probes/07-rust-struct-literal.tono	build-red
 08-ts-new-construction	typescript	probes/08-ts-new-construction.tono	build-red
 09-ts-sync-method	typescript	probes/09-ts-sync-method.tono	build-red

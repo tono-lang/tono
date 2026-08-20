@@ -7,12 +7,13 @@
 use super::super::ext_fixtures::rust_ext_fixture_model;
 use super::*;
 use crate::codegen::entries::module_entries;
+use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use crate::codegen::ops::op_impl_call;
 use crate::codegen::targets::rust::types::rust_casing;
 use crate::ir::{
     CallCtor, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternParam, Instance,
-    LangPath, Member, Model, OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue, Shape,
-    ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
+    InstanceName, LangPath, Member, Model, OpaqueType, Prim, ReturnsField, ReturnsLit,
+    ReturnsValue, Shape, ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
 };
 
 fn bare_module() -> Module {
@@ -253,7 +254,10 @@ fn a_render_of_the_full_fixture_is_stable_prose() {
 fn handle_rust_type_spells_a_generic_instance_with_its_foreign_name_and_type_argument() {
     let mut lib = handle_lib("bus", "typed_publisher");
     lib.types[0].instance = Some(Instance {
-        foreign_name: "Publisher".into(),
+        names: vec![InstanceName {
+            lang: "rust".into(),
+            name: "Publisher".into(),
+        }],
         arg: Tref::Prim(Prim::String),
     });
     let ty = &lib.types[0];
@@ -261,6 +265,74 @@ fn handle_rust_type_spells_a_generic_instance_with_its_foreign_name_and_type_arg
         handle_rust_type(&lib, ty),
         Some("some_bus::Publisher<String>".to_string())
     );
+}
+
+/// The instantiation can spell a different foreign type per language; only
+/// the "rust" entry reaches this emitter, and it is emitted verbatim (the
+/// library's own spelling), never folded by the casing engine.
+#[test]
+fn handle_rust_type_reads_its_own_language_entry_verbatim() {
+    let mut lib = handle_lib("bus", "typed_publisher");
+    lib.types[0].instance = Some(Instance {
+        names: vec![
+            InstanceName {
+                lang: "go".into(),
+                name: "Sender".into(),
+            },
+            InstanceName {
+                lang: "rust".into(),
+                name: "EventPublisher".into(),
+            },
+        ],
+        arg: Tref::Prim(Prim::String),
+    });
+    let ty = &lib.types[0];
+    assert_eq!(
+        handle_rust_type(&lib, ty),
+        Some("some_bus::EventPublisher<String>".to_string())
+    );
+}
+
+/// An `interface` handle names the crate's trait, not a concrete type: it is
+/// held as a boxed trait object, and a constructor's yield is boxed on its
+/// way into the slot (the library's concrete return types never need a tono
+/// spelling; the target compiler infers each one at its own call site).
+#[test]
+fn an_interface_handle_is_held_as_a_boxed_trait_object_and_boxed_at_construction() {
+    let mut lib = handle_lib("bus", "typed_publisher");
+    lib.types[0].interface = true;
+    lib.types[0].instance = Some(Instance {
+        names: vec![InstanceName {
+            lang: "rust".into(),
+            name: "Publisher".into(),
+        }],
+        arg: Tref::Prim(Prim::String),
+    });
+    let ty = &lib.types[0];
+    assert_eq!(
+        handle_rust_type(&lib, ty),
+        Some("Box<dyn some_bus::Publisher<String>>".to_string())
+    );
+
+    let module = Module {
+        name: "m".into(),
+        shapes: vec![],
+        operations: vec![],
+        ext_libs: vec![lib],
+        extensions: vec![],
+        tests: vec![],
+    };
+    let target = Tref::Ref {
+        id: "bus#typed_publisher".into(),
+        args: vec![],
+    };
+    assert_eq!(
+        wrap_constructed(&target, &module, "v"),
+        "Some(Box::new(v))".to_string()
+    );
+    // An already-typed value (an injected handle, boxed by the caller) is
+    // stored without another box.
+    assert_eq!(wrap_stored(&target, &module, "v"), "Some(v)".to_string());
 }
 
 fn strings(names: &[&str]) -> Vec<String> {
@@ -594,4 +666,18 @@ fn impl_call_body_with_no_declared_errors_falls_back_to_contract_error() {
         "{body}"
     );
     assert!(!body.contains("match e.to_string().as_str()"), "{body}");
+}
+
+/// The shared per-language-name fixture, rendered end to end: the "rust"
+/// instantiation entry spells the crate's own `Vault<String>` verbatim in
+/// the stored slot and the constructor call, while the Go sibling of the
+/// same handle names a `Store[T]` (asserted in the Go emitter's own tests).
+/// The against-the-real-crate compile of the same model lives in
+/// `rust_ext_roundtrip.rs`, which coverage runs skip.
+#[test]
+fn the_per_language_fixture_spells_its_own_rust_name() {
+    let out = entry_text(&per_lang_handle_model("rust"));
+    assert!(out.contains("Option<keepkit::Vault<String>>"), "{out}");
+    assert!(out.contains("keepkit::open_vault("), "{out}");
+    assert!(!out.contains("Store"), "{out}");
 }

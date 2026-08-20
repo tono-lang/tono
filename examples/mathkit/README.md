@@ -73,8 +73,8 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 | # | capability | where it shows | check | state today |
 |---|---|---|---|---|
 | 1 | a foreign handle that is an interface, not a pointer to a struct | Go `Calculator[T]` | `01-go-interface-handle` | pass: the `interface` marker on the handle declaration drops the pointer, and the SDK holds the interface value itself |
-| 2 | the foreign type name per language | `Calculator` (Go, TS) vs `ConstantCalculator` (Rust) | `02-rust-foreign-name` | build-red: one name for every target; in Rust that name is the trait, "expected a type, found a trait" |
-| 3 | several concrete types for one logical handle | Rust: four structs, one trait | `03-rust-concrete-types` | build-red: the instantiation name is also re-cased (`Constantcalculator`), and one handle can only name one struct |
+| 2 | the foreign type name per language | `Calculator` (Go, TS) vs `ConstantCalculator` (Rust) | `02-rust-foreign-name` | build-red, one step further: the instantiation now names the type per language (`type calculator(rust: "ConstantCalculator", float)`), verbatim, and the type resolves; what remains is that `compute` is a trait method on the concrete type and nothing brings the trait into scope |
+| 3 | several concrete types for one logical handle | Rust: four structs, one trait | `03-rust-concrete-types` | pass: the `interface` marker makes the handle the trait; Rust holds `Box<dyn Calculator<f64>>` and boxes each constructor's concrete value where it is built, so the concrete types never need a tono name |
 | 4 | a variadic parameter | `opts ...Option`, `calcs ...Calculator[T]` | `04-go-variadic-options` | build-red: no variadic form; the precision passed positionally is refused ("cannot use uint8 as Option") |
 | 5 | a collection of handles as an argument | `Vec<Box<dyn Calculator<T>>>`, `Calculator<T>[]` | `05-rust-handle-collection` | build-red: no list literal in a call argument; declared with a fixed arity of two (blocked first by 3) |
 | 6 | a nested call in `call:` | `WithPrecision(4)` inside `FromFormula` | `06-nested-call` | frontend-red: the argument grammar has no call form ("expected ')' to close call arguments") |
@@ -83,8 +83,10 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 | 9 | a method synchronous in one target, asynchronous in the others | `compute()` in TS | `09-ts-sync-method` | build-red: blocked by 8 (the constructor is a class); the `sync` marker itself is accepted |
 | 10 | a handle composed and read separately | fallback + a read of one of its inputs | `10-ownership-refused` | refused, as intended: single ownership is the rule, and the generator names the field and both readers |
 
-Passing today: capability 1 (the `interface` marker) and capability 10 (the
-one that is a rule, not a gap). Eight gaps remain.
+Passing today: capabilities 1 and 3 (the `interface` marker, held by value
+in Go and as a boxed trait object in Rust) and capability 10 (the one that
+is a rule, not a gap). Seven gaps remain, and capability 2's red narrowed
+from "cannot name the type" to "cannot bring the trait into scope".
 
 ### The bench proper (`service.tono`)
 

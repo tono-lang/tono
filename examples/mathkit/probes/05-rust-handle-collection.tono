@@ -1,23 +1,24 @@
 // Capability 5: a collection of handles as an argument. from_fallback takes
 // Vec<Box<dyn Calculator<T>>>, the handles the caller already built. A call
 // argument has no list literal, so the composition is declared with a fixed
-// arity of two, which Rust refuses (it expects one Vec). The fallback also
-// returns FallbackCalculator<T>, a second concrete type (capability 3).
+// arity of two, which Rust refuses (it expects one Vec). The handle is held
+// behind the trait (the "interface" marker), so the several concrete return
+// types are no longer in the way; the collection form is.
 ext mathkit {
   rust: "mathkit"
 
-  type calculator("ConstantCalculator", float) {
+  type calculator(rust: "Calculator", float) interface {
     extern compute(): float {
       rust { call: "compute"() }
     }
   }
 
   extern from_constant(value: float): calculator {
-    rust { call: "from_constant"(value) }
+    rust { call: "from_constant"(value) sync }
   }
 
   extern from_fallback(strategy: string, primary: calculator, secondary: calculator): calculator {
-    rust { call: "from_fallback"(strategy, primary, secondary) }
+    rust { call: "from_fallback"(strategy, primary, secondary) sync }
   }
 }
 

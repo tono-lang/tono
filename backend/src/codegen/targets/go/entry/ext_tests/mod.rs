@@ -8,12 +8,13 @@
 use super::ext_fixtures::{ext_param, field, member, string_t, structure};
 use super::*;
 use crate::codegen::entries::module_entries;
+use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::rendered;
 use crate::ir::{
-    CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang, Instance, LangPath,
-    OpImplCall, OpaqueType, Shape, ShapeKind, Tref, YieldsPos,
+    CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang, Instance,
+    InstanceName, LangPath, OpImplCall, OpaqueType, Shape, ShapeKind, Tref, YieldsPos,
 };
 
 fn entry_text(module: &Module) -> String {
@@ -116,7 +117,10 @@ fn handle_go_type_spells_an_instantiated_interface_handle_by_value() {
     let mut lib = handle_lib("calckit", "meter");
     lib.types[0].interface = true;
     lib.types[0].instance = Some(Instance {
-        foreign_name: "Meter".into(),
+        names: vec![InstanceName {
+            lang: "go".into(),
+            name: "Meter".into(),
+        }],
         arg: Tref::Prim(Prim::Float),
     });
     let mut refs = Vec::new();
@@ -137,7 +141,10 @@ fn handle_go_type_spells_an_instantiated_interface_handle_by_value() {
 fn handle_go_type_spells_the_foreign_name_with_an_explicit_type_argument() {
     let mut lib = handle_lib("cfgkit", "env_source");
     lib.types[0].instance = Some(Instance {
-        foreign_name: "Source".into(),
+        names: vec![InstanceName {
+            lang: "go".into(),
+            name: "Source".into(),
+        }],
         arg: Tref::Ref {
             id: "notes#settings".into(),
             args: vec![],
@@ -152,6 +159,30 @@ fn handle_go_type_spells_the_foreign_name_with_an_explicit_type_argument() {
     );
 }
 
+/// The instantiation can spell a different foreign type per language: only
+/// the "go" entry reaches this emitter, and it is emitted verbatim (the
+/// library's own spelling), never folded by the casing engine.
+#[test]
+fn handle_go_type_reads_its_own_language_entry_verbatim() {
+    let mut lib = handle_lib("cfgkit", "env_source");
+    lib.types[0].instance = Some(Instance {
+        names: vec![
+            InstanceName {
+                lang: "go".into(),
+                name: "DataSource".into(),
+            },
+            InstanceName {
+                lang: "rust".into(),
+                name: "EnvSource".into(),
+            },
+        ],
+        arg: Tref::Prim(Prim::Float),
+    });
+    let mut refs = Vec::new();
+    let ty = ext::handle_go_type(&lib, &lib.types[0], &mut refs).expect("go module path is set");
+    assert!(ty.starts_with("*cfgkit.DataSource["), "{ty}");
+}
+
 /// A constructor call returning an instantiated handle carries the type
 /// argument on the call itself (`NewEnvSource[Settings](...)`, not
 /// `NewEnvSource(...)`): Go cannot infer it from the call site the way it
@@ -161,7 +192,10 @@ fn handle_adapter_decl_names_the_real_instantiated_type() {
     let module = bare_module();
     let mut lib = handle_lib("cfgkit", "env_source");
     lib.types[0].instance = Some(Instance {
-        foreign_name: "Source".into(),
+        names: vec![InstanceName {
+            lang: "go".into(),
+            name: "Source".into(),
+        }],
         arg: Tref::Ref {
             id: "notes#settings".into(),
             args: vec![],
@@ -478,3 +512,19 @@ fn declared_error_literal_is_a_zero_value_without_a_message_member() {
 mod calls;
 mod composed_handles;
 mod handle_source;
+
+/// The shared per-language-name fixture, rendered end to end: the "go"
+/// instantiation entry spells the package's own `Store[string]` verbatim
+/// (held by pointer, the handle is concrete) and the constructor carries
+/// the explicit type argument, while the Rust sibling of the same handle
+/// names a `Vault<T>` (asserted in the Rust emitter's own tests). The
+/// against-the-real-package build of the same model lives in
+/// `go_ext_roundtrip.rs`, which coverage runs skip.
+#[test]
+fn the_per_language_fixture_spells_its_own_go_name() {
+    let model = per_lang_handle_model("go");
+    let text = entry_text(&model.modules[0]);
+    assert!(text.contains("*keepkit.Store[string]"), "{text}");
+    assert!(text.contains("OpenStore[string]("), "{text}");
+    assert!(!text.contains("Vault"), "{text}");
+}

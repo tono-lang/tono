@@ -274,15 +274,33 @@ type extern_decl = {
   ed_span : Span.span;
 }
 
-(* [type name("ForeignName", Arg) { ... }] — declares which instantiation of
-   a foreign generic type this opaque handle names: the foreign type's own
-   name (a string, so the origin stays visible) and the tono type argument
+(* One [lang: "ForeignName"] entry inside an instantiation: the same logical
+   handle can name a different foreign type per language (an interface in one
+   target, a trait in another, with each library free to spell its own). *)
+type opaque_name_entry = {
+  one_lang : string;
+  one_lang_span : Span.span;
+  one_name : string;
+  one_name_span : Span.span;
+}
+
+(* The foreign-name part of an instantiation: either one string shared by
+   every language, or one entry per language the ext declares a module path
+   for. Kept as the surface wrote it so the formatter round-trips. *)
+type opaque_names =
+  | OnShared of string * Span.span
+  | OnPerLang of opaque_name_entry list
+
+(* [type name("ForeignName", Arg) { ... }] or
+   [type name(go: "GoName", rust: "RustName", Arg) { ... }] — declares which
+   instantiation of a foreign generic type this opaque handle names: the
+   foreign type's own name (a string, so the origin stays visible; per
+   language when the targets spell it differently) and the tono type argument
    it is monomorphized with. Absent for a foreign type that is not generic;
    the handle then keeps being written as [type name { ... }] and its
    foreign identifier is derived from [opq_name] itself, as before. *)
 type opaque_instance = {
-  oi_foreign_name : string;
-  oi_foreign_span : Span.span;
+  oi_names : opaque_names;
   oi_arg : ty;
   oi_arg_span : Span.span;
   oi_span : Span.span;

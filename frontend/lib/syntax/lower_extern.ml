@@ -138,15 +138,30 @@ let rec lower_extern ~lower_type ~lower_select ~resolve ~diags
         e.ed_langs;
   }
 
-and lower_opaque_type ~lower_type ~lower_select ~resolve ~diags
+and lower_opaque_type ~lower_type ~lower_select ~resolve ~diags ~langs
     (t : Ast.opaque_type) : Ir.opaque_type =
   {
     Ir.opq_name = t.opq_name;
     opq_instance =
       Option.map
         (fun (i : Ast.opaque_instance) ->
+          (* A shared surface name is expanded here to one entry per language
+             the ext declares a module path for, so IR consumers only ever
+             look a language up; the keyed surface form lowers verbatim. *)
+          let names =
+            match i.Ast.oi_names with
+            | Ast.OnShared (name, _) ->
+                List.map
+                  (fun lang -> { Ir.inn_lang = lang; inn_name = name })
+                  langs
+            | Ast.OnPerLang entries ->
+                List.map
+                  (fun (e : Ast.opaque_name_entry) ->
+                    { Ir.inn_lang = e.one_lang; inn_name = e.one_name })
+                  entries
+          in
           {
-            Ir.inst_foreign_name = i.oi_foreign_name;
+            Ir.inst_names = names;
             inst_arg = lower_type ~params:[] ~resolve ~diags i.oi_arg;
           })
         t.opq_instance;
@@ -169,9 +184,12 @@ let lower_ext_lib ~lower_type ~lower_select ~resolve ~diags (d : Ast.decl) :
             (lower_foreign_struct ~lower_type ~resolve ~diags)
             body.elib_structs;
         xl_types =
-          List.map
-            (lower_opaque_type ~lower_type ~lower_select ~resolve ~diags)
-            body.elib_types;
+          (let langs =
+             List.map (fun (lp : Ast.lang_path) -> lp.lp_lang) body.elib_langs
+           in
+           List.map
+             (lower_opaque_type ~lower_type ~lower_select ~resolve ~diags ~langs)
+             body.elib_types);
         xl_externs =
           List.map
             (lower_extern ~lower_type ~lower_select ~resolve ~diags)

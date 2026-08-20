@@ -215,6 +215,168 @@ let interface_absent_lowers_as_concrete () =
   let t = List.hd lib.Ir.xl_types in
   Alcotest.(check bool) "concrete by default" false t.Ir.opq_interface
 
+(* The keyed form: one foreign name per language, in the same "lang: string"
+   shape the ext header's module paths use. It parses, lowers verbatim (one
+   IR entry per written language), and round-trips through the printer. *)
+let keyed_names_parse_lower_and_print () =
+  let src =
+    {|ext calckit {
+  go: "github.com/x/calckit"
+  rust: "calckit"
+
+  type meter(go: "Meter", rust: "Gauge", float) interface {
+    extern read(): float {
+      go { call: "Read"() }
+      rust { call: "read"() }
+    }
+  }
+}
+|}
+  in
+  let file, errs = Parser.parse src in
+  Alcotest.(check int)
+    "parses clean" 0
+    (List.length
+       (List.filter
+          (fun (d : Diagnostic.t) -> d.severity = Diagnostic.Error)
+          errs));
+  let diags = ref [] in
+  let m = Lower.lower_file ~module_name:"m" ~diags file in
+  let lib = List.hd m.Ir.ext_libs in
+  let t = List.hd lib.Ir.xl_types in
+  (match t.Ir.opq_instance with
+  | Some { inst_names; _ } ->
+      Alcotest.(check (list (pair string string)))
+        "one entry per written language"
+        [ ("go", "Meter"); ("rust", "Gauge") ]
+        (List.map
+           (fun (n : Ir.instance_name) -> (n.inn_lang, n.inn_name))
+           inst_names)
+  | None -> Alcotest.fail "expected an instance");
+  let printed = Printer.print_file file in
+  Alcotest.(check bool)
+    "keyed clause survives printing" true
+    (contains ~sub:{|(go: "Meter", rust: "Gauge", float) interface {|} printed);
+  let reparsed, _ = Parser.parse printed in
+  let printed2 = Printer.print_file reparsed in
+  Alcotest.(check string) "idempotent" printed printed2
+
+(* The shared form expands in the IR to one entry per declared language, so
+   backends only ever look a language up. *)
+let shared_name_expands_over_declared_languages () =
+  let src =
+    {|ext calckit {
+  go: "github.com/x/calckit"
+  rust: "calckit"
+
+  type meter("Meter", float) {
+    extern read(): float {
+      go { call: "Read"() }
+      rust { call: "read"() }
+    }
+  }
+}
+|}
+  in
+  let file, _ = Parser.parse src in
+  let diags = ref [] in
+  let m = Lower.lower_file ~module_name:"m" ~diags file in
+  let lib = List.hd m.Ir.ext_libs in
+  let t = List.hd lib.Ir.xl_types in
+  match t.Ir.opq_instance with
+  | Some { inst_names; _ } ->
+      Alcotest.(check (list (pair string string)))
+        "expanded over declared languages"
+        [ ("go", "Meter"); ("rust", "Meter") ]
+        (List.map
+           (fun (n : Ir.instance_name) -> (n.inn_lang, n.inn_name))
+           inst_names)
+  | None -> Alcotest.fail "expected an instance"
+
+(* A keyed list must be exactly one entry per declared language: a language
+   named twice, a language with no declared module path, and a declared
+   language left without a name are each TC0095. *)
+let keyed_names_mismatches_are_diagnosed () =
+  let dup =
+    {|ext calckit {
+  go: "github.com/x/calckit"
+
+  type meter(go: "Meter", go: "Gauge", float) {
+    extern read(): float { go { call: "Read"() } }
+  }
+}
+|}
+  in
+  Alcotest.(check bool) "duplicate language" true (has "TC0095" dup);
+  let unknown =
+    {|ext calckit {
+  go: "github.com/x/calckit"
+
+  type meter(go: "Meter", rust: "Gauge", float) {
+    extern read(): float { go { call: "Read"() } }
+  }
+}
+|}
+  in
+  Alcotest.(check bool) "undeclared language" true (has "TC0095" unknown);
+  let missing =
+    {|ext calckit {
+  go: "github.com/x/calckit"
+  rust: "calckit"
+
+  type meter(go: "Meter", float) {
+    extern read(): float {
+      go { call: "Read"() }
+      rust { call: "read"() }
+    }
+  }
+}
+|}
+  in
+  Alcotest.(check bool) "missing declared language" true (has "TC0095" missing)
+
+(* A keyed instantiation collides with a shared one when they claim the same
+   foreign name and argument for the same language of the same ext. *)
+let keyed_and_shared_names_collide_per_language () =
+  let src =
+    {|ext cfgkit {
+  go: "github.com/x/cfgkit"
+
+  type first_source("Source", settings) {
+    extern get(): settings { go { call: "Get"() } }
+  }
+
+  type second_source(go: "Source", settings) {
+    extern get(): settings { go { call: "Get"() } }
+  }
+}
+
+struct settings { endpoint: string }
+|}
+  in
+  Alcotest.(check bool) "collides per language" true (has "TC0092" src)
+
+(* Different per-language names for the same argument are distinct
+   instantiations: no collision. *)
+let keyed_names_differing_no_collision () =
+  let src =
+    {|ext cfgkit {
+  go: "github.com/x/cfgkit"
+
+  type first_source(go: "Source", settings) {
+    extern get(): settings { go { call: "Get"() } }
+  }
+
+  type second_source(go: "Registry", settings) {
+    extern get(): settings { go { call: "Get"() } }
+  }
+}
+
+struct settings { endpoint: string }
+|}
+  in
+  Alcotest.(check bool) "no collision" false (has "TC0092" src)
+
 let () =
   Alcotest.run "extern_instance"
     [
@@ -232,6 +394,19 @@ let () =
             instance_clause_prints_idempotently;
           Alcotest.test_case "absent for non-generic" `Quick
             instance_absent_for_a_non_generic_handle;
+        ] );
+      ( "per-language names",
+        [
+          Alcotest.test_case "keyed form parses, lowers and prints" `Quick
+            keyed_names_parse_lower_and_print;
+          Alcotest.test_case "shared name expands" `Quick
+            shared_name_expands_over_declared_languages;
+          Alcotest.test_case "mismatches are diagnosed" `Quick
+            keyed_names_mismatches_are_diagnosed;
+          Alcotest.test_case "keyed and shared collide" `Quick
+            keyed_and_shared_names_collide_per_language;
+          Alcotest.test_case "different names do not collide" `Quick
+            keyed_names_differing_no_collision;
         ] );
       ( "interface marker",
         [
