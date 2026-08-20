@@ -58,7 +58,7 @@ let check_request_value (op : Ast.decl) : Diagnostic.t list =
     | Ast.CaRef r when r.Ast.segs = [ "request" ] ->
         if allow_request then [] else [ bad_bare r.Ast.ref_span ]
     | Ast.CaRef _ | Ast.CaLit _ -> []
-    | Ast.CaParam (_, span) -> [ bad_param span ]
+    | Ast.CaParam (_, span) | Ast.CaType (_, span) -> [ bad_param span ]
     | Ast.CaCtor c ->
         List.concat_map
           (fun (_, _, v) -> value_diags ~allow_request v)

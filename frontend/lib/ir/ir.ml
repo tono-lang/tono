@@ -218,6 +218,9 @@ and call_arg =
   | Ca_list of call_arg list
   | Ca_call of entry_call
   | Ca_symbol_call of symbol_call
+  | Ca_type of string
+(* a declared opaque handle passed as a class reference: the
+         emitter spells its foreign name for the binding's language *)
 
 and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
 

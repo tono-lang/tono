@@ -69,7 +69,7 @@ use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{
-    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExternLang, ExternParam, Module,
+    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExtLib, ExternLang, ExternParam, Module,
     ReturnsValue, Select,
 };
 
@@ -141,9 +141,11 @@ pub(super) fn field_ref(
 /// outer template's parameters. `ref_expr` resolves a `Ref` leaf: the two
 /// call sites (a free extern-fn field and an op's own handle-method call)
 /// read a `Ref`'s root differently, so this is the one seam they don't share.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_arg(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
+    lib: &ExtLib,
     arg: &CallArg,
     params: &[ExternParam],
     site_args: &[CallArg],
@@ -160,7 +162,7 @@ pub(super) fn render_arg(
             let site = site_args.get(idx).unwrap_or_else(|| {
                 panic!("extern call site is missing an argument for parameter {name:?}")
             });
-            render_arg(entry, config, site, &[], &[], ref_expr)
+            render_arg(entry, config, lib, site, &[], &[], ref_expr)
         }
         CallArg::Ref(path) => ref_expr(entry, config, path),
         CallArg::Lit(v) => json_literal(v),
@@ -168,7 +170,7 @@ pub(super) fn render_arg(
             "[{}]",
             items
                 .iter()
-                .map(|i| render_arg(entry, config, i, params, site_args, ref_expr))
+                .map(|i| render_arg(entry, config, lib, i, params, site_args, ref_expr))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -178,7 +180,7 @@ pub(super) fn render_arg(
                 .iter()
                 .map(|(k, v)| format!(
                     "{k}: {}",
-                    render_arg(entry, config, v, params, site_args, ref_expr)
+                    render_arg(entry, config, lib, v, params, site_args, ref_expr)
                 ))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -203,10 +205,68 @@ pub(super) fn render_arg(
             sc.symbol,
             sc.args
                 .iter()
-                .map(|a| render_arg(entry, config, a, params, site_args, ref_expr))
+                .map(|a| render_arg(entry, config, lib, a, params, site_args, ref_expr))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        // A class reference: the declared handle's own class, passed as the
+        // imported identifier (the library constructs it; tono only names
+        // it). The import itself is collected by `class_reference_imports`
+        // at the call site that owns the seam's refs.
+        CallArg::TypeRef(handle) => class_reference_name(lib, handle),
+    }
+}
+
+/// The TypeScript spelling of a declared handle's class: the instantiation's
+/// own `ts` name when the surface wrote one (the library's spelling, emitted
+/// verbatim), else the cased handle name, the same fallback the handle's
+/// field type uses.
+pub(super) fn class_reference_name(lib: &ExtLib, handle: &str) -> String {
+    let ty = lib.types.iter().find(|t| t.name == handle).unwrap_or_else(|| {
+        panic!(
+            "a class reference names undeclared handle {handle:?} in ext lib {:?} (the frontend should have rejected this)",
+            lib.name
+        )
+    });
+    match ty
+        .instance
+        .as_ref()
+        .and_then(|i| i.name_for("ts").or_else(|| i.name_for("typescript")))
+    {
+        Some(name) => name.to_string(),
+        None => pascal(&ty.name),
+    }
+}
+
+/// One import per class reference anywhere in a `call:` line's argument
+/// tree, from the lib's own TypeScript module path (the same module the
+/// call's symbol comes from).
+pub(super) fn class_reference_imports(args: &[CallArg], lib: &ExtLib, refs: &mut Vec<Symbol>) {
+    for arg in args {
+        match arg {
+            CallArg::TypeRef(handle) => {
+                let name = class_reference_name(lib, handle);
+                let path = lib
+                    .langs
+                    .iter()
+                    .find(|p| p.lang == "ts" || p.lang == "typescript")
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "ext lib {:?} declares no typescript module path (validate_entries should have rejected this)",
+                            lib.name
+                        )
+                    });
+                refs.push(Symbol::imported(name.clone(), path.path.clone(), name));
+            }
+            CallArg::List(items) => class_reference_imports(items, lib, refs),
+            CallArg::SymbolCall(sc) => class_reference_imports(&sc.args, lib, refs),
+            CallArg::Ctor(ctor) => {
+                for v in ctor.fields.values() {
+                    class_reference_imports(std::slice::from_ref(v), lib, refs);
+                }
+            }
+            CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) | CallArg::Call(_) => {}
+        }
     }
 }
 
@@ -281,6 +341,7 @@ pub(super) fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> Str
 /// this for the typescript target before generation reaches here, so every
 /// lookup is an internal-invariant check, not a validation.
 struct Lookup<'a> {
+    lib: &'a ExtLib,
     lang: &'a ExternLang,
     params: &'a [ExternParam],
 }
@@ -317,6 +378,7 @@ fn lookup<'a>(module: &'a Module, field: &EntryField, call: &EntryCall) -> Looku
             )
         });
     Lookup {
+        lib,
         lang,
         params: &decl.params,
     }
@@ -341,12 +403,13 @@ fn call_body(
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
+    class_reference_imports(&lang.call_args, l.lib, refs);
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
         for a in &lang.call_args {
             parts.push(render_arg(
-                entry, config, a, l.params, &call.args, &field_ref,
+                entry, config, l.lib, a, l.params, &call.args, &field_ref,
             ));
         }
         parts.join(", ")

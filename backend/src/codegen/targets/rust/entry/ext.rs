@@ -310,6 +310,10 @@ impl ArgCtx<'_> {
                 format!("{name} {{ {} }}", rendered.join(", "))
             }
             CallArg::Call(nested) => self.nested_call_expr(nested),
+            CallArg::TypeRef(_) => panic!(
+                "a class reference as a call argument reached Rust codegen; \
+                 validate_calls::class_reference_renders should have rejected it first"
+            ),
             // A bare foreign-symbol call nested inside a `call:` line's own
             // argument list, e.g. `WithPrecision(precision)`: no declared
             // extern to resolve against, so no yields/returns/errors

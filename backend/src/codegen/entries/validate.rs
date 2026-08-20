@@ -60,7 +60,7 @@ pub(super) fn ref_paths(args: &[CallArg], out: &mut Vec<Vec<String>>) {
                 ref_paths(&fields, out);
             }
             CallArg::SymbolCall(sc) => ref_paths(&sc.args, out),
-            CallArg::Param(_) | CallArg::Lit(_) | CallArg::Call(_) => {}
+            CallArg::Param(_) | CallArg::Lit(_) | CallArg::Call(_) | CallArg::TypeRef(_) => {}
         }
     }
 }
@@ -165,6 +165,11 @@ pub(super) fn wire_call_resolves(
             ));
         };
         super::validate_calls::static_receiver_renders(
+            &format!("{}.{}(..)", call.ns, call.fn_name),
+            *target,
+            lang,
+        )?;
+        super::validate_calls::class_reference_in_wire_position(
             &format!("{}.{}(..)", call.ns, call.fn_name),
             *target,
             lang,

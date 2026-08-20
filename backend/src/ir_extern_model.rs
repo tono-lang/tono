@@ -43,6 +43,11 @@ pub enum CallArg {
     List(Vec<CallArg>),
     Call(Box<EntryCall>),
     SymbolCall(SymbolCall),
+    /// A declared opaque handle passed as a class reference (wire key
+    /// `type`): the library takes the class itself and constructs on its
+    /// own, so what crosses is the handle's foreign name for the binding's
+    /// language, never a value tono built.
+    TypeRef(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +106,11 @@ impl Serialize for CallArg {
                 m.serialize_entry("symbol_args", &sc.args)?;
                 m.end()
             }
+            CallArg::TypeRef(n) => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("type", n)?;
+                m.end()
+            }
         }
     }
 }
@@ -112,7 +122,9 @@ impl<'de> Deserialize<'de> for CallArg {
     }
 }
 
-const CALL_ARG_KEYS: [&str; 7] = ["param", "field", "lit", "list", "call", "ctor", "symbol"];
+const CALL_ARG_KEYS: [&str; 8] = [
+    "param", "field", "lit", "list", "call", "ctor", "symbol", "type",
+];
 
 fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
     let obj = v.as_object().ok_or("expected an object")?;
@@ -147,6 +159,12 @@ fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
         ["lit"] => {
             ensure_only(obj, &["lit"])?;
             Ok(CallArg::Lit(obj["lit"].clone()))
+        }
+        ["type"] => {
+            ensure_only(obj, &["type"])?;
+            Ok(CallArg::TypeRef(
+                obj["type"].as_str().ok_or("expected a string")?.to_string(),
+            ))
         }
         ["list"] => {
             ensure_only(obj, &["list"])?;
@@ -442,6 +460,19 @@ mod tests {
             symbol: "Bare".into(),
             args: vec![],
         }));
+        roundtrip(&CallArg::TypeRef("answer_calculator".into()));
+        roundtrip(&CallArg::SymbolCall(SymbolCall {
+            symbol: "Pick".into(),
+            args: vec![CallArg::TypeRef("answer_calculator".into())],
+        }));
+    }
+
+    #[test]
+    fn a_class_reference_serializes_under_the_type_key() {
+        let json = serde_json::to_value(CallArg::TypeRef("answer_calculator".into())).unwrap();
+        assert_eq!(json, serde_json::json!({"type": "answer_calculator"}));
+        assert!(serde_json::from_str::<CallArg>(r#"{"type": 1}"#).is_err());
+        assert!(serde_json::from_str::<CallArg>(r#"{"type": "a", "param": "b"}"#).is_err());
     }
 
     #[test]

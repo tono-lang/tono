@@ -123,3 +123,17 @@ export class FallbackCalculator<T> implements Calculator<T> {
     return last as T;
   }
 }
+
+export class AnswerCalculator implements Calculator<number> {
+  compute(): number {
+    return 42;
+  }
+}
+
+// Takes the class itself and constructs it (`new () => T`), the shape a
+// library uses when the caller chooses the implementation and the library
+// owns its construction: reached with the class as a value, never with an
+// instance the caller built.
+export function instantiate<T>(clazz: new () => Calculator<T>): Calculator<T> {
+  return new clazz();
+}

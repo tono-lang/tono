@@ -42,10 +42,10 @@ use crate::codegen::syntax::render_type;
 use crate::codegen::targets::typescript::render::TsRules;
 use crate::codegen::targets::typescript::types::type_expr_of;
 use crate::codegen::tree::Decl;
-use crate::ir::{ExternLang, ExternParam, Module, OpImplCall, Shape};
+use crate::ir::{ExtLib, ExternLang, ExternParam, Module, OpImplCall, Shape};
 
 use super::checks::field_path_expr;
-use super::ext_call::{render_arg, returns_value_expr, sentinel_switch};
+use super::ext_call::{class_reference_imports, render_arg, returns_value_expr, sentinel_switch};
 use super::ext_handle_iface::resolve_handle;
 use super::module_symbol;
 use std::collections::BTreeSet;
@@ -53,6 +53,7 @@ use std::collections::BTreeSet;
 /// The declared handle method [`impl_call_body`] resolves against: the
 /// opaque type's own `ExternDecl` and its `ts`/`typescript` language block.
 struct Lookup<'a> {
+    lib: &'a ExtLib,
     lang: &'a ExternLang,
     params: &'a [ExternParam],
 }
@@ -72,7 +73,7 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
             field.name
         )
     };
-    let (_lib, handle) = resolve_handle(handle_id, module).unwrap_or_else(|| {
+    let (lib, handle) = resolve_handle(handle_id, module).unwrap_or_else(|| {
         panic!(
             "receiver field {:?} names an unresolved foreign handle {handle_id:?} (the frontend should have rejected this)",
             field.name
@@ -95,6 +96,7 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
             )
         });
     Lookup {
+        lib,
         lang,
         params: &decl.params,
     }
@@ -133,6 +135,7 @@ fn call_parts(
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
+    class_reference_imports(&lang.call_args, l.lib, refs);
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
@@ -140,6 +143,7 @@ fn call_parts(
             parts.push(render_arg(
                 entry,
                 config,
+                l.lib,
                 a,
                 l.params,
                 &call.args,

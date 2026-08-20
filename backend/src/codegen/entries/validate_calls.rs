@@ -239,6 +239,7 @@ fn extern_binds_every_target(
             }
         }
         static_receiver_renders(site, *target, lang)?;
+        class_reference_renders(site, *target, lang)?;
         if !target.emits_nested_extern_call_args() && contains_cross_extern_call(&lang.call_args) {
             return Err(format!(
                 "{site}: the {} block's call: line uses another declared extern's call as one of its own arguments; {} codegen cannot render that yet",
@@ -271,6 +272,62 @@ pub(super) fn static_receiver_renders(
     }
 }
 
+/// A `call:` line passing a class reference (`type handle`, the declared
+/// handle's foreign type itself, for a library that constructs it) is
+/// rejected for a target that has no type as a value to pass (see
+/// [`TargetKind::emits_class_reference_args`]), naming the site and the
+/// handle, before any emitter could spell a type where a value goes.
+pub(super) fn class_reference_renders(
+    site: &str,
+    target: TargetKind,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    match first_class_reference(&lang.call_args) {
+        Some(handle) if !target.emits_class_reference_args() => Err(format!(
+            "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument (type {handle}); {} has no class reference to pass, bind a function that constructs it instead",
+            target.binding_langs()[0],
+            target.dir()
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// A wire-position call (`@header`/`@body` value) passes the trait's own
+/// arguments positionally and never applies the binding's `call:` argument
+/// template, so a class reference written there would be dropped silently
+/// in every target; refused by name instead, whatever the target.
+pub(super) fn class_reference_in_wire_position(
+    site: &str,
+    target: TargetKind,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    match first_class_reference(&lang.call_args) {
+        Some(handle) => Err(format!(
+            "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument (type {handle}); a call in wire position passes the trait's own arguments and cannot carry a class reference",
+            target.binding_langs()[0],
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The first class reference anywhere in a call's own argument tree, walked
+/// through the same nesting shapes [`ref_paths`] does.
+fn first_class_reference(args: &[crate::ir::CallArg]) -> Option<&str> {
+    use crate::ir::CallArg;
+    args.iter().find_map(|a| match a {
+        CallArg::TypeRef(handle) => Some(handle.as_str()),
+        CallArg::Ctor(ctor) => {
+            let fields: Vec<&CallArg> = ctor.fields.values().collect();
+            fields
+                .iter()
+                .find_map(|v| first_class_reference(std::slice::from_ref(*v)))
+        }
+        CallArg::List(items) => first_class_reference(items),
+        CallArg::SymbolCall(sc) => first_class_reference(&sc.args),
+        CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) | CallArg::Call(_) => None,
+    })
+}
+
 /// Whether a call's own argument tree uses a cross-extern call
 /// (`CallArg::Call`, resolved against a declared `extern`) anywhere, walked
 /// through the same nesting shapes [`ref_paths`] does (a ctor field's own
@@ -283,7 +340,7 @@ fn contains_cross_extern_call(args: &[crate::ir::CallArg]) -> bool {
         CallArg::Ctor(ctor) => ctor.fields.values().any(contains_cross_extern_call_one),
         CallArg::List(items) => contains_cross_extern_call(items),
         CallArg::SymbolCall(sc) => contains_cross_extern_call(&sc.args),
-        CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) => false,
+        CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) | CallArg::TypeRef(_) => false,
     })
 }
 

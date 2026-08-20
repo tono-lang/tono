@@ -1,0 +1,30 @@
+// Capability 12, the Go side: Go has no type as a value either. A library
+// takes a constructor function or a zero value for this, so a binding
+// passing a class reference has nothing correct to render as. The generator
+// refuses it naming the site; this probe passes when generation is refused.
+ext mathkit {
+  go: "tono-ext-fixture/mathkit"
+
+  type calculator("Calculator", float) interface {
+    extern compute(): float {
+      go { call: "Compute"() ctx }
+    }
+  }
+
+  type answer_calculator {
+    extern compute(): float {
+      go { call: "Compute"() ctx }
+    }
+  }
+
+  extern make(): calculator {
+    go { call: "Instantiate"(type answer_calculator) }
+  }
+}
+
+pub struct client {
+  calc: mathkit.calculator = mathkit.make()
+
+  op value(): float
+    impl .calc.compute()
+}

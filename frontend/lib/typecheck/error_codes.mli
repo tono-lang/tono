@@ -185,3 +185,7 @@ val extern_receiver_on_method : string
 
 val extern_receiver_with_new : string
 (** A call: line with a type receiver and the "new" marker at once. *)
+
+val extern_type_arg_unknown : string
+(** A call: argument passing a class reference that names no opaque handle of
+    its own ext block. *)

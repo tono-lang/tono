@@ -42,6 +42,7 @@ and call_arg =
   | CaLit of call_lit * Span.span
   | CaCall of nested_call
   | CaList of call_arg list * Span.span
+  | CaType of string * Span.span
 
 and nested_call = {
   nc_symbol : string;

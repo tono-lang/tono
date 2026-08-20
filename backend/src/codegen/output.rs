@@ -118,6 +118,20 @@ impl TargetKind {
             Self::Go => false,
         }
     }
+
+    /// Whether this target can pass a declared handle's class itself as a
+    /// `call:` argument (`type handle`, for a library that takes the class
+    /// and constructs on its own). TypeScript has the class as a value
+    /// (the imported identifier, `new () => T` on the library's side). Go
+    /// and Rust have no type as a value: a Go type or a Rust struct cannot
+    /// stand where an argument goes, so there is nothing correct to spell
+    /// and generation refuses the binding.
+    pub fn emits_class_reference_args(self) -> bool {
+        match self {
+            Self::TypeScript => true,
+            Self::Go | Self::Rust => false,
+        }
+    }
 }
 
 /// A generated source file: which target produced it (so a caller knows which

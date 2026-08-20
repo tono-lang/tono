@@ -1,0 +1,31 @@
+// Capability 12: a class reference as a call argument. The library takes
+// the class itself (`instantiate(clazz: new () => Calculator<T>)`) and
+// constructs on its own, so what the binding passes is a declared handle's
+// foreign type, not a value: `type answer_calculator` names the handle and
+// the generated module imports and passes its class.
+ext mathkit {
+  ts: "@tono-ext-fixture/mathkit"
+
+  type calculator("Calculator", float) {
+    extern compute(): float {
+      ts { call: "compute"() sync }
+    }
+  }
+
+  type answer_calculator {
+    extern compute(): float {
+      ts { call: "compute"() sync }
+    }
+  }
+
+  extern make(): calculator {
+    ts { call: "instantiate"(type answer_calculator) sync }
+  }
+}
+
+pub struct client {
+  calc: mathkit.calculator = mathkit.make()
+
+  op value(): float
+    impl .calc.compute()
+}

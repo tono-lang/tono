@@ -187,7 +187,7 @@ and call_args_refs (args : Ast.call_arg list) : (string list * Span.span) list =
           List.concat_map (fun (_, _, v) -> trait_arg_refs v) c.Ast.ctor_fields
       | Ast.CaCall nc -> call_args_refs nc.Ast.nc_args
       | Ast.CaList (items, _) -> call_args_refs items
-      | Ast.CaParam _ | Ast.CaLit _ -> [])
+      | Ast.CaParam _ | Ast.CaLit _ | Ast.CaType _ -> [])
     args
 
 and ce_refs (ce : Ast.call_expr) : (string list * Span.span) list =

@@ -194,6 +194,8 @@ let rec gen_call_arg n =
          Ast.CaRef r);
         (let+ c = gen_ctor_arg in
          Ast.CaCtor c);
+        (let+ n = gen_lname in
+         Ast.CaType (n, dspan));
       ]
   in
   if n <= 0 then base

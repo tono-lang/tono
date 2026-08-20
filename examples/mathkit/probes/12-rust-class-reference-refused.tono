@@ -1,0 +1,31 @@
+// Capability 12, the Rust side: Rust has no type as a value. A library that
+// lets the caller choose the implementation takes a type parameter
+// (`instantiate::<T>()`), a different shape from an argument, so a binding
+// passing a class reference has nothing correct to render as. The generator
+// refuses it naming the site; this probe passes when generation is refused.
+ext mathkit {
+  rust: "mathkit"
+
+  type calculator(rust: "Calculator", float) interface {
+    extern compute(): float {
+      rust { call: "compute"() }
+    }
+  }
+
+  type answer_calculator {
+    extern compute(): float {
+      rust { call: "compute"() }
+    }
+  }
+
+  extern make(): calculator {
+    rust { call: "instantiate"(type answer_calculator) sync }
+  }
+}
+
+pub struct client {
+  calc: mathkit.calculator = mathkit.make()
+
+  op value(): float
+    impl .calc.compute()
+}

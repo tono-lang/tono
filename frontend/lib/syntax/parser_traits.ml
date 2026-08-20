@@ -155,6 +155,9 @@ and parse_trait_list_value st : Ast.trait_arg =
    a [variadic] logical parameter, e.g.
    [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]). A
    string not followed by "(" is an ordinary literal instead ([CaLit]). *)
+and is_ident (t : Token.t) =
+  match t.kind with Token.Ident _ -> true | _ -> false
+
 and parse_call_arg st : Ast.call_arg =
   match (P.peek st).kind with
   | Token.Dot -> Ast.CaRef (parse_ref_path st)
@@ -169,6 +172,13 @@ and parse_call_arg st : Ast.call_arg =
   | Token.Float f ->
       let t = P.advance st in
       Ast.CaLit (Ast.LFloat f, t.span)
+  | Token.Ident "type" when is_ident (P.peek_ahead st 1) ->
+      (* "type" is contextual here, like in a handle declaration: a
+         parameter named [type] stays a parameter when nothing follows it. *)
+      let kw = P.advance st in
+      let nt = P.advance st in
+      let n = match nt.kind with Token.Ident n -> n | _ -> assert false in
+      Ast.CaType (n, Span.merge kw.span nt.span)
   | Token.Ident n -> (
       let nt = P.advance st in
       match (P.peek st).kind with
