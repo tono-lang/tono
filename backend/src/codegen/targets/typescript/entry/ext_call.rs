@@ -219,8 +219,10 @@ pub(super) fn render_arg(
 
 /// The TypeScript spelling of a declared handle's class: the instantiation's
 /// own `ts` name when the surface wrote one (the library's spelling, emitted
-/// verbatim), else the cased handle name, the same fallback the handle's
-/// field type uses.
+/// verbatim), else the cased handle name. This is the first TypeScript
+/// position that needs the foreign name at all (a handle's field type is the
+/// generated interface, never the foreign class); the fallback is the one Go
+/// and Rust use in their own foreign-name positions.
 pub(super) fn class_reference_name(lib: &ExtLib, handle: &str) -> String {
     let ty = lib.types.iter().find(|t| t.name == handle).unwrap_or_else(|| {
         panic!(
