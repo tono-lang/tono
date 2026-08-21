@@ -45,12 +45,12 @@ pub struct client {
   provider: envkit.provider = envkit.new_environment_provider("kvs")
   endpoints: endpoints = .provider.get()
 
+  @http(method: "GET", path: "/items/{.i.id}", endpoint: .endpoints.endpoint_read)
   op get(i: item_ref): item
-    @http(method: "GET", path: "/items/{.i.id}", endpoint: .endpoints.endpoint_read)
 
+  @http(method: "PUT", path: "/items", endpoint: .endpoints.endpoint_write)
+  @body(.i)
   op set(i: item): item
-    @http(method: "PUT", path: "/items", endpoint: .endpoints.endpoint_write)
-    @body(.i)
 }
 
 // The library is never installed for this test: `stub envkit.new_environment_provider`

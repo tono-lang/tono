@@ -22,9 +22,9 @@ below.
   api_token: string @env("API_TOKEN") @length(min: 1)
   auth_header: string @format("Bearer {.api_token}")
   ...
+  @http(method: "GET", path: "/account", endpoint: .endpoint)
+  @header("Authorization", .auth_header)
   op get_account(): account
-    @http(method: "GET", path: "/account", endpoint: .endpoint)
-    @header("Authorization", .auth_header)
   ```
 
   `api_token` resolves from the environment and is validated non-empty;

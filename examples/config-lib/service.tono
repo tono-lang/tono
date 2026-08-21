@@ -56,9 +56,9 @@ pub struct client {
   config: app_config = configlib.load(.service, .region)
   auth: string @format("Bearer {.config.token}")
 
+  @http(method: "GET", path: "/account", endpoint: .config.endpoint)
+  @header("Authorization", .auth)
   op get_account(): account
-    @http(method: "GET", path: "/account", endpoint: .config.endpoint)
-    @header("Authorization", .auth)
 }
 
 // The library is never installed for this test: `stub configlib.load`
