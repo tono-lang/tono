@@ -515,7 +515,7 @@ fn call_arg_expr_types_a_map_literal_by_its_parameter() {
             &lib,
             &CallArg::Param("table".into()),
             &[ext_param("table", float_map)],
-            &[table.clone()],
+            std::slice::from_ref(&table),
             &mut ref_expr
         ),
         "map[string]float64{\"answer\": 42}"
@@ -559,7 +559,7 @@ fn call_arg_expr_types_a_map_literal_by_its_parameter() {
             &lib,
             &CallArg::Param("table".into()),
             &[ext_param("table", int_keyed)],
-            &[table.clone()],
+            std::slice::from_ref(&table),
             &mut ref_expr
         ),
         "map[string]any{\"answer\": 42}"
@@ -571,7 +571,7 @@ fn call_arg_expr_types_a_map_literal_by_its_parameter() {
             &lib,
             &CallArg::Param("table".into()),
             &[ext_param("table", string_t())],
-            &[table],
+            std::slice::from_ref(&table),
             &mut ref_expr
         ),
         "map[string]any{\"answer\": 42}"
