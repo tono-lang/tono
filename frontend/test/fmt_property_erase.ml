@@ -51,6 +51,7 @@ and erase_call_arg = function
   | Ast.CaLit (l, _) -> Ast.CaLit (l, dspan)
   | Ast.CaCall nc -> Ast.CaCall (erase_nested_call nc)
   | Ast.CaList (items, _) -> Ast.CaList (List.map erase_call_arg items, dspan)
+  | Ast.CaType (n, _) -> Ast.CaType (n, dspan)
 
 and erase_nested_call (nc : Ast.nested_call) : Ast.nested_call =
   {

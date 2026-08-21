@@ -28,7 +28,7 @@ let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
    arguments can reference this extern's own parameters too). *)
 let rec collect_call_arg : Ast.call_arg -> string list = function
   | Ast.CaParam (n, _) -> [ n ]
-  | Ast.CaRef _ | Ast.CaLit _ -> []
+  | Ast.CaRef _ | Ast.CaLit _ | Ast.CaType _ -> []
   | Ast.CaCtor c ->
       List.concat_map (fun (_, _, v) -> collect_trait_arg v) c.Ast.ctor_fields
   | Ast.CaCall nc -> List.concat_map collect_call_arg nc.Ast.nc_args
@@ -55,7 +55,7 @@ let rec unknown_param_call_arg (declared : string list) :
           err Error_codes.extern_call_unknown_param span
             "'%s' is not a declared logical parameter of this extern" n;
         ]
-  | Ast.CaRef _ | Ast.CaLit _ -> []
+  | Ast.CaRef _ | Ast.CaLit _ | Ast.CaType _ -> []
   | Ast.CaCtor c ->
       List.concat_map
         (fun (_, span, v) -> unknown_param_trait_arg declared span v)
@@ -153,7 +153,27 @@ let rec check_ctor_projection_arg
       List.concat_map (check_ctor_projection_arg structs params) nc.Ast.nc_args
   | Ast.CaList (items, _) ->
       List.concat_map (check_ctor_projection_arg structs params) items
-  | Ast.CaParam _ | Ast.CaRef _ | Ast.CaLit _ -> []
+  | Ast.CaParam _ | Ast.CaRef _ | Ast.CaLit _ | Ast.CaType _ -> []
+
+(* A class reference ([type name]) must name an opaque handle declared in
+   this same ext block (TC0098): that declaration is what carries the
+   foreign name the emitter passes, per language. Walked through the same
+   nesting a nested call or list allows. *)
+let rec check_type_args (handles : string list) :
+    Ast.call_arg -> Diagnostic.t list = function
+  | Ast.CaType (n, span) ->
+      if List.mem n handles then []
+      else
+        [
+          err Error_codes.extern_type_arg_unknown span
+            "'%s' is not an opaque handle declared in this ext block; a class \
+             reference names the handle whose foreign type the library \
+             constructs"
+            n;
+        ]
+  | Ast.CaCall nc -> List.concat_map (check_type_args handles) nc.Ast.nc_args
+  | Ast.CaList (items, _) -> List.concat_map (check_type_args handles) items
+  | Ast.CaParam _ | Ast.CaRef _ | Ast.CaLit _ | Ast.CaCtor _ -> []
 
 let consumed_heads (r : Ast.returns_lit option) : string list =
   match r with
@@ -359,8 +379,8 @@ let check_receiver_scope ~(is_method : bool) (b : Ast.extern_lang_body) :
   | _ -> []
 
 let check_extern ~(tbl : Symtab.t)
-    (structs : (string, Ast.foreign_struct) Hashtbl.t) ~(is_method : bool)
-    (e : Ast.extern_decl) : Diagnostic.t list =
+    (structs : (string, Ast.foreign_struct) Hashtbl.t) ~(handles : string list)
+    ~(is_method : bool) (e : Ast.extern_decl) : Diagnostic.t list =
   let declared_param_names =
     List.map (fun (p : Ast.extern_param) -> p.Ast.ep_name) e.Ast.ed_params
   in
@@ -372,6 +392,7 @@ let check_extern ~(tbl : Symtab.t)
       @ List.concat_map
           (fun a -> check_ctor_projection_arg structs e.Ast.ed_params a)
           b.Ast.elb_call_args
+      @ List.concat_map (check_type_args handles) b.Ast.elb_call_args
       @ check_yields_consumption b
       @ (match b.Ast.elb_yields with
         | Some ys -> check_single_error_position ys
@@ -620,16 +641,21 @@ let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
             (fun (s : Ast.foreign_struct) ->
               Hashtbl.replace structs s.Ast.fs_name s)
             body.Ast.elib_structs;
+          let handles =
+            List.map
+              (fun (t : Ast.opaque_type) -> t.Ast.opq_name)
+              body.Ast.elib_types
+          in
           let free_diags =
             List.concat_map
-              (check_extern ~tbl structs ~is_method:false)
+              (check_extern ~tbl structs ~handles ~is_method:false)
               body.Ast.elib_externs
           in
           let method_diags =
             List.concat_map
               (fun (t : Ast.opaque_type) ->
                 List.concat_map
-                  (check_extern ~tbl structs ~is_method:true)
+                  (check_extern ~tbl structs ~handles ~is_method:true)
                   t.Ast.opq_methods)
               body.Ast.elib_types
           in

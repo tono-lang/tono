@@ -460,3 +460,57 @@ fn a_static_method_receiver_imports_the_type_and_calls_its_member() {
         "{out}"
     );
 }
+
+/// A class reference (`type handle`) passes the handle's class itself: the
+/// seam imports the class from the lib's module and writes the identifier
+/// where the argument goes, nested calls included.
+#[test]
+fn a_class_reference_imports_the_handle_class_and_passes_it() {
+    let mut module = appendix_module(appendix_fields());
+    let connect = &mut module.ext_libs[1].externs[0].langs[0];
+    assert_eq!(connect.symbol, "connect");
+    connect.call_args = vec![
+        crate::ir::CallArg::TypeRef("publisher".into()),
+        crate::ir::CallArg::SymbolCall(crate::ir::SymbolCall {
+            symbol: "WithKind".into(),
+            args: vec![crate::ir::CallArg::TypeRef("publisher".into())],
+        }),
+    ];
+    let decls = rendered_decls(&module);
+    let seam_decl = decls
+        .iter()
+        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("let busExt")))
+        .expect("bus seam decl");
+    let refs = crate::codegen::tree::item_refs(seam_decl);
+    assert!(
+        refs.iter().any(|s| s.name == "Publisher"
+            && s.import
+                .as_ref()
+                .is_some_and(|i| i.module == "@company/bus")),
+        "the seam must import the handle's class: {refs:?}"
+    );
+    let out = rendered_text(&module);
+    assert!(
+        out.contains("connect(Publisher, WithKind(Publisher))"),
+        "{out}"
+    );
+}
+
+/// The instantiation's own `ts` name is the class the library exports, so a
+/// class reference spells that name, verbatim, never the cased handle name.
+#[test]
+fn a_class_reference_spells_the_instantiation_ts_name_verbatim() {
+    let mut module = appendix_module(appendix_fields());
+    module.ext_libs[1].types[0].instance = Some(crate::ir::Instance {
+        names: vec![crate::ir::InstanceName {
+            lang: "ts".into(),
+            name: "QueuePublisher".into(),
+        }],
+        arg: Tref::Prim(Prim::String),
+    });
+    module.ext_libs[1].externs[0].langs[0].call_args =
+        vec![crate::ir::CallArg::TypeRef("publisher".into())];
+    let out = rendered_text(&module);
+    assert!(out.contains("connect(QueuePublisher)"), "{out}");
+    assert!(!out.contains("connect(Publisher)"), "{out}");
+}

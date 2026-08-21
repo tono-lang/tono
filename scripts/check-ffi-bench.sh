@@ -55,8 +55,9 @@ export CARGO_TARGET_DIR="$work/cargo-target"
 # generator names the rule with: capability 10 (a handle forwarded to
 # another call is owned by that call, so a second reader is refused) and
 # capability 11 on Go (a static method receiver has nothing to render as,
-# Go has no static method).
-refusal_markers="is owned by that call|has no static method to call"
+# Go has no static method) and capability 12 on Go and Rust (a class
+# reference has nothing to render as, neither has a type as a value).
+refusal_markers="is owned by that call|has no static method to call|has no class reference to pass"
 
 # One check. Prints the outcome it reached to stdout; every tool log goes to
 # $work/<id>/log so a mismatch can quote it.

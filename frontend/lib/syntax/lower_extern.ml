@@ -28,6 +28,7 @@ let rec lower_call_arg : Ast.call_arg -> Ir.call_arg = function
           scl_args = List.map lower_call_arg nc.nc_args;
         }
   | Ast.CaList (items, _) -> Ir.Ca_list (List.map lower_call_arg items)
+  | Ast.CaType (n, _) -> Ir.Ca_type n
 
 and lower_call_ctor (c : Ast.ctor_arg) : Ir.call_ctor =
   {

@@ -281,3 +281,8 @@ let extern_receiver_on_method = register "TC0096"
    is called on the type, it does not construct it, so "new" has nothing to
    apply to. *)
 let extern_receiver_with_new = register "TC0097"
+
+(* A call: argument passing a class reference ("type name") whose name is
+   not an opaque handle declared in the same ext block: only a declared
+   handle carries the foreign name the emitter spells for it. *)
+let extern_type_arg_unknown = register "TC0098"

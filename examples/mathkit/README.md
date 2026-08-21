@@ -81,9 +81,10 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 | 9 | a method synchronous in one target, asynchronous in the others | `compute()` in TS | `09-ts-sync-method` | pass: the `sync` marker now reaches the generated handle interface's own method signature, not just the call site |
 | 10 | a handle composed and read separately | fallback + a read of one of its inputs | `10-ownership-refused` | refused, as intended: single ownership is the rule, and the generator names the field and both readers |
 | 11 | a static method as the constructor: the call's receiver is the foreign type itself | `FormulaCalculator.parse(expr)` (TS), `FormulaCalculator::parse(expr)` (Rust) | `11-ts-static-method`, `11-rust-static-method`, `11-go-static-method-refused` | pass: the type is a second string before the method (`call: "FormulaCalculator"."parse"(expr)`), imported in TypeScript and qualifying the path in Rust; Go has no static method, so its generation refuses the binding naming the site (refused, as intended) |
+| 12 | a class reference as an argument: the library takes the class itself and constructs it | `instantiate(AnswerCalculator)` (TS, `new () => T`) | `12-ts-class-reference`, `12-rust-class-reference-refused`, `12-go-class-reference-refused` | pass: `type answer_calculator` in a `call:` argument names a declared handle and passes its class, imported in TypeScript; Rust and Go have no type as a value, so their generation refuses the binding naming the site (refused, as intended) |
 
-Passing today: capabilities 1, 3, 4, 5, 6, 8, 9 and 11, plus capability 10
-(the one that is a rule, not a gap). Two gaps remain (2 and 7, both blocked on
+Passing today: capabilities 1, 3, 4, 5, 6, 8, 9, 11 and 12, plus capability
+10 (the one that is a rule, not a gap). Two gaps remain (2 and 7, both blocked on
 per-language foreign-type naming reaching Rust's trait scope and `Some`
 wrapping, a separate capability).
 
@@ -108,22 +109,23 @@ the probes already report.
 ## Call-argument shapes not covered here
 
 Three shapes a consumer raised were deliberately not attempted as a small
-extension of `call:`'s own argument grammar. One of them, the static method,
-is capability 11 now: it turned out to be a third kind of call receiver
+extension of `call:`'s own argument grammar. Two of them are capabilities
+now. The static method (11) turned out to be a third kind of call receiver
 (alongside a declared `ext` namespace, `ns.fn(..)`, and a handle field,
 `.field.method(..)`), and got its own syntax, the receiver type as a second
-string before the method. Two remain out:
+string before the method. The class reference (12) turned out not to need a
+type-level construct at all: tono never constructs or inspects the class, so
+what crosses the boundary is only a foreign name, and a declared handle
+already carries that name per language; `type handle` in a `call:` argument
+reads the handle's foreign name in value position. One remains out:
 
-- **class reference** (a type naming a constructor, not a value) needs a new
-  type-level construct, a typechecker change rather than an argument shape.
 - **Map literal** as a call argument needs its own key-value collection
   shape, distinct from the list this bench's own capability 4/5 already
   added for a variadic parameter.
 
-Each is its own scoped piece of work with its own design questions, not a
+It is its own scoped piece of work with its own design questions, not a
 one-line addition to what nested calls and variadic parameters already
-cover; bundling them here would risk a rushed design on the parts that
-touch the type system.
+cover.
 
 ## Updating the record
 

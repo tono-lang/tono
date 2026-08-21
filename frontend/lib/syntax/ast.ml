@@ -54,7 +54,12 @@ and call_lit = LStr of string | LInt of int | LFloat of float
    same shape [ctor_arg] already gives [@body(name { field: value })] — a
    bare literal, a nested foreign-symbol call ([nested_call]), or a list
    literal (the caller's own value for a [variadic] logical parameter, e.g.
-   [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]). *)
+   [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]), or a
+   class reference ([type handle]): a declared opaque handle of the same
+   [ext] block passed as a value, for a library that takes the class itself
+   and constructs on its own. tono never constructs or inspects it, so what
+   crosses is only the handle's foreign name; the name is resolved against
+   the block's handles in the typechecker, not here. *)
 and call_arg =
   | CaParam of string * Span.span
   | CaRef of ref_path
@@ -62,6 +67,7 @@ and call_arg =
   | CaLit of call_lit * Span.span
   | CaCall of nested_call
   | CaList of call_arg list * Span.span
+  | CaType of string * Span.span
 
 (* A bare foreign-symbol call standing in a [call:] argument position, e.g.
    the [WithPrecision(precision)] inside [call: "FromFormula"(expr,

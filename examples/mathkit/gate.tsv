@@ -29,3 +29,8 @@ bench	rust	service.tono	build-red
 11-ts-static-method	typescript	probes/11-ts-static-method.tono	pass
 11-rust-static-method	rust	probes/11-rust-static-method.tono	pass
 11-go-static-method-refused	go	probes/11-go-static-method-refused.tono	refused
+# 12: the call passes a declared handle's class itself (instantiate(AnswerCalculator));
+# Rust and Go have no type as a value, so their rows pass by being refused.
+12-ts-class-reference	typescript	probes/12-ts-class-reference.tono	pass
+12-rust-class-reference-refused	rust	probes/12-rust-class-reference-refused.tono	refused
+12-go-class-reference-refused	go	probes/12-go-class-reference-refused.tono	refused

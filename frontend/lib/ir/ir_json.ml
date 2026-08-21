@@ -94,7 +94,10 @@
 (* v26 added extern_lang's optional el_receiver: the call: line's own
    receiver when it is a foreign type name (a static method, Type.method),
    not a value. Absent for a free function of the library. *)
-let current_ir_version = 26
+(* v27 widened call_arg with Ca_type: a declared opaque handle passed as a
+   class reference (the library constructs it), carried as the handle's
+   tono name and spelled by each emitter as that handle's foreign name. *)
+let current_ir_version = 27
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

@@ -103,7 +103,11 @@ pub use crate::ir_tests_model::*;
 /// v26 added `ExternLang::receiver`: the `call:` line's own receiver when
 /// it is a foreign type name (a static method, `"Type"."method"(args)`),
 /// absent for a free function of the library.
-pub const TONO_IR_VERSION: u32 = 26;
+/// v27 widened `CallArg` with `TypeRef` (wire key `type`): a declared opaque
+/// handle passed as a class reference, for a library that takes the class
+/// itself and constructs on its own; carried as the handle's tono name and
+/// spelled by each emitter as that handle's foreign name.
+pub const TONO_IR_VERSION: u32 = 27;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -143,6 +143,7 @@ and print_call_arg (a : Ast.call_arg) : string =
   | Ast.CaCall nc -> print_nested_call nc
   | Ast.CaList (items, _) ->
       "[" ^ String.concat ", " (List.map print_call_arg items) ^ "]"
+  | Ast.CaType (n, _) -> "type " ^ n
 
 and print_nested_call (nc : Ast.nested_call) : string =
   string_literal nc.Ast.nc_symbol

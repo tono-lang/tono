@@ -106,6 +106,12 @@ pub(in super::super) fn call_arg_expr(
             "a cross-extern call as a call argument reached Go codegen; \
              validate_calls::extern_binds_every_target should have rejected it first"
         ),
+        // Go has no type as a value to pass; `validate_calls` refuses the
+        // binding by name before generation reaches here.
+        CallArg::TypeRef(_) => panic!(
+            "a class reference as a call argument reached Go codegen; \
+             validate_calls::class_reference_renders should have rejected it first"
+        ),
         // A bare foreign-symbol call nested inside a `call:` line's own
         // argument list, e.g. `WithPrecision(precision)`: no declared
         // extern to resolve against, so no yields/returns/errors

@@ -459,3 +459,61 @@ fn a_static_method_receiver_in_wire_position_is_refused_for_go_only() {
     assert!(super::validate::wire_call_resolves(&module, &call, &[TargetKind::TypeScript]).is_ok());
     assert!(super::validate::wire_call_resolves(&module, &call, &[TargetKind::Rust]).is_ok());
 }
+
+/// A `call:` line passing a declared handle's class itself (`type handle`,
+/// for a library that constructs it) has a rendering only in TypeScript,
+/// where the imported class is a value. Go and Rust have no type as a
+/// value, so generation refuses the binding naming the site and the handle
+/// instead of spelling a type where an argument goes.
+#[test]
+fn a_class_reference_is_refused_for_go_and_rust_and_accepted_in_typescript() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.call_args = vec![CallArg::SymbolCall(crate::ir::SymbolCall {
+            symbol: "Pick".into(),
+            args: vec![CallArg::TypeRef("answer".into())],
+        })];
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+
+    for target in [TargetKind::Go, TargetKind::Rust] {
+        let err = super::validate_entries(&model, &[target]).unwrap_err();
+        assert!(
+            err.contains("config = ns.load(..)"),
+            "names the site: {err}"
+        );
+        assert!(err.contains("type answer"), "names the handle: {err}");
+        assert!(err.contains("has no class reference to pass"), "{err}");
+    }
+    assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
+}
+
+/// A wire-position call passes the trait's own arguments and never applies
+/// the binding's `call:` template, so a class reference there would be
+/// dropped silently in every target: refused by name, TypeScript included.
+#[test]
+fn a_class_reference_in_wire_position_is_refused_for_every_target() {
+    use crate::ir::{WireCall, WireCallArg};
+    let mut module = module_of(vec![]);
+    let mut lib = ext_lib_with_extern("ns", "sign", &["go", "ts", "rust"]);
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.call_args = vec![CallArg::TypeRef("signer".into())];
+    }
+    module.ext_libs = vec![lib];
+    let call = WireCall {
+        ns: "ns".into(),
+        fn_name: "sign".into(),
+        args: vec![WireCallArg::Request],
+    };
+    for target in [TargetKind::Go, TargetKind::TypeScript, TargetKind::Rust] {
+        let err = super::validate::wire_call_resolves(&module, &call, &[target]).unwrap_err();
+        assert!(err.contains("ns.sign(..)"), "{err}");
+        assert!(err.contains("type signer"), "{err}");
+        assert!(err.contains("wire position"), "{err}");
+    }
+}

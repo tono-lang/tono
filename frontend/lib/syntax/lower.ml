@@ -150,6 +150,7 @@ and json_of_call_arg : Ast.call_arg -> Ir.json = function
         ]
   | Ast.CaList (items, _) ->
       `Assoc [ ("list", `List (List.map json_of_call_arg items)) ]
+  | Ast.CaType (n, _) -> `Assoc [ ("type", `String n) ]
 
 (* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
    -> {"method":"get","path":"/x"}); any positional arg keeps the uniform array

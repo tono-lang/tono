@@ -291,7 +291,11 @@ let ext_lib_docs : (string * string) list =
        method names the foreign type it is called on as a second string before \
        the method: call: \"Formula\".\"parse\"(expr) (Rust Formula::parse, \
        TypeScript Formula.parse on the imported type; Go has no static method \
-       and refuses it at generation). Required in every language block." );
+       and refuses it at generation). A class reference passes a declared \
+       handle's foreign type itself, for a library that constructs it: call: \
+       \"instantiate\"(type answer_calculator) (TypeScript passes the imported \
+       class; Rust and Go have no type as a value and refuse it at \
+       generation). Required in every language block." );
     ( "yields",
       "Names what the call returns, position by position, so returns: can \
        project from it (e.g. yields: (cfg: go_config)). Also declares \

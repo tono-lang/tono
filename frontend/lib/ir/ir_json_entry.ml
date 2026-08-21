@@ -83,6 +83,7 @@ let rec encode_call_arg (a : Ir.call_arg) : Ir.json =
           ("symbol", `String sc.scl_symbol);
           ("symbol_args", `List (List.map encode_call_arg sc.scl_args));
         ]
+  | Ir.Ca_type n -> `Assoc [ ("type", `String n) ]
 
 and encode_call_ctor (c : Ir.call_ctor) : Ir.json =
   `Assoc
@@ -255,6 +256,9 @@ let rec decode_call_arg j =
       let* p = decode_path v in
       Ok (Ir.Ca_ref p)
   | [ ("lit", v) ] -> Ok (Ir.Ca_lit v)
+  | [ ("type", v) ] ->
+      let* s = as_string v in
+      Ok (Ir.Ca_type s)
   | [ ("list", v) ] ->
       let* xs = as_list v in
       let* items = map_result decode_call_arg xs in
@@ -281,8 +285,8 @@ let rec decode_call_arg j =
       Ok (Ir.Ca_ctor c)
   | _ ->
       err
-        "call arg must be a single param, field, lit, list, call, symbol, or \
-         ctor/fields pair"
+        "call arg must be a single param, field, lit, list, call, symbol, \
+         type, or ctor/fields pair"
 
 and decode_call_ctor kvs =
   let* name =
