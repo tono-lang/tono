@@ -305,8 +305,8 @@ let hover_nullable_marker () =
 
 let hover_trait_contract () =
   let src =
-    "op create(point): point\n\
-    \  @http(method: \"POST\", path: \"/points\")\n\
+    "@http(method: \"POST\", path: \"/points\")\n\
+     op create(point): point\n\
      struct point { x: i64 }"
   in
   let v = hover_value src (pos 1 4) in
@@ -368,8 +368,8 @@ let entry_src =
   \    _ => .api_key\n\
   \  }\n\
   \  conf: settings @bind(api_key, .api_key)\n\n\
+  \  @http(method: \"GET\", path: \"/n\", endpoint: .endpoint)\n\
   \  op fetch(note): note\n\
-  \    @http(method: \"GET\", path: \"/n\", endpoint: .endpoint)\n\
    }\n"
 
 let hover_value_source () =
@@ -402,11 +402,12 @@ let hover_field_shows_its_selection_table () =
   Alcotest.(check bool) "renders an arm" true (contains v "=>")
 
 let hover_entry_operation () =
-  (* The op name on line 9. *)
-  let v = hover_value entry_src (pos 9 6) in
-  Alcotest.(check bool) "prints the operation" true (contains v "op fetch");
-  (* Its @http trait on line 10: nested ops carry traits like any other. *)
+  (* The op name on line 10. *)
   let v = hover_value entry_src (pos 10 6) in
+  Alcotest.(check bool) "prints the operation" true (contains v "op fetch");
+  (* Its @http trait on line 9, above it: nested ops carry traits like any
+     other declaration. *)
+  let v = hover_value entry_src (pos 9 6) in
   Alcotest.(check bool) "explains the transport" true (contains v "HTTP")
 
 let hover_raw_word () =

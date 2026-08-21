@@ -676,13 +676,13 @@ pub struct client {
 
   bus: companybus.publisher @with = companybus.connect(.config.endpoint, .config.token)
 
+  @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .config.endpoint)
+  @header("Authorization", .auth)
+  @errors(not_found)
   op fetch(ref: note_ref): note
-    @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .config.endpoint)
-    @header("Authorization", .auth)
-    @errors(not_found)
 
+  @errors(overloaded)
   op publish(payload: note): ack
-    @errors(overloaded)
     impl .bus.send("notes", .payload.body)
 }
 |}

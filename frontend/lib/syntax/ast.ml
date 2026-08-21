@@ -166,7 +166,7 @@ type member = {
 }
 
 (* One variant of an enum: a name, an optional [= N] for int-backed enums, and
-   any trailing traits. *)
+   its traits (written above it or inline after it). *)
 type enum_case = {
   cname : string;
   cname_span : Span.span;
@@ -174,8 +174,9 @@ type enum_case = {
   ctraits : trait list;
 }
 
-(* One variant of a union: a name, an optional payload type, and trailing traits.
-   Lowers to an IR member (name = variant, target = payload). *)
+(* One variant of a union: a name, an optional payload type, and its traits
+   (written above it or inline after it). Lowers to an IR member (name =
+   variant, target = payload). *)
 type union_variant = {
   vname : string;
   vname_span : Span.span;

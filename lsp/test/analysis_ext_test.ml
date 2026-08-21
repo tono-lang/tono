@@ -90,9 +90,9 @@ pub struct client {
   endpoint: string @arg
   link: conn = bus.connect(.endpoint)
 
+  @http(method: "GET", path: "/ping")
+  @header("Authorization", bus.connect(.request))
   op ping(): ack
-    @http(method: "GET", path: "/ping")
-    @header("Authorization", bus.connect(.request))
 }
 |}
 

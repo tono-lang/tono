@@ -432,13 +432,11 @@ let signature_help_in_trait () =
     Printf.sprintf
       {|{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///sig.tono","languageId":"tono","version":1,"text":%s}}}|}
       (json_string
-         "op f(a): a\n\
-         \  @http(method: \"GET\", path: \"/x\")\n\
-          struct a { x: i64 }")
+         "@http(method: \"GET\", path: \"/x\")\nop f(a): a\nstruct a { x: i64 }")
   in
   ignore src;
   let body =
-    {|{"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///sig.tono"},"position":{"line":1,"character":9}}}|}
+    {|{"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///sig.tono"},"position":{"line":0,"character":7}}}|}
   in
   let frames, _ =
     session [ init_body; opened; body; shutdown_body; exit_body ]

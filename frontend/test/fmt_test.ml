@@ -53,9 +53,9 @@ union source[t] {
 
 struct empty {}
 
+@errors(not_found, conflict)
+@http(method: "post")
 op create_charge(charge: charge): charge
-  @errors(not_found, conflict)
-  @http(method: "post")
 
 op ping()
 |}
@@ -180,8 +180,9 @@ pub struct client { client_name: string @arg @str::trim
     2 => .endpoint_v2
     _ => @env("FALLBACK") @default("https://x") }
   conf: settings @bind(api_key, .client_key)
-  op fetch(note_ref: note_ref): note @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
-    @header("Authorization", .creds.token) @timeout(.timeout) @errors(not_found)
+  @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+  @header("Authorization", .creds.token) @timeout(.timeout) @errors(not_found)
+  op fetch(note_ref: note_ref): note
   op ping() }
 |}
   in
@@ -206,11 +207,11 @@ pub struct client {
   }
   conf: settings @bind(api_key, .client_key)
 
+  @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+  @header("Authorization", .creds.token)
+  @timeout(.timeout)
+  @errors(not_found)
   op fetch(note_ref: note_ref): note
-    @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
-    @header("Authorization", .creds.token)
-    @timeout(.timeout)
-    @errors(not_found)
 
   op ping()
 }
@@ -230,13 +231,13 @@ struct note { id: string }
 pub struct client {
   api_key: string @arg
   endpoint: string @env("ENDPOINT") @default("https://x")
+  @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
+  @header("X-Api-Key", .api_key)
+  @errors(not_found)
   op fetch(note_ref: note_ref): note
-    @http(method: "GET", path: "/notes/{id}", endpoint: .endpoint)
-    @header("X-Api-Key", .api_key)
-    @errors(not_found)
 
+  @errors(not_found)
   op store(note: note): note
-    @errors(not_found)
 }
 ext impl client.store raw { go: "ext/go/n.go#Store" }
 |}
@@ -307,10 +308,11 @@ let defensive_placeholders () =
   let dspan : Span.span = { start = dpos; finish = dpos } in
   Alcotest.(check string) "error type" "_" (Printer.print_ty (Ast.TError dspan))
 
-(* Whitespace is not significant, so a trait between an op and the next
-   declaration binds to the op. The formatter keeps op traits on the op line;
-   this pins the grammar behavior the layout is designed around. *)
-let op_swallows_following_traits () =
+(* A trait on its own line belongs to the declaration after it, so the
+   traits the formatter prints above an op read back onto that op and never
+   onto the one before it; this pins the grammar behavior the layout is
+   designed around. *)
+let own_line_trait_follows_the_layout () =
   let file, ds =
     Parser.parse {|
 op ping()
@@ -320,11 +322,11 @@ op ping()
   Alcotest.(check int) "parses cleanly" 0 (List.length (errors_of ds));
   match file.Ast.decls with
   | [
-   { Ast.dkind = Ast.DOp _; dtraits = [ { Ast.tname = "doc"; _ } ]; _ };
-   { Ast.dkind = Ast.DStruct _; dtraits = []; _ };
+   { Ast.dkind = Ast.DOp _; dtraits = []; _ };
+   { Ast.dkind = Ast.DStruct _; dtraits = [ { Ast.tname = "doc"; _ } ]; _ };
   ] ->
       ()
-  | _ -> Alcotest.fail "expected the op to own the trait"
+  | _ -> Alcotest.fail "expected the struct to own the trait"
 
 (* The [fmt] pipeline behind the CLI: canonical output on success, joined
    diagnostics on parse errors. *)
@@ -381,8 +383,8 @@ let () =
           Alcotest.test_case "literals round-trip" `Quick literals;
           Alcotest.test_case "defensive placeholders" `Quick
             defensive_placeholders;
-          Alcotest.test_case "op swallows following traits" `Quick
-            op_swallows_following_traits;
+          Alcotest.test_case "own-line trait follows the layout" `Quick
+            own_line_trait_follows_the_layout;
           Alcotest.test_case "ext layout" `Quick ext_layout;
           Alcotest.test_case "hook still prints" `Quick hook_still_prints;
           Alcotest.test_case "entry layout" `Quick entry_layout;

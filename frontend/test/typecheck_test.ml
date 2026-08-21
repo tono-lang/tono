@@ -205,9 +205,7 @@ let repeated_error_name_not_ambiguous () =
        "@status(404) struct not_found { m: string }\n\
         @errors(not_found) @errors(not_found) op o(): i64")
 
-(* Different operations may reuse a status freely; uniqueness is per op. The
-   trailing trait form keeps each @errors attached to its own op (a leading
-   trait after an op would attach to the previous op instead). *)
+(* Different operations may reuse a status freely; uniqueness is per op. *)
 let ambiguity_is_per_operation () =
   Alcotest.(check (list string))
     "two ops each declaring one 400 error" []

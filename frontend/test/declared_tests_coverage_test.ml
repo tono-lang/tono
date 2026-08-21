@@ -62,19 +62,19 @@ pub struct boom { message: string }
 pub struct vclient {
   endpoint: string @env("EP") @default("https://x")
 
+  @http(method: "GET", path: "/p/{.person_ref.key}", endpoint: .endpoint)
   op get(person_ref: person_ref): person
-    @http(method: "GET", path: "/p/{.person_ref.key}", endpoint: .endpoint)
 
   op put(person: person): person @errors(boom)
 
+  @http(method: "GET", path: "/w/{.person_ref.key}", endpoint: .endpoint)
   op word(person_ref: person_ref): string
-    @http(method: "GET", path: "/w/{.person_ref.key}", endpoint: .endpoint)
 
+  @http(method: "GET", path: "/t", endpoint: .endpoint)
   op tag(): color
-    @http(method: "GET", path: "/t", endpoint: .endpoint)
 
+  @http(method: "GET", path: "/n", endpoint: .endpoint)
   op nop()
-    @http(method: "GET", path: "/n", endpoint: .endpoint)
 }
 
 ext impl put {
@@ -344,8 +344,8 @@ let unparsed_member_type () =
 pub struct wk { a: ? }
 pub struct ec {
   endpoint: string @env("EP3") @default("https://x")
+  @http(method: "POST", path: "/s", endpoint: .endpoint)
   op send(wk): wk
-    @http(method: "POST", path: "/s", endpoint: .endpoint)
 }
 test "t" {
   c: ec {}
@@ -364,8 +364,8 @@ let unresolved_member_type () =
 pub struct un { u: ghosttype }
 pub struct ec {
   endpoint: string @env("EP4") @default("https://x")
+  @http(method: "POST", path: "/s", endpoint: .endpoint)
   op send(un): un
-    @http(method: "POST", path: "/s", endpoint: .endpoint)
 }
 test "t" {
   c: ec {}

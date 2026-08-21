@@ -1940,7 +1940,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-tono"
 version = "0.1.0"
-source = "git+https://github.com/tono-lang/tree-sitter-tono?rev=180450236f80a040fc1f52f08c16ebab6369df73#180450236f80a040fc1f52f08c16ebab6369df73"
+source = "git+https://github.com/tono-lang/tree-sitter-tono?rev=a408a27e33d0e454454cd0703e96e4a04ca98d63#a408a27e33d0e454454cd0703e96e4a04ca98d63"
 dependencies = [
  "cc",
  "tree-sitter-language",

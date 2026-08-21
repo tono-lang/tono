@@ -99,7 +99,7 @@ let transform_unknown = register "TC0045"
 let entry_shape_invalid = register "TC0046"
 
 (* A second occurrence of a non-repeatable trait (@doc, @http, ...) on one
-   declaration or member; usually the trailing-trait absorption footgun. *)
+   declaration or member. *)
 let duplicate_trait = register "TC0047"
 
 (* Bespoke operation implementations. An "ext impl" names the operation it

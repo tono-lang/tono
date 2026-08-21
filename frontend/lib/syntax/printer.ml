@@ -1,7 +1,8 @@
 (* Pretty-printer for the surface AST. One canonical layout: declaration traits
-   on their own lines above the keyword (except for ops, whose traits trail on
-   the op line, where the grammar attaches them anyway), two-space indentation,
-   one member, case, or variant per line, and a blank line between declarations.
+   (ops included, wherever they sit) on their own lines above the keyword,
+   member, case, and variant traits inline on their line, two-space
+   indentation, one member, case, or variant per line, and a blank line
+   between declarations.
    The printer assumes a diagnostic-free parse; [TError] gets a parseable
    placeholder only so a defensive caller never emits garbage. *)
 
@@ -233,11 +234,11 @@ let braced (header : string) (lines : string list) : string =
   | ls -> header ^ " {\n" ^ String.concat "\n" ls ^ "\n}"
 
 (* The op form, shared by top-level ops and ops nested in a struct body (where
-   [indent] is the body indentation). Op traits print one per line below the
-   signature: an operation carries the whole protocol vocabulary (@http,
-   @header, @timeout, @retry, @errors), which on one line runs past any usable
-   width. They stay below, never above: whitespace is not significant, so a
-   trait written above an op would bind to whatever was declared before it. *)
+   [indent] is the body indentation). Op traits print one per line above the
+   signature, like every other declaration: an operation carries the whole
+   protocol vocabulary (@http, @header, @timeout, @retry, @errors), which on
+   one line runs past any usable width, and a trait on its own line belongs to
+   the declaration that follows it. *)
 let print_op_impl ~indent (oi : Ast.op_impl) : string =
   "\n" ^ indent ^ "  impl " ^ print_handle_call oi
 
@@ -256,12 +257,12 @@ let print_op ~indent (d : Ast.decl) : string =
         ^ match output with Some t -> ": " ^ print_ty t | None -> ""
       in
       let traits =
-        List.map (fun t -> "\n" ^ indent ^ "  " ^ print_trait t) d.Ast.dtraits
+        List.map (fun t -> indent ^ print_trait t ^ "\n") d.Ast.dtraits
       in
       let impl =
         match oimpl with Some oi -> print_op_impl ~indent oi | None -> ""
       in
-      signature ^ String.concat "" traits ^ impl
+      String.concat "" traits ^ signature ^ impl
   | _ -> assert false
 
 (* ── Test blocks ───────────────────────────────────────────────────────── *)
@@ -518,10 +519,7 @@ let print_ext_lib_body ~indent (b : Ast.ext_lib_body) : string list =
 let print_decl (d : Ast.decl) : string =
   let pub = if d.Ast.pub then "pub " else "" in
   match d.Ast.dkind with
-  | Ast.DOp _ ->
-      (* Op traits print trailing: whitespace is not significant, so any trait
-         between an op and the next declaration binds to the op regardless. *)
-      print_op ~indent:"" d
+  | Ast.DOp _ -> print_op ~indent:"" d
   | kind ->
       let above =
         String.concat ""

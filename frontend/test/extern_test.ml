@@ -125,10 +125,10 @@ pub struct client {
 
   bus: companybus.publisher = companybus.connect(.config.endpoint, .config.token) @with
 
+  @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .config.endpoint)
+  @header("Authorization", companyauth.sign("Wrap"(.request)))
+  @errors(not_found)
   op fetch(ref: note_ref): note
-    @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .config.endpoint)
-    @header("Authorization", companyauth.sign("Wrap"(.request)))
-    @errors(not_found)
 }
 |}
 
