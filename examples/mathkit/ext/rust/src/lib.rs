@@ -3,10 +3,12 @@
 //! bent to fit the emitter): the logical handle is a trait, and every
 //! constructor returns a *different* concrete struct implementing it; the
 //! formula constructor takes an options struct by value (with a
-//! `Default`); the series constructor takes a `Vec`; and the fallback
-//! constructor takes a `Vec` of boxed trait objects, the handles the caller
-//! already built. No handle is `Clone`.
+//! `Default`); the series constructor takes a `Vec`; the table constructor
+//! takes a `HashMap` keyed by name; and the fallback constructor takes a
+//! `Vec` of boxed trait objects, the handles the caller already built. No
+//! handle is `Clone`.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -131,6 +133,28 @@ impl<T: Clone + Send + Sync> Calculator<T> for SeriesCalculator<T> {
                 .last()
                 .cloned()
                 .ok_or_else(|| Error("mathkit: empty series".to_string()))
+        })
+    }
+}
+
+pub struct TableCalculator<T> {
+    entries: HashMap<String, T>,
+}
+
+/// Answers from a collection keyed by name, the map-shaped argument real
+/// libraries take for a registry of named descriptors.
+pub fn from_table<T>(entries: HashMap<String, T>) -> Result<TableCalculator<T>, Error> {
+    Ok(TableCalculator { entries })
+}
+
+/// Answers the entry keyed "answer".
+impl<T: Clone + Send + Sync> Calculator<T> for TableCalculator<T> {
+    fn compute(&self) -> Computed<'_, T> {
+        Box::pin(async move {
+            self.entries
+                .get("answer")
+                .cloned()
+                .ok_or_else(|| Error("mathkit: table has no \"answer\" entry".to_string()))
         })
     }
 }

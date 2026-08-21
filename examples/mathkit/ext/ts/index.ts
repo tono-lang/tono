@@ -2,9 +2,10 @@
 // TypeScript libraries have, kept deliberately (this is the FFI bench, not a
 // fixture bent to fit the emitter): every constructor is a class, reached
 // with `new`, not a factory function; the formula options are an optional
-// object; the series constructor takes an array; the fallback constructor
-// takes an array of the handles the caller already built; and compute() is
-// synchronous, unlike the Go and Rust shapes of the same contract.
+// object; the series constructor takes an array; the table constructor
+// takes an object keyed by name; the fallback constructor takes an array of
+// the handles the caller already built; and compute() is synchronous,
+// unlike the Go and Rust shapes of the same contract.
 
 export interface Calculator<T> {
   compute(): T;
@@ -85,6 +86,20 @@ export class SeriesCalculator<T> implements Calculator<T> {
     }
     const [last] = this.values.slice(-1);
     return last;
+  }
+}
+
+export class TableCalculator<T> implements Calculator<T> {
+  // A collection keyed by name, the map-shaped argument real libraries
+  // take for a registry of named descriptors: a plain object, not a Map.
+  constructor(private readonly entries: Record<string, T>) {}
+
+  // Answers the entry keyed "answer".
+  compute(): T {
+    if (!("answer" in this.entries)) {
+      throw new Error('mathkit: table has no "answer" entry');
+    }
+    return this.entries["answer"];
   }
 }
 

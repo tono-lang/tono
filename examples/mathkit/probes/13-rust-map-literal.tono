@@ -1,0 +1,27 @@
+// Capability 13: a map literal as a call argument. The library takes a
+// collection keyed by name (from_table(entries: HashMap<String, T>)); the
+// call site passes `{ "answer": .answer, "other": 1.5 }`, the caller's own
+// value for the map[string]float logical parameter, rendered as
+// HashMap::from over owned String keys. The handle is the trait
+// (capability 3), so the concrete TableCalculator never needs a tono name.
+ext mathkit {
+  rust: "mathkit"
+
+  type calculator(rust: "Calculator", float) interface {
+    extern compute(): float {
+      rust { call: "compute"() }
+    }
+  }
+
+  extern from_table(entries: map[string]float): calculator {
+    rust { call: "from_table"(entries) sync }
+  }
+}
+
+pub struct client {
+  answer: float @arg
+  table: mathkit.calculator = mathkit.from_table({ "answer": .answer, "other": 1.5 })
+
+  op value(): float
+    impl .table.compute()
+}

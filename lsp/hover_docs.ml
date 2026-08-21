@@ -295,7 +295,9 @@ let ext_lib_docs : (string * string) list =
        handle's foreign type itself, for a library that constructs it: call: \
        \"instantiate\"(type answer_calculator) (TypeScript passes the imported \
        class; Rust and Go have no type as a value and refuse it at \
-       generation). Required in every language block." );
+       generation). A map literal passes a string-keyed collection: call: \
+       \"FromTable\"({ \"answer\": value }) (Go map[string]V, Rust HashMap, a \
+       TypeScript object). Required in every language block." );
     ( "yields",
       "Names what the call returns, position by position, so returns: can \
        project from it (e.g. yields: (cfg: go_config)). Also declares \

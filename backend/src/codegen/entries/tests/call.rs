@@ -493,6 +493,95 @@ fn a_class_reference_is_refused_for_go_and_rust_and_accepted_in_typescript() {
     assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
 }
 
+/// Every target has a string-keyed map to spell a map literal as, so a
+/// `call:` line carrying one (at the top level or nested) validates for
+/// all three; the capability is still declared per target.
+#[test]
+fn a_map_literal_is_accepted_in_every_target() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.call_args = vec![CallArg::List(vec![CallArg::Map(vec![(
+            "answer".to_string(),
+            CallArg::Lit(serde_json::json!(42)),
+        )])])];
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+    for target in [TargetKind::Go, TargetKind::Rust, TargetKind::TypeScript] {
+        assert!(target.emits_map_literal_args());
+        assert!(
+            super::validate_entries(&model, &[target]).is_ok(),
+            "{target:?}"
+        );
+    }
+}
+
+/// A map literal nested anywhere in the call's own argument tree (a ctor
+/// field, a list item, a nested call's argument) is found by the same walk
+/// that finds a class reference, so a class reference inside a map is still
+/// refused where the target has none.
+#[test]
+fn a_class_reference_inside_a_map_literal_is_still_refused() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go"]);
+    lib.externs[0].langs[0].call_args = vec![CallArg::Map(vec![(
+        "impl".to_string(),
+        CallArg::TypeRef("answer".into()),
+    )])];
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+    let err = super::validate_entries(&model, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("type answer"), "{err}");
+}
+
+/// A wire-position call never applies the binding's `call:` template, so a
+/// map literal there would be dropped silently: refused by name in every
+/// target, nested inside a list or a nested call included.
+#[test]
+fn a_map_literal_in_wire_position_is_refused_for_every_target() {
+    use crate::ir::{WireCall, WireCallArg};
+    let shapes = [
+        CallArg::Map(vec![]),
+        CallArg::List(vec![CallArg::Map(vec![])]),
+        CallArg::SymbolCall(crate::ir::SymbolCall {
+            symbol: "Wrap".into(),
+            args: vec![CallArg::Map(vec![])],
+        }),
+        CallArg::Ctor(crate::ir::CallCtor {
+            name: "opts".into(),
+            fields: [("table".to_string(), CallArg::Map(vec![]))]
+                .into_iter()
+                .collect(),
+        }),
+    ];
+    for shape in shapes {
+        let mut module = module_of(vec![]);
+        let mut lib = ext_lib_with_extern("ns", "sign", &["go", "ts", "rust"]);
+        for lang in lib.externs[0].langs.iter_mut() {
+            lang.call_args = vec![shape.clone()];
+        }
+        module.ext_libs = vec![lib];
+        let call = WireCall {
+            ns: "ns".into(),
+            fn_name: "sign".into(),
+            args: vec![WireCallArg::Request],
+        };
+        for target in [TargetKind::Go, TargetKind::TypeScript, TargetKind::Rust] {
+            let err = super::validate::wire_call_resolves(&module, &call, &[target]).unwrap_err();
+            assert!(err.contains("ns.sign(..)"), "{err}");
+            assert!(err.contains("map literal"), "{err}");
+            assert!(err.contains("wire position"), "{err}");
+        }
+    }
+}
+
 /// A wire-position call passes the trait's own arguments and never applies
 /// the binding's `call:` template, so a class reference there would be
 /// dropped silently in every target: refused by name, TypeScript included.

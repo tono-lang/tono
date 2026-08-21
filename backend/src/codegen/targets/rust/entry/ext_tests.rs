@@ -557,6 +557,11 @@ fn impl_call_body_renders_every_call_arg_variant() {
             CallArg::Param("x".into()),
             CallArg::Ref(strings(&["side"])),
             CallArg::List(vec![CallArg::Lit(serde_json::json!(1))]),
+            CallArg::Map(vec![(
+                "answer".to_string(),
+                CallArg::Lit(serde_json::json!(42)),
+            )]),
+            CallArg::Map(vec![]),
             CallArg::Ctor(CallCtor {
                 name: "Opts".into(),
                 fields: [("n".to_string(), CallArg::Lit(serde_json::json!(3)))]
@@ -579,6 +584,11 @@ fn impl_call_body_renders_every_call_arg_variant() {
     assert!(body.contains("(input.body).clone()"), "{body}");
     assert!(body.contains("(self.settings.side).clone()"), "{body}");
     assert!(body.contains("vec![1]"), "{body}");
+    assert!(
+        body.contains("std::collections::HashMap::from([(\"answer\".to_string(), 42)])"),
+        "{body}"
+    );
+    assert!(body.contains("std::collections::HashMap::new()"), "{body}");
     assert!(body.contains("Opts { n: 3 }"), "{body}");
     assert!(body.contains("other_crate::mk()"), "{body}");
     assert!(!body.contains("other_crate::mk().await"), "{body}");

@@ -153,8 +153,10 @@ and parse_trait_list_value st : Ast.trait_arg =
    call, e.g. the [WithPrecision(precision)] in [call: "FromFormula"(expr,
    WithPrecision(precision))], or a list literal (the caller's own value for
    a [variadic] logical parameter, e.g.
-   [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]). A
-   string not followed by "(" is an ordinary literal instead ([CaLit]). *)
+   [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]), or a
+   map literal (the caller's own value for a [map[string]V] logical
+   parameter, e.g. [mathkit.from_table({ "answer": 42 })]). A string not
+   followed by "(" is an ordinary literal instead ([CaLit]). *)
 and is_ident (t : Token.t) =
   match t.kind with Token.Ident _ -> true | _ -> false
 
@@ -188,6 +190,7 @@ and parse_call_arg st : Ast.call_arg =
           | _ -> assert false)
       | _ -> Ast.CaParam (n, nt.span))
   | Token.LBracket -> parse_call_list st
+  | Token.LBrace -> parse_call_map st
   | _ ->
       P.error st (P.peek st).span "expected a call argument";
       ignore (P.advance st);
@@ -215,6 +218,56 @@ and parse_call_list st : Ast.call_arg =
       let close = P.expect st Token.RBracket "']' to close a list argument" in
       let finish = match close with Some t -> t.span | None -> lb.span in
       Ast.CaList (items, Span.merge lb.span finish)
+
+(* "{" (string ":" call_arg ("," string ":" call_arg)* ","?)? "}" — the
+   caller has not consumed '{' yet. A bare '{' in argument position can only
+   open a map literal (a struct literal is always preceded by its name), so
+   no lookahead is needed. Keys are string literals; a key written twice is
+   diagnosed here, since every target's map would keep only one of them. *)
+and parse_call_map st : Ast.call_arg =
+  let lb = P.advance st in
+  (* '{' *)
+  let parse_entry () =
+    let key =
+      match (P.peek st).kind with
+      | Token.Str s ->
+          let t = P.advance st in
+          Some (s, t.span)
+      | _ ->
+          P.error st (P.peek st).span "expected a string key in a map argument";
+          None
+    in
+    ignore (P.expect st Token.Colon "':' after a map argument key");
+    let value = parse_call_arg st in
+    match key with Some (k, span) -> Some (k, span, value) | None -> None
+  in
+  let entries =
+    match (P.peek st).kind with
+    | Token.RBrace -> []
+    | _ ->
+        let first = parse_entry () in
+        let rec more acc =
+          match (P.peek st).kind with
+          | Token.Comma ->
+              ignore (P.advance st);
+              if (P.peek st).kind = Token.RBrace then List.rev acc
+              else more (parse_entry () :: acc)
+          | _ -> List.rev acc
+        in
+        List.filter_map Fun.id (more [ first ])
+  in
+  List.iteri
+    (fun i (k, span, _) ->
+      if
+        List.exists
+          (fun (k', _, _) -> k' = k)
+          (List.filteri (fun j _ -> j < i) entries)
+      then
+        P.error st span (Printf.sprintf "duplicate key %S in a map argument" k))
+    entries;
+  let close = P.expect st Token.RBrace "'}' to close a map argument" in
+  let finish = match close with Some t -> t.span | None -> lb.span in
+  Ast.CaMap (entries, Span.merge lb.span finish)
 
 (* "string" "(" call_arg ("," call_arg)* ")" — the symbol has already been
    consumed at [symbol]/[symbol_span]; the cursor sits on "(". *)

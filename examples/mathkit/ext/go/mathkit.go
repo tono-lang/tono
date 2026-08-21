@@ -2,8 +2,9 @@
 // shapes real Go libraries have, kept deliberately (this is the FFI bench,
 // not a fixture bent to fit the emitter): the handle is an interface, not a
 // pointer to a struct; the constructors are generic over the value they
-// produce; the formula constructor takes functional variadic options; and
-// the fallback constructor composes handles it already built.
+// produce; the formula constructor takes functional variadic options; the
+// table constructor takes a map keyed by name; and the fallback constructor
+// composes handles it already built.
 package mathkit
 
 import (
@@ -120,6 +121,25 @@ func (s *series[T]) Close() error { return nil }
 // FromSeries answers from a collection of values.
 func FromSeries[T any](values []T) (Calculator[T], error) {
 	return &series[T]{values: values}, nil
+}
+
+type table[T any] struct{ entries map[string]T }
+
+// Compute answers the entry keyed "answer".
+func (t *table[T]) Compute(ctx context.Context) (T, error) {
+	v, ok := t.entries["answer"]
+	if !ok {
+		var zero T
+		return zero, errors.New("mathkit: table has no \"answer\" entry")
+	}
+	return v, nil
+}
+func (t *table[T]) Close() error { return nil }
+
+// FromTable answers from a collection keyed by name, the map-shaped
+// argument real libraries take for a registry of named descriptors.
+func FromTable[T any](entries map[string]T) (Calculator[T], error) {
+	return &table[T]{entries: entries}, nil
 }
 
 type fallback[T any] struct {

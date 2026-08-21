@@ -29,6 +29,8 @@ let rec lower_call_arg : Ast.call_arg -> Ir.call_arg = function
         }
   | Ast.CaList (items, _) -> Ir.Ca_list (List.map lower_call_arg items)
   | Ast.CaType (n, _) -> Ir.Ca_type n
+  | Ast.CaMap (entries, _) ->
+      Ir.Ca_map (List.map (fun (k, _, v) -> (k, lower_call_arg v)) entries)
 
 and lower_call_ctor (c : Ast.ctor_arg) : Ir.call_ctor =
   {

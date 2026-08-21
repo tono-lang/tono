@@ -45,8 +45,8 @@ use crate::ir::{
 
 use super::resolve::Resolver;
 use super::resolve_call::{
-    call_arg_expr, error_match, find_extern, find_lib, find_rust_lang, json_literal, ok_assign,
-    CallScope,
+    call_arg_expr, error_match, find_extern, find_lib, find_rust_lang, json_literal, map_literal,
+    ok_assign, CallScope,
 };
 use super::transport::FieldCtx;
 use super::{field_snake, pascal, rust_type, LANG};
@@ -308,6 +308,13 @@ impl ArgCtx<'_> {
                     .map(|(field_name, value)| format!("{field_name}: {}", self.arg_expr(value)))
                     .collect();
                 format!("{name} {{ {} }}", rendered.join(", "))
+            }
+            CallArg::Map(entries) => {
+                let rendered: Vec<(String, String)> = entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.arg_expr(v)))
+                    .collect();
+                map_literal(&rendered)
             }
             CallArg::Call(nested) => self.nested_call_expr(nested),
             CallArg::TypeRef(_) => panic!(

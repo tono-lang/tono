@@ -415,6 +415,36 @@ fn call_arg_expr_covers_every_variant() {
         ),
         "[]any{1, 2}"
     );
+    // A bare map literal (no parameter to type it by) is `map[string]any`,
+    // the same untyped shape the bare list takes.
+    let map = CallArg::Map(vec![
+        ("answer".to_string(), CallArg::Lit(serde_json::json!(42))),
+        ("who".to_string(), CallArg::Param("a".into())),
+    ]);
+    assert_eq!(
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &map,
+            &params,
+            &entry_args,
+            &mut ref_expr
+        ),
+        "map[string]any{\"answer\": 42, \"who\": s.region}"
+    );
+    assert_eq!(
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &CallArg::Map(vec![]),
+            &params,
+            &entry_args,
+            &mut ref_expr
+        ),
+        "map[string]any{}"
+    );
     // A cross-extern call as a call argument: `validate_calls`'s own
     // nested-call gate rejects this before generation reaches here (see
     // `entries/tests/call.rs`), so reaching this arm at all is a validation
@@ -458,6 +488,94 @@ fn call_arg_expr_covers_every_variant() {
     );
     assert_eq!(expr, "bus.Publisher{Topic: \"t\"}");
     assert!(refs.iter().any(|s| s.name == "bus"));
+}
+
+/// A `map[string]V` parameter's actual argument is typed by the parameter,
+/// the way a variadic spread is: a wire value type spells as its Go type, a
+/// foreign handle as the handle's Go type (importing its package), and a
+/// parameter that is not a string-keyed map falls back to `map[string]any`.
+#[test]
+fn call_arg_expr_types_a_map_literal_by_its_parameter() {
+    let lib = handle_lib("bus", "publisher");
+    let mut refs = Vec::new();
+    let mut ref_expr = |path: &[String]| format!("s.{}", path.join("."));
+    let table = CallArg::Map(vec![(
+        "answer".to_string(),
+        CallArg::Lit(serde_json::json!(42)),
+    )]);
+
+    let float_map = Tref::Map(
+        Box::new(string_t()),
+        Box::new(Tref::Prim(crate::ir::Prim::Float)),
+    );
+    assert_eq!(
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &CallArg::Param("table".into()),
+            &[ext_param("table", float_map)],
+            &[table.clone()],
+            &mut ref_expr
+        ),
+        "map[string]float64{\"answer\": 42}"
+    );
+
+    let mut module = bare_module();
+    module.ext_libs = vec![lib.clone()];
+    let handle_map = Tref::Map(
+        Box::new(string_t()),
+        Box::new(Tref::Ref {
+            id: "bus#publisher".into(),
+            args: vec![],
+        }),
+    );
+    let handles = CallArg::Map(vec![(
+        "main".to_string(),
+        CallArg::Ref(vec!["primary".into()]),
+    )]);
+    assert_eq!(
+        ext::call_arg_expr(
+            &mut refs,
+            &module,
+            &lib,
+            &CallArg::Param("table".into()),
+            &[ext_param("table", handle_map)],
+            &[handles],
+            &mut ref_expr
+        ),
+        "map[string]*bus.Publisher{\"main\": s.primary}"
+    );
+    assert!(refs.iter().any(|s| s.name == "bus"));
+
+    let int_keyed = Tref::Map(
+        Box::new(Tref::Prim(crate::ir::Prim::I32)),
+        Box::new(string_t()),
+    );
+    assert_eq!(
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &CallArg::Param("table".into()),
+            &[ext_param("table", int_keyed)],
+            &[table.clone()],
+            &mut ref_expr
+        ),
+        "map[string]any{\"answer\": 42}"
+    );
+    assert_eq!(
+        ext::call_arg_expr(
+            &mut refs,
+            &bare_module(),
+            &lib,
+            &CallArg::Param("table".into()),
+            &[ext_param("table", string_t())],
+            &[table],
+            &mut ref_expr
+        ),
+        "map[string]any{\"answer\": 42}"
+    );
 }
 
 #[test]

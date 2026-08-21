@@ -191,6 +191,7 @@ and call_arg =
   | Ca_call of entry_call
   | Ca_symbol_call of symbol_call
   | Ca_type of string
+  | Ca_map of (string * call_arg) list
 
 and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
 

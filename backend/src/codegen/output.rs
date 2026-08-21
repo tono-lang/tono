@@ -132,6 +132,19 @@ impl TargetKind {
             Self::Go | Self::Rust => false,
         }
     }
+
+    /// Whether this target can pass a string-keyed map literal as a
+    /// `call:` argument (`{ "key": value }`, the value side of a
+    /// `map[string]V` logical parameter). Every target has one: Go a
+    /// `map[string]V` literal, Rust `HashMap::from([..])`, TypeScript an
+    /// object literal. Declared per target all the same, so a target
+    /// without one is refused by name at generation instead of reaching an
+    /// emitter with nothing correct to write.
+    pub fn emits_map_literal_args(self) -> bool {
+        match self {
+            Self::Go | Self::Rust | Self::TypeScript => true,
+        }
+    }
 }
 
 /// A generated source file: which target produced it (so a caller knows which
@@ -157,6 +170,13 @@ mod tests {
         );
         assert_eq!(TargetKind::parse("ts"), Some(TargetKind::TypeScript));
         assert_eq!(TargetKind::parse("java"), None);
+    }
+
+    #[test]
+    fn every_target_emits_map_literal_args() {
+        for target in [TargetKind::Rust, TargetKind::Go, TargetKind::TypeScript] {
+            assert!(target.emits_map_literal_args(), "{target:?}");
+        }
     }
 
     #[test]

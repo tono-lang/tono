@@ -75,6 +75,22 @@ pub(super) fn json_literal(v: &serde_json::Value) -> String {
     }
 }
 
+/// A string-keyed map literal as a Rust expression: `HashMap::from` over
+/// owned `String` keys (tono's `string` is `String` in Rust, the same
+/// spelling `json_literal` gives a string), with the value type left to
+/// the callee's own parameter to infer. Fully qualified so no `use` has to
+/// reach the generated module for it.
+pub(super) fn map_literal(entries: &[(String, String)]) -> String {
+    if entries.is_empty() {
+        return "std::collections::HashMap::new()".to_string();
+    }
+    let rendered: Vec<String> = entries
+        .iter()
+        .map(|(k, v)| format!("({k:?}.to_string(), {v})"))
+        .collect();
+    format!("std::collections::HashMap::from([{}])", rendered.join(", "))
+}
+
 /// The call one argument is rendered for: the declaring library (a `Ctor`
 /// names one of its structs), the extern's declared parameter list and the
 /// caller's own actual arguments (the entry field's `call(..)`), which a
@@ -163,6 +179,13 @@ pub(super) fn call_arg_expr(
                 })
                 .collect();
             format!("{name} {{ {} }}", rendered.join(", "))
+        }
+        CallArg::Map(entries) => {
+            let rendered: Vec<(String, String)> = entries
+                .iter()
+                .map(|(k, v)| (k.clone(), call_arg_expr(r, scope, v)))
+                .collect();
+            map_literal(&rendered)
         }
         CallArg::Call(nested) => call_expr(r, nested),
         // Rust has no type as a value to pass; `validate_calls` refuses the

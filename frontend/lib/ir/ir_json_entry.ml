@@ -84,6 +84,17 @@ let rec encode_call_arg (a : Ir.call_arg) : Ir.json =
           ("symbol_args", `List (List.map encode_call_arg sc.scl_args));
         ]
   | Ir.Ca_type n -> `Assoc [ ("type", `String n) ]
+  (* Pairs, not an object: written order is part of the value (the emitted
+     literal keeps it), and a JSON object does not promise one. *)
+  | Ir.Ca_map entries ->
+      `Assoc
+        [
+          ( "map",
+            `List
+              (List.map
+                 (fun (k, v) -> `List [ `String k; encode_call_arg v ])
+                 entries) );
+        ]
 
 and encode_call_ctor (c : Ir.call_ctor) : Ir.json =
   `Assoc
@@ -266,6 +277,19 @@ let rec decode_call_arg j =
   | [ ("call", v) ] ->
       let* c = decode_entry_call v in
       Ok (Ir.Ca_call c)
+  | [ ("map", v) ] ->
+      let* xs = as_list v in
+      let* entries =
+        map_result
+          (fun e ->
+            match e with
+            | `List [ `String k; v ] ->
+                let* a = decode_call_arg v in
+                Ok (k, a)
+            | _ -> err "map entry must be a [key, value] pair")
+          xs
+      in
+      Ok (Ir.Ca_map entries)
   | ("symbol", _) :: _ ->
       let* symbol =
         match List.assoc_opt "symbol" kvs with
@@ -285,7 +309,7 @@ let rec decode_call_arg j =
       Ok (Ir.Ca_ctor c)
   | _ ->
       err
-        "call arg must be a single param, field, lit, list, call, symbol, \
+        "call arg must be a single param, field, lit, list, map, call, symbol, \
          type, or ctor/fields pair"
 
 and decode_call_ctor kvs =

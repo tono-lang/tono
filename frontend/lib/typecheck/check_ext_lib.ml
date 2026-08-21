@@ -33,6 +33,8 @@ let rec collect_call_arg : Ast.call_arg -> string list = function
       List.concat_map (fun (_, _, v) -> collect_trait_arg v) c.Ast.ctor_fields
   | Ast.CaCall nc -> List.concat_map collect_call_arg nc.Ast.nc_args
   | Ast.CaList (items, _) -> List.concat_map collect_call_arg items
+  | Ast.CaMap (entries, _) ->
+      List.concat_map (fun (_, _, v) -> collect_call_arg v) entries
 
 and collect_trait_arg : Ast.trait_arg -> string list = function
   | Ast.AName n -> [ n ]
@@ -64,6 +66,10 @@ let rec unknown_param_call_arg (declared : string list) :
       List.concat_map (unknown_param_call_arg declared) nc.Ast.nc_args
   | Ast.CaList (items, _) ->
       List.concat_map (unknown_param_call_arg declared) items
+  | Ast.CaMap (entries, _) ->
+      List.concat_map
+        (fun (_, _, v) -> unknown_param_call_arg declared v)
+        entries
 
 and unknown_param_trait_arg (declared : string list) (span : Span.span) :
     Ast.trait_arg -> Diagnostic.t list = function
@@ -153,6 +159,10 @@ let rec check_ctor_projection_arg
       List.concat_map (check_ctor_projection_arg structs params) nc.Ast.nc_args
   | Ast.CaList (items, _) ->
       List.concat_map (check_ctor_projection_arg structs params) items
+  | Ast.CaMap (entries, _) ->
+      List.concat_map
+        (fun (_, _, v) -> check_ctor_projection_arg structs params v)
+        entries
   | Ast.CaParam _ | Ast.CaRef _ | Ast.CaLit _ | Ast.CaType _ -> []
 
 (* A class reference ([type name]) must name an opaque handle declared in
@@ -173,6 +183,8 @@ let rec check_type_args (handles : string list) :
         ]
   | Ast.CaCall nc -> List.concat_map (check_type_args handles) nc.Ast.nc_args
   | Ast.CaList (items, _) -> List.concat_map (check_type_args handles) items
+  | Ast.CaMap (entries, _) ->
+      List.concat_map (fun (_, _, v) -> check_type_args handles v) entries
   | Ast.CaParam _ | Ast.CaRef _ | Ast.CaLit _ | Ast.CaCtor _ -> []
 
 let consumed_heads (r : Ast.returns_lit option) : string list =

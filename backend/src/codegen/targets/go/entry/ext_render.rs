@@ -40,6 +40,38 @@ fn variadic_element_go_type(
     handle_go_type(handle_lib, handle, refs)
 }
 
+/// The Go value type of a `map[string]V` parameter's literal, or `None`
+/// when the parameter is not a string-keyed map: a foreign handle spells
+/// as its Go type (pointer or interface value), anything else as its wire
+/// spelling.
+fn map_value_go_type(
+    module: &Module,
+    param: &ExternParam,
+    refs: &mut Vec<Symbol>,
+) -> Option<String> {
+    let Tref::Map(key, value) = &param.r#type else {
+        return None;
+    };
+    if **key != Tref::Prim(crate::ir::Prim::String) {
+        return None;
+    }
+    match foreign_handle(value, module) {
+        Some((handle_lib, handle_ty)) => {
+            let handle = handle_lib.types.iter().find(|t| t.name == handle_ty)?;
+            // The literal names the handle's package in a type position,
+            // which the enclosing call's own import does not cover when the
+            // handle comes from another library.
+            refs.extend(handle_symbol(handle_lib));
+            handle_go_type(handle_lib, handle, refs)
+        }
+        None => Some(go_type(value)),
+    }
+}
+
+fn map_literal_expr(value_ty: &str, rendered: &[String]) -> String {
+    format!("map[string]{value_ty}{{{}}}", rendered.join(", "))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn call_arg_expr(
     refs: &mut Vec<Symbol>,
@@ -74,6 +106,31 @@ pub(in super::super) fn call_arg_expr(
                         .collect();
                     format!("[]{elem_ty}{{{}}}...", rendered.join(", "))
                 }
+                // A `map[string]V` parameter's own actual argument, a
+                // `CallArg::Map`: typed by the parameter's value type, the
+                // same way the variadic spread above is typed, so the
+                // literal matches what the library declares instead of the
+                // untyped `map[string]any{...}` the bare `Map` branch
+                // renders.
+                Some(CallArg::Map(entries)) if param.is_some() => {
+                    match map_value_go_type(module, param.unwrap(), refs) {
+                        Some(value_ty) => {
+                            let rendered = map_entries(
+                                refs, module, lib, entries, params, entry_args, ref_expr,
+                            );
+                            map_literal_expr(&value_ty, &rendered)
+                        }
+                        None => call_arg_expr(
+                            refs,
+                            module,
+                            lib,
+                            &CallArg::Map(entries.clone()),
+                            params,
+                            entry_args,
+                            ref_expr,
+                        ),
+                    }
+                }
                 Some(actual) => {
                     call_arg_expr(refs, module, lib, actual, params, entry_args, ref_expr)
                 }
@@ -93,6 +150,10 @@ pub(in super::super) fn call_arg_expr(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        CallArg::Map(entries) => {
+            let rendered = map_entries(refs, module, lib, entries, params, entry_args, ref_expr);
+            map_literal_expr("any", &rendered)
+        }
         CallArg::Ctor(ctor) => ctor_expr(refs, module, lib, ctor, params, entry_args, ref_expr),
         // A cross-extern call standing as another call's own argument (e.g.
         // a ctor field's value naming a declared extern): Go codegen has no
@@ -138,6 +199,29 @@ pub(in super::super) fn call_arg_expr(
     }
 }
 
+/// The `"key": value` entries of a map literal, each value rendered through
+/// `call_arg_expr` so every argument shape nests inside a map the way it
+/// nests inside a list.
+#[allow(clippy::too_many_arguments)]
+fn map_entries(
+    refs: &mut Vec<Symbol>,
+    module: &Module,
+    lib: &ExtLib,
+    entries: &[(String, CallArg)],
+    params: &[ExternParam],
+    entry_args: &[CallArg],
+    ref_expr: &mut dyn FnMut(&[String]) -> String,
+) -> Vec<String> {
+    entries
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{k:?}: {}",
+                call_arg_expr(refs, module, lib, v, params, entry_args, ref_expr)
+            )
+        })
+        .collect()
+}
 #[allow(clippy::too_many_arguments)]
 fn ctor_expr(
     refs: &mut Vec<Symbol>,

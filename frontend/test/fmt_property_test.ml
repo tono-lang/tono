@@ -214,6 +214,12 @@ let rec gen_call_arg n =
            });
         (let+ items = G.list_size (G.int_range 0 2) (gen_call_arg (n - 1)) in
          Ast.CaList (items, dspan));
+        (* Keys are distinct by construction: the parser rejects a key
+           written twice, so a generated map must never carry one. *)
+        (let+ values = G.list_size (G.int_range 0 2) (gen_call_arg (n - 1)) in
+         Ast.CaMap
+           ( List.mapi (fun i v -> (Printf.sprintf "k%d" i, dspan, v)) values,
+             dspan ));
       ]
 
 let gen_call_expr =

@@ -240,6 +240,7 @@ fn extern_binds_every_target(
         }
         static_receiver_renders(site, *target, lang)?;
         class_reference_renders(site, *target, lang)?;
+        map_literal_renders(site, *target, lang)?;
         if !target.emits_nested_extern_call_args() && contains_cross_extern_call(&lang.call_args) {
             return Err(format!(
                 "{site}: the {} block's call: line uses another declared extern's call as one of its own arguments; {} codegen cannot render that yet",
@@ -310,6 +311,62 @@ pub(super) fn class_reference_in_wire_position(
     }
 }
 
+/// A map literal is rendered where the target has a string-keyed map to
+/// spell it as (`TargetKind::emits_map_literal_args`); a target without one
+/// is refused by name, the way a class reference is, instead of reaching an
+/// emitter with nothing correct to write.
+pub(super) fn map_literal_renders(
+    site: &str,
+    target: TargetKind,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    if !target.emits_map_literal_args() && contains_map_literal(&lang.call_args) {
+        return Err(format!(
+            "{site}: the {} block's call: line passes a map literal as an argument; {} has no map literal to pass",
+            target.binding_langs()[0],
+            target.dir()
+        ));
+    }
+    Ok(())
+}
+
+/// A wire-position call never applies the binding's `call:` template (see
+/// [`class_reference_in_wire_position`]), so a map literal written there
+/// would be dropped silently in every target; refused by name instead.
+pub(super) fn map_literal_in_wire_position(
+    site: &str,
+    target: TargetKind,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    if contains_map_literal(&lang.call_args) {
+        return Err(format!(
+            "{site}: the {} block's call: line passes a map literal as an argument; a call in wire position passes the trait's own arguments and cannot carry a map literal",
+            target.binding_langs()[0],
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a map literal stands anywhere in a call's own argument tree,
+/// walked through the same nesting shapes [`ref_paths`] does.
+fn contains_map_literal(args: &[crate::ir::CallArg]) -> bool {
+    use crate::ir::CallArg;
+    args.iter().any(|a| match a {
+        CallArg::Map(_) => true,
+        CallArg::Ctor(ctor) => ctor
+            .fields
+            .values()
+            .any(|v| contains_map_literal(std::slice::from_ref(v))),
+        CallArg::List(items) => contains_map_literal(items),
+        CallArg::SymbolCall(sc) => contains_map_literal(&sc.args),
+        CallArg::Param(_)
+        | CallArg::Ref(_)
+        | CallArg::Lit(_)
+        | CallArg::Call(_)
+        | CallArg::TypeRef(_) => false,
+    })
+}
+
 /// The first class reference anywhere in a call's own argument tree, walked
 /// through the same nesting shapes [`ref_paths`] does.
 fn first_class_reference(args: &[crate::ir::CallArg]) -> Option<&str> {
@@ -323,6 +380,9 @@ fn first_class_reference(args: &[crate::ir::CallArg]) -> Option<&str> {
                 .find_map(|v| first_class_reference(std::slice::from_ref(*v)))
         }
         CallArg::List(items) => first_class_reference(items),
+        CallArg::Map(entries) => entries
+            .iter()
+            .find_map(|(_, v)| first_class_reference(std::slice::from_ref(v))),
         CallArg::SymbolCall(sc) => first_class_reference(&sc.args),
         CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) | CallArg::Call(_) => None,
     })
@@ -339,6 +399,9 @@ fn contains_cross_extern_call(args: &[crate::ir::CallArg]) -> bool {
         CallArg::Call(_) => true,
         CallArg::Ctor(ctor) => ctor.fields.values().any(contains_cross_extern_call_one),
         CallArg::List(items) => contains_cross_extern_call(items),
+        CallArg::Map(entries) => entries
+            .iter()
+            .any(|(_, v)| contains_cross_extern_call_one(v)),
         CallArg::SymbolCall(sc) => contains_cross_extern_call(&sc.args),
         CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) | CallArg::TypeRef(_) => false,
     })

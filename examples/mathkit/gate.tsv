@@ -34,3 +34,8 @@ bench	rust	service.tono	build-red
 12-ts-class-reference	typescript	probes/12-ts-class-reference.tono	pass
 12-rust-class-reference-refused	rust	probes/12-rust-class-reference-refused.tono	refused
 12-go-class-reference-refused	go	probes/12-go-class-reference-refused.tono	refused
+# 13: the call passes a map literal ({ "answer": .answer, "other": 1.5 }) for a
+# map[string]float parameter; every target has a string-keyed map to spell it as.
+13-go-map-literal	go	probes/13-go-map-literal.tono	pass
+13-rust-map-literal	rust	probes/13-rust-map-literal.tono	pass
+13-ts-map-literal	typescript	probes/13-ts-map-literal.tono	pass

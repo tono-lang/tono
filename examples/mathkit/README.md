@@ -26,6 +26,7 @@ built:
 - `formula`: an expression plus options (functional and variadic in Go, a
   struct by value in Rust, an optional object in TypeScript).
 - `series`: a collection of values.
+- `table`: a collection keyed by name (a map of string to value).
 - `fallback`: N already-built handles, returning a handle of the same
   contract.
 
@@ -36,9 +37,9 @@ synchronous in TypeScript.
 
 | target | where | shape kept on purpose |
 |---|---|---|
-| Go | `ext/go` | `Calculator[T]` is an interface; `FromFormula(expr, opts ...Option)` with `WithPrecision(int) Option`; `FromFallback(strategy, calcs ...Calculator[T])` |
-| Rust | `ext/rust` | `Calculator<T>` is a trait; `from_constant`, `from_formula`, `from_series`, `from_fallback` each return a different concrete struct; `FormulaOptions { precision: Option<u8> }` by value; `Vec<Box<dyn Calculator<T>>>`; no handle is `Clone` |
-| TypeScript | `ext/ts` | every constructor is a class (`new`); `FormulaOptions` is an optional object; `Calculator<T>[]`; `compute()` is synchronous |
+| Go | `ext/go` | `Calculator[T]` is an interface; `FromFormula(expr, opts ...Option)` with `WithPrecision(int) Option`; `FromTable(entries map[string]T)`; `FromFallback(strategy, calcs ...Calculator[T])` |
+| Rust | `ext/rust` | `Calculator<T>` is a trait; `from_constant`, `from_formula`, `from_series`, `from_table`, `from_fallback` each return a different concrete struct; `FormulaOptions { precision: Option<u8> }` by value; `HashMap<String, T>`; `Vec<Box<dyn Calculator<T>>>`; no handle is `Clone` |
+| TypeScript | `ext/ts` | every constructor is a class (`new`); `FormulaOptions` is an optional object; `Record<string, T>`; `Calculator<T>[]`; `compute()` is synchronous |
 
 ## Files
 
@@ -82,9 +83,10 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 | 10 | a handle composed and read separately | fallback + a read of one of its inputs | `10-ownership-refused` | refused, as intended: single ownership is the rule, and the generator names the field and both readers |
 | 11 | a static method as the constructor: the call's receiver is the foreign type itself | `FormulaCalculator.parse(expr)` (TS), `FormulaCalculator::parse(expr)` (Rust) | `11-ts-static-method`, `11-rust-static-method`, `11-go-static-method-refused` | pass: the type is a second string before the method (`call: "FormulaCalculator"."parse"(expr)`), imported in TypeScript and qualifying the path in Rust; Go has no static method, so its generation refuses the binding naming the site (refused, as intended) |
 | 12 | a class reference as an argument: the library takes the class itself and constructs it | `instantiate(AnswerCalculator)` (TS, `new () => T`) | `12-ts-class-reference`, `12-rust-class-reference-refused`, `12-go-class-reference-refused` | pass: `type answer_calculator` in a `call:` argument names a declared handle and passes its class, imported in TypeScript; Rust and Go have no type as a value, so their generation refuses the binding naming the site (refused, as intended) |
+| 13 | a map literal as an argument: the library takes a collection keyed by name | `FromTable(map[string]T)` (Go), `from_table(HashMap<String, T>)` (Rust), `new TableCalculator(Record<string, T>)` (TS) | `13-go-map-literal`, `13-rust-map-literal`, `13-ts-map-literal` | pass: `{ "answer": .answer, "other": 1.5 }` in a call argument is the value side of a `map[string]V` logical parameter; Go types the literal by that parameter (`map[string]float64{...}`), Rust renders `HashMap::from([...])` over owned `String` keys, TypeScript an object literal with quoted keys |
 
-Passing today: capabilities 1, 3, 4, 5, 6, 8, 9, 11 and 12, plus capability
-10 (the one that is a rule, not a gap). Two gaps remain (2 and 7, both blocked on
+Passing today: capabilities 1, 3, 4, 5, 6, 8, 9, 11, 12 and 13, plus
+capability 10 (the one that is a rule, not a gap). Two gaps remain (2 and 7, both blocked on
 per-language foreign-type naming reaching Rust's trait scope and `Some`
 wrapping, a separate capability).
 
@@ -106,26 +108,26 @@ The Go blocker is not among the ten capabilities; it is the first thing the
 bench found. Once it clears, the Go bench too will stop at the capabilities
 the probes already report.
 
-## Call-argument shapes not covered here
+## Call-argument shapes that were once not covered here
 
 Three shapes a consumer raised were deliberately not attempted as a small
-extension of `call:`'s own argument grammar. Two of them are capabilities
-now. The static method (11) turned out to be a third kind of call receiver
-(alongside a declared `ext` namespace, `ns.fn(..)`, and a handle field,
-`.field.method(..)`), and got its own syntax, the receiver type as a second
-string before the method. The class reference (12) turned out not to need a
-type-level construct at all: tono never constructs or inspects the class, so
-what crosses the boundary is only a foreign name, and a declared handle
-already carries that name per language; `type handle` in a `call:` argument
-reads the handle's foreign name in value position. One remains out:
-
-- **Map literal** as a call argument needs its own key-value collection
-  shape, distinct from the list this bench's own capability 4/5 already
-  added for a variadic parameter.
-
-It is its own scoped piece of work with its own design questions, not a
-one-line addition to what nested calls and variadic parameters already
-cover.
+extension of `call:`'s own argument grammar; each became a capability on its
+own terms. The static method (11) turned out to be a third kind of call
+receiver (alongside a declared `ext` namespace, `ns.fn(..)`, and a handle
+field, `.field.method(..)`), and got its own syntax, the receiver type as a
+second string before the method. The class reference (12) turned out not to
+need a type-level construct at all: tono never constructs or inspects the
+class, so what crosses the boundary is only a foreign name, and a declared
+handle already carries that name per language; `type handle` in a `call:`
+argument reads the handle's foreign name in value position. The map literal
+(13) is the key-value sibling of the list: a value shape of the call
+argument, not a reuse of the wire `map[K]V` type, for the same reason the
+list never reused the wire `[]T`. A wire type describes what a wire carries;
+a call argument's items are foreign values (a parameter, a handle, a nested
+call) that no wire type names. The logical parameter's declared type is
+still the wire type (`entries: map[string]float`), and that is what Go reads
+to type the literal, the way a variadic parameter types its spread. Keys are
+string literals until a real case asks for more.
 
 ## Updating the record
 

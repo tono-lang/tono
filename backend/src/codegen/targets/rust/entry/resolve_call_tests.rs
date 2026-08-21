@@ -321,6 +321,10 @@ fn every_variant_args(head: CallArg) -> Vec<CallArg> {
     vec![
         head,
         CallArg::List(vec![CallArg::Lit(serde_json::json!(1))]),
+        CallArg::Map(vec![
+            ("answer".to_string(), CallArg::Lit(serde_json::json!(42))),
+            ("empty".to_string(), CallArg::Map(vec![])),
+        ]),
         CallArg::Ctor(crate::ir::CallCtor {
             name: "opts".into(),
             fields: [("retries".to_string(), CallArg::Lit(serde_json::json!(3)))]
@@ -371,7 +375,7 @@ fn a_call_field_with_every_call_arg_variant_and_a_nested_call_emits_without_pani
         "company_config",
         vec![extern_decl(
             "load",
-            string_params(&["reg", "ids", "opts", "sig"]),
+            string_params(&["reg", "ids", "table", "opts", "sig"]),
             Tref::Prim(Prim::String),
             load,
         )],
@@ -400,6 +404,12 @@ fn a_call_field_with_every_call_arg_variant_and_a_nested_call_emits_without_pani
     assert!(out.contains("(s.region).clone()"), "{out}");
     assert!(!out.contains("s.reg)"), "{out}");
     assert!(out.contains("vec![1]"), "{out}");
+    assert!(
+        out.contains(
+            "std::collections::HashMap::from([(\"answer\".to_string(), 42), (\"empty\".to_string(), std::collections::HashMap::new())])"
+        ),
+        "{out}"
+    );
     assert!(out.contains("opts { retries: 3 }"), "{out}");
     assert!(out.contains("company_auth::sign().await"), "{out}");
     assert!(out.contains("Ok((a, b))"), "{out}");

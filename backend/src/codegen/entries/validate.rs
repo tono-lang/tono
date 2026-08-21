@@ -55,6 +55,10 @@ pub(super) fn ref_paths(args: &[CallArg], out: &mut Vec<Vec<String>>) {
         match a {
             CallArg::Ref(path) => out.push(path.clone()),
             CallArg::List(items) => ref_paths(items, out),
+            CallArg::Map(entries) => {
+                let values: Vec<CallArg> = entries.iter().map(|(_, v)| v.clone()).collect();
+                ref_paths(&values, out);
+            }
             CallArg::Ctor(ctor) => {
                 let fields: Vec<CallArg> = ctor.fields.values().cloned().collect();
                 ref_paths(&fields, out);
@@ -170,6 +174,11 @@ pub(super) fn wire_call_resolves(
             lang,
         )?;
         super::validate_calls::class_reference_in_wire_position(
+            &format!("{}.{}(..)", call.ns, call.fn_name),
+            *target,
+            lang,
+        )?;
+        super::validate_calls::map_literal_in_wire_position(
             &format!("{}.{}(..)", call.ns, call.fn_name),
             *target,
             lang,

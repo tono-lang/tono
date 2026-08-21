@@ -496,6 +496,49 @@ fn a_class_reference_imports_the_handle_class_and_passes_it() {
     );
 }
 
+/// A map literal is an object literal with quoted keys; its values go
+/// through the same rendering every other argument does (a parameter, a
+/// nested call, a class reference with its import), and an empty map is
+/// `{}`.
+#[test]
+fn a_map_literal_renders_as_an_object_literal_with_quoted_keys() {
+    let mut module = appendix_module(appendix_fields());
+    let connect = &mut module.ext_libs[1].externs[0].langs[0];
+    assert_eq!(connect.symbol, "connect");
+    connect.call_args = vec![
+        crate::ir::CallArg::Map(vec![
+            (
+                "answer".to_string(),
+                crate::ir::CallArg::Lit(serde_json::json!(42)),
+            ),
+            (
+                "with-dash".to_string(),
+                crate::ir::CallArg::SymbolCall(crate::ir::SymbolCall {
+                    symbol: "WithKind".into(),
+                    args: vec![crate::ir::CallArg::TypeRef("publisher".into())],
+                }),
+            ),
+        ]),
+        crate::ir::CallArg::Map(vec![]),
+    ];
+    let decls = rendered_decls(&module);
+    let seam_decl = decls
+        .iter()
+        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("let busExt")))
+        .expect("bus seam decl");
+    let refs = crate::codegen::tree::item_refs(seam_decl);
+    assert!(
+        refs.iter().any(|s| s.name == "Publisher"),
+        "a class reference inside a map still imports the class: {refs:?}"
+    );
+    let out = rendered_text(&module);
+    assert!(
+        out.contains(r#"connect({ answer: 42, "with-dash": WithKind(Publisher) }, {})"#)
+            || out.contains(r#"connect({ "answer": 42, "with-dash": WithKind(Publisher) }, {})"#),
+        "{out}"
+    );
+}
+
 /// The instantiation's own `ts` name is the class the library exports, so a
 /// class reference spells that name, verbatim, never the cased handle name.
 #[test]

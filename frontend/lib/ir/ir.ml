@@ -219,8 +219,14 @@ and call_arg =
   | Ca_call of entry_call
   | Ca_symbol_call of symbol_call
   | Ca_type of string
-(* a declared opaque handle passed as a class reference: the
-         emitter spells its foreign name for the binding's language *)
+    (* a declared opaque handle passed as a class reference: the
+       emitter spells its foreign name for the binding's language *)
+  | Ca_map of (string * call_arg) list
+(* a string-keyed map literal, in written order: the value side of a
+   [map[string]V] logical parameter. Its own variant rather than a reuse of
+   the wire [Map] type, like [Ca_list] next to the wire [List]: a wire type
+   describes what the wire carries, a call argument's items are foreign
+   values no wire type names. *)
 
 and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
 

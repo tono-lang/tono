@@ -59,7 +59,17 @@ and call_lit = LStr of string | LInt of int | LFloat of float
    [ext] block passed as a value, for a library that takes the class itself
    and constructs on its own. tono never constructs or inspects it, so what
    crosses is only the handle's foreign name; the name is resolved against
-   the block's handles in the typechecker, not here. *)
+   the block's handles in the typechecker, not here.
+
+   A map literal ([{ "key": value, ... }]) is the key-value sibling of the
+   list: the caller's own value for a logical parameter of a [map[string]V]
+   type, for a library that takes a collection keyed by name. It is a value
+   shape of [call_arg], not a reuse of the wire [TMap] type, for the same
+   reason the list is not [TList]: the wire types describe what a wire
+   carries, while a call argument's items are foreign values (a parameter,
+   a handle, a nested call) that no wire type names. Keys are string
+   literals, kept in written order, each with its own span for
+   diagnostics. *)
 and call_arg =
   | CaParam of string * Span.span
   | CaRef of ref_path
@@ -68,6 +78,7 @@ and call_arg =
   | CaCall of nested_call
   | CaList of call_arg list * Span.span
   | CaType of string * Span.span
+  | CaMap of (string * Span.span * call_arg) list * Span.span
 
 (* A bare foreign-symbol call standing in a [call:] argument position, e.g.
    the [WithPrecision(precision)] inside [call: "FromFormula"(expr,

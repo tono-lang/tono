@@ -27,6 +27,11 @@ fn call_arg_heads<'a>(arg: &'a CallArg, out: &mut Vec<&'a str>) {
                 call_arg_heads(item, out);
             }
         }
+        CallArg::Map(entries) => {
+            for (_, v) in entries {
+                call_arg_heads(v, out);
+            }
+        }
         CallArg::Call(call) => {
             for a in &call.args {
                 call_arg_heads(a, out);

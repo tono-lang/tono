@@ -185,6 +185,21 @@ pub(super) fn render_arg(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        // A string-keyed map literal is an object literal with quoted keys
+        // (a key is any string, not necessarily an identifier), the shape a
+        // `Record<string, V>` parameter takes.
+        CallArg::Map(entries) if entries.is_empty() => "{}".to_string(),
+        CallArg::Map(entries) => format!(
+            "{{ {} }}",
+            entries
+                .iter()
+                .map(|(k, v)| format!(
+                    "{k:?}: {}",
+                    render_arg(entry, config, lib, v, params, site_args, ref_expr)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         // A cross-extern call as a call argument (`ns.fn(...)` naming a
         // *declared* extern, reached today only from a ctor field's own
         // value): rejected before generation reaches here, see the module
@@ -261,6 +276,11 @@ pub(super) fn class_reference_imports(args: &[CallArg], lib: &ExtLib, refs: &mut
                 refs.push(Symbol::imported(name.clone(), path.path.clone(), name));
             }
             CallArg::List(items) => class_reference_imports(items, lib, refs),
+            CallArg::Map(entries) => {
+                for (_, v) in entries {
+                    class_reference_imports(std::slice::from_ref(v), lib, refs);
+                }
+            }
             CallArg::SymbolCall(sc) => class_reference_imports(&sc.args, lib, refs),
             CallArg::Ctor(ctor) => {
                 for v in ctor.fields.values() {

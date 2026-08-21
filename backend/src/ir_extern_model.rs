@@ -48,6 +48,13 @@ pub enum CallArg {
     /// own, so what crosses is the handle's foreign name for the binding's
     /// language, never a value tono built.
     TypeRef(String),
+    /// A string-keyed map literal (wire key `map`), the value side of a
+    /// `map[string]V` logical parameter, carried as pairs in written order
+    /// (a JSON object does not promise one, and the emitted literal keeps
+    /// it). Its own variant rather than a reuse of `Tref::Map`, like `List`
+    /// next to `Tref::List`: a wire type describes what the wire carries,
+    /// a call argument's items are foreign values no wire type names.
+    Map(Vec<(String, CallArg)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,6 +118,11 @@ impl Serialize for CallArg {
                 m.serialize_entry("type", n)?;
                 m.end()
             }
+            CallArg::Map(entries) => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("map", entries)?;
+                m.end()
+            }
         }
     }
 }
@@ -122,8 +134,8 @@ impl<'de> Deserialize<'de> for CallArg {
     }
 }
 
-const CALL_ARG_KEYS: [&str; 8] = [
-    "param", "field", "lit", "list", "call", "ctor", "symbol", "type",
+const CALL_ARG_KEYS: [&str; 9] = [
+    "param", "field", "lit", "list", "call", "ctor", "symbol", "type", "map",
 ];
 
 fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
@@ -174,6 +186,22 @@ fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
                 .map(call_arg_from_value)
                 .collect::<Result<_, _>>()?;
             Ok(CallArg::List(items))
+        }
+        ["map"] => {
+            ensure_only(obj, &["map"])?;
+            let arr = obj["map"].as_array().ok_or("expected an array")?;
+            let entries = arr
+                .iter()
+                .map(|pair| {
+                    let pair = pair.as_array().ok_or("expected a [key, value] pair")?;
+                    let [k, v] = pair.as_slice() else {
+                        return Err("expected a [key, value] pair".to_string());
+                    };
+                    let key = k.as_str().ok_or("expected a string key")?.to_string();
+                    Ok((key, call_arg_from_value(v)?))
+                })
+                .collect::<Result<_, String>>()?;
+            Ok(CallArg::Map(entries))
         }
         ["call"] => {
             ensure_only(obj, &["call"])?;
@@ -465,6 +493,34 @@ mod tests {
             symbol: "Pick".into(),
             args: vec![CallArg::TypeRef("answer_calculator".into())],
         }));
+        roundtrip(&CallArg::Map(vec![]));
+        roundtrip(&CallArg::Map(vec![
+            ("answer".to_string(), CallArg::Lit(serde_json::json!(42))),
+            ("scale".to_string(), CallArg::Param("scale".into())),
+        ]));
+    }
+
+    /// A map literal keeps its written order through the wire: the pairs
+    /// come back in the order they went in, not sorted by key.
+    #[test]
+    fn a_map_literal_keeps_written_order_and_rejects_a_malformed_pair() {
+        let arg = CallArg::Map(vec![
+            ("zeta".to_string(), CallArg::Lit(serde_json::json!(1))),
+            ("alpha".to_string(), CallArg::Lit(serde_json::json!(2))),
+        ]);
+        let json = serde_json::to_string(&arg).unwrap();
+        assert_eq!(json, r#"{"map":[["zeta",{"lit":1}],["alpha",{"lit":2}]]}"#);
+        for bad in [
+            r#"{"map":[["zeta"]]}"#,
+            r#"{"map":[[1,{"lit":1}]]}"#,
+            r#"{"map":{"zeta":{"lit":1}}}"#,
+            r#"{"map":[],"lit":1}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<CallArg>(bad).is_err(),
+                "{bad} must not decode"
+            );
+        }
     }
 
     #[test]
