@@ -604,3 +604,160 @@ fn the_per_language_fixture_spells_its_own_go_name() {
     assert!(text.contains("OpenStore[string]("), "{text}");
     assert!(!text.contains("Vault"), "{text}");
 }
+
+// --- call_arg_expr: a parameter under its own spelling ---------------------
+
+/// The spelling says what the parameter crosses as: a variadic slot spreads
+/// a list literal as a typed slice or a slice value as is, a builtin numeric
+/// type converts, the parameter's own type passes unchanged, a declared
+/// position reads as the call site's context, and a nested call qualifies
+/// its symbol by the package selector.
+#[test]
+fn call_arg_expr_coerces_a_spelled_parameter() {
+    let lib = handle_lib("bus", "publisher");
+    let module = bare_module();
+    let mut refs = Vec::new();
+    let params = vec![
+        ext_param("values", Tref::List(Box::new(Tref::Prim(Prim::Float)))),
+        ext_param("digits", Tref::Prim(Prim::U8)),
+    ];
+    let mut ref_expr = |path: &[String]| format!("s.{}", path.join("."));
+    let mut render = |refs: &mut Vec<Symbol>, arg: &CallArg, entry_args: &[CallArg]| {
+        ext::call_arg_expr(
+            refs,
+            &module,
+            &lib,
+            arg,
+            &params,
+            entry_args,
+            "ctx",
+            &mut ref_expr,
+        )
+    };
+    let spread = CallArg::ParamAs {
+        name: "values".into(),
+        spelling: "...float64".into(),
+    };
+    let literal_list = CallArg::List(vec![
+        CallArg::Lit(serde_json::json!(1.5)),
+        CallArg::Lit(serde_json::json!(2.5)),
+    ]);
+    assert_eq!(
+        render(
+            &mut refs,
+            &spread,
+            &[literal_list, CallArg::Ref(vec!["digits".into()])]
+        ),
+        "[]float64{1.5, 2.5}..."
+    );
+    let by_ref = [
+        CallArg::Ref(vec!["samples".into()]),
+        CallArg::Ref(vec!["digits".into()]),
+    ];
+    assert_eq!(render(&mut refs, &spread, &by_ref), "s.samples...");
+    let identity = CallArg::ParamAs {
+        name: "values".into(),
+        spelling: "[]float64".into(),
+    };
+    assert_eq!(render(&mut refs, &identity, &by_ref), "s.samples");
+    let converted = CallArg::ParamAs {
+        name: "digits".into(),
+        spelling: "int".into(),
+    };
+    assert_eq!(render(&mut refs, &converted, &by_ref), "int(s.digits)");
+    assert_eq!(
+        render(
+            &mut refs,
+            &CallArg::Foreign("ctx context.Context".into()),
+            &by_ref
+        ),
+        "ctx"
+    );
+    let nested = CallArg::SymbolCall(crate::ir::SymbolCall {
+        symbol: "WithPrecision".into(),
+        args: vec![CallArg::Param("digits".into())],
+    });
+    assert_eq!(
+        render(&mut refs, &nested, &by_ref),
+        "bus.WithPrecision(s.digits)"
+    );
+    let unknown = CallArg::ParamAs {
+        name: "nope".into(),
+        spelling: "int".into(),
+    };
+    assert_eq!(render(&mut refs, &unknown, &by_ref), "nil");
+    // A spelling Go has no conversion for is refused by name, before any
+    // emitter could reach the panic above.
+    let err = crate::codegen::targets::go::entry::param_spelling_coerces(
+        &module,
+        &lib,
+        &Tref::Prim(Prim::U8),
+        "map[string]int",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("no conversion from uint8 to map[string]int"),
+        "{err}"
+    );
+}
+
+/// A struct literal names the form's own Go type from its `go` block, and
+/// converts a field the block spells under another type.
+#[test]
+fn call_arg_expr_builds_a_form_from_its_go_block() {
+    let mut lib = handle_lib("bus", "publisher");
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert("Digits".to_string(), "int".to_string());
+    lib.structs.push(crate::ir::ForeignStruct {
+        name: "opts".into(),
+        fields: vec![crate::ir::ForeignField {
+            name: "Digits".into(),
+            r#type: Tref::Prim(Prim::U8),
+        }],
+        langs: vec![ForeignLang {
+            lang: "go".into(),
+            name: "Options".into(),
+            fields,
+        }],
+    });
+    let mut ctor_fields = std::collections::BTreeMap::new();
+    ctor_fields.insert("Digits".to_string(), CallArg::Lit(serde_json::json!(3)));
+    let ctor = CallArg::Ctor(CallCtor {
+        name: "opts".into(),
+        fields: ctor_fields,
+    });
+    let mut refs = Vec::new();
+    let mut ref_expr = |_: &[String]| String::new();
+    let expr = ext::call_arg_expr(
+        &mut refs,
+        &bare_module(),
+        &lib,
+        &ctor,
+        &[],
+        &[],
+        "ctx",
+        &mut ref_expr,
+    );
+    assert_eq!(expr, "bus.Options{Digits: int(3)}");
+}
+
+/// An error the op declares but that has no `go` block is not recognized
+/// here: only the contract fallback remains.
+#[test]
+fn error_block_skips_an_error_with_no_go_block() {
+    let mut module = bare_module();
+    module.shapes.push(structure("m#overloaded", vec![]));
+    let mut refs = Vec::new();
+    let out = ext::error_block(
+        &mut refs,
+        &module,
+        &go_casing(),
+        &handle_lib("bus", "publisher"),
+        &["m#overloaded".to_string()],
+        "bus.send",
+        "err",
+        &|expr| format!("return nil, {expr}"),
+    );
+    assert!(!out.contains("errors.Is"), "{out}");
+    assert!(out.contains("ContractError"), "{out}");
+}

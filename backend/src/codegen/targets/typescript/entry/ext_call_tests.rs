@@ -513,3 +513,34 @@ fn a_class_reference_spells_the_instantiation_ts_name_verbatim() {
     assert!(out.contains("connect(QueuePublisher)"), "{out}");
     assert!(!out.contains("connect(Publisher)"), "{out}");
 }
+
+/// A parameter spelled under its own TypeScript type passes as the value
+/// it is: the spelling is for the compiler to grade, structurally.
+#[test]
+fn a_spelled_parameter_renders_as_the_value_it_names() {
+    let mut module = appendix_module(appendix_fields());
+    let load = &mut module.ext_libs[0].externs[0].langs[0];
+    load.call_args = load
+        .call_args
+        .iter()
+        .map(|a| match a {
+            CallArg::Param(name) => CallArg::ParamAs {
+                name: name.clone(),
+                spelling: "string".into(),
+            },
+            other => other.clone(),
+        })
+        .collect();
+    let with_spelling = rendered_text(&module);
+    let plain = rendered_text(&appendix_module(appendix_fields()));
+    assert_eq!(with_spelling, plain);
+}
+
+#[test]
+fn json_literal_renders_arrays_and_objects() {
+    assert_eq!(
+        json_literal(&serde_json::json!([1, "a", null])),
+        "[1, \"a\", null]"
+    );
+    assert_eq!(json_literal(&serde_json::json!({"k": true})), "{ k: true }");
+}

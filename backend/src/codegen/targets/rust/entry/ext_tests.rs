@@ -717,3 +717,36 @@ fn a_static_method_receiver_qualifies_the_call_by_its_type() {
     let text = entry_text(&model);
     assert!(text.contains(&format!("::Loader::{symbol}(")), "{text}");
 }
+
+/// An op's own impl body with the argument shapes that carry a foreign
+/// spelling: the parameter lent as `&str`, a nested call qualified by the
+/// crate, and a form built from its `rust` block.
+#[test]
+fn impl_call_body_renders_spelled_and_nested_arguments() {
+    let model = handle_call_model(
+        vec![
+            CallArg::ParamAs {
+                name: "x".into(),
+                spelling: "&str".into(),
+            },
+            CallArg::SymbolCall(crate::ir::SymbolCall {
+                symbol: "Tag".into(),
+                args: vec![CallArg::Param("x".into())],
+            }),
+            CallArg::Ctor(CallCtor {
+                name: "Opts".into(),
+                fields: [("n".to_string(), CallArg::Lit(serde_json::json!(1)))]
+                    .into_iter()
+                    .collect(),
+            }),
+        ],
+        vec![],
+        None,
+        vec![],
+        true,
+    );
+    let text = entry_text(&model);
+    assert!(text.contains("some_handle::Tag("), "{text}");
+    assert!(text.contains("some_handle::Opts { n: 1 }"), "{text}");
+    assert!(text.contains("recv.do_it(&"), "{text}");
+}

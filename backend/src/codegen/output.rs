@@ -200,4 +200,48 @@ mod tests {
             assert_eq!(target.extension(), ext);
         }
     }
+
+    #[test]
+    fn only_go_binds_a_declared_position_and_only_its_own_context() {
+        assert!(TargetKind::Go
+            .binds_foreign_position("ctx context.Context")
+            .is_ok());
+        let err = TargetKind::Go
+            .binds_foreign_position("c context.Context")
+            .unwrap_err();
+        assert!(err.contains("#(ctx context.Context)"), "{err}");
+        for t in [TargetKind::Rust, TargetKind::TypeScript] {
+            let err = t.binds_foreign_position("ctx context.Context").unwrap_err();
+            assert!(err.contains("binds no position of its own"), "{err}");
+        }
+    }
+
+    #[test]
+    fn typescript_accepts_every_parameter_spelling_structurally() {
+        let module = crate::ir::Module {
+            name: "m".into(),
+            shapes: vec![],
+            operations: vec![],
+            extensions: vec![],
+            ext_libs: vec![],
+            tests: vec![],
+        };
+        let lib = crate::ir::ExtLib {
+            name: "lib".into(),
+            langs: vec![],
+            structs: vec![],
+            types: vec![],
+            externs: vec![],
+        };
+        let t = crate::ir::Tref::Prim(crate::ir::Prim::String);
+        assert!(TargetKind::TypeScript
+            .param_spelling_coerces(&module, &lib, &t, "Whatever<number>")
+            .is_ok());
+        assert!(TargetKind::Go
+            .param_spelling_coerces(&module, &lib, &t, "Whatever")
+            .is_err());
+        assert!(TargetKind::Rust
+            .param_spelling_coerces(&module, &lib, &t, "Whatever")
+            .is_err());
+    }
 }

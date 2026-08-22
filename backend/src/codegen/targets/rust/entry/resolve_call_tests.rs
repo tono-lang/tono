@@ -78,7 +78,7 @@ fn rust_lang(symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
         call_args,
         yields: vec![],
         returns: None,
-    } /*__migrated async:rust */
+    }
 }
 
 fn extern_decl(
@@ -460,4 +460,105 @@ fn a_param_with_no_argument_at_its_position_panics() {
         )],
     )];
     let _ = entry_text(&module, &rust_casing());
+}
+
+/// The conversions Rust knows for a parameter spelled under its own type,
+/// and the refusal naming both types when there is none.
+#[test]
+fn coerce_knows_some_borrow_and_identity_and_refuses_the_rest() {
+    let module = module_of(vec![]);
+    let lib = lib("companyconfig", "company-config", vec![]);
+    let string = Tref::Prim(Prim::String);
+    assert_eq!(coerce(&module, &lib, &string, "String", "v").unwrap(), "v");
+    assert_eq!(
+        coerce(&module, &lib, &string, "Option<String>", "v").unwrap(),
+        "Some(v)"
+    );
+    assert_eq!(coerce(&module, &lib, &string, "&str", "v").unwrap(), "&v");
+    assert_eq!(
+        coerce(&module, &lib, &string, "&String", "v").unwrap(),
+        "&v"
+    );
+    let list = Tref::List(Box::new(Tref::Prim(Prim::Float)));
+    assert_eq!(coerce(&module, &lib, &list, "Vec<f64>", "v").unwrap(), "v");
+    let err = coerce(&module, &lib, &string, "u8", "v").unwrap_err();
+    assert!(err.contains("no conversion from String to u8"), "{err}");
+}
+
+/// A form's literal names the library's own type from its `rust` block and
+/// converts a field the block spells under another type.
+#[test]
+fn ctor_expr_builds_a_form_from_its_rust_block() {
+    let module = module_of(vec![]);
+    let mut lib = lib("companyconfig", "company-config", vec![]);
+    let mut spelled = std::collections::BTreeMap::new();
+    spelled.insert("n".to_string(), "Option<String>".to_string());
+    lib.structs = vec![crate::ir::ForeignStruct {
+        name: "opts".into(),
+        fields: vec![crate::ir::ForeignField {
+            name: "n".into(),
+            r#type: Tref::Prim(Prim::String),
+        }],
+        langs: vec![crate::ir::ForeignLang {
+            lang: "rust".into(),
+            name: "Opts".into(),
+            fields: spelled,
+        }],
+    }];
+    let ctor = CallCtor {
+        name: "opts".into(),
+        fields: [("n".to_string(), CallArg::Lit(serde_json::json!("x")))]
+            .into_iter()
+            .collect(),
+    };
+    let out = ctor_expr(
+        &module,
+        &lib,
+        "company_config",
+        &ctor,
+        &["\"x\".to_string()".to_string()],
+    );
+    assert_eq!(out, "company_config::Opts { n: Some(\"x\".to_string()) }");
+}
+
+/// A spelled parameter and a nested foreign call inside a field's own
+/// construction call: the parameter is lent as `&str`, the nested symbol is
+/// crate-qualified.
+#[test]
+fn a_call_field_lends_a_spelled_parameter_and_qualifies_a_nested_call() {
+    let region = bare_entry_field("region", Tref::Prim(Prim::String), vec![Source::Arg]);
+    let config = call_field(
+        "config",
+        vec![],
+        "companyconfig",
+        "load",
+        vec![CallArg::Ref(vec!["region".into()])],
+    );
+    let mut module = module_of(vec![client_shape(vec![config, region])]);
+    let lang = rust_lang(
+        "load",
+        vec![
+            CallArg::ParamAs {
+                name: "region".into(),
+                spelling: "&str".into(),
+            },
+            CallArg::SymbolCall(crate::ir::SymbolCall {
+                symbol: "Retries".into(),
+                args: vec![CallArg::Lit(serde_json::json!(3))],
+            }),
+        ],
+    );
+    module.ext_libs = vec![lib(
+        "companyconfig",
+        "company-config",
+        vec![extern_decl(
+            "load",
+            string_params(&["region"]),
+            Tref::Prim(Prim::String),
+            lang,
+        )],
+    )];
+    let out = entry_text(&module, &rust_casing());
+    assert!(out.contains("&(s.region).clone()"), "{out}");
+    assert!(out.contains("company_config::Retries(3)"), "{out}");
 }

@@ -519,3 +519,117 @@ fn a_class_reference_in_wire_position_is_refused_for_every_target() {
         assert!(err.contains("wire position"), "{err}");
     }
 }
+
+/// A parameter spelled under its own foreign type must be one the target
+/// can coerce into: `&str` is a Rust conversion (a `String` is lent), Go
+/// has none for it, and TypeScript passes the value structurally. The
+/// refusal names the site, the parameter and both types.
+#[test]
+fn a_parameter_spelling_is_checked_against_what_the_target_can_coerce() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field(
+            "config",
+            "ns",
+            "load",
+            vec![CallArg::Lit(serde_json::json!("x"))],
+        )],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    lib.langs = ["go", "ts", "rust"]
+        .into_iter()
+        .map(|l| crate::ir::LangPath {
+            lang: l.into(),
+            path: "ns-lib".into(),
+        })
+        .collect();
+    lib.externs[0].params = vec![crate::ir::ExternParam {
+        name: "region".into(),
+        r#type: Tref::Prim(crate::ir::Prim::String),
+    }];
+    for lang in lib.externs[0].langs.iter_mut() {
+        // Nested inside a nested call, so the walker is exercised too.
+        lang.call_args = vec![CallArg::SymbolCall(crate::ir::SymbolCall {
+            symbol: "Wrap".into(),
+            args: vec![CallArg::ParamAs {
+                name: "region".into(),
+                spelling: "&str".into(),
+            }],
+        })];
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+
+    let err = super::validate_entries(&model, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("config = ns.load(..)"), "{err}");
+    assert!(err.contains("passes region as #(&str)"), "{err}");
+    assert!(err.contains("no conversion"), "{err}");
+    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
+    assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
+}
+
+/// A struct literal in a binding names a form that must exist for the
+/// target (a block for its language), and a field the block spells must be
+/// coercible from the form's declared type.
+#[test]
+fn a_foreign_form_must_declare_a_block_for_the_target_it_is_built_in() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "rust"]);
+    lib.langs = ["go", "rust"]
+        .into_iter()
+        .map(|l| crate::ir::LangPath {
+            lang: l.into(),
+            path: "ns-lib".into(),
+        })
+        .collect();
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert("n".to_string(), "Option<u8>".to_string());
+    lib.structs = vec![crate::ir::ForeignStruct {
+        name: "opts".into(),
+        fields: vec![crate::ir::ForeignField {
+            name: "n".into(),
+            r#type: Tref::Prim(crate::ir::Prim::String),
+        }],
+        langs: vec![crate::ir::ForeignLang {
+            lang: "rust".into(),
+            name: "Opts".into(),
+            fields,
+        }],
+    }];
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.call_args = vec![CallArg::List(vec![CallArg::Ctor(crate::ir::CallCtor {
+            name: "opts".into(),
+            fields: Default::default(),
+        })])];
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+
+    let err = super::validate_entries(&model, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("struct opts declares no go block"), "{err}");
+    let err = super::validate_entries(&model, &[TargetKind::Rust]).unwrap_err();
+    assert!(err.contains("spells n as #(Option<u8>)"), "{err}");
+}
+
+/// A handle field needs a storage type for every target it is emitted in:
+/// nothing is derived from the handle's name.
+#[test]
+fn a_handle_with_no_block_for_the_target_has_no_storage_and_is_refused() {
+    let mut bus = call_field("bus", "c", "connect", vec![]);
+    bus.target = Tref::Ref {
+        id: "c#h".into(),
+        args: vec![],
+    };
+    let mut module = module_of(vec![entry_shape("m#client", vec![bus])]);
+    let mut lib = ext_lib_with_handle_ctor("c", "h", "connect");
+    lib.types[0].langs.retain(|l| l.lang != "go");
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+    let err = super::validate_entries(&model, &[TargetKind::Go]).unwrap_err();
+    assert!(err.contains("handle c.h declares no go block"), "{err}");
+    assert!(err.contains("no storage type"), "{err}");
+    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
+}
