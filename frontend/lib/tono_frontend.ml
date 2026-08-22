@@ -21,6 +21,7 @@ module Check_ext = Check_ext
 module Check_ext_lib = Check_ext_lib
 module Check_request_value = Check_request_value
 module Ext_lib_vocab = Ext_lib_vocab
+module Ext_sites = Ext_sites
 module Syntax_vocab = Syntax_vocab
 module Check_entries = Check_entries
 module Entry_scope = Entry_scope
@@ -176,7 +177,8 @@ module Cli = struct
 
   let usage =
     "usage: tono-frontend (compile <file.tono> [--module <name>] | compile-dir \
-     <root> | check <file.tono> | fmt <file.tono> | version)"
+     <root> | check <file.tono> | ext-bindings <file.tono> | fmt <file.tono> | \
+     version)"
 
   (* Render diagnostics one per line, source order. Shared by the [check]
      command's report. *)
@@ -264,6 +266,25 @@ module Cli = struct
             if has_error diags then { code = 1; out = ""; err = report }
             else { code = 0; out = ""; err = report })
     | [ _; "check" ] -> { code = 2; out = ""; err = usage ^ "\n" }
+    | _ :: "ext-bindings" :: path :: _ -> (
+        (* The source span of every foreign binding, one JSON object per
+           line, for a tool that checks the bindings against the real
+           library and reports on the .tono. A source that does not parse
+           has no bindings to locate: its diagnostics are the output. *)
+        match read_file path with
+        | exception Sys_error msg -> { code = 1; out = ""; err = msg ^ "\n" }
+        | src ->
+            let file, diags = Parser.parse src in
+            if has_error diags then
+              { code = 1; out = ""; err = render_diags diags }
+            else
+              let lines =
+                List.map
+                  (fun s -> Yojson.Safe.to_string (Ext_sites.to_json s) ^ "\n")
+                  (Ext_sites.of_file file)
+              in
+              { code = 0; out = String.concat "" lines; err = "" })
+    | [ _; "ext-bindings" ] -> { code = 2; out = ""; err = usage ^ "\n" }
     | _ :: "fmt" :: path :: _ -> (
         match read_file path with
         | exception Sys_error msg -> { code = 1; out = ""; err = msg ^ "\n" }

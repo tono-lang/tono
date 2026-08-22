@@ -9,7 +9,7 @@
 
 use super::*;
 
-fn literal_of_json(v: &serde_json::Value) -> String {
+pub(in super::super) fn literal_of_json(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => format!("{s:?}"),
         serde_json::Value::Bool(b) => b.to_string(),

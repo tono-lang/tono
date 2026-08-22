@@ -453,6 +453,7 @@ mod surface;
 mod tests;
 mod transport;
 pub(crate) mod vector_tests;
+pub mod verify;
 
 use constructor::{err_var, new_decl};
 use op_method::{field_path_expr, op_method_decl, timeout_field_ident};

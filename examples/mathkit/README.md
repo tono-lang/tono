@@ -60,6 +60,10 @@ synchronous in TypeScript.
   library for real, one per target, unreachable until the bench builds.
 - `gate.tsv`: the record of what each check must reach today. The gate
   compares against it in both directions.
+- Every row runs `tono check` against the stand-in libraries before
+  generating, with the Go module and the `node_modules` the gate builds for
+  it: a binding that diverges from the library stops the row as
+  `check-red`, at the `.tono` line, before any generated file exists.
 - `scripts/check-ffi-bench.sh`: the gate, called from
   `scripts/check-example-compiles.sh`.
 
@@ -67,8 +71,9 @@ synchronous in TypeScript.
 
 Measured by `scripts/check-ffi-bench.sh` (run it to reproduce; every row
 prints the tool output that stopped it). Outcomes: `pass` (compiles, tests
-run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
-`run-red`, `refused`.
+run, driver runs), `frontend-red`, `check-red` (`tono check` found a binding
+that diverges from the stand-in library, reported on the `.tono`), `gen-red`,
+`build-red`, `test-red`, `run-red`, `refused`.
 
 | # | capability | where it shows | check | state today |
 |---|---|---|---|---|

@@ -239,7 +239,7 @@ pub(super) use ext_handle::{
 };
 
 #[path = "ext_render.rs"]
-mod ext_render;
+pub(super) mod ext_render;
 pub(super) use ext_render::{call_arg_expr, coerce, error_block, has_error_position, returns_expr};
 // declared_error_literal has no caller in this file itself: it is exported
 // for ext_tests's own unit coverage of it, not for anything ext.rs calls.

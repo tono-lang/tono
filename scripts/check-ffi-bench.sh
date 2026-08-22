@@ -2,9 +2,10 @@
 # The FFI bench: examples/mathkit declares one numeric library with the shapes
 # real libraries have (interface handle and variadic options in Go, one concrete
 # struct per constructor in Rust, classes and a synchronous method in
-# TypeScript), and this gate takes it the whole way: frontend, generation, the
-# target compiler against the stand-in library, the generated declared tests,
-# and a driver that runs the SDK against the library for real.
+# TypeScript), and this gate takes it the whole way: frontend, the binding
+# check against the stand-in library (tono check), generation, the target
+# compiler against the stand-in library, the generated declared tests, and a
+# driver that runs the SDK against the library for real.
 #
 # The bench was written before the emitters could pass it, so most checks are
 # expected red today. examples/mathkit/gate.tsv records the outcome each check
@@ -51,6 +52,24 @@ export PATH="$root/backend/codegen-tests/typescript/node_modules/.bin:$PATH"
 # the same dependencies; one target directory per run compiles those once.
 export CARGO_TARGET_DIR="$work/cargo-target"
 
+# `tono check` resolves each language's library the way the generated SDK
+# does: from a consumer tree. One Go module requiring the stand-in through a
+# `replace`, one node_modules holding the stand-in package, both built once.
+export TONO_FRONTEND="$frontend"
+check_go="$work/check-go"
+mkdir -p "$check_go"
+cat >"$check_go/go.mod" <<GOMOD
+module example.com/check
+
+go 1.21
+
+require tono-ext-fixture/mathkit v0.0.0
+replace tono-ext-fixture/mathkit => $bench/ext/go
+GOMOD
+check_ts="$work/check-ts"
+mkdir -p "$check_ts/node_modules/@tono-ext-fixture"
+cp -R "$bench/ext/ts" "$check_ts/node_modules/@tono-ext-fixture/mathkit"
+
 # The generation-time refusals the bench asserts, each by the phrase the
 # generator names the rule with: capability 10 (a handle forwarded to
 # another call is owned by that call, so a second reader is refused) and
@@ -70,6 +89,13 @@ run_check() {
 
     if ! "$frontend" compile "$bench/$source" --module mathkit >"$dir/ir.json" 2>>"$log"; then
         echo frontend-red
+        return
+    fi
+    # The bindings against the stand-in library, reported on the .tono. A
+    # finding here is what the target compiler would have said about a
+    # generated line; the gate wants it said about the declaration instead.
+    if ! "$tono" check "$bench/$source" --lib-root "go=$check_go" --lib-root "ts=$check_ts" >>"$log" 2>&1; then
+        echo check-red
         return
     fi
     if ! "$tono" gen --target "$target" --out "$dir/out" --go-module example.com/mathkit "$dir/ir.json" >>"$log" 2>&1; then
