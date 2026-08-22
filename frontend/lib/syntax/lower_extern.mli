@@ -9,7 +9,12 @@ val lower_call_expr : Ast.call_expr -> Ir.entry_call
 (* One call argument, shared by [lower_call_expr] and [Lower]'s own op
    [impl .field.method(args)] lowering (whose receiver is a field path, not
    an "ext" namespace, so it cannot reuse [lower_call_expr] itself). *)
-val lower_call_arg : Ast.call_arg -> Ir.call_arg
+val lower_call_arg :
+  ?handles:string list -> ?params:string list -> Ast.call_arg -> Ir.call_arg
+
+(* The language blocks of a top-level (error) struct, as the "foreign"
+   trait of its shape; [] when it has none. *)
+val foreign_trait : Ast.lang_block list -> Ir.trait list
 
 (* Lower a full [ext <name> { ... }] declaration. [lower_type]/[lower_select]
    are threaded in from [Lower] to avoid a dependency cycle. *)

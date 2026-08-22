@@ -1,0 +1,27 @@
+// Capability 11, the Go side: Go has no static method, and there is nothing
+// to refuse either. The library exposes the same constructor as a package
+// function, which is what the Go block writes; the callee is whatever the
+// library spells there, never a shape the generator has to recognise.
+ext mathkit {
+  go { #(tono-ext-fixture/mathkit) }
+
+  struct calculator {
+    go { #(Calculator[float64]) }
+
+    op compute(): float {
+      go { call: #(Compute)(#(ctx context.Context)) }
+    }
+  }
+
+  op parse(expr: string): calculator {
+    go { call: #(FromFormula[float64])(expr) }
+  }
+}
+
+pub struct client {
+  expr: string @arg
+  formula: mathkit.calculator = mathkit.parse(.expr)
+
+  op value(): float
+    impl .formula.compute()
+}

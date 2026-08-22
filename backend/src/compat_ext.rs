@@ -52,11 +52,11 @@ pub fn diff_ext_libs(baseline: &Model, current: &Model, out: &mut Vec<Change>) {
     }
 }
 
-/// An opaque type's instantiation (the foreign name and argument it
-/// monomorphizes) changing, appearing, or disappearing between two versions
-/// of the same handle: the emitted Go type spelling
-/// (`*pkg.Source[Settings]`) changes with it, so generated consumer code
-/// that names the concrete type no longer compiles.
+/// An opaque type's storage spelling for any language changing, appearing,
+/// or disappearing between two versions of the same handle: the emitted
+/// type (`*pkg.Source[Settings]`, `Box<dyn Calculator<f64>>`) changes with
+/// it, so generated consumer code that names the concrete type no longer
+/// compiles.
 fn diff_instances(module: &str, lib: &ExtLib, curr_lib: &ExtLib, out: &mut Vec<Change>) {
     let curr_types: BTreeMap<&str, &crate::ir_extern_model::OpaqueType> = curr_lib
         .types
@@ -67,28 +67,13 @@ fn diff_instances(module: &str, lib: &ExtLib, curr_lib: &ExtLib, out: &mut Vec<C
         let Some(curr_ty) = curr_types.get(ty.name.as_str()) else {
             continue;
         };
-        if ty.instance != curr_ty.instance {
+        if ty.langs != curr_ty.langs {
             out.push(Change {
                 key: format!("ext-instance {module}::{}.{}", lib.name, ty.name),
                 category: Category::SourceBreaking,
                 detail: format!(
-                    "{}.{}: the foreign instantiation changed; the emitted concrete \
-                     type no longer matches generated consumer code that names it",
-                    lib.name, ty.name
-                ),
-            });
-        }
-        // The interface marker flips the emitted Go spelling between a
-        // pointer and an interface value (`*pkg.T` vs `pkg.T`), the same
-        // consumer-facing surface the instantiation rule above guards.
-        if ty.interface != curr_ty.interface {
-            out.push(Change {
-                key: format!("ext-shape {module}::{}.{}", lib.name, ty.name),
-                category: Category::SourceBreaking,
-                detail: format!(
-                    "{}.{}: the handle's foreign shape changed between concrete \
-                     and interface; the emitted type spelling (pointer vs value) \
-                     no longer matches generated consumer code that names it",
+                    "{}.{}: the handle's storage type changed; the emitted type no \
+                     longer matches generated consumer code that names it",
                     lib.name, ty.name
                 ),
             });
@@ -228,7 +213,6 @@ mod tests {
                 externs: vec![ExternDecl {
                     name: "load".into(),
                     params: vec![ExternParam {
-                        variadic: false,
                         name: "service".into(),
                         r#type: tref("string"),
                     }],
@@ -239,13 +223,9 @@ mod tests {
                         call_args: vec![CallArg::Param("service".into())],
                         yields: vec![],
                         returns: None,
-                        errors: vec![],
-                        sync: false,
-                        infallible: false,
-                        ctx: false,
-                        receiver: None,
-                        is_new: false,
                     }],
+                    r#async: vec![],
+                    errors: vec![],
                 }],
             }],
         }
@@ -303,8 +283,7 @@ mod tests {
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "publisher".into(),
-            interface: false,
-            instance: None,
+            langs: vec![],
             methods: vec![ExternDecl {
                 name: "send".into(),
                 params: vec![],
@@ -315,13 +294,9 @@ mod tests {
                     call_args: vec![],
                     yields: vec![],
                     returns: None,
-                    errors: vec![],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                    receiver: None,
-                    is_new: false,
                 }],
+                r#async: vec![],
+                errors: vec![],
             }],
         }];
         let base = model(m.clone());
@@ -335,25 +310,26 @@ mod tests {
         assert!(out[0].key.contains("publisher.send@go"), "{}", out[0].key);
     }
 
+    fn storage(lang: &str, name: &str) -> crate::ir::ForeignLang {
+        crate::ir::ForeignLang {
+            lang: lang.into(),
+            name: name.into(),
+            fields: Default::default(),
+        }
+    }
+
     #[test]
-    fn a_changed_instantiation_is_source_breaking() {
+    fn a_changed_storage_type_is_source_breaking() {
         let mut m = base_module();
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "env_source".into(),
-            interface: false,
-            instance: Some(crate::ir_extern_model::Instance {
-                names: vec![crate::ir_extern_model::InstanceName {
-                    lang: "go".into(),
-                    name: "Source".into(),
-                }],
-                arg: tref("settings"),
-            }),
+            langs: vec![storage("go", "*Source[Settings]")],
             methods: vec![],
         }];
         let base = model(m.clone());
         let mut changed = m;
-        changed.ext_libs[0].types[0].instance.as_mut().unwrap().arg = tref("other_settings");
+        changed.ext_libs[0].types[0].langs[0].name = "*Source[OtherSettings]".into();
         let curr = model(changed);
 
         let mut out = Vec::new();
@@ -364,25 +340,23 @@ mod tests {
     }
 
     #[test]
-    fn a_flipped_interface_marker_is_source_breaking() {
+    fn a_storage_type_held_differently_is_source_breaking() {
         let mut m = base_module();
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "meter".into(),
-            interface: false,
-            instance: None,
+            langs: vec![storage("go", "*Meter")],
             methods: vec![],
         }];
         let base = model(m.clone());
         let mut changed = m;
-        changed.ext_libs[0].types[0].interface = true;
+        changed.ext_libs[0].types[0].langs[0].name = "Meter".into();
         let curr = model(changed);
 
         let mut out = Vec::new();
         diff_ext_libs(&base, &curr, &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].category, Category::SourceBreaking);
-        assert!(out[0].key.contains("ext-shape"), "{}", out[0].key);
         assert!(out[0].key.contains("meter"), "{}", out[0].key);
     }
 
@@ -392,14 +366,7 @@ mod tests {
         m.ext_libs[0].externs.clear();
         m.ext_libs[0].types = vec![OpaqueType {
             name: "env_source".into(),
-            interface: false,
-            instance: Some(crate::ir_extern_model::Instance {
-                names: vec![crate::ir_extern_model::InstanceName {
-                    lang: "go".into(),
-                    name: "Source".into(),
-                }],
-                arg: tref("settings"),
-            }),
+            langs: vec![storage("go", "*Source[Settings]")],
             methods: vec![],
         }];
         let base = model(m.clone());

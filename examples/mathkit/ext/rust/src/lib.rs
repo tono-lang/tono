@@ -11,12 +11,19 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
+/// The library's own error: a formula that does not parse is its own
+/// variant, so a caller recognises it by pattern.
 #[derive(Debug)]
-pub struct Error(String);
+pub enum Error {
+    Parse(String),
+    Other(String),
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        match self {
+            Error::Parse(s) | Error::Other(s) => f.write_str(s),
+        }
     }
 }
 
@@ -91,9 +98,9 @@ impl<T: 'static> FormulaCalculator<T> {
     fn evaluate(&self) -> Result<T, Error> {
         let fields: Vec<&str> = self.expr.split_whitespace().collect();
         if fields.len() != 3 {
-            return Err(Error(format!("mathkit: cannot parse {:?}", self.expr)));
+            return Err(Error::Parse(format!("mathkit: cannot parse {:?}", self.expr)));
         }
-        let parse = |s: &str| s.parse::<f64>().map_err(|e| Error(e.to_string()));
+        let parse = |s: &str| s.parse::<f64>().map_err(|e| Error::Parse(e.to_string()));
         let a = parse(fields[0])?;
         let b = parse(fields[2])?;
         let mut out = match fields[1] {
@@ -101,7 +108,7 @@ impl<T: 'static> FormulaCalculator<T> {
             "-" => a - b,
             "*" => a * b,
             "/" => a / b,
-            op => return Err(Error(format!("mathkit: unknown operator {op:?}"))),
+            op => return Err(Error::Other(format!("mathkit: unknown operator {op:?}"))),
         };
         if let Some(digits) = self.precision {
             let scale = 10f64.powi(i32::from(digits));
@@ -111,7 +118,7 @@ impl<T: 'static> FormulaCalculator<T> {
         boxed
             .downcast::<T>()
             .map(|v| *v)
-            .map_err(|_| Error("mathkit: formula results are f64".to_string()))
+            .map_err(|_| Error::Other("mathkit: formula results are f64".to_string()))
     }
 }
 
@@ -130,7 +137,7 @@ impl<T: Clone + Send + Sync> Calculator<T> for SeriesCalculator<T> {
             self.values
                 .last()
                 .cloned()
-                .ok_or_else(|| Error("mathkit: empty series".to_string()))
+                .ok_or_else(|| Error::Other("mathkit: empty series".to_string()))
         })
     }
 }
@@ -151,7 +158,7 @@ pub fn from_fallback<T>(
     calcs: Vec<Box<dyn Calculator<T>>>,
 ) -> Result<FallbackCalculator<T>, Error> {
     if strategy != "first" && strategy != "last" {
-        return Err(Error("mathkit: unknown fallback strategy".to_string()));
+        return Err(Error::Other("mathkit: unknown fallback strategy".to_string()));
     }
     Ok(FallbackCalculator { strategy, calcs })
 }
@@ -162,7 +169,7 @@ impl<T: Send + Sync> Calculator<T> for FallbackCalculator<T> {
     fn compute(&self) -> Computed<'_, T> {
         Box::pin(async move {
             let mut last: Result<T, Error> =
-                Err(Error("mathkit: no calculators to fall back to".to_string()));
+                Err(Error::Other("mathkit: no calculators to fall back to".to_string()));
             for c in &self.calcs {
                 match c.compute().await {
                     Ok(v) if self.strategy == "first" => return Ok(v),

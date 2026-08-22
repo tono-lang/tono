@@ -71,10 +71,10 @@ fn call_wire_bare_expr(
         .iter()
         .map(|a| call_arg_wire_expr(a, fields, request_var))
         .collect();
-    let awaited = if lang.sync { "" } else { ".await" };
+    let awaited = if decl.is_async("rust") { ".await" } else { "" };
     format!(
         "{}({}){awaited}",
-        qualified_symbol(&crate_ident, lang),
+        qualified_symbol(&crate_ident, lang, module),
         args.join(", ")
     )
 }
@@ -239,24 +239,19 @@ mod tests {
                 externs: vec![ExternDecl {
                     name: "sign".into(),
                     params: vec![ExternParam {
-                        variadic: false,
                         name: "request".into(),
                         r#type: Tref::Prim(Prim::String),
                     }],
                     r#return: return_type,
                     langs: vec![ExternLang {
                         lang: "rust".into(),
-                        symbol: "Client::sign".into(),
+                        symbol: "company_auth::Client::sign".into(),
                         call_args: vec![CallArg::Ref(vec!["request".into()])],
                         yields: vec![],
                         returns: None,
-                        errors: vec![],
-                        sync,
-                        infallible: false,
-                        ctx: false,
-                        receiver: None,
-                        is_new: false,
                     }],
+                    r#async: if sync { vec![] } else { vec!["rust".into()] },
+                    errors: vec![],
                 }],
             }],
         }
@@ -339,14 +334,13 @@ mod tests {
         assert_eq!(out, "company_auth::Client::sign(request.clone()).await");
     }
 
-    /// A static method in wire position is qualified by its receiver type
-    /// between the crate and the symbol, like a field's construction call.
+    /// A static method in wire position is spelled whole in the callee and
+    /// crate-qualified at its head, like a field's construction call.
     #[test]
     fn a_static_method_receiver_qualifies_the_wire_call_by_its_type() {
         let mut module = module_with_extern(Tref::Prim(Prim::String), false);
         let lang = &mut module.ext_libs[0].externs[0].langs[0];
-        lang.symbol = "sign".into();
-        lang.receiver = Some("Signer".into());
+        lang.symbol = "Signer::sign".into();
         let out = with_ctx(&module, |ctx| {
             call_wire_bare_expr(&call(), &module, ctx, "request")
         });

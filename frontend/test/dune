@@ -13,10 +13,8 @@
   extern_test
   extern_ir_decode_test
   extern_typecheck_test
-  extern_instance_test
-  ctx_marker_test
-  static_receiver_test
-  class_reference_test
+  foreign_spelling_test
+  lang_block_test
   ext_lib_collisions_test
   op_impl_test
   handle_call_source_test

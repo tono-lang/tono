@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 /// A module whose `demo` declares one `ext` block with a Go and a TypeScript
 /// module path. No `extern`/struct content: `ext_deps_for` only reads
 /// `ExtLib.langs`, so this is the minimal fixture that exercises it.
-const IR_WITH_EXT: &str = r#"{"tono_ir_version":27,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[],"ext_libs":[{"name":"companyconfig","langs":[{"lang":"go","path":"github.com/company/config"},{"lang":"ts","path":"@company/config"},{"lang":"rust","path":"company-config"}]}]}]}"#;
+const IR_WITH_EXT: &str = r#"{"tono_ir_version":28,"modules":[{"name":"demo","shapes":[{"id":"demo#Charge","kind":"structure","params":[],"members":[{"name":"amount","required":true,"target":{"prim":"i64"},"constraints":[],"traits":[]}],"operations":[]}],"operations":[],"ext_libs":[{"name":"companyconfig","langs":[{"lang":"go","path":"github.com/company/config"},{"lang":"ts","path":"@company/config"},{"lang":"rust","path":"company-config"}]}]}]}"#;
 
 fn tono() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tono"))

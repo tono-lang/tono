@@ -7,28 +7,29 @@
 # outcome: pass | frontend-red | gen-red | build-red | test-red | run-red | refused
 # id	target	source	expected
 bench	go	service.tono	gen-red
-bench	typescript	service.tono	build-red
-bench	rust	service.tono	build-red
+bench	typescript	service.tono	pass
+bench	rust	service.tono	pass
 01-go-interface-handle	go	probes/01-go-interface-handle.tono	pass
-# 02: the per-language name itself resolves (ConstantCalculator<f64>); the
-# red is the narrower gap left behind: compute is a trait method on the
-# concretely held type and nothing brings the trait into scope.
-02-rust-foreign-name	rust	probes/02-rust-foreign-name.tono	build-red
+# 02: the handle is held as the concrete type the Rust block spells, and the
+# trait method is reached through its own path, which is what brings the
+# trait into scope.
+02-rust-foreign-name	rust	probes/02-rust-foreign-name.tono	pass
 03-rust-concrete-types	rust	probes/03-rust-concrete-types.tono	pass
 04-go-variadic-options	go	probes/04-go-variadic-options.tono	pass
 05-rust-handle-collection	rust	probes/05-rust-handle-collection.tono	pass
 06-nested-call	go	probes/06-nested-call.tono	pass
-# 07: the handle resolves behind the trait now; the red is the struct
-# literal (the foreign options struct's own name and the Some(..) wrap).
-07-rust-struct-literal	rust	probes/07-rust-struct-literal.tono	build-red
+# 07: the options form's Rust block names the library's own type and spells
+# the field as Option<u8>, so the literal wraps the value in Some(..).
+07-rust-struct-literal	rust	probes/07-rust-struct-literal.tono	pass
 08-ts-new-construction	typescript	probes/08-ts-new-construction.tono	pass
 09-ts-sync-method	typescript	probes/09-ts-sync-method.tono	pass
 10-ownership-refused	go	probes/10-ownership-refused.tono	refused
-# 11: the call's receiver is the foreign type itself (FormulaCalculator.parse);
-# Go has no static method, so its row passes by being refused at generation.
+# 11: the callee is the foreign type itself (FormulaCalculator.parse); Go has
+# no static method and nothing to refuse: its block writes the package
+# function the library exposes there.
 11-ts-static-method	typescript	probes/11-ts-static-method.tono	pass
 11-rust-static-method	rust	probes/11-rust-static-method.tono	pass
-11-go-static-method-refused	go	probes/11-go-static-method-refused.tono	refused
+11-go-package-function	go	probes/11-go-package-function.tono	pass
 # 12: the call passes a declared handle's class itself (instantiate(AnswerCalculator));
 # Rust and Go have no type as a value, so their rows pass by being refused.
 12-ts-class-reference	typescript	probes/12-ts-class-reference.tono	pass

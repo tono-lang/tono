@@ -19,8 +19,8 @@
 //! argument out of its stored `Option` slot cannot compile either.
 
 use crate::ir::{
-    ArmValue, CallArg, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternLang,
-    ExternParam, ForeignField, ForeignStruct, LangPath, Member, Model, Module, OpImplCall,
+    ArmValue, CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam,
+    ForeignField, ForeignLang, ForeignStruct, LangPath, Member, Model, Module, OpImplCall,
     OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue, Select, SelectArm, Shape, ShapeKind,
     Source, Tref, YieldsPos, TONO_IR_VERSION,
 };
@@ -93,6 +93,7 @@ fn foreign_struct(
     }
     ForeignStruct {
         name: name.into(),
+        langs: vec![],
         fields,
     }
 }
@@ -101,7 +102,6 @@ fn string_params(names: &[&str]) -> Vec<ExternParam> {
     names
         .iter()
         .map(|n| ExternParam {
-            variadic: false,
             name: (*n).to_string(),
             r#type: Tref::Prim(Prim::String),
         })
@@ -137,13 +137,9 @@ fn constructor_extern(name: &str, params: Vec<ExternParam>, ret: Tref) -> Extern
             call_args: param_args(&param_names),
             yields: vec![],
             returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["rust".into()],
+        errors: vec![],
     }
 }
 
@@ -234,7 +230,12 @@ pub fn rust_ext_fixture_model() -> Model {
             params: vec![],
             members: vec![member("message")],
         },
-        traits: vec![],
+        traits: vec![crate::ir::Trait {
+            id: "foreign".into(),
+            value: serde_json::json!([
+                {"lang": "rust", "name": "BusError::Busy", "fields": {"message": "to_string()"}}
+            ]),
+        }],
     };
 
     let publish_op = Shape {
@@ -293,6 +294,7 @@ pub fn rust_ext_fixture_model() -> Model {
                     name: "cfg".into(),
                     r#type: Some(ref_to("companyconfig#Config")),
                     is_error: false,
+                    foreign: None,
                 }],
                 returns: Some(ReturnsLit {
                     r#type: ref_to("m#app_config"),
@@ -320,13 +322,9 @@ pub fn rust_ext_fixture_model() -> Model {
                         },
                     ],
                 }),
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec!["rust".into()],
+            errors: vec![],
         }],
     };
 
@@ -348,18 +346,25 @@ pub fn rust_ext_fixture_model() -> Model {
                     r#type: Tref::Prim(Prim::Bool),
                 },
             ],
+            langs: vec![],
         }],
         types: vec![
             OpaqueType {
                 name: "publisher".into(),
-                interface: false,
-                instance: None,
+                langs: vec![ForeignLang {
+                    lang: "rust".into(),
+                    name: "Publisher".into(),
+                    fields: Default::default(),
+                }],
                 methods: vec![],
             },
             OpaqueType {
                 name: "relay".into(),
-                interface: false,
-                instance: None,
+                langs: vec![ForeignLang {
+                    lang: "rust".into(),
+                    name: "Relay".into(),
+                    fields: Default::default(),
+                }],
                 methods: vec![ExternDecl {
                     name: "send".into(),
                     params: string_params(&["topic", "body"]),
@@ -372,6 +377,7 @@ pub fn rust_ext_fixture_model() -> Model {
                             name: "a".into(),
                             r#type: Some(ref_to("companybus#Ack")),
                             is_error: false,
+                            foreign: None,
                         }],
                         returns: Some(ReturnsLit {
                             r#type: ref_to("m#ack"),
@@ -386,16 +392,9 @@ pub fn rust_ext_fixture_model() -> Model {
                                 },
                             ],
                         }),
-                        errors: vec![ErrorBinding {
-                            sentinel: "busy".into(),
-                            r#type: "overloaded".into(),
-                        }],
-                        sync: false,
-                        infallible: false,
-                        ctx: false,
-                        receiver: None,
-                        is_new: false,
                     }],
+                    r#async: vec!["rust".into()],
+                    errors: vec!["m#overloaded".into()],
                 }],
             },
         ],
@@ -409,12 +408,10 @@ pub fn rust_ext_fixture_model() -> Model {
                 "attach",
                 vec![
                     ExternParam {
-                        variadic: false,
                         name: "source".into(),
                         r#type: ref_to("companybus#publisher"),
                     },
                     ExternParam {
-                        variadic: false,
                         name: "tag".into(),
                         r#type: Tref::Prim(Prim::String),
                     },

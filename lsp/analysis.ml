@@ -437,9 +437,8 @@ let ext_kind_items : CompletionItem.t list =
     ]
 
 (* The words of an ext library block, offered by frame: what may open a
-   declaration in an ext body, the fields (as `word:`) and markers of a
-   language block, the lone `extern` of a handle body. The prose is the
-   hover's, so the two never drift. *)
+   declaration in an ext body or a handle body, and the lines (as `word:`)
+   of a language block. The prose is the hover's, so the two never drift. *)
 let ext_word_item ?(suffix = "") (word : string) : CompletionItem.t =
   let documentation =
     Option.map (fun d -> `String d) (Hover_docs.construct_doc word)
@@ -451,18 +450,14 @@ let ext_frame_items (frame : Analysis_ext.frame) : CompletionItem.t list option
     =
   let open Analysis_ext in
   match frame with
-  | Ext ->
-      Some
-        (List.map ext_word_item
-           ("struct" :: Tono_frontend.Ext_lib_vocab.block_words))
-  | Type -> Some [ ext_word_item "extern" ]
+  | Ext -> Some (List.map ext_word_item [ "struct"; "op" ])
+  | Struct -> Some [ ext_word_item "op" ]
   | Lang ->
       Some
         (List.map
            (ext_word_item ~suffix:": ")
-           Tono_frontend.Ext_lib_vocab.lang_fields
-        @ List.map ext_word_item Tono_frontend.Ext_lib_vocab.lang_markers)
-  | Extern | Other -> None
+           Tono_frontend.Ext_lib_vocab.lang_fields)
+  | Op | Block | Other -> None
 
 (* The @str:: catalog, offered after the separator. *)
 let str_catalog_items : CompletionItem.t list =

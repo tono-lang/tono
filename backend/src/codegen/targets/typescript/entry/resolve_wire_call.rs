@@ -90,17 +90,12 @@ fn call_wire_stmt(
     let lib = find_lib(module, &call.ns);
     let decl = find_extern(lib, &call.fn_name);
     let lang = find_ts_lang(decl);
-    let lib_path = lib
-        .langs
-        .iter()
-        .find(|p| p.lang == "ts" || p.lang == "typescript")
-        .expect("validate::wire_call_resolves checked a ts module path exists");
-    let (imported, callee) = super::ext_call::static_callee(lang);
-    refs.push(Symbol::imported(
-        imported.to_string(),
-        lib_path.path.clone(),
-        imported.to_string(),
-    ));
+    super::ext_call::import_spelling(&lang.symbol, lib, module, refs);
+    let callee = match crate::codegen::foreign_spelling::constructed(&lang.symbol) {
+        Some(class) => format!("new {class}"),
+        None if decl.is_async("ts") => format!("await {}", lang.symbol),
+        None => lang.symbol.clone(),
+    };
     refs.push(module_symbol(
         &crate::codegen::ops::error_names().contract,
         module,
@@ -113,7 +108,7 @@ fn call_wire_stmt(
     let contract = crate::codegen::ops::error_names().contract;
     let contract_name = format!("{}.{}", call.ns, call.fn_name);
     format!(
-        "let {result_var};\ntry {{\n  {result_var} = await {callee}({args});\n}} catch (e) {{\n  throw new {contract}({contract_name:?}, e);\n}}\n",
+        "let {result_var};\ntry {{\n  {result_var} = {callee}({args});\n}} catch (e) {{\n  throw new {contract}({contract_name:?}, e);\n}}\n",
         args = args.join(", "),
     )
 }
@@ -219,7 +214,6 @@ mod tests {
                 externs: vec![ExternDecl {
                     name: "sign".into(),
                     params: vec![ExternParam {
-                        variadic: false,
                         name: "request".into(),
                         r#type: Tref::Prim(Prim::String),
                     }],
@@ -230,13 +224,9 @@ mod tests {
                         call_args: vec![CallArg::Ref(vec!["request".into()])],
                         yields: vec![],
                         returns: None,
-                        errors: vec![],
-                        sync: false,
-                        infallible: false,
-                        ctx: false,
-                        receiver: None,
-                        is_new: false,
                     }],
+                    r#async: vec!["ts".into()],
+                    errors: vec![],
                 }],
             }],
         }
@@ -327,12 +317,13 @@ mod tests {
         assert!(!refs.is_empty());
     }
 
-    /// A static method in wire position imports the receiver type and calls
-    /// a member of it, the same shape a field's own construction call takes.
+    /// A static method in wire position imports the type its spelling names
+    /// and calls a member of it, the same shape a field's own construction
+    /// call takes.
     #[test]
     fn call_wire_stmt_calls_a_static_method_on_the_imported_type() {
         let mut module = module_with_sign_extern();
-        module.ext_libs[0].externs[0].langs[0].receiver = Some("Signer".into());
+        module.ext_libs[0].externs[0].langs[0].symbol = "Signer.sign".into();
         let mut refs = Vec::new();
         let out = call_wire_stmt(
             &call(),

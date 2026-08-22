@@ -11,7 +11,6 @@ use super::super::ext_fixtures::ef;
 
 fn string_param(name: &str) -> ExternParam {
     ExternParam {
-        variadic: false,
         name: name.into(),
         r#type: Tref::Prim(Prim::String),
     }
@@ -44,13 +43,9 @@ fn bus_lib() -> ExtLib {
             call_args: vec![],
             yields: vec![],
             returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["ts".into()],
+        errors: vec![],
     };
     let status = ExternDecl {
         name: "status".into(),
@@ -67,6 +62,7 @@ fn bus_lib() -> ExtLib {
                     args: vec![],
                 }),
                 is_error: false,
+                foreign: None,
             }],
             returns: Some(ReturnsLit {
                 r#type: status_t,
@@ -88,13 +84,9 @@ fn bus_lib() -> ExtLib {
                     }),
                 }],
             }),
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["ts".into()],
+        errors: vec![],
     };
     // `tag` exercises `render_call_arg`'s `Lit`/`List`/`Ctor` branches
     // directly in the call template (no `Param` substitution involved);
@@ -122,13 +114,9 @@ fn bus_lib() -> ExtLib {
             ],
             yields: vec![],
             returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["ts".into()],
+        errors: vec![],
     };
     let echo = ExternDecl {
         name: "echo".into(),
@@ -140,13 +128,9 @@ fn bus_lib() -> ExtLib {
             call_args: vec![CallArg::Param("msg".into())],
             yields: vec![],
             returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["ts".into()],
+        errors: vec![],
     };
     let connect = ExternDecl {
         name: "connect".into(),
@@ -161,13 +145,9 @@ fn bus_lib() -> ExtLib {
             call_args: vec![],
             yields: vec![],
             returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["ts".into()],
+        errors: vec![],
     };
     ExtLib {
         name: "bus".into(),
@@ -179,16 +159,21 @@ fn bus_lib() -> ExtLib {
             ForeignStruct {
                 name: "raw_ack".into(),
                 fields: vec![string_field("ok")],
+                langs: vec![],
             },
             ForeignStruct {
                 name: "raw_status".into(),
                 fields: vec![string_field("code"), string_field("message")],
+                langs: vec![],
             },
         ],
         types: vec![OpaqueType {
             name: "publisher".into(),
-            interface: false,
-            instance: None,
+            langs: vec![crate::ir::ForeignLang {
+                lang: "ts".into(),
+                name: "Publisher".into(),
+                fields: Default::default(),
+            }],
             methods: vec![send, ping, status, tag, echo],
         }],
         externs: vec![connect],
@@ -328,6 +313,7 @@ fn module_with_ops(ops: Vec<Shape>) -> Module {
             publish_input_shape(),
             ack_shape(),
             status_shape(),
+            super::super::ext_fixtures::overloaded_shape("m"),
             Shape {
                 id: "m#client".into(),
                 kind: ShapeKind::Entry {
@@ -387,7 +373,7 @@ fn a_yields_projection_reads_the_foreign_verbatim_member_and_casts_to_the_logica
 fn a_declared_sentinel_throws_the_generated_typed_error() {
     let out = rendered_text(&module_with_ops(vec![publish_op()]));
     assert!(
-        out.contains("case \"BUSY\": throw new OverloadedError(e);"),
+        out.contains("if (e instanceof BusyError) { throw new OverloadedError(e); }"),
         "{out}"
     );
     assert!(

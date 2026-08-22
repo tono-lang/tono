@@ -28,13 +28,13 @@ let foreign_struct_collides_with_shape () =
     {|struct shared_name { note: string }
 
 ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct shared_name { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: shared_name)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -52,13 +52,13 @@ struct app_config { endpoint: string }
 let foreign_struct_duplicated_within_one_file () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct dup_thing { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: dup_thing)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -79,22 +79,22 @@ struct app_config { endpoint: string }
 let opaque_handle_applied_as_generic () =
   let src =
     {|ext bus {
-  go: "github.com/x/bus"
+  go { #(github.com/x/bus) }
 
   struct go_ack { OK: bool }
 
-  type publisher {
-    extern send(topic: string): ack {
+  struct publisher {
+    op send(topic: string): ack {
       go {
-        call: "Send"(topic)
+        call: #(Send)(topic)
         yields: (a: go_ack)
         returns: ack { accepted: .a.OK }
       }
     }
   }
 
-  extern connect(endpoint: string): publisher {
-    go { call: "Connect"(endpoint) }
+  op connect(endpoint: string): publisher {
+    go { call: #(Connect)(endpoint) }
   }
 }
 
@@ -125,13 +125,13 @@ struct holder { p: notabus.thing }
 let bare_foreign_name_applied_as_generic () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -153,14 +153,14 @@ struct holder { c: go_cfg[i64] }
 let param_consumed_through_nested_ctor_and_list () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
   struct go_opts { Names: []string }
 
-  extern load(service: string, region: string): app_config {
+  op load(service: string, region: string): app_config {
     go {
-      call: "Load"(go_opts { Names: [service, region] })
+      call: #(Load)(go_opts { Names: [service, region] })
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -184,13 +184,13 @@ struct app_config { endpoint: string }
 let nested_symbol_call_consumes_and_diagnoses_params () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string, precision: i64): app_config {
+  op load(service: string, precision: i64): app_config {
     go {
-      call: "Load"(service, "WithPrecision"(precision))
+      call: #(Load)(service, #(WithPrecision)(precision))
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -205,13 +205,13 @@ struct app_config { endpoint: string }
     (List.filter (String.equal "TC0078") (codes src));
   let bogus_src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service, "WithPrecision"(bogus))
+      call: #(Load)(service, #(WithPrecision)(bogus))
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -232,13 +232,13 @@ struct app_config { endpoint: string }
 let list_call_arg_consumes_and_diagnoses_params () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(opts: string variadic): app_config {
+  op load(opts: []string): app_config {
     go {
-      call: "Load"(opts)
+      call: #(Load)(opts)
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -253,13 +253,13 @@ struct app_config { endpoint: string }
     (List.filter (String.equal "TC0078") (codes src));
   let bogus_src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(): app_config {
+  op load(): app_config {
     go {
-      call: "Load"([bogus])
+      call: #(Load)([bogus])
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }

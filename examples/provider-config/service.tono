@@ -6,23 +6,24 @@ import tono.http
 // block names where the library lives; the handle's methods declare the
 // real call, its foreign return shape, and the projection into `endpoints`.
 ext envkit {
-  go: "github.com/example/envkit"
+  go { #(github.com/example/envkit) }
 
   struct go_endpoints { ReadURL: string, WriteURL: string }
 
-  type provider {
-    extern get(): endpoints {
+  struct provider {
+    go { #(*Provider) }
+
+    op get(): endpoints {
       go {
-        call: "Get"()
+        call: #(Get)(#(ctx context.Context))
         yields: (e: go_endpoints)
         returns: endpoints { endpoint_read: .e.ReadURL, endpoint_write: .e.WriteURL }
-        ctx
       }
     }
   }
 
-  extern new_environment_provider(name: string): provider {
-    go { call: "NewEnvironmentProvider"(name) }
+  op new_environment_provider(name: string): provider {
+    go { call: #(NewEnvironmentProvider)(name) }
   }
 }
 

@@ -217,7 +217,7 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
 let version_is_27 () =
-  Alcotest.(check int) "wire version" 27 Ir_json.current_ir_version
+  Alcotest.(check int) "wire version" 28 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 

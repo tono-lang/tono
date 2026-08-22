@@ -281,19 +281,19 @@ let ext_free_answer ctx ~refty (ed : Ast.extern_decl) (v : Ast.test_value) :
   Some (Ir.Answer_value (V.encode_value ctx ~refty ed.Ast.ed_return v))
 
 (* A handle method's stub answers with its declared return type, or one of the
-   error shapes bound across the method's own per-language ':errors' maps
-   (the stub is not scoped to one call site, so every language's sentinels
-   count). *)
+   error shapes its @errors lists. *)
 let ext_method_answer ctx ~refty (ed : Ast.extern_decl) (v : Ast.test_value) :
     Ir.stub_answer option =
   let error_names =
     List.sort_uniq compare
       (List.concat_map
-         (fun (l : Ast.extern_lang_body) ->
-           List.map
-             (fun (em : Ast.error_map_entry) -> em.Ast.em_type)
-             l.Ast.elb_errors)
-         ed.Ast.ed_langs)
+         (fun (t : Ast.trait) ->
+           if String.equal t.Ast.tname "errors" then
+             List.filter_map
+               (function Ast.AName n -> Some n | _ -> None)
+               t.Ast.targs
+           else [])
+         ed.Ast.ed_traits)
   in
   match v with
   | Ast.TvCtor c -> (

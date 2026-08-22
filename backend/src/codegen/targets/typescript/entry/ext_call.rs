@@ -65,6 +65,7 @@ use super::{
     field_camel, field_ts_type, foreign_handle, module_symbol, pascal, Helpers, Names, Resolver,
 };
 use crate::codegen::entries::EntryModel;
+use crate::codegen::foreign_spelling;
 use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
@@ -145,6 +146,7 @@ pub(super) fn field_ref(
 pub(super) fn render_arg(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
+    module: &Module,
     lib: &ExtLib,
     arg: &CallArg,
     params: &[ExternParam],
@@ -152,6 +154,25 @@ pub(super) fn render_arg(
     ref_expr: &dyn Fn(&EntryModel<'_>, &crate::codegen::casing::CasingConfig, &[String]) -> String,
 ) -> String {
     match arg {
+        // TypeScript is structurally typed: a parameter under its own
+        // spelling (`values: #(number[])`) passes as the value it is; the
+        // compiler grades the spelling against the library's own
+        // declaration.
+        CallArg::ParamAs { name, .. } => render_arg(
+            entry,
+            config,
+            module,
+            lib,
+            &CallArg::Param(name.clone()),
+            params,
+            site_args,
+            ref_expr,
+        ),
+        // TypeScript binds no position of its own: `validate_calls::
+        // foreign_position_binds` refuses a declared position here.
+        CallArg::Foreign(sp) => panic!(
+            "a declared position {sp:?} reached TypeScript codegen; validate_calls::foreign_position_binds should have refused it"
+        ),
         CallArg::Param(name) => {
             let idx = params
                 .iter()
@@ -162,7 +183,7 @@ pub(super) fn render_arg(
             let site = site_args.get(idx).unwrap_or_else(|| {
                 panic!("extern call site is missing an argument for parameter {name:?}")
             });
-            render_arg(entry, config, lib, site, &[], &[], ref_expr)
+            render_arg(entry, config, module, lib, site, &[], &[], ref_expr)
         }
         CallArg::Ref(path) => ref_expr(entry, config, path),
         CallArg::Lit(v) => json_literal(v),
@@ -170,7 +191,7 @@ pub(super) fn render_arg(
             "[{}]",
             items
                 .iter()
-                .map(|i| render_arg(entry, config, lib, i, params, site_args, ref_expr))
+                .map(|i| render_arg(entry, config, module, lib, i, params, site_args, ref_expr))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -180,7 +201,7 @@ pub(super) fn render_arg(
                 .iter()
                 .map(|(k, v)| format!(
                     "{k}: {}",
-                    render_arg(entry, config, lib, v, params, site_args, ref_expr)
+                    render_arg(entry, config, module, lib, v, params, site_args, ref_expr)
                 ))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -205,7 +226,7 @@ pub(super) fn render_arg(
             sc.symbol,
             sc.args
                 .iter()
-                .map(|a| render_arg(entry, config, lib, a, params, site_args, ref_expr))
+                .map(|a| render_arg(entry, config, module, lib, a, params, site_args, ref_expr))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -213,61 +234,109 @@ pub(super) fn render_arg(
         // imported identifier (the library constructs it; tono only names
         // it). The import itself is collected by `class_reference_imports`
         // at the call site that owns the seam's refs.
-        CallArg::TypeRef(handle) => class_reference_name(lib, handle),
+        CallArg::TypeRef(handle) => class_reference_name(lib, handle, module),
     }
 }
 
-/// The TypeScript spelling of a declared handle's class: the instantiation's
-/// own `ts` name when the surface wrote one (the library's spelling, emitted
-/// verbatim), else the cased handle name. This is the first TypeScript
-/// position that needs the foreign name at all (a handle's field type is the
-/// generated interface, never the foreign class); the fallback is the one Go
-/// and Rust use in their own foreign-name positions.
-pub(super) fn class_reference_name(lib: &ExtLib, handle: &str) -> String {
+/// Whether a word of a foreign spelling is one of this module's own
+/// generated types, which a spelling can use without importing it from
+/// the library.
+pub(super) fn is_local_type(module: &Module, word: &str) -> bool {
+    module
+        .shapes
+        .iter()
+        .any(|s| pascal(crate::codegen::entries::local_name(&s.id)) == word)
+}
+
+/// The library identifiers a spelling names, to import from the lib's own
+/// TypeScript module: `new ConstantCalculator` imports `ConstantCalculator`,
+/// `FormulaCalculator.parse` imports `FormulaCalculator`,
+/// `Calculator<number>[]` imports `Calculator`. Builtins and the module's
+/// own generated types need no import.
+pub(super) fn import_spelling(
+    spelling: &str,
+    lib: &ExtLib,
+    module: &Module,
+    refs: &mut Vec<Symbol>,
+) {
+    let names = foreign_spelling::library_names(spelling, &|w| {
+        foreign_spelling::ts_builtin(w) || is_local_type(module, w)
+    });
+    if names.is_empty() {
+        return;
+    }
+    let path = lib
+        .langs
+        .iter()
+        .find(|p| p.lang == "ts" || p.lang == "typescript")
+        .unwrap_or_else(|| {
+            panic!(
+                "ext lib {:?} declares no typescript module path (validate_entries should have rejected this)",
+                lib.name
+            )
+        });
+    for name in names {
+        refs.push(Symbol::imported(name.clone(), path.path.clone(), name));
+    }
+}
+
+/// The TypeScript spelling of a declared handle's class, for a class
+/// reference: the head of the storage type its `ts` block declares
+/// (`AnswerCalculator`), the one thing that can stand as a value. A handle
+/// with no `ts` block has no class to pass;
+/// `validate_calls::handle_storage_declared` refuses it first.
+pub(super) fn class_reference_name(lib: &ExtLib, handle: &str, module: &Module) -> String {
     let ty = lib.types.iter().find(|t| t.name == handle).unwrap_or_else(|| {
         panic!(
             "a class reference names undeclared handle {handle:?} in ext lib {:?} (the frontend should have rejected this)",
             lib.name
         )
     });
-    match ty
-        .instance
-        .as_ref()
-        .and_then(|i| i.name_for("ts").or_else(|| i.name_for("typescript")))
-    {
-        Some(name) => name.to_string(),
-        None => pascal(&ty.name),
-    }
+    let storage = ty.storage("ts").unwrap_or_else(|| {
+        panic!(
+            "handle {handle:?} declares no ts block; validate_calls::handle_storage_declared should have refused it"
+        )
+    });
+    foreign_spelling::library_names(storage, &|w| {
+        foreign_spelling::ts_builtin(w) || is_local_type(module, w)
+    })
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| storage.to_string())
 }
 
 /// One import per class reference anywhere in a `call:` line's argument
 /// tree, from the lib's own TypeScript module path (the same module the
 /// call's symbol comes from).
-pub(super) fn class_reference_imports(args: &[CallArg], lib: &ExtLib, refs: &mut Vec<Symbol>) {
+pub(super) fn class_reference_imports(
+    args: &[CallArg],
+    lib: &ExtLib,
+    module: &Module,
+    refs: &mut Vec<Symbol>,
+) {
     for arg in args {
         match arg {
             CallArg::TypeRef(handle) => {
-                let name = class_reference_name(lib, handle);
-                let path = lib
-                    .langs
-                    .iter()
-                    .find(|p| p.lang == "ts" || p.lang == "typescript")
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "ext lib {:?} declares no typescript module path (validate_entries should have rejected this)",
-                            lib.name
-                        )
-                    });
-                refs.push(Symbol::imported(name.clone(), path.path.clone(), name));
+                let name = class_reference_name(lib, handle, module);
+                import_spelling(&name, lib, module, refs);
             }
-            CallArg::List(items) => class_reference_imports(items, lib, refs),
-            CallArg::SymbolCall(sc) => class_reference_imports(&sc.args, lib, refs),
+            // A nested foreign call names a symbol of the same module.
+            CallArg::SymbolCall(sc) => {
+                import_spelling(&sc.symbol, lib, module, refs);
+                class_reference_imports(&sc.args, lib, module, refs);
+            }
+            CallArg::List(items) => class_reference_imports(items, lib, module, refs),
             CallArg::Ctor(ctor) => {
                 for v in ctor.fields.values() {
-                    class_reference_imports(std::slice::from_ref(v), lib, refs);
+                    class_reference_imports(std::slice::from_ref(v), lib, module, refs);
                 }
             }
-            CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) | CallArg::Call(_) => {}
+            CallArg::Param(_)
+            | CallArg::ParamAs { .. }
+            | CallArg::Foreign(_)
+            | CallArg::Ref(_)
+            | CallArg::Lit(_)
+            | CallArg::Call(_) => {}
         }
     }
 }
@@ -344,6 +413,7 @@ pub(super) fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> Str
 /// lookup is an internal-invariant check, not a validation.
 struct Lookup<'a> {
     lib: &'a ExtLib,
+    decl: &'a crate::ir::ExternDecl,
     lang: &'a ExternLang,
     params: &'a [ExternParam],
 }
@@ -382,6 +452,7 @@ fn lookup<'a>(module: &'a Module, field: &EntryField, call: &EntryCall) -> Looku
     Lookup {
         lib,
         lang,
+        decl,
         params: &decl.params,
     }
 }
@@ -405,13 +476,13 @@ fn call_body(
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
-    class_reference_imports(&lang.call_args, l.lib, refs);
+    class_reference_imports(&lang.call_args, l.lib, module, refs);
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
         for a in &lang.call_args {
             parts.push(render_arg(
-                entry, config, l.lib, a, l.params, &call.args, &field_ref,
+                entry, config, module, l.lib, a, l.params, &call.args, &field_ref,
             ));
         }
         parts.join(", ")
@@ -457,21 +528,27 @@ fn call_body(
         }
     };
 
-    let switch = sentinel_switch(&lang.errors, module, refs, sentinel_types, &|expr| {
-        format!("throw {expr};")
-    });
+    let switch = sentinel_switch(
+        &l.decl.errors,
+        l.lib,
+        module,
+        refs,
+        sentinel_types,
+        &|expr| format!("throw {expr};"),
+    );
 
-    // `new` constructs a TypeScript class instead of calling a plain
-    // function -- always synchronous by construction (a class constructor
-    // never returns a Promise), so no `await` here, unlike the plain-call
-    // shape below. The surrounding seam stays `async` regardless (an entry
-    // with any extern-call field is already async-constructed; this one
-    // call's own expression is the only thing that changes).
-    let (_, callee) = static_callee(lang);
-    let call_expr = if lang.is_new {
-        format!("new {callee}({args})")
-    } else {
-        format!("await {callee}({args})")
+    // The callee spelling is written as is, its library identifiers
+    // imported: `new ConstantCalculator(value)` constructs a class
+    // (synchronous by construction), `FormulaCalculator.parse(expr)` calls
+    // a static method, and a call the op declares asynchronous for this
+    // target is awaited. The surrounding seam stays `async` regardless (an
+    // entry with any extern-call field is already async-constructed; this
+    // one call's own expression is the only thing that changes).
+    import_spelling(&lang.symbol, l.lib, module, refs);
+    let call_expr = match foreign_spelling::constructed(&lang.symbol) {
+        Some(class) => format!("new {class}({args})"),
+        None if l.decl.is_async("ts") => format!("await {}({args})", lang.symbol),
+        None => format!("{}({args})", lang.symbol),
     };
 
     format!(
@@ -480,48 +557,39 @@ fn call_body(
     )
 }
 
-/// What a binding's call imports and calls: a static method
-/// (`"Type"."method"`) imports the receiver type and calls a member of it
-/// (`Type.method`); a free function imports and calls the symbol itself.
-pub(super) fn static_callee(lang: &ExternLang) -> (&str, String) {
-    match &lang.receiver {
-        Some(recv) => (recv.as_str(), format!("{recv}.{}", lang.symbol)),
-        None => (lang.symbol.as_str(), lang.symbol.clone()),
-    }
-}
-
-/// The `catch (e) { switch (...) { ... } }` block mapping every declared
-/// sentinel to its typed error class, shared by a free extern-fn call's own
-/// seam ([`call_body`]) and an op's own handle-method call
-/// (`ext_handle_call::impl_call_body`): identical shape, the only
-/// difference being how the caller wants a matched case to exit (`throw`
-/// here, `throw` there too but composed with the caller's own `throw`
-/// closure so the caller's overall statement style stays in one place).
-/// Empty when `errors` is empty, so a call with no declared sentinel adds no
-/// dead `switch`.
+/// The `catch (e) { ... }` checks mapping every error the op declares
+/// (`@errors`, in declared order) to its typed error class, recognized the
+/// way its own `ts` block says: the block names the class the library
+/// throws (`e instanceof ParseError`), imported from the library's module.
+/// Shared by a free extern-fn call's own seam ([`call_body`]) and an op's
+/// own handle-method call (`ext_handle_call::impl_call_body`); `throw`
+/// composes the caller's own exit statement. Empty when no declared error
+/// has a `ts` block, so a call with nothing to recognize adds no dead check.
 pub(super) fn sentinel_switch(
-    errors: &[crate::ir::ErrorBinding],
+    errors: &[String],
+    lib: &ExtLib,
     module: &Module,
     refs: &mut Vec<Symbol>,
     sentinel_types: &mut BTreeSet<String>,
     throw: &dyn Fn(String) -> String,
 ) -> String {
-    let mut cases = String::new();
-    for eb in errors {
-        let class_name = sentinel_error_class(&eb.r#type);
-        sentinel_types.insert(eb.r#type.clone());
+    let mut checks = String::new();
+    for id in errors {
+        let Some(fl) = crate::ir::ForeignLang::of_error(module, id, "ts") else {
+            continue;
+        };
+        let type_name = crate::codegen::entries::local_name(id);
+        let class_name = sentinel_error_class(type_name);
+        sentinel_types.insert(type_name.to_string());
         refs.push(module_symbol(&class_name, module));
-        cases.push_str(&format!(
-            "      case {sentinel:?}: {t}\n",
-            sentinel = eb.sentinel,
+        import_spelling(&fl.name, lib, module, refs);
+        checks.push_str(&format!(
+            "  if (e instanceof {sentinel}) {{ {t} }}\n",
+            sentinel = fl.name,
             t = throw(format!("new {class_name}(e)")),
         ));
     }
-    if cases.is_empty() {
-        String::new()
-    } else {
-        format!("  switch (e instanceof Error ? e.message : String(e)) {{\n{cases}  }}\n")
-    }
+    checks
 }
 
 /// The per-field seam bindings of an entry's extern-call fields: one mutable
@@ -551,29 +619,8 @@ pub(super) fn seam_decls(
         }
         let Some(call) = &field.call else { continue };
         let l = lookup(module, field, call);
-        let lib = module
-            .ext_libs
-            .iter()
-            .find(|lib| lib.name == call.ns)
-            .expect("looked up above");
-        let lib_path = lib
-            .langs
-            .iter()
-            .find(|p| p.lang == "ts" || p.lang == "typescript")
-            .unwrap_or_else(|| {
-                panic!(
-                    "ext lib {:?} declares no typescript module path (validate_entries should have rejected this)",
-                    lib.name
-                )
-            });
-
         let seam = ext_seam_var(n, field);
-        let (imported, _) = static_callee(l.lang);
-        let mut refs = vec![Symbol::imported(
-            imported.to_string(),
-            lib_path.path.clone(),
-            imported.to_string(),
-        )];
+        let mut refs = Vec::new();
         let mut sentinel_types = BTreeSet::new();
         let body = call_body(
             entry,
@@ -593,7 +640,7 @@ pub(super) fn seam_decls(
              // the foreign {sym} (an ESM import is a read-only binding, so a test that\n\
              // simulates an outcome swaps this module-local one instead).\n\
              let {seam}: (s: {settings}) => Promise<{target_ty}> = async (s) => {{\n{body}\n}};",
-            sym = l.lang.symbol,
+            sym = foreign_spelling::constructed(&l.lang.symbol).unwrap_or(&l.lang.symbol),
             settings = n.settings,
             body = indent_body(&body),
         );

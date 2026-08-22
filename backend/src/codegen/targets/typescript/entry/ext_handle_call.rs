@@ -54,6 +54,7 @@ use std::collections::BTreeSet;
 /// opaque type's own `ExternDecl` and its `ts`/`typescript` language block.
 struct Lookup<'a> {
     lib: &'a ExtLib,
+    decl: &'a crate::ir::ExternDecl,
     lang: &'a ExternLang,
     params: &'a [ExternParam],
 }
@@ -98,6 +99,7 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
     Lookup {
         lib,
         lang,
+        decl,
         params: &decl.params,
     }
 }
@@ -135,7 +137,7 @@ fn call_parts(
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
-    class_reference_imports(&lang.call_args, l.lib, refs);
+    class_reference_imports(&lang.call_args, l.lib, module, refs);
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
@@ -143,6 +145,7 @@ fn call_parts(
             parts.push(render_arg(
                 entry,
                 config,
+                module,
                 l.lib,
                 a,
                 l.params,
@@ -190,7 +193,14 @@ fn call_parts(
         }
     };
 
-    let switch = sentinel_switch(&lang.errors, module, refs, sentinel_types, site.throw);
+    let switch = sentinel_switch(
+        &l.decl.errors,
+        l.lib,
+        module,
+        refs,
+        sentinel_types,
+        site.throw,
+    );
     let en = error_names();
     let fallback = (site.throw)(format!("new {}({call_name:?}, e)", en.contract));
     (

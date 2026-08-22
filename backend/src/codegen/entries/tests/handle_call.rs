@@ -30,12 +30,6 @@ fn go_lang(symbol: &str) -> ExternLang {
         call_args: vec![],
         yields: vec![],
         returns: None,
-        errors: vec![],
-        sync: false,
-        infallible: false,
-        ctx: false,
-        receiver: None,
-        is_new: false,
     }
 }
 
@@ -51,13 +45,25 @@ fn lib_with_handle_method() -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: "handle".into(),
-            interface: false,
-            instance: None,
+            langs: ["go", "ts", "rust"]
+                .into_iter()
+                .map(|l| crate::ir::ForeignLang {
+                    lang: l.into(),
+                    name: if l == "go" {
+                        "*Handle".into()
+                    } else {
+                        "Handle".into()
+                    },
+                    fields: Default::default(),
+                })
+                .collect(),
             methods: vec![ExternDecl {
                 name: "read".into(),
                 params: vec![],
                 r#return: Tref::Prim(crate::ir::Prim::String),
                 langs: vec![go_lang("Read")],
+                r#async: vec![],
+                errors: vec![],
             }],
         }],
         externs: vec![ExternDecl {
@@ -68,6 +74,8 @@ fn lib_with_handle_method() -> ExtLib {
                 args: vec![],
             },
             langs: vec![go_lang("Make")],
+            r#async: vec![],
+            errors: vec![],
         }],
     }
 }

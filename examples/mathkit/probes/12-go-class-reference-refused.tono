@@ -3,22 +3,26 @@
 // passing a class reference has nothing correct to render as. The generator
 // refuses it naming the site; this probe passes when generation is refused.
 ext mathkit {
-  go: "tono-ext-fixture/mathkit"
+  go { #(tono-ext-fixture/mathkit) }
 
-  type calculator("Calculator", float) interface {
-    extern compute(): float {
-      go { call: "Compute"() ctx }
+  struct calculator {
+    go { #(Calculator[float64]) }
+
+    op compute(): float {
+      go { call: #(Compute)(#(ctx context.Context)) }
     }
   }
 
-  type answer_calculator {
-    extern compute(): float {
-      go { call: "Compute"() ctx }
+  struct answer_calculator {
+    go { #(AnswerCalculator) }
+
+    op compute(): float {
+      go { call: #(Compute)(#(ctx context.Context)) }
     }
   }
 
-  extern make(): calculator {
-    go { call: "Instantiate"(type answer_calculator) }
+  op make(): calculator {
+    go { call: #(Instantiate)(answer_calculator) }
   }
 }
 

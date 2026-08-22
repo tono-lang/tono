@@ -7,17 +7,18 @@ import tono.errors
 // target; each language block declares the real call, its foreign return
 // shape, and the projection into `app_config`.
 ext configlib {
-  go: "github.com/example/configlib"
-  ts: "@example/configlib"
-  rust: "configlib"
+  go { #(github.com/example/configlib) }
+  ts { #(@example/configlib) }
+  rust { #(configlib) }
 
   struct go_config { Host: string, DevHost: string, Env: string, Token: string }
   struct ts_config { host: string, token: string }
   struct rust_config { host: string, dev_host: string, env: string, token: string }
 
-  extern load(service: string, region: string): app_config {
+  @async(ts, rust)
+  op load(service: string, region: string): app_config {
     go {
-      call: "Load"(service, region)
+      call: #(Load)(service, region)
       yields: (cfg: go_config)
       returns: app_config {
         endpoint: match .cfg.Env { "prod" => .cfg.Host, _ => .cfg.DevHost }
@@ -25,12 +26,12 @@ ext configlib {
       }
     }
     ts {
-      call: "load"(service, region)
+      call: #(load)(service, region)
       yields: (cfg: ts_config)
       returns: app_config { endpoint: .cfg.host, token: .cfg.token }
     }
     rust {
-      call: "load"(service, region)
+      call: #(load)(service, region)
       yields: (cfg: rust_config)
       returns: app_config {
         endpoint: match .cfg.env { "prod" => .cfg.host, _ => .cfg.dev_host }

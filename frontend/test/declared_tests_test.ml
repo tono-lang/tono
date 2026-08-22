@@ -361,19 +361,19 @@ let ext_base =
   with_base
     {|
 ext companyconfig {
-  go: "github.com/company/config"
-  ts: "@company/config"
+  go { #(github.com/company/config) }
+  ts { #(@company/config) }
 
   struct go_config { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_config)
       returns: app_config { endpoint: .cfg.Host }
     }
     ts {
-      call: "load"(service)
+      call: #(load)(service)
       yields: (cfg: go_config)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -381,36 +381,35 @@ ext companyconfig {
 }
 
 ext companybus {
-  go: "github.com/company/bus"
-  ts: "@company/bus"
+  go { #(github.com/company/bus) }
+  ts { #(@company/bus) }
 
   struct go_ack { ID: string }
 
-  type publisher {
-    extern send(topic: string): ack {
+  struct publisher {
+    @errors(overloaded)
+    op send(topic: string): ack {
       go {
-        call: "Send"(topic)
+        call: #(Send)(topic)
         yields: (a: go_ack)
         returns: ack { id: .a.ID }
-        errors: { "ErrBusy" => overloaded }
       }
       ts {
-        call: "send"(topic)
+        call: #(send)(topic)
         yields: (a: go_ack)
         returns: ack { id: .a.ID }
-        errors: { "BUSY" => overloaded }
       }
     }
 
-    extern count(): i32 {
-      go { call: "Count"() }
-      ts { call: "count"() }
+    op count(): i32 {
+      go { call: #(Count)() }
+      ts { call: #(count)() }
     }
   }
 
-  extern connect(endpoint: string): publisher {
-    go { call: "Connect"(endpoint) }
-    ts { call: "connect"(endpoint) }
+  op connect(endpoint: string): publisher {
+    go { call: #(Connect)(endpoint) }
+    ts { call: #(connect)(endpoint) }
   }
 }
 

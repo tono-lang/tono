@@ -107,7 +107,7 @@ pub use crate::ir_tests_model::*;
 /// handle passed as a class reference, for a library that takes the class
 /// itself and constructs on its own; carried as the handle's tono name and
 /// spelled by each emitter as that handle's foreign name.
-pub const TONO_IR_VERSION: u32 = 27;
+pub const TONO_IR_VERSION: u32 = 28;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

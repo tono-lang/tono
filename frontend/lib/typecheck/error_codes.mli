@@ -121,7 +121,7 @@ val extern_yields_multiple_errors : string
 val extern_yields_required : string
 val extern_returns_type_mismatch : string
 val extern_returns_ref_unknown : string
-val extern_error_sentinel_unknown : string
+val extern_error_unknown : string
 val extern_param_unconsumed : string
 val ext_lib_module_path_conflict : string
 val extern_duplicate_name : string
@@ -161,11 +161,11 @@ val match_subject_ref_invalid : string
 
 (* An opaque foreign type's instantiation clause declared more than once
    with the same foreign name and argument (see error_codes.ml). *)
-val instance_duplicate : string
+val struct_lang_block_misplaced : string
 
 (* The `ctx` marker on a language block that is not a foreign handle's own
    method (see error_codes.ml for the rule). *)
-val extern_ctx_on_free_call : string
+val extern_async_target_invalid : string
 
 (* A field's "= .field.method(args)" source names a method whose declared
    return is not the field's declared type. *)
@@ -177,15 +177,15 @@ val register : string -> string
 
 (* Every registered code, for the uniqueness/format test. *)
 val registered : unit -> string list
-val instance_names_mismatch : string
+val lang_block_mismatch : string
 
-val extern_receiver_on_method : string
+val extern_trait_invalid : string
 (** A call: line naming a type as receiver on a foreign handle's own method (the
     handle is already the receiver). *)
 
-val extern_receiver_with_new : string
+val lang_block_field_unknown : string
 (** A call: line with a type receiver and the "new" marker at once. *)
 
-val extern_type_arg_unknown : string
+val extern_name_ambiguous : string
 (** A call: argument passing a class reference that names no opaque handle of
     its own ext block. *)

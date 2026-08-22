@@ -20,7 +20,14 @@ let returns_field =
   `Assoc [ ("name", `String "r"); ("value", returns_value_field) ]
 
 let returns_lit = `Assoc [ ("type", tref); ("fields", `List [ returns_field ]) ]
-let error_binding = `Assoc [ ("sentinel", `String "S"); ("type", `String "T") ]
+
+let foreign_lang =
+  `Assoc
+    [
+      ("lang", `String "go");
+      ("name", `String "ErrParse");
+      ("fields", `Assoc [ ("message", `String "Error()") ]);
+    ]
 
 let extern_lang =
   `Assoc
@@ -30,7 +37,6 @@ let extern_lang =
       ("call_args", `List []);
       ("yields", `List [ yields_pos ]);
       ("returns", returns_lit);
-      ("errors", `List [ error_binding ]);
     ]
 
 let extern_param = `Assoc [ ("name", `String "p"); ("type", tref) ]
@@ -163,15 +169,18 @@ let missing_returns_type () =
   let lang = with_ "returns" bad_returns extern_lang in
   ok_decode "returns missing type" (model_with (with_extern lang))
 
-let missing_error_binding_sentinel () =
-  let bad = without "sentinel" error_binding in
-  let lang = with_ "errors" (`List [ bad ]) extern_lang in
-  ok_decode "error binding missing sentinel" (model_with (with_extern lang))
+let foreign_lang_decodes ~name bad =
+  match Ir_json_extern.decode_foreign_lang bad with
+  | Ok _ -> Alcotest.failf "%s: expected an error" name
+  | Error _ -> ()
 
-let missing_error_binding_type () =
-  let bad = without "type" error_binding in
-  let lang = with_ "errors" (`List [ bad ]) extern_lang in
-  ok_decode "error binding missing type" (model_with (with_extern lang))
+let missing_foreign_lang_lang () =
+  foreign_lang_decodes ~name:"foreign lang missing lang"
+    (without "lang" foreign_lang)
+
+let missing_foreign_lang_name () =
+  foreign_lang_decodes ~name:"foreign lang missing name"
+    (without "name" foreign_lang)
 
 let missing_extern_lang_lang () =
   let bad = without "lang" extern_lang in
@@ -231,10 +240,10 @@ let () =
           Alcotest.test_case "returns field value" `Quick
             missing_returns_field_value;
           Alcotest.test_case "returns type" `Quick missing_returns_type;
-          Alcotest.test_case "error binding sentinel" `Quick
-            missing_error_binding_sentinel;
-          Alcotest.test_case "error binding type" `Quick
-            missing_error_binding_type;
+          Alcotest.test_case "foreign lang lang" `Quick
+            missing_foreign_lang_lang;
+          Alcotest.test_case "foreign lang name" `Quick
+            missing_foreign_lang_name;
           Alcotest.test_case "extern lang lang" `Quick missing_extern_lang_lang;
           Alcotest.test_case "extern lang symbol" `Quick
             missing_extern_lang_symbol;

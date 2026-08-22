@@ -287,7 +287,7 @@ let hover_ext_word_no_longer_lists_a_lifecycle () =
   let v = hover_value src (pos 0 1) in
   Alcotest.(check bool)
     "no lifecycle slot in the hover" false (contains v "client_init");
-  Alcotest.(check bool) "points at extern" true (contains v "extern")
+  Alcotest.(check bool) "points at the ops" true (contains v "ops that call")
 
 let hover_primitive () =
   let v = hover_value two_shapes (pos 1 18) in

@@ -14,6 +14,7 @@ type kind =
   | Ident of string
   | Prim of string
   | Str of string
+  | Foreign of string
   | Int of int
   | Float of float
   | At

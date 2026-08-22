@@ -1,30 +1,34 @@
-// Capability 4 (variadic parameter) and 6 (nested call in call:): the Go
-// shape is FromFormula(expr, WithPrecision(4)), an option built by a
-// nested call and passed through a variadic logical parameter. "option" has
-// no methods of its own (WithPrecision is a free function, not one of its
-// methods); the "interface" marker still fits, since a Go func value is
-// exactly the "not a concrete struct held by pointer" shape it names.
+// Capability 4 (variadic parameter): FromFallback takes
+// `calcs ...Calculator[T]`. The logical parameter is a collection; the Go
+// binding spells what it crosses as, `...Calculator[float64]`, and the
+// generated call spreads the caller's list into the variadic slot.
 ext mathkit {
-  go: "tono-ext-fixture/mathkit"
+  go { #(tono-ext-fixture/mathkit) }
 
-  type calculator("Calculator", float) interface {
-    extern compute(): float {
-      go { call: "Compute"() ctx }
+  struct calculator {
+    go { #(Calculator[float64]) }
+
+    op compute(): float {
+      go { call: #(Compute)(#(ctx context.Context)) }
     }
   }
 
-  type option interface {
+  op from_constant(value: float): calculator {
+    go { call: #(FromConstant[float64])(value) }
   }
 
-  extern from_formula(expr: string, opts: option variadic): calculator {
-    go { call: "FromFormula"(expr, opts) }
+  op from_fallback(strategy: string, calcs: []calculator): calculator {
+    go { call: #(FromFallback[float64])(strategy, calcs: #(...Calculator[float64])) }
   }
 }
 
 pub struct client {
-  expr: string @arg
-  formula: mathkit.calculator = mathkit.from_formula(.expr, ["WithPrecision"(4)])
+  base: float @arg
+  other: float @arg
+  primary: mathkit.calculator = mathkit.from_constant(.base)
+  secondary: mathkit.calculator = mathkit.from_constant(.other)
+  combined: mathkit.calculator = mathkit.from_fallback("first", [.primary, .secondary])
 
   op value(): float
-    impl .formula.compute()
+    impl .combined.compute()
 }

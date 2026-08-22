@@ -131,10 +131,10 @@ fn method_signature(
     // interface member key must match it verbatim, or the generated call
     // site (`recv.{symbol}(..)`) would no longer type-check against this
     // same interface.
-    let ret = if lang.sync {
-        ret
-    } else {
+    let ret = if decl.is_async("ts") {
         format!("Promise<{ret}>")
+    } else {
+        ret
     };
     (format!("{}({params}): {ret};", lang.symbol), struct_id)
 }

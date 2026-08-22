@@ -70,6 +70,7 @@ fn foreign_struct(name: &str, fields: &[&str]) -> ForeignStruct {
                 r#type: string_t(),
             })
             .collect(),
+        langs: vec![],
     }
 }
 
@@ -102,6 +103,13 @@ fn cfg_lang(
     write_field: &str,
     ctx: bool,
 ) -> ExternLang {
+    let call_args = if ctx {
+        std::iter::once(CallArg::Foreign("ctx context.Context".into()))
+            .chain(call_args)
+            .collect()
+    } else {
+        call_args
+    };
     ExternLang {
         lang: lang.into(),
         symbol: symbol.into(),
@@ -110,6 +118,7 @@ fn cfg_lang(
             name: "c".into(),
             r#type: Some(reference(&format!("kvs#{raw}"))),
             is_error: false,
+            foreign: None,
         }],
         returns: Some(ReturnsLit {
             r#type: reference("kvs#cfg"),
@@ -124,17 +133,11 @@ fn cfg_lang(
                 },
             ],
         }),
-        errors: vec![],
-        sync: false,
-        infallible: false,
-        ctx,
-        receiver: None,
-        is_new: false,
     }
 }
 
-/// A `cfg`-returning handle method bound for all three targets. `ctx` marks
-/// the Go binding as taking a context (only meaningful there).
+/// A `cfg`-returning handle method bound for all three targets. `ctx` makes
+/// the Go binding declare its context position (only meaningful there).
 fn cfg_method(
     name: &str,
     params: Vec<ExternParam>,
@@ -193,6 +196,16 @@ fn cfg_method(
                 false,
             ),
         ],
+        r#async: vec!["ts".into(), "rust".into()],
+        errors: vec![],
+    }
+}
+
+fn foreign_lang(lang: &str, name: &str) -> crate::ir::ForeignLang {
+    crate::ir::ForeignLang {
+        lang: lang.into(),
+        name: name.into(),
+        fields: Default::default(),
     }
 }
 
@@ -203,12 +216,6 @@ fn plain_lang(lang: &str, symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
         call_args,
         yields: vec![],
         returns: None,
-        errors: vec![],
-        sync: false,
-        infallible: false,
-        ctx: false,
-        receiver: None,
-        is_new: false,
     }
 }
 
@@ -241,15 +248,17 @@ fn envkit() -> ExtLib {
         ],
         types: vec![OpaqueType {
             name: "provider".into(),
-            interface: false,
-            instance: None,
+            langs: vec![
+                foreign_lang("go", "*Provider"),
+                foreign_lang("ts", "Provider"),
+                foreign_lang("rust", "Provider"),
+            ],
             methods: vec![
                 cfg_method("get", vec![], vec![], true),
                 cfg_method(
                     "get_for",
                     vec![ExternParam {
                         name: "region".into(),
-                        variadic: false,
                         r#type: string_t(),
                     }],
                     region_arg,
@@ -261,7 +270,6 @@ fn envkit() -> ExtLib {
             name: "new_provider".into(),
             params: vec![ExternParam {
                 name: "name".into(),
-                variadic: false,
                 r#type: string_t(),
             }],
             r#return: reference("envkit#provider"),
@@ -270,6 +278,8 @@ fn envkit() -> ExtLib {
                 plain_lang("ts", "newProvider", name_arg.clone()),
                 plain_lang("rust", "new_provider", name_arg),
             ],
+            r#async: vec!["ts".into(), "rust".into()],
+            errors: vec![],
         }],
     }
 }

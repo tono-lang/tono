@@ -45,9 +45,11 @@ synchronous in TypeScript.
 - `service.tono`: the bench proper. Declares the whole contract for the
   three targets and composes it: three constructors of different shapes, the
   fallback receiving two constructed handles, the results feeding two
-  operations, plus the declared tests that stub every foreign call. Where
-  the language cannot express a shape yet, a comment names the capability
-  below and the nearest form is declared instead of bending the library.
+  operations, plus the declared tests that stub every foreign call. Two
+  rules carry the file: `#(...)` is a foreign spelling, emitted verbatim and
+  never text; and everything specific to one language lives in that
+  language's block, at every level (the ext header, a struct, a field, an
+  op, the error struct).
 - `probes/NN-*.tono`: one small single-target file per capability, so the
   gate can report each capability on its own instead of one red for
   everything. `10-ownership-refused.tono` is the negative one: it must be
@@ -70,62 +72,55 @@ run, driver runs), `frontend-red`, `gen-red`, `build-red`, `test-red`,
 
 | # | capability | where it shows | check | state today |
 |---|---|---|---|---|
-| 1 | a foreign handle that is an interface, not a pointer to a struct | Go `Calculator[T]` | `01-go-interface-handle` | pass: the `interface` marker on the handle declaration drops the pointer, and the SDK holds the interface value itself |
-| 2 | the foreign type name per language | `Calculator` (Go, TS) vs `ConstantCalculator` (Rust) | `02-rust-foreign-name` | build-red, one step further: the instantiation now names the type per language (`type calculator(rust: "ConstantCalculator", float)`), verbatim, and the type resolves; what remains is that `compute` is a trait method on the concrete type and nothing brings the trait into scope |
-| 3 | several concrete types for one logical handle | Rust: four structs, one trait | `03-rust-concrete-types` | pass: the `interface` marker makes the handle the trait; Rust holds `Box<dyn Calculator<f64>>` and boxes each constructor's concrete value where it is built, so the concrete types never need a tono name |
-| 4 | a variadic parameter | `opts ...Option`, `calcs ...Calculator[T]` | `04-go-variadic-options` | pass: the `variadic` marker on the logical parameter's type spreads a call-site list as `[]Option{...}...` |
-| 5 | a collection of handles as an argument | `Vec<Box<dyn Calculator<T>>>`, `Calculator<T>[]` | `05-rust-handle-collection` | pass: a `variadic` parameter's call-site list collects the already-built handles into the collection the library expects |
-| 6 | a nested call in `call:` | `WithPrecision(4)` inside `FromFormula` | `06-nested-call` | pass: a string immediately followed by `(` in a `call:` argument is a nested foreign-symbol call |
-| 7 | a struct literal in `call:` | `FormulaOptions { precision: 4 }` | `07-rust-struct-literal` | build-red: accepted by the frontend; Rust cannot be told the foreign struct's own name nor wrap the value in `Some` (blocked first by 3) |
-| 8 | construction by `new`, not a function call | TypeScript classes | `08-ts-new-construction` | pass: the `new` marker on the language binding constructs with `new Symbol(args)` instead of calling it plainly |
-| 9 | a method synchronous in one target, asynchronous in the others | `compute()` in TS | `09-ts-sync-method` | pass: the `sync` marker now reaches the generated handle interface's own method signature, not just the call site |
+| 1 | a foreign handle that is an interface, not a pointer to a struct | Go `Calculator[T]` | `01-go-interface-handle` | pass: the handle's `go` block spells the whole storage type, `#(Calculator[float64])`, without `*`, and the SDK holds the interface value itself |
+| 2 | the foreign type name per language | `Calculator` (Go, TS) vs `ConstantCalculator` (Rust) | `02-rust-foreign-name` | pass: each language block spells its own storage type; a handle held as the concrete `#(ConstantCalculator<f64>)` reaches the trait method through its path, `call: #(Calculator::compute)()`, which is what brings the trait into scope |
+| 3 | several concrete types for one logical handle | Rust: four structs, one trait | `03-rust-concrete-types` | pass: the Rust block spells `#(Box<dyn Calculator<f64>>)`, so each constructor's concrete value is boxed where it is built and the concrete types never need a tono name |
+| 4 | a variadic parameter | `opts ...Option`, `calcs ...Calculator[T]` | `04-go-variadic-options` | pass: the logical parameter is a collection (`calcs: []calculator`) and the Go block spells what it crosses as, `calcs: #(...Calculator[float64])`, which spreads the caller's list into the variadic slot |
+| 5 | a collection of handles as an argument | `Vec<Box<dyn Calculator<T>>>`, `Calculator<T>[]` | `05-rust-handle-collection` | pass: the same collection parameter, spelled `#(Vec<Box<dyn Calculator<f64>>>)` in the Rust block, collects the already-built handles |
+| 6 | a nested call in `call:` | `WithPrecision(4)` inside `FromFormula` | `06-nested-call` | pass: a spelling immediately followed by `(` in a `call:` argument is a nested foreign call, `#(WithPrecision)(4)` |
+| 7 | a struct literal in `call:` | `FormulaOptions { precision: 4 }` | `07-rust-struct-literal` | pass: the form's Rust block names the library's own type and spells the field, `rust { #(FormulaOptions)  precision: #(Option<u8>) }`, so the literal renders as `FormulaOptions { precision: Some(..) }` |
+| 8 | construction by `new`, not a function call | TypeScript classes | `08-ts-new-construction` | pass: the callee spelling carries the `new`, `call: #(new ConstantCalculator)(value)` |
+| 9 | a method synchronous in one target, asynchronous in the others | `compute()` in TS | `09-ts-sync-method` | pass: `@async(rust)` lists the targets where the foreign call is asynchronous; absence means synchronous, so TypeScript's `compute()` is neither awaited nor declared as a `Promise` |
 | 10 | a handle composed and read separately | fallback + a read of one of its inputs | `10-ownership-refused` | refused, as intended: single ownership is the rule, and the generator names the field and both readers |
-| 11 | a static method as the constructor: the call's receiver is the foreign type itself | `FormulaCalculator.parse(expr)` (TS), `FormulaCalculator::parse(expr)` (Rust) | `11-ts-static-method`, `11-rust-static-method`, `11-go-static-method-refused` | pass: the type is a second string before the method (`call: "FormulaCalculator"."parse"(expr)`), imported in TypeScript and qualifying the path in Rust; Go has no static method, so its generation refuses the binding naming the site (refused, as intended) |
-| 12 | a class reference as an argument: the library takes the class itself and constructs it | `instantiate(AnswerCalculator)` (TS, `new () => T`) | `12-ts-class-reference`, `12-rust-class-reference-refused`, `12-go-class-reference-refused` | pass: `type answer_calculator` in a `call:` argument names a declared handle and passes its class, imported in TypeScript; Rust and Go have no type as a value, so their generation refuses the binding naming the site (refused, as intended) |
+| 11 | a static method as the constructor: the call's receiver is the foreign type itself | `FormulaCalculator.parse(expr)` (TS), `FormulaCalculator::parse(expr)` (Rust) | `11-ts-static-method`, `11-rust-static-method`, `11-go-package-function` | pass: the receiver is inside the spelling (`#(FormulaCalculator.parse)`, `#(FormulaCalculator::parse)`), imported in TypeScript and crate-qualified at its head in Rust; Go has no static method and nothing to refuse: its block writes the package function the library exposes there |
+| 12 | a class reference as an argument: the library takes the class itself and constructs it | `instantiate(AnswerCalculator)` (TS, `new () => T`) | `12-ts-class-reference`, `12-rust-class-reference-refused`, `12-go-class-reference-refused` | pass: a bare name in a `call:` argument that is a handle of the same ext block (and no parameter) passes its class, the head of the handle's `ts` storage type; Rust and Go have no type as a value, so their generation refuses the binding naming the site (refused, as intended) |
 
-Passing today: capabilities 1, 3, 4, 5, 6, 8, 9, 11 and 12, plus capability
-10 (the one that is a rule, not a gap). Two gaps remain (2 and 7, both blocked on
-per-language foreign-type naming reaching Rust's trait scope and `Some`
-wrapping, a separate capability).
+Every capability passes today, capability 10 by being refused (the one that
+is a rule, not a gap).
 
 ### The bench proper (`service.tono`)
 
-The full three-target file compiles through the frontend; Go stops at
-generation (its declared-test emitter does not carry what the bench needs)
-while TypeScript and Rust generate and stop at the capabilities:
+The full three-target file compiles through the frontend; TypeScript and
+Rust generate, build, run their declared tests and the driver (`bench
+typescript`, `bench rust`: pass). Go stops at generation (`bench go`,
+gen-red): its declared-test emitter does not carry what the bench needs (a
+`[]float @arg` pinned in a test renders as `[]float64("")`, and four stubs of
+the same handle type in one test emit the same fake type four times). That
+blocker is not among the twelve capabilities; it is the first thing the bench
+found, and the probes report every Go capability green around it.
 
-- Go (`bench go`, gen-red): a `[]float @arg` pinned in a test renders as
-  `[]float64("")`, and four stubs of the same handle type in one test emit
-  the same fake type four times.
-- TypeScript and Rust (`bench typescript`, `bench rust`, build-red): the
-  handle-method stub generates now (the emitter used to panic on
-  `stub mathkit.calculator.compute`), so both targets reach the build and
-  stop at the capabilities the probes already report (2 and 8 first).
+### The error struct
 
-The Go blocker is not among the ten capabilities; it is the first thing the
-bench found. Once it clears, the Go bench too will stop at the capabilities
-the probes already report.
+`invalid_expression` is an ordinary tono error struct whose language blocks
+say how each target recognizes the library's failure and where each field
+comes from: `go { #(ErrParse)  message: #(Error()) }` (by identity,
+`errors.Is`; a pointer type such as `#(*ParseError)` is matched by type,
+`errors.As`) and `rust { #(Error::Parse)  message: #(to_string()) }` (by
+pattern). The op only lists it, `@errors(invalid_expression)`, in test
+order. TypeScript recognizes a class with `instanceof`; the bench library
+throws no class, so it declares no `ts` block.
 
 ## Call-argument shapes not covered here
 
-Three shapes a consumer raised were deliberately not attempted as a small
-extension of `call:`'s own argument grammar. Two of them are capabilities
-now. The static method (11) turned out to be a third kind of call receiver
-(alongside a declared `ext` namespace, `ns.fn(..)`, and a handle field,
-`.field.method(..)`), and got its own syntax, the receiver type as a second
-string before the method. The class reference (12) turned out not to need a
-type-level construct at all: tono never constructs or inspects the class, so
-what crosses the boundary is only a foreign name, and a declared handle
-already carries that name per language; `type handle` in a `call:` argument
-reads the handle's foreign name in value position. One remains out:
+One shape a consumer raised was deliberately not attempted as a small
+extension of `call:`'s own argument grammar:
 
 - **Map literal** as a call argument needs its own key-value collection
-  shape, distinct from the list this bench's own capability 4/5 already
-  added for a variadic parameter.
+  shape. tono already has `map[K]V` and the `{ "k": v }` literal used in
+  test headers, so the question is which of those a binding reaches for,
+  not a new construct.
 
-It is its own scoped piece of work with its own design questions, not a
-one-line addition to what nested calls and variadic parameters already
-cover.
+It is its own scoped piece of work with its own design questions.
 
 ## Updating the record
 

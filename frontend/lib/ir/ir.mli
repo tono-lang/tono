@@ -184,6 +184,7 @@ and bind = { bind_field : string; bind_source : string list }
    a nested call (the last three only arise inside a ctor field's value). *)
 and call_arg =
   | Ca_param of string
+  | Ca_param_as of string * string
   | Ca_ref of string list
   | Ca_ctor of call_ctor
   | Ca_lit of json
@@ -191,6 +192,7 @@ and call_arg =
   | Ca_call of entry_call
   | Ca_symbol_call of symbol_call
   | Ca_type of string
+  | Ca_foreign of string
 
 and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
 
@@ -264,45 +266,49 @@ type yields_pos = {
   yp_name : string;
   yp_type : tref option;
   yp_is_error : bool;
+  yp_foreign : string option;
 }
 
 type returns_value = Rv_ref of string list | Rv_select of select
 type returns_field = { rvf_name : string; rvf_value : returns_value }
 type returns_lit = { rvl_type : tref; rvl_fields : returns_field list }
-type error_binding = { erb_sentinel : string; erb_type : string }
 
 type extern_lang = {
   el_lang : string;
-  el_receiver : string option;
   el_symbol : string;
   el_call_args : call_arg list;
   el_yields : yields_pos list;
   el_returns : returns_lit option;
-  el_errors : error_binding list;
-  el_sync : bool;
-  el_infallible : bool;
-  el_ctx : bool;
-  el_new : bool;
 }
 
-type extern_param = { xp_name : string; xp_type : tref; xp_variadic : bool }
+type extern_param = { xp_name : string; xp_type : tref }
 
 type extern_decl = {
   x_name : string;
   x_params : extern_param list;
   x_return : tref;
   x_langs : extern_lang list;
+  x_async : string list;
+  x_errors : shape_id list;
+}
+
+type foreign_lang = {
+  fl_lang : string;
+  fl_head : string;
+  fl_fields : (string * string) list;
 }
 
 type foreign_field = { fgf_name : string; fgf_type : tref }
-type foreign_struct = { fgs_name : string; fgs_fields : foreign_field list }
-type instance_name = { inn_lang : string; inn_name : string }
-type opaque_instance = { inst_names : instance_name list; inst_arg : tref }
+
+type foreign_struct = {
+  fgs_name : string;
+  fgs_fields : foreign_field list;
+  fgs_langs : foreign_lang list;
+}
 
 type opaque_type = {
   opq_name : string;
-  opq_instance : opaque_instance option;
-  opq_interface : bool;
+  opq_langs : foreign_lang list;
   opq_methods : extern_decl list;
 }
 

@@ -155,6 +155,34 @@ let scan_triple st start =
   done;
   add_tok st (Token.Str (Buffer.contents buf)) ~start
 
+(* A foreign spelling [#(...)]: raw bytes up to the parenthesis that
+   closes the opening one, counting nesting ([#(Error())] has a pair inside).
+   Nothing is decoded or escaped: the spelling is emitted verbatim by the
+   target, so it must survive untouched. Unbalanced at end of input is a
+   diagnostic (the spelling is recorded up to the end), and a [#] with no
+   parenthesis after it is a diagnostic too. *)
+let scan_foreign st start =
+  bump st;
+  (* '#' *)
+  if at_end st || cur st <> '(' then
+    add_diag st Diagnostic.Error
+      "expected '(' after '#' to open a foreign spelling" ~start
+  else (
+    bump st;
+    (* '(' *)
+    let buf = Buffer.create 16 in
+    let depth = ref 1 in
+    while !depth > 0 && not (at_end st) do
+      let c = cur st in
+      if c = '(' then incr depth else if c = ')' then decr depth;
+      if !depth > 0 then Buffer.add_char buf c;
+      bump st
+    done;
+    if !depth > 0 then
+      add_diag st Diagnostic.Error
+        "unterminated foreign spelling: '#(' has no matching ')'" ~start;
+    add_tok st (Token.Foreign (Buffer.contents buf)) ~start)
+
 let scan_string st start =
   if char_at st (st.off + 1) = Some '"' && char_at st (st.off + 2) = Some '"'
   then scan_triple st start
@@ -298,6 +326,7 @@ let tokenize (src : string) : Token.t list * Diagnostic.t list =
           bump st;
           add_tok st Token.At ~start
       | '"' -> scan_string st start
+      | '#' -> scan_foreign st start
       | c when is_digit c -> scan_number st start
       | c when is_ident_start c -> scan_ident st start
       | _ ->

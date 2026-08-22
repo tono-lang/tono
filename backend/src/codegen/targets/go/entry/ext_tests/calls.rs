@@ -35,13 +35,9 @@ fn a_versioned_go_module_path_still_selects_by_the_ext_lib_name() {
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec![],
+            errors: vec![],
         }],
     };
     let call = EntryCall {
@@ -130,26 +126,6 @@ fn the_appendix_module_wires_the_call_handle_and_impl_call() {
     assert!(text.contains("return publishOut, nil"));
 }
 
-/// The `infallible` marker's own repro: a single-return foreign function
-/// (`idgen.NewString() string`, matching `uuid.NewString`) with no `yields:`
-/// at all, the zero-yields path that always destructured two Go values
-/// before the fix regardless of the real function's own arity. Checked here
-/// through the full `emit` pipeline (the same style as the appendix test
-/// above); `go_ext_roundtrip.rs`'s `an_infallible_single_return_extern_builds`
-/// proves the stronger claim (`go build` against a real package) but only
-/// runs with a Go toolchain installed and skips under coverage
-/// instrumentation, so this is what keeps the fix covered either way.
-#[test]
-fn an_infallible_extern_assigns_a_single_value_with_no_error_check() {
-    let module = crate::codegen::targets::go::entry::ext_fixtures::infallible_extern_module();
-    let text = entry_text(&module);
-    assert!(
-        text.contains("idResult := idgen.NewString()\n\ts.ID = idResult\n"),
-        "{text}"
-    );
-    assert!(!text.contains("idErr"), "{text}");
-}
-
 /// The `ctx` marker's own repro: a foreign handle's `ctx`-marked method call
 /// threads a `ctx context.Context` parameter through all three Go call
 /// sites that must agree byte-for-byte (the generated interface, the
@@ -203,13 +179,9 @@ fn lib_missing(lib_langs: Vec<LangPath>, fn_name: &str, fn_lang: &str) -> ExtLib
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec![],
+            errors: vec![],
         }],
     }
 }
@@ -238,13 +210,9 @@ fn simple_go_lib(lib_name: &str, fn_name: &str, symbol: &str, return_ty: Tref) -
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec![],
+            errors: vec![],
         }],
     }
 }
@@ -349,21 +317,19 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
                         name: "err".into(),
                         r#type: None,
                         is_error: true,
+                        foreign: None,
                     },
                     YieldsPos {
                         name: "body".into(),
                         r#type: Some(string_t()),
                         is_error: false,
+                        foreign: None,
                     },
                 ],
                 returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec![],
+            errors: vec![],
         }],
     };
     let call = EntryCall {
@@ -391,22 +357,16 @@ fn call_assign_names_the_type_argument_on_a_generic_constructor() {
     let mut lib = simple_go_lib(
         "cfgkit",
         "new_env_source",
-        "NewEnvSource",
+        "NewEnvSource[Settings]",
         source_ref.clone(),
     );
     lib.types = vec![OpaqueType {
         name: "source".into(),
-        interface: false,
-        instance: Some(Instance {
-            names: vec![crate::ir::InstanceName {
-                lang: "go".into(),
-                name: "Source".into(),
-            }],
-            arg: Tref::Ref {
-                id: "notes#settings".into(),
-                args: vec![],
-            },
-        }),
+        langs: vec![crate::ir::ForeignLang {
+            lang: "go".into(),
+            name: "*Source[Settings]".into(),
+            fields: Default::default(),
+        }],
         methods: vec![],
     }];
     let call = EntryCall {
@@ -417,6 +377,9 @@ fn call_assign_names_the_type_argument_on_a_generic_constructor() {
     let mut source_field = field("source", source_ref, vec![]);
     source_field.call = Some(call.clone());
     let mut module = bare_module();
+    // `Settings` is one of the module's own generated types, so the
+    // spelling keeps it bare inside the instantiation.
+    module.shapes.push(structure("m#settings", vec![]));
     module.ext_libs = vec![lib];
     module.shapes.push(Shape {
         id: "m#client".into(),

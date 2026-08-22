@@ -66,7 +66,7 @@ fn the_field_borrows_the_receiver_awaits_the_call_and_projects_the_yields() {
 fn a_sync_method_without_yields_assigns_the_bare_result() {
     let mut module = handle_source_module("rust");
     for method in &mut module.ext_libs[0].types[0].methods {
-        method.langs[0].sync = true;
+        method.r#async.clear();
         method.langs[0].yields.clear();
         method.langs[0].returns = None;
     }

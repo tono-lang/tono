@@ -22,8 +22,8 @@ use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::rendered;
 use crate::ir::{
-    AnswerError, Empty, ExtLib, ExternLang, ExternStub, ExternStubTarget, HttpAnswer, LangPath,
-    OpaqueType, Prim, StubAnswer, TestConstruction, Tref,
+    AnswerError, CallArg, Empty, ExtLib, ExternLang, ExternStub, ExternStubTarget, HttpAnswer,
+    LangPath, OpaqueType, Prim, StubAnswer, TestConstruction, Tref,
 };
 
 fn appendix_ctx<'a>(
@@ -201,8 +201,7 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
     };
     let handle = OpaqueType {
         name: "publisher".into(),
-        interface: false,
-        instance: None,
+        langs: vec![],
         methods: vec![crate::ir::ExternDecl {
             name: "send".into(),
             params: vec![],
@@ -213,13 +212,9 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec!["rust".into()],
+            errors: vec![],
         }],
     };
     let (_ident, decl) = handle_fake_decl(&ctx, &lib, &handle);
@@ -250,12 +245,14 @@ fn a_ctx_marked_method_fake_takes_the_context_first() {
     };
     let handle = OpaqueType {
         name: "publisher".into(),
-        interface: false,
-        instance: None,
+        langs: vec![crate::ir::ForeignLang {
+            lang: "go".into(),
+            name: "*Publisher".into(),
+            fields: Default::default(),
+        }],
         methods: vec![crate::ir::ExternDecl {
             name: "send".into(),
             params: vec![crate::ir::ExternParam {
-                variadic: false,
                 name: "topic".into(),
                 r#type: Tref::Prim(Prim::String),
             }],
@@ -263,16 +260,12 @@ fn a_ctx_marked_method_fake_takes_the_context_first() {
             langs: vec![ExternLang {
                 lang: "go".into(),
                 symbol: "Send".into(),
-                call_args: vec![],
+                call_args: vec![CallArg::Foreign("ctx context.Context".into())],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: true,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec![],
+            errors: vec![],
         }],
     };
     let (_ident, decl) = handle_fake_decl(&ctx, &lib, &handle);

@@ -462,7 +462,6 @@ fn module_with_sign_extern() -> Module {
         externs: vec![ExternDecl {
             name: "sign".into(),
             params: vec![ExternParam {
-                variadic: false,
                 name: "request".into(),
                 r#type: Tref::Prim(Prim::String),
             }],
@@ -473,13 +472,9 @@ fn module_with_sign_extern() -> Module {
                 call_args: vec![CallArg::Ref(vec!["request".into()])],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: true,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec![],
+            errors: vec![],
         }],
     }];
     module

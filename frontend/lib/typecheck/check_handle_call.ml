@@ -51,10 +51,10 @@ let rec check_arg ctx ~fields ~pname ~pty (a : Ast.call_arg) : Diagnostic.t list
           "a bare identifier has no meaning here; pass a literal or a field \
            reference";
       ]
-  | Ast.CaType (_, span) ->
+  | Ast.CaParamAs (_, span, _, _) | Ast.CaForeign (_, span) ->
       [
         err Error_codes.op_impl_arity_mismatch span
-          "a class reference belongs in a language block's call: line, not \
+          "a foreign spelling belongs in a language block's call: line, not \
            here; pass a literal or a field reference";
       ]
   | Ast.CaCtor c ->

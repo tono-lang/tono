@@ -1,22 +1,25 @@
-(* Internal-consistency typecheck for the "ext"/"extern" FFI library block,
-   per extern, per language binding: a call: arg naming an undeclared logical
-   parameter (TC0070); a ctor literal projected into a declared foreign
-   struct disagreeing in field name or type with the parameter it forwards
-   (TC0071); a yields: position nothing in returns:/errors: consumes
-   (TC0072); more than one "error"-typed yields: position (TC0073); a
-   returns: with no yields: to project from (TC0074); a returns: that builds
-   a type other than the extern's own declared logical return (TC0075); a
-   returns: field ref whose head is not a declared yields: name (TC0076); an
-   errors: sentinel mapped to a type that does not resolve (TC0077); a
-   logical parameter this language's call: never consumes (TC0078).
+(* Internal-consistency typecheck for the "ext" FFI library block, per op,
+   per language binding: a call: arg naming an undeclared logical parameter
+   (TC0070); a ctor literal projected into a declared foreign struct
+   disagreeing in field name or type with the parameter it forwards
+   (TC0071); a yields: position nothing in returns: consumes (TC0072); more
+   than one "error"-typed yields: position (TC0073); a returns: with no
+   yields: to project from (TC0074); a returns: that builds a type other
+   than the op's own declared logical return (TC0075); a returns: field ref
+   whose head is not a declared yields: name (TC0076); @errors naming a type
+   that does not resolve (TC0077); a logical parameter this language's call:
+   never consumes (TC0078); a language block that does not fit its struct
+   (TC0092, TC0095, TC0097); @async naming a target without an asynchronous
+   call (TC0093); a trait the boundary does not accept (TC0096); a bare name
+   that is both a parameter and a handle (TC0098).
 
    The cross-file closed accounting (decision K: TC0079-TC0081) lives in
    [Check_ext_lib_project], split out to keep this file under the line-count
    cap.
 
-   Never verifies that a declared foreign symbol really exists in the target
-   library: that is the target compiler's own job, out of scope here. The
-   foreign-role wire/surface boundary lives in [Roles]/[Check_entries]
+   Never verifies that a declared foreign spelling really exists in the
+   target library: that is the target compiler's own job, out of scope here.
+   The foreign-role wire/surface boundary lives in [Roles]/[Check_entries]
    instead, since it reuses their existing closed-boundary machinery. *)
 
 let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
@@ -25,10 +28,10 @@ let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 
 (* A call: arg or ctor field value that names a logical parameter, walked
    recursively through nested ctors and nested "ns.fn(...)" calls (their
-   arguments can reference this extern's own parameters too). *)
+   arguments can reference this op's own parameters too). *)
 let rec collect_call_arg : Ast.call_arg -> string list = function
-  | Ast.CaParam (n, _) -> [ n ]
-  | Ast.CaRef _ | Ast.CaLit _ | Ast.CaType _ -> []
+  | Ast.CaParam (n, _) | Ast.CaParamAs (n, _, _, _) -> [ n ]
+  | Ast.CaRef _ | Ast.CaLit _ | Ast.CaForeign _ -> []
   | Ast.CaCtor c ->
       List.concat_map (fun (_, _, v) -> collect_trait_arg v) c.Ast.ctor_fields
   | Ast.CaCall nc -> List.concat_map collect_call_arg nc.Ast.nc_args
@@ -43,27 +46,46 @@ and collect_trait_arg : Ast.trait_arg -> string list = function
   | Ast.ACall ce -> List.concat_map collect_call_arg ce.Ast.ce_args
   | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.ARef _ -> []
 
-(* Every unknown-parameter diagnostic, walked the same way, anchored at the
-   best span available (the arg's own span, or its ctor field's key span for
-   a nested [Ast.trait_arg] which carries none of its own). *)
-let rec unknown_param_call_arg (declared : string list) :
-    Ast.call_arg -> Diagnostic.t list = function
+(* Every unknown-name diagnostic, walked the same way, anchored at the best
+   span available (the arg's own span, or its ctor field's key span for a
+   nested [Ast.trait_arg] which carries none of its own). A bare name may
+   also be an opaque handle of the block (a class reference); one that is
+   both a parameter and a handle is ambiguous (TC0098). *)
+let rec unknown_param_call_arg ~(declared : string list)
+    ~(handles : string list) : Ast.call_arg -> Diagnostic.t list = function
   | Ast.CaParam (n, span) ->
+      let is_param = List.mem n declared and is_handle = List.mem n handles in
+      if is_param && is_handle then
+        [
+          err Error_codes.extern_name_ambiguous span
+            "'%s' is both a logical parameter of this op and an opaque handle \
+             of this ext block; rename one so the call names one thing"
+            n;
+        ]
+      else if is_param || is_handle then []
+      else
+        [
+          err Error_codes.extern_call_unknown_param span
+            "'%s' is not a declared logical parameter of this op (nor an \
+             opaque handle of this ext block)"
+            n;
+        ]
+  | Ast.CaParamAs (n, span, _, _) ->
       if List.mem n declared then []
       else
         [
           err Error_codes.extern_call_unknown_param span
-            "'%s' is not a declared logical parameter of this extern" n;
+            "'%s' is not a declared logical parameter of this op" n;
         ]
-  | Ast.CaRef _ | Ast.CaLit _ | Ast.CaType _ -> []
+  | Ast.CaRef _ | Ast.CaLit _ | Ast.CaForeign _ -> []
   | Ast.CaCtor c ->
       List.concat_map
         (fun (_, span, v) -> unknown_param_trait_arg declared span v)
         c.Ast.ctor_fields
   | Ast.CaCall nc ->
-      List.concat_map (unknown_param_call_arg declared) nc.Ast.nc_args
+      List.concat_map (unknown_param_call_arg ~declared ~handles) nc.Ast.nc_args
   | Ast.CaList (items, _) ->
-      List.concat_map (unknown_param_call_arg declared) items
+      List.concat_map (unknown_param_call_arg ~declared ~handles) items
 
 and unknown_param_trait_arg (declared : string list) (span : Span.span) :
     Ast.trait_arg -> Diagnostic.t list = function
@@ -72,7 +94,7 @@ and unknown_param_trait_arg (declared : string list) (span : Span.span) :
       else
         [
           err Error_codes.extern_call_unknown_param span
-            "'%s' is not a declared logical parameter of this extern" n;
+            "'%s' is not a declared logical parameter of this op" n;
         ]
   | Ast.AKv (_, v) -> unknown_param_trait_arg declared span v
   | Ast.AList xs -> List.concat_map (unknown_param_trait_arg declared span) xs
@@ -81,10 +103,12 @@ and unknown_param_trait_arg (declared : string list) (span : Span.span) :
         (fun (_, fspan, v) -> unknown_param_trait_arg declared fspan v)
         c.Ast.ctor_fields
   | Ast.ACall ce ->
-      List.concat_map (unknown_param_call_arg declared) ce.Ast.ce_args
+      List.concat_map
+        (unknown_param_call_arg ~declared ~handles:[])
+        ce.Ast.ce_args
   | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.ARef _ -> []
 
-(* ── One extern's per-language rules ───────────────────────────────────── *)
+(* ── One op's per-language rules ────────────────────────────────────────── *)
 
 (* A call: ctor projecting into a declared foreign struct: every field must
    exist on that struct, and a field forwarding a logical parameter must
@@ -143,7 +167,7 @@ let check_ctor_projection (structs : (string, Ast.foreign_struct) Hashtbl.t)
 
 (* [check_ctor_projection], walked over a whole [call_arg], including into a
    nested call's own arguments (a [CaCall] can carry a ctor argument too,
-   e.g. [WithPrecision(opts { retries: 3 })]). *)
+   e.g. [#(WithPrecision)(opts { retries: 3 })]). *)
 let rec check_ctor_projection_arg
     (structs : (string, Ast.foreign_struct) Hashtbl.t)
     (params : Ast.extern_param list) : Ast.call_arg -> Diagnostic.t list =
@@ -153,27 +177,9 @@ let rec check_ctor_projection_arg
       List.concat_map (check_ctor_projection_arg structs params) nc.Ast.nc_args
   | Ast.CaList (items, _) ->
       List.concat_map (check_ctor_projection_arg structs params) items
-  | Ast.CaParam _ | Ast.CaRef _ | Ast.CaLit _ | Ast.CaType _ -> []
-
-(* A class reference ([type name]) must name an opaque handle declared in
-   this same ext block (TC0098): that declaration is what carries the
-   foreign name the emitter passes, per language. Walked through the same
-   nesting a nested call or list allows. *)
-let rec check_type_args (handles : string list) :
-    Ast.call_arg -> Diagnostic.t list = function
-  | Ast.CaType (n, span) ->
-      if List.mem n handles then []
-      else
-        [
-          err Error_codes.extern_type_arg_unknown span
-            "'%s' is not an opaque handle declared in this ext block; a class \
-             reference names the handle whose foreign type the library \
-             constructs"
-            n;
-        ]
-  | Ast.CaCall nc -> List.concat_map (check_type_args handles) nc.Ast.nc_args
-  | Ast.CaList (items, _) -> List.concat_map (check_type_args handles) items
-  | Ast.CaParam _ | Ast.CaRef _ | Ast.CaLit _ | Ast.CaCtor _ -> []
+  | Ast.CaParam _ | Ast.CaParamAs _ | Ast.CaRef _ | Ast.CaLit _
+  | Ast.CaForeign _ ->
+      []
 
 let consumed_heads (r : Ast.returns_lit option) : string list =
   match r with
@@ -188,35 +194,26 @@ let consumed_heads (r : Ast.returns_lit option) : string list =
               match fm.Ast.subject.Ast.segs with h :: _ -> Some h | [] -> None))
         rl.Ast.rl_fields
 
-(* Every yields: position must be consumed: a plain position by a returns:
-   ref reading it, the one reserved "error" position by the mere presence of
-   an errors: mapping (nothing else could reference it -- error is not a
-   type, see [Ast.yields_ty]). *)
+(* Every typed yields: position must be consumed by a returns: ref reading
+   it. The reserved "error" position is consumed by the boundary itself
+   (it feeds the op's declared errors and the contract wrap), and a
+   position under a foreign spelling is the value the target coerces into
+   the declared return, so neither needs a reader. *)
 let check_yields_consumption (b : Ast.extern_lang_body) : Diagnostic.t list =
   match b.Ast.elb_yields with
   | None -> []
   | Some ys ->
       let consumed = consumed_heads b.Ast.elb_returns in
-      let has_errors = b.Ast.elb_errors <> [] in
       List.concat_map
         (fun (y : Ast.yields_pos) ->
           match y.Ast.yp_ty with
-          | Ast.YError _ ->
-              if has_errors then []
-              else
-                [
-                  err Error_codes.extern_yields_position_dead y.Ast.yp_name_span
-                    "yields position '%s' is the reserved error position but \
-                     no 'errors:' mapping consumes it"
-                    y.Ast.yp_name;
-                ]
+          | Ast.YError _ | Ast.YForeign _ -> []
           | Ast.YType _ ->
               if List.mem y.Ast.yp_name consumed then []
               else
                 [
                   err Error_codes.extern_yields_position_dead y.Ast.yp_name_span
-                    "yields position '%s' is never consumed by 'returns:' or \
-                     'errors:'"
+                    "yields position '%s' is never consumed by 'returns:'"
                     y.Ast.yp_name;
                 ])
         ys
@@ -226,7 +223,7 @@ let check_single_error_position (ys : Ast.yields_pos list) : Diagnostic.t list =
   let errs =
     List.filter
       (fun (y : Ast.yields_pos) ->
-        match y.Ast.yp_ty with Ast.YError _ -> true | Ast.YType _ -> false)
+        match y.Ast.yp_ty with Ast.YError _ -> true | _ -> false)
       ys
   in
   match errs with
@@ -253,8 +250,8 @@ let check_returns_requires_yields (b : Ast.extern_lang_body) : Diagnostic.t list
       ]
   | _ -> []
 
-(* returns: builds the extern's own declared logical type, never another
-   one: "Tipo { ... }" means the same thing here as everywhere else in tono. *)
+(* returns: builds the op's own declared logical type, never another one:
+   "Tipo { ... }" means the same thing here as everywhere else in tono. *)
 let check_returns_type (ed_return : Ast.ty) (b : Ast.extern_lang_body) :
     Diagnostic.t list =
   match b.Ast.elb_returns with
@@ -268,8 +265,8 @@ let check_returns_type (ed_return : Ast.ty) (b : Ast.extern_lang_body) :
       else
         [
           err Error_codes.extern_returns_type_mismatch rl.Ast.rl_span
-            "'returns:' builds '%s', but the extern's declared logical return \
-             is '%s'"
+            "'returns:' builds '%s', but the op's declared logical return is \
+             '%s'"
             (Printer.print_ty rl.Ast.rl_type)
             (Printer.print_ty ed_return);
         ]
@@ -303,23 +300,6 @@ let check_returns_refs (b : Ast.extern_lang_body) : Diagnostic.t list =
           | [] -> [])
         rl.Ast.rl_fields
 
-(* An errors: sentinel must map to a type declared somewhere in this module
-   (the wire error the fronter, generated glue, and testing surface all
-   need). *)
-let check_error_sentinels ~(tbl : Symtab.t) (b : Ast.extern_lang_body) :
-    Diagnostic.t list =
-  List.filter_map
-    (fun (e : Ast.error_map_entry) ->
-      match Symtab.find e.Ast.em_type tbl with
-      | Some _ -> None
-      | None ->
-          Some
-            (err Error_codes.extern_error_sentinel_unknown e.Ast.em_type_span
-               "unknown error type '%s'; declare it before mapping a sentinel \
-                to it"
-               e.Ast.em_type))
-    b.Ast.elb_errors
-
 (* Every logical parameter must be consumed by this language's own call:,
    recursively through any ctor projection or nested call. *)
 let check_param_consumption (params : Ast.extern_param list)
@@ -336,75 +316,187 @@ let check_param_consumption (params : Ast.extern_param list)
              p.Ast.ep_name b.Ast.elb_lang))
     params
 
-(* The [ctx] marker only has an idiomatic slot to fill on a foreign handle's
-   own method call (Go's generated op signatures already carry [ctx
-   context.Context] in scope there); a free/library extern (including a
-   field's own construction call) has no such call site, so marking it
-   there is rejected rather than silently ignored. *)
-let check_ctx_marker_scope ~(is_method : bool) (b : Ast.extern_lang_body) :
-    Diagnostic.t list =
-  if b.Ast.elb_ctx && not is_method then
-    [
-      err Error_codes.extern_ctx_on_free_call b.Ast.elb_span
-        "'ctx' only applies to a foreign handle's own method call; the '%s' \
-         binding here has no idiomatic scope to receive it"
-        b.Ast.elb_lang;
-    ]
-  else []
+(* ── An op's traits ─────────────────────────────────────────────────────── *)
 
-(* A type receiver ("Type"."method") only makes sense on a free extern: a
-   handle's own method already has its receiver (the handle), and "new"
-   constructs a type rather than calling a method on it. *)
-let check_receiver_scope ~(is_method : bool) (b : Ast.extern_lang_body) :
-    Diagnostic.t list =
-  match (b.Ast.elb_call_receiver, b.Ast.elb_call_receiver_span) with
-  | Some r, Some span ->
-      (if is_method then
-         [
-           err Error_codes.extern_receiver_on_method span
-             "'%s' names a type as the receiver of a foreign handle's own \
-              method; the handle is already the receiver of the '%s' call"
-             r b.Ast.elb_lang;
-         ]
-       else [])
-      @
-      if b.Ast.elb_new then
-        [
-          err Error_codes.extern_receiver_with_new span
-            "'new' constructs a type and a type receiver calls a static method \
-             on it; the '%s' binding cannot do both"
-            b.Ast.elb_lang;
-        ]
-      else []
-  | _ -> []
+(* @async lists targets where the foreign call is asynchronous: each must
+   have the concept and a module path declared by this ext. @errors lists
+   declared error shapes. Anything else is not a trait of the boundary. *)
+let check_extern_traits ~(tbl : Symtab.t) ~(langs : string list)
+    (e : Ast.extern_decl) : Diagnostic.t list =
+  List.concat_map
+    (fun (t : Ast.trait) ->
+      match t.Ast.tname with
+      | "async" ->
+          (match t.Ast.targs with
+            | [] ->
+                [
+                  err Error_codes.extern_async_target_invalid t.Ast.tspan
+                    "@async on an ext op lists the targets where the foreign \
+                     call is asynchronous (e.g. @async(rust)); absence means \
+                     synchronous";
+                ]
+            | _ -> [])
+          @ List.concat_map
+              (function
+                | Ast.AName lang ->
+                    if not (List.mem lang Ext_lib_vocab.async_targets) then
+                      [
+                        err Error_codes.extern_async_target_invalid t.Ast.tspan
+                          "'%s' has no asynchronous call to declare; @async \
+                           names one of %s"
+                          lang
+                          (Ext_lib_vocab.quoted Ext_lib_vocab.async_targets);
+                      ]
+                    else if not (List.mem lang langs) then
+                      [
+                        err Error_codes.extern_async_target_invalid t.Ast.tspan
+                          "the ext declares no '%s' module path for @async to \
+                           apply to"
+                          lang;
+                      ]
+                    else []
+                | _ ->
+                    [
+                      err Error_codes.extern_async_target_invalid t.Ast.tspan
+                        "@async expects target names";
+                    ])
+              t.Ast.targs
+      | "errors" ->
+          List.concat_map
+            (function
+              | Ast.AName n when Option.is_none (Symtab.find n tbl) ->
+                  [
+                    err Error_codes.extern_error_unknown t.Ast.tspan
+                      "unknown error type '%s'; declare it before listing it \
+                       in @errors"
+                      n;
+                  ]
+              | Ast.AName _ -> []
+              | _ ->
+                  [
+                    err Error_codes.extern_error_unknown t.Ast.tspan
+                      "@errors expects type names";
+                  ])
+            t.Ast.targs
+      | "doc" -> []
+      | other ->
+          [
+            err Error_codes.extern_trait_invalid t.Ast.tspan
+              "@%s is not a trait of an ext op; only %s apply here" other
+              (Ext_lib_vocab.quoted Ext_lib_vocab.op_traits);
+          ])
+    e.Ast.ed_traits
 
-let check_extern ~(tbl : Symtab.t)
+let check_extern ~(tbl : Symtab.t) ~(langs : string list)
     (structs : (string, Ast.foreign_struct) Hashtbl.t) ~(handles : string list)
-    ~(is_method : bool) (e : Ast.extern_decl) : Diagnostic.t list =
-  let declared_param_names =
+    (e : Ast.extern_decl) : Diagnostic.t list =
+  let declared =
     List.map (fun (p : Ast.extern_param) -> p.Ast.ep_name) e.Ast.ed_params
   in
-  List.concat_map
-    (fun (b : Ast.extern_lang_body) ->
-      List.concat_map
-        (unknown_param_call_arg declared_param_names)
-        b.Ast.elb_call_args
-      @ List.concat_map
-          (fun a -> check_ctor_projection_arg structs e.Ast.ed_params a)
+  check_extern_traits ~tbl ~langs e
+  @ List.concat_map
+      (fun (b : Ast.extern_lang_body) ->
+        List.concat_map
+          (unknown_param_call_arg ~declared ~handles)
           b.Ast.elb_call_args
-      @ List.concat_map (check_type_args handles) b.Ast.elb_call_args
-      @ check_yields_consumption b
-      @ (match b.Ast.elb_yields with
-        | Some ys -> check_single_error_position ys
-        | None -> [])
-      @ check_returns_requires_yields b
-      @ check_returns_type e.Ast.ed_return b
-      @ check_returns_refs b
-      @ check_error_sentinels ~tbl b
-      @ check_param_consumption e.Ast.ed_params b
-      @ check_ctx_marker_scope ~is_method b
-      @ check_receiver_scope ~is_method b)
-    e.Ast.ed_langs
+        @ List.concat_map
+            (fun a -> check_ctor_projection_arg structs e.Ast.ed_params a)
+            b.Ast.elb_call_args
+        @ check_yields_consumption b
+        @ (match b.Ast.elb_yields with
+          | Some ys -> check_single_error_position ys
+          | None -> [])
+        @ check_returns_requires_yields b
+        @ check_returns_type e.Ast.ed_return b
+        @ check_returns_refs b
+        @ check_param_consumption e.Ast.ed_params b)
+      e.Ast.ed_langs
+
+(* ── Language blocks on structs ─────────────────────────────────────────── *)
+
+(* The blocks of one struct: each language at most once, each one the ext
+   declares a module path for (or, at top level, a target at all), and
+   each keyed entry a field of the struct; a handle carries no keyed entry. *)
+let check_lang_blocks ~(allowed : string list) ~(allowed_what : string)
+    ~(fields : string list) ~(is_handle : bool) (blocks : Ast.lang_block list) :
+    Diagnostic.t list =
+  let seen = Hashtbl.create 4 in
+  List.concat_map
+    (fun (b : Ast.lang_block) ->
+      let dup =
+        if Hashtbl.mem seen b.Ast.lb_lang then
+          [
+            err Error_codes.lang_block_mismatch b.Ast.lb_lang_span
+              "this struct already has a '%s' block" b.Ast.lb_lang;
+          ]
+        else (
+          Hashtbl.add seen b.Ast.lb_lang ();
+          [])
+      in
+      let known =
+        if List.mem b.Ast.lb_lang allowed then []
+        else
+          [
+            err Error_codes.lang_block_mismatch b.Ast.lb_lang_span
+              "%s '%s'; a language block names one of %s" allowed_what
+              b.Ast.lb_lang
+              (Ext_lib_vocab.quoted allowed);
+          ]
+      in
+      let keyed =
+        List.concat_map
+          (fun (n, span, _, _) ->
+            if is_handle then
+              [
+                err Error_codes.lang_block_field_unknown span
+                  "an opaque handle has no fields; its '%s' block is only the \
+                   storage type"
+                  b.Ast.lb_lang;
+              ]
+            else if List.mem n fields then []
+            else
+              [
+                err Error_codes.lang_block_field_unknown span
+                  "'%s' is not a field of this struct" n;
+              ])
+          b.Ast.lb_fields
+      in
+      dup @ known @ keyed)
+    blocks
+
+(* A top-level struct's language blocks belong to an error struct only:
+   there they say how the target recognizes the foreign error. *)
+let is_error_struct (d : Ast.decl) : bool =
+  List.exists
+    (fun (t : Ast.trait) ->
+      match t.Ast.tname with "status" | "errorCode" -> true | _ -> false)
+    d.Ast.dtraits
+
+let check_struct_lang_blocks (decls : Ast.decl list) : Diagnostic.t list =
+  List.concat_map
+    (fun (d : Ast.decl) ->
+      match d.Ast.dkind with
+      | Ast.DStruct { slangs = []; _ } -> []
+      | Ast.DStruct { members; slangs; _ } ->
+          let misplaced =
+            if is_error_struct d then []
+            else
+              List.map
+                (fun (b : Ast.lang_block) ->
+                  err Error_codes.struct_lang_block_misplaced b.Ast.lb_span
+                    "a language block on '%s' has nothing to bind: only an \
+                     error struct (@status or @errorCode) declares how a \
+                     target recognizes it"
+                    d.Ast.dname)
+                slangs
+          in
+          misplaced
+          @ check_lang_blocks ~allowed:Ext_lib_vocab.targets
+              ~allowed_what:"no target is named"
+              ~fields:(List.map (fun (m : Ast.member) -> m.Ast.mname) members)
+              ~is_handle:false slangs
+      | _ -> [])
+    decls
 
 (* ── Foreign-name collisions (not a silent Roles.classify overwrite) ────── *)
 
@@ -491,144 +583,6 @@ let is_foreign_name (decls : Ast.decl list) (name : string) : bool =
       | _ -> false)
     decls
 
-(* ── Instantiation clauses ("type Name(\"Foreign\", Arg) { ... }") ──────── *)
-
-(* The argument must be a tono type already declared in this module: never a
-   foreign name (a foreign struct/opaque type is not "known" here, so it
-   falls through to an ordinary unresolved-name diagnostic, TC0001), and
-   never a type parameter (there is none to be in scope at module level). *)
-let check_instance_arg ~(tbl : Symtab.t) (t : Ast.opaque_type) :
-    Diagnostic.t list =
-  match t.Ast.opq_instance with
-  | None -> []
-  | Some i ->
-      Resolve.resolve_ty ~params:[] ~tbl ~qualified:Resolve.no_imports
-        i.Ast.oi_arg
-
-(* A keyed instantiation name list must be exactly one entry per language
-   the "ext" declares a module path for: a language named twice, a language
-   with no declared module path (same spirit as TC0081), or a declared
-   language left without a name are all diagnosed, so every target's emitter
-   has exactly one spelling to read. The shared (single-string) form is
-   exempt: it covers every language by construction. *)
-let check_instance_names (body : Ast.ext_lib_body) (t : Ast.opaque_type) :
-    Diagnostic.t list =
-  match t.Ast.opq_instance with
-  | None | Some { oi_names = Ast.OnShared _; _ } -> []
-  | Some ({ oi_names = Ast.OnPerLang entries; _ } as i) ->
-      let declared =
-        List.map (fun (lp : Ast.lang_path) -> lp.Ast.lp_lang) body.elib_langs
-      in
-      let dups =
-        List.filteri
-          (fun idx (e : Ast.opaque_name_entry) ->
-            List.exists
-              (fun (prev : Ast.opaque_name_entry) ->
-                String.equal prev.one_lang e.one_lang)
-              (List.filteri (fun j _ -> j < idx) entries))
-          entries
-      in
-      let dup_diags =
-        List.map
-          (fun (e : Ast.opaque_name_entry) ->
-            err Error_codes.instance_names_mismatch e.one_lang_span
-              "the instantiation already names its '%s' type" e.one_lang)
-          dups
-      in
-      let unknown =
-        List.filter
-          (fun (e : Ast.opaque_name_entry) ->
-            not (List.mem e.one_lang declared))
-          entries
-      in
-      let unknown_diags =
-        List.map
-          (fun (e : Ast.opaque_name_entry) ->
-            err Error_codes.instance_names_mismatch e.one_lang_span
-              "the ext declares no '%s' module path for this instantiation \
-               name to bind to"
-              e.one_lang)
-          unknown
-      in
-      let named lang =
-        List.exists
-          (fun (e : Ast.opaque_name_entry) -> String.equal e.one_lang lang)
-          entries
-      in
-      let missing = List.filter (fun lang -> not (named lang)) declared in
-      let missing_diags =
-        List.map
-          (fun lang ->
-            err Error_codes.instance_names_mismatch i.Ast.oi_span
-              "the instantiation names no '%s' type, but the ext declares a \
-               '%s' module path"
-              lang lang)
-          missing
-      in
-      dup_diags @ unknown_diags @ missing_diags
-
-(* The names an instantiation claims, one (lang, name) pair per language: the
-   shared form expands over the ext's declared languages, mirroring how
-   lowering expands it for the IR. *)
-let instance_lang_names (body : Ast.ext_lib_body) (i : Ast.opaque_instance) :
-    (string * string) list =
-  match i.Ast.oi_names with
-  | Ast.OnShared (name, _) ->
-      List.map
-        (fun (lp : Ast.lang_path) -> (lp.Ast.lp_lang, name))
-        body.elib_langs
-  | Ast.OnPerLang entries ->
-      List.map
-        (fun (e : Ast.opaque_name_entry) -> (e.one_lang, e.one_name))
-        entries
-
-(* The same instantiation (foreign name + argument, per language) declared
-   twice across a module's "ext" library blocks: two tono types would both
-   claim to be the same monomorphization, which the emitter cannot tell
-   apart. *)
-let check_instance_collisions (decls : Ast.decl list) : Diagnostic.t list =
-  let seen = Hashtbl.create 8 in
-  List.concat_map
-    (fun (d : Ast.decl) ->
-      match d.Ast.dkind with
-      | Ast.DExtLib { body; _ } ->
-          List.concat_map
-            (fun (t : Ast.opaque_type) ->
-              match t.Ast.opq_instance with
-              | None -> []
-              | Some i -> (
-                  let arg = Printer.print_ty i.Ast.oi_arg in
-                  let colliding =
-                    List.filter_map
-                      (fun (lang, foreign_name) ->
-                        (* Keyed by the declaring "ext" too: the foreign name
-                           is the library's own, not the user's, so two
-                           different libraries that each export a "Source"
-                           are not the same instantiation and must not
-                           collide. *)
-                        let key = (d.Ast.dname, lang, foreign_name, arg) in
-                        if Hashtbl.mem seen key then Some (lang, foreign_name)
-                        else (
-                          Hashtbl.add seen key ();
-                          None))
-                      (instance_lang_names body i)
-                  in
-                  (* One diagnostic per instantiation, not one per language:
-                     a shared-name duplicate would otherwise repeat the same
-                     message once per declared language at the same span. *)
-                  match colliding with
-                  | [] -> []
-                  | (lang, foreign_name) :: _ ->
-                      [
-                        err Error_codes.instance_duplicate i.Ast.oi_span
-                          "the instantiation of '%s.%s' with '%s' is already \
-                           declared elsewhere in this module for '%s'"
-                          d.Ast.dname foreign_name arg lang;
-                      ]))
-            body.Ast.elib_types
-      | _ -> [])
-    decls
-
 (* ── Per-module entry point ────────────────────────────────────────────── *)
 
 let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
@@ -636,6 +590,11 @@ let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
     (fun (d : Ast.decl) ->
       match d.Ast.dkind with
       | Ast.DExtLib { body; _ } ->
+          let langs =
+            List.map
+              (fun (lp : Ast.lang_path) -> lp.Ast.lp_lang)
+              body.elib_langs
+          in
           let structs = Hashtbl.create 8 in
           List.iter
             (fun (s : Ast.foreign_struct) ->
@@ -646,27 +605,33 @@ let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
               (fun (t : Ast.opaque_type) -> t.Ast.opq_name)
               body.Ast.elib_types
           in
-          let free_diags =
-            List.concat_map
-              (check_extern ~tbl structs ~handles ~is_method:false)
-              body.Ast.elib_externs
+          (* Whether the ext declares a module path for the block's
+             language is a cross-file question (decision K), answered in
+             [Check_ext_lib_project]; here only the target set is closed. *)
+          let blocks_of ~fields ~is_handle blocks =
+            check_lang_blocks ~allowed:Ext_lib_vocab.targets
+              ~allowed_what:"no target is named" ~fields ~is_handle blocks
           in
-          let method_diags =
-            List.concat_map
+          List.concat_map
+            (check_extern ~tbl ~langs structs ~handles)
+            body.Ast.elib_externs
+          @ List.concat_map
               (fun (t : Ast.opaque_type) ->
-                List.concat_map
-                  (check_extern ~tbl structs ~handles ~is_method:true)
-                  t.Ast.opq_methods)
+                blocks_of ~fields:[] ~is_handle:true t.Ast.opq_langs
+                @ List.concat_map
+                    (check_extern ~tbl ~langs structs ~handles)
+                    t.Ast.opq_methods)
               body.Ast.elib_types
-          in
-          let instance_diags =
-            List.concat_map (check_instance_arg ~tbl) body.Ast.elib_types
-          in
-          let name_diags =
-            List.concat_map (check_instance_names body) body.Ast.elib_types
-          in
-          free_diags @ method_diags @ instance_diags @ name_diags
+          @ List.concat_map
+              (fun (s : Ast.foreign_struct) ->
+                blocks_of
+                  ~fields:
+                    (List.map
+                       (fun (f : Ast.foreign_field) -> f.Ast.ff_name)
+                       s.Ast.fs_fields)
+                  ~is_handle:false s.Ast.fs_langs)
+              body.Ast.elib_structs
       | _ -> [])
     decls
   @ check_foreign_name_collisions ~tbl decls
-  @ check_instance_collisions decls
+  @ check_struct_lang_blocks decls

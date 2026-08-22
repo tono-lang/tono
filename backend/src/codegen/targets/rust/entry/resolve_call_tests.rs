@@ -8,8 +8,8 @@ use super::*;
 use crate::codegen::targets::rust::rust_casing;
 use crate::codegen::test_support::bare_entry_field;
 use crate::ir::{
-    CallArg, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternParam, LangPath,
-    ReturnsField, ReturnsLit, ReturnsValue, SelectArm, YieldsPos,
+    CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternParam, LangPath, ReturnsField,
+    ReturnsLit, ReturnsValue, SelectArm, YieldsPos,
 };
 
 fn module_of(shapes: Vec<Shape>) -> Module {
@@ -45,7 +45,6 @@ fn string_params(names: &[&str]) -> Vec<ExternParam> {
     names
         .iter()
         .map(|n| ExternParam {
-            variadic: false,
             name: (*n).to_string(),
             r#type: Tref::Prim(Prim::String),
         })
@@ -79,12 +78,6 @@ fn rust_lang(symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
         call_args,
         yields: vec![],
         returns: None,
-        errors: vec![],
-        sync: false,
-        infallible: false,
-        ctx: false,
-        receiver: None,
-        is_new: false,
     }
 }
 
@@ -99,6 +92,8 @@ fn extern_decl(
         params,
         r#return,
         langs: vec![lang],
+        r#async: vec![],
+        errors: vec![],
     }
 }
 
@@ -129,18 +124,18 @@ fn region_load_module(sync: bool) -> Module {
         vec![CallArg::Ref(vec!["region".into()])],
     );
     let mut module = module_of(vec![client_shape(vec![config, region])]);
-    let mut lang = rust_lang("Client::load", vec![CallArg::Ref(vec!["region".into()])]);
-    lang.sync = sync;
-    module.ext_libs = vec![lib(
-        "companyconfig",
-        "company-config",
-        vec![extern_decl(
-            "load",
-            string_params(&["region"]),
-            Tref::Prim(Prim::String),
-            lang,
-        )],
-    )];
+    let lang = rust_lang(
+        "company_config::Client::load",
+        vec![CallArg::Ref(vec!["region".into()])],
+    );
+    let mut decl = extern_decl(
+        "load",
+        string_params(&["region"]),
+        Tref::Prim(Prim::String),
+        lang,
+    );
+    decl.r#async = if sync { vec![] } else { vec!["rust".into()] };
+    module.ext_libs = vec![lib("companyconfig", "company-config", vec![decl])];
     module
 }
 
@@ -204,17 +199,19 @@ fn a_call_field_with_yields_returns_and_errors_projects_and_maps() {
         traits: vec![],
     };
     let mut module = module_of(vec![client_shape(vec![conn]), app_config]);
-    let mut lang = rust_lang("Client::load", vec![]);
+    let mut lang = rust_lang("company_config::Client::load", vec![]);
     lang.yields = vec![
         YieldsPos {
             name: "cfg".into(),
             r#type: Some(Tref::Prim(Prim::String)),
             is_error: false,
+            foreign: None,
         },
         YieldsPos {
             name: "err".into(),
             r#type: None,
             is_error: true,
+            foreign: None,
         },
     ];
     lang.returns = Some(ReturnsLit {
@@ -224,19 +221,29 @@ fn a_call_field_with_yields_returns_and_errors_projects_and_maps() {
             value: ReturnsValue::Field(vec!["cfg".into(), "Host".into()]),
         }],
     });
-    lang.errors = vec![ErrorBinding {
-        sentinel: "ErrBusy".into(),
-        r#type: "overloaded".into(),
-    }];
-    module.ext_libs = vec![lib(
-        "companyconfig",
-        "company_config",
-        vec![extern_decl("load", vec![], shape_ref("m#app_config"), lang)],
-    )];
+    module.shapes.push(Shape {
+        id: "m#overloaded".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![],
+        },
+        traits: vec![crate::ir::Trait {
+            id: "foreign".into(),
+            value: serde_json::json!([
+                {"lang": "rust", "name": "Error::Busy", "fields": {"message": "to_string()"}}
+            ]),
+        }],
+    });
+    let mut decl = extern_decl("load", vec![], shape_ref("m#app_config"), lang);
+    decl.errors = vec!["m#overloaded".into()];
+    module.ext_libs = vec![lib("companyconfig", "company_config", vec![decl])];
     let out = entry_text(&module, &rust_casing());
     assert!(out.contains("Ok(cfg)"), "{out}");
     assert!(out.contains("endpoint: cfg.Host"), "{out}");
-    assert!(out.contains("\"ErrBusy\""), "{out}");
+    assert!(
+        out.contains("matches!(e, company_config::Error::Busy { .. })"),
+        "{out}"
+    );
     assert!(out.contains("ContractError"), "{out}");
 }
 
@@ -258,11 +265,13 @@ fn ok_pattern_destructures_a_tuple_for_more_than_one_position() {
         name: "a".into(),
         r#type: None,
         is_error: false,
+        foreign: None,
     };
     let b = YieldsPos {
         name: "b".into(),
         r#type: None,
         is_error: false,
+        foreign: None,
     };
     assert_eq!(ok_pattern(&[&a]), "a");
     assert_eq!(ok_pattern(&[&a, &b]), "(a, b)");
@@ -292,23 +301,49 @@ fn select_expr_covers_a_field_arm_a_sources_arm_and_the_synthesized_default() {
 }
 
 #[test]
-fn error_match_maps_every_declared_sentinel_and_falls_back_to_contract_error() {
+fn error_match_recognizes_every_declared_error_and_falls_back_to_contract_error() {
+    let error_shape = |id: &str, name: &str| Shape {
+        id: id.to_string(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![],
+        },
+        traits: vec![crate::ir::Trait {
+            id: "foreign".into(),
+            value: serde_json::json!([
+                {"lang": "rust", "name": name, "fields": {"message": "to_string()"}}
+            ]),
+        }],
+    };
+    let module = module_of(vec![
+        error_shape("m#overloaded", "Error::Busy"),
+        error_shape("m#not_found", "Error::Gone"),
+    ]);
+    let lib = crate::ir::ExtLib {
+        name: "companybus".into(),
+        langs: vec![crate::ir::LangPath {
+            lang: "rust".into(),
+            path: "companybus".into(),
+        }],
+        structs: vec![],
+        types: vec![],
+        externs: vec![],
+    };
     let out = error_match(
+        &module,
+        &lib,
         "companybus",
         "send",
-        &[
-            ErrorBinding {
-                sentinel: "ErrBusy".into(),
-                r#type: "overloaded".into(),
-            },
-            ErrorBinding {
-                sentinel: "ErrGone".into(),
-                r#type: "not_found".into(),
-            },
-        ],
+        &["m#overloaded".to_string(), "m#not_found".to_string()],
     );
-    assert!(out.contains("\"ErrBusy\" =>"), "{out}");
-    assert!(out.contains("\"ErrGone\" =>"), "{out}");
+    assert!(
+        out.contains("matches!(e, companybus::Error::Busy { .. })"),
+        "{out}"
+    );
+    assert!(
+        out.contains("matches!(e, companybus::Error::Gone { .. })"),
+        "{out}"
+    );
     assert!(out.contains("companybus.send"), "{out}");
     assert!(out.contains("ContractError"), "{out}");
 }
@@ -364,6 +399,7 @@ fn a_call_field_with_every_call_arg_variant_and_a_nested_call_emits_without_pani
             name: (*n).to_string(),
             r#type: Some(Tref::Prim(Prim::String)),
             is_error: false,
+            foreign: None,
         })
         .collect();
     let mut config_lib = lib(
@@ -382,25 +418,25 @@ fn a_call_field_with_every_call_arg_variant_and_a_nested_call_emits_without_pani
             name: "retries".into(),
             r#type: Tref::Prim(Prim::I32),
         }],
+        langs: vec![crate::ir::ForeignLang {
+            lang: "rust".into(),
+            name: "Opts".into(),
+            fields: Default::default(),
+        }],
     }];
-    module.ext_libs = vec![
-        lib(
-            "companyauth",
-            "company-auth",
-            vec![extern_decl(
-                "sign",
-                vec![],
-                Tref::Prim(Prim::String),
-                rust_lang("sign", vec![]),
-            )],
-        ),
-        config_lib,
-    ];
+    let mut sign = extern_decl(
+        "sign",
+        vec![],
+        Tref::Prim(Prim::String),
+        rust_lang("sign", vec![]),
+    );
+    sign.r#async = vec!["rust".into()];
+    module.ext_libs = vec![lib("companyauth", "company-auth", vec![sign]), config_lib];
     let out = entry_text(&module, &rust_casing());
     assert!(out.contains("(s.region).clone()"), "{out}");
     assert!(!out.contains("s.reg)"), "{out}");
     assert!(out.contains("vec![1]"), "{out}");
-    assert!(out.contains("opts { retries: 3 }"), "{out}");
+    assert!(out.contains("company_config::Opts { retries: 3 }"), "{out}");
     assert!(out.contains("company_auth::sign().await"), "{out}");
     assert!(out.contains("Ok((a, b))"), "{out}");
 }
@@ -424,4 +460,105 @@ fn a_param_with_no_argument_at_its_position_panics() {
         )],
     )];
     let _ = entry_text(&module, &rust_casing());
+}
+
+/// The conversions Rust knows for a parameter spelled under its own type,
+/// and the refusal naming both types when there is none.
+#[test]
+fn coerce_knows_some_borrow_and_identity_and_refuses_the_rest() {
+    let module = module_of(vec![]);
+    let lib = lib("companyconfig", "company-config", vec![]);
+    let string = Tref::Prim(Prim::String);
+    assert_eq!(coerce(&module, &lib, &string, "String", "v").unwrap(), "v");
+    assert_eq!(
+        coerce(&module, &lib, &string, "Option<String>", "v").unwrap(),
+        "Some(v)"
+    );
+    assert_eq!(coerce(&module, &lib, &string, "&str", "v").unwrap(), "&v");
+    assert_eq!(
+        coerce(&module, &lib, &string, "&String", "v").unwrap(),
+        "&v"
+    );
+    let list = Tref::List(Box::new(Tref::Prim(Prim::Float)));
+    assert_eq!(coerce(&module, &lib, &list, "Vec<f64>", "v").unwrap(), "v");
+    let err = coerce(&module, &lib, &string, "u8", "v").unwrap_err();
+    assert!(err.contains("no conversion from String to u8"), "{err}");
+}
+
+/// A form's literal names the library's own type from its `rust` block and
+/// converts a field the block spells under another type.
+#[test]
+fn ctor_expr_builds_a_form_from_its_rust_block() {
+    let module = module_of(vec![]);
+    let mut lib = lib("companyconfig", "company-config", vec![]);
+    let mut spelled = std::collections::BTreeMap::new();
+    spelled.insert("n".to_string(), "Option<String>".to_string());
+    lib.structs = vec![crate::ir::ForeignStruct {
+        name: "opts".into(),
+        fields: vec![crate::ir::ForeignField {
+            name: "n".into(),
+            r#type: Tref::Prim(Prim::String),
+        }],
+        langs: vec![crate::ir::ForeignLang {
+            lang: "rust".into(),
+            name: "Opts".into(),
+            fields: spelled,
+        }],
+    }];
+    let ctor = CallCtor {
+        name: "opts".into(),
+        fields: [("n".to_string(), CallArg::Lit(serde_json::json!("x")))]
+            .into_iter()
+            .collect(),
+    };
+    let out = ctor_expr(
+        &module,
+        &lib,
+        "company_config",
+        &ctor,
+        &["\"x\".to_string()".to_string()],
+    );
+    assert_eq!(out, "company_config::Opts { n: Some(\"x\".to_string()) }");
+}
+
+/// A spelled parameter and a nested foreign call inside a field's own
+/// construction call: the parameter is lent as `&str`, the nested symbol is
+/// crate-qualified.
+#[test]
+fn a_call_field_lends_a_spelled_parameter_and_qualifies_a_nested_call() {
+    let region = bare_entry_field("region", Tref::Prim(Prim::String), vec![Source::Arg]);
+    let config = call_field(
+        "config",
+        vec![],
+        "companyconfig",
+        "load",
+        vec![CallArg::Ref(vec!["region".into()])],
+    );
+    let mut module = module_of(vec![client_shape(vec![config, region])]);
+    let lang = rust_lang(
+        "load",
+        vec![
+            CallArg::ParamAs {
+                name: "region".into(),
+                spelling: "&str".into(),
+            },
+            CallArg::SymbolCall(crate::ir::SymbolCall {
+                symbol: "Retries".into(),
+                args: vec![CallArg::Lit(serde_json::json!(3))],
+            }),
+        ],
+    );
+    module.ext_libs = vec![lib(
+        "companyconfig",
+        "company-config",
+        vec![extern_decl(
+            "load",
+            string_params(&["region"]),
+            Tref::Prim(Prim::String),
+            lang,
+        )],
+    )];
+    let out = entry_text(&module, &rust_casing());
+    assert!(out.contains("&(s.region).clone()"), "{out}");
+    assert!(out.contains("company_config::Retries(3)"), "{out}");
 }

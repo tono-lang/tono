@@ -80,13 +80,13 @@ let leading_and_trailing_trait_order_equivalent () =
 
 let base =
   {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -103,13 +103,13 @@ let clean () = Alcotest.(check (list string)) "no codes" [] (codes base)
 let unknown_call_param () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(bogus)
+      call: #(Load)(bogus)
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -126,14 +126,14 @@ struct app_config { endpoint: string }
 let ctor_field_type_mismatch () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
   struct go_opts { Num: string }
 
-  extern load(count: i64): app_config {
+  op load(count: i64): app_config {
     go {
-      call: "Load"(go_opts { Num: count })
+      call: #(Load)(go_opts { Num: count })
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -148,14 +148,14 @@ struct app_config { endpoint: string }
 let ctor_unknown_field () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
   struct go_opts { Num: i64 }
 
-  extern load(count: i64): app_config {
+  op load(count: i64): app_config {
     go {
-      call: "Load"(go_opts { Bogus: count })
+      call: #(Load)(go_opts { Bogus: count })
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -172,13 +172,13 @@ struct app_config { endpoint: string }
 let dead_yields_position () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string, Extra: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg, extra: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -193,16 +193,19 @@ struct app_config { endpoint: string }
      ("extra: go_cfg"), not at the whole yields: list or the extern. *)
   Alcotest.(check int) "points at 'extra'" 9 (line_of "TC0072" src)
 
-let dead_error_position () =
+(* The reserved error position is consumed by the boundary itself (the
+   op's declared errors and the contract wrap read it), so it never counts
+   as dead. *)
+let error_position_is_consumed () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg, err: error)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -212,23 +215,23 @@ let dead_error_position () =
 struct app_config { endpoint: string }
 |}
   in
-  Alcotest.(check bool) "dead error position" true (has "TC0072" src)
+  Alcotest.(check bool) "error position is consumed" false (has "TC0072" src)
 
 (* ── TC0073: more than one "error"-typed yields: position ───────────────── *)
 
 let two_error_positions () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_ack { OK: bool }
 
-  extern send(topic: string): ack {
+  @errors(overloaded)
+  op send(topic: string): ack {
     go {
-      call: "Send"(topic)
+      call: #(Send)(topic)
       yields: (a: error, b: error)
       returns: ack { accepted: true }
-      errors: { "ErrBusy" => overloaded }
     }
   }
 }
@@ -245,11 +248,11 @@ pub struct overloaded { message: string }
 let returns_without_yields () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       returns: app_config { endpoint: "x" }
     }
   }
@@ -265,13 +268,13 @@ struct app_config { endpoint: string }
 let returns_wrong_type () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg)
       returns: other_config { endpoint: .cfg.Host }
     }
@@ -289,13 +292,13 @@ struct other_config { endpoint: string }
 let returns_ref_unknown () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .bogus.Host }
     }
@@ -312,16 +315,16 @@ struct app_config { endpoint: string }
 let error_sentinel_unknown () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_ack { OK: bool }
 
-  extern send(topic: string): ack {
+  @errors(nope)
+  op send(topic: string): ack {
     go {
-      call: "Send"(topic)
+      call: #(Send)(topic)
       yields: (a: go_ack, err: error)
       returns: ack { accepted: .a.OK }
-      errors: { "ErrBusy" => nope }
     }
   }
 }
@@ -336,13 +339,13 @@ pub struct ack { accepted: bool }
 let param_unconsumed () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string, region: string): app_config {
+  op load(service: string, region: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -380,22 +383,22 @@ let foreign_struct_as_wire_member () =
 let opaque_handle_as_op_output () =
   let src =
     {|ext bus {
-  go: "github.com/x/bus"
+  go { #(github.com/x/bus) }
 
   struct go_ack { OK: bool }
 
-  type publisher {
-    extern send(topic: string): ack {
+  struct publisher {
+    op send(topic: string): ack {
       go {
-        call: "Send"(topic)
+        call: #(Send)(topic)
         yields: (a: go_ack)
         returns: ack { accepted: .a.OK }
       }
     }
   }
 
-  extern connect(endpoint: string): publisher {
-    go { call: "Connect"(endpoint) }
+  op connect(endpoint: string): publisher {
+    go { call: #(Connect)(endpoint) }
   }
 }
 
@@ -411,22 +414,22 @@ op fetch(): bus.publisher
 let opaque_handle_as_entry_field_ok () =
   let src =
     {|ext bus {
-  go: "github.com/x/bus"
+  go { #(github.com/x/bus) }
 
   struct go_ack { OK: bool }
 
-  type publisher {
-    extern send(topic: string): ack {
+  struct publisher {
+    op send(topic: string): ack {
       go {
-        call: "Send"(topic)
+        call: #(Send)(topic)
         yields: (a: go_ack)
         returns: ack { accepted: .a.OK }
       }
     }
   }
 
-  extern connect(endpoint: string): publisher {
-    go { call: "Connect"(endpoint) }
+  op connect(endpoint: string): publisher {
+    go { call: #(Connect)(endpoint) }
   }
 }
 
@@ -452,13 +455,13 @@ pub struct client {
 let yields_with_no_returns_at_all_is_dead () =
   let src =
     {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg)
     }
   }
@@ -474,13 +477,13 @@ struct app_config { endpoint: string }
 
 let split_lib_a =
   {|ext lib {
-  go: "github.com/x/y"
+  go { #(github.com/x/y) }
 
   struct go_cfg { Host: string }
 
-  extern load(service: string): app_config {
+  op load(service: string): app_config {
     go {
-      call: "Load"(service)
+      call: #(Load)(service)
       yields: (cfg: go_cfg)
       returns: app_config { endpoint: .cfg.Host }
     }
@@ -494,8 +497,8 @@ let split_lib_b =
   {|ext lib {
   struct go_creds { Secret: string }
 
-  extern token(): string {
-    go { call: "Token"() }
+  op token(): string {
+    go { call: #(Token)() }
   }
 }
 |}
@@ -515,10 +518,10 @@ let split_valid_within_one_file () =
 let conflicting_module_path () =
   let b =
     {|ext lib {
-  go: "github.com/x/other"
+  go { #(github.com/x/other) }
 
-  extern token(): string {
-    go { call: "Token"() }
+  op token(): string {
+    go { call: #(Token)() }
   }
 }
 |}
@@ -551,8 +554,8 @@ let conflicting_module_path () =
 let duplicate_extern_name_across_files () =
   let b =
     {|ext lib {
-  extern load(x: string): string {
-    go { call: "Other"(x) }
+  op load(x: string): string {
+    go { call: #(Other)(x) }
   }
 }
 |}
@@ -564,8 +567,8 @@ let duplicate_extern_name_across_files () =
 let lang_block_without_module () =
   let b =
     {|ext lib {
-  extern token(): string {
-    ts { call: "token"() }
+  op token(): string {
+    ts { call: #(token)() }
   }
 }
 |}
@@ -596,17 +599,17 @@ let reference_example =
   {|import tono.http
 
 ext companyconfig {
-  go: "github.com/company/config"
-  ts: "@company/config"
+  go { #(github.com/company/config) }
+  ts { #(@company/config) }
 
   struct go_config { Host: string, DevHost: string, Env: string, Credentials: go_creds }
   struct go_creds  { Secret: string }
   struct ts_config { host: string, token: string }
   struct ts_opts   { region: string, service: string }
 
-  extern load(service: string, region: string): app_config {
+  op load(service: string, region: string): app_config {
     go {
-      call: "Load"(service, region)
+      call: #(Load)(service, region)
       yields: (cfg: go_config)
       returns: app_config {
         endpoint: match .cfg.Env { "prod" => .cfg.Host, _ => .cfg.DevHost }
@@ -614,7 +617,7 @@ ext companyconfig {
       }
     }
     ts {
-      call: "load"(ts_opts { region: region, service: service })
+      call: #(load)(ts_opts { region: region, service: service })
       yields: (cfg: ts_config)
       returns: app_config { endpoint: .cfg.host, token: .cfg.token }
     }
@@ -622,32 +625,31 @@ ext companyconfig {
 }
 
 ext companybus {
-  go: "github.com/company/bus"
-  ts: "@company/bus"
+  go { #(github.com/company/bus) }
+  ts { #(@company/bus) }
 
   struct go_ack { ID: string, OK: bool }
   struct ts_ack { id: string, accepted: bool }
 
-  type publisher {
-    extern send(topic: string, body: string): ack {
+  struct publisher {
+    @errors(overloaded)
+    op send(topic: string, body: string): ack {
       go {
-        call: "Send"(topic, body)
+        call: #(Send)(topic, body)
         yields: (a: go_ack)
         returns: ack { id: .a.ID, accepted: .a.OK }
-        errors: { "ErrBusy" => overloaded }
       }
       ts {
-        call: "send"(topic, body)
+        call: #(send)(topic, body)
         yields: (a: ts_ack)
         returns: ack { id: .a.id, accepted: .a.accepted }
-        errors: { "BUSY" => overloaded }
       }
     }
   }
 
-  extern connect(endpoint: string, token: string): publisher {
-    go { call: "Connect"(endpoint, token) }
-    ts { call: "connect"(endpoint, token) }
+  op connect(endpoint: string, token: string): publisher {
+    go { call: #(Connect)(endpoint, token) }
+    ts { call: #(connect)(endpoint, token) }
   }
 }
 
@@ -715,7 +717,8 @@ let () =
           Alcotest.test_case "dead yields position" `Quick dead_yields_position;
           Alcotest.test_case "yields with no returns at all" `Quick
             yields_with_no_returns_at_all_is_dead;
-          Alcotest.test_case "dead error position" `Quick dead_error_position;
+          Alcotest.test_case "error position is consumed" `Quick
+            error_position_is_consumed;
           Alcotest.test_case "two error positions" `Quick two_error_positions;
           Alcotest.test_case "returns without yields" `Quick
             returns_without_yields;

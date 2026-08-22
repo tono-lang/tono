@@ -131,8 +131,9 @@ let check_duplicate_names (occs : occurrence list) :
         dup_name_diags ~code:Error_codes.extern_duplicate_name items)
       (Hashtbl.fold (fun _ items acc -> items :: acc) methods_by_type [])
 
-(* A language block bound in a call: for a target the ext declares no module
-   path for is inert: nothing tells the generator where the symbol lives. *)
+(* A language block (on an op, or on a struct) for a target the ext declares
+   no module path for is inert: nothing tells the generator where the
+   symbol lives. *)
 let check_lang_has_module (ext_name : string) (occs : occurrence list) :
     (string * Diagnostic.t) list =
   let declared_langs =
@@ -150,21 +151,33 @@ let check_lang_has_module (ext_name : string) (occs : occurrence list) :
         (fun (t : Ast.opaque_type) -> t.Ast.opq_methods)
         occ.body.Ast.elib_types
   in
+  let undeclared file lang span =
+    if List.mem lang declared_langs then None
+    else
+      Some
+        ( file,
+          err Error_codes.extern_lang_no_module span
+            "language '%s' has no declared module path in ext '%s'" lang
+            ext_name )
+  in
   List.concat_map
     (fun occ ->
       List.concat_map
         (fun (e : Ast.extern_decl) ->
           List.filter_map
             (fun (b : Ast.extern_lang_body) ->
-              if List.mem b.Ast.elb_lang declared_langs then None
-              else
-                Some
-                  ( occ.file,
-                    err Error_codes.extern_lang_no_module b.Ast.elb_lang_span
-                      "language '%s' has no declared module path in ext '%s'"
-                      b.Ast.elb_lang ext_name ))
+              undeclared occ.file b.Ast.elb_lang b.Ast.elb_lang_span)
             e.Ast.ed_langs)
-        (externs_of occ))
+        (externs_of occ)
+      @ List.filter_map
+          (fun (b : Ast.lang_block) ->
+            undeclared occ.file b.Ast.lb_lang b.Ast.lb_lang_span)
+          (List.concat_map
+             (fun (s : Ast.foreign_struct) -> s.Ast.fs_langs)
+             occ.body.Ast.elib_structs
+          @ List.concat_map
+              (fun (t : Ast.opaque_type) -> t.Ast.opq_langs)
+              occ.body.Ast.elib_types))
     occs
 
 let check_project (files : (string * Ast.decl list) list) : Diagnostic.t list =

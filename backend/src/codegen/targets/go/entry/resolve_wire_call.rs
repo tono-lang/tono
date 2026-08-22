@@ -98,10 +98,9 @@ fn call_wire_stmt(
         .map(|a| wire_call_arg_expr(a, field_access, param_access, request_var))
         .collect();
     let err_var = format!("{result_var}Err");
-    super::ext::refuse_static_receiver(lang);
     let mut out = format!(
-        "{result_var}, {err_var} := {callee}.{}({})\n",
-        lang.symbol,
+        "{result_var}, {err_var} := {}({})\n",
+        super::ext::qualify(&lang.symbol, &callee, module),
         args.join(", ")
     );
     let contract_name = format!("{}.{}", call.ns, call.fn_name);
@@ -110,7 +109,7 @@ fn call_wire_stmt(
         module,
         config,
         lib,
-        &lang.errors,
+        &decl.errors,
         &contract_name,
         &err_var,
         &|expr| format!("return {ret_zero}{}\n", fail(expr)),

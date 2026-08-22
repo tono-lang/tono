@@ -37,12 +37,13 @@ and call_lit = LStr of string | LInt of int | LFloat of float
 
 and call_arg =
   | CaParam of string * Span.span
+  | CaParamAs of string * Span.span * string * Span.span
   | CaRef of ref_path
   | CaCtor of ctor_arg
   | CaLit of call_lit * Span.span
   | CaCall of nested_call
   | CaList of call_arg list * Span.span
-  | CaType of string * Span.span
+  | CaForeign of string * Span.span
 
 and nested_call = {
   nc_symbol : string;
@@ -89,11 +90,6 @@ type field_match = {
   match_span : Span.span;
 }
 
-(* A call into a declared opaque handle's method, [.field.method(args)]:
-   shared by an op's own "impl" body and a member's "= .h.m(args)" value
-   source. The receiver names an entry field (a declared opaque handle), the
-   method one of its declared "extern" methods; the closed-boundary/arity
-   rules live in the typechecker, not here. *)
 type op_impl = {
   oi_recv : ref_path;
   oi_method : string;
@@ -102,8 +98,6 @@ type op_impl = {
   oi_span : Span.span;
 }
 
-(* A member's [= ...] value: a selection table, an extern call, or a handle
-   method call. *)
 type member_value =
   | MMatch of field_match
   | MCall of call_expr
@@ -135,11 +129,11 @@ type ext_kind = EHook | EContract | EConstraint | EImpl
 type ext_binding = { lang : string; lang_span : Span.span; target : string }
 type ext_sig = { esig_in : ty; esig_out : ty }
 
-(* FFI library blocks: ext <name> { ... } (see ast.ml for shape commentary). *)
 type lang_path = {
   lp_lang : string;
   lp_lang_span : Span.span;
   lp_path : string;
+  lp_path_span : Span.span;
 }
 
 type foreign_field = {
@@ -148,14 +142,27 @@ type foreign_field = {
   ff_type : ty;
 }
 
+type lang_block = {
+  lb_lang : string;
+  lb_lang_span : Span.span;
+  lb_head : string;
+  lb_head_span : Span.span;
+  lb_fields : (string * Span.span * string * Span.span) list;
+  lb_span : Span.span;
+}
+
 type foreign_struct = {
   fs_name : string;
   fs_name_span : Span.span;
   fs_fields : foreign_field list;
+  fs_langs : lang_block list;
   fs_span : Span.span;
 }
 
-type yields_ty = YType of ty | YError of Span.span
+type yields_ty =
+  | YType of ty
+  | YError of Span.span
+  | YForeign of string * Span.span
 
 type yields_pos = {
   yp_name : string;
@@ -178,70 +185,33 @@ type returns_lit = {
   rl_span : Span.span;
 }
 
-type error_map_entry = {
-  em_sentinel : string;
-  em_sentinel_span : Span.span;
-  em_type : string;
-  em_type_span : Span.span;
-}
-
 type extern_lang_body = {
   elb_lang : string;
   elb_lang_span : Span.span;
-  elb_call_receiver : string option;
-  elb_call_receiver_span : Span.span option;
   elb_call_symbol : string;
   elb_call_symbol_span : Span.span;
   elb_call_args : call_arg list;
   elb_yields : yields_pos list option;
   elb_returns : returns_lit option;
-  elb_errors : error_map_entry list;
-  elb_sync : bool;
-  elb_infallible : bool;
-  elb_ctx : bool;
-  elb_new : bool;
   elb_span : Span.span;
 }
 
-type extern_param = {
-  ep_name : string;
-  ep_name_span : Span.span;
-  ep_type : ty;
-  ep_variadic : bool;
-}
+type extern_param = { ep_name : string; ep_name_span : Span.span; ep_type : ty }
 
 type extern_decl = {
   ed_name : string;
   ed_name_span : Span.span;
+  ed_traits : trait list;
   ed_params : extern_param list;
   ed_return : ty;
   ed_langs : extern_lang_body list;
   ed_span : Span.span;
 }
 
-type opaque_name_entry = {
-  one_lang : string;
-  one_lang_span : Span.span;
-  one_name : string;
-  one_name_span : Span.span;
-}
-
-type opaque_names =
-  | OnShared of string * Span.span
-  | OnPerLang of opaque_name_entry list
-
-type opaque_instance = {
-  oi_names : opaque_names;
-  oi_arg : ty;
-  oi_arg_span : Span.span;
-  oi_span : Span.span;
-}
-
 type opaque_type = {
   opq_name : string;
   opq_name_span : Span.span;
-  opq_instance : opaque_instance option;
-  opq_interface : bool;
+  opq_langs : lang_block list;
   opq_methods : extern_decl list;
   opq_span : Span.span;
 }
@@ -253,7 +223,6 @@ type ext_lib_body = {
   elib_externs : extern_decl list;
 }
 
-(* Declared test blocks (see ast.ml for the shape commentary). *)
 type value_head = { vh_segs : string list; vh_span : Span.span }
 
 type test_value =
@@ -333,7 +302,12 @@ type test_item =
     }
 
 type decl_kind =
-  | DStruct of { params : string list; members : member list; ops : decl list }
+  | DStruct of {
+      params : string list;
+      members : member list;
+      ops : decl list;
+      slangs : lang_block list;
+    }
   | DEnum of { cases : enum_case list }
   | DUnion of { params : string list; variants : union_variant list }
   | DOp of {

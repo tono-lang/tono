@@ -6,83 +6,121 @@
 // the numbered capabilities named in the comments are the rows of the table
 // in README.md.
 //
-// Where the language cannot express the library's shape yet, this file
-// declares the nearest form it can and lets the target compiler grade it,
-// instead of bending the library to fit. That is what keeps the bench honest.
+// Two rules carry the whole file:
+//   1. #(...) is a foreign spelling, emitted verbatim. It is never text.
+//   2. Everything specific to one language lives in that language's block.
+//      Traits belong to tono; blocks belong to the boundary.
+//
+// The Go context is neither a spelling nor a tono reference: it is a
+// position declaration. The emitter already binds `ctx context.Context` on
+// every Go op, and the binding only says where it enters the foreign call;
+// the type written there is checked against what the emitter generates.
 ext mathkit {
-  go: "tono-ext-fixture/mathkit"
-  ts: "@tono-ext-fixture/mathkit"
-  rust: "mathkit"
+  go { #(tono-ext-fixture/mathkit) }
+  ts { #(@tono-ext-fixture/mathkit) }
+  rust { #(mathkit) }
 
-  // Capability 7 (struct literal in call:). The Rust library takes
-  // `FormulaOptions { precision: Option<u8> }` by value and TypeScript an
-  // optional `{ precision?: number }`. A foreign struct has one name for
-  // every target (the tono one), so Rust cannot be told the type is spelled
-  // `FormulaOptions`; and there is no way to wrap a value into `Option`, so
-  // the field is declared as the bare `u8` the parameter carries.
-  struct rust_formula_options { precision: u8 }
-  struct ts_formula_options { precision: u8 }
+  // Capability 7 (struct literal in call:). A readable foreign form. Go does
+  // not have it (it uses a functional option), so it declares no go block. A
+  // field carries its own spelling when it differs from the tono type: in
+  // Rust the field is Option<u8>, in tono it is u8.
+  struct formula_options {
+    precision: u8
 
-  // Capability 2 (foreign type name per language): the instantiation can
-  // name the foreign type per language (`go: "..."`, `rust: "..."`); here
-  // one shared name is right, because "Calculator" is the abstraction in
-  // all three targets (the Go interface, the TypeScript interface, the Rust
-  // trait).
-  //
-  // Capabilities 1 and 3 (handle that is an interface; several concrete
-  // types for one logical handle): the "interface" marker declares the
-  // handle is the abstraction. Go holds the interface value itself, never a
-  // pointer; Rust holds `Box<dyn Calculator<f64>>` and boxes each
-  // constructor's concrete value (ConstantCalculator, FormulaCalculator,
-  // SeriesCalculator, FallbackCalculator) where it is built, so those
-  // concrete types never need a tono name.
-  type calculator("Calculator", float) interface {
+    ts { #(FormulaOptions) }
+    rust { #(FormulaOptions)  precision: #(Option<u8>) }
+  }
+
+  // Capabilities 1, 2 and 3 (handle that is an interface; foreign type per
+  // language; several concrete types for one logical handle). An opaque
+  // handle: no fields, only methods. Each target spells the whole STORAGE
+  // type, which is what absorbs the Go interface (held by value, no `*`),
+  // the Rust Box<dyn>, and a generic instantiation that differs per target.
+  struct calculator {
+    go { #(Calculator[float64]) }
+    ts { #(Calculator<number>) }
+    rust { #(Box<dyn Calculator<f64>>) }
+
     // Capability 9 (synchronous in one target, asynchronous in the others):
-    // compute() blocks in TypeScript, takes a ctx in Go, is a future in Rust.
-    extern compute(): float {
-      go { call: "Compute"() ctx }
-      ts { call: "compute"() sync }
-      rust { call: "compute"() }
+    // compute() is a future only in Rust; Go has no await and the TypeScript
+    // of this library returns T, not Promise<T>. Absence of @async means
+    // synchronous; naming a target without async (go) is an error.
+    @async(rust)
+    op compute(): float {
+      go { call: #(Compute)(#(ctx context.Context)) }
+      ts { call: #(compute)() }
+      rust { call: #(compute)() }
     }
   }
 
   // Capability 8 (construction by `new`): the TypeScript constructors are
-  // classes. There is no `new` form, so the class is named as if it were a
-  // callable function; TypeScript refuses to call a class without `new`.
-  extern from_constant(value: float): calculator {
-    go { call: "FromConstant"(value) }
-    ts { call: "ConstantCalculator"(value) }
-    rust { call: "from_constant"(value) }
+  // classes, and the callee spelling carries the `new`.
+  op from_constant(value: float): calculator {
+    go { call: #(FromConstant[float64])(value) }
+    ts { call: #(new ConstantCalculator)(value) }
+    rust { call: #(from_constant)(value) }
   }
 
-  // Capability 4 (variadic parameter) and 6 (nested call in call:): the Go
-  // shape is `FromFormula(expr, WithPrecision(precision))`, an option built
-  // by a nested call and passed variadically. Neither is expressible, so
-  // the precision is passed positionally, the nearest form; Go refuses an
-  // integer where an Option is expected.
-  extern from_formula(expr: string, precision: u8): calculator {
-    go { call: "FromFormula"(expr, precision) }
-    ts { call: "FormulaCalculator"(expr, ts_formula_options { precision: precision }) }
-    rust { call: "from_formula"(expr, rust_formula_options { precision: precision }) }
+  // Capability 6 (nested call in call:). Go builds the option by a nested
+  // call; TypeScript and Rust by a struct literal. All three shapes are
+  // written, each in the block of the target that uses it.
+  @errors(invalid_expression)
+  op from_formula(expr: string, precision: u8): calculator {
+    go { call: #(FromFormula[float64])(expr, #(WithPrecision)(precision)) }
+    ts { call: #(new FormulaCalculator)(expr, formula_options { precision: precision }) }
+    rust { call: #(from_formula)(expr: #(&str), formula_options { precision: precision }) }
   }
 
-  extern from_series(values: []float): calculator {
-    go { call: "FromSeries"(values) }
-    ts { call: "SeriesCalculator"(values) }
-    rust { call: "from_series"(values) }
+  op from_series(values: []float): calculator {
+    go { call: #(FromSeries[float64])(values: #([]float64)) }
+    ts { call: #(new SeriesCalculator)(values: #(number[])) }
+    rust { call: #(from_series)(values: #(Vec<f64>)) }
   }
 
-  // Capability 5 (collection of handles as argument) and 4 again: the
-  // library takes N already-built handles (`calcs ...Calculator[T]`,
-  // `Vec<Box<dyn Calculator<T>>>`, `Calculator<T>[]`). A call argument has
-  // no list literal, so the composition is declared with a fixed arity of
-  // two, which only Go can accept (two positional values fill a variadic
-  // slot); Rust and TypeScript expect one collection.
-  extern from_fallback(strategy: string, primary: calculator, secondary: calculator): calculator {
-    go { call: "FromFallback"(strategy, primary, secondary) }
-    ts { call: "FallbackCalculator"(strategy, primary, secondary) }
-    rust { call: "from_fallback"(strategy, primary, secondary) }
+  // Capabilities 4 and 5 (variadic parameter; collection of handles as an
+  // argument). The logical parameter is a collection; each target spells
+  // what it crosses as.
+  op from_fallback(strategy: string, calcs: []calculator): calculator {
+    go { call: #(FromFallback[float64])(strategy, calcs: #(...Calculator[float64])) }
+    ts { call: #(new FallbackCalculator)(strategy, calcs: #(Calculator<number>[])) }
+    rust { call: #(from_fallback)(strategy, calcs: #(Vec<Box<dyn Calculator<f64>>>)) }
   }
+
+  // Capability 11 (static method): the receiver is the foreign type itself,
+  // inside the spelling. Go has no static method and needs no refusal: it
+  // writes the package function, which is how the library exposes it there.
+  op parse(expr: string): calculator {
+    go { call: #(FromFormula[float64])(expr) }
+    ts { call: #(FormulaCalculator.parse)(expr) }
+    rust { call: #(FormulaCalculator::parse)(expr) }
+  }
+
+  // Capability 12 (class reference): the class itself crosses.
+  // `answer_calculator` resolves as a handle declared in this ext, not as a
+  // logical parameter; a collision between the two is an error.
+  struct answer_calculator {
+    ts { #(AnswerCalculator) }
+
+    op compute(): float {
+      ts { call: #(compute)() }
+    }
+  }
+
+  op instantiate(): calculator {
+    ts { call: #(instantiate)(answer_calculator) }
+  }
+}
+
+// The error is an ordinary tono struct. The language block says how each
+// target recognises it and where each field comes from, once, not in every
+// op that can raise it.
+@doc("The library could not interpret the expression.")
+@errorCode("code", "invalid_expression")
+pub struct invalid_expression {
+  message: string
+
+  go { #(ErrParse)  message: #(Error()) }
+  rust { #(Error::Parse)  message: #(to_string()) }
 }
 
 @doc("Three calculators of different shapes, two of them composed into a fallback, feeding two operations.")
@@ -100,7 +138,7 @@ pub struct client {
   // operation below may read either of them again (single ownership,
   // affirmed by probes/10-ownership-refused.tono). `series` is only read,
   // never forwarded, so it stays readable.
-  combined: mathkit.calculator = mathkit.from_fallback("first", .constant, .formula)
+  combined: mathkit.calculator = mathkit.from_fallback("first", [.constant, .formula])
 
   op combined_value(): float
     impl .combined.compute()
@@ -117,6 +155,7 @@ test "the composed handle answers the operation" {
   stub mathkit.from_formula: mathkit.calculator {}
   stub mathkit.from_series: mathkit.calculator {}
   stub mathkit.from_fallback: mathkit.calculator {}
+  stub mathkit.parse: mathkit.calculator {}
   stub mathkit.calculator.compute: 4.5
   c: client { base: 1.5, expr: "2 * 3", precision: 2, samples: [1.0, 2.0, 3.0] }
   got: c.combined_value()
@@ -128,6 +167,7 @@ test "a handle that is only read answers its own operation" {
   stub mathkit.from_formula: mathkit.calculator {}
   stub mathkit.from_series: mathkit.calculator {}
   stub mathkit.from_fallback: mathkit.calculator {}
+  stub mathkit.parse: mathkit.calculator {}
   stub mathkit.calculator.compute: 3.0
   c: client { base: 1.5, expr: "2 * 3", precision: 2, samples: [1.0, 2.0, 3.0] }
   got: c.series_value()

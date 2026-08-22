@@ -531,30 +531,36 @@ let parse_op st ~pub ~dtraits : Ast.decl =
    is an entry). A trait on its own line belongs to the member or op after
    it, exactly as at the top level; only a trait continuing a line stays with
    that line. *)
-let parse_struct_items st : Ast.member list * Ast.decl list =
+let parse_struct_items st :
+    Ast.member list * Ast.decl list * Ast.lang_block list =
   let starts_item = function
     | Token.Ident _ | Token.KwOp -> true
     | _ -> false
   in
-  let rec go members ops =
+  let rec go members ops langs =
     let leading = parse_item_traits st ~what:"member or op" ~starts_item in
     match (P.peek st).kind with
-    | Token.RBrace | Token.Eof -> (List.rev members, List.rev ops)
-    | Token.Ident _ -> go (parse_member st ~leading :: members) ops
-    | Token.KwOp -> go members (parse_op st ~pub:false ~dtraits:leading :: ops)
+    | Token.RBrace | Token.Eof ->
+        (List.rev members, List.rev ops, List.rev langs)
+    | Token.Ident _ when (P.peek_ahead st 1).kind = Token.LBrace ->
+        go members ops
+          (Parser_extern.parse_struct_lang_block st ~traits:leading :: langs)
+    | Token.Ident _ -> go (parse_member st ~leading :: members) ops langs
+    | Token.KwOp ->
+        go members (parse_op st ~pub:false ~dtraits:leading :: ops) langs
     | Token.Comma ->
         ignore (P.advance st);
-        go members ops
+        go members ops langs
     | _ ->
         P.error st (P.peek st).span
           (Printf.sprintf "unexpected %s in struct body"
              (Token.describe (P.peek st).kind));
         ignore (P.advance st);
-        go members ops
+        go members ops langs
   in
-  go [] []
+  go [] [] []
 
-(* struct ::= "struct" name generics? "{" (member | op)* "}" *)
+(* struct ::= "struct" name generics? "{" (member | op | lang_block)* "}" *)
 let parse_struct st ~pub ~dtraits : Ast.decl =
   ignore (P.advance st);
   (* 'struct' *)
@@ -571,14 +577,14 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
   Parser_extern.check_not_error_name st "struct" name nt.span;
   let params = parse_generics st in
   ignore (P.expect st Token.LBrace "'{' to open the struct body");
-  let members, ops = parse_struct_items st in
+  let members, ops, slangs = parse_struct_items st in
   ignore (P.expect st Token.RBrace "'}' to close the struct body");
   {
     Ast.dname = name;
     dname_span = nt.span;
     pub;
     dtraits;
-    dkind = Ast.DStruct { params; members; ops };
+    dkind = Ast.DStruct { params; members; ops; slangs };
   }
 
 (* ── Extensions ────────────────────────────────────────────────────────── *)

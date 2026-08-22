@@ -167,7 +167,7 @@ fn gen_prefers_piped_ir_over_the_project_sources() {
     assert!(init.status.success());
 
     const PIPED: &str =
-        r#"{"tono_ir_version":27,"modules":[{"name":"piped","shapes":[],"operations":[]}]}"#;
+        r#"{"tono_ir_version":28,"modules":[{"name":"piped","shapes":[],"operations":[]}]}"#;
     // A stale version number here fails with a decode error far from this
     // assertion; catch it here instead.
     assert!(PIPED.contains(&format!(

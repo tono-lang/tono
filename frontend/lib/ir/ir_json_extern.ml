@@ -1,6 +1,6 @@
 (* JSON codecs for FFI library declarations (module [ext_libs]): per-language
-   module paths, foreign struct/opaque-handle declarations, and [extern]
-   declarations with their per-language call/yields/returns/errors bindings.
+   module paths, foreign struct/opaque-handle declarations, and ext op
+   declarations with their per-language call/yields/returns bindings.
    Scalar and entry-model codecs come from [Ir_json_base]/[Ir_json_entry];
    [Ir_json] folds these into the module envelope. *)
 
@@ -23,6 +23,17 @@ let as_bool = Ir_json_base.as_bool
 let encode_lang_path (lp : Ir.lang_path) : Ir.json =
   `Assoc [ ("lang", `String lp.lgp_lang); ("path", `String lp.lgp_path) ]
 
+let encode_foreign_lang (l : Ir.foreign_lang) : Ir.json =
+  `Assoc
+    ([ ("lang", `String l.fl_lang); ("name", `String l.fl_head) ]
+    @
+    if l.fl_fields = [] then []
+    else
+      [
+        ( "fields",
+          `Assoc (List.map (fun (n, sp) -> (n, `String sp)) l.fl_fields) );
+      ])
+
 let encode_foreign_field (f : Ir.foreign_field) : Ir.json =
   `Assoc [ ("name", `String f.fgf_name); ("type", encode_tref f.fgf_type) ]
 
@@ -31,6 +42,7 @@ let encode_foreign_struct (s : Ir.foreign_struct) : Ir.json =
     [
       ("name", `String s.fgs_name);
       ("fields", `List (List.map encode_foreign_field s.fgs_fields));
+      ("langs", `List (List.map encode_foreign_lang s.fgs_langs));
     ]
 
 let encode_yields_pos (y : Ir.yields_pos) : Ir.json =
@@ -39,7 +51,11 @@ let encode_yields_pos (y : Ir.yields_pos) : Ir.json =
     @ (match y.yp_type with
       | None -> []
       | Some t -> [ ("type", encode_tref t) ])
-    @ if y.yp_is_error then [ ("is_error", `Bool true) ] else [])
+    @ (if y.yp_is_error then [ ("is_error", `Bool true) ] else [])
+    @
+    match y.yp_foreign with
+    | None -> []
+    | Some s -> [ ("foreign", `String s) ])
 
 let encode_returns_value (v : Ir.returns_value) : Ir.json =
   match v with
@@ -59,65 +75,43 @@ let encode_returns_lit (r : Ir.returns_lit) : Ir.json =
       ("fields", `List (List.map encode_returns_field r.rvl_fields));
     ]
 
-let encode_error_binding (e : Ir.error_binding) : Ir.json =
-  `Assoc [ ("sentinel", `String e.erb_sentinel); ("type", `String e.erb_type) ]
-
 let encode_extern_lang (l : Ir.extern_lang) : Ir.json =
   `Assoc
-    ([ ("lang", `String l.el_lang) ]
-    @ (match l.el_receiver with
-      | None -> []
-      | Some r -> [ ("receiver", `String r) ])
-    @ [
-        ("symbol", `String l.el_symbol);
-        ("call_args", `List (List.map encode_call_arg l.el_call_args));
-      ]
+    ([
+       ("lang", `String l.el_lang);
+       ("symbol", `String l.el_symbol);
+       ("call_args", `List (List.map encode_call_arg l.el_call_args));
+     ]
     @ (if l.el_yields = [] then []
        else [ ("yields", `List (List.map encode_yields_pos l.el_yields)) ])
-    @ (match l.el_returns with
-      | None -> []
-      | Some r -> [ ("returns", encode_returns_lit r) ])
-    @ (if l.el_errors = [] then []
-       else [ ("errors", `List (List.map encode_error_binding l.el_errors)) ])
-    @ (if l.el_sync then [ ("sync", `Bool true) ] else [])
-    @ (if l.el_infallible then [ ("infallible", `Bool true) ] else [])
-    @ (if l.el_ctx then [ ("ctx", `Bool true) ] else [])
-    @ if l.el_new then [ ("new", `Bool true) ] else [])
+    @
+    match l.el_returns with
+    | None -> []
+    | Some r -> [ ("returns", encode_returns_lit r) ])
 
 let encode_extern_param (p : Ir.extern_param) : Ir.json =
-  `Assoc
-    ([ ("name", `String p.xp_name); ("type", encode_tref p.xp_type) ]
-    @ if p.xp_variadic then [ ("variadic", `Bool true) ] else [])
+  `Assoc [ ("name", `String p.xp_name); ("type", encode_tref p.xp_type) ]
+
+let strings xs = `List (List.map (fun s -> `String s) xs)
 
 let encode_extern_decl (e : Ir.extern_decl) : Ir.json =
   `Assoc
-    [
-      ("name", `String e.x_name);
-      ("params", `List (List.map encode_extern_param e.x_params));
-      ("return", encode_tref e.x_return);
-      ("langs", `List (List.map encode_extern_lang e.x_langs));
-    ]
-
-let encode_instance_name (n : Ir.instance_name) : Ir.json =
-  `Assoc [ ("lang", `String n.inn_lang); ("name", `String n.inn_name) ]
-
-let encode_opaque_instance (i : Ir.opaque_instance) : Ir.json =
-  `Assoc
-    [
-      ("names", `List (List.map encode_instance_name i.inst_names));
-      ("arg", encode_tref i.inst_arg);
-    ]
+    ([
+       ("name", `String e.x_name);
+       ("params", `List (List.map encode_extern_param e.x_params));
+       ("return", encode_tref e.x_return);
+       ("langs", `List (List.map encode_extern_lang e.x_langs));
+     ]
+    @ (if e.x_async = [] then [] else [ ("async", strings e.x_async) ])
+    @ if e.x_errors = [] then [] else [ ("errors", strings e.x_errors) ])
 
 let encode_opaque_type (t : Ir.opaque_type) : Ir.json =
   `Assoc
-    ([
-       ("name", `String t.opq_name);
-       ("methods", `List (List.map encode_extern_decl t.opq_methods));
-     ]
-    @ (match t.opq_instance with
-      | None -> []
-      | Some i -> [ ("instance", encode_opaque_instance i) ])
-    @ if t.opq_interface then [ ("interface", `Bool true) ] else [])
+    [
+      ("name", `String t.opq_name);
+      ("langs", `List (List.map encode_foreign_lang t.opq_langs));
+      ("methods", `List (List.map encode_extern_decl t.opq_methods));
+    ]
 
 let encode_ext_lib (l : Ir.ext_lib) : Ir.json =
   `Assoc
@@ -131,57 +125,61 @@ let encode_ext_lib (l : Ir.ext_lib) : Ir.json =
 
 (* ── Decoding ──────────────────────────────────────────────────────────── *)
 
+let field kvs k what dec =
+  match List.assoc_opt k kvs with
+  | Some v -> dec v
+  | None -> err "%s is missing %s" what k
+
+let list_field kvs k dec =
+  match List.assoc_opt k kvs with
+  | None -> Ok []
+  | Some v ->
+      let* xs = as_list v in
+      map_result dec xs
+
 let decode_lang_path j =
   let* kvs = as_assoc j in
-  let* lang =
-    match List.assoc_opt "lang" kvs with
-    | Some v -> as_string v
-    | None -> err "lang path is missing lang"
-  in
-  let* path =
-    match List.assoc_opt "path" kvs with
-    | Some v -> as_string v
-    | None -> err "lang path is missing path"
-  in
+  let* lang = field kvs "lang" "lang path" as_string in
+  let* path = field kvs "path" "lang path" as_string in
   Ok ({ Ir.lgp_lang = lang; lgp_path = path } : Ir.lang_path)
 
-let decode_foreign_field j =
+let decode_foreign_lang j =
   let* kvs = as_assoc j in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "foreign field is missing name"
-  in
-  let* ty =
-    match List.assoc_opt "type" kvs with
-    | Some v -> decode_tref v
-    | None -> err "foreign field is missing type"
-  in
-  Ok ({ Ir.fgf_name = name; fgf_type = ty } : Ir.foreign_field)
-
-let decode_foreign_struct j =
-  let* kvs = as_assoc j in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "foreign struct is missing name"
-  in
+  let* lang = field kvs "lang" "foreign lang" as_string in
+  let* head = field kvs "name" "foreign lang" as_string in
   let* fields =
     match List.assoc_opt "fields" kvs with
     | None -> Ok []
     | Some v ->
-        let* xs = as_list v in
-        map_result decode_foreign_field xs
+        let* pairs = as_assoc v in
+        map_result
+          (fun (n, sp) ->
+            let* sp = as_string sp in
+            Ok (n, sp))
+          pairs
   in
-  Ok ({ Ir.fgs_name = name; fgs_fields = fields } : Ir.foreign_struct)
+  Ok
+    ({ Ir.fl_lang = lang; fl_head = head; fl_fields = fields }
+      : Ir.foreign_lang)
+
+let decode_foreign_field j =
+  let* kvs = as_assoc j in
+  let* name = field kvs "name" "foreign field" as_string in
+  let* ty = field kvs "type" "foreign field" decode_tref in
+  Ok ({ Ir.fgf_name = name; fgf_type = ty } : Ir.foreign_field)
+
+let decode_foreign_struct j =
+  let* kvs = as_assoc j in
+  let* name = field kvs "name" "foreign struct" as_string in
+  let* fields = list_field kvs "fields" decode_foreign_field in
+  let* langs = list_field kvs "langs" decode_foreign_lang in
+  Ok
+    ({ Ir.fgs_name = name; fgs_fields = fields; fgs_langs = langs }
+      : Ir.foreign_struct)
 
 let decode_yields_pos j =
   let* kvs = as_assoc j in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "yields position is missing name"
-  in
+  let* name = field kvs "name" "yields position" as_string in
   let* ty =
     match List.assoc_opt "type" kvs with
     | None -> Ok None
@@ -192,10 +190,22 @@ let decode_yields_pos j =
   let* is_error =
     match List.assoc_opt "is_error" kvs with
     | None -> Ok false
-    | Some v -> Ir_json_base.as_bool v
+    | Some v -> as_bool v
+  in
+  let* foreign =
+    match List.assoc_opt "foreign" kvs with
+    | None -> Ok None
+    | Some v ->
+        let* s = as_string v in
+        Ok (Some s)
   in
   Ok
-    ({ Ir.yp_name = name; yp_type = ty; yp_is_error = is_error }
+    ({
+       Ir.yp_name = name;
+       yp_type = ty;
+       yp_is_error = is_error;
+       yp_foreign = foreign;
+     }
       : Ir.yields_pos)
 
 let decode_returns_value j =
@@ -212,252 +222,80 @@ let decode_returns_value j =
 
 let decode_returns_field j =
   let* kvs = as_assoc j in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "returns field is missing name"
-  in
-  let* value =
-    match List.assoc_opt "value" kvs with
-    | Some v -> decode_returns_value v
-    | None -> err "returns field is missing value"
-  in
+  let* name = field kvs "name" "returns field" as_string in
+  let* value = field kvs "value" "returns field" decode_returns_value in
   Ok ({ Ir.rvf_name = name; rvf_value = value } : Ir.returns_field)
 
 let decode_returns_lit j =
   let* kvs = as_assoc j in
-  let* ty =
-    match List.assoc_opt "type" kvs with
-    | Some v -> decode_tref v
-    | None -> err "returns is missing type"
-  in
-  let* fields =
-    match List.assoc_opt "fields" kvs with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_returns_field xs
-  in
+  let* ty = field kvs "type" "returns" decode_tref in
+  let* fields = list_field kvs "fields" decode_returns_field in
   Ok ({ Ir.rvl_type = ty; rvl_fields = fields } : Ir.returns_lit)
-
-let decode_error_binding j =
-  let* kvs = as_assoc j in
-  let* sentinel =
-    match List.assoc_opt "sentinel" kvs with
-    | Some v -> as_string v
-    | None -> err "error binding is missing sentinel"
-  in
-  let* ty =
-    match List.assoc_opt "type" kvs with
-    | Some v -> as_string v
-    | None -> err "error binding is missing type"
-  in
-  Ok ({ Ir.erb_sentinel = sentinel; erb_type = ty } : Ir.error_binding)
 
 let decode_extern_lang j =
   let* kvs = as_assoc j in
-  let get k = List.assoc_opt k kvs in
-  let* lang =
-    match get "lang" with
-    | Some v -> as_string v
-    | None -> err "language block is missing lang"
-  in
-  let* symbol =
-    match get "symbol" with
-    | Some v -> as_string v
-    | None -> err "language block is missing symbol"
-  in
-  let* call_args =
-    match get "call_args" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_call_arg xs
-  in
-  let* yields =
-    match get "yields" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_yields_pos xs
-  in
+  let* lang = field kvs "lang" "language block" as_string in
+  let* symbol = field kvs "symbol" "language block" as_string in
+  let* call_args = list_field kvs "call_args" decode_call_arg in
+  let* yields = list_field kvs "yields" decode_yields_pos in
   let* returns =
-    match get "returns" with
+    match List.assoc_opt "returns" kvs with
     | None -> Ok None
     | Some v ->
         let* r = decode_returns_lit v in
         Ok (Some r)
   in
-  let* errors =
-    match get "errors" with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_error_binding xs
-  in
-  let* sync = match get "sync" with None -> Ok false | Some v -> as_bool v in
-  let* infallible =
-    match get "infallible" with None -> Ok false | Some v -> as_bool v
-  in
-  let* ctx = match get "ctx" with None -> Ok false | Some v -> as_bool v in
-  let* new_ = match get "new" with None -> Ok false | Some v -> as_bool v in
-  let* receiver =
-    match get "receiver" with
-    | None -> Ok None
-    | Some v ->
-        let* r = as_string v in
-        Ok (Some r)
-  in
   Ok
     ({
        el_lang = lang;
-       el_receiver = receiver;
        el_symbol = symbol;
        el_call_args = call_args;
        el_yields = yields;
        el_returns = returns;
-       el_errors = errors;
-       el_sync = sync;
-       el_infallible = infallible;
-       el_ctx = ctx;
-       el_new = new_;
      }
       : Ir.extern_lang)
 
 let decode_extern_param j =
   let* kvs = as_assoc j in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "extern param is missing name"
-  in
-  let* ty =
-    match List.assoc_opt "type" kvs with
-    | Some v -> decode_tref v
-    | None -> err "extern param is missing type"
-  in
-  let* variadic =
-    match List.assoc_opt "variadic" kvs with
-    | None -> Ok false
-    | Some v -> as_bool v
-  in
-  Ok
-    ({ Ir.xp_name = name; xp_type = ty; xp_variadic = variadic }
-      : Ir.extern_param)
+  let* name = field kvs "name" "extern param" as_string in
+  let* ty = field kvs "type" "extern param" decode_tref in
+  Ok ({ Ir.xp_name = name; xp_type = ty } : Ir.extern_param)
 
-let rec decode_extern_decl j =
+let decode_extern_decl j =
   let* kvs = as_assoc j in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "extern is missing name"
-  in
-  let* params =
-    match List.assoc_opt "params" kvs with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_extern_param xs
-  in
-  let* ret =
-    match List.assoc_opt "return" kvs with
-    | Some v -> decode_tref v
-    | None -> err "extern is missing return"
-  in
-  let* langs =
-    match List.assoc_opt "langs" kvs with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_extern_lang xs
-  in
-  Ok
-    ({ Ir.x_name = name; x_params = params; x_return = ret; x_langs = langs }
-      : Ir.extern_decl)
-
-and decode_instance_name j =
-  let* kvs = as_assoc j in
-  let* lang =
-    match List.assoc_opt "lang" kvs with
-    | Some v -> as_string v
-    | None -> err "instance name is missing lang"
-  in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "instance name is missing name"
-  in
-  Ok ({ Ir.inn_lang = lang; inn_name = name } : Ir.instance_name)
-
-and decode_opaque_instance j =
-  let* kvs = as_assoc j in
-  let* names =
-    match List.assoc_opt "names" kvs with
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_instance_name xs
-    | None -> err "opaque instance is missing names"
-  in
-  let* arg =
-    match List.assoc_opt "arg" kvs with
-    | Some v -> decode_tref v
-    | None -> err "opaque instance is missing arg"
-  in
-  Ok ({ Ir.inst_names = names; inst_arg = arg } : Ir.opaque_instance)
-
-and decode_opaque_type j =
-  let* kvs = as_assoc j in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "opaque type is missing name"
-  in
-  let* instance =
-    match List.assoc_opt "instance" kvs with
-    | None -> Ok None
-    | Some v ->
-        let* i = decode_opaque_instance v in
-        Ok (Some i)
-  in
-  let* interface =
-    match List.assoc_opt "interface" kvs with
-    | None -> Ok false
-    | Some v -> as_bool v
-  in
-  let* methods =
-    match List.assoc_opt "methods" kvs with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result decode_extern_decl xs
-  in
+  let* name = field kvs "name" "extern" as_string in
+  let* params = list_field kvs "params" decode_extern_param in
+  let* ret = field kvs "return" "extern" decode_tref in
+  let* langs = list_field kvs "langs" decode_extern_lang in
+  let* async = list_field kvs "async" as_string in
+  let* errors = list_field kvs "errors" as_string in
   Ok
     ({
-       Ir.opq_name = name;
-       opq_instance = instance;
-       opq_interface = interface;
-       opq_methods = methods;
+       Ir.x_name = name;
+       x_params = params;
+       x_return = ret;
+       x_langs = langs;
+       x_async = async;
+       x_errors = errors;
      }
+      : Ir.extern_decl)
+
+let decode_opaque_type j =
+  let* kvs = as_assoc j in
+  let* name = field kvs "name" "opaque type" as_string in
+  let* langs = list_field kvs "langs" decode_foreign_lang in
+  let* methods = list_field kvs "methods" decode_extern_decl in
+  Ok
+    ({ Ir.opq_name = name; opq_langs = langs; opq_methods = methods }
       : Ir.opaque_type)
 
 let decode_ext_lib j =
   let* kvs = as_assoc j in
-  let* name =
-    match List.assoc_opt "name" kvs with
-    | Some v -> as_string v
-    | None -> err "ext lib is missing name"
-  in
-  let list_of k dec =
-    match List.assoc_opt k kvs with
-    | None -> Ok []
-    | Some v ->
-        let* xs = as_list v in
-        map_result dec xs
-  in
-  let* langs = list_of "langs" decode_lang_path in
-  let* structs = list_of "structs" decode_foreign_struct in
-  let* types = list_of "types" decode_opaque_type in
-  let* externs = list_of "externs" decode_extern_decl in
+  let* name = field kvs "name" "ext lib" as_string in
+  let* langs = list_field kvs "langs" decode_lang_path in
+  let* structs = list_field kvs "structs" decode_foreign_struct in
+  let* types = list_field kvs "types" decode_opaque_type in
+  let* externs = list_field kvs "externs" decode_extern_decl in
   Ok
     ({
        Ir.xl_name = name;

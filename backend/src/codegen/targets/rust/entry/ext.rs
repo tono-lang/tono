@@ -38,8 +38,9 @@ use crate::codegen::casing::CasingConfig;
 use crate::codegen::conventions::type_ident_from_id;
 use crate::codegen::entries::plan::Emitter;
 use crate::codegen::entries::EntryModel;
+use crate::codegen::foreign_spelling::{self, rust_builtin};
 use crate::ir::{
-    CallArg, CallCtor, EntryCall, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpImplCall,
+    CallArg, EntryCall, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpImplCall,
     OpaqueType, ReturnsField, ReturnsLit, ReturnsValue, Tref, YieldsPos,
 };
 
@@ -78,57 +79,58 @@ fn crate_ident(lib: &ExtLib) -> Option<String> {
         .map(|l| l.path.replace('-', "_"))
 }
 
-/// The Rust type spelling of a foreign opaque handle: the owned concrete
-/// type the declaring crate exports, or a boxed trait object when the
-/// handle is declared `interface`.
-///
-/// A generic handle (`handle.instance` set) spells the *foreign* name
-/// instead of the handle's own tono name (two handles can instantiate the
-/// same foreign generic differently, so they cannot share an identifier),
-/// picking the instantiation's own "rust" spelling when the surface named
-/// one per language, with the instantiation argument appended as a type
-/// argument through the same `rust_type` every other declared type reaches
-/// codegen through.
-///
-/// An `interface` handle names an abstraction, not a concrete type: in Rust
-/// that is a trait, and the library's constructors are free to each return
-/// a *different* concrete type implementing it. The handle is therefore
-/// held as `Box<dyn Trait>`, boxed at the construction site, so those
-/// concrete types never need a tono spelling at all: the target compiler
-/// infers each one at its own call site.
-///
-/// `None` when the lib declares no `rust` module path at all: there is no
-/// crate to qualify the type with, so the caller falls back to the ordinary
-/// nominal spelling and lets the target compiler report the unresolved name.
-pub(super) fn handle_rust_type(lib: &ExtLib, handle: &OpaqueType) -> Option<String> {
-    let krate = crate_ident(lib)?;
-    // The instantiation's name is the library's own spelling, written as a
-    // string exactly so the origin stays visible: it is emitted verbatim,
-    // never through the casing engine (which would fold "ConstantCalculator"
-    // into "Constantcalculator"). Only the fallback derived from the
-    // handle's own tono name is cased.
-    let base = match handle.instance.as_ref().and_then(|i| i.name_for("rust")) {
-        Some(name) => name.to_string(),
-        None => pascal(&handle.name),
-    };
-    let named = match &handle.instance {
-        Some(inst) => format!("{krate}::{base}<{}>", rust_type(&inst.arg)),
-        None => format!("{krate}::{base}"),
-    };
-    Some(if handle.interface {
-        format!("Box<dyn {named}>")
-    } else {
-        named
-    })
+/// Whether a word of a foreign spelling is one of this module's own
+/// generated types (a tono shape in scope through `types::*`), which a
+/// spelling can use without the crate path: `Source<AppSettings>`.
+pub(super) fn is_local_type(module: &Module, word: &str) -> bool {
+    module
+        .shapes
+        .iter()
+        .any(|s| pascal(crate::codegen::entries::local_name(&s.id)) == word)
 }
 
-/// Whether a construction slot holds an `interface` handle in Rust, so the
-/// concrete value a constructor yields is boxed on its way in (see
-/// [`handle_rust_type`]).
-pub(super) fn is_boxed_handle(t: &Tref, module: &Module) -> bool {
+/// A foreign spelling with the library's identifiers qualified by the
+/// crate: `Box<dyn Calculator<f64>>` becomes `Box<dyn mathkit::Calculator<f64>>`,
+/// `FormulaCalculator::parse` becomes `mathkit::FormulaCalculator::parse`.
+/// Rust keywords, primitives, the prelude and the module's own generated
+/// types stay bare; a head the author qualified stays as written.
+pub(super) fn qualify(spelling: &str, krate: &str, module: &Module) -> String {
+    foreign_spelling::qualify(
+        spelling,
+        &format!("{krate}::"),
+        &|w| rust_builtin(w) || w == krate || is_local_type(module, w),
+        false,
+    )
+}
+
+/// The Rust type spelling of a foreign opaque handle: the storage type its
+/// `rust` block declares, verbatim, qualified by the crate. The block spells
+/// the whole thing (`Box<dyn Calculator<f64>>` for a trait the constructors
+/// return concrete types of, `ConstantCalculator<f64>` for one held
+/// concretely, the instantiation included), so nothing is derived from the
+/// handle's name. `None` when the lib declares no `rust` module path or the
+/// handle no `rust` block: there is no storage to spell, and
+/// `validate_calls::handle_storage_declared` refuses the field before any
+/// emitter reaches it.
+pub(super) fn handle_rust_type(
+    lib: &ExtLib,
+    handle: &OpaqueType,
+    module: &Module,
+) -> Option<String> {
+    let krate = crate_ident(lib)?;
+    let storage = handle.storage("rust")?;
+    Some(qualify(storage, &krate, module))
+}
+
+/// The wrap a freshly constructed value goes through on its way into a
+/// handle slot stored behind a box (`Box<dyn Trait>`, `Arc<..>`): the
+/// constructor yields one of the library's own concrete types and the slot
+/// holds the trait object, so the value is boxed at the construction site.
+/// `None` for a slot that holds the concrete type itself.
+pub(super) fn boxed_wrap(t: &Tref, module: &Module) -> Option<&'static str> {
     foreign_handle(t, module)
-        .map(|(lib, handle)| handle.interface && crate_ident(lib).is_some())
-        .unwrap_or(false)
+        .and_then(|(lib, handle)| crate_ident(lib).and(handle.storage("rust")))
+        .and_then(foreign_spelling::rust_boxed)
 }
 
 /// The public Rust spelling of an entry field's declared type: a foreign
@@ -136,7 +138,8 @@ pub(super) fn is_boxed_handle(t: &Tref, module: &Module) -> bool {
 /// rendering for everything else. This is what a constructor parameter, a
 /// `.with_*` argument and a builder field are typed with.
 pub(super) fn field_type(t: &Tref, module: &Module) -> String {
-    match foreign_handle(t, module).and_then(|(lib, handle)| handle_rust_type(lib, handle)) {
+    match foreign_handle(t, module).and_then(|(lib, handle)| handle_rust_type(lib, handle, module))
+    {
         Some(ty) => ty,
         None => rust_type(t),
     }
@@ -147,7 +150,8 @@ pub(super) fn field_type(t: &Tref, module: &Module) -> String {
 /// handle because the draft the resolution assigns into has to start at some
 /// value and a foreign type has no zero (see the module doc).
 pub(super) fn settings_field_type(t: &Tref, module: &Module) -> String {
-    match foreign_handle(t, module).and_then(|(lib, handle)| handle_rust_type(lib, handle)) {
+    match foreign_handle(t, module).and_then(|(lib, handle)| handle_rust_type(lib, handle, module))
+    {
         Some(ty) => format!("Option<{ty}>"),
         None => rust_type(t),
     }
@@ -157,7 +161,7 @@ pub(super) fn settings_field_type(t: &Tref, module: &Module) -> String {
 /// [`settings_field_type`]), so a leaf assigning into it wraps its value.
 pub(super) fn is_stored_wrapped(t: &Tref, module: &Module) -> bool {
     foreign_handle(t, module)
-        .and_then(|(lib, handle)| handle_rust_type(lib, handle))
+        .and_then(|(lib, handle)| handle_rust_type(lib, handle, module))
         .is_some()
 }
 
@@ -175,15 +179,13 @@ pub(super) fn wrap_stored(t: &Tref, module: &Module, expr: &str) -> String {
 }
 
 /// A value a foreign constructor (or handle method) just yielded, on its way
-/// into a construction slot: boxed first when the slot holds an `interface`
-/// handle (the constructor returns one of the library's own concrete types,
-/// and the slot holds the trait object; see [`handle_rust_type`]), then
-/// wrapped like every other stored value.
+/// into a construction slot: the target coerces it into the declared
+/// storage, boxing it when the slot holds a trait object (see
+/// [`boxed_wrap`]), then wraps it like every other stored value.
 pub(super) fn wrap_constructed(t: &Tref, module: &Module, expr: &str) -> String {
-    if is_boxed_handle(t, module) {
-        wrap_stored(t, module, &format!("Box::new({expr})"))
-    } else {
-        wrap_stored(t, module, expr)
+    match boxed_wrap(t, module) {
+        Some(wrap) => wrap_stored(t, module, &format!("{wrap}({expr})")),
+        None => wrap_stored(t, module, expr),
     }
 }
 
@@ -192,6 +194,7 @@ pub(super) fn wrap_constructed(t: &Tref, module: &Module, expr: &str) -> String 
 /// `rust` language block.
 struct Lookup<'a> {
     lib: &'a ExtLib,
+    decl: &'a ExternDecl,
     lang: &'a ExternLang,
     params: &'a [ExternParam],
 }
@@ -223,6 +226,7 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
     let lang = find_rust_lang_method(decl, &call.method);
     Lookup {
         lib,
+        decl,
         lang,
         params: &decl.params,
     }
@@ -292,6 +296,26 @@ impl ArgCtx<'_> {
     fn arg_expr(&self, arg: &CallArg) -> String {
         match arg {
             CallArg::Param(name) => self.param_expr(name),
+            // The parameter crosses under its own Rust spelling: the value
+            // coerced as the spelling asks (see `resolve_call::coerce`).
+            CallArg::ParamAs { name, spelling } => {
+                let param_type = self
+                    .params
+                    .iter()
+                    .find(|p| p.name == *name)
+                    .map(|p| p.r#type.clone())
+                    .unwrap_or(crate::ir::Tref::Prim(crate::ir::Prim::String));
+                let expr = self.param_expr(name);
+                super::resolve_call::coerce(self.module, self.lib, &param_type, spelling, &expr)
+                    .unwrap_or_else(|e| {
+                        panic!("{e}; validate_calls::param_spelling_coerces should have refused it")
+                    })
+            }
+            // Rust binds no position of its own: `validate_calls::
+            // foreign_position_binds` refuses a declared position here.
+            CallArg::Foreign(sp) => panic!(
+                "a declared position {sp:?} reached Rust codegen; validate_calls::foreign_position_binds should have refused it"
+            ),
             CallArg::Ref(path) => self.ref_expr(path),
             CallArg::Lit(v) => json_literal(v),
             CallArg::List(items) => format!(
@@ -302,12 +326,11 @@ impl ArgCtx<'_> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            CallArg::Ctor(CallCtor { name, fields }) => {
-                let rendered: Vec<String> = fields
-                    .iter()
-                    .map(|(field_name, value)| format!("{field_name}: {}", self.arg_expr(value)))
-                    .collect();
-                format!("{name} {{ {} }}", rendered.join(", "))
+            CallArg::Ctor(ctor) => {
+                let krate = crate_ident(self.lib)
+                    .expect("validate::call_resolves checked a rust module path exists");
+                let values: Vec<String> = ctor.fields.values().map(|v| self.arg_expr(v)).collect();
+                super::resolve_call::ctor_expr(self.module, self.lib, &krate, ctor, &values)
             }
             CallArg::Call(nested) => self.nested_call_expr(nested),
             CallArg::TypeRef(_) => panic!(
@@ -323,8 +346,8 @@ impl ArgCtx<'_> {
                 let krate = crate_ident(self.lib)
                     .expect("validate::call_resolves checked a rust module path exists");
                 format!(
-                    "{krate}::{}({})",
-                    sc.symbol,
+                    "{}({})",
+                    qualify(&sc.symbol, &krate, self.module),
                     sc.args
                         .iter()
                         .map(|a| self.arg_expr(a))
@@ -358,9 +381,9 @@ impl ArgCtx<'_> {
         let args: Vec<String> = lang.call_args.iter().map(|a| inner.arg_expr(a)).collect();
         format!(
             "{}({}){}",
-            super::resolve_call::qualified_symbol(&krate, lang),
+            qualify(&lang.symbol, &krate, self.module),
             args.join(", "),
-            if lang.sync { "" } else { ".await" }
+            if decl.is_async(LANG) { ".await" } else { "" }
         )
     }
 }
@@ -473,10 +496,10 @@ pub(super) fn impl_call_body(c: &ImplCall<'_>) -> (String, bool) {
     let recv_name = c.call.recv.join(".");
     let call_name = format!("{recv_name}.{}", c.call.method);
 
-    let awaited = if l.lang.sync { "" } else { ".await" };
+    let awaited = if l.decl.is_async(LANG) { ".await" } else { "" };
     let binding = ok_pattern(&l.lang.yields);
     let value = ok_value(&binding, l.lang.returns.as_ref(), c.has_output);
-    let mapped = error_match(&recv_name, &c.call.method, &l.lang.errors);
+    let mapped = error_match(c.module, l.lib, &recv_name, &c.call.method, &l.decl.errors);
 
     let body = format!(
         "let recv = match &{stored} {{\n\
@@ -485,15 +508,14 @@ pub(super) fn impl_call_body(c: &ImplCall<'_>) -> (String, bool) {
          \x20       return Err(TonoError::Config(ConfigError {{ message: {miss:?}.to_string() }}));\n\
          \x20   }}\n\
          }};\n\
-         match recv.{symbol}({args}){awaited} {{\n\
+         match {call}{awaited} {{\n\
          \x20   Ok({binding}) => Ok({value}),\n\
          \x20   Err(e) => Err({mapped}),\n\
          }}",
         miss = format!("{call_name}: the {recv_name} handle is not configured"),
-        symbol = l.lang.symbol,
-        args = args.join(", "),
+        call = method_call(c.module, l.lib, "recv", &l.lang.symbol, &args),
     );
-    (body, !l.lang.sync)
+    (body, l.decl.is_async(LANG))
 }
 
 /// A field's own `= .field.method(args)` construction source: the receiver
@@ -529,9 +551,9 @@ pub(super) fn handle_call_assign(
         .map(|a| call_arg_expr(r, &scope, a))
         .collect();
     let stored = r.path_expr(&call.recv);
-    let awaited = if l.lang.sync { "" } else { ".await" };
+    let awaited = if l.decl.is_async(LANG) { ".await" } else { "" };
     let binding = ok_pattern(&l.lang.yields);
-    let mapped = error_match(&recv_name, &call.method, &l.lang.errors);
+    let mapped = error_match(r.module, l.lib, &recv_name, &call.method, &l.decl.errors);
     let target = field.target.clone();
     let module = r.module;
     let store = move |expr: &str| wrap_constructed(&target, module, expr);
@@ -546,12 +568,26 @@ pub(super) fn handle_call_assign(
          \x20       return Err(TonoError::Config(ConfigError {{ message: {miss:?}.to_string() }}));\n\
          \x20   }}\n\
          }};\n\
-         let outcome = recv.{symbol}({args}){awaited};\n\
+         let outcome = {call}{awaited};\n\
          match outcome {{\n    Ok({binding}) => {{ {assign} }}\n    Err(e) => {{ return Err({mapped}); }}\n}}",
         miss = format!("{call_name}: the {recv_name} handle is not configured"),
-        symbol = l.lang.symbol,
-        args = args.join(", "),
+        call = method_call(r.module, l.lib, "recv", &l.lang.symbol, &args),
     )
+}
+
+/// A handle method call: `recv.method(args)` for a bare method name, or
+/// the path form when the spelling is a path (`Calculator::compute`): the
+/// method is called through its trait or type with the receiver first,
+/// which is what brings a trait into scope on a concretely held handle.
+fn method_call(module: &Module, lib: &ExtLib, recv: &str, symbol: &str, args: &[String]) -> String {
+    if symbol.contains("::") {
+        let krate = crate_ident(lib).unwrap_or_default();
+        let mut all = vec![recv.to_string()];
+        all.extend(args.iter().cloned());
+        format!("{}({})", qualify(symbol, &krate, module), all.join(", "))
+    } else {
+        format!("{recv}.{symbol}({})", args.join(", "))
+    }
 }
 
 #[cfg(test)]

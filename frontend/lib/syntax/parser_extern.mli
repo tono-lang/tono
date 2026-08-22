@@ -18,6 +18,16 @@ val parse_type_no_error :
 val check_not_error_name :
   Parser_state.t -> string -> string -> Span.span -> unit
 
+(* lang "{" "#(...)" (name ":" "#(...)")* "}" -- a language block, with the
+   cursor on the language identifier. Also used by [Parser] for the blocks
+   of an error struct at top level. *)
+val parse_lang_block : Parser_state.t -> Ast.lang_block
+
+(* The same block on a top-level (error) struct, diagnosing traits written
+   above it, which belong to the struct. *)
+val parse_struct_lang_block :
+  Parser_state.t -> traits:Ast.trait list -> Ast.lang_block
+
 (* Parse the body and close of "ext <name> { ... }"; "ext" and [name] have
    already been consumed by the caller (see [Parser]'s disambiguation at
    "ext <ident>"). *)

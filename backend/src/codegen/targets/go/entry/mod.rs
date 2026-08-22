@@ -145,7 +145,7 @@ fn field_go_type(t: &Tref, module: &Module, refs: &mut Vec<Symbol>) -> String {
         if let Some((lib, type_name)) = ext::foreign_handle(t, module) {
             let handle = lib.types.iter().find(|ty| ty.name == type_name);
             if let Some(handle) = handle {
-                if let Some(ty) = ext::handle_go_type(lib, handle, refs) {
+                if let Some(ty) = ext::handle_go_type(lib, handle, module, refs) {
                     return ty;
                 }
             }
@@ -460,3 +460,14 @@ use resolve::Resolver;
 use shared::{apply_transforms, shared_slot, shared_symbol};
 pub use shared::{shared_groups, shared_groups_for};
 use surface::method_signature;
+
+/// Whether Go can coerce a logical value of `t` into `spelling` (see
+/// `ext_render::coerce`); the reason names both types when it cannot.
+pub fn param_spelling_coerces(
+    module: &Module,
+    lib: &crate::ir::ExtLib,
+    t: &Tref,
+    spelling: &str,
+) -> Result<(), String> {
+    ext::coerce(module, lib, t, spelling, "v", None).map(|_| ())
+}

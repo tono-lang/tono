@@ -21,12 +21,13 @@ use std::collections::HashMap;
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::entries::EntryModel;
+use crate::codegen::foreign_spelling::{self, go_builtin};
 use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{
-    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl,
-    ExternLang, ExternParam, Module, OpaqueType, Prim, ReturnsLit, ReturnsValue, ShapeKind, Tref,
+    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang,
+    ExternParam, ForeignLang, Module, OpaqueType, Prim, ReturnsLit, ReturnsValue, ShapeKind, Tref,
 };
 
 use super::resolve::Resolver;
@@ -178,56 +179,50 @@ pub(super) fn foreign_handle<'a>(t: &Tref, module: &'a Module) -> Option<(&'a Ex
         .then(|| (lib, ty.to_string()))
 }
 
-/// The Go type spelling of a foreign opaque handle: the real package's
-/// exported type, held by pointer for a concrete struct (the return
-/// convention of a constructor whose methods have pointer receivers) and by
-/// value for a declared `interface` handle (`*Iface` is never the right
-/// type in Go: an interface value already carries its indirection). Every
-/// position that spells the real foreign type (a `With*` setter's parameter,
-/// the adapter's `real` field, a constructor's concrete argument) goes
-/// through here, so the pointer-or-value decision is made exactly once.
-///
-/// The exported identifier is assumed to be the
-/// handle's own canonical name Pascal-cased — the same casing convention
-/// every other nominal type in this codegen follows. This is the one guess
-/// the target compiler is expected to grade: a library whose real exported
-/// identifier differs fails `go build`, which is the intended failure mode,
-/// not a generation-time crash.
-///
-/// A generic handle (`handle.instance` set) spells the *foreign* name
-/// instead of the handle's own tono name (two handles can instantiate the
-/// same foreign generic differently, so they cannot share an identifier),
-/// with the instantiation argument appended as a type argument; the
-/// argument's own Go spelling and import go through the same `go_type`/
-/// `push_type_symbols` every other declared type reaches codegen through,
-/// never hand-formatted. `refs` collects the argument's import when one is
-/// present; a non-generic handle needs none.
+/// Whether a word of a foreign spelling is one of this module's own
+/// generated types (a tono shape rendered in the same Go package), which a
+/// spelling can use without the package selector: `Source[AppSettings]`.
+pub(super) fn is_local_type(module: &Module, word: &str) -> bool {
+    module
+        .shapes
+        .iter()
+        .any(|s| pascal(crate::codegen::entries::local_name(&s.id)) == word)
+}
+
+/// A foreign spelling with the library's identifiers qualified by its
+/// package selector: `Calculator[float64]` becomes
+/// `mathkit.Calculator[float64]`, `*Source[AppSettings]` becomes
+/// `*settingskit.Source[AppSettings]`. Go builtins and the module's own
+/// generated types stay bare; a head the author qualified stays as written.
+pub(super) fn qualify(spelling: &str, alias: &str, module: &Module) -> String {
+    foreign_spelling::qualify(
+        spelling,
+        &format!("{alias}."),
+        &|w| go_builtin(w) || is_local_type(module, w),
+        true,
+    )
+}
+
+/// The Go type spelling of a foreign opaque handle: the storage type its
+/// `go` block declares, verbatim, qualified by the package selector. The
+/// block spells the whole thing (`Calculator[float64]` for an interface held
+/// by value, `*Provider` for a concrete struct held by pointer, the
+/// instantiation included), so nothing is derived from the handle's name.
+/// Every position that spells the real foreign type (a `With*` setter's
+/// parameter, the adapter's `real` field, a constructor's concrete argument)
+/// goes through here. `None` when the lib declares no Go module path or
+/// the handle no `go` block: there is no storage to spell, and
+/// `validate_calls::handle_storage_declared` refuses the field before any
+/// emitter reaches it.
 pub(super) fn handle_go_type(
     lib: &ExtLib,
     handle: &OpaqueType,
+    module: &Module,
     refs: &mut Vec<Symbol>,
 ) -> Option<String> {
-    lib_go_path(lib)?;
-    // The instantiation's own "go" spelling wins, emitted verbatim: it is
-    // the library's spelling, written as a string exactly so the origin
-    // stays visible, and the casing engine would fold an inner capital
-    // ("DataSource" into "Datasource"). A handle whose instance somehow
-    // lacks a "go" entry (defensive: the frontend expands a shared name over
-    // every declared language) falls back to the cased tono name like a
-    // non-generic handle does.
-    let base = match handle.instance.as_ref().and_then(|i| i.name_for("go")) {
-        Some(name) => name.to_string(),
-        None => pascal(&handle.name),
-    };
-    let type_arg = handle.instance.as_ref().map(|inst| {
-        push_type_symbols(&inst.arg, refs);
-        go_type(&inst.arg)
-    });
-    let ptr = if handle.interface { "" } else { "*" };
-    Some(match type_arg {
-        Some(arg) => format!("{ptr}{}.{base}[{arg}]", lib_ident(&lib.name)),
-        None => format!("{ptr}{}.{base}", lib_ident(&lib.name)),
-    })
+    let alias = import_lib(refs, lib)?;
+    let storage = handle.storage("go")?;
+    Some(qualify(storage, &alias, module))
 }
 
 /// The import a foreign handle field's type needs, alongside its spelling.
@@ -245,7 +240,7 @@ pub(super) use ext_handle::{
 
 #[path = "ext_render.rs"]
 mod ext_render;
-pub(super) use ext_render::{call_arg_expr, error_block, has_error_position, returns_expr};
+pub(super) use ext_render::{call_arg_expr, coerce, error_block, has_error_position, returns_expr};
 // declared_error_literal has no caller in this file itself: it is exported
 // for ext_tests's own unit coverage of it, not for anything ext.rs calls.
 #[allow(unused_imports)]
@@ -254,77 +249,81 @@ pub(super) use ext_render::declared_error_literal;
 /// The result of building and assigning an extern call's return values: the
 /// Go statement(s) up to and including the call itself, the yields-bound
 /// variable names (empty-string key for the no-`yields` case), and the
-/// error variable's own name, `None` for an `infallible` call (the real Go
-/// function has no error to check, so there is nothing to name).
+/// error variable's own name.
 struct CallResult {
     stmt: String,
     yields_vars: HashMap<String, String>,
     err_var: Option<String>,
 }
 
-/// Build the call expression and its LHS variable bindings; does not handle
-/// error branching or `returns:` projection (the two call sites — a field's
-/// own construction and an op's `impl` method call — diverge there).
-/// `callee` is what `lang.symbol` is called on: the lib's package selector
-/// for a free function, or the receiver's own read expression for a method.
-/// `var_prefix` names every generated variable (the field's own name, or the
-/// op's), so two calls sharing a scope never collide. `type_arg` is a
-/// generic constructor's own explicit type argument (`NewEnvSource[Settings]`
-/// rather than `NewEnvSource`, when the callee returns an instantiated
-/// opaque handle) -- `None` for every other call, including a method call,
-/// which never spells one: Go infers a method's type parameters from its
-/// receiver.
-/// Go has no static method: `validate_calls::static_receiver_renders`
-/// refuses a binding with a type receiver before generation, so reaching a
-/// Go call renderer with one is a pipeline defect. Panicking here beats the
-/// alternative, a method expression (`pkg.Type.Method(args)`) that compiles
-/// into a call with a different meaning.
-pub(super) fn refuse_static_receiver(lang: &ExternLang) {
-    if let Some(recv) = &lang.receiver {
-        panic!(
-            "go codegen cannot render a static method receiver ({recv}.{}); validate_calls should have refused it",
-            lang.symbol
-        );
-    }
+/// What a binding's callee spelling is called on: the library's package
+/// (a free function, `mathkit.FromConstant[float64]`: the spelling's own
+/// identifiers are qualified by the selector) or a receiver expression (a
+/// handle method, `a.real.Compute`: the spelling is the method name).
+pub(super) enum Callee {
+    Package(String),
+    Receiver(String),
 }
 
+/// What a declared context position reads as where no caller context
+/// exists (a field's construction-time call).
+pub(super) const BACKGROUND_CTX: &str = "context.Background()";
+
+/// Whether a binding declares a context position (`#(ctx context.Context)`):
+/// the one thing that decides whether a generated method signature carries
+/// `ctx context.Context`, and whether the `context` package is imported.
+pub(super) fn binds_ctx(lang: &ExternLang) -> bool {
+    lang.call_args
+        .iter()
+        .any(|a| matches!(a, CallArg::Foreign(_)))
+}
+
+/// Build the call expression and its LHS variable bindings; does not handle
+/// error branching or `returns:` projection (the two call sites, a field's
+/// own construction and an op's `impl` method call, diverge there).
+/// `var_prefix` names every generated variable (the field's own name, or the
+/// op's), so two calls sharing a scope never collide. `ctx_expr` is what a
+/// declared context position reads as at this call site.
 #[allow(clippy::too_many_arguments)]
 fn build_call(
     refs: &mut Vec<Symbol>,
     module: &Module,
     lib: &ExtLib,
     lang: &ExternLang,
-    callee: &str,
-    type_arg: Option<&str>,
+    callee: &Callee,
     decl_params: &[ExternParam],
     call_args_src: &[CallArg],
     var_prefix: &str,
+    ctx_expr: &str,
     ref_expr: &mut dyn FnMut(&[String]) -> String,
 ) -> CallResult {
-    let mut call_args: Vec<String> = lang
+    let call_args: Vec<String> = lang
         .call_args
         .iter()
-        .map(|a| call_arg_expr(refs, module, lib, a, decl_params, call_args_src, ref_expr))
+        .map(|a| {
+            call_arg_expr(
+                refs,
+                module,
+                lib,
+                a,
+                decl_params,
+                call_args_src,
+                ctx_expr,
+                ref_expr,
+            )
+        })
         .collect();
-    if lang.ctx {
-        call_args.insert(0, "ctx".to_string());
-    }
-    refuse_static_receiver(lang);
-    let symbol = match type_arg {
-        Some(arg) => format!("{}[{arg}]", lang.symbol),
-        None => lang.symbol.clone(),
+    let head = match callee {
+        Callee::Package(alias) => qualify(&lang.symbol, alias, module),
+        Callee::Receiver(recv) => format!("{recv}.{}", lang.symbol),
     };
-    let call_expr = format!("{callee}.{symbol}({})", call_args.join(", "));
+    let call_expr = format!("{head}({})", call_args.join(", "));
 
     let prefix = camel(var_prefix);
     let has_error_pos = has_error_position(lang);
     let mut lhs: Vec<String> = Vec::new();
     let mut yields_vars: HashMap<String, String> = HashMap::new();
-    let mut err_var: Option<String> = if lang.infallible {
-        None
-    } else {
-        Some(format!("{prefix}Err"))
-    };
+    let mut err_var: Option<String> = Some(format!("{prefix}Err"));
     if lang.yields.is_empty() {
         // "sem yields: o retorno já é o tipo lógico" — the raw call result
         // is the target's own declared type, with no projection.
@@ -395,29 +394,24 @@ pub(super) fn call_assign(
         return format!("// {:?} declares no Go module path\n{dest} = nil", call.ns);
     };
 
-    // A constructor's own return type instantiates the field's declared
-    // handle, so the type argument comes from the *field's* target, not
-    // from `decl` (a free extern's declared logical return is the same for
-    // every instantiation; only the field it constructs pins one down).
-    let type_arg = foreign_handle(&field.target, r.module).and_then(|(handle_lib, type_name)| {
-        let handle = handle_lib.types.iter().find(|t| t.name == type_name)?;
-        let inst = handle.instance.as_ref()?;
-        push_type_symbols(&inst.arg, r.refs);
-        Some(go_type(&inst.arg))
-    });
-
     let (entry, module, config) = (r.entry, r.module, r.config);
     let mut ref_expr = move |path: &[String]| sibling_path_expr(entry, module, config, path);
+    // A field's own construction call has no caller context to thread
+    // through: a declared context position reads the background context
+    // for this one-shot resolution.
+    if binds_ctx(lang) {
+        r.refs.push(import("context", "context"));
+    }
     let built = build_call(
         r.refs,
         module,
         lib,
         lang,
-        &alias,
-        type_arg.as_deref(),
+        &Callee::Package(alias),
         &decl.params,
         &call.args,
         &field.name,
+        BACKGROUND_CTX,
         &mut ref_expr,
     );
 
@@ -428,7 +422,7 @@ pub(super) fn call_assign(
             r.module,
             r.config,
             lib,
-            &lang.errors,
+            &decl.errors,
             &format!("{}.{}", call.ns, call.func),
             err_var,
             &|expr| format!("return nil, {expr}"),
@@ -529,7 +523,7 @@ pub(super) fn impl_call_body(
         }
         _ => field_path_expr(entry, module, config, path, "c.settings"),
     };
-    let mut call_args: Vec<String> = lang
+    let call_args: Vec<String> = lang
         .call_args
         .iter()
         .map(|a| {
@@ -540,13 +534,11 @@ pub(super) fn impl_call_body(
                 a,
                 &decl.params,
                 &call.args,
+                "ctx",
                 &mut ref_expr,
             )
         })
         .collect();
-    if lang.ctx {
-        call_args.insert(0, "ctx".to_string());
-    }
     let prefix = camel(op_name);
     let out_var = format!("{prefix}Out");
     let err_var = format!("{prefix}Err");

@@ -91,7 +91,11 @@ pub(super) fn call_resolves(
             call.ns, call.func
         ));
     };
-    extern_binds_every_target(&site, &call.func, decl, targets)
+    extern_binds_every_target(&site, &call.func, module, lib, decl, targets)?;
+    for target in targets {
+        handle_storage_declared(&site, *target, module, &field.target)?;
+    }
+    Ok(())
 }
 
 /// A field's `= .field.method(args)` source must name a sibling foreign
@@ -116,7 +120,7 @@ pub(super) fn handle_call_resolves(
         call.recv.join("."),
         call.method
     );
-    let decl = handle_method_of(module, declared, call, &site)?;
+    let (lib, decl) = handle_method_of(module, declared, call, &site)?;
     // A method's declared return is spelled through the same projection an
     // op's own `impl` output is (a logical wire type); no target spells a
     // foreign handle in that position, so a field would compile against a
@@ -127,7 +131,7 @@ pub(super) fn handle_call_resolves(
             "{site}: the field is itself a foreign handle; a handle method call only sources a field of a logical (non-handle) type, construct a handle with a free extern call instead"
         ));
     }
-    extern_binds_every_target(&site, &call.method, decl, targets)
+    extern_binds_every_target(&site, &call.method, module, lib, decl, targets)
 }
 
 /// An operation's own `impl .field.method(args)` body must name a foreign
@@ -149,8 +153,8 @@ pub(super) fn op_impl_call_resolves(
         call.recv.join("."),
         call.method
     );
-    let decl = handle_method_of(module, declared, call, &site)?;
-    extern_binds_every_target(&site, &call.method, decl, targets)
+    let (lib, decl) = handle_method_of(module, declared, call, &site)?;
+    extern_binds_every_target(&site, &call.method, module, lib, decl, targets)
 }
 
 /// The declared handle method a `.field.method(args)` call site (a field
@@ -161,7 +165,7 @@ fn handle_method_of<'m>(
     declared: &[&EntryField],
     call: &OpImplCall,
     site: &str,
-) -> Result<&'m ExternDecl, String> {
+) -> Result<(&'m crate::ir::ExtLib, &'m ExternDecl), String> {
     let Some(head) = call.recv.first() else {
         return Err(format!("{site}: the handle method call has no receiver"));
     };
@@ -173,9 +177,12 @@ fn handle_method_of<'m>(
     let handle = ref_id(&recv.target).and_then(|id| {
         let (lib_name, type_name) = id.split_once('#')?;
         let lib = module.ext_libs.iter().find(|l| l.name == lib_name)?;
-        lib.types.iter().find(|t| t.name == type_name)
+        lib.types
+            .iter()
+            .find(|t| t.name == type_name)
+            .map(|t| (lib, t))
     });
-    let Some(handle) = handle else {
+    let Some((lib, handle)) = handle else {
         return Err(format!(
             "{site}: receiver {head} is not a foreign handle field; a handle method call reads a method of a field typed by an ext block's opaque type"
         ));
@@ -184,6 +191,7 @@ fn handle_method_of<'m>(
         .methods
         .iter()
         .find(|m| m.name == call.method)
+        .map(|m| (lib, m))
         .ok_or_else(|| {
             format!(
                 "{site}: handle {} declares no method named {}",
@@ -198,6 +206,8 @@ fn handle_method_of<'m>(
 fn extern_binds_every_target(
     site: &str,
     callee: &str,
+    module: &Module,
+    lib: &crate::ir::ExtLib,
     decl: &ExternDecl,
     targets: &[TargetKind],
 ) -> Result<(), String> {
@@ -238,8 +248,10 @@ fn extern_binds_every_target(
                 ));
             }
         }
-        static_receiver_renders(site, *target, lang)?;
         class_reference_renders(site, *target, lang)?;
+        foreign_positions_bind(site, *target, lang)?;
+        param_spellings_coerce(site, *target, module, lib, decl, lang)?;
+        foreign_forms_declared(site, *target, module, lib, lang)?;
         if !target.emits_nested_extern_call_args() && contains_cross_extern_call(&lang.call_args) {
             return Err(format!(
                 "{site}: the {} block's call: line uses another declared extern's call as one of its own arguments; {} codegen cannot render that yet",
@@ -251,30 +263,9 @@ fn extern_binds_every_target(
     Ok(())
 }
 
-/// A `call:` line whose receiver is a foreign type name (a static method,
-/// `"Type"."method"(args)`) is rejected for a target that has nothing to
-/// spell it as (see [`TargetKind::emits_static_receiver_calls`]), naming
-/// the site and the method, before any emitter could write a method
-/// expression that compiles into the wrong call.
-pub(super) fn static_receiver_renders(
-    site: &str,
-    target: TargetKind,
-    lang: &crate::ir::ExternLang,
-) -> Result<(), String> {
-    match &lang.receiver {
-        Some(recv) if !target.emits_static_receiver_calls() => Err(format!(
-            "{site}: the {} block's call: line is a static method of the foreign type {recv:?} ({recv}.{}); {} has no static method to call, bind a package function instead",
-            target.binding_langs()[0],
-            lang.symbol,
-            target.dir()
-        )),
-        _ => Ok(()),
-    }
-}
-
-/// A `call:` line passing a class reference (`type handle`, the declared
-/// handle's foreign type itself, for a library that constructs it) is
-/// rejected for a target that has no type as a value to pass (see
+/// A `call:` line passing a class reference (a declared handle's class
+/// itself, for a library that constructs it) is rejected for a target that
+/// has no type as a value to pass (see
 /// [`TargetKind::emits_class_reference_args`]), naming the site and the
 /// handle, before any emitter could spell a type where a value goes.
 pub(super) fn class_reference_renders(
@@ -284,12 +275,191 @@ pub(super) fn class_reference_renders(
 ) -> Result<(), String> {
     match first_class_reference(&lang.call_args) {
         Some(handle) if !target.emits_class_reference_args() => Err(format!(
-            "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument (type {handle}); {} has no class reference to pass, bind a function that constructs it instead",
+            "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument; {} has no class reference to pass, bind a function that constructs it instead",
             target.binding_langs()[0],
             target.dir()
         )),
         _ => Ok(()),
     }
+}
+
+/// A declared position (`#(ctx context.Context)`) is bound by the target
+/// itself, so the spelling must be exactly what the target binds there (see
+/// [`TargetKind::binds_foreign_position`]): the Go context, and nothing in
+/// Rust or TypeScript.
+pub(super) fn foreign_positions_bind(
+    site: &str,
+    target: TargetKind,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    for arg in foreign_positions(&lang.call_args) {
+        if let Err(reason) = target.binds_foreign_position(arg) {
+            return Err(format!(
+                "{site}: the {} block's call: line declares the position #({arg}); {reason}",
+                target.binding_langs()[0],
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every parameter spelled under its own foreign type (`values:
+/// #(Vec<f64>)`) must be one the target knows how to coerce the logical
+/// value into (see [`TargetKind::param_spelling_coerces`]); the target
+/// names both types when it cannot.
+pub(super) fn param_spellings_coerce(
+    site: &str,
+    target: TargetKind,
+    module: &crate::ir::Module,
+    lib: &crate::ir::ExtLib,
+    decl: &crate::ir::ExternDecl,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    for (name, spelling) in spelled_params(&lang.call_args) {
+        let Some(param) = decl.params.iter().find(|p| p.name == name) else {
+            continue;
+        };
+        if let Err(reason) = target.param_spelling_coerces(module, lib, &param.r#type, spelling) {
+            return Err(format!(
+                "{site}: the {} block's call: line passes {name} as #({spelling}); {reason}",
+                target.binding_langs()[0],
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every foreign struct literal in a binding names a form that exists for
+/// the target (the form declares a block for it), with every spelled field
+/// coercible from the form's own declared type.
+pub(super) fn foreign_forms_declared(
+    site: &str,
+    target: TargetKind,
+    module: &crate::ir::Module,
+    lib: &crate::ir::ExtLib,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    let binding_lang = target.binding_langs()[0];
+    for name in ctor_names(&lang.call_args) {
+        let Some(form) = lib.structs.iter().find(|s| s.name == name) else {
+            continue;
+        };
+        let Some(block) = form
+            .langs
+            .iter()
+            .find(|l| target.binding_langs().contains(&l.lang.as_str()))
+        else {
+            return Err(format!(
+                "{site}: the {binding_lang} block's call: line builds {name}, but struct {name} declares no {binding_lang} block; a form that does not exist for a target cannot be built there"
+            ));
+        };
+        for (field, spelling) in &block.fields {
+            let Some(ff) = form.fields.iter().find(|f| f.name == *field) else {
+                continue;
+            };
+            if let Err(reason) = target.param_spelling_coerces(module, lib, &ff.r#type, spelling) {
+                return Err(format!(
+                    "{site}: struct {name} spells {field} as #({spelling}) for {binding_lang}; {reason}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A foreign handle field (or a call yielding one) has a storage type for
+/// every target it is emitted in: the handle's block for that language.
+/// Nothing is derived from the handle's name.
+pub(super) fn handle_storage_declared(
+    site: &str,
+    target: TargetKind,
+    module: &crate::ir::Module,
+    t: &crate::ir::Tref,
+) -> Result<(), String> {
+    let crate::ir::Tref::Ref { id, .. } = t else {
+        return Ok(());
+    };
+    let Some((lib_name, ty)) = id.split_once('#') else {
+        return Ok(());
+    };
+    let Some(lib) = module.ext_libs.iter().find(|l| l.name == lib_name) else {
+        return Ok(());
+    };
+    let Some(handle) = lib.types.iter().find(|h| h.name == ty) else {
+        return Ok(());
+    };
+    let binding_lang = target.binding_langs()[0];
+    if target
+        .binding_langs()
+        .iter()
+        .any(|l| handle.storage(l).is_some())
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "{site}: handle {}.{} declares no {binding_lang} block, so {} has no storage type to hold it as; spell the whole storage type there (e.g. {binding_lang} {{ #(...) }})",
+            lib.name,
+            handle.name,
+            target.dir()
+        ))
+    }
+}
+
+fn foreign_positions(args: &[crate::ir::CallArg]) -> Vec<&str> {
+    use crate::ir::CallArg;
+    let mut out = Vec::new();
+    for a in args {
+        match a {
+            CallArg::Foreign(sp) => out.push(sp.as_str()),
+            CallArg::Ctor(ctor) => {
+                for v in ctor.fields.values() {
+                    out.extend(foreign_positions(std::slice::from_ref(v)));
+                }
+            }
+            CallArg::List(items) => out.extend(foreign_positions(items)),
+            CallArg::SymbolCall(sc) => out.extend(foreign_positions(&sc.args)),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn spelled_params(args: &[crate::ir::CallArg]) -> Vec<(&str, &str)> {
+    use crate::ir::CallArg;
+    let mut out = Vec::new();
+    for a in args {
+        match a {
+            CallArg::ParamAs { name, spelling } => out.push((name.as_str(), spelling.as_str())),
+            CallArg::Ctor(ctor) => {
+                for v in ctor.fields.values() {
+                    out.extend(spelled_params(std::slice::from_ref(v)));
+                }
+            }
+            CallArg::List(items) => out.extend(spelled_params(items)),
+            CallArg::SymbolCall(sc) => out.extend(spelled_params(&sc.args)),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn ctor_names(args: &[crate::ir::CallArg]) -> Vec<&str> {
+    use crate::ir::CallArg;
+    let mut out = Vec::new();
+    for a in args {
+        match a {
+            CallArg::Ctor(ctor) => {
+                out.push(ctor.name.as_str());
+                for v in ctor.fields.values() {
+                    out.extend(ctor_names(std::slice::from_ref(v)));
+                }
+            }
+            CallArg::List(items) => out.extend(ctor_names(items)),
+            CallArg::SymbolCall(sc) => out.extend(ctor_names(&sc.args)),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// A wire-position call (`@header`/`@body` value) passes the trait's own
@@ -303,7 +473,7 @@ pub(super) fn class_reference_in_wire_position(
 ) -> Result<(), String> {
     match first_class_reference(&lang.call_args) {
         Some(handle) => Err(format!(
-            "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument (type {handle}); a call in wire position passes the trait's own arguments and cannot carry a class reference",
+            "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument; a call in wire position passes the trait's own arguments and cannot carry a class reference",
             target.binding_langs()[0],
         )),
         None => Ok(()),
@@ -324,7 +494,12 @@ fn first_class_reference(args: &[crate::ir::CallArg]) -> Option<&str> {
         }
         CallArg::List(items) => first_class_reference(items),
         CallArg::SymbolCall(sc) => first_class_reference(&sc.args),
-        CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) | CallArg::Call(_) => None,
+        CallArg::Param(_)
+        | CallArg::ParamAs { .. }
+        | CallArg::Foreign(_)
+        | CallArg::Ref(_)
+        | CallArg::Lit(_)
+        | CallArg::Call(_) => None,
     })
 }
 
@@ -340,7 +515,12 @@ fn contains_cross_extern_call(args: &[crate::ir::CallArg]) -> bool {
         CallArg::Ctor(ctor) => ctor.fields.values().any(contains_cross_extern_call_one),
         CallArg::List(items) => contains_cross_extern_call(items),
         CallArg::SymbolCall(sc) => contains_cross_extern_call(&sc.args),
-        CallArg::Param(_) | CallArg::Ref(_) | CallArg::Lit(_) | CallArg::TypeRef(_) => false,
+        CallArg::Param(_)
+        | CallArg::ParamAs { .. }
+        | CallArg::Foreign(_)
+        | CallArg::Ref(_)
+        | CallArg::Lit(_)
+        | CallArg::TypeRef(_) => false,
     })
 }
 

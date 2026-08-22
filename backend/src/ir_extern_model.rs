@@ -1,9 +1,12 @@
-//! Rust mirror of the FFI `ext`/`extern` library surface (module `ext_libs`):
+//! Rust mirror of the FFI `ext` library surface (module `ext_libs`):
 //! per-language module paths, foreign struct/opaque-handle declarations, and
-//! `extern` declarations with a per-language call/yields/returns/errors
-//! binding. The frontend's `ir_json_extern.ml` codec is the source of truth.
-//! Split out of `ir.rs` to stay within the file-size gate. Surface-and-IR
-//! only: no typecheck or codegen consumes this yet.
+//! ext op declarations with a per-language call/yields/returns binding. The
+//! frontend's `ir_json_extern.ml` codec is the source of truth. Split out of
+//! `ir.rs` to stay within the file-size gate.
+//!
+//! A foreign spelling (every `String` below that is not a tono name) is
+//! carried verbatim: the emitter writes it as it stands, qualifying only
+//! the identifiers that belong to the library with its module.
 
 use std::collections::BTreeMap;
 
@@ -37,6 +40,13 @@ fn is_false(b: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallArg {
     Param(String),
+    /// The parameter under a foreign spelling of its own (wire keys
+    /// `param` + `as`): what it crosses the boundary as, for the target to
+    /// coerce into (`values: #(Vec<f64>)`, `calcs: #(...Calculator[float64])`).
+    ParamAs {
+        name: String,
+        spelling: String,
+    },
     Ref(Vec<String>),
     Ctor(CallCtor),
     Lit(Value),
@@ -48,6 +58,10 @@ pub enum CallArg {
     /// own, so what crosses is the handle's foreign name for the binding's
     /// language, never a value tono built.
     TypeRef(String),
+    /// A position that is not a tono value but a declaration of what the
+    /// target binds there, with its type (wire key `foreign`): Go's
+    /// `#(ctx context.Context)`.
+    Foreign(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +86,17 @@ impl Serialize for CallArg {
             CallArg::Param(n) => {
                 let mut m = s.serialize_map(Some(1))?;
                 m.serialize_entry("param", n)?;
+                m.end()
+            }
+            CallArg::ParamAs { name, spelling } => {
+                let mut m = s.serialize_map(Some(2))?;
+                m.serialize_entry("param", name)?;
+                m.serialize_entry("as", spelling)?;
+                m.end()
+            }
+            CallArg::Foreign(sp) => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("foreign", sp)?;
                 m.end()
             }
             CallArg::Ref(p) => {
@@ -122,8 +147,8 @@ impl<'de> Deserialize<'de> for CallArg {
     }
 }
 
-const CALL_ARG_KEYS: [&str; 8] = [
-    "param", "field", "lit", "list", "call", "ctor", "symbol", "type",
+const CALL_ARG_KEYS: [&str; 9] = [
+    "param", "field", "lit", "list", "call", "ctor", "symbol", "type", "foreign",
 ];
 
 fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
@@ -135,9 +160,23 @@ fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
         .collect();
     match present.as_slice() {
         ["param"] => {
-            ensure_only(obj, &["param"])?;
-            Ok(CallArg::Param(
-                obj["param"]
+            ensure_only(obj, &["param", "as"])?;
+            let name = obj["param"]
+                .as_str()
+                .ok_or("expected a string")?
+                .to_string();
+            match obj.get("as") {
+                None => Ok(CallArg::Param(name)),
+                Some(sp) => Ok(CallArg::ParamAs {
+                    name,
+                    spelling: sp.as_str().ok_or("expected a string")?.to_string(),
+                }),
+            }
+        }
+        ["foreign"] => {
+            ensure_only(obj, &["foreign"])?;
+            Ok(CallArg::Foreign(
+                obj["foreign"]
                     .as_str()
                     .ok_or("expected a string")?
                     .to_string(),
@@ -225,8 +264,11 @@ pub struct EntryCall {
     pub args: Vec<CallArg>,
 }
 
-/// One `yields:` position; `r#type` is absent only for the reserved `error`
-/// sentinel (`is_error`), never for an ordinary omitted type.
+/// One `yields:` position. `r#type` is the tono type it carries; it is
+/// absent for the reserved `error` sentinel (`is_error`) and for a position
+/// declared under a foreign spelling (`foreign`: what the call really
+/// returns, for the target to coerce into the declared return or refuse
+/// naming both).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct YieldsPos {
     pub name: String,
@@ -234,6 +276,8 @@ pub struct YieldsPos {
     pub r#type: Option<Tref>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign: Option<String>,
 }
 
 /// A `returns:` field value: a bare ref into a `yields:`-bound name, or a
@@ -258,26 +302,14 @@ pub struct ReturnsLit {
     pub fields: Vec<ReturnsField>,
 }
 
-/// One `errors: { "sentinel" => TypeName }` entry.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ErrorBinding {
-    pub sentinel: String,
-    pub r#type: String,
-}
-
-/// One per-language block inside an `extern`'s body.
+/// One per-language block inside an ext op's body. `symbol` is the
+/// callee's whole foreign spelling: a function, a generic instantiation
+/// (`FromConstant[float64]`), a class under `new` (`new ConstantCalculator`),
+/// a static method on a type (`FormulaCalculator::parse`). Each emitter
+/// reads the identifiers out of it to import, and writes the rest as is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternLang {
     pub lang: String,
-    /// The foreign type a static method is qualified by (`Type.method`),
-    /// when the call's receiver is a type name and not a value: absent for
-    /// a free function of the library. Rendered as the library namespace's
-    /// own qualification in Rust (`krate::Type::method`) and as a member of
-    /// the imported type in TypeScript (`Type.method`); Go has no static
-    /// method (a constructor is a package function, the plain call), so its
-    /// generation refuses the shape instead of guessing at one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub receiver: Option<String>,
     pub symbol: String,
     #[serde(default)]
     pub call_args: Vec<CallArg>,
@@ -285,45 +317,19 @@ pub struct ExternLang {
     pub yields: Vec<YieldsPos>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub returns: Option<ReturnsLit>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<ErrorBinding>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub sync: bool,
-    /// No error return (Go's own convention makes every call fallible by
-    /// default, `(value, error)`; this opts a single-return foreign function
-    /// like `uuid.NewString() string` out of that shape). Only Go's emitter
-    /// reads it, the same way only Rust's reads `sync`.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub infallible: bool,
-    /// The call receives the target's own cancellation/deadline context in
-    /// its idiomatic position (Go: `ctx context.Context` as the first
-    /// parameter). Only meaningful on a foreign handle's own method call
-    /// (the frontend rejects it elsewhere); a target with no equivalent
-    /// convention ignores it the same way Go ignores `sync`.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub ctx: bool,
-    /// The foreign symbol is a class constructed with `new`, not a function
-    /// called plainly (TypeScript only; Go/Rust ignore it, neither has a
-    /// `new` distinct from an ordinary call). Named `is_new`: `new` is a
-    /// Rust keyword.
-    #[serde(rename = "new", default, skip_serializing_if = "is_false")]
-    pub is_new: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternParam {
     pub name: String,
     pub r#type: Tref,
-    /// The caller passes a collection of values for this logical parameter
-    /// (Go's `opts ...Option`, Rust's `Vec<T>`, TypeScript's `T[]`); the
-    /// call site binds a list, and each language block's own `call:`
-    /// materializes it in its own idiom (spread, `vec!`, array).
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub variadic: bool,
 }
 
-/// A free function inside an `ext` block, or a method inside a `type`
-/// opaque handle.
+/// A free function inside an `ext` block, or a method of an opaque handle.
+/// `r#async` lists the languages where the foreign call itself is
+/// asynchronous (absent means synchronous at the boundary); `errors` lists
+/// the declared error shapes it can raise, in test order, each recognized
+/// through its own `foreign` trait (see `ForeignLang`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternDecl {
     pub name: String,
@@ -332,6 +338,32 @@ pub struct ExternDecl {
     pub r#return: Tref,
     #[serde(default)]
     pub langs: Vec<ExternLang>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub r#async: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+}
+
+impl ExternDecl {
+    /// Whether the foreign call is asynchronous in `lang`: the boundary is
+    /// synchronous unless the op says otherwise.
+    pub fn is_async(&self, lang: &str) -> bool {
+        self.r#async.iter().any(|l| l == lang)
+    }
+}
+
+/// One language's block on a struct. `name` is positional and names the
+/// foreign thing: a foreign form's type, an opaque handle's whole storage
+/// type, an error struct's sentinel or error type. `fields` pairs a tono
+/// field with its foreign spelling: the field's foreign type on a form,
+/// where the field comes from on an error value. An error struct carries
+/// its blocks as the `foreign` trait of its shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForeignLang {
+    pub lang: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -348,57 +380,58 @@ pub struct ForeignStruct {
     pub name: String,
     #[serde(default)]
     pub fields: Vec<ForeignField>,
-}
-
-/// One language's spelling of the foreign type an opaque handle names.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InstanceName {
-    pub lang: String,
-    pub name: String,
-}
-
-/// Which instantiation of a foreign generic type an opaque handle names: the
-/// foreign type's own name per language (kept distinct from the handle's own
-/// tono name, since two handles can instantiate the same foreign generic
-/// differently; per language because the same logical handle can be an
-/// interface in one target and a trait in another, each spelled by its own
-/// library), and the tono argument it is monomorphized with. The frontend
-/// expands a shared surface name to one entry per declared language, so a
-/// reader only ever looks its own language up.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Instance {
     #[serde(default)]
-    pub names: Vec<InstanceName>,
-    pub arg: Tref,
+    pub langs: Vec<ForeignLang>,
 }
 
-impl Instance {
-    /// The foreign name this instantiation declares for one language, when
-    /// the surface named one.
-    pub fn name_for(&self, lang: &str) -> Option<&str> {
-        self.names
-            .iter()
-            .find(|n| n.lang == lang)
-            .map(|n| n.name.as_str())
+impl ForeignStruct {
+    pub fn lang(&self, lang: &str) -> Option<&ForeignLang> {
+        self.langs.iter().find(|l| l.lang == lang)
     }
 }
 
-/// An opaque foreign handle whose only members are extern methods; never
-/// serializes, never crosses the wire. `interface` declares the foreign type
-/// is abstract, not a concrete struct: nothing about a foreign name says
-/// which one it is, and the two hold differently per target (a Go interface
-/// is held by value, never behind `*`; a Rust trait is held as
-/// `Box<dyn Trait>`, boxed where a constructor yields one of the library's
-/// concrete types).
+/// An opaque foreign handle whose only members are ext op methods; never
+/// serializes, never crosses the wire. Each language block spells the whole
+/// storage type verbatim (`Calculator[float64]`, `Box<dyn Calculator<f64>>`);
+/// a language with no block does not hold the handle at all.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpaqueType {
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instance: Option<Instance>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub interface: bool,
+    #[serde(default)]
+    pub langs: Vec<ForeignLang>,
     #[serde(default)]
     pub methods: Vec<ExternDecl>,
+}
+
+impl OpaqueType {
+    /// The storage type this handle declares for one language, when it
+    /// declares one.
+    pub fn storage(&self, lang: &str) -> Option<&str> {
+        self.langs
+            .iter()
+            .find(|l| l.lang == lang)
+            .map(|l| l.name.as_str())
+    }
+}
+
+impl ForeignLang {
+    /// The language blocks an error struct carries as the `foreign` trait of
+    /// its shape (see `ForeignLang`); empty when it declares none.
+    pub fn of_shape(shape: &crate::ir::Shape) -> Vec<ForeignLang> {
+        shape
+            .traits
+            .iter()
+            .find(|t| t.id == "foreign")
+            .and_then(|t| serde_json::from_value(t.value.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// How `lang` recognizes the error shape `id` of `module`: its block,
+    /// when the shape declares one for that language.
+    pub fn of_error(module: &crate::ir::Module, id: &str, lang: &str) -> Option<ForeignLang> {
+        let shape = module.shapes.iter().find(|s| s.id == id)?;
+        Self::of_shape(shape).into_iter().find(|l| l.lang == lang)
+    }
 }
 
 /// One per-language module path declared by an `ext` block.
@@ -465,6 +498,26 @@ mod tests {
             symbol: "Pick".into(),
             args: vec![CallArg::TypeRef("answer_calculator".into())],
         }));
+        roundtrip(&CallArg::ParamAs {
+            name: "values".into(),
+            spelling: "Vec<f64>".into(),
+        });
+        roundtrip(&CallArg::Foreign("ctx context.Context".into()));
+    }
+
+    #[test]
+    fn a_spelled_parameter_serializes_under_param_and_as() {
+        let json = serde_json::to_value(CallArg::ParamAs {
+            name: "values".into(),
+            spelling: "[]float64".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"param": "values", "as": "[]float64"})
+        );
+        assert!(serde_json::from_str::<CallArg>(r#"{"param": "a", "as": 1}"#).is_err());
+        assert!(serde_json::from_str::<CallArg>(r#"{"foreign": 1}"#).is_err());
     }
 
     #[test]
@@ -528,6 +581,7 @@ mod tests {
             name: "cfg".into(),
             r#type: Some(Tref::Prim(crate::ir::Prim::String)),
             is_error: false,
+            foreign: None,
         };
         let json = serde_json::to_string(&ordinary).unwrap();
         assert!(!json.contains("is_error"));
@@ -536,6 +590,7 @@ mod tests {
             name: "e".into(),
             r#type: None,
             is_error: true,
+            foreign: None,
         };
         let json = serde_json::to_string(&sentinel).unwrap();
         assert!(json.contains(r#""is_error":true"#));
@@ -544,128 +599,101 @@ mod tests {
     }
 
     #[test]
-    fn extern_lang_sync_omits_the_flag_when_false() {
+    fn extern_decl_omits_async_and_errors_when_empty_and_round_trips_them() {
         let lang = ExternLang {
             lang: "rust".into(),
             symbol: "load".into(),
             call_args: vec![],
             yields: vec![],
             returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         };
-        let json = serde_json::to_string(&lang).unwrap();
-        assert!(!json.contains("sync"));
-        let back: ExternLang = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, lang);
+        let mut decl = ExternDecl {
+            name: "load".into(),
+            params: vec![],
+            r#return: Tref::Prim(crate::ir::Prim::String),
+            langs: vec![lang],
+            r#async: vec![],
+            errors: vec![],
+        };
+        let json = serde_json::to_string(&decl).unwrap();
+        assert!(!json.contains("async"));
+        assert!(!json.contains("errors"));
+        assert!(!decl.is_async("rust"));
+        decl.r#async = vec!["rust".into()];
+        decl.errors = vec!["m#overloaded".into()];
+        let json = serde_json::to_string(&decl).unwrap();
+        assert!(json.contains(r#""async":["rust"]"#), "{json}");
+        assert!(json.contains(r#""errors":["m#overloaded"]"#), "{json}");
+        let back: ExternDecl = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, decl);
+        assert!(back.is_async("rust") && !back.is_async("ts"));
     }
 
     #[test]
-    fn extern_lang_sync_serializes_true_and_round_trips() {
-        let lang = ExternLang {
-            lang: "rust".into(),
-            symbol: "load".into(),
-            call_args: vec![],
-            yields: vec![],
-            returns: None,
-            errors: vec![],
-            sync: true,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
+    fn yields_pos_foreign_spelling_round_trips() {
+        let pos = YieldsPos {
+            name: "c".into(),
+            r#type: None,
+            is_error: false,
+            foreign: Some("ConstantCalculator<f64>".into()),
         };
-        let json = serde_json::to_string(&lang).unwrap();
-        assert!(json.contains(r#""sync":true"#));
-        let back: ExternLang = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, lang);
+        let json = serde_json::to_string(&pos).unwrap();
+        assert!(
+            json.contains(r#""foreign":"ConstantCalculator<f64>""#),
+            "{json}"
+        );
+        let back: YieldsPos = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, pos);
     }
 
     #[test]
-    fn extern_lang_infallible_omits_the_flag_when_false() {
-        let lang = ExternLang {
+    fn foreign_lang_round_trips_and_reads_off_a_shape() {
+        let mut fields = BTreeMap::new();
+        fields.insert("message".to_string(), "Error()".to_string());
+        let fl = ForeignLang {
             lang: "go".into(),
-            symbol: "NewString".into(),
-            call_args: vec![],
-            yields: vec![],
-            returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
+            name: "ErrParse".into(),
+            fields,
         };
-        let json = serde_json::to_string(&lang).unwrap();
-        assert!(!json.contains("infallible"));
-        let back: ExternLang = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, lang);
-    }
-
-    #[test]
-    fn extern_lang_infallible_serializes_true_and_round_trips() {
-        let lang = ExternLang {
-            lang: "go".into(),
-            symbol: "NewString".into(),
-            call_args: vec![],
-            yields: vec![],
-            returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: true,
-            ctx: false,
-            receiver: None,
-            is_new: false,
+        let json = serde_json::to_value(&fl).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"lang": "go", "name": "ErrParse", "fields": {"message": "Error()"}})
+        );
+        let shape = crate::ir::Shape {
+            id: "m#invalid_expression".into(),
+            kind: crate::ir::ShapeKind::Structure {
+                params: vec![],
+                members: vec![],
+            },
+            traits: vec![crate::ir::Trait {
+                id: "foreign".into(),
+                value: serde_json::json!([json]),
+            }],
         };
-        let json = serde_json::to_string(&lang).unwrap();
-        assert!(json.contains(r#""infallible":true"#));
-        let back: ExternLang = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, lang);
-    }
-
-    #[test]
-    fn extern_lang_ctx_omits_the_flag_when_false() {
-        let lang = ExternLang {
-            lang: "go".into(),
-            symbol: "Get".into(),
-            call_args: vec![],
-            yields: vec![],
-            returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
+        assert_eq!(ForeignLang::of_shape(&shape), vec![fl.clone()]);
+        let module = crate::ir::Module {
+            name: "m".into(),
+            shapes: vec![shape],
+            operations: vec![],
+            extensions: vec![],
+            ext_libs: vec![],
+            tests: vec![],
         };
-        let json = serde_json::to_string(&lang).unwrap();
-        assert!(!json.contains("ctx"));
-        let back: ExternLang = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, lang);
-    }
-
-    #[test]
-    fn extern_lang_ctx_serializes_true_and_round_trips() {
-        let lang = ExternLang {
-            lang: "go".into(),
-            symbol: "Get".into(),
-            call_args: vec![],
-            yields: vec![],
-            returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: true,
-            receiver: None,
-            is_new: false,
+        assert_eq!(
+            ForeignLang::of_error(&module, "m#invalid_expression", "go"),
+            Some(fl)
+        );
+        assert_eq!(
+            ForeignLang::of_error(&module, "m#invalid_expression", "ts"),
+            None
+        );
+        assert_eq!(ForeignLang::of_error(&module, "m#nope", "go"), None);
+        let bare = OpaqueType {
+            name: "h".into(),
+            langs: vec![],
+            methods: vec![],
         };
-        let json = serde_json::to_string(&lang).unwrap();
-        assert!(json.contains(r#""ctx":true"#));
-        let back: ExternLang = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, lang);
+        assert_eq!(bare.storage("go"), None);
     }
 }

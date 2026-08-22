@@ -22,6 +22,8 @@ fn ext_libs() -> Vec<crate::ir::ExtLib> {
                 params: vec![],
                 r#return: Tref::Prim(Prim::String),
                 langs: vec![],
+                r#async: vec![],
+                errors: vec![],
             }],
         },
         crate::ir::ExtLib {
@@ -30,13 +32,25 @@ fn ext_libs() -> Vec<crate::ir::ExtLib> {
             structs: vec![],
             types: vec![OpaqueType {
                 name: "Publisher".into(),
-                interface: false,
-                instance: None,
+                langs: ["go", "ts", "rust"]
+                    .into_iter()
+                    .map(|l| crate::ir::ForeignLang {
+                        lang: l.into(),
+                        name: if l == "go" {
+                            "*Handle".into()
+                        } else {
+                            "Handle".into()
+                        },
+                        fields: Default::default(),
+                    })
+                    .collect(),
                 methods: vec![ExternDecl {
                     name: "send".into(),
                     params: vec![],
                     r#return: Tref::Prim(Prim::String),
                     langs: vec![],
+                    r#async: vec![],
+                    errors: vec![],
                 }],
             }],
             externs: vec![],

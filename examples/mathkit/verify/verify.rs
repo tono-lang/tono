@@ -7,8 +7,7 @@ use example_mathkit::mathkit::Client;
 
 #[tokio::main]
 async fn main() {
-    let client = Client::builder(1.5, "2 * 3".to_string(), 2, vec![1.0, 2.0, 3.0])
-        .build()
+    let client = Client::new(1.5, "2 * 3".to_string(), 2, vec![1.0, 2.0, 3.0])
         .await
         .expect("construct");
     let combined = client.combined_value().await.expect("combined_value");

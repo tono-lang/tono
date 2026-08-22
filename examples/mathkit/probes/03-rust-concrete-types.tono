@@ -1,32 +1,33 @@
 // Capability 3: several concrete types for one logical handle. In Rust
 // from_constant returns ConstantCalculator<T> and from_series returns
 // SeriesCalculator<T>, both implementing the Calculator<T> trait. The
-// "interface" marker declares the handle is the abstraction: the generated
-// Rust holds it as `Box<dyn Calculator<f64>>` and boxes each constructor's
-// concrete value where it is built, so the concrete types never need a tono
+// storage type is `Box<dyn Calculator<f64>>`, so each constructor's concrete
+// value is boxed where it is built and the concrete types never need a tono
 // name at all.
 ext mathkit {
-  rust: "mathkit"
+  rust { #(mathkit) }
 
-  type calculator(rust: "Calculator", float) interface {
-    extern compute(): float {
-      rust { call: "compute"() }
+  struct calculator {
+    rust { #(Box<dyn Calculator<f64>>) }
+
+    @async(rust)
+    op compute(): float {
+      rust { call: #(compute)() }
     }
   }
 
-  extern from_constant(value: float): calculator {
-    rust { call: "from_constant"(value) sync }
+  op from_constant(value: float): calculator {
+    rust { call: #(from_constant)(value) }
   }
 
-  extern from_series(values: []float): calculator {
-    rust { call: "from_series"(values) sync }
+  op from_series(values: []float): calculator {
+    rust { call: #(from_series)(values: #(Vec<f64>)) }
   }
 }
 
 pub struct client {
   base: float @arg
   samples: []float @arg
-
   constant: mathkit.calculator = mathkit.from_constant(.base)
   series: mathkit.calculator = mathkit.from_series(.samples)
 

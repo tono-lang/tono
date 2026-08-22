@@ -11,9 +11,9 @@ use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use crate::codegen::ops::op_impl_call;
 use crate::codegen::targets::rust::types::rust_casing;
 use crate::ir::{
-    CallCtor, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternParam, Instance,
-    InstanceName, LangPath, Member, Model, OpaqueType, Prim, ReturnsField, ReturnsLit,
-    ReturnsValue, Shape, ShapeKind, Source, Tref, YieldsPos, TONO_IR_VERSION,
+    CallCtor, EntryCall, EntryField, ExtLib, ExternDecl, ExternParam, LangPath, Member, Model,
+    OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue, Shape, ShapeKind, Source, Tref,
+    YieldsPos, TONO_IR_VERSION,
 };
 
 fn bare_module() -> Module {
@@ -37,8 +37,11 @@ fn handle_lib(lib: &str, ty: &str) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: ty.into(),
-            interface: false,
-            instance: None,
+            langs: vec![crate::ir::ForeignLang {
+                lang: "rust".into(),
+                name: pascal(ty),
+                fields: Default::default(),
+            }],
             methods: vec![],
         }],
         externs: vec![],
@@ -100,7 +103,7 @@ fn handle_rust_type_qualifies_the_pascal_cased_name_with_the_crate_path() {
     let lib = handle_lib("bus", "publisher");
     let ty = &lib.types[0];
     assert_eq!(
-        handle_rust_type(&lib, ty),
+        handle_rust_type(&lib, ty, &bare_module()),
         Some("some_bus::Publisher".to_string())
     );
 }
@@ -110,7 +113,7 @@ fn handle_rust_type_is_none_without_a_declared_rust_module_path() {
     let mut lib = handle_lib("bus", "publisher");
     lib.langs.clear();
     let ty = &lib.types[0];
-    assert!(handle_rust_type(&lib, ty).is_none());
+    assert!(handle_rust_type(&lib, ty, &bare_module()).is_none());
 }
 
 #[test]
@@ -250,67 +253,55 @@ fn a_render_of_the_full_fixture_is_stable_prose() {
     assert!(text.contains("Option<companybus::Publisher>"), "{text}");
 }
 
+fn storage(lang: &str, name: &str) -> crate::ir::ForeignLang {
+    crate::ir::ForeignLang {
+        lang: lang.into(),
+        name: name.into(),
+        fields: Default::default(),
+    }
+}
+
+/// The storage type is the `rust` block's spelling, crate-qualified, the
+/// instantiation included; a builtin type argument stays bare.
 #[test]
-fn handle_rust_type_spells_a_generic_instance_with_its_foreign_name_and_type_argument() {
+fn handle_rust_type_qualifies_the_declared_storage_with_its_type_argument() {
     let mut lib = handle_lib("bus", "typed_publisher");
-    lib.types[0].instance = Some(Instance {
-        names: vec![InstanceName {
-            lang: "rust".into(),
-            name: "Publisher".into(),
-        }],
-        arg: Tref::Prim(Prim::String),
-    });
+    lib.types[0].langs = vec![storage("rust", "Publisher<String>")];
     let ty = &lib.types[0];
     assert_eq!(
-        handle_rust_type(&lib, ty),
+        handle_rust_type(&lib, ty, &bare_module()),
         Some("some_bus::Publisher<String>".to_string())
     );
 }
 
-/// The instantiation can spell a different foreign type per language; only
-/// the "rust" entry reaches this emitter, and it is emitted verbatim (the
-/// library's own spelling), never folded by the casing engine.
+/// Only the `rust` block reaches this emitter; another language's spelling
+/// of the same handle never does.
 #[test]
-fn handle_rust_type_reads_its_own_language_entry_verbatim() {
+fn handle_rust_type_reads_its_own_language_block() {
     let mut lib = handle_lib("bus", "typed_publisher");
-    lib.types[0].instance = Some(Instance {
-        names: vec![
-            InstanceName {
-                lang: "go".into(),
-                name: "Sender".into(),
-            },
-            InstanceName {
-                lang: "rust".into(),
-                name: "EventPublisher".into(),
-            },
-        ],
-        arg: Tref::Prim(Prim::String),
-    });
+    lib.types[0].langs = vec![
+        storage("go", "*Sender[string]"),
+        storage("rust", "EventPublisher<String>"),
+    ];
     let ty = &lib.types[0];
     assert_eq!(
-        handle_rust_type(&lib, ty),
+        handle_rust_type(&lib, ty, &bare_module()),
         Some("some_bus::EventPublisher<String>".to_string())
     );
 }
 
-/// An `interface` handle names the crate's trait, not a concrete type: it is
-/// held as a boxed trait object, and a constructor's yield is boxed on its
-/// way into the slot (the library's concrete return types never need a tono
-/// spelling; the target compiler infers each one at its own call site).
+/// A handle stored behind a box names the crate's trait inside it: the box
+/// and the prelude stay bare, the trait is qualified, and a constructor's
+/// yield is boxed on its way into the slot (the library's concrete return
+/// types never need a tono spelling; the target compiler infers each one at
+/// its own call site).
 #[test]
-fn an_interface_handle_is_held_as_a_boxed_trait_object_and_boxed_at_construction() {
+fn a_boxed_handle_is_held_as_a_trait_object_and_boxed_at_construction() {
     let mut lib = handle_lib("bus", "typed_publisher");
-    lib.types[0].interface = true;
-    lib.types[0].instance = Some(Instance {
-        names: vec![InstanceName {
-            lang: "rust".into(),
-            name: "Publisher".into(),
-        }],
-        arg: Tref::Prim(Prim::String),
-    });
+    lib.types[0].langs = vec![storage("rust", "Box<dyn Publisher<String>>")];
     let ty = &lib.types[0];
     assert_eq!(
-        handle_rust_type(&lib, ty),
+        handle_rust_type(&lib, ty, &bare_module()),
         Some("Box<dyn some_bus::Publisher<String>>".to_string())
     );
 
@@ -333,6 +324,15 @@ fn an_interface_handle_is_held_as_a_boxed_trait_object_and_boxed_at_construction
     // An already-typed value (an injected handle, boxed by the caller) is
     // stored without another box.
     assert_eq!(wrap_stored(&target, &module, "v"), "Some(v)".to_string());
+}
+
+/// A handle with no `rust` block has no storage to spell; the validator
+/// refuses the field, and the emitter has nothing to answer.
+#[test]
+fn handle_rust_type_is_none_without_a_rust_block() {
+    let mut lib = handle_lib("bus", "publisher");
+    lib.types[0].langs.clear();
+    assert_eq!(handle_rust_type(&lib, &lib.types[0], &bare_module()), None);
 }
 
 fn strings(names: &[&str]) -> Vec<String> {
@@ -364,7 +364,7 @@ fn handle_call_model(
     method_call_args: Vec<CallArg>,
     method_yields: Vec<YieldsPos>,
     method_returns: Option<ReturnsLit>,
-    method_errors: Vec<ErrorBinding>,
+    method_errors: Vec<String>,
     sync: bool,
 ) -> Model {
     let side = entry_field("side", Tref::Prim(Prim::String), vec![Source::Arg]);
@@ -458,13 +458,9 @@ fn handle_call_model(
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: true,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec![],
+            errors: vec![],
         }],
     };
 
@@ -474,15 +470,25 @@ fn handle_call_model(
             lang: "rust".into(),
             path: "some-handle".into(),
         }],
-        structs: vec![],
+        structs: vec![crate::ir::ForeignStruct {
+            name: "Opts".into(),
+            fields: vec![],
+            langs: vec![crate::ir::ForeignLang {
+                lang: "rust".into(),
+                name: "Opts".into(),
+                fields: Default::default(),
+            }],
+        }],
         types: vec![OpaqueType {
             name: "h".into(),
-            interface: false,
-            instance: None,
+            langs: vec![crate::ir::ForeignLang {
+                lang: "rust".into(),
+                name: "H".into(),
+                fields: Default::default(),
+            }],
             methods: vec![ExternDecl {
                 name: "do_it".into(),
                 params: vec![ExternParam {
-                    variadic: false,
                     name: "x".into(),
                     r#type: Tref::Prim(Prim::String),
                 }],
@@ -496,13 +502,9 @@ fn handle_call_model(
                     call_args: method_call_args,
                     yields: method_yields,
                     returns: method_returns,
-                    errors: method_errors,
-                    sync,
-                    infallible: false,
-                    ctx: false,
-                    receiver: None,
-                    is_new: false,
                 }],
+                r#async: if sync { vec![] } else { vec!["rust".into()] },
+                errors: method_errors,
             }],
         }],
         externs: vec![],
@@ -635,11 +637,13 @@ fn impl_call_body_with_multiple_yields_destructures_a_tuple() {
                 name: "a".into(),
                 r#type: Some(Tref::Prim(Prim::String)),
                 is_error: false,
+                foreign: None,
             },
             YieldsPos {
                 name: "b".into(),
                 r#type: Some(Tref::Prim(Prim::String)),
                 is_error: false,
+                foreign: None,
             },
         ],
         Some(ReturnsLit {
@@ -709,7 +713,40 @@ fn a_static_method_receiver_qualifies_the_call_by_its_type() {
         .and_then(|e| e.langs.iter_mut().find(|l| l.lang == "rust"))
         .expect("fixture binds rust");
     let symbol = lang.symbol.clone();
-    lang.receiver = Some("Loader".into());
+    lang.symbol = format!("Loader::{symbol}");
     let text = entry_text(&model);
     assert!(text.contains(&format!("::Loader::{symbol}(")), "{text}");
+}
+
+/// An op's own impl body with the argument shapes that carry a foreign
+/// spelling: the parameter lent as `&str`, a nested call qualified by the
+/// crate, and a form built from its `rust` block.
+#[test]
+fn impl_call_body_renders_spelled_and_nested_arguments() {
+    let model = handle_call_model(
+        vec![
+            CallArg::ParamAs {
+                name: "x".into(),
+                spelling: "&str".into(),
+            },
+            CallArg::SymbolCall(crate::ir::SymbolCall {
+                symbol: "Tag".into(),
+                args: vec![CallArg::Param("x".into())],
+            }),
+            CallArg::Ctor(CallCtor {
+                name: "Opts".into(),
+                fields: [("n".to_string(), CallArg::Lit(serde_json::json!(1)))]
+                    .into_iter()
+                    .collect(),
+            }),
+        ],
+        vec![],
+        None,
+        vec![],
+        true,
+    );
+    let text = entry_text(&model);
+    assert!(text.contains("some_handle::Tag("), "{text}");
+    assert!(text.contains("some_handle::Opts { n: 1 }"), "{text}");
+    assert!(text.contains("recv.do_it(&"), "{text}");
 }

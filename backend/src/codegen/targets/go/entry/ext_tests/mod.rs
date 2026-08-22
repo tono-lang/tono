@@ -13,8 +13,8 @@ use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::rendered;
 use crate::ir::{
-    CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang, Instance,
-    InstanceName, LangPath, OpImplCall, OpaqueType, Shape, ShapeKind, Tref, YieldsPos,
+    CallArg, CallCtor, EntryCall, ExtLib, ExternDecl, ExternLang, ForeignLang, LangPath,
+    OpImplCall, OpaqueType, Shape, ShapeKind, Tref, YieldsPos,
 };
 
 fn entry_text(module: &Module) -> String {
@@ -86,126 +86,104 @@ fn foreign_handle_is_none_when_the_lib_declares_no_such_type() {
     assert!(ext::foreign_handle(&t, &module).is_none());
 }
 
+fn storage(lang: &str, name: &str) -> ForeignLang {
+    ForeignLang {
+        lang: lang.into(),
+        name: name.into(),
+        fields: Default::default(),
+    }
+}
+
+/// The storage type is the `go` block's spelling, qualified by the package
+/// selector: a concrete struct held by pointer writes the `*` itself.
 #[test]
-fn handle_go_type_spells_a_pointer_to_the_pascal_cased_name() {
+fn handle_go_type_qualifies_the_declared_storage() {
     let lib = handle_lib("bus", "publisher");
     let mut refs = Vec::new();
     assert_eq!(
-        ext::handle_go_type(&lib, &lib.types[0], &mut refs),
+        ext::handle_go_type(&lib, &lib.types[0], &bare_module(), &mut refs),
         Some("*bus.Publisher".to_string())
     );
 }
 
-/// An `interface` handle drops the pointer: the foreign type is abstract
-/// and Go holds an interface by value (`*Iface` is never the right type,
-/// it is a pointer to an interface, not the interface).
+/// An interface handle is held by value: the block spells no `*`, and none
+/// is added (`*Iface` is never the right type in Go).
 #[test]
 fn handle_go_type_spells_an_interface_handle_by_value() {
     let mut lib = handle_lib("bus", "publisher");
-    lib.types[0].interface = true;
+    lib.types[0].langs = vec![storage("go", "Publisher")];
     let mut refs = Vec::new();
     assert_eq!(
-        ext::handle_go_type(&lib, &lib.types[0], &mut refs),
+        ext::handle_go_type(&lib, &lib.types[0], &bare_module(), &mut refs),
         Some("bus.Publisher".to_string())
     );
 }
 
-/// The generic and interface markers compose: an instantiated abstract
-/// handle spells the foreign name with its type argument, still by value.
+/// The instantiation is part of the spelling: a builtin type argument
+/// stays bare, the foreign head is qualified.
 #[test]
-fn handle_go_type_spells_an_instantiated_interface_handle_by_value() {
+fn handle_go_type_keeps_a_builtin_type_argument_bare() {
     let mut lib = handle_lib("calckit", "meter");
-    lib.types[0].interface = true;
-    lib.types[0].instance = Some(Instance {
-        names: vec![InstanceName {
-            lang: "go".into(),
-            name: "Meter".into(),
-        }],
-        arg: Tref::Prim(Prim::Float),
-    });
+    lib.types[0].langs = vec![storage("go", "Meter[float64]")];
     let mut refs = Vec::new();
-    let ty = ext::handle_go_type(&lib, &lib.types[0], &mut refs).expect("go module path is set");
-    assert!(ty.starts_with("calckit.Meter["), "{ty}");
-}
-
-/// The motivating case for generic handle instantiation: a handle
-/// instantiating a foreign generic type spells the *foreign* name (not the
-/// tono handle name), with
-/// the argument's own type registered so its import reaches the file the
-/// same way any other declared type's does. The argument itself renders as
-/// a slot (its final text is only decided when the whole declaration is
-/// rendered, see [`handle_adapter_decl_names_the_real_instantiated_type`]
-/// below), so this only proves the base identifier and that an import was
-/// registered, not the final byte-for-byte spelling.
-#[test]
-fn handle_go_type_spells_the_foreign_name_with_an_explicit_type_argument() {
-    let mut lib = handle_lib("cfgkit", "env_source");
-    lib.types[0].instance = Some(Instance {
-        names: vec![InstanceName {
-            lang: "go".into(),
-            name: "Source".into(),
-        }],
-        arg: Tref::Ref {
-            id: "notes#settings".into(),
-            args: vec![],
-        },
-    });
-    let mut refs = Vec::new();
-    let ty = ext::handle_go_type(&lib, &lib.types[0], &mut refs).expect("go module path is set");
-    assert!(ty.starts_with("*cfgkit.Source["), "{ty}");
-    assert!(
-        !refs.is_empty(),
-        "the argument's own import must be registered"
+    assert_eq!(
+        ext::handle_go_type(&lib, &lib.types[0], &bare_module(), &mut refs),
+        Some("calckit.Meter[float64]".to_string())
     );
 }
 
-/// The instantiation can spell a different foreign type per language: only
-/// the "go" entry reaches this emitter, and it is emitted verbatim (the
-/// library's own spelling), never folded by the casing engine.
+/// A type argument that is one of the module's own generated types stays
+/// bare too: it lives in the same package as the generated client.
 #[test]
-fn handle_go_type_reads_its_own_language_entry_verbatim() {
+fn handle_go_type_keeps_a_local_type_argument_bare() {
     let mut lib = handle_lib("cfgkit", "env_source");
-    lib.types[0].instance = Some(Instance {
-        names: vec![
-            InstanceName {
-                lang: "go".into(),
-                name: "DataSource".into(),
-            },
-            InstanceName {
-                lang: "rust".into(),
-                name: "EnvSource".into(),
-            },
-        ],
-        arg: Tref::Prim(Prim::Float),
-    });
+    lib.types[0].langs = vec![storage("go", "*Source[AppConfig]")];
     let mut refs = Vec::new();
-    let ty = ext::handle_go_type(&lib, &lib.types[0], &mut refs).expect("go module path is set");
-    assert!(ty.starts_with("*cfgkit.DataSource["), "{ty}");
+    assert_eq!(
+        ext::handle_go_type(&lib, &lib.types[0], &bare_module(), &mut refs),
+        Some("*cfgkit.Source[AppConfig]".to_string())
+    );
+    assert!(!refs.is_empty(), "the library's own import is registered");
 }
 
-/// A constructor call returning an instantiated handle carries the type
-/// argument on the call itself (`NewEnvSource[Settings](...)`, not
-/// `NewEnvSource(...)`): Go cannot infer it from the call site the way it
-/// can for a method call on an already-typed receiver.
+/// Only the `go` block reaches this emitter; another language's spelling
+/// of the same handle never does.
+#[test]
+fn handle_go_type_reads_its_own_language_block() {
+    let mut lib = handle_lib("cfgkit", "env_source");
+    lib.types[0].langs = vec![
+        storage("rust", "EnvSource<f64>"),
+        storage("go", "*DataSource[float64]"),
+    ];
+    let mut refs = Vec::new();
+    assert_eq!(
+        ext::handle_go_type(&lib, &lib.types[0], &bare_module(), &mut refs),
+        Some("*cfgkit.DataSource[float64]".to_string())
+    );
+}
+
+/// A handle with no `go` block has no storage to spell; the validator
+/// refuses the field, and the emitter has nothing to answer.
+#[test]
+fn handle_go_type_is_none_without_a_go_block() {
+    let mut lib = handle_lib("bus", "publisher");
+    lib.types[0].langs.clear();
+    let mut refs = Vec::new();
+    assert!(ext::handle_go_type(&lib, &lib.types[0], &bare_module(), &mut refs).is_none());
+}
+
+/// The adapter's `real` field is the declared storage, instantiation
+/// included.
 #[test]
 fn handle_adapter_decl_names_the_real_instantiated_type() {
     let module = bare_module();
     let mut lib = handle_lib("cfgkit", "env_source");
-    lib.types[0].instance = Some(Instance {
-        names: vec![InstanceName {
-            lang: "go".into(),
-            name: "Source".into(),
-        }],
-        arg: Tref::Ref {
-            id: "notes#settings".into(),
-            args: vec![],
-        },
-    });
+    lib.types[0].langs = vec![storage("go", "*Source[AppConfig]")];
     let handle = &lib.types[0];
     let decl = ext::handle_adapter_decl(&module, &go_casing(), &lib, handle)
         .expect("send is a Go-bound method");
     let text = rendered(&[decl], &GoRules::default());
-    assert!(text.contains("real *cfgkit.Source[Settings]"), "{text}");
+    assert!(text.contains("real *cfgkit.Source[AppConfig]"), "{text}");
 }
 
 #[test]
@@ -213,7 +191,7 @@ fn handle_go_type_is_none_without_a_go_module_path() {
     let mut lib = handle_lib("bus", "publisher");
     lib.langs.clear();
     let mut refs = Vec::new();
-    assert!(ext::handle_go_type(&lib, &lib.types[0], &mut refs).is_none());
+    assert!(ext::handle_go_type(&lib, &lib.types[0], &bare_module(), &mut refs).is_none());
     assert!(ext::handle_symbol(&lib).is_none());
 }
 
@@ -287,8 +265,7 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: type_name.into(),
-            interface: false,
-            instance: None,
+            langs: vec![storage("go", &format!("*{}", pascal(type_name)))],
             methods: vec![ExternDecl {
                 name: "send".into(),
                 params: vec![ext_param("topic", string_t())],
@@ -299,13 +276,9 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
                     call_args: vec![CallArg::Param("topic".into())],
                     yields: vec![],
                     returns: None,
-                    errors: vec![],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                    receiver: None,
-                    is_new: false,
                 }],
+                r#async: vec![],
+                errors: vec![],
             }],
         }],
         externs: vec![],
@@ -331,6 +304,7 @@ fn call_arg_expr_covers_every_variant() {
             &CallArg::Param("a".into()),
             &params,
             &entry_args,
+            "ctx",
             &mut ref_expr
         ),
         "s.region"
@@ -345,6 +319,7 @@ fn call_arg_expr_covers_every_variant() {
             &CallArg::Param("missing".into()),
             &params,
             &entry_args,
+            "ctx",
             &mut ref_expr
         ),
         "nil"
@@ -358,6 +333,7 @@ fn call_arg_expr_covers_every_variant() {
             &CallArg::Lit(serde_json::json!("notes")),
             &params,
             &entry_args,
+            "ctx",
             &mut ref_expr
         ),
         "\"notes\""
@@ -370,6 +346,7 @@ fn call_arg_expr_covers_every_variant() {
             &CallArg::Lit(serde_json::json!(true)),
             &params,
             &entry_args,
+            "ctx",
             &mut ref_expr
         ),
         "true"
@@ -382,6 +359,7 @@ fn call_arg_expr_covers_every_variant() {
             &CallArg::Lit(serde_json::json!(3)),
             &params,
             &entry_args,
+            "ctx",
             &mut ref_expr
         ),
         "3"
@@ -394,6 +372,7 @@ fn call_arg_expr_covers_every_variant() {
             &CallArg::Lit(serde_json::Value::Null),
             &params,
             &entry_args,
+            "ctx",
             &mut ref_expr
         ),
         "nil"
@@ -411,6 +390,7 @@ fn call_arg_expr_covers_every_variant() {
             &list,
             &params,
             &entry_args,
+            "ctx",
             &mut ref_expr
         ),
         "[]any{1, 2}"
@@ -432,6 +412,7 @@ fn call_arg_expr_covers_every_variant() {
             &nested,
             &params,
             &entry_args,
+            "ctx",
             &mut ref_expr,
         )
     }))
@@ -440,11 +421,17 @@ fn call_arg_expr_covers_every_variant() {
         panicked,
         "a cross-extern call argument should panic, not render"
     );
-    // Ctor.
+    // Ctor: the form's own Go type comes from its `go` block.
+    let mut lib = lib;
+    lib.structs.push(crate::ir::ForeignStruct {
+        name: "publish_opts".into(),
+        fields: vec![],
+        langs: vec![storage("go", "PublishOptions")],
+    });
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("Topic".to_string(), CallArg::Lit(serde_json::json!("t")));
     let ctor = CallArg::Ctor(CallCtor {
-        name: "publisher".into(),
+        name: "publish_opts".into(),
         fields,
     });
     let expr = ext::call_arg_expr(
@@ -454,9 +441,10 @@ fn call_arg_expr_covers_every_variant() {
         &ctor,
         &params,
         &entry_args,
+        "ctx",
         &mut ref_expr,
     );
-    assert_eq!(expr, "bus.Publisher{Topic: \"t\"}");
+    assert_eq!(expr, "bus.PublishOptions{Topic: \"t\"}");
     assert!(refs.iter().any(|s| s.name == "bus"));
 }
 
@@ -480,6 +468,7 @@ fn call_arg_expr_ctor_is_nil_without_a_go_module_path() {
             &ctor,
             &[],
             &[],
+            "ctx",
             &mut ref_expr
         ),
         "nil"
@@ -514,10 +503,17 @@ fn error_block_discriminates_a_declared_sentinel() {
     let mut module = bare_module();
     module.shapes.push({
         let mut s = structure("m#overloaded", vec![member("message", string_t(), true)]);
-        s.traits = vec![Trait {
-            id: "retryable".into(),
-            value: serde_json::Value::Null,
-        }];
+        s.traits = vec![
+            Trait {
+                id: "retryable".into(),
+                value: serde_json::Value::Null,
+            },
+            super::ext_fixtures::foreign_trait(vec![super::ext_fixtures::foreign_lang(
+                "go",
+                "ErrBusy",
+                &[("message", "Error()")],
+            )]),
+        ];
         s
     });
     let config = go_casing();
@@ -528,25 +524,63 @@ fn error_block_discriminates_a_declared_sentinel() {
         &module,
         &config,
         &lib,
-        &[ErrorBinding {
-            sentinel: "ErrBusy".into(),
-            r#type: "overloaded".into(),
-        }],
+        &["m#overloaded".to_string()],
         "bus.send",
         "err",
         &|expr| format!("return nil, {expr}"),
     );
-    assert!(out.contains("errors.Is(err, bus.ErrBusy)"));
-    assert!(out.contains("&Overloaded{Message: err.Error()}"));
+    assert!(out.contains("errors.Is(err, bus.ErrBusy)"), "{out}");
+    assert!(out.contains("&Overloaded{Message: err.Error()}"), "{out}");
 }
 
 #[test]
-fn declared_error_literal_is_a_zero_value_without_a_message_member() {
+fn error_block_matches_a_pointer_type_with_errors_as() {
+    let mut module = bare_module();
+    module.shapes.push({
+        let mut s = structure(
+            "m#timed_out",
+            vec![
+                member("message", string_t(), true),
+                member("retry_after", Tref::Prim(Prim::I32), true),
+            ],
+        );
+        s.traits = vec![super::ext_fixtures::foreign_trait(vec![
+            super::ext_fixtures::foreign_lang(
+                "go",
+                "*TimeoutError",
+                &[("message", "Error()"), ("retry_after", "RetryAfter")],
+            ),
+        ])];
+        s
+    });
+    let config = go_casing();
+    let mut refs = Vec::new();
+    let lib = handle_lib("bus", "publisher");
+    let out = ext::error_block(
+        &mut refs,
+        &module,
+        &config,
+        &lib,
+        &["m#timed_out".to_string()],
+        "bus.send",
+        "err",
+        &|expr| format!("return nil, {expr}"),
+    );
+    assert!(out.contains("var errAs0 *bus.TimeoutError"), "{out}");
+    assert!(out.contains("errors.As(err, &errAs0)"), "{out}");
+    assert!(
+        out.contains("&TimedOut{Message: errAs0.Error(), RetryAfter: errAs0.RetryAfter}"),
+        "{out}"
+    );
+}
+
+#[test]
+fn declared_error_literal_is_a_zero_value_without_a_mapped_member() {
     let mut module = bare_module();
     module.shapes.push(structure("m#overloaded", vec![]));
     let config = go_casing();
     assert_eq!(
-        ext::declared_error_literal(&module, &config, "overloaded", "err"),
+        ext::declared_error_literal(&module, &config, "m#overloaded", "err", &Default::default()),
         "&Overloaded{}"
     );
 }
@@ -569,4 +603,161 @@ fn the_per_language_fixture_spells_its_own_go_name() {
     assert!(text.contains("*keepkit.Store[string]"), "{text}");
     assert!(text.contains("OpenStore[string]("), "{text}");
     assert!(!text.contains("Vault"), "{text}");
+}
+
+// --- call_arg_expr: a parameter under its own spelling ---------------------
+
+/// The spelling says what the parameter crosses as: a variadic slot spreads
+/// a list literal as a typed slice or a slice value as is, a builtin numeric
+/// type converts, the parameter's own type passes unchanged, a declared
+/// position reads as the call site's context, and a nested call qualifies
+/// its symbol by the package selector.
+#[test]
+fn call_arg_expr_coerces_a_spelled_parameter() {
+    let lib = handle_lib("bus", "publisher");
+    let module = bare_module();
+    let mut refs = Vec::new();
+    let params = vec![
+        ext_param("values", Tref::List(Box::new(Tref::Prim(Prim::Float)))),
+        ext_param("digits", Tref::Prim(Prim::U8)),
+    ];
+    let mut ref_expr = |path: &[String]| format!("s.{}", path.join("."));
+    let mut render = |refs: &mut Vec<Symbol>, arg: &CallArg, entry_args: &[CallArg]| {
+        ext::call_arg_expr(
+            refs,
+            &module,
+            &lib,
+            arg,
+            &params,
+            entry_args,
+            "ctx",
+            &mut ref_expr,
+        )
+    };
+    let spread = CallArg::ParamAs {
+        name: "values".into(),
+        spelling: "...float64".into(),
+    };
+    let literal_list = CallArg::List(vec![
+        CallArg::Lit(serde_json::json!(1.5)),
+        CallArg::Lit(serde_json::json!(2.5)),
+    ]);
+    assert_eq!(
+        render(
+            &mut refs,
+            &spread,
+            &[literal_list, CallArg::Ref(vec!["digits".into()])]
+        ),
+        "[]float64{1.5, 2.5}..."
+    );
+    let by_ref = [
+        CallArg::Ref(vec!["samples".into()]),
+        CallArg::Ref(vec!["digits".into()]),
+    ];
+    assert_eq!(render(&mut refs, &spread, &by_ref), "s.samples...");
+    let identity = CallArg::ParamAs {
+        name: "values".into(),
+        spelling: "[]float64".into(),
+    };
+    assert_eq!(render(&mut refs, &identity, &by_ref), "s.samples");
+    let converted = CallArg::ParamAs {
+        name: "digits".into(),
+        spelling: "int".into(),
+    };
+    assert_eq!(render(&mut refs, &converted, &by_ref), "int(s.digits)");
+    assert_eq!(
+        render(
+            &mut refs,
+            &CallArg::Foreign("ctx context.Context".into()),
+            &by_ref
+        ),
+        "ctx"
+    );
+    let nested = CallArg::SymbolCall(crate::ir::SymbolCall {
+        symbol: "WithPrecision".into(),
+        args: vec![CallArg::Param("digits".into())],
+    });
+    assert_eq!(
+        render(&mut refs, &nested, &by_ref),
+        "bus.WithPrecision(s.digits)"
+    );
+    let unknown = CallArg::ParamAs {
+        name: "nope".into(),
+        spelling: "int".into(),
+    };
+    assert_eq!(render(&mut refs, &unknown, &by_ref), "nil");
+    // A spelling Go has no conversion for is refused by name, before any
+    // emitter could reach the panic above.
+    let err = crate::codegen::targets::go::entry::param_spelling_coerces(
+        &module,
+        &lib,
+        &Tref::Prim(Prim::U8),
+        "map[string]int",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("no conversion from uint8 to map[string]int"),
+        "{err}"
+    );
+}
+
+/// A struct literal names the form's own Go type from its `go` block, and
+/// converts a field the block spells under another type.
+#[test]
+fn call_arg_expr_builds_a_form_from_its_go_block() {
+    let mut lib = handle_lib("bus", "publisher");
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert("Digits".to_string(), "int".to_string());
+    lib.structs.push(crate::ir::ForeignStruct {
+        name: "opts".into(),
+        fields: vec![crate::ir::ForeignField {
+            name: "Digits".into(),
+            r#type: Tref::Prim(Prim::U8),
+        }],
+        langs: vec![ForeignLang {
+            lang: "go".into(),
+            name: "Options".into(),
+            fields,
+        }],
+    });
+    let mut ctor_fields = std::collections::BTreeMap::new();
+    ctor_fields.insert("Digits".to_string(), CallArg::Lit(serde_json::json!(3)));
+    let ctor = CallArg::Ctor(CallCtor {
+        name: "opts".into(),
+        fields: ctor_fields,
+    });
+    let mut refs = Vec::new();
+    let mut ref_expr = |_: &[String]| String::new();
+    let expr = ext::call_arg_expr(
+        &mut refs,
+        &bare_module(),
+        &lib,
+        &ctor,
+        &[],
+        &[],
+        "ctx",
+        &mut ref_expr,
+    );
+    assert_eq!(expr, "bus.Options{Digits: int(3)}");
+}
+
+/// An error the op declares but that has no `go` block is not recognized
+/// here: only the contract fallback remains.
+#[test]
+fn error_block_skips_an_error_with_no_go_block() {
+    let mut module = bare_module();
+    module.shapes.push(structure("m#overloaded", vec![]));
+    let mut refs = Vec::new();
+    let out = ext::error_block(
+        &mut refs,
+        &module,
+        &go_casing(),
+        &handle_lib("bus", "publisher"),
+        &["m#overloaded".to_string()],
+        "bus.send",
+        "err",
+        &|expr| format!("return nil, {expr}"),
+    );
+    assert!(!out.contains("errors.Is"), "{out}");
+    assert!(out.contains("ContractError"), "{out}");
 }

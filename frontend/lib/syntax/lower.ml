@@ -150,7 +150,9 @@ and json_of_call_arg : Ast.call_arg -> Ir.json = function
         ]
   | Ast.CaList (items, _) ->
       `Assoc [ ("list", `List (List.map json_of_call_arg items)) ]
-  | Ast.CaType (n, _) -> `Assoc [ ("type", `String n) ]
+  | Ast.CaParamAs (n, _, sp, _) ->
+      `Assoc [ ("param", `String n); ("as", `String sp) ]
+  | Ast.CaForeign (s, _) -> `Assoc [ ("foreign", `String s) ]
 
 (* All-keyword args collapse to a single object (@http(method: "get", path: "/x")
    -> {"method":"get","path":"/x"}); any positional arg keeps the uniform array
@@ -522,7 +524,8 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
   in
   let bag rest = pub_trait @ lower_bag_traits rest in
   match d.dkind with
-  | Ast.DStruct { params = _; members; ops } when role = Roles.Entry ->
+  | Ast.DStruct { params = _; members; ops; slangs = _ } when role = Roles.Entry
+    ->
       (* Entry generics have no meaning (the construction surface is concrete);
          the typechecker rejects them, lowering drops them. Nested ops are
          identified as [module#entry.op], scoped to the entry so they never
@@ -545,7 +548,8 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
         kind = Ir.Entry { fields; operations };
         traits = bag d.dtraits;
       }
-  | Ast.DStruct { params = _; members; ops = _ } when role = Roles.Config ->
+  | Ast.DStruct { params = _; members; ops = _; slangs = _ }
+    when role = Roles.Config ->
       {
         Ir.id = qualify module_name d.dname;
         kind =
@@ -553,7 +557,7 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
             { fields = List.map (lower_entry_field ~resolve ~diags) members };
         traits = bag d.dtraits;
       }
-  | Ast.DStruct { params; members; ops = _ } ->
+  | Ast.DStruct { params; members; ops = _; slangs } ->
       {
         Ir.id = qualify module_name d.dname;
         kind =
@@ -562,7 +566,7 @@ let lower_decl ?(role = Roles.Wire) ~module_name ~resolve ~diags (d : Ast.decl)
               params;
               members = List.map (lower_member ~params ~resolve ~diags) members;
             };
-        traits = bag d.dtraits;
+        traits = bag d.dtraits @ Lower_extern.foreign_trait slangs;
       }
   | Ast.DUnion { params; variants } ->
       let disc, rest = take_trait "discriminator" d.dtraits in

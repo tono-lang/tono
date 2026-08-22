@@ -15,9 +15,7 @@ use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::entry::{
     ext_call, ext_handle_call, ext_handle_iface, foreign_handle, module_symbol,
 };
-use crate::ir::{
-    EntryField, ErrorBinding, ExternStub, ExternStubTarget, OpImplCall, StubAnswer, Tref,
-};
+use crate::ir::{EntryField, ExternStub, ExternStubTarget, OpImplCall, StubAnswer, Tref};
 
 /// Every extern stub this test declares, wrapped as nested swap/restore
 /// pairs around `body`: `entries::plan` and `declared_tests::
@@ -226,7 +224,7 @@ fn method_answer_expr(
         Some(StubAnswer::Error { error }) => {
             let mapped = ts_method_errors(ctx, call)
                 .iter()
-                .any(|eb| eb.r#type == error.shape);
+                .any(|id| crate::codegen::entries::local_name(id) == error.shape);
             if mapped {
                 let class = ext_call::sentinel_error_class(&error.shape);
                 refs.push(module_symbol(&class, ctx.module));
@@ -247,10 +245,9 @@ fn method_answer_expr(
     }
 }
 
-/// The `errors:` bindings of the `ts` block of the handle method a call
-/// site reaches (empty when the method or its `ts` block is missing, which
-/// the frontend already rejected).
-fn ts_method_errors<'a>(ctx: &TestCtx<'a>, call: &OpImplCall) -> &'a [ErrorBinding] {
+/// The declared errors of the handle method a call site reaches (empty
+/// when the method is missing, which the frontend already rejected).
+fn ts_method_errors<'a>(ctx: &TestCtx<'a>, call: &OpImplCall) -> &'a [String] {
     let field: Option<&EntryField> = call
         .recv
         .first()
@@ -265,7 +262,6 @@ fn ts_method_errors<'a>(ctx: &TestCtx<'a>, call: &OpImplCall) -> &'a [ErrorBindi
         .methods
         .iter()
         .find(|m| m.name == call.method)
-        .and_then(ext_handle_iface::ts_lang)
-        .map(|lang| lang.errors.as_slice())
+        .map(|m| m.errors.as_slice())
         .unwrap_or(&[])
 }

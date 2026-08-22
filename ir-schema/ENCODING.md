@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **15**.
+The current version is **28**.
 
 ## Modules
 
@@ -226,59 +226,81 @@ A field reference inside an operation trait value is the structured object
 `@timeout`/`@retry`); path templates keep both placeholder scopes verbatim in
 the string (`"/notes/{.x}/{id}"`).
 
-## FFI library declarations (v14)
+## FFI library declarations (v14, reshaped in v28)
 
-The module `ext_libs` array is the new `ext <name> { ... }` library-block
-form, distinct from the legacy `extensions` table above (contract/constraint/
-impl). One entry per `ext` block:
+The module `ext_libs` array is the `ext <name> { ... }` library-block form,
+distinct from the legacy `extensions` table above (contract/constraint/impl).
+Every string that is not a tono name is a foreign spelling, the text of a
+`#(...)` on the surface, carried verbatim. One entry per `ext` block:
 
 ```json
-{ "name": "companyconfig",
-  "langs": [ { "lang": "go", "path": "github.com/company/config" },
-             { "lang": "ts", "path": "@company/config" } ],
-  "structs": [ { "name": "go_config",
-                 "fields": [ { "name": "Host", "type": { "prim": "string" } } ] } ],
-  "types": [ { "name": "publisher", "methods": [ /* extern_decl */ ] } ],
+{ "name": "mathkit",
+  "langs": [ { "lang": "go", "path": "tono-ext-fixture/mathkit" },
+             { "lang": "rust", "path": "mathkit" } ],
+  "structs": [ { "name": "formula_options",
+                 "fields": [ { "name": "precision", "type": { "prim": "u8" } } ],
+                 "langs": [ { "lang": "rust", "name": "FormulaOptions",
+                              "fields": { "precision": "Option<u8>" } } ] } ],
+  "types": [ { "name": "calculator",
+               "langs": [ { "lang": "go", "name": "Calculator[float64]" },
+                          { "lang": "rust", "name": "Box<dyn Calculator<f64>>" } ],
+               "methods": [ /* extern_decl */ ] } ],
   "externs": [ /* extern_decl */ ] }
 ```
 
-- `structs` are foreign shapes declared inside the block, field names/casing
+- A `foreign_lang` is one language's block on a struct:
+  `{"lang", "name", "fields"?}`. `name` is the positional first element of
+  the block and what it is depends on the struct: a foreign form's type, an
+  opaque handle's whole storage type, an error struct's sentinel or error
+  type. `fields` (omitted when empty) pairs a tono field name with its
+  foreign spelling: the field's foreign type on a form, where the field
+  comes from on an error value (`"message": "Error()"`).
+- `structs` are foreign forms declared inside the block, field names/casing
   kept verbatim (never normalized); never a top-level shape, never role-
-  classified, never crosses the wire.
-- `types` are opaque foreign handles; each `methods` entry is an `extern_decl`
-  (a receiver method, same shape as a free extern).
+  classified, never crosses the wire. Each carries its `langs`; a target
+  with no block does not have the form.
+- `types` are opaque foreign handles; `langs` spells the storage type per
+  language (nothing is derived from the handle's name), and each `methods`
+  entry is an `extern_decl` (a receiver method, same shape as a free extern).
 - An `extern_decl` is `{"name", "params": [{"name","type"}], "return": <tref>,
-  "langs": [<extern_lang>]}`.
+  "langs": [<extern_lang>], "async"?, "errors"?}`. `async` (omitted when
+  empty) lists the languages where the foreign call is asynchronous; absent
+  means synchronous at the boundary. `errors` (omitted when empty) lists the
+  declared error shapes the call can raise, by shape id, in test order; how
+  a target recognizes each one lives on that shape (below).
 - An `extern_lang` (one per language block) is
-  `{"lang", "symbol", "call_args": [<call_arg>], "yields"?, "returns"?, "errors"?,
-  "sync"?, "infallible"?, "ctx"?}`.
-  `yields`/`errors` are omitted when empty; `returns` when absent. `sync`,
-  `infallible`, and `ctx` are bare opt-in markers, each omitted when `false`
-  and present as `true` otherwise: `sync` marks a call that blocks rather
-  than awaits (meaningful only where a target awaits extern calls by
-  default), `infallible` marks a call with no error return (meaningful only
-  in Go), and `ctx` marks a call that receives the target's own
-  cancellation/deadline context in its idiomatic position (meaningful only
-  on a foreign handle's own method call; Go prepends `ctx context.Context`
-  as the first parameter). A target that has no equivalent convention
-  ignores the marker it does not read. A
-  `yields` position is `{"name", "type"?, "is_error"?}` -- `type` is absent
-  and `is_error` is `true` only for the reserved `error` sentinel, never for
-  an ordinary omitted type. `returns` is
-  `{"type": <tref>, "fields": [{"name","value"}]}` where a field's `value` is
-  `{"field": [...]}` (a ref into a `yields`-bound name) or `{"select": <select>}`
-  (a match over one, reusing the same `select` shape as `= match`). An
-  `errors` entry is `{"sentinel", "type"}`.
+  `{"lang", "symbol", "call_args": [<call_arg>], "yields"?, "returns"?}`.
+  `symbol` is the callee's whole foreign spelling (`FromConstant[float64]`,
+  `new ConstantCalculator`, `FormulaCalculator::parse`). `yields` is
+  omitted when empty; `returns` when absent. A `yields` position is
+  `{"name", "type"?, "is_error"?, "foreign"?}`: `type` is the tono type it
+  carries, absent for the reserved `error` sentinel (`is_error`: `true`)
+  and for a position under a foreign spelling (`foreign`: what the call
+  really returns, for the target to coerce into the declared return).
+  `returns` is `{"type": <tref>, "fields": [{"name","value"}]}` where a
+  field's `value` is `{"field": [...]}` (a ref into a `yields`-bound name)
+  or `{"select": <select>}` (a match over one, reusing the same `select`
+  shape as `= match`).
 - A `call_arg` is a tagged object: `{"param": <string>}` (the extern's own
-  parameter), `{"field": [...]}` (a ref path), `{"ctor": <string>, "fields":
-  {<name>: <call_arg>}}` (a struct-literal mapper), `{"lit": <json>}` (a
-  bare scalar literal, e.g. the `"notes"` in `.bus.send("notes", ...)`; v14
-  only inside a ctor field's value, v15 also as a bare top-level call
-  argument), `{"list": [<call_arg>]}`, or `{"call": <entry_call>}` -- the
-  last two only arise inside a ctor field's value (e.g. `opts { retries:
-  3 }`), never as a bare top-level call argument. `entry_call` is `{"ns",
-  "fn", "args": [<call_arg>]}`, the same shape an entry field's `call` key
-  and a trait argument's own `{"call": <entry_call>}` form both carry.
+  parameter), `{"param": <string>, "as": <string>}` (the parameter under a
+  foreign spelling of its own, what it crosses as: `Vec<f64>`,
+  `...Calculator[float64]`), `{"foreign": <string>}` (a declared position
+  the target binds itself, `ctx context.Context`), `{"field": [...]}` (a
+  ref path), `{"ctor": <string>, "fields": {<name>: <call_arg>}}` (a
+  struct-literal mapper), `{"lit": <json>}` (a bare scalar literal),
+  `{"list": [<call_arg>]}`, `{"symbol": <string>, "symbol_args": [...]}` (a
+  nested foreign call), `{"type": <string>}` (a declared handle passed as a
+  class reference), or `{"call": <entry_call>}` (a call into another
+  declared extern, only inside a ctor field's value). `entry_call` is
+  `{"ns", "fn", "args": [<call_arg>]}`, the same shape an entry field's
+  `call` key and a trait argument's own `{"call": <entry_call>}` form both
+  carry.
+- An error struct carries its language blocks as the `foreign` trait of its
+  shape: `{"id": "foreign", "value": [<foreign_lang>]}`, one block per
+  language, `name` being the sentinel (`ErrParse`, matched by identity) or
+  the pointer type (`*TimeoutError`, matched by type) in Go and the pattern
+  (`Error::Parse`) in Rust, the class (`ParseError`, `instanceof`) in
+  TypeScript, with `fields` saying where each tono field comes from.
 
 ## Resolved wire bindings (v8)
 
