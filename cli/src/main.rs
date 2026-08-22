@@ -20,6 +20,7 @@
 //! manifest's `[compat]` (flags override). The generation itself lives in the
 //! testable `tono_backend` library; this binary is the IO shell around it.
 
+mod check;
 mod frontend;
 mod gen;
 mod gen_ext;
@@ -45,12 +46,13 @@ use crate::frontend::Frontend;
 use crate::preview::pipeline;
 use crate::preview::pipeline::Verdict;
 
-const USAGE: &str = "usage: tono (\n  \
+pub(crate) const USAGE: &str = "usage: tono (\n  \
     init [--target <list>] [--yes] [--root <path>]\n  \
     gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [--clean] [<ir.json>]\n    \
     (with no <ir.json> and nothing piped in, the project's .tono sources are compiled;\n    \
      --clean also removes generated files this run did not produce)\n  \
-    check <file.tono>\n  \
+    check <file.tono> [--lib-root <lang>=<dir>]... [--config <tono.toml>]\n    \
+    (an ext block's bindings are checked against the library in that target's out dir, or in --lib-root)\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
     playground [--port <n>] [--no-open]\n  \
@@ -60,7 +62,7 @@ const USAGE: &str = "usage: tono (\n  \
 
 /// The project manifest's conventional filename, auto-discovered by walking up
 /// from the working directory when no explicit path is given.
-const MANIFEST_NAME: &str = "tono.toml";
+pub(crate) const MANIFEST_NAME: &str = "tono.toml";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -77,7 +79,7 @@ fn run(args: &[String]) -> Result<(), String> {
     match args.get(1).map(String::as_str) {
         Some("init") => init::run(&args[2..]),
         Some("gen") => gen::run(&args[2..]),
-        Some("check") => run_frontend("check", &args[2..]),
+        Some("check") => run_check(&args[2..]),
         Some("fmt") => run_frontend("fmt", &args[2..]),
         Some("preview") => run_preview(&args[2..]),
         #[cfg(feature = "playground")]
@@ -112,6 +114,25 @@ pub(crate) fn discover_manifest() -> Result<PathBuf, String> {
 /// Relay a source-level subcommand (`check`, `fmt`) to the frontend, inheriting
 /// its stdio and exit code. The frontend owns parsing and typechecking, so these
 /// are thin passthroughs: it prints diagnostics or the formatted source itself.
+/// `tono check`: the frontend's diagnostics first (a rejected source ends
+/// here, with its exit code), then every foreign binding checked against
+/// its library. Findings print like the frontend's own diagnostics and fail
+/// the check the same way.
+fn run_check(args: &[String]) -> Result<(), String> {
+    let parsed = check::parse_args(args)?;
+    let path = parsed
+        .path
+        .clone()
+        .ok_or(format!("missing <file.tono>\n{USAGE}"))?;
+    run_frontend("check", std::slice::from_ref(&path))?;
+    if check::check_bindings(Path::new(&path), &parsed)? {
+        eprintln!("ok: {path}");
+        Ok(())
+    } else {
+        std::process::exit(1);
+    }
+}
+
 fn run_frontend(sub: &str, args: &[String]) -> Result<(), String> {
     let program = frontend::resolve_program();
     let status = Command::new(&program)
@@ -122,12 +143,9 @@ fn run_frontend(sub: &str, args: &[String]) -> Result<(), String> {
             format!("could not run {program} ({e}); set TONO_FRONTEND to the frontend binary")
         })?;
     if status.success() {
-        // A clean check prints nothing of its own, which reads the same as
-        // having done nothing; say so. Only for `check`: `fmt` writes the
-        // formatted source, and stdout is its result.
-        if sub == "check" {
-            eprintln!("ok: {}", args.join(" "));
-        }
+        // A clean check prints nothing of its own; `run_check` says so once
+        // the bindings are checked too. `fmt` writes the formatted source,
+        // and stdout is its result.
         Ok(())
     } else {
         // Mirror the frontend's exit code (1 for diagnostics, 2 for usage).

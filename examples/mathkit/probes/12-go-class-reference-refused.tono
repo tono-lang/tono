@@ -14,7 +14,7 @@ ext mathkit {
   }
 
   struct answer_calculator {
-    go { #(AnswerCalculator) }
+    go { #(Calculator[float64]) }
 
     op compute(): float {
       go { call: #(Compute)(#(ctx context.Context)) }

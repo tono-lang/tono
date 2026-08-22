@@ -37,6 +37,7 @@ pub mod test_support;
 mod traits;
 pub mod tree;
 pub mod validation;
+pub mod verify;
 pub mod visibility;
 
 pub use assemble::resolve_groups;

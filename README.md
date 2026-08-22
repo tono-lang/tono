@@ -45,7 +45,7 @@ attached directly to each [release](https://github.com/tono-lang/tono/releases).
 
 ```
 tono init                # write tono.toml and a build manifest per target
-tono check src/api.tono  # parse and typecheck
+tono check src/api.tono  # parse and typecheck; check ext bindings against their libraries
 tono gen                 # generate every enabled target's SDK
 tono gen --clean         # the same, clearing output the spec no longer produces
 ```
@@ -54,6 +54,19 @@ tono gen --clean         # the same, clearing output the spec no longer produces
 `project.root`) and writes each enabled target under its configured `out`. The
 IR is an internal artifact, so no separate compile step is needed; pass an IR
 file, or pipe one in, only when you already have one.
+
+`tono check` runs the frontend's diagnostics and then, for every `ext` block,
+checks each foreign binding against the real library with that target's own
+toolchain (`go build`, `tsc`): arity, the types a parameter is declared to
+cross as, the return, a handle's storage type, the Go context position. A
+divergence is reported at the `.tono` line that declared it, like any other
+diagnostic, instead of in a generated file. The library is resolved the way
+the generated SDK resolves it, from that target's `out` directory (a Go module
+requiring it, a `node_modules` holding it), or from `--lib-root <lang>=<dir>`.
+A library with no type source to read (no module, no `.d.ts`) leaves its
+bindings unchecked, and the report says so; Rust bindings are always reported
+unchecked until rustdoc's JSON output leaves nightly. Only the check needs a
+target toolchain; `tono gen` never does.
 
 Renaming or deleting a module leaves its old output behind, since generation
 only writes. `--clean` sweeps each output directory of generated files the run

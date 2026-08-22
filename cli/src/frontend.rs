@@ -73,6 +73,12 @@ impl Frontend {
         self.invoke("compile-dir", root)
     }
 
+    /// The source span of every foreign binding in `path`, one JSON object
+    /// per line (see `tono_backend::codegen::verify::parse_sites`).
+    pub fn ext_bindings(&self, path: &Path) -> Result<String, FrontendError> {
+        self.invoke("ext-bindings", path)
+    }
+
     fn invoke(&self, sub: &str, path: &Path) -> Result<String, FrontendError> {
         match Command::new(&self.program).arg(sub).arg(path).output() {
             Ok(out) => interpret(
