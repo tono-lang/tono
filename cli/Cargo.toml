@@ -54,4 +54,4 @@ tree-sitter-go = { version = "0.25.0", optional = true }
 tree-sitter-typescript = { version = "0.23.2", optional = true }
 tree-sitter-javascript = { version = "0.25.0", optional = true }
 tree-sitter = { version = "0.26.11", optional = true }
-tree-sitter-tono = { git = "https://github.com/tono-lang/tree-sitter-tono", rev = "a408a27e33d0e454454cd0703e96e4a04ca98d63", version = "0.1.0", optional = true }
+tree-sitter-tono = { git = "https://github.com/tono-lang/tree-sitter-tono", rev = "d694e1683d6995049a4977b8ca9645bd11888fa7", version = "0.1.0", optional = true }
