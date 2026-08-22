@@ -146,39 +146,31 @@ and parse_trait_list_value st : Ast.trait_arg =
       ignore (P.expect st Token.RBracket "']' to close a list value");
       Ast.AList values
 
-(* call_arg ::= ".path" | name | name "{" field ":" value, ... "}" | string
-   "(" call_arg, ... ")" | "[" call_arg, ... "]" — the same shapes [call:]
-   accepts: a field-reference path, the caller's own bare parameter, a
-   struct-literal mapper (reusing [parse_ctor_arg]), a nested foreign-symbol
-   call, e.g. the [WithPrecision(precision)] in [call: "FromFormula"(expr,
-   WithPrecision(precision))], or a list literal (the caller's own value for
-   a [variadic] logical parameter, e.g.
-   [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]). A
-   string not followed by "(" is an ordinary literal instead ([CaLit]). *)
-and is_ident (t : Token.t) =
-  match t.kind with Token.Ident _ -> true | _ -> false
-
+(* call_arg ::= ".path" | name | name ":" "#(...)" | name "{" field ":"
+   value, ... "}" | string | "#(...)" | "#(...)" "(" call_arg, ... ")" | "["
+   call_arg, ... "]": the same shapes [call:] accepts: a field-reference
+   path, the caller's own bare parameter (or the parameter under a foreign
+   spelling of its own), a struct-literal mapper (reusing [parse_ctor_arg]),
+   a literal, a foreign position, a nested foreign-symbol call, e.g. the
+   [#(WithPrecision)(precision)] in [call: #(FromFormula)(expr,
+   #(WithPrecision)(precision))], or a list literal. *)
 and parse_call_arg st : Ast.call_arg =
   match (P.peek st).kind with
   | Token.Dot -> Ast.CaRef (parse_ref_path st)
-  | Token.Str s -> (
+  | Token.Str s ->
+      let t = P.advance st in
+      Ast.CaLit (Ast.LStr s, t.span)
+  | Token.Foreign s -> (
       let t = P.advance st in
       match (P.peek st).kind with
       | Token.LParen -> Ast.CaCall (parse_nested_call st s t.span)
-      | _ -> Ast.CaLit (Ast.LStr s, t.span))
+      | _ -> Ast.CaForeign (s, t.span))
   | Token.Int n ->
       let t = P.advance st in
       Ast.CaLit (Ast.LInt n, t.span)
   | Token.Float f ->
       let t = P.advance st in
       Ast.CaLit (Ast.LFloat f, t.span)
-  | Token.Ident "type" when is_ident (P.peek_ahead st 1) ->
-      (* "type" is contextual here, like in a handle declaration: a
-         parameter named [type] stays a parameter when nothing follows it. *)
-      let kw = P.advance st in
-      let nt = P.advance st in
-      let n = match nt.kind with Token.Ident n -> n | _ -> assert false in
-      Ast.CaType (n, Span.merge kw.span nt.span)
   | Token.Ident n -> (
       let nt = P.advance st in
       match (P.peek st).kind with
@@ -186,6 +178,18 @@ and parse_call_arg st : Ast.call_arg =
           match parse_ctor_arg st n nt.span with
           | Ast.ACtor c -> Ast.CaCtor c
           | _ -> assert false)
+      | Token.Colon -> (
+          (* [name: #(spelling)]: the parameter crosses under a foreign
+             spelling of its own. Only a spelling may follow the colon. *)
+          ignore (P.advance st);
+          match (P.peek st).kind with
+          | Token.Foreign sp ->
+              let ft = P.advance st in
+              Ast.CaParamAs (n, nt.span, sp, ft.span)
+          | _ ->
+              P.error st (P.peek st).span
+                "expected a foreign spelling '#(...)' after the parameter's ':'";
+              Ast.CaParam (n, nt.span))
       | _ -> Ast.CaParam (n, nt.span))
   | Token.LBracket -> parse_call_list st
   | _ ->
@@ -216,8 +220,8 @@ and parse_call_list st : Ast.call_arg =
       let finish = match close with Some t -> t.span | None -> lb.span in
       Ast.CaList (items, Span.merge lb.span finish)
 
-(* "string" "(" call_arg ("," call_arg)* ")" — the symbol has already been
-   consumed at [symbol]/[symbol_span]; the cursor sits on "(". *)
+(* "#(symbol)" "(" call_arg ("," call_arg)* ")": the spelling has already
+   been consumed at [symbol]/[symbol_span]; the cursor sits on "(". *)
 and parse_nested_call st (symbol : string) (symbol_span : Span.span) :
     Ast.nested_call =
   let args = parse_call_args st in

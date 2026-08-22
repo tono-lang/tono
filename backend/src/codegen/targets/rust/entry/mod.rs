@@ -732,3 +732,14 @@ pub(crate) mod transport_decls;
 pub(crate) mod vector_tests;
 
 pub use shared::shared_groups;
+
+/// Whether Rust can coerce a logical value of `t` into `spelling` (see
+/// `resolve_call::coerce`); the reason names both types when it cannot.
+pub fn param_spelling_coerces(
+    module: &Module,
+    lib: &crate::ir::ExtLib,
+    t: &Tref,
+    spelling: &str,
+) -> Result<(), String> {
+    resolve_call::coerce(module, lib, t, spelling, "v").map(|_| ())
+}

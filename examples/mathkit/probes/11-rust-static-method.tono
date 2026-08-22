@@ -1,20 +1,23 @@
 // Capability 11: a static method as the constructor. The receiver of the
 // call is the foreign type itself (FormulaCalculator::parse(expr)), an
-// associated function rather than a free function of the crate: the type
-// is written as a second string before the method and qualifies the call
-// the same way the crate does. The handle is the trait (capability 3), so
-// the concrete type only ever appears as the receiver.
+// associated function of the concrete type rather than a free function; the
+// callee spelling carries the whole path, qualified the way the crate is.
+// The handle is stored behind the trait (capability 3), so the concrete
+// type only ever appears as the receiver.
 ext mathkit {
-  rust: "mathkit"
+  rust { #(mathkit) }
 
-  type calculator(rust: "Calculator", float) interface {
-    extern compute(): float {
-      rust { call: "compute"() }
+  struct calculator {
+    rust { #(Box<dyn Calculator<f64>>) }
+
+    @async(rust)
+    op compute(): float {
+      rust { call: #(compute)() }
     }
   }
 
-  extern parse(expr: string): calculator {
-    rust { call: "FormulaCalculator"."parse"(expr) sync }
+  op parse(expr: string): calculator {
+    rust { call: #(FormulaCalculator::parse)(expr) }
   }
 }
 

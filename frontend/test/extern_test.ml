@@ -11,17 +11,17 @@ let src =
   {|import tono.http
 
 ext companyconfig {
-  go: "github.com/company/config"
-  ts: "@company/config"
+  go { #(github.com/company/config) }
+  ts { #(@company/config) }
 
   struct go_config { Host: string, DevHost: string, Env: string, Credentials: go_creds }
   struct go_creds  { Secret: string }
   struct ts_config { host: string, token: string }
   struct ts_opts   { region: string, service: string }
 
-  extern load(service: string, region: string): app_config {
+  op load(service: string, region: string): app_config {
     go {
-      call: "Load"(service, "Region"(region))
+      call: #(Load)(service, #(Region)(region))
       yields: (cfg: go_config, err: error)
       returns: app_config {
         endpoint: match .cfg.Env { "prod" => .cfg.Host, _ => .cfg.DevHost }
@@ -29,7 +29,7 @@ ext companyconfig {
       }
     }
     ts {
-      call: "load"(ts_opts {
+      call: #(load)(ts_opts {
         region: region,
         service: service,
         retries: 3,
@@ -43,59 +43,62 @@ ext companyconfig {
     }
   }
 
-  extern with_precision(digits: i64): app_config {
-    go { call: "WithPrecision"(digits) }
+  op with_precision(digits: i64): app_config {
+    go { call: #(WithPrecision)(digits) }
   }
 
-  extern build(seed: string, opts: app_config variadic): app_config {
-    go { call: "Build"(seed, opts) }
-    ts { call: "Build"(seed, opts) new }
+  op build(seed: string, opts: []app_config): app_config {
+    go { call: #(Build)(seed, opts) }
+    ts { call: #(new Build)(seed, opts) }
   }
 }
 
 ext companybus {
-  go: "github.com/company/bus"
-  ts: "@company/bus"
+  go { #(github.com/company/bus) }
+  ts { #(@company/bus) }
 
   struct go_ack { ID: string, OK: bool }
   struct ts_ack { id: string, accepted: bool }
 
-  type publisher {
-    extern send(topic: string, body: string): ack {
+  struct publisher {
+    @errors(overloaded)
+    op send(topic: string, body: string): ack {
       go {
-        call: "Send"(topic, body)
+        call: #(Send)(topic, body)
         yields: (a: go_ack)
         returns: ack { id: .a.ID, accepted: .a.OK }
-        errors: { "ErrBusy" => overloaded }
       }
       ts {
-        call: "send"(topic, body)
+        call: #(send)(topic, body)
         yields: (a: ts_ack)
         returns: ack { id: .a.id, accepted: .a.accepted }
-        errors: { "BUSY" => overloaded }
       }
     }
   }
 
-  extern connect(endpoint: string, token: string): publisher {
-    go { call: "Connect"(endpoint, token) }
-    ts { call: "connect"(endpoint, token) }
+  op connect(endpoint: string, token: string): publisher {
+    go { call: #(Connect)(endpoint, token) }
+    ts { call: #(connect)(endpoint, token) }
   }
 
-  type ack_source("Source", ack) {
-    extern get(): ack {
-      go { call: "Get"() }
+  struct ack_source {
+
+    go { #(Source[Ack]) }
+
+    ts { #(Source<Ack>) }
+    op get(): ack {
+      go { call: #(Get)() }
     }
   }
 }
 
 ext companyauth {
-  go: "github.com/company/auth"
-  ts: "@company/auth"
+  go { #(github.com/company/auth) }
+  ts { #(@company/auth) }
 
-  extern sign(req: http.request): string {
-    go { call: "Sign"(req) }
-    ts { call: "sign"(req) }
+  op sign(req: http.request): string {
+    go { call: #(Sign)(req) }
+    ts { call: #(sign)(req) }
   }
 }
 
@@ -126,7 +129,7 @@ pub struct client {
   bus: companybus.publisher = companybus.connect(.config.endpoint, .config.token) @with
 
   @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .config.endpoint)
-  @header("Authorization", companyauth.sign("Wrap"(.request)))
+  @header("Authorization", companyauth.sign(.request))
   @errors(not_found)
   op fetch(ref: note_ref): note
 }
@@ -170,6 +173,28 @@ let lower_and_roundtrip () =
       let b = Ir_json.to_canonical_string (Ir_json.encode_model decoded) in
       Alcotest.(check string) "round-trip" a b
 
+(* The checked-in golden fixture is this very source, lowered: the backend's
+   round-trip test reads it as the frontend's encoding of the ext surface.
+   Set TONO_WRITE_FIXTURES=1 to rewrite it after an IR change. *)
+let golden_path = "../../../../ir-schema/fixtures/extern_ffi.json"
+
+let golden_fixture_matches () =
+  let file, _ = Parser.parse src in
+  let model = Lower.lower_file ~module_name:"notes" ~diags:(ref []) file in
+  let full : Ir.model =
+    { tono_ir_version = Ir_json.current_ir_version; modules = [ model ] }
+  in
+  let encoded = Ir_json.to_canonical_string (Ir_json.encode_model full) in
+  if Sys.getenv_opt "TONO_WRITE_FIXTURES" = Some "1" then
+    Out_channel.with_open_bin golden_path (fun oc ->
+        output_string oc encoded;
+        output_char oc '\n');
+  let on_disk =
+    In_channel.with_open_bin golden_path In_channel.input_all |> String.trim
+  in
+  Alcotest.(check string)
+    "ir-schema/fixtures/extern_ffi.json is current" encoded on_disk
+
 let () =
   Alcotest.run "extern"
     [
@@ -181,5 +206,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "lowers and round-trips" `Quick lower_and_roundtrip;
+          Alcotest.test_case "golden fixture is current" `Quick
+            golden_fixture_matches;
         ] );
     ]

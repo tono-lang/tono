@@ -1,23 +1,28 @@
 // Capability 7: a struct literal in call:. from_formula takes
-// FormulaOptions { precision: Option<u8> } by value. The literal is
-// accepted by the frontend; Rust then needs the foreign struct spelled by
-// its own name (FormulaOptions, not the tono-side rust_formula_options) and
-// the value wrapped in Some(..), neither of which is expressible. The
-// handle is held behind the trait (the "interface" marker), so the concrete
-// return type is no longer in the way; the struct literal is.
+// `FormulaOptions { precision: Option<u8> }` by value. The foreign form's
+// Rust block names the type as the library spells it and the field as
+// `Option<u8>`, so the literal renders as FormulaOptions { precision:
+// Some(..) } from the bare u8 the logical parameter carries.
 ext mathkit {
-  rust: "mathkit"
+  rust { #(mathkit) }
 
-  struct rust_formula_options { precision: u8 }
+  struct formula_options {
+    precision: u8
 
-  type calculator(rust: "Calculator", float) interface {
-    extern compute(): float {
-      rust { call: "compute"() }
+    rust { #(FormulaOptions)  precision: #(Option<u8>) }
+  }
+
+  struct calculator {
+    rust { #(Box<dyn Calculator<f64>>) }
+
+    @async(rust)
+    op compute(): float {
+      rust { call: #(compute)() }
     }
   }
 
-  extern from_formula(expr: string, precision: u8): calculator {
-    rust { call: "from_formula"(expr, rust_formula_options { precision: precision }) sync }
+  op from_formula(expr: string, precision: u8): calculator {
+    rust { call: #(from_formula)(expr: #(&str), formula_options { precision: precision }) }
   }
 }
 

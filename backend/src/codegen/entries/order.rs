@@ -37,7 +37,11 @@ fn call_arg_heads<'a>(arg: &'a CallArg, out: &mut Vec<&'a str>) {
                 call_arg_heads(a, out);
             }
         }
-        CallArg::Param(_) | CallArg::Lit(_) | CallArg::TypeRef(_) => {}
+        CallArg::Param(_)
+        | CallArg::ParamAs { .. }
+        | CallArg::Foreign(_)
+        | CallArg::Lit(_)
+        | CallArg::TypeRef(_) => {}
     }
 }
 

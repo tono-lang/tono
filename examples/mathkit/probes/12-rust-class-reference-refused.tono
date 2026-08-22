@@ -4,22 +4,28 @@
 // passing a class reference has nothing correct to render as. The generator
 // refuses it naming the site; this probe passes when generation is refused.
 ext mathkit {
-  rust: "mathkit"
+  rust { #(mathkit) }
 
-  type calculator(rust: "Calculator", float) interface {
-    extern compute(): float {
-      rust { call: "compute"() }
+  struct calculator {
+    rust { #(Box<dyn Calculator<f64>>) }
+
+    @async(rust)
+    op compute(): float {
+      rust { call: #(compute)() }
     }
   }
 
-  type answer_calculator {
-    extern compute(): float {
-      rust { call: "compute"() }
+  struct answer_calculator {
+    rust { #(AnswerCalculator) }
+
+    @async(rust)
+    op compute(): float {
+      rust { call: #(compute)() }
     }
   }
 
-  extern make(): calculator {
-    rust { call: "instantiate"(type answer_calculator) sync }
+  op make(): calculator {
+    rust { call: #(instantiate)(answer_calculator) }
   }
 }
 

@@ -16,6 +16,10 @@ type kind =
   | Ident of string (* identifiers and shape/type names, incl. PascalCase *)
   | Prim of string (* a recognized primitive keyword, e.g. "i64" *)
   | Str of string (* decoded string-literal content *)
+  | Foreign of string
+    (* a foreign spelling, [#(...)]: the bytes between the parentheses,
+         verbatim, balanced parentheses included. Never text that crosses as
+         data; see [Lexer.scan_foreign]. *)
   | Int of int
   | Float of float
   | At
@@ -70,6 +74,7 @@ let describe (k : kind) : string =
   | Ident s -> Printf.sprintf "identifier '%s'" s
   | Prim s -> Printf.sprintf "type '%s'" s
   | Str _ -> "string literal"
+  | Foreign s -> Printf.sprintf "foreign spelling '#(%s)'" s
   | Int n -> Printf.sprintf "integer '%d'" n
   | Float f -> Printf.sprintf "number '%g'" f
   | At -> "'@'"

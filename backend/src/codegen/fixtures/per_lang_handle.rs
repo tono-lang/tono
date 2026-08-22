@@ -1,17 +1,17 @@
 //! A worked example of one logical handle naming a *different* foreign type
 //! per language: the `keepkit` stand-in exports the same generic contract as
 //! `Store[T]` in Go and `Vault<T>` in Rust, both concrete types with
-//! inherent methods, and the handle's instantiation carries one name per
-//! language. The compiled-vector checks (`go_ext_roundtrip.rs`,
+//! inherent methods, and the handle's language blocks spell one storage type
+//! per language. The compiled-vector checks (`go_ext_roundtrip.rs`,
 //! `rust_ext_roundtrip.rs`) build the generated SDK against each stand-in,
 //! which is what proves both spellings resolve, beyond rendered text.
 //!
 //! Not `cfg(test)`: the integration tests link it from outside the crate.
 
 use crate::ir::{
-    CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam, Instance,
-    InstanceName, LangPath, Model, Module, OpImplCall, OpaqueType, Prim, Shape, ShapeKind, Source,
-    Trait, Tref, TONO_IR_VERSION,
+    CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam, ForeignLang,
+    LangPath, Model, Module, OpImplCall, OpaqueType, Prim, Shape, ShapeKind, Source, Trait, Tref,
+    TONO_IR_VERSION,
 };
 
 fn string_t() -> Tref {
@@ -26,18 +26,19 @@ fn reference(id: &str) -> Tref {
 }
 
 fn plain_lang(lang: &str, symbol: &str, call_args: Vec<CallArg>, ctx: bool) -> ExternLang {
+    let call_args = if ctx {
+        std::iter::once(CallArg::Foreign("ctx context.Context".into()))
+            .chain(call_args)
+            .collect()
+    } else {
+        call_args
+    };
     ExternLang {
         lang: lang.into(),
         symbol: symbol.into(),
         call_args,
         yields: vec![],
         returns: None,
-        errors: vec![],
-        sync: false,
-        infallible: false,
-        ctx,
-        receiver: None,
-        is_new: false,
     }
 }
 
@@ -60,20 +61,18 @@ fn keepkit() -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: "locker".into(),
-            interface: false,
-            instance: Some(Instance {
-                names: vec![
-                    InstanceName {
-                        lang: "go".into(),
-                        name: "Store".into(),
-                    },
-                    InstanceName {
-                        lang: "rust".into(),
-                        name: "Vault".into(),
-                    },
-                ],
-                arg: string_t(),
-            }),
+            langs: vec![
+                ForeignLang {
+                    lang: "go".into(),
+                    name: "*Store[string]".into(),
+                    fields: Default::default(),
+                },
+                ForeignLang {
+                    lang: "rust".into(),
+                    name: "Vault<String>".into(),
+                    fields: Default::default(),
+                },
+            ],
             methods: vec![ExternDecl {
                 name: "get".into(),
                 params: vec![],
@@ -82,12 +81,13 @@ fn keepkit() -> ExtLib {
                     plain_lang("go", "Get", vec![], true),
                     plain_lang("rust", "get", vec![], false),
                 ],
+                r#async: vec!["rust".into()],
+                errors: vec![],
             }],
         }],
         externs: vec![ExternDecl {
             name: "open".into(),
             params: vec![ExternParam {
-                variadic: false,
                 name: "seed".into(),
                 r#type: string_t(),
             }],
@@ -95,7 +95,7 @@ fn keepkit() -> ExtLib {
             langs: vec![
                 plain_lang(
                     "go",
-                    "OpenStore",
+                    "OpenStore[string]",
                     vec![CallArg::Param("seed".into())],
                     false,
                 ),
@@ -106,6 +106,8 @@ fn keepkit() -> ExtLib {
                     false,
                 ),
             ],
+            r#async: vec!["rust".into()],
+            errors: vec![],
         }],
     }
 }
@@ -115,9 +117,7 @@ fn keepkit() -> ExtLib {
 fn only_lang(mut lib: ExtLib, lang: &str) -> ExtLib {
     lib.langs.retain(|l| l.lang == lang);
     for handle in &mut lib.types {
-        if let Some(instance) = &mut handle.instance {
-            instance.names.retain(|n| n.lang == lang);
-        }
+        handle.langs.retain(|l| l.lang == lang);
         for method in &mut handle.methods {
             method.langs.retain(|l| l.lang == lang);
         }

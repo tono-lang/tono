@@ -101,7 +101,7 @@ let rec resolve_ty ~params ~(tbl : Symtab.t) ~(qualified : qualified)
 let rec resolve_decl ~(qualified : qualified) ~(known : string -> bool)
     (tbl : Symtab.t) (d : Ast.decl) : Diagnostic.t list =
   match d.dkind with
-  | Ast.DStruct { params; members; ops } ->
+  | Ast.DStruct { params; members; ops; _ } ->
       List.concat_map
         (fun (m : Ast.member) ->
           resolve_ty ~params ~tbl ~qualified ~known m.mtype)

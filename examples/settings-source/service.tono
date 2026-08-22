@@ -1,28 +1,33 @@
 // A third-party settings source library that is generic over the value it
-// resolves: `Source[T]` in the real Go package. The `type` declaration below
-// names the instantiation (the foreign "Source" name plus the tono argument
-// it is monomorphized with), so the emitted Go names the concrete type
-// argument instead of leaving it for the compiler to infer.
+// resolves: `Source[T]` in the real Go package. Each language block of the
+// handle spells the whole storage type, instantiation included, so the
+// emitted code names the concrete type argument instead of leaving it for
+// the compiler to infer.
 ext settingskit {
-  go: "github.com/example/settingskit"
-  ts: "@example/settingskit"
-  rust: "settingskit"
+  go { #(github.com/example/settingskit) }
+  ts { #(@example/settingskit) }
+  rust { #(settingskit) }
 
-  type env_source("Source", app_settings) {
-    extern get(): app_settings {
+  struct env_source {
+    go { #(*Source[AppSettings]) }
+    ts { #(Source<AppSettings>) }
+    rust { #(Source<AppSettings>) }
+
+    @async(ts, rust)
+    op get(): app_settings {
       go {
-        call: "Get"()
-        ctx
+        call: #(Get)(#(ctx context.Context))
       }
-      ts { call: "get"() }
-      rust { call: "get"() }
+      ts { call: #(get)() }
+      rust { call: #(get)() }
     }
   }
 
-  extern new_env_source(service: string, region: string): env_source {
-    go { call: "NewEnvSource"(service, region) }
-    ts { call: "newEnvSource"(service, region) }
-    rust { call: "new_env_source"(service, region) }
+  @async(ts, rust)
+  op new_env_source(service: string, region: string): env_source {
+    go { call: #(NewEnvSource[AppSettings])(service, region) }
+    ts { call: #(newEnvSource)(service, region) }
+    rust { call: #(new_env_source)(service, region) }
   }
 }
 

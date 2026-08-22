@@ -10,8 +10,8 @@
 use super::*;
 
 /// One declared method's Go-rendered parameter list (`name Type`, in
-/// declared order, `ctx context.Context` first when the binding is
-/// `ctx`-marked) and return type, with every referenced type registered
+/// declared order, `ctx context.Context` first when the binding declares a
+/// context position) and return type, with every referenced type registered
 /// into `refs` along the way: shared by [`handle_iface_decl`],
 /// [`handle_adapter_decl`] and a declared test's fake handle
 /// (`vector_extern::handle_fake_decl`), whose interface, adapter and fake
@@ -23,7 +23,7 @@ pub(in super::super) fn method_signature(
     refs: &mut Vec<Symbol>,
 ) -> (Vec<String>, String) {
     let mut params: Vec<String> = Vec::new();
-    if lang.ctx {
+    if binds_ctx(lang) {
         refs.push(import("context", "context"));
         params.push("ctx context.Context".to_string());
     }
@@ -77,7 +77,7 @@ pub(in super::super) fn handle_adapter_decl(
 ) -> Option<Decl> {
     let adapter_ty = handle_adapter_ident(&lib.name, &handle.name);
     let mut refs = Vec::new();
-    let real_ty = handle_go_type(lib, handle, &mut refs)?;
+    let real_ty = handle_go_type(lib, handle, module, &mut refs)?;
     // The `real` field's own type names the foreign package directly (unlike
     // every other position this handle reaches, which is spelled as tono's
     // generated interface); the adapter decl is the one place that import is
@@ -112,11 +112,11 @@ pub(in super::super) fn handle_adapter_decl(
             module,
             lib,
             lang,
-            "a.real",
-            None,
+            &Callee::Receiver("a.real".to_string()),
             &m.params,
             &identity_args,
             &m.name,
+            "ctx",
             &mut ref_expr,
         );
         let mut body = format!("\tvar zero {ret_ty}\n");
@@ -127,7 +127,7 @@ pub(in super::super) fn handle_adapter_decl(
                 module,
                 config,
                 lib,
-                &lang.errors,
+                &m.errors,
                 &format!("{}.{}.{}", lib.name, handle.name, m.name),
                 err_var,
                 &|expr| format!("return zero, {expr}"),
@@ -263,7 +263,10 @@ pub(in super::super) fn handle_call_assign(
     let (entry, module, config) = (r.entry, r.module, r.config);
     let recv_expr = field_path_expr(entry, module, config, &call.recv, "s");
     let mut ref_expr = move |path: &[String]| sibling_path_expr(entry, module, config, path);
-    let mut call_args: Vec<String> = lang
+    if binds_ctx(lang) {
+        r.refs.push(import("context", "context"));
+    }
+    let call_args: Vec<String> = lang
         .call_args
         .iter()
         .map(|a| {
@@ -274,14 +277,11 @@ pub(in super::super) fn handle_call_assign(
                 a,
                 &decl.params,
                 &call.args,
+                BACKGROUND_CTX,
                 &mut ref_expr,
             )
         })
         .collect();
-    if lang.ctx {
-        r.refs.push(import("context", "context"));
-        call_args.insert(0, "context.Background()".to_string());
-    }
     let prefix = camel(&field.name);
     let out_var = format!("{prefix}Out");
     let err_var = format!("{prefix}Err");

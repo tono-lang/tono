@@ -56,30 +56,26 @@ let at (src : string) (needle : string) : Position.t =
    extern with every language-block line, and a call site reading .request. *)
 let lib_src =
   {|ext bus {
-  go: "github.com/example/bus"
-  rust: "bus"
+  go { #(github.com/example/bus) }
+  rust { #(bus) }
 
   struct go_ack { ID: string, OK: bool }
 
-  type conn interface {
-    extern publish(topic: string): ack {
+  struct conn {
+    op publish(topic: string): ack {
       go {
-        call: "Publish"(topic)
+        call: #(Publish)(topic)
         yields: (a: go_ack)
         returns: ack { id: .a.ID, accepted: .a.OK }
-        errors: { "ErrBusy" => overloaded }
-        infallible
-        ctx
       }
       rust {
-        call: "publish"(topic)
-        sync
+        call: #(publish)(topic)
       }
     }
   }
 
-  extern connect(endpoint: string): conn {
-    go { call: "Connect"(endpoint) }
+  op connect(endpoint: string): conn {
+    go { call: #(Connect)(endpoint) }
   }
 }
 
@@ -102,16 +98,11 @@ let hover_construct_words () =
     Alcotest.(check bool) ("hover on " ^ word) true (contains v expected)
   in
   check "ext bus" "third-party library";
-  check "extern connect" "foreign function";
-  check "type conn" "opaque foreign handle";
-  check "call:" "foreign symbol";
+  check "op connect" "foreign call";
+  check "struct conn" "opaque handle";
+  check "call:" "foreign callee";
   check "yields:" "position by position";
-  check "returns:" "declared return type";
-  check "errors:" "error sentinel";
-  check "sync" "not awaited";
-  check "infallible" "single value with no error position";
-  check "ctx" "cancellation";
-  check "interface" "abstract"
+  check "returns:" "declared return type"
 
 let hover_request_reference () =
   let v = hover_value lib_src (at lib_src ".request") in
@@ -132,19 +123,19 @@ let hover_named_extern_and_handle () =
   let v = hover_value lib_src (at lib_src "connect(endpoint") in
   Alcotest.(check bool)
     "prints the extern as fmt does" true
-    (contains v "extern connect(endpoint: string): conn {");
-  let v = hover_value lib_src (at lib_src "conn interface {") in
+    (contains v "op connect(endpoint: string): conn {");
+  let v = hover_value lib_src (at lib_src "conn {") in
   Alcotest.(check bool)
     "prints the handle with its methods" true
-    (contains v "type conn interface {" && contains v "extern publish");
+    (contains v "struct conn {" && contains v "op publish");
   let v = hover_value lib_src (at lib_src "publish(topic") in
   Alcotest.(check bool)
-    "a method hovers like a free extern" true
-    (contains v "extern publish(topic: string): ack {")
+    "a method hovers like a free op" true
+    (contains v "op publish(topic: string): ack {")
 
 (* A foreign struct field named like a language-block word is a field. *)
 let hover_field_named_like_a_word_is_not_a_construct () =
-  let src = "ext lib {\n  go: \"x\"\n  struct cfg { call: string }\n}" in
+  let src = "ext lib {\n  go { #(x) }\n  struct cfg { call: string }\n}" in
   Alcotest.(check bool)
     "no construct hover on a field" true
     (no_hover src (pos 2 16))
@@ -153,16 +144,13 @@ let ext_construct_doc_is_present () =
   match Hover_docs.construct_doc "ext" with
   | None -> Alcotest.fail "construct_doc \"ext\" must document the block"
   | Some d ->
-      Alcotest.(check bool) "covers the library form" true (contains d "extern")
+      Alcotest.(check bool) "covers the library form" true (contains d "#(...)")
 
 (* The documented vocabulary is the grammar's: every contextual word the
    parser recognizes hovers with prose, and nothing is documented that the
    grammar does not spell. *)
 let ext_lib_docs_cover_the_grammar () =
-  let grammar =
-    Vocab.block_words @ Vocab.lang_body_words @ Vocab.type_markers
-    @ Vocab.param_markers @ [ Vocab.request_ref ]
-  in
+  let grammar = Vocab.lang_fields @ [ Vocab.request_ref ] in
   let documented = List.map fst Hover_docs.ext_lib_docs in
   let missing = List.filter (fun w -> not (List.mem w documented)) grammar in
   let extra = List.filter (fun w -> not (List.mem w grammar)) documented in
@@ -181,7 +169,7 @@ let ext_lib_docs_cover_the_grammar () =
    accepted ones from the same list. *)
 let parser_accepts_the_vocabulary () =
   let block lines =
-    "ext lib {\n  go: \"x\"\n  extern f(a: string): string {\n    go {\n"
+    "ext lib {\n  go { #(x) }\n  op f(a: string): string {\n    go {\n"
     ^ String.concat "\n" (List.map (fun l -> "      " ^ l) lines)
     ^ "\n    }\n  }\n}\n"
   in
@@ -191,16 +179,8 @@ let parser_accepts_the_vocabulary () =
     (List.length
        (diags
           (block
-             [
-               "call: \"F\"(a)";
-               "yields: (r: string)";
-               "returns: string { }";
-               "errors: { \"E\" => ack }";
-               "sync";
-               "infallible";
-               "ctx";
-             ])));
-  match diags (block [ "call: \"F\"(a)"; "bogus" ]) with
+             [ "call: #(F)(a)"; "yields: (r: string)"; "returns: string { }" ])));
+  match diags (block [ "call: #(F)(a)"; "bogus" ]) with
   | [] -> Alcotest.fail "a stray word must be diagnosed"
   | d :: _ -> (
       List.iter
@@ -208,8 +188,8 @@ let parser_accepts_the_vocabulary () =
           Alcotest.(check bool)
             ("diagnostic names " ^ w) true
             (contains d.Tono_frontend.Diagnostic.message w))
-        Vocab.lang_body_words;
-      match diags "ext lib {\n  go: \"x\"\n  42\n}\n" with
+        Vocab.lang_fields;
+      match diags "ext lib {\n  go { #(x) }\n  42\n}\n" with
       | [] -> Alcotest.fail "a stray token in the ext body must be diagnosed"
       | d :: _ ->
           List.iter
@@ -218,7 +198,7 @@ let parser_accepts_the_vocabulary () =
                 ("ext body diagnostic names " ^ w)
                 true
                 (contains d.Tono_frontend.Diagnostic.message w))
-            Vocab.block_words)
+            [ "struct"; "op" ])
 
 let outline_of_the_example () =
   let src = In_channel.with_open_bin "service.tono" In_channel.input_all in
@@ -271,34 +251,32 @@ let outline_of_a_handle () =
 
 let completion_in_a_language_block () =
   let src =
-    "ext lib {\n  go: \"x\"\n  extern f(a: string): string {\n    go {\n      "
+    "ext lib {\n  go { #(x) }\n  op f(a: string): string {\n    go {\n      "
   in
   let labels = completion_labels src (pos 4 6) in
   List.iter
     (fun w -> Alcotest.(check bool) ("offers " ^ w) true (List.mem w labels))
-    Vocab.lang_body_words;
+    Vocab.lang_fields;
   Alcotest.(check bool)
     "not the declaration list" false
     (List.mem "struct" labels || List.mem "i64" labels)
 
 let completion_in_an_ext_body () =
-  let src = "ext lib {\n  go: \"x\"\n  " in
+  let src = "ext lib {\n  go { #(x) }\n  " in
   let labels = completion_labels src (pos 2 2) in
   Alcotest.(check bool)
     "offers the block words" true
-    (List.mem "extern" labels && List.mem "type" labels
-   && List.mem "struct" labels);
-  let src = "ext lib {\n  go: \"x\"\n  type h {\n    " in
+    (List.mem "op" labels && List.mem "struct" labels);
+  let src = "ext lib {\n  go { #(x) }\n  struct h {\n    " in
   let labels = completion_labels src (pos 3 4) in
-  Alcotest.(check (list string))
-    "a handle body takes externs" [ "extern" ] labels
+  Alcotest.(check (list string)) "a handle body takes ops" [ "op" ] labels
 
 (* A type position inside a language block still wants a type. *)
 let completion_type_position_inside_a_block () =
   let src =
     "ext lib {\n\
-    \  go: \"x\"\n\
-    \  extern f(a: string): string {\n\
+    \  go { #(x) }\n\
+    \  op f(a: string): string {\n\
     \    go {\n\
     \      returns: "
   in

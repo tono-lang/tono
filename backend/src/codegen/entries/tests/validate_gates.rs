@@ -398,8 +398,18 @@ fn bus_lib_with_send_bound_for(langs: &[&str]) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: "publisher".into(),
-            interface: false,
-            instance: None,
+            langs: ["go", "ts", "rust"]
+                .into_iter()
+                .map(|l| crate::ir::ForeignLang {
+                    lang: l.into(),
+                    name: if l == "go" {
+                        "*Handle".into()
+                    } else {
+                        "Handle".into()
+                    },
+                    fields: Default::default(),
+                })
+                .collect(),
             methods: vec![ExternDecl {
                 name: "send".into(),
                 params: vec![],
@@ -412,14 +422,10 @@ fn bus_lib_with_send_bound_for(langs: &[&str]) -> ExtLib {
                         call_args: vec![],
                         yields: vec![],
                         returns: None,
-                        errors: vec![],
-                        sync: false,
-                        infallible: false,
-                        ctx: false,
-                        receiver: None,
-                        is_new: false,
                     })
                     .collect(),
+                r#async: vec![],
+                errors: vec![],
             }],
         }],
         externs: vec![],
@@ -493,8 +499,18 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
         structs: vec![],
         types: vec![OpaqueType {
             name: handle.into(),
-            interface: false,
-            instance: None,
+            langs: ["go", "ts", "rust"]
+                .into_iter()
+                .map(|l| crate::ir::ForeignLang {
+                    lang: l.into(),
+                    name: if l == "go" {
+                        "*Handle".into()
+                    } else {
+                        "Handle".into()
+                    },
+                    fields: Default::default(),
+                })
+                .collect(),
             methods: vec![ExternDecl {
                 name: "ping".into(),
                 params: vec![],
@@ -505,13 +521,9 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
                     call_args: vec![],
                     yields: vec![],
                     returns: None,
-                    errors: vec![],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                    receiver: None,
-                    is_new: false,
                 }],
+                r#async: vec![],
+                errors: vec![],
             }],
         }],
         externs: vec![ExternDecl {
@@ -527,13 +539,9 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec![],
+            errors: vec![],
         }],
     }
 }

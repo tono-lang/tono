@@ -97,7 +97,7 @@
 (* v27 widened call_arg with Ca_type: a declared opaque handle passed as a
    class reference (the library constructs it), carried as the handle's
    tono name and spelled by each emitter as that handle's foreign name. *)
-let current_ir_version = 27
+let current_ir_version = 28
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

@@ -16,6 +16,7 @@ pub mod doc;
 pub mod entries;
 pub mod extensions;
 pub mod fixtures;
+pub mod foreign_spelling;
 pub mod format;
 pub mod group;
 pub mod imports;

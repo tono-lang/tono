@@ -4,20 +4,22 @@
 // generator must refuse this, naming the field and both readers. This probe
 // passes when generation is refused.
 ext mathkit {
-  go: "tono-ext-fixture/mathkit"
+  go { #(tono-ext-fixture/mathkit) }
 
-  type calculator("Calculator", float) {
-    extern compute(): float {
-      go { call: "Compute"() ctx }
+  struct calculator {
+    go { #(Calculator[float64]) }
+
+    op compute(): float {
+      go { call: #(Compute)(#(ctx context.Context)) }
     }
   }
 
-  extern from_constant(value: float): calculator {
-    go { call: "FromConstant"(value) }
+  op from_constant(value: float): calculator {
+    go { call: #(FromConstant[float64])(value) }
   }
 
-  extern from_fallback(strategy: string, primary: calculator, secondary: calculator): calculator {
-    go { call: "FromFallback"(strategy, primary, secondary) }
+  op from_fallback(strategy: string, calcs: []calculator): calculator {
+    go { call: #(FromFallback[float64])(strategy, calcs: #(...Calculator[float64])) }
   }
 }
 
@@ -26,7 +28,7 @@ pub struct client {
   other: float @arg
   constant: mathkit.calculator = mathkit.from_constant(.base)
   spare: mathkit.calculator = mathkit.from_constant(.other)
-  combined: mathkit.calculator = mathkit.from_fallback("first", .constant, .spare)
+  combined: mathkit.calculator = mathkit.from_fallback("first", [.constant, .spare])
 
   op combined_value(): float
     impl .combined.compute()

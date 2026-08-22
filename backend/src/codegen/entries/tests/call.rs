@@ -171,14 +171,10 @@ fn ext_lib_with_extern(lib: &str, name: &str, langs: &[&str]) -> ExtLib {
                     call_args: vec![],
                     yields: vec![],
                     returns: None,
-                    errors: vec![],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                    receiver: None,
-                    is_new: false,
                 })
                 .collect(),
+            r#async: vec![],
+            errors: vec![],
         }],
     }
 }
@@ -324,8 +320,18 @@ fn ext_lib_with_handle(lib: &str, handle: &str) -> ExtLib {
         structs: vec![],
         types: vec![OpaqueType {
             name: handle.into(),
-            interface: false,
-            instance: None,
+            langs: ["go", "ts", "rust"]
+                .into_iter()
+                .map(|l| crate::ir::ForeignLang {
+                    lang: l.into(),
+                    name: if l == "go" {
+                        "*Handle".into()
+                    } else {
+                        "Handle".into()
+                    },
+                    fields: Default::default(),
+                })
+                .collect(),
             methods: vec![],
         }],
         externs: vec![],
@@ -353,14 +359,10 @@ fn ext_lib_with_handle_ctor(lib: &str, handle: &str, ctor: &str) -> ExtLib {
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             })
             .collect(),
+        r#async: vec![],
+        errors: vec![],
     });
     l
 }
@@ -403,49 +405,49 @@ fn gen_accepts_a_plain_arg_injected_foreign_handle_field() {
     assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
 }
 
-/// A `call:` line whose receiver is a foreign type name (a static method,
-/// `"Type"."method"(args)`) has a rendering in Rust (`krate::Type::method`)
-/// and TypeScript (`Type.method` on the imported type) but none in Go, which
-/// has no static method to call; Go generation refuses the binding naming
-/// the site and the type rather than emitting a method expression that
-/// compiles into the wrong call.
+/// A declared position (`#(ctx context.Context)`) is what the target binds
+/// there, so it must be spelled exactly as Go declares its context, and
+/// Rust and TypeScript, which bind nothing, refuse it by name.
 #[test]
-fn a_static_method_receiver_is_refused_for_go_and_accepted_where_it_renders() {
+fn a_declared_position_binds_only_as_go_spells_its_context() {
     let mut module = module_of(vec![entry_shape(
         "m#client",
         vec![call_field("config", "ns", "load", vec![])],
     )]);
     let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
     for lang in lib.externs[0].langs.iter_mut() {
-        lang.receiver = Some("Loader".into());
+        lang.call_args = vec![CallArg::Foreign("ctx context.Context".into())];
     }
     module.ext_libs = vec![lib];
-    let model = model_of(module);
+    let model = model_of(module.clone());
 
-    let err = super::validate_entries(&model, &[TargetKind::Go]).unwrap_err();
+    assert!(super::validate_entries(&model, &[TargetKind::Go]).is_ok());
+    let err = super::validate_entries(&model, &[TargetKind::TypeScript]).unwrap_err();
     assert!(
         err.contains("config = ns.load(..)"),
         "names the site: {err}"
     );
-    assert!(
-        err.contains("Loader.Load"),
-        "names the static method: {err}"
-    );
-    assert!(err.contains("go has no static method"), "{err}");
+    assert!(err.contains("binds no position of its own"), "{err}");
+    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_err());
 
-    assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
-    assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
+    module.ext_libs[0].externs[0].langs[0].call_args =
+        vec![CallArg::Foreign("c context.Context".into())];
+    let err = super::validate_entries(&model_of(module), &[TargetKind::Go]).unwrap_err();
+    assert!(
+        err.contains("#(ctx context.Context)"),
+        "names the expected spelling: {err}"
+    );
 }
 
-/// The same refusal at the other place a free extern is called from: a
+/// The same rule at the other place a free extern is called from: a
 /// `@header`/`@body` value computed by an extern call in wire position.
 #[test]
-fn a_static_method_receiver_in_wire_position_is_refused_for_go_only() {
+fn a_declared_position_in_wire_position_follows_the_same_rule() {
     use crate::ir::{WireCall, WireCallArg};
     let mut module = module_of(vec![]);
     let mut lib = ext_lib_with_extern("ns", "sign", &["go", "ts", "rust"]);
     for lang in lib.externs[0].langs.iter_mut() {
-        lang.receiver = Some("Signer".into());
+        lang.call_args = vec![CallArg::Foreign("ctx context.Context".into())];
     }
     module.ext_libs = vec![lib];
     let call = WireCall {
@@ -453,11 +455,11 @@ fn a_static_method_receiver_in_wire_position_is_refused_for_go_only() {
         fn_name: "sign".into(),
         args: vec![WireCallArg::Request],
     };
-    let err = super::validate::wire_call_resolves(&module, &call, &[TargetKind::Go]).unwrap_err();
+    assert!(super::validate::wire_call_resolves(&module, &call, &[TargetKind::Go]).is_ok());
+    let err =
+        super::validate::wire_call_resolves(&module, &call, &[TargetKind::TypeScript]).unwrap_err();
     assert!(err.contains("ns.sign(..)"), "{err}");
-    assert!(err.contains("Signer.Load"), "{err}");
-    assert!(super::validate::wire_call_resolves(&module, &call, &[TargetKind::TypeScript]).is_ok());
-    assert!(super::validate::wire_call_resolves(&module, &call, &[TargetKind::Rust]).is_ok());
+    assert!(err.contains("binds no position of its own"), "{err}");
 }
 
 /// A `call:` line passing a declared handle's class itself (`type handle`,
@@ -487,7 +489,7 @@ fn a_class_reference_is_refused_for_go_and_rust_and_accepted_in_typescript() {
             err.contains("config = ns.load(..)"),
             "names the site: {err}"
         );
-        assert!(err.contains("type answer"), "names the handle: {err}");
+        assert!(err.contains("handle \"answer\""), "names the handle: {err}");
         assert!(err.contains("has no class reference to pass"), "{err}");
     }
     assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
@@ -513,7 +515,7 @@ fn a_class_reference_in_wire_position_is_refused_for_every_target() {
     for target in [TargetKind::Go, TargetKind::TypeScript, TargetKind::Rust] {
         let err = super::validate::wire_call_resolves(&module, &call, &[target]).unwrap_err();
         assert!(err.contains("ns.sign(..)"), "{err}");
-        assert!(err.contains("type signer"), "{err}");
+        assert!(err.contains("handle \"signer\""), "{err}");
         assert!(err.contains("wire position"), "{err}");
     }
 }

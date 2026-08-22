@@ -259,86 +259,34 @@ let trait_docs : (string * string) list =
    disagree. *)
 let ext_lib_docs : (string * string) list =
   [
-    ( "extern",
-      "A foreign function the SDK calls: a tono-facing signature (typed \
-       parameters and a return type) plus one language block per target, each \
-       declaring the real call and how its result becomes the declared return. \
-       Free in an ext body, or a method inside a 'type' handle." );
-    ( "type",
-      "An opaque foreign handle: a value the library returns and the SDK only \
-       passes back to it. Its members are extern methods; it never serializes \
-       and never crosses the wire. type Name(\"Foreign\", Arg) { ... } names \
-       which instantiation of a foreign generic type the handle declares: the \
-       foreign type's own name as a string, plus the already-declared tono \
-       type it is monomorphized with. When the targets spell that type \
-       differently, name it per language in the module-path form: type \
-       Name(go: \"GoName\", rust: \"RustName\", Arg) { ... }, one entry per \
-       declared language. Omit the clause for a foreign type that is not \
-       generic." );
-    ( "interface",
-      "Marks the foreign type as abstract: the handle is the library's \
-       abstraction, not one concrete struct. In Go the constructors return the \
-       interface value itself, so the generated code holds and passes it by \
-       value; in Rust the handle is held as Box<dyn Trait> and each \
-       constructor's concrete value is boxed where it is built. Without the \
-       marker the handle is one concrete type (held by pointer in Go). \
-       TypeScript ignores the marker." );
     ( "call",
-      "The foreign symbol and the argument order it takes, e.g. call: \
-       \"Load\"(service, region). Arguments are the extern's parameters, \
-       literals, a foreign struct literal, or a nested foreign-symbol call, \
-       e.g. \"FromFormula\"(expr, \"WithPrecision\"(precision)). A static \
-       method names the foreign type it is called on as a second string before \
-       the method: call: \"Formula\".\"parse\"(expr) (Rust Formula::parse, \
-       TypeScript Formula.parse on the imported type; Go has no static method \
-       and refuses it at generation). A class reference passes a declared \
-       handle's foreign type itself, for a library that constructs it: call: \
-       \"instantiate\"(type answer_calculator) (TypeScript passes the imported \
-       class; Rust and Go have no type as a value and refuse it at \
-       generation). Required in every language block." );
+      "The foreign callee and the argument order it takes, e.g. call: \
+       #(Load)(service, region). The callee is a foreign spelling, emitted \
+       verbatim: a function, a generic instantiation \
+       (#(FromConstant[float64])), a class constructed with new (#(new \
+       ConstantCalculator)), or a static method on a type \
+       (#(FormulaCalculator::parse)). Arguments are the op's parameters, \
+       literals, a foreign struct literal, a nested foreign call \
+       (#(FromFormula)(expr, #(WithPrecision)(precision))), a parameter under \
+       its own foreign spelling when it crosses as a different type (values: \
+       #(Vec<f64>), calcs: #(...Calculator[float64])), a declared handle \
+       passed as a class reference, or a declared position the target binds \
+       itself (#(ctx context.Context) in Go). Required in every language \
+       block." );
     ( "yields",
       "Names what the call returns, position by position, so returns: can \
        project from it (e.g. yields: (cfg: go_config)). Also declares \
        positions outside the target's convention; the reserved '"
       ^ Ext_lib_vocab.error_sentinel
-      ^ "' type marks the error position, at most once. Omit it when the \
-         result already is the declared return type." );
+      ^ "' type marks the error position, at most once. A position under a \
+         foreign spelling (yields: (c: #(ConstantCalculator<f64>))) declares \
+         what the call really returns, for the target to coerce into the \
+         declared return or refuse naming both. Omit it when the result \
+         already is the declared return type." );
     ( "returns",
-      "Builds the extern's declared return type from the yields: names, as \
-       every struct literal does: returns: app_config { endpoint: .cfg.Host }. \
-       A field takes a reference or a match over one." );
-    ( "errors",
-      "Maps a foreign error sentinel to a declared error shape: errors: { \
-       \"ErrBusy\" => overloaded }. An unmapped failure surfaces as the \
-       generic contract error." );
-    ( "sync",
-      "The call blocks and is not awaited. Only meaningful in targets that \
-       await extern calls by default (Rust, TypeScript); Go ignores it, since \
-       every Go call is already synchronous." );
-    ( "infallible",
-      "The call returns a single value with no error position. Only meaningful \
-       in Go, whose convention makes every call (value, error); the other \
-       targets ignore it, since their error travels in the type or is thrown."
-    );
-    ( "ctx",
-      "The call receives the target's own cancellation/deadline context in its \
-       idiomatic position. Only valid on a foreign handle's own method call: \
-       Go prepends ctx context.Context as the first parameter. In an op's own \
-       'impl' body that is the operation's ctx; in a field source ('config: \
-       cfg = .handle.method()') the constructor has no caller context, so Go \
-       passes context.Background() (no deadline, no cancellation) for that \
-       one-shot resolution. Rust and TypeScript have no equivalent convention \
-       and ignore the marker." );
-    ( "new",
-      "The call constructs a TypeScript class with 'new' instead of calling a \
-       plain function: new Symbol(args) instead of await Symbol(args). Only \
-       meaningful in TypeScript; Go and Rust have no 'new' distinct from an \
-       ordinary call and ignore the marker." );
-    ( "variadic",
-      "This logical parameter accepts a collection of values, not one: the \
-       caller passes a list for it, and each language's own call: materializes \
-       it in its own idiom (Go's opts ...Option spread, Rust's Vec<T>, \
-       TypeScript's T[])." );
+      "Builds the op's declared return type from the yields: names, as every \
+       struct literal does: returns: app_config { endpoint: .cfg.Host }. A \
+       field takes a reference or a match over one." );
     ( Ext_lib_vocab.request_ref,
       Printf.sprintf
         "The canonical request, already assembled (method, path, headers, \
@@ -358,7 +306,14 @@ let ext_lib_docs : (string * string) list =
 let construct_docs : (string * string) list =
   [
     ( "struct",
-      "A record shape: named members with types, serialized as an object." );
+      "A record shape: named members with types, serialized as an object. \
+       Inside an ext block it is a foreign form (fields, plus a language block \
+       naming the foreign type and any field spelled differently) or, with no \
+       fields, an opaque handle whose language blocks spell the whole storage \
+       type (go { #(Calculator[float64]) }, rust { #(Box<dyn Calculator<f64>>) \
+       }). An error struct takes language blocks too: the sentinel or error \
+       type a target recognizes, and where each field comes from (go { \
+       #(ErrParse) message: #(Error()) })." );
     ( "enum",
       "An open enumeration: strict on encode, lenient on decode (an unknown \
        value is carried, never a failure)." );
@@ -367,7 +322,11 @@ let construct_docs : (string * string) list =
        tagged by the discriminator field." );
     ( "op",
       "An operation: input and output shapes plus traits (transport, errors, \
-       effect)." );
+       effect). Inside an ext block it is a foreign call: a tono-facing \
+       signature plus one language block per target with the real call, free \
+       in the ext body or a method inside a handle's struct. @async(rust, ts) \
+       lists the targets where the foreign call is asynchronous (absence means \
+       synchronous); @errors lists the declared errors it can raise." );
     ( "map",
       "A homogeneous map type, map[K]V. Keys that cannot be object keys can \
        escape to a pairs array with @entries." );
@@ -378,10 +337,12 @@ let construct_docs : (string * string) list =
        as c." );
     ( "ext",
       "Two forms. 'ext <lib> { ... }' integrates a third-party library \
-       declaratively: the module path per language, its foreign shapes, and \
-       the extern functions and opaque handles that call into it. 'ext \
-       contract|constraint|impl' declares a bespoke extension point bound per \
-       language to a file#symbol reference." );
+       declaratively: the module path per language (go { #(path) }), its \
+       foreign structs and opaque handles, and the ops that call into it; a \
+       foreign spelling #(...) is emitted verbatim and never text, and \
+       everything specific to one language lives in that language's block. \
+       'ext contract|constraint|impl' declares a bespoke extension point bound \
+       per language to a file#symbol reference." );
     ( "contract",
       "A bespoke function with a typed signature; emission is gated on a \
        conformance spec." );

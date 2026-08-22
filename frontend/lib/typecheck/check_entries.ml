@@ -705,7 +705,7 @@ let check_decls (decls : Ast.decl list) : Diagnostic.t list =
   List.concat_map
     (fun (d : Ast.decl) ->
       match d.dkind with
-      | Ast.DStruct { params; members; ops } -> (
+      | Ast.DStruct { params; members; ops; _ } -> (
           match Roles.role_of ctx.roles d.dname with
           | Roles.Entry ->
               check_entry ctx d params members ops

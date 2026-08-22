@@ -5,8 +5,8 @@
 //! is built once instead of drifting apart as two copies.
 
 use crate::ir::{
-    CallArg, CallCtor, EntryCall, EntryField, ErrorBinding, ExternDecl, ExternLang, ExternParam,
-    OpImplCall, Prim, ReturnsField, ReturnsLit, ReturnsValue, Source, Tref, YieldsPos,
+    CallArg, CallCtor, EntryCall, EntryField, ExternDecl, ExternLang, ExternParam, OpImplCall,
+    Prim, ReturnsField, ReturnsLit, ReturnsValue, Source, Tref, YieldsPos,
 };
 use std::collections::BTreeMap;
 
@@ -45,12 +45,10 @@ pub fn send_method(ack_id: &str, raw_ack_id: &str) -> ExternDecl {
         name: "send".into(),
         params: vec![
             ExternParam {
-                variadic: false,
                 name: "topic".into(),
                 r#type: Tref::Prim(Prim::String),
             },
             ExternParam {
-                variadic: false,
                 name: "body".into(),
                 r#type: Tref::Prim(Prim::String),
             },
@@ -70,6 +68,7 @@ pub fn send_method(ack_id: &str, raw_ack_id: &str) -> ExternDecl {
                     args: vec![],
                 }),
                 is_error: false,
+                foreign: None,
             }],
             returns: Some(ReturnsLit {
                 r#type: ack_t,
@@ -78,16 +77,9 @@ pub fn send_method(ack_id: &str, raw_ack_id: &str) -> ExternDecl {
                     value: ReturnsValue::Field(vec!["ack".into(), "ok".into()]),
                 }],
             }),
-            errors: vec![ErrorBinding {
-                sentinel: "BUSY".into(),
-                r#type: "overloaded".into(),
-            }],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["ts".into()],
+        errors: vec!["m#overloaded".into()],
     }
 }
 
@@ -100,12 +92,10 @@ pub fn connect_publisher_extern(publisher_id: &str) -> ExternDecl {
         name: "connect".into(),
         params: vec![
             ExternParam {
-                variadic: false,
                 name: "endpoint".into(),
                 r#type: Tref::Prim(Prim::String),
             },
             ExternParam {
-                variadic: false,
                 name: "token".into(),
                 r#type: Tref::Prim(Prim::String),
             },
@@ -123,13 +113,9 @@ pub fn connect_publisher_extern(publisher_id: &str) -> ExternDecl {
             ],
             yields: vec![],
             returns: None,
-            errors: vec![],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["ts".into()],
+        errors: vec![],
     }
 }
 
@@ -171,12 +157,10 @@ pub fn load_config_extern(app_config_id: &str) -> ExternDecl {
         name: "load".into(),
         params: vec![
             ExternParam {
-                variadic: false,
                 name: "service".into(),
                 r#type: Tref::Prim(Prim::String),
             },
             ExternParam {
-                variadic: false,
                 name: "region".into(),
                 r#type: Tref::Prim(Prim::String),
             },
@@ -196,6 +180,7 @@ pub fn load_config_extern(app_config_id: &str) -> ExternDecl {
                     args: vec![],
                 }),
                 is_error: false,
+                foreign: None,
             }],
             returns: Some(ReturnsLit {
                 r#type: app_config_t,
@@ -210,16 +195,9 @@ pub fn load_config_extern(app_config_id: &str) -> ExternDecl {
                     },
                 ],
             }),
-            errors: vec![ErrorBinding {
-                sentinel: "BUSY".into(),
-                r#type: "overloaded".into(),
-            }],
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec!["ts".into()],
+        errors: vec!["m#overloaded".into()],
     }
 }
 
@@ -267,4 +245,35 @@ pub fn appendix_config_and_bus_fields(
     );
     bus.sources = vec![Source::With];
     (config, bus)
+}
+
+/// The `overloaded` error shape the appendix example's bus raises, with
+/// the `ts` block that recognizes the library's own `BusyError` class.
+pub fn overloaded_shape(module: &str) -> crate::ir::Shape {
+    crate::ir::Shape {
+        id: format!("{module}#overloaded"),
+        kind: crate::ir::ShapeKind::Structure {
+            params: vec![],
+            members: vec![crate::ir::Member {
+                name: "message".into(),
+                target: Tref::Prim(Prim::String),
+                required: true,
+                default: None,
+                constraints: vec![],
+                traits: vec![],
+            }],
+        },
+        traits: vec![
+            crate::ir::Trait {
+                id: "status".into(),
+                value: serde_json::json!([529]),
+            },
+            crate::ir::Trait {
+                id: "foreign".into(),
+                value: serde_json::json!([
+                    {"lang": "ts", "name": "BusyError", "fields": {"message": "message"}}
+                ]),
+            },
+        ],
+    }
 }

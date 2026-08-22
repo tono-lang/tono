@@ -62,6 +62,22 @@ let gen_ref =
   let+ segs = G.list_size (G.int_range 1 3) gen_lname in
   { Ast.segs; index = None; ref_span = dspan }
 
+(* A foreign spelling round-trips byte for byte, balanced parentheses
+   included; the closing one is what ends it, so nothing else is off
+   limits. *)
+let gen_spelling =
+  G.oneof_list
+    [
+      "Load";
+      "new ConstantCalculator";
+      "Box<dyn Calculator<f64>>";
+      "FormulaCalculator::parse";
+      "Error()";
+      "...Calculator[float64]";
+      "ctx context.Context";
+      "@company/config";
+    ]
+
 let gen_string =
   G.oneof_list
     [
@@ -194,8 +210,10 @@ let rec gen_call_arg n =
          Ast.CaRef r);
         (let+ c = gen_ctor_arg in
          Ast.CaCtor c);
-        (let+ n = gen_lname in
-         Ast.CaType (n, dspan));
+        (let+ n = gen_lname and+ sp = gen_spelling in
+         Ast.CaParamAs (n, dspan, sp, dspan));
+        (let+ sp = gen_spelling in
+         Ast.CaForeign (sp, dspan));
       ]
   in
   if n <= 0 then base
@@ -203,7 +221,7 @@ let rec gen_call_arg n =
     G.oneof
       [
         base;
-        (let+ symbol = gen_string
+        (let+ symbol = gen_spelling
          and+ args = G.list_size (G.int_range 0 2) (gen_call_arg (n - 1)) in
          Ast.CaCall
            {
@@ -325,21 +343,56 @@ let gen_binding =
 
 (* ── FFI library blocks: ext <name> { ... } ──────────────────────────────── *)
 
+let gen_lang = G.oneof_list [ "go"; "ts"; "rust" ]
+
 let gen_lang_path =
-  let+ lang = G.oneof_list [ "go"; "ts"; "rust" ] and+ path = gen_string in
-  { Ast.lp_lang = lang; lp_lang_span = dspan; lp_path = path }
+  let+ lang = gen_lang and+ path = gen_spelling in
+  {
+    Ast.lp_lang = lang;
+    lp_lang_span = dspan;
+    lp_path = path;
+    lp_path_span = dspan;
+  }
+
+(* A language block's keyed entries name fields of the struct; the
+   generator draws names from the same pool as the fields, since the
+   printer does not care whether they resolve. *)
+let gen_lang_block ~with_fields =
+  let+ lang = gen_lang
+  and+ head = gen_spelling
+  and+ fields =
+    if with_fields then
+      G.list_size (G.int_range 0 2)
+        (let+ n = gen_lname and+ sp = gen_spelling in
+         (n, dspan, sp, dspan))
+    else G.return []
+  in
+  {
+    Ast.lb_lang = lang;
+    lb_lang_span = dspan;
+    lb_head = head;
+    lb_head_span = dspan;
+    lb_fields = fields;
+    lb_span = dspan;
+  }
 
 let gen_foreign_field =
   let+ name = gen_tname and+ ty = gen_ty in
   { Ast.ff_name = name; ff_name_span = dspan; ff_type = ty }
 
+(* A foreign form always has a field: the parser tells it apart from an
+   opaque handle by that alone. *)
 let gen_foreign_struct =
   let+ name = gen_tname
-  and+ fields = G.list_size (G.int_range 0 2) gen_foreign_field in
+  and+ fields = G.list_size (G.int_range 1 2) gen_foreign_field
+  and+ langs =
+    G.list_size (G.int_range 0 2) (gen_lang_block ~with_fields:true)
+  in
   {
     Ast.fs_name = name;
     fs_name_span = dspan;
     fs_fields = fields;
+    fs_langs = langs;
     fs_span = dspan;
   }
 
@@ -349,6 +402,8 @@ let gen_yields_ty =
       (let+ t = gen_ty in
        Ast.YType t);
       G.return (Ast.YError dspan);
+      (let+ sp = gen_spelling in
+       Ast.YForeign (sp, dspan));
     ]
 
 let gen_yields_pos =
@@ -373,18 +428,9 @@ let gen_returns_lit =
   and+ fields = G.list_size (G.int_range 1 2) gen_returns_field in
   { Ast.rl_type = ty; rl_fields = fields; rl_span = dspan }
 
-let gen_error_map_entry =
-  let+ sentinel = gen_string and+ ty = gen_tname in
-  {
-    Ast.em_sentinel = sentinel;
-    em_sentinel_span = dspan;
-    em_type = ty;
-    em_type_span = dspan;
-  }
-
 let gen_extern_lang_body =
-  let+ lang = G.oneof_list [ "go"; "ts"; "rust" ]
-  and+ symbol = gen_string
+  let+ lang = gen_lang
+  and+ symbol = gen_spelling
   and+ args = G.list_size (G.int_range 0 2) (gen_call_arg 1)
   and+ yields =
     G.oneof
@@ -400,88 +446,64 @@ let gen_extern_lang_body =
         (let+ r = gen_returns_lit in
          Some r);
       ]
-  and+ errors = G.list_size (G.int_range 0 2) gen_error_map_entry
-  and+ sync = G.bool
-  and+ infallible = G.bool
-  and+ ctx = G.bool
-  and+ new_ = G.bool
-  and+ receiver = G.option gen_string in
+  in
   {
     Ast.elb_lang = lang;
     elb_lang_span = dspan;
-    elb_call_receiver = receiver;
-    elb_call_receiver_span = Option.map (fun _ -> dspan) receiver;
     elb_call_symbol = symbol;
     elb_call_symbol_span = dspan;
     elb_call_args = args;
     elb_yields = yields;
     elb_returns = returns;
-    elb_errors = errors;
-    elb_sync = sync;
-    elb_infallible = infallible;
-    elb_ctx = ctx;
-    elb_new = new_;
     elb_span = dspan;
   }
 
 let gen_extern_param =
-  let+ name = gen_lname and+ ty = gen_ty and+ variadic = G.bool in
-  {
-    Ast.ep_name = name;
-    ep_name_span = dspan;
-    ep_type = ty;
-    ep_variadic = variadic;
-  }
+  let+ name = gen_lname and+ ty = gen_ty in
+  { Ast.ep_name = name; ep_name_span = dspan; ep_type = ty }
+
+(* The traits an ext op takes, as the parser reads them above the op. *)
+let gen_extern_trait =
+  G.oneof
+    [
+      (let+ langs = G.list_size (G.int_range 1 2) gen_lang in
+       {
+         Ast.tname = "async";
+         targs = List.map (fun l -> Ast.AName l) langs;
+         tspan = dspan;
+       });
+      (let+ names = G.list_size (G.int_range 1 2) gen_tname in
+       {
+         Ast.tname = "errors";
+         targs = List.map (fun n -> Ast.AName n) names;
+         tspan = dspan;
+       });
+    ]
 
 let gen_extern_decl =
   let+ name = gen_lname
+  and+ traits = G.list_size (G.int_range 0 2) gen_extern_trait
   and+ params = G.list_size (G.int_range 0 2) gen_extern_param
   and+ ret = gen_ty
   and+ langs = G.list_size (G.int_range 1 2) gen_extern_lang_body in
   {
     Ast.ed_name = name;
     ed_name_span = dspan;
+    ed_traits = traits;
     ed_params = params;
     ed_return = ret;
     ed_langs = langs;
     ed_span = dspan;
   }
 
-let gen_opaque_name_entry =
-  let+ lang = gen_lname and+ name = gen_string in
-  {
-    Ast.one_lang = lang;
-    one_lang_span = dspan;
-    one_name = name;
-    one_name_span = dspan;
-  }
-
-let gen_opaque_names =
-  G.oneof
-    [
-      (let+ name = gen_string in
-       Ast.OnShared (name, dspan));
-      (let+ entries = G.list_size (G.int_range 1 2) gen_opaque_name_entry in
-       Ast.OnPerLang entries);
-    ]
-
-let gen_opaque_instance =
-  let+ names = gen_opaque_names and+ arg = gen_ty in
-  { Ast.oi_names = names; oi_arg = arg; oi_arg_span = dspan; oi_span = dspan }
-
-let gen_opt_opaque_instance =
-  G.oneof [ G.return None; G.map Option.some gen_opaque_instance ]
-
 let gen_opaque_type =
   let+ name = gen_tname
-  and+ instance = gen_opt_opaque_instance
-  and+ interface = G.bool
+  and+ langs = G.list_size (G.int_range 0 2) (gen_lang_block ~with_fields:false)
   and+ methods = G.list_size (G.int_range 0 1) gen_extern_decl in
   {
     Ast.opq_name = name;
     opq_name_span = dspan;
-    opq_instance = instance;
-    opq_interface = interface;
+    opq_langs = langs;
     opq_methods = methods;
     opq_span = dspan;
   }
@@ -503,8 +525,11 @@ let gen_kind =
     [
       (let+ params = gen_params
        and+ members = G.list_size (G.int_range 0 4) gen_member
-       and+ ops = G.list_size (G.int_range 0 2) gen_entry_op in
-       Ast.DStruct { params; members; ops });
+       and+ ops = G.list_size (G.int_range 0 2) gen_entry_op
+       and+ slangs =
+         G.list_size (G.int_range 0 1) (gen_lang_block ~with_fields:true)
+       in
+       Ast.DStruct { params; members; ops; slangs });
       (let+ cases = G.list_size (G.int_range 0 3) gen_case in
        Ast.DEnum { cases });
       (let+ params = gen_params

@@ -212,6 +212,9 @@ and bind = { bind_field : string; bind_source : string list }
    [call:] line, and a trait-argument call. *)
 and call_arg =
   | Ca_param of string
+  | Ca_param_as of string * string
+    (* the parameter under a foreign spelling of its own: what it crosses
+         the boundary as, for the target to coerce into *)
   | Ca_ref of string list
   | Ca_ctor of call_ctor
   | Ca_lit of json
@@ -219,8 +222,11 @@ and call_arg =
   | Ca_call of entry_call
   | Ca_symbol_call of symbol_call
   | Ca_type of string
-(* a declared opaque handle passed as a class reference: the
-         emitter spells its foreign name for the binding's language *)
+    (* a declared opaque handle passed as a class reference: the emitter
+         spells its foreign name for the binding's language *)
+  | Ca_foreign of string
+(* a position that is not a tono value but a declaration of what the
+         target binds there, with its type ("ctx context.Context") *)
 
 and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
 
@@ -305,18 +311,21 @@ type extension = {
 }
 
 (* ── FFI library declarations: ext <name> { ... } ──────────────────────────
-   The new [ext] form, distinct from [extension] above (hook/contract/
-   constraint/impl). Surface-and-IR only for now: no typecheck resolves an
-   extern's arity/types, an [errors:] sentinel against a declared error shape,
-   or a [returns:] field ref against its [yields:] name. That resolution, and
-   codegen of the call itself, are later passes. *)
+   The library form of [ext], distinct from [extension] above (hook/contract/
+   constraint/impl). A foreign spelling (the [string]s below that are not
+   tono names) is carried verbatim: the target emits it as written,
+   qualifying only its head identifier with the library's module. *)
 
-(* One [yields:] position; [yp_type] is [None] only for the reserved [error]
-   sentinel ([yp_is_error]), never for an ordinary omitted type. *)
+(* One [yields:] position. [yp_type] is the tono type it carries; it is
+   [None] for the reserved [error] sentinel ([yp_is_error]) and for a
+   position declared under a foreign spelling ([yp_foreign]: what the call
+   really returns, for the target to coerce into the declared logical
+   type, or refuse naming both). *)
 type yields_pos = {
   yp_name : string;
   yp_type : tref option;
   yp_is_error : bool;
+  yp_foreign : string option;
 }
 
 (* A [returns:] field value: a bare ref into a yields-bound name, or a match
@@ -324,64 +333,59 @@ type yields_pos = {
 type returns_value = Rv_ref of string list | Rv_select of select
 type returns_field = { rvf_name : string; rvf_value : returns_value }
 type returns_lit = { rvl_type : tref; rvl_fields : returns_field list }
-type error_binding = { erb_sentinel : string; erb_type : string }
 
-(* One per-language block inside an [extern]'s body. *)
+(* One per-language block inside an ext op's body. [el_symbol] is the
+   callee's whole foreign spelling: a function, a generic instantiation
+   ([FromConstant[float64]]), a class under [new] ([new ConstantCalculator]),
+   a static method on a type ([FormulaCalculator::parse]). *)
 type extern_lang = {
   el_lang : string;
-  el_receiver : string option;
   el_symbol : string;
   el_call_args : call_arg list;
   el_yields : yields_pos list; (* [] when no yields: line *)
   el_returns : returns_lit option;
-  el_errors : error_binding list;
-  el_sync : bool;
-  el_infallible : bool;
-  el_ctx : bool;
-  el_new : bool;
-      (* the foreign symbol is a class constructed with [new], not a
-         function called plainly (TypeScript only; other targets ignore it
-         -- neither has a [new] distinct from an ordinary call) *)
 }
 
-type extern_param = {
-  xp_name : string;
-  xp_type : tref;
-  xp_variadic : bool;
-      (* the caller passes a collection of values for this logical
-         parameter (Go's [opts ...Option], Rust's [Vec<T>], TypeScript's
-         [T[]]); the call site binds a list, and each language block's own
-         [call:] materializes it in its own idiom (spread, [vec!], array) *)
-}
+type extern_param = { xp_name : string; xp_type : tref }
 
-(* A free function inside an [ext] block, or a method inside a [type] opaque
-   handle. *)
+(* A free function inside an [ext] block, or a method of an opaque handle.
+   [x_async] lists the languages where the foreign call itself is
+   asynchronous (absent means synchronous at the boundary); [x_errors] the
+   declared error shapes it can raise, in test order, each recognized
+   through its own [foreign] trait (see [foreign_lang]). *)
 type extern_decl = {
   x_name : string;
   x_params : extern_param list;
   x_return : tref;
   x_langs : extern_lang list;
+  x_async : string list;
+  x_errors : shape_id list;
+}
+
+(* One language's block on a struct. [fl_head] is positional and names the
+   foreign thing: a foreign form's type, an opaque handle's whole storage
+   type, an error struct's sentinel or error type. [fl_fields] pairs a tono
+   field with its foreign spelling: the field's foreign type on a form,
+   where the field comes from on an error value. *)
+type foreign_lang = {
+  fl_lang : string;
+  fl_head : string;
+  fl_fields : (string * string) list;
 }
 
 type foreign_field = { fgf_name : string; fgf_type : tref }
-type foreign_struct = { fgs_name : string; fgs_fields : foreign_field list }
 
-(* One language's spelling of the foreign type an opaque handle names. *)
-type instance_name = { inn_lang : string; inn_name : string }
+type foreign_struct = {
+  fgs_name : string;
+  fgs_fields : foreign_field list;
+  fgs_langs : foreign_lang list;
+}
 
-(* Which instantiation of a foreign generic type an opaque handle names: the
-   foreign type's own name per language (the same logical handle can be an
-   interface in one target and a trait in another, each spelled by its own
-   library; a shared surface name is expanded to one entry per declared
-   language by lowering), and the tono argument it is monomorphized with. *)
-type opaque_instance = { inst_names : instance_name list; inst_arg : tref }
-
-(* [opq_interface] declares the foreign type is abstract (a Go interface,
-   held by value), not a concrete struct held by pointer. *)
+(* An opaque handle: each language spells the whole storage type, verbatim.
+   A language with no block does not hold the handle at all. *)
 type opaque_type = {
   opq_name : string;
-  opq_instance : opaque_instance option;
-  opq_interface : bool;
+  opq_langs : foreign_lang list;
   opq_methods : extern_decl list;
 }
 

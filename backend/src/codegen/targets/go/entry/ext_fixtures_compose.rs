@@ -134,6 +134,7 @@ pub fn composed_handles_module() -> Module {
                 args: vec![],
             }),
             is_error: false,
+            foreign: None,
         }],
         Some(ReturnsLit {
             r#type: value_t.clone(),
@@ -154,11 +155,17 @@ pub fn composed_handles_module() -> Module {
                 name: "Data".into(),
                 r#type: string_t(),
             }],
+            langs: vec![],
         }],
         vec![OpaqueType {
             name: "resource".into(),
-            interface: false,
-            instance: None,
+            langs: vec![
+                crate::codegen::targets::go::entry::ext_fixtures::foreign_lang(
+                    "go",
+                    "*Resource",
+                    &[],
+                ),
+            ],
             methods: vec![get_method],
         }],
         vec![

@@ -22,9 +22,10 @@ use super::ext;
 use super::resolve::Resolver;
 use super::*;
 use crate::codegen::entries::plan::Emitter;
+use crate::codegen::foreign_spelling;
 use crate::ir::{
-    ArmValue, CallArg, CallCtor, EntryCall, ErrorBinding, ExtLib, ExternDecl, ExternLang,
-    ExternParam, ReturnsField, ReturnsLit, ReturnsValue, Select, YieldsPos,
+    ArmValue, CallArg, CallCtor, EntryCall, ExtLib, ExternDecl, ExternLang, ExternParam,
+    ForeignLang, ReturnsField, ReturnsLit, ReturnsValue, Select, Tref, YieldsPos,
 };
 
 pub(super) fn find_lib<'a>(module: &'a Module, ns: &str) -> &'a ExtLib {
@@ -42,14 +43,106 @@ pub(super) fn find_extern<'a>(lib: &'a ExtLib, func: &str) -> &'a ExternDecl {
         .expect("validate::call_resolves/wire_call_resolves checked this extern exists")
 }
 
-/// The path a binding's call is spelled at: the crate, then the receiver
-/// type when the call is a static method of it (`krate::Type::method`, the
-/// type qualifying the call the same way the crate does), then the symbol.
-pub(super) fn qualified_symbol(crate_ident: &str, lang: &ExternLang) -> String {
-    match &lang.receiver {
-        Some(recv) => format!("{crate_ident}::{recv}::{}", lang.symbol),
-        None => format!("{crate_ident}::{}", lang.symbol),
+/// The path a binding's callee is spelled at: the callee spelling with the
+/// library's identifiers crate-qualified (`mathkit::from_constant`,
+/// `mathkit::FormulaCalculator::parse` for a static method of a type).
+pub(super) fn qualified_symbol(crate_ident: &str, lang: &ExternLang, module: &Module) -> String {
+    ext::qualify(&lang.symbol, crate_ident, module)
+}
+
+/// The conversion a value spelled under its own Rust type goes through:
+/// `Option<T>` wraps the value in `Some(..)`, `&T` (and `&str` for a
+/// `String`) lends it, the type's own default spelling (a handle's declared
+/// storage, or the ordinary mapping) passes as is. Anything else has no
+/// conversion Rust can write, and
+/// `validate_calls::param_spelling_coerces` refuses it before generation.
+pub(super) fn coerce(
+    module: &Module,
+    lib: &ExtLib,
+    ty: &Tref,
+    spelling: &str,
+    expr: &str,
+) -> Result<String, String> {
+    let krate = lib
+        .langs
+        .iter()
+        .find(|l| l.lang == "rust")
+        .map(|l| l.path.replace('-', "_"))
+        .unwrap_or_default();
+    let default = spelled_type(module, ty);
+    let qualified = ext::qualify(spelling, &krate, module);
+    if qualified == default {
+        return Ok(expr.to_string());
     }
+    if let Some(inner) = foreign_spelling::rust_option(spelling) {
+        if ext::qualify(inner, &krate, module) == default {
+            return Ok(format!("Some({expr})"));
+        }
+    }
+    // A borrowed spelling of the same type, or `&str` for a `String`:
+    // the value is lent for the call.
+    if let Some(inner) = spelling.strip_prefix('&') {
+        let inner = inner.trim_start();
+        if ext::qualify(inner, &krate, module) == default || (inner == "str" && default == "String")
+        {
+            return Ok(format!("&{expr}"));
+        }
+    }
+    Err(format!(
+        "cannot pass a {default} as {spelling} in Rust: no conversion from {default} to {spelling}"
+    ))
+}
+
+/// The Rust type a logical type already has at the boundary: a handle's
+/// declared storage (or a `Vec` of them), else the ordinary mapping.
+fn spelled_type(module: &Module, t: &Tref) -> String {
+    match t {
+        Tref::List(inner) => format!("Vec<{}>", spelled_type(module, inner)),
+        _ => ext::field_type(t, module),
+    }
+}
+
+/// A foreign struct literal: the form's own Rust type, from its `rust`
+/// block, with each field's value converted when the block spells the field
+/// under its own type. `values` are the already-rendered field values, in
+/// the ctor's own (key-sorted) order. A form with no `rust` block does not
+/// exist in Rust; `validate_calls::foreign_form_declared` refuses the
+/// binding first.
+pub(super) fn ctor_expr(
+    module: &Module,
+    lib: &ExtLib,
+    krate: &str,
+    ctor: &CallCtor,
+    values: &[String],
+) -> String {
+    let form = lib.structs.iter().find(|s| s.name == ctor.name);
+    let Some(block) = form.and_then(|f| f.lang("rust")) else {
+        panic!(
+            "foreign struct {:?} declares no rust block; validate_calls::foreign_form_declared should have refused it",
+            ctor.name
+        );
+    };
+    let rendered: Vec<String> = ctor
+        .fields
+        .keys()
+        .zip(values)
+        .map(|(field_name, expr)| {
+            let declared = form.and_then(|f| f.fields.iter().find(|ff| ff.name == *field_name));
+            let expr = match (block.fields.get(field_name), declared) {
+                (Some(spelling), Some(ff)) => coerce(module, lib, &ff.r#type, spelling, expr)
+                    .unwrap_or_else(|e| {
+                        panic!("{e}; validate_calls::field_spelling_coerces should have refused it")
+                    }),
+                _ => expr.clone(),
+            };
+            format!("{field_name}: {expr}")
+        })
+        .collect();
+    format!(
+        "{} {{ {} }}",
+        ext::qualify(&block.name, krate, module),
+        rendered.join(", ")
+    )
 }
 
 pub(super) fn find_rust_lang(decl: &ExternDecl) -> &ExternLang {
@@ -139,6 +232,26 @@ pub(super) fn call_arg_expr(
                 r.path_expr(path)
             )
         }
+        // The parameter crosses under its own Rust spelling: the caller's
+        // actual argument, converted as the spelling asks.
+        CallArg::ParamAs { name, spelling } => {
+            let idx = scope.params.iter().position(|p| p.name == *name);
+            let (Some(param), Some(actual)) = (
+                idx.map(|i| &scope.params[i]),
+                idx.and_then(|i| scope.entry_args.get(i)),
+            ) else {
+                panic!("extern param {name:?} has no argument at its position")
+            };
+            let expr = call_arg_expr(r, scope, actual);
+            coerce(r.module, scope.lib, &param.r#type, spelling, &expr).unwrap_or_else(|e| {
+                panic!("{e}; validate_calls::param_spelling_coerces should have refused it")
+            })
+        }
+        // Rust binds no position of its own: `validate_calls::
+        // foreign_position_binds` refuses a declared position here.
+        CallArg::Foreign(sp) => panic!(
+            "a declared position {sp:?} reached Rust codegen; validate_calls::foreign_position_binds should have refused it"
+        ),
         // Cloned, not moved: `s` (the composed settings struct) is still
         // read later (the frozen `ClientOptions`, `Client { settings: s,
         // .. }`), the same "copy, don't move a sibling" rule every other
@@ -149,20 +262,20 @@ pub(super) fn call_arg_expr(
             let rendered: Vec<String> = items.iter().map(|a| call_arg_expr(r, scope, a)).collect();
             format!("vec![{}]", rendered.join(", "))
         }
-        CallArg::Ctor(CallCtor { name, fields }) => {
-            scope
+        CallArg::Ctor(ctor) => {
+            let krate = scope
                 .lib
-                .structs
+                .langs
                 .iter()
-                .find(|s| &s.name == name)
-                .expect("checker rejects a ctor naming an undeclared foreign struct");
-            let rendered: Vec<String> = fields
-                .iter()
-                .map(|(field_name, value)| {
-                    format!("{field_name}: {}", call_arg_expr(r, scope, value))
-                })
+                .find(|l| l.lang == "rust")
+                .map(|l| l.path.replace('-', "_"))
+                .expect("validate::call_resolves checked a rust module path exists");
+            let values: Vec<String> = ctor
+                .fields
+                .values()
+                .map(|v| call_arg_expr(r, scope, v))
                 .collect();
-            format!("{name} {{ {} }}", rendered.join(", "))
+            ctor_expr(r.module, scope.lib, &krate, ctor, &values)
         }
         CallArg::Call(nested) => call_expr(r, nested),
         // Rust has no type as a value to pass; `validate_calls` refuses the
@@ -189,7 +302,11 @@ pub(super) fn call_arg_expr(
                 .expect("validate::call_resolves checked a rust module path exists");
             let rendered: Vec<String> =
                 sc.args.iter().map(|a| call_arg_expr(r, scope, a)).collect();
-            format!("{crate_ident}::{}({})", sc.symbol, rendered.join(", "))
+            format!(
+                "{}({})",
+                ext::qualify(&sc.symbol, &crate_ident, r.module),
+                rendered.join(", ")
+            )
         }
     }
 }
@@ -223,10 +340,10 @@ fn call_expr(r: &mut Resolver<'_, '_>, call: &EntryCall) -> String {
         .iter()
         .map(|a| call_arg_expr(r, &scope, a))
         .collect();
-    let awaited = if lang.sync { "" } else { ".await" };
+    let awaited = if decl.is_async("rust") { ".await" } else { "" };
     format!(
         "{}({}){awaited}",
-        qualified_symbol(&crate_ident, lang),
+        qualified_symbol(&crate_ident, lang, r.module),
         args.join(", ")
     )
 }
@@ -285,31 +402,56 @@ fn select_expr(select: &Select) -> String {
     format!("match ({subject}).to_string().as_str() {{ {arms}}}")
 }
 
-/// The `errors:` mapping inside the `Err(e)` arm: a declared sentinel names
-/// a diagnosed `ConfigError`; anything else is a `ContractError` naming the
-/// extern, the same "declaration is a hypothesis the target build already
-/// enforces, so an unmapped failure names its origin" idiom `impl_op` uses
-/// for a bespoke operation.
-pub(super) fn error_match(ns: &str, func: &str, errors: &[ErrorBinding]) -> String {
+/// The declared errors inside the `Err(e)` arm: each error the op lists
+/// (`@errors`, in declared order) is recognized by the pattern its own
+/// `rust` block spells (`Error::Parse`, matched as `Error::Parse { .. }` so
+/// a unit, tuple or struct variant all fit), its message read from the
+/// source the block maps `message` to (`to_string()` by default); anything
+/// else (including an error with no `rust` block) is a `ContractError`
+/// naming the extern, the same "declaration is a hypothesis the target
+/// build already enforces, so an unmapped failure names its origin" idiom
+/// `impl_op` uses for a bespoke operation.
+pub(super) fn error_match(
+    module: &Module,
+    lib: &ExtLib,
+    ns: &str,
+    func: &str,
+    errors: &[String],
+) -> String {
     let contract_name = format!("{ns}.{func}");
     let fallback = format!(
         "TonoError::Contract(ContractError {{ contract_name: {contract_name:?}.to_string(), cause: e.to_string().into() }})"
     );
+    let krate = lib
+        .langs
+        .iter()
+        .find(|l| l.lang == "rust")
+        .map(|l| l.path.replace('-', "_"))
+        .unwrap_or_default();
+    let bindings: Vec<ForeignLang> = errors
+        .iter()
+        .filter_map(|id| ForeignLang::of_error(module, id, "rust"))
+        .collect();
     // No declared sentinel leaves a single wildcard arm, which clippy flags
     // as a match on nothing (`match_single_binding`): spell the fallback
     // directly rather than routing it through a match with one arm.
-    if errors.is_empty() {
+    if bindings.is_empty() {
         return fallback;
     }
     let mut arms = String::new();
-    for e in errors {
+    for fl in &bindings {
+        let pattern = ext::qualify(&fl.name, &krate, module);
+        let message = fl
+            .fields
+            .get("message")
+            .map(|source| format!("e.{source}"))
+            .unwrap_or_else(|| "e.to_string()".to_string());
         let _ = write!(
             arms,
-            "{:?} => TonoError::Config(ConfigError {{ message: e.to_string() }}), ",
-            e.sentinel,
+            "e if matches!(e, {pattern} {{ .. }}) => TonoError::Config(ConfigError {{ message: {message} }}), ",
         );
     }
-    format!("match e.to_string().as_str() {{ {arms}_ => {fallback}, }}")
+    format!("match e {{ {arms}_ => {fallback}, }}")
 }
 
 /// `yields`' non-error positions bound out of `Ok(..)`: a single position
@@ -373,7 +515,7 @@ pub(super) fn call_assign(
     let lib = find_lib(r.module, &call.ns);
     let decl = find_extern(lib, &call.func);
     let lang = find_rust_lang(decl);
-    let errors = lang.errors.clone();
+    let errors = decl.errors.clone();
     let returns = lang.returns.clone();
     let ns = call.ns.clone();
     let func = call.func.clone();
@@ -397,7 +539,7 @@ pub(super) fn call_assign(
     format!(
         "match {expr} {{\n    Ok({ok_pat}) => {{ {assign} }}\n    Err(e) => {{ return Err({mapped}); }}\n}}",
         assign = ok_assign(dest, &ok_pat, returns.as_ref(), &store),
-        mapped = error_match(&ns, &func, &errors),
+        mapped = error_match(r.module, lib, &ns, &func, &errors),
     )
 }
 

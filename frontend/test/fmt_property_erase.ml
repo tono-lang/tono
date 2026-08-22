@@ -51,7 +51,8 @@ and erase_call_arg = function
   | Ast.CaLit (l, _) -> Ast.CaLit (l, dspan)
   | Ast.CaCall nc -> Ast.CaCall (erase_nested_call nc)
   | Ast.CaList (items, _) -> Ast.CaList (List.map erase_call_arg items, dspan)
-  | Ast.CaType (n, _) -> Ast.CaType (n, dspan)
+  | Ast.CaParamAs (n, _, sp, _) -> Ast.CaParamAs (n, dspan, sp, dspan)
+  | Ast.CaForeign (s, _) -> Ast.CaForeign (s, dspan)
 
 and erase_nested_call (nc : Ast.nested_call) : Ast.nested_call =
   {
@@ -134,7 +135,18 @@ let erase_variant (v : Ast.union_variant) =
 
 (* ── FFI library blocks: ext <name> { ... } ──────────────────────────────── *)
 
-let erase_lang_path (lp : Ast.lang_path) = { lp with Ast.lp_lang_span = dspan }
+let erase_lang_path (lp : Ast.lang_path) =
+  { lp with Ast.lp_lang_span = dspan; lp_path_span = dspan }
+
+let erase_lang_block (b : Ast.lang_block) =
+  {
+    b with
+    Ast.lb_lang_span = dspan;
+    lb_head_span = dspan;
+    lb_fields =
+      List.map (fun (n, _, sp, _) -> (n, dspan, sp, dspan)) b.Ast.lb_fields;
+    lb_span = dspan;
+  }
 
 let erase_foreign_field (f : Ast.foreign_field) =
   { f with Ast.ff_name_span = dspan; ff_type = erase_ty f.Ast.ff_type }
@@ -144,12 +156,14 @@ let erase_foreign_struct (s : Ast.foreign_struct) =
     s with
     Ast.fs_name_span = dspan;
     fs_fields = List.map erase_foreign_field s.Ast.fs_fields;
+    fs_langs = List.map erase_lang_block s.Ast.fs_langs;
     fs_span = dspan;
   }
 
 let erase_yields_ty = function
   | Ast.YType t -> Ast.YType (erase_ty t)
   | Ast.YError _ -> Ast.YError dspan
+  | Ast.YForeign (s, _) -> Ast.YForeign (s, dspan)
 
 let erase_yields_pos (y : Ast.yields_pos) =
   { y with Ast.yp_name_span = dspan; yp_ty = erase_yields_ty y.Ast.yp_ty }
@@ -173,20 +187,14 @@ let erase_returns_lit (r : Ast.returns_lit) =
     rl_span = dspan;
   }
 
-let erase_error_map_entry (e : Ast.error_map_entry) =
-  { e with Ast.em_sentinel_span = dspan; em_type_span = dspan }
-
 let erase_extern_lang_body (b : Ast.extern_lang_body) =
   {
     b with
     Ast.elb_lang_span = dspan;
     elb_call_symbol_span = dspan;
-    elb_call_receiver_span =
-      Option.map (fun _ -> dspan) b.Ast.elb_call_receiver_span;
     elb_call_args = List.map erase_call_arg b.Ast.elb_call_args;
     elb_yields = Option.map (List.map erase_yields_pos) b.Ast.elb_yields;
     elb_returns = Option.map erase_returns_lit b.Ast.elb_returns;
-    elb_errors = List.map erase_error_map_entry b.Ast.elb_errors;
     elb_span = dspan;
   }
 
@@ -197,34 +205,18 @@ let erase_extern_decl (e : Ast.extern_decl) =
   {
     e with
     Ast.ed_name_span = dspan;
+    ed_traits = List.map erase_trait e.Ast.ed_traits;
     ed_params = List.map erase_extern_param e.Ast.ed_params;
     ed_return = erase_ty e.Ast.ed_return;
     ed_langs = List.map erase_extern_lang_body e.Ast.ed_langs;
     ed_span = dspan;
   }
 
-let erase_opaque_names = function
-  | Ast.OnShared (name, _) -> Ast.OnShared (name, dspan)
-  | Ast.OnPerLang entries ->
-      Ast.OnPerLang
-        (List.map
-           (fun (e : Ast.opaque_name_entry) ->
-             { e with Ast.one_lang_span = dspan; one_name_span = dspan })
-           entries)
-
-let erase_opaque_instance (i : Ast.opaque_instance) =
-  {
-    Ast.oi_names = erase_opaque_names i.Ast.oi_names;
-    oi_arg = erase_ty i.Ast.oi_arg;
-    oi_arg_span = dspan;
-    oi_span = dspan;
-  }
-
 let erase_opaque_type (t : Ast.opaque_type) =
   {
     t with
     Ast.opq_name_span = dspan;
-    opq_instance = Option.map erase_opaque_instance t.Ast.opq_instance;
+    opq_langs = List.map erase_lang_block t.Ast.opq_langs;
     opq_methods = List.map erase_extern_decl t.Ast.opq_methods;
     opq_span = dspan;
   }
@@ -238,12 +230,13 @@ let erase_ext_lib_body (b : Ast.ext_lib_body) : Ast.ext_lib_body =
   }
 
 let rec erase_kind = function
-  | Ast.DStruct { params; members; ops } ->
+  | Ast.DStruct { params; members; ops; slangs } ->
       Ast.DStruct
         {
           params;
           members = List.map erase_member members;
           ops = List.map erase_decl ops;
+          slangs = List.map erase_lang_block slangs;
         }
   | Ast.DEnum { cases } -> Ast.DEnum { cases = List.map erase_case cases }
   | Ast.DUnion { params; variants } ->

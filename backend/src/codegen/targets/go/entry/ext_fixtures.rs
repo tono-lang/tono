@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use crate::ir::{
-    ArmValue, CallArg, Empty, EntryCall, EntryField, ErrorBinding, ExtLib, ExternDecl, ExternLang,
-    ExternParam, ExternStub, ExternStubTarget, ForeignField, ForeignStruct, LangPath, Member,
+    ArmValue, CallArg, Empty, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang, ExternParam,
+    ExternStub, ExternStubTarget, ForeignField, ForeignLang, ForeignStruct, LangPath, Member,
     Model, Module, OpImplCall, OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue, Select,
     SelectArm, Shape, ShapeKind, Source, StubAnswer, TestCall, TestConstruction, TestDecl,
     TestExpect, TestPattern, Trait, Tref, YieldsPos, TONO_IR_VERSION,
@@ -64,7 +64,6 @@ pub fn call_ref(path: &[&str]) -> CallArg {
 
 pub fn ext_param(name: &str, target: Tref) -> ExternParam {
     ExternParam {
-        variadic: false,
         name: name.into(),
         r#type: target,
     }
@@ -84,7 +83,7 @@ pub fn go_extern(
     call_args: Vec<CallArg>,
     yields: Vec<YieldsPos>,
     returns: Option<ReturnsLit>,
-    errors: Vec<ErrorBinding>,
+    errors: Vec<&str>,
 ) -> ExternDecl {
     ExternDecl {
         name: name.into(),
@@ -96,46 +95,15 @@ pub fn go_extern(
             call_args,
             yields,
             returns,
-            errors,
-            sync: false,
-            infallible: false,
-            ctx: false,
-            receiver: None,
-            is_new: false,
         }],
+        r#async: vec![],
+        errors: errors.into_iter().map(String::from).collect(),
     }
 }
 
-/// The same shape as [`go_extern`], marked `infallible`: a foreign function
-/// with no error return, like `uuid.NewString() string`.
-#[allow(clippy::too_many_arguments)]
-pub fn go_extern_infallible(
-    name: &str,
-    params: Vec<ExternParam>,
-    ret: Tref,
-    symbol: &str,
-    call_args: Vec<CallArg>,
-    yields: Vec<YieldsPos>,
-    returns: Option<ReturnsLit>,
-) -> ExternDecl {
-    let mut decl = go_extern(
-        name,
-        params,
-        ret,
-        symbol,
-        call_args,
-        yields,
-        returns,
-        vec![],
-    );
-    decl.langs[0].infallible = true;
-    decl
-}
-
-/// The same shape as [`go_extern`], marked `ctx`: a foreign handle's own
-/// method call that receives the target's cancellation/deadline context in
-/// its idiomatic position (Go: `ctx context.Context` as the first
-/// parameter).
+/// The same shape as [`go_extern`], declaring its context position: a
+/// foreign handle's own method call that receives the target's
+/// cancellation/deadline context (`#(ctx context.Context)` first).
 #[allow(clippy::too_many_arguments)]
 pub fn go_extern_ctx(
     name: &str,
@@ -145,13 +113,35 @@ pub fn go_extern_ctx(
     call_args: Vec<CallArg>,
     yields: Vec<YieldsPos>,
     returns: Option<ReturnsLit>,
-    errors: Vec<ErrorBinding>,
+    errors: Vec<&str>,
 ) -> ExternDecl {
-    let mut decl = go_extern(
+    let call_args = std::iter::once(CallArg::Foreign("ctx context.Context".into()))
+        .chain(call_args)
+        .collect();
+    go_extern(
         name, params, ret, symbol, call_args, yields, returns, errors,
-    );
-    decl.langs[0].ctx = true;
-    decl
+    )
+}
+
+/// One language block of a struct: a handle's storage type, an error's
+/// sentinel with its field sources.
+pub fn foreign_lang(lang: &str, name: &str, fields: &[(&str, &str)]) -> ForeignLang {
+    ForeignLang {
+        lang: lang.into(),
+        name: name.into(),
+        fields: fields
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+    }
+}
+
+/// The `foreign` trait of an error struct: how each target recognizes it.
+pub fn foreign_trait(langs: Vec<ForeignLang>) -> Trait {
+    Trait {
+        id: "foreign".into(),
+        value: serde_json::to_value(langs).expect("a foreign lang serializes"),
+    }
 }
 
 /// An `ext` block declaring only a Go module path, for the common case
@@ -212,10 +202,17 @@ pub fn reference_example_module() -> Module {
         ],
     );
     let mut overloaded = structure("m#overloaded", vec![member("message", string_t(), true)]);
-    overloaded.traits = vec![Trait {
-        id: "retryable".into(),
-        value: serde_json::Value::Null,
-    }];
+    overloaded.traits = vec![
+        Trait {
+            id: "retryable".into(),
+            value: serde_json::Value::Null,
+        },
+        foreign_trait(vec![foreign_lang(
+            "go",
+            "ErrBusy",
+            &[("message", "Error()")],
+        )]),
+    ];
 
     let config_field = {
         let mut f = field(
@@ -324,6 +321,7 @@ pub fn reference_example_module() -> Module {
                         },
                     },
                 ],
+                langs: vec![],
             },
             ForeignStruct {
                 name: "go_creds".into(),
@@ -331,6 +329,7 @@ pub fn reference_example_module() -> Module {
                     name: "Secret".into(),
                     r#type: string_t(),
                 }],
+                langs: vec![],
             },
         ],
         vec![],
@@ -356,6 +355,7 @@ pub fn reference_example_module() -> Module {
                     args: vec![],
                 }),
                 is_error: false,
+                foreign: None,
             }],
             Some(ReturnsLit {
                 r#type: Tref::Ref {
@@ -409,11 +409,11 @@ pub fn reference_example_module() -> Module {
                     r#type: Tref::Prim(Prim::Bool),
                 },
             ],
+            langs: vec![],
         }],
         vec![OpaqueType {
             name: "publisher".into(),
-            interface: false,
-            instance: None,
+            langs: vec![foreign_lang("go", "*Publisher", &[])],
             methods: vec![go_extern(
                 "send",
                 vec![
@@ -436,6 +436,7 @@ pub fn reference_example_module() -> Module {
                         args: vec![],
                     }),
                     is_error: false,
+                    foreign: None,
                 }],
                 Some(ReturnsLit {
                     r#type: Tref::Ref {
@@ -453,10 +454,7 @@ pub fn reference_example_module() -> Module {
                         },
                     ],
                 }),
-                vec![ErrorBinding {
-                    sentinel: "ErrBusy".into(),
-                    r#type: "overloaded".into(),
-                }],
+                vec!["m#overloaded"],
             )],
         }],
         vec![go_extern(
@@ -587,63 +585,7 @@ pub fn reference_example_model() -> Model {
     }
 }
 
-/// A minimal repro of a real single-return Go function bound as `extern`:
-/// `idgen.NewString() string` (no error, matching `uuid.NewString`), marked
-/// `infallible`, with no `yields:` at all (the zero-yields path is one of
-/// the two shapes the Go emitter used to always destructure as two values
-/// regardless of the real function's own arity).
-pub fn infallible_extern_module() -> Module {
-    let id_field = {
-        let mut f = field("id", string_t(), vec![]);
-        f.call = Some(EntryCall {
-            ns: "idgen".into(),
-            func: "new_id".into(),
-            args: vec![],
-        });
-        f
-    };
-    let entry = Shape {
-        id: "n#client".into(),
-        kind: ShapeKind::Entry {
-            fields: vec![id_field],
-            operations: vec![],
-        },
-        traits: vec![],
-    };
-    let idgen = go_ext_lib(
-        "idgen",
-        "tono-ext-fixture/idgen",
-        vec![],
-        vec![],
-        vec![go_extern_infallible(
-            "new_id",
-            vec![],
-            string_t(),
-            "NewString",
-            vec![],
-            vec![],
-            None,
-        )],
-    );
-    Module {
-        name: "n".into(),
-        shapes: vec![entry],
-        operations: vec![],
-        extensions: vec![],
-        ext_libs: vec![idgen],
-        tests: vec![],
-    }
-}
-
-/// [`infallible_extern_module`], wrapped in a `Model`.
-pub fn infallible_extern_model() -> Model {
-    Model {
-        tono_ir_version: TONO_IR_VERSION,
-        modules: vec![infallible_extern_module()],
-    }
-}
-
-/// A minimal repro of the `ctx` marker: a foreign handle with one `ctx`-
+/// A minimal repro of a declared context position: a foreign handle with one
 /// marked method, reached through an op's own `impl .conn.get(args)` body
 /// (the one construct the marker is legal on). The handle's own construction
 /// call is a plain, unmarked free extern, matching the frontend gate that
@@ -695,8 +637,7 @@ pub fn ctx_extern_module() -> Module {
         vec![],
         vec![OpaqueType {
             name: "conn".into(),
-            interface: false,
-            instance: None,
+            langs: vec![foreign_lang("go", "*Conn", &[])],
             methods: vec![go_extern_ctx(
                 "get",
                 vec![ext_param("id", string_t())],

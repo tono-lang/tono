@@ -17,6 +17,7 @@ let show_kind : Token.kind -> string = function
   | Ident s -> "id:" ^ s
   | Prim s -> "prim:" ^ s
   | Str s -> "str:" ^ s
+  | Foreign s -> "foreign:" ^ s
   | Int n -> "int:" ^ string_of_int n
   | Float f -> "float:" ^ string_of_float f
   | At -> "@"

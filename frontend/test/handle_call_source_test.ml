@@ -31,30 +31,29 @@ let has code src = List.mem code (codes src)
 
 let kit_lib =
   {|ext kit {
-  go: "github.com/x/kit"
+  go { #(github.com/x/kit) }
 
   struct go_cfg { ReadURL: string, WriteURL: string }
 
-  type provider {
-    extern get(): cfg {
+  struct provider {
+    op get(): cfg {
       go {
-        call: "Get"()
+        call: #(Get)()
         yields: (c: go_cfg)
         returns: cfg { endpoint_read: .c.ReadURL, endpoint_write: .c.WriteURL }
-        ctx
       }
     }
-    extern get_for(region: string): cfg {
+    op get_for(region: string): cfg {
       go {
-        call: "GetFor"(region)
+        call: #(GetFor)(region)
         yields: (c: go_cfg)
         returns: cfg { endpoint_read: .c.ReadURL, endpoint_write: .c.WriteURL }
       }
     }
   }
 
-  extern new_provider(name: string): provider {
-    go { call: "NewProvider"(name) }
+  op new_provider(name: string): provider {
+    go { call: #(NewProvider)(name) }
   }
 }
 

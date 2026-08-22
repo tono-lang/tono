@@ -23,8 +23,8 @@ let missing_call_line () =
   let ds =
     file_diags
       {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
+         go { #(example.com/mylib) }
+         op load(): string {
            go { yields: (x: string) }
          }
        }|}
@@ -37,9 +37,9 @@ let empty_yields () =
   let ds =
     file_diags
       {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"() yields: () }
+         go { #(example.com/mylib) }
+         op load(): string {
+           go { call: #(Load)() yields: () }
          }
        }|}
   in
@@ -51,9 +51,9 @@ let returns_missing_type () =
   nonempty "'returns:' with no type before '{'"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"() returns: { } }
+         go { #(example.com/mylib) }
+         op load(): string {
+           go { call: #(Load)() returns: { } }
          }
        }|})
 
@@ -61,9 +61,9 @@ let error_as_extern_return_type () =
   nonempty "'error' used as an extern return type"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): error {
-           go { call: "Load"() }
+         go { #(example.com/mylib) }
+         op load(): error {
+           go { call: #(Load)() }
          }
        }|})
 
@@ -71,9 +71,9 @@ let error_as_returns_type () =
   nonempty "'error' used as a 'returns:' type"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"() returns: error { } }
+         go { #(example.com/mylib) }
+         op load(): string {
+           go { call: #(Load)() returns: error { } }
          }
        }|})
 
@@ -83,7 +83,7 @@ let error_as_ordinary_field_name () =
   let ds =
     file_diags
       {|ext mylib {
-        go: "example.com/mylib"
+        go { #(example.com/mylib) }
         struct go_result { error: string }
       }|}
   in
@@ -96,7 +96,7 @@ let struct_named_error () =
   let ds =
     file_diags
       {|ext mylib {
-        go: "example.com/mylib"
+        go { #(example.com/mylib) }
         struct error { message: string }
       }|}
   in
@@ -108,8 +108,8 @@ let opaque_type_named_error () =
   let ds =
     file_diags
       {|ext mylib {
-        go: "example.com/mylib"
-        type error { extern send(): string { go { call: "Send"() } } }
+        go { #(example.com/mylib) }
+        struct error { op send(): string { go { call: #(Send)() } } }
       }|}
   in
   Alcotest.(check bool)
@@ -158,9 +158,9 @@ let library_named_like_a_primitive_is_a_single_diagnostic () =
   let ds =
     file_diags
       {|ext string {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"() }
+         go { #(example.com/mylib) }
+         op load(): string {
+           go { call: #(Load)() }
          }
        }|}
   in
@@ -199,7 +199,7 @@ let bad_foreign_field_name () =
   nonempty "non-identifier foreign field name"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
+         go { #(example.com/mylib) }
          struct s { 5: string }
        }|})
 
@@ -207,7 +207,7 @@ let missing_struct_name () =
   nonempty "missing foreign struct name"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
+         go { #(example.com/mylib) }
          struct { a: string }
        }|})
 
@@ -215,7 +215,7 @@ let struct_body_junk () =
   nonempty "junk in a foreign struct body"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
+         go { #(example.com/mylib) }
          struct s { @ }
        }|})
 
@@ -227,9 +227,9 @@ let missing_yields_name () =
   nonempty "missing yields binding name"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"() yields: (: string) }
+         go { #(example.com/mylib) }
+         op load(): string {
+           go { call: #(Load)() yields: (: string) }
          }
        }|})
 
@@ -238,9 +238,9 @@ let yields_trailing_comma () =
   let ds =
     file_diags
       {|ext mylib {
-        go: "example.com/mylib"
-        extern load(): string {
-          go { call: "Load"() yields: (cfg: string,) }
+        go { #(example.com/mylib) }
+        op load(): string {
+          go { call: #(Load)() yields: (cfg: string,) }
         }
       }|}
   in
@@ -250,9 +250,9 @@ let returns_value_bad_shape () =
   nonempty "returns field value neither '.path' nor 'match'"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): app_config {
-           go { call: "Load"() returns: app_config { endpoint: 5 } }
+         go { #(example.com/mylib) }
+         op load(): app_config {
+           go { call: #(Load)() returns: app_config { endpoint: 5 } }
          }
        }|})
 
@@ -260,9 +260,9 @@ let missing_returns_field_name () =
   nonempty "missing returns field name"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): app_config {
-           go { call: "Load"() returns: app_config { : .x } }
+         go { #(example.com/mylib) }
+         op load(): app_config {
+           go { call: #(Load)() returns: app_config { : .x } }
          }
        }|})
 
@@ -270,9 +270,9 @@ let returns_body_junk () =
   nonempty "junk in a returns body"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): app_config {
-           go { call: "Load"() returns: app_config { @ } }
+         go { #(example.com/mylib) }
+         op load(): app_config {
+           go { call: #(Load)() returns: app_config { @ } }
          }
        }|})
 
@@ -280,46 +280,16 @@ let returns_missing_brace () =
   nonempty "returns body never closed"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): app_config {
-           go { call: "Load"() returns: app_config { |})
-
-let errors_sentinel_not_string () =
-  nonempty "errors sentinel is not a string"
-    (file_diags
-       {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"() errors: { x => overloaded } }
-         }
-       }|})
-
-let errors_missing_type () =
-  nonempty "errors entry missing a type name"
-    (file_diags
-       {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"() errors: { "S" => } }
-         }
-       }|})
-
-let errors_body_junk () =
-  nonempty "junk in an errors body"
-    (file_diags
-       {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"() errors: { 5 } }
-         }
-       }|})
+         go { #(example.com/mylib) }
+         op load(): app_config {
+           go { call: #(Load)() returns: app_config { |})
 
 let call_symbol_missing () =
   nonempty "call: without a foreign symbol string"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
+         go { #(example.com/mylib) }
+         op load(): string {
            go { call: 5() }
          }
        }|})
@@ -328,9 +298,9 @@ let lang_block_junk () =
   nonempty "junk in a language block"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { @ call: "Load"() }
+         go { #(example.com/mylib) }
+         op load(): string {
+           go { @ call: #(Load)() }
          }
        }|})
 
@@ -338,18 +308,18 @@ let lang_block_missing_brace () =
   nonempty "language block never closed"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string {
-           go { call: "Load"()
+         go { #(example.com/mylib) }
+         op load(): string {
+           go { call: #(Load)()
        }|})
 
 let extern_param_bad_name () =
   nonempty "non-identifier extern parameter name"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(5: string): string {
-           go { call: "Load"() }
+         go { #(example.com/mylib) }
+         op load(5: string): string {
+           go { call: #(Load)() }
          }
        }|})
 
@@ -357,9 +327,9 @@ let extern_missing_name () =
   nonempty "missing extern name"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern (): string {
-           go { call: "Load"() }
+         go { #(example.com/mylib) }
+         op (): string {
+           go { call: #(Load)() }
          }
        }|})
 
@@ -367,21 +337,21 @@ let extern_body_junk () =
   nonempty "junk in an extern body"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         extern load(): string { @ }
+         go { #(example.com/mylib) }
+         op load(): string { @ }
        }|})
 
 let extern_missing_brace () =
   nonempty "extern body never closed"
-    (file_diags {|ext mylib { go: "example.com/mylib" extern load(): string |})
+    (file_diags {|ext mylib { go: "example.com/mylib" op load(): string |})
 
 let opaque_type_missing_name () =
   nonempty "missing opaque type name"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
+         go { #(example.com/mylib) }
          type {
-           extern send(): string { go { call: "Send"() } }
+           op send(): string { go { call: #(Send)() } }
          }
        }|})
 
@@ -389,66 +359,57 @@ let opaque_type_body_junk () =
   nonempty "non-extern member in an opaque type body"
     (file_diags
        {|ext mylib {
-         go: "example.com/mylib"
-         type publisher { @ }
+         go { #(example.com/mylib) }
+         struct publisher { @ }
        }|})
+
+(* ── language blocks ───────────────────────────────────────────────────── *)
+
+let lang_block_missing_head () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go { #(example.com/mylib) }
+         struct source { go { } }
+       }|}
+  in
+  Alcotest.(check bool)
+    "names the missing spelling" true
+    (has_message ~sub:"first element of a language block" ds)
+
+let lang_block_keyed_entry_missing_spelling () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go { #(example.com/mylib) }
+         struct opts { a: string  go { #(Opts) a: string } }
+       }|}
+  in
+  Alcotest.(check bool)
+    "names the field's foreign form" true
+    (has_message ~sub:"field's foreign form" ds)
+
+let header_block_with_a_keyed_entry () =
+  let ds = file_diags {|ext mylib { go { #(example.com/mylib) a: #(x) } }|} in
+  Alcotest.(check bool)
+    "names the module path rule" true
+    (has_message ~sub:"names only the module path" ds)
+
+let call_head_not_a_spelling () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go { #(example.com/mylib) }
+         op get(): string { go { call: "Get"() } }
+       }|}
+  in
+  Alcotest.(check bool)
+    "names the callee rule" true
+    (has_message ~sub:"callee after 'call:'" ds)
 
 let opaque_type_missing_brace () =
   nonempty "opaque type body never closed"
     (file_diags {|ext mylib { go: "example.com/mylib" type publisher |})
-
-let opaque_type_instance_missing_string () =
-  let ds =
-    file_diags
-      {|ext mylib {
-         go: "example.com/mylib"
-         type source(settings) { extern get(): settings { go { call: "Get"() } } }
-       }|}
-  in
-  Alcotest.(check bool)
-    "names the missing foreign name string" true
-    (has_message ~sub:"foreign type's name as a string" ds)
-
-let opaque_type_instance_missing_comma () =
-  let ds =
-    file_diags
-      {|ext mylib {
-         go: "example.com/mylib"
-         type source("Source" settings) { extern get(): settings { go { call: "Get"() } } }
-       }|}
-  in
-  Alcotest.(check bool)
-    "names the missing comma" true
-    (has_message ~sub:"',' between the foreign name and the argument" ds)
-
-let opaque_type_instance_missing_paren () =
-  nonempty "instantiation clause never closed"
-    (file_diags
-       {|ext mylib {
-         go: "example.com/mylib"
-         type source("Source", settings { extern get(): settings { go { call: "Get"() } } }
-       }|})
-
-(* An instantiation names exactly one argument; a second one is diagnosed
-   once, at the stray comma, not cascaded into a diagnostic per leftover
-   token (the recovery skips to the close paren instead of falling through
-   into "expected '{' to open the type body"). *)
-let opaque_type_instance_extra_argument () =
-  let ds =
-    file_diags
-      {|ext mylib {
-         go: "example.com/mylib"
-         type source("Source", settings, flags) {
-           extern get(): settings { go { call: "Get"() } }
-         }
-       }
-       struct settings { endpoint: string }
-       struct flags { enabled: bool }|}
-  in
-  Alcotest.(check int) "one diagnostic, not a cascade" 1 (List.length ds);
-  Alcotest.(check bool)
-    "names the close paren" true
-    (has_message ~sub:"')' to close the instantiation" ds)
 
 let ext_lib_body_junk () =
   nonempty "junk directly in an ext lib body" (file_diags {|ext mylib { @ }|})
@@ -533,13 +494,7 @@ let () =
           Alcotest.test_case "body junk" `Quick returns_body_junk;
           Alcotest.test_case "missing brace" `Quick returns_missing_brace;
         ] );
-      ( "errors",
-        [
-          Alcotest.test_case "sentinel not a string" `Quick
-            errors_sentinel_not_string;
-          Alcotest.test_case "missing type" `Quick errors_missing_type;
-          Alcotest.test_case "body junk" `Quick errors_body_junk;
-        ] );
+      ("errors", []);
       ( "call",
         [ Alcotest.test_case "symbol missing" `Quick call_symbol_missing ] );
       ( "extern",
@@ -553,15 +508,15 @@ let () =
         [
           Alcotest.test_case "missing name" `Quick opaque_type_missing_name;
           Alcotest.test_case "body junk" `Quick opaque_type_body_junk;
+          Alcotest.test_case "lang block missing head" `Quick
+            lang_block_missing_head;
+          Alcotest.test_case "keyed entry missing spelling" `Quick
+            lang_block_keyed_entry_missing_spelling;
+          Alcotest.test_case "header block with a keyed entry" `Quick
+            header_block_with_a_keyed_entry;
+          Alcotest.test_case "call head not a spelling" `Quick
+            call_head_not_a_spelling;
           Alcotest.test_case "missing brace" `Quick opaque_type_missing_brace;
-          Alcotest.test_case "instance missing string" `Quick
-            opaque_type_instance_missing_string;
-          Alcotest.test_case "instance missing comma" `Quick
-            opaque_type_instance_missing_comma;
-          Alcotest.test_case "instance missing paren" `Quick
-            opaque_type_instance_missing_paren;
-          Alcotest.test_case "instance extra argument" `Quick
-            opaque_type_instance_extra_argument;
         ] );
       ( "ext lib",
         [

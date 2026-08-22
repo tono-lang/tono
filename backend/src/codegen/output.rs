@@ -105,17 +105,47 @@ impl TargetKind {
         }
     }
 
-    /// Whether this target can render a `call:` line whose receiver is a
-    /// foreign type name (a static method, `"Type"."method"(args)`). Rust
-    /// qualifies the call by the type the way it does by the crate
-    /// (`krate::Type::method`); TypeScript calls a member of the imported
-    /// type (`Type.method`). Go has no static method at all (a library
-    /// exposes a package function, the plain `call:` shape), so there is
-    /// nothing correct to spell and generation refuses the binding.
-    pub fn emits_static_receiver_calls(self) -> bool {
+    /// What a declared position of a `call:` line (`#(ctx context.Context)`)
+    /// may be for this target: Go binds its context there, spelled exactly
+    /// as the generated signature declares it (the variable name is
+    /// surface, so a different spelling is a mismatch, not a rename); Rust
+    /// and TypeScript bind nothing of their own.
+    pub fn binds_foreign_position(self, spelling: &str) -> Result<(), String> {
         match self {
-            Self::Rust | Self::TypeScript => true,
-            Self::Go => false,
+            Self::Go if spelling == "ctx context.Context" => Ok(()),
+            Self::Go => Err(format!(
+                "Go binds only its context there, declared as #(ctx context.Context), not #({spelling})"
+            )),
+            Self::Rust | Self::TypeScript => Err(format!(
+                "{} binds no position of its own; only Go declares its context this way",
+                self.dir()
+            )),
+        }
+    }
+
+    /// Whether this target can coerce a logical value of `t` into the
+    /// foreign spelling a binding declares for it (`values: #(Vec<f64>)`,
+    /// `calcs: #(...Calculator[float64])`, a field spelled `Option<u8>`):
+    /// each target knows its own conversions, and names both types when it
+    /// has none.
+    pub fn param_spelling_coerces(
+        self,
+        module: &crate::ir::Module,
+        lib: &crate::ir::ExtLib,
+        t: &crate::ir::Tref,
+        spelling: &str,
+    ) -> Result<(), String> {
+        match self {
+            Self::Go => {
+                crate::codegen::targets::go::entry::param_spelling_coerces(module, lib, t, spelling)
+            }
+            Self::Rust => crate::codegen::targets::rust::entry::param_spelling_coerces(
+                module, lib, t, spelling,
+            ),
+            // TypeScript is structurally typed: the value passes as it is
+            // and `tsc` grades the spelling against the library's own
+            // declaration.
+            Self::TypeScript => Ok(()),
         }
     }
 

@@ -1,21 +1,28 @@
-(* Lowering for the FFI ext/extern surface: an extern call argument (shared
-   by a field's own [= ns.fn(args)] source and an ext block's own [call:]
-   line), and the [ext <name> { ... }] library block itself. Split out of
-   [Lower] to keep that file under the line-count cap. Structural lowering
-   only: no resolution of an extern's arity/types against its callers, of an
-   [errors:] sentinel against a declared error shape, or of a [returns:]
-   field ref against its [yields:] name -- that is a later pass (see
-   [Ir.ext_lib]'s doc comment). [lower_type]/[lower_select] are threaded in
-   (as [Parser_ext] threads [parse_type]) to avoid a dependency cycle with
+(* Lowering for the FFI ext surface: an extern call argument (shared by a
+   field's own [= ns.fn(args)] source and an ext block's own [call:] line),
+   and the [ext <name> { ... }] library block itself. Split out of [Lower]
+   to keep that file under the line-count cap. Structural lowering only: no
+   resolution of an op's arity/types against its callers or of a [returns:]
+   field ref against its [yields:] name -- that is [Check_ext_lib]'s job at
+   the AST stage. [lower_type]/[lower_select] are threaded in (as
+   [Parser_ext] threads [parse_type]) to avoid a dependency cycle with
    [Lower]. *)
 
 (* An extern call argument: resolving [ns]/[fn] against a declared [ext]
    block is deferred (out of scope); this only carries the call structured.
    A ctor field's own value is the general trait-value grammar (it can be a
    literal, list, or nested call, e.g. [opts { retries: 3 }]), so
-   [lower_ctor_field_value] converts that richer shape down to [Ir.call_arg]. *)
-let rec lower_call_arg : Ast.call_arg -> Ir.call_arg = function
-  | Ast.CaParam (n, _) -> Ir.Ca_param n
+   [lower_ctor_field_value] converts that richer shape down to [Ir.call_arg].
+   [handles] are the opaque handles of the enclosing ext block: a bare name
+   that names one (and no logical parameter) is a class reference, the
+   handle itself passed for a library that constructs on its own. Outside a
+   [call:] line there is no block in scope, so the list is empty. *)
+let rec lower_call_arg ?(handles = []) ?(params = []) :
+    Ast.call_arg -> Ir.call_arg = function
+  | Ast.CaParam (n, _) ->
+      if List.mem n handles && not (List.mem n params) then Ir.Ca_type n
+      else Ir.Ca_param n
+  | Ast.CaParamAs (n, _, sp, _) -> Ir.Ca_param_as (n, sp)
   | Ast.CaRef r -> Ir.Ca_ref r.segs
   | Ast.CaCtor c -> Ir.Ca_ctor (lower_call_ctor c)
   | Ast.CaLit (Ast.LStr s, _) -> Ir.Ca_lit (`String s)
@@ -25,10 +32,11 @@ let rec lower_call_arg : Ast.call_arg -> Ir.call_arg = function
       Ir.Ca_symbol_call
         {
           Ir.scl_symbol = nc.nc_symbol;
-          scl_args = List.map lower_call_arg nc.nc_args;
+          scl_args = List.map (lower_call_arg ~handles ~params) nc.nc_args;
         }
-  | Ast.CaList (items, _) -> Ir.Ca_list (List.map lower_call_arg items)
-  | Ast.CaType (n, _) -> Ir.Ca_type n
+  | Ast.CaList (items, _) ->
+      Ir.Ca_list (List.map (lower_call_arg ~handles ~params) items)
+  | Ast.CaForeign (s, _) -> Ir.Ca_foreign s
 
 and lower_call_ctor (c : Ast.ctor_arg) : Ir.call_ctor =
   {
@@ -52,11 +60,38 @@ and lower_call_expr (ce : Ast.call_expr) : Ir.entry_call =
   {
     Ir.ec_ns = ce.ce_ns;
     ec_fn = ce.ce_fn;
-    ec_args = List.map lower_call_arg ce.ce_args;
+    ec_args = List.map (fun a -> lower_call_arg a) ce.ce_args;
   }
 
 let lower_lang_path (lp : Ast.lang_path) : Ir.lang_path =
   { Ir.lgp_lang = lp.lp_lang; lgp_path = lp.lp_path }
+
+let lower_lang_block (b : Ast.lang_block) : Ir.foreign_lang =
+  {
+    Ir.fl_lang = b.lb_lang;
+    fl_head = b.lb_head;
+    fl_fields = List.map (fun (n, _, sp, _) -> (n, sp)) b.lb_fields;
+  }
+
+(* The language blocks of a top-level struct (an error struct), carried in
+   the shape's trait bag under "foreign", the way @doc travels: the shape
+   record stays unchanged and a reader that does not know the key ignores
+   it. Absent when the struct has no block. *)
+let foreign_trait (langs : Ast.lang_block list) : Ir.trait list =
+  match langs with
+  | [] -> []
+  | _ ->
+      [
+        {
+          Ir.trait_id = "foreign";
+          value =
+            `List
+              (List.map
+                 (fun b ->
+                   Ir_json_extern.encode_foreign_lang (lower_lang_block b))
+                 langs);
+        };
+      ]
 
 let lower_foreign_field ~lower_type ~resolve ~diags (f : Ast.foreign_field) :
     Ir.foreign_field =
@@ -71,19 +106,24 @@ let lower_foreign_struct ~lower_type ~resolve ~diags (s : Ast.foreign_struct) :
     Ir.fgs_name = s.fs_name;
     fgs_fields =
       List.map (lower_foreign_field ~lower_type ~resolve ~diags) s.fs_fields;
+    fgs_langs = List.map lower_lang_block s.fs_langs;
   }
 
 let lower_yields_pos ~lower_type ~resolve ~diags (y : Ast.yields_pos) :
     Ir.yields_pos =
+  let base =
+    {
+      Ir.yp_name = y.yp_name;
+      yp_type = None;
+      yp_is_error = false;
+      yp_foreign = None;
+    }
+  in
   match y.yp_ty with
   | Ast.YType t ->
-      {
-        Ir.yp_name = y.yp_name;
-        yp_type = Some (lower_type ~params:[] ~resolve ~diags t);
-        yp_is_error = false;
-      }
-  | Ast.YError _ ->
-      { Ir.yp_name = y.yp_name; yp_type = None; yp_is_error = true }
+      { base with yp_type = Some (lower_type ~params:[] ~resolve ~diags t) }
+  | Ast.YError _ -> { base with yp_is_error = true }
+  | Ast.YForeign (s, _) -> { base with yp_foreign = Some s }
 
 let lower_returns_value ~lower_select ~diags :
     Ast.returns_value -> Ir.returns_value = function
@@ -104,16 +144,12 @@ let lower_returns ~lower_type ~lower_select ~resolve ~diags
         r.rl_fields;
   }
 
-let lower_error_binding (e : Ast.error_map_entry) : Ir.error_binding =
-  { Ir.erb_sentinel = e.em_sentinel; erb_type = e.em_type }
-
-let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags
-    (b : Ast.extern_lang_body) : Ir.extern_lang =
+let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags ~handles
+    ~params (b : Ast.extern_lang_body) : Ir.extern_lang =
   {
     Ir.el_lang = b.elb_lang;
-    el_receiver = b.elb_call_receiver;
     el_symbol = b.elb_call_symbol;
-    el_call_args = List.map lower_call_arg b.elb_call_args;
+    el_call_args = List.map (lower_call_arg ~handles ~params) b.elb_call_args;
     el_yields =
       (match b.elb_yields with
       | None -> []
@@ -122,15 +158,26 @@ let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags
       Option.map
         (lower_returns ~lower_type ~lower_select ~resolve ~diags)
         b.elb_returns;
-    el_errors = List.map lower_error_binding b.elb_errors;
-    el_sync = b.elb_sync;
-    el_infallible = b.elb_infallible;
-    el_ctx = b.elb_ctx;
-    el_new = b.elb_new;
   }
 
-let rec lower_extern ~lower_type ~lower_select ~resolve ~diags
+(* The names an op's trait lists: @async(rust, ts), @errors(a, b). Repeats
+   collapse in declaration order. *)
+let trait_names (name : string) (traits : Ast.trait list) : string list =
+  let names =
+    List.concat_map
+      (fun (t : Ast.trait) ->
+        if String.equal t.tname name then
+          List.filter_map (function Ast.AName n -> Some n | _ -> None) t.targs
+        else [])
+      traits
+  in
+  List.fold_left
+    (fun acc n -> if List.mem n acc then acc else acc @ [ n ])
+    [] names
+
+let lower_extern ~lower_type ~lower_select ~resolve ~diags ~handles
     (e : Ast.extern_decl) : Ir.extern_decl =
+  let params = List.map (fun (p : Ast.extern_param) -> p.ep_name) e.ed_params in
   {
     Ir.x_name = e.ed_name;
     x_params =
@@ -139,47 +186,29 @@ let rec lower_extern ~lower_type ~lower_select ~resolve ~diags
           {
             Ir.xp_name = p.ep_name;
             xp_type = lower_type ~params:[] ~resolve ~diags p.ep_type;
-            xp_variadic = p.ep_variadic;
           })
         e.ed_params;
     x_return = lower_type ~params:[] ~resolve ~diags e.ed_return;
     x_langs =
       List.map
-        (lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags)
+        (lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags
+           ~handles ~params)
         e.ed_langs;
+    x_async = trait_names "async" e.ed_traits;
+    x_errors =
+      List.map
+        (fun n -> resolve ~qualifier:None ~name:n)
+        (trait_names "errors" e.ed_traits);
   }
 
-and lower_opaque_type ~lower_type ~lower_select ~resolve ~diags ~langs
+let lower_opaque_type ~lower_type ~lower_select ~resolve ~diags ~handles
     (t : Ast.opaque_type) : Ir.opaque_type =
   {
     Ir.opq_name = t.opq_name;
-    opq_instance =
-      Option.map
-        (fun (i : Ast.opaque_instance) ->
-          (* A shared surface name is expanded here to one entry per language
-             the ext declares a module path for, so IR consumers only ever
-             look a language up; the keyed surface form lowers verbatim. *)
-          let names =
-            match i.Ast.oi_names with
-            | Ast.OnShared (name, _) ->
-                List.map
-                  (fun lang -> { Ir.inn_lang = lang; inn_name = name })
-                  langs
-            | Ast.OnPerLang entries ->
-                List.map
-                  (fun (e : Ast.opaque_name_entry) ->
-                    { Ir.inn_lang = e.one_lang; inn_name = e.one_name })
-                  entries
-          in
-          {
-            Ir.inst_names = names;
-            inst_arg = lower_type ~params:[] ~resolve ~diags i.oi_arg;
-          })
-        t.opq_instance;
-    opq_interface = t.opq_interface;
+    opq_langs = List.map lower_lang_block t.opq_langs;
     opq_methods =
       List.map
-        (lower_extern ~lower_type ~lower_select ~resolve ~diags)
+        (lower_extern ~lower_type ~lower_select ~resolve ~diags ~handles)
         t.opq_methods;
   }
 
@@ -187,6 +216,9 @@ let lower_ext_lib ~lower_type ~lower_select ~resolve ~diags (d : Ast.decl) :
     Ir.ext_lib =
   match d.dkind with
   | Ast.DExtLib { body; _ } ->
+      let handles =
+        List.map (fun (t : Ast.opaque_type) -> t.opq_name) body.elib_types
+      in
       {
         Ir.xl_name = d.dname;
         xl_langs = List.map lower_lang_path body.elib_langs;
@@ -195,15 +227,13 @@ let lower_ext_lib ~lower_type ~lower_select ~resolve ~diags (d : Ast.decl) :
             (lower_foreign_struct ~lower_type ~resolve ~diags)
             body.elib_structs;
         xl_types =
-          (let langs =
-             List.map (fun (lp : Ast.lang_path) -> lp.lp_lang) body.elib_langs
-           in
-           List.map
-             (lower_opaque_type ~lower_type ~lower_select ~resolve ~diags ~langs)
-             body.elib_types);
+          List.map
+            (lower_opaque_type ~lower_type ~lower_select ~resolve ~diags
+               ~handles)
+            body.elib_types;
         xl_externs =
           List.map
-            (lower_extern ~lower_type ~lower_select ~resolve ~diags)
+            (lower_extern ~lower_type ~lower_select ~resolve ~diags ~handles)
             body.elib_externs;
       }
   | _ -> assert false

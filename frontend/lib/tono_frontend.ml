@@ -5,6 +5,8 @@ let version = "0.0.0"
    A custom main module suppresses dune's automatic submodule aliasing. *)
 module Ir = Ir
 module Ir_json = Ir_json
+module Ir_json_extern = Ir_json_extern
+module Check_ext_lib_project = Check_ext_lib_project
 module Span = Span
 module Diagnostic = Diagnostic
 module Token = Token

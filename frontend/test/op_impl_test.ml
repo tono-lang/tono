@@ -31,22 +31,22 @@ let has code src = List.mem code (codes src)
    below. *)
 let bus_lib =
   {|ext bus {
-  go: "github.com/x/bus"
+  go { #(github.com/x/bus) }
 
   struct go_ack { OK: bool }
 
-  type publisher {
-    extern send(topic: string, body: string): ack {
+  struct publisher {
+    op send(topic: string, body: string): ack {
       go {
-        call: "Send"(topic, body)
+        call: #(Send)(topic, body)
         yields: (a: go_ack)
         returns: ack { accepted: .a.OK }
       }
     }
   }
 
-  extern connect(endpoint: string): publisher {
-    go { call: "Connect"(endpoint) }
+  op connect(endpoint: string): publisher {
+    go { call: #(Connect)(endpoint) }
   }
 }
 
@@ -269,7 +269,7 @@ pub struct client {
   bus: bus.publisher @with = bus.connect(.endpoint)
 
   op publish(topic: string): ack
-    impl .bus.send("Wrap"(.topic), .topic)
+    impl .bus.send(#(Wrap)(.topic), .topic)
 }
 |}
   in
@@ -284,7 +284,7 @@ pub struct client {
   bus: bus.publisher @with = bus.connect(.endpoint)
 
   op publish(topic: string): ack
-    impl .bus.send("Wrap"(.bogus), .topic)
+    impl .bus.send(#(Wrap)(.bogus), .topic)
 }
 |}
   in

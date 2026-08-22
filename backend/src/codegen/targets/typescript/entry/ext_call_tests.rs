@@ -36,7 +36,6 @@ fn ext_lib(
 
 fn extern_param(name: &str, r#type: Tref) -> ExternParam {
     ExternParam {
-        variadic: false,
         name: name.into(),
         r#type,
     }
@@ -60,6 +59,7 @@ fn string_field(name: &str) -> ForeignField {
 fn foreign_struct(name: &str, fields: Vec<ForeignField>) -> ForeignStruct {
     ForeignStruct {
         name: name.into(),
+        langs: vec![],
         fields,
     }
 }
@@ -103,8 +103,11 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
         vec![],
         vec![OpaqueType {
             name: "publisher".into(),
-            interface: false,
-            instance: None,
+            langs: vec![crate::ir::ForeignLang {
+                lang: "ts".into(),
+                name: "Publisher".into(),
+                fields: Default::default(),
+            }],
             methods: vec![],
         }],
         vec![super::super::ext_fixtures::connect_publisher_extern(
@@ -136,6 +139,7 @@ fn appendix_module(fields: Vec<EntryField>) -> Module {
         name: "m".into(),
         shapes: vec![
             app_config_shape(),
+            super::super::ext_fixtures::overloaded_shape("m"),
             Shape {
                 id: "m#client".into(),
                 kind: ShapeKind::Entry {
@@ -217,7 +221,7 @@ fn a_bare_call_with_no_yields_assigns_the_raw_result_directly() {
 fn a_declared_sentinel_throws_the_generated_typed_error() {
     let out = rendered_text(&appendix_module(appendix_fields()));
     assert!(
-        out.contains("case \"BUSY\": throw new OverloadedError(e);"),
+        out.contains("if (e instanceof BusyError) { throw new OverloadedError(e); }"),
         "{out}"
     );
     assert!(
@@ -371,6 +375,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                     name: "cfg".into(),
                     r#type: None,
                     is_error: false,
+                    foreign: None,
                 }],
                 returns: Some(ReturnsLit {
                     r#type: Tref::Ref {
@@ -395,13 +400,9 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                         }),
                     }],
                 }),
-                errors: vec![],
-                sync: false,
-                infallible: false,
-                ctx: false,
-                receiver: None,
-                is_new: false,
             }],
+            r#async: vec!["ts".into()],
+            errors: vec![],
         }],
     );
     let config = ef(
@@ -428,15 +429,15 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
     assert!(out.contains("})() };"), "{out}");
 }
 
-/// A static method (`"Type"."method"(args)`) is called on the imported type:
-/// the seam imports the receiver type, not the method, and calls
+/// A static method (`#(Type.method)(args)`) is called on the imported type:
+/// the seam imports the type the spelling names, not the method, and calls
 /// `Type.method(..)` through it.
 #[test]
 fn a_static_method_receiver_imports_the_type_and_calls_its_member() {
     let mut module = appendix_module(appendix_fields());
     let load = &mut module.ext_libs[0].externs[0].langs[0];
     assert_eq!(load.symbol, "load");
-    load.receiver = Some("ConfigLoader".into());
+    load.symbol = "ConfigLoader.load".into();
     let decls = rendered_decls(&module);
     let seam_decl = decls
         .iter()
@@ -496,18 +497,16 @@ fn a_class_reference_imports_the_handle_class_and_passes_it() {
     );
 }
 
-/// The instantiation's own `ts` name is the class the library exports, so a
-/// class reference spells that name, verbatim, never the cased handle name.
+/// The handle's `ts` block names the class the library exports, so a class
+/// reference spells that name, verbatim, never the cased handle name.
 #[test]
 fn a_class_reference_spells_the_instantiation_ts_name_verbatim() {
     let mut module = appendix_module(appendix_fields());
-    module.ext_libs[1].types[0].instance = Some(crate::ir::Instance {
-        names: vec![crate::ir::InstanceName {
-            lang: "ts".into(),
-            name: "QueuePublisher".into(),
-        }],
-        arg: Tref::Prim(Prim::String),
-    });
+    module.ext_libs[1].types[0].langs = vec![crate::ir::ForeignLang {
+        lang: "ts".into(),
+        name: "QueuePublisher".into(),
+        fields: Default::default(),
+    }];
     module.ext_libs[1].externs[0].langs[0].call_args =
         vec![crate::ir::CallArg::TypeRef("publisher".into())];
     let out = rendered_text(&module);

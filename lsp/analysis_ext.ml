@@ -21,26 +21,19 @@ let contains (s : Span.span) (off : int) : bool =
 
 (* --- where the cursor is, read off the token stream --- *)
 
-(* The braces of an ext block nest as ext { extern { lang { ... } } } and
-   ext { type { extern { lang { ... } } } }; the frame kind is what decides
-   which words read as constructs and which completions apply. Read from
-   tokens rather than the AST because the parser collapses the span of an
-   unclosed block, and completion runs mid-edit, on unclosed blocks. *)
-type frame = Ext | Extern | Lang | Type | Other
-
-(* The word that will name the next frame opened at the current depth: only a
-   block word standing where a declaration begins (after `{`, `}`, `,`, or
-   the string closing a language path) counts, so an extern parameter named
-   `type` does not. *)
-let starts_decl (prev : Token.kind option) : bool =
-  match prev with
-  | None | Some (Token.LBrace | Token.RBrace | Token.Comma | Token.Str _) ->
-      true
-  | Some _ -> false
+(* The braces of an ext block nest as ext { op { lang { ... } } } and
+   ext { struct { op { lang { ... } } } }, with a language block of the
+   header or of a struct (lang { #(...) }) opening directly under Ext or
+   Struct; the frame kind is what decides which words read as constructs and
+   which completions apply. Read from tokens rather than the AST because the
+   parser collapses the span of an unclosed block, and completion runs
+   mid-edit, on unclosed blocks. *)
+type frame = Ext | Struct | Op | Lang | Block | Other
 
 type state = {
   stack : frame list;
-  pending : string option; (* the block word seen since the last brace *)
+  pending : Token.kind option;
+      (* the declaration keyword since the last brace *)
   prev : Token.kind option;
   prev2 : Token.kind option;
 }
@@ -54,9 +47,10 @@ let step (st : state) (k : Token.kind) : state =
       let frame =
         match (top st, st.pending, st.prev, st.prev2) with
         | _, _, Some (Token.Ident _), Some Token.KwExt -> Ext
-        | (Ext | Type), Some "extern", _, _ -> Extern
-        | Ext, Some "type", _, _ -> Type
-        | Extern, _, Some (Token.Ident _), _ -> Lang
+        | Ext, Some Token.KwStruct, _, _ -> Struct
+        | (Ext | Struct), Some Token.KwOp, _, _ -> Op
+        | Op, _, Some (Token.Ident _), _ -> Lang
+        | (Ext | Struct), None, Some (Token.Ident _), _ -> Block
         | _ -> Other
       in
       { st' with stack = frame :: st.stack; pending = None }
@@ -64,11 +58,9 @@ let step (st : state) (k : Token.kind) : state =
       match st.stack with
       | _ :: rest -> { st' with stack = rest; pending = None }
       | [] -> st')
-  | Token.Ident w
-    when List.mem w Vocab.block_words
-         && (match top st with Ext | Type -> true | _ -> false)
-         && starts_decl st.prev ->
-      { st' with pending = Some w }
+  | (Token.KwStruct | Token.KwOp) as kw
+    when match top st with Ext | Struct -> true | _ -> false ->
+      { st' with pending = Some kw }
   | _ -> st'
 
 let initial = { stack = []; pending = None; prev = None; prev2 = None }
@@ -83,11 +75,11 @@ let frame_at (toks : Token.t list) (off : int) : frame =
   in
   top st
 
-(* The construct word the token at [off] spells, if any: extern/type where a
-   declaration begins in an ext (or type) body, a language-block field or
-   marker inside a language block, and the leading-dot `.request` reference
-   anywhere (a dot after an identifier is a path or a qualifier, so
-   `http.request` is not it). *)
+(* The construct word the token at [off] spells, if any: a language-block
+   line (call/yields/returns) inside a language block, and the leading-dot
+   `.request` reference anywhere (a dot after an identifier is a path or a
+   qualifier, so `http.request` is not it). The block's declarations are
+   keywords, which [Analysis] already resolves on its own. *)
 let word_at (toks : Token.t list) (off : int) : string option =
   let is_ident (t : Token.t) =
     match t.kind with Token.Ident _ -> true | _ -> false
@@ -99,18 +91,7 @@ let word_at (toks : Token.t list) (off : int) : string option =
     | (t : Token.t) :: rest ->
         if contains t.span off && is_ident t then
           match t.kind with
-          | Token.Ident w
-            when List.mem w Vocab.block_words
-                 && (match top st with Ext | Type -> true | _ -> false)
-                 && starts_decl st.prev ->
-              Some w
-          | Token.Ident w when List.mem w Vocab.lang_body_words && top st = Lang
-            ->
-              Some w
-          (* A type-header marker sits between the handle's name and its
-             opening brace: the "type" word is still pending there. *)
-          | Token.Ident w
-            when List.mem w Vocab.type_markers && st.pending = Some "type" ->
+          | Token.Ident w when List.mem w Vocab.lang_fields && top st = Lang ->
               Some w
           | Token.Ident w
             when String.equal w Vocab.request_ref
@@ -152,7 +133,7 @@ let extern_items (externs : Ast.extern_decl list) : CompletionItem.t list =
   List.map
     (fun (e : Ast.extern_decl) ->
       CompletionItem.create ~label:e.Ast.ed_name ~kind:CompletionItemKind.Method
-        ~detail:("extern " ^ extern_signature e)
+        ~detail:("op " ^ extern_signature e)
         ())
     externs
 
@@ -238,22 +219,17 @@ let symbols ~(range : Span.span -> Range.t) (b : Ast.ext_lib_body) :
              s.Ast.fs_fields) )
   in
   let type_sym (t : Ast.opaque_type) =
+    (* The outline shows how each target holds the handle, the one thing
+       its header says. *)
     let name =
-      match t.Ast.opq_instance with
-      | None -> t.Ast.opq_name
-      | Some i ->
-          let foreign =
-            match i.Ast.oi_names with
-            | Ast.OnShared (name, _) -> name
-            | Ast.OnPerLang entries ->
-                String.concat ", "
-                  (List.map
-                     (fun (e : Ast.opaque_name_entry) ->
-                       e.one_lang ^ ": " ^ e.one_name)
-                     entries)
-          in
-          Printf.sprintf "%s (%s[%s])" t.Ast.opq_name foreign
-            (Printer.print_ty i.Ast.oi_arg)
+      match t.Ast.opq_langs with
+      | [] -> t.Ast.opq_name
+      | langs ->
+          Printf.sprintf "%s (%s)" t.Ast.opq_name
+            (String.concat ", "
+               (List.map
+                  (fun (b : Ast.lang_block) -> b.Ast.lb_lang ^ ": " ^ b.lb_head)
+                  langs))
     in
     ( t.Ast.opq_span.Span.start.offset,
       node ~kind:SymbolKind.Class ~name ~span:t.Ast.opq_name_span

@@ -25,19 +25,51 @@ fn literal_of_json(v: &serde_json::Value) -> String {
 /// recursively — the two call sites this serves (a field's own construction
 /// call and an op's `impl` method call) differ only in what a `Ref` reads,
 /// so that is the one thing the caller supplies).
-/// The Go element type of a variadic parameter's collection, or `None` when
-/// it cannot be resolved (a non-handle logical type -- the bench only
-/// exercises a handle-typed collection, `Vec<Box<dyn Calculator<T>>>`'s Go
-/// counterpart -- or a handle the `ext` block does not declare). Reused for
-/// both a variadic slice's own element type and its spread.
-fn variadic_element_go_type(
+/// The conversion a parameter spelled under its own Go type goes through:
+/// a variadic slot (`...T`) spreads the caller's collection, a builtin
+/// numeric type converts (`int(v)`), the parameter's own default spelling
+/// passes as is. Anything else has no conversion Go can write, and
+/// `validate_calls::param_spelling_coerces` refuses it before generation.
+pub(in super::super) fn coerce(
     module: &Module,
-    param: &ExternParam,
-    refs: &mut Vec<Symbol>,
-) -> Option<String> {
-    let (handle_lib, handle_ty) = foreign_handle(&param.r#type, module)?;
-    let handle = handle_lib.types.iter().find(|t| t.name == handle_ty)?;
-    handle_go_type(handle_lib, handle, refs)
+    lib: &ExtLib,
+    param_type: &Tref,
+    spelling: &str,
+    expr: &str,
+    list_items: Option<&[String]>,
+) -> Result<String, String> {
+    let alias = lib_ident(&lib.name);
+    if let Some(elem) = foreign_spelling::variadic(spelling) {
+        let elem_ty = qualify(elem, &alias, module);
+        return Ok(match list_items {
+            Some(items) => format!("[]{elem_ty}{{{}}}...", items.join(", ")),
+            None => format!("{expr}..."),
+        });
+    }
+    let default = spelled_type(module, param_type);
+    if go_builtin(spelling) && spelling != default {
+        return Ok(format!("{spelling}({expr})"));
+    }
+    if qualify(spelling, &alias, module) == default {
+        return Ok(expr.to_string());
+    }
+    Err(format!(
+        "cannot pass a {default} as {spelling} in Go: no conversion from {default} to {spelling}"
+    ))
+}
+
+/// The Go type a logical type already has at the boundary: a handle's
+/// declared storage (or a slice of them), else the ordinary mapping.
+fn spelled_type(module: &Module, t: &Tref) -> String {
+    match t {
+        Tref::List(inner) => format!("[]{}", spelled_type(module, inner)),
+        _ => foreign_handle(t, module)
+            .and_then(|(lib, ty)| {
+                let handle = lib.types.iter().find(|h| h.name == ty)?;
+                handle_go_type(lib, handle, module, &mut Vec::new())
+            })
+            .unwrap_or_else(|| go_type(t)),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -48,52 +80,83 @@ pub(in super::super) fn call_arg_expr(
     arg: &CallArg,
     params: &[ExternParam],
     entry_args: &[CallArg],
+    ctx_expr: &str,
     ref_expr: &mut dyn FnMut(&[String]) -> String,
 ) -> String {
     match arg {
         CallArg::Param(name) => {
             let idx = params.iter().position(|p| p.name == *name);
-            let param = idx.map(|i| &params[i]);
             match idx.and_then(|i| entry_args.get(i)) {
-                // A variadic parameter's own actual argument is, by
-                // construction, a `CallArg::List`: spread it as a typed
-                // slice (`[]GoType{...}...`) instead of recursing into the
-                // generic, untyped `[]any{...}` the `List` branch below
-                // renders -- Go cannot spread `[]any` into `...Option`.
-                Some(CallArg::List(items)) if param.is_some_and(|p| p.variadic) => {
-                    let elem_ty = variadic_element_go_type(module, param.unwrap(), refs)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "cannot resolve the Go element type of variadic parameter {:?}",
-                                param.unwrap().name
-                            )
-                        });
-                    let rendered: Vec<String> = items
-                        .iter()
-                        .map(|a| call_arg_expr(refs, module, lib, a, params, entry_args, ref_expr))
-                        .collect();
-                    format!("[]{elem_ty}{{{}}}...", rendered.join(", "))
-                }
-                Some(actual) => {
-                    call_arg_expr(refs, module, lib, actual, params, entry_args, ref_expr)
-                }
+                Some(actual) => call_arg_expr(
+                    refs, module, lib, actual, params, entry_args, ctx_expr, ref_expr,
+                ),
                 // Unreachable through `tono check`: an extern's own params
                 // and its per-language `call:` args are arity-checked
                 // against each other on the frontend.
                 None => "nil".to_string(),
             }
         }
+        // The parameter crosses under its own Go spelling: the caller's
+        // actual argument, converted as the spelling asks (a variadic slot
+        // spreads a list literal as a typed slice, `[]T{...}...`, since Go
+        // cannot spread `[]any`).
+        CallArg::ParamAs { name, spelling } => {
+            let idx = params.iter().position(|p| p.name == *name);
+            let (Some(param), Some(actual)) =
+                (idx.map(|i| &params[i]), idx.and_then(|i| entry_args.get(i)))
+            else {
+                return "nil".to_string();
+            };
+            let items: Option<Vec<String>> = match actual {
+                CallArg::List(items) => Some(
+                    items
+                        .iter()
+                        .map(|a| {
+                            call_arg_expr(
+                                refs, module, lib, a, params, entry_args, ctx_expr, ref_expr,
+                            )
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            };
+            let expr = match &items {
+                Some(_) => String::new(),
+                None => call_arg_expr(
+                    refs, module, lib, actual, params, entry_args, ctx_expr, ref_expr,
+                ),
+            };
+            coerce(
+                module,
+                lib,
+                &param.r#type,
+                spelling,
+                &expr,
+                items.as_deref(),
+            )
+            .unwrap_or_else(|e| {
+                panic!("{e}; validate_calls::param_spelling_coerces should have refused it")
+            })
+        }
+        // A declared position: the context, bound by the emitter (the
+        // spelling is checked against `ctx context.Context` by
+        // `validate_calls::foreign_position_binds`).
+        CallArg::Foreign(_) => ctx_expr.to_string(),
         CallArg::Ref(path) => ref_expr(path),
         CallArg::Lit(v) => literal_of_json(v),
         CallArg::List(items) => format!(
             "[]any{{{}}}",
             items
                 .iter()
-                .map(|a| call_arg_expr(refs, module, lib, a, params, entry_args, ref_expr))
+                .map(|a| call_arg_expr(
+                    refs, module, lib, a, params, entry_args, ctx_expr, ref_expr
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        CallArg::Ctor(ctor) => ctor_expr(refs, module, lib, ctor, params, entry_args, ref_expr),
+        CallArg::Ctor(ctor) => ctor_expr(
+            refs, module, lib, ctor, params, entry_args, ctx_expr, ref_expr,
+        ),
         // A cross-extern call standing as another call's own argument (e.g.
         // a ctor field's value naming a declared extern): Go codegen has no
         // case for it yet. `TargetKind::emits_nested_extern_call_args`
@@ -120,24 +183,29 @@ pub(in super::super) fn call_arg_expr(
         // the same package as the enclosing `call:`, so it is qualified and
         // imported the same way `ctor_expr` qualifies a foreign struct.
         CallArg::SymbolCall(sc) => {
-            let Some(path) = lib_go_path(lib) else {
+            let Some(alias) = import_lib(refs, lib) else {
                 return "nil".to_string();
             };
-            let ident = lib_ident(&lib.name);
-            refs.push(import(&ident, path));
+            let rendered: Vec<String> = sc
+                .args
+                .iter()
+                .map(|a| {
+                    call_arg_expr(refs, module, lib, a, params, entry_args, ctx_expr, ref_expr)
+                })
+                .collect();
             format!(
-                "{ident}.{}({})",
-                sc.symbol,
-                sc.args
-                    .iter()
-                    .map(|a| call_arg_expr(refs, module, lib, a, params, entry_args, ref_expr))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "{}({})",
+                qualify(&sc.symbol, &alias, module),
+                rendered.join(", ")
             )
         }
     }
 }
 
+/// A foreign struct literal: the form's own Go type, from its `go` block,
+/// with each field's value converted when the block spells the field under
+/// its own type. A form with no `go` block does not exist in Go;
+/// `validate_calls::foreign_form_declared` refuses the binding first.
 #[allow(clippy::too_many_arguments)]
 fn ctor_expr(
     refs: &mut Vec<Symbol>,
@@ -146,26 +214,46 @@ fn ctor_expr(
     ctor: &CallCtor,
     params: &[ExternParam],
     entry_args: &[CallArg],
+    ctx_expr: &str,
     ref_expr: &mut dyn FnMut(&[String]) -> String,
 ) -> String {
-    let path = lib_go_path(lib);
-    let Some(path) = path else {
+    let Some(alias) = import_lib(refs, lib) else {
         return "nil".to_string();
     };
-    let ident = lib_ident(&lib.name);
-    refs.push(import(&ident, path));
+    let form = lib.structs.iter().find(|s| s.name == ctor.name);
+    let Some(block) = form.and_then(|f| f.lang("go")) else {
+        panic!(
+            "foreign struct {:?} declares no go block; validate_calls::foreign_form_declared should have refused it",
+            ctor.name
+        );
+    };
     let fields: Vec<String> = ctor
         .fields
         .iter()
         .map(|(name, value)| {
-            let expr = call_arg_expr(refs, module, lib, value, params, entry_args, ref_expr);
+            let expr = call_arg_expr(
+                refs, module, lib, value, params, entry_args, ctx_expr, ref_expr,
+            );
+            let declared = form.and_then(|f| f.fields.iter().find(|ff| ff.name == *name));
+            let expr = match (block.fields.get(name), declared) {
+                (Some(spelling), Some(ff)) => {
+                    coerce(module, lib, &ff.r#type, spelling, &expr, None).unwrap_or_else(|e| {
+                        panic!("{e}; validate_calls::field_spelling_coerces should have refused it")
+                    })
+                }
+                _ => expr,
+            };
             // Mirrors the foreign side's own field spelling verbatim, like
             // a declared foreign struct's fields: the ctor's field key is
             // written exactly as the caller declared it.
             format!("{name}: {expr}")
         })
         .collect();
-    format!("{ident}.{}{{{}}}", pascal(&ctor.name), fields.join(", "))
+    format!(
+        "{}{{{}}}",
+        qualify(&block.name, &alias, module),
+        fields.join(", ")
+    )
 }
 
 fn yields_path_expr(yields_vars: &HashMap<String, String>, path: &[String]) -> String {
@@ -250,64 +338,86 @@ pub(in super::super) fn returns_expr(
     (pre, format!("{ty}{{{}}}", parts.join(", ")))
 }
 
-/// The declared-error literal an `errors:` sentinel maps to: the shape's own
-/// Go type, with its first required string-like member filled from the
-/// wrapped Go error's message (the closest a bespoke sentinel gets to a
-/// reason, matching the `Cause`/`Message` shape every other boundary wrap in
-/// this target uses), or a bare zero value when no such member exists.
+/// The declared-error literal a recognized foreign error builds: the
+/// shape's own Go type, each field the `go` block maps filled from its
+/// source on the matched value (`Message: err.Error()`,
+/// `RetryAfter: target.RetryAfter`); an unmapped field keeps its zero
+/// value.
 pub(in super::super) fn declared_error_literal(
     module: &Module,
     config: &crate::codegen::casing::CasingConfig,
-    type_name: &str,
-    err_var: &str,
+    shape_id: &str,
+    source: &str,
+    fields: &std::collections::BTreeMap<String, String>,
 ) -> String {
-    let ty = pascal(type_name);
-    let message = module
+    let ty = pascal(crate::codegen::entries::local_name(shape_id));
+    let members = module
         .shapes
         .iter()
-        .find(|s| crate::codegen::entries::local_name(&s.id) == type_name)
+        .find(|s| s.id == shape_id)
         .and_then(|shape| match &shape.kind {
-            ShapeKind::Structure { members, .. } => members
-                .iter()
-                .find(|m| m.required && matches!(m.target, Tref::Prim(Prim::String))),
+            ShapeKind::Structure { members, .. } => Some(members),
             _ => None,
+        });
+    let parts: Vec<String> = members
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let spelling = fields.get(&m.name)?;
+            let field = crate::codegen::conventions::field_ident(m, config, super::super::LANG);
+            Some(format!("{field}: {source}.{spelling}"))
         })
-        .map(|m| crate::codegen::conventions::field_ident(m, config, super::super::LANG));
-    match message {
-        Some(field) => format!("&{ty}{{{field}: {err_var}.Error()}}"),
-        None => format!("&{ty}{{}}"),
-    }
+        .collect();
+    format!("&{ty}{{{}}}", parts.join(", "))
 }
 
-/// The error-handling block after a call assigns `err_var`: a declared
-/// sentinel discriminates via `errors.Is` into its typed SDK error, in
-/// declared order; anything else (including no `errors:` at all) becomes a
-/// `ContractError` naming the extern. `ret` turns a built error expression
-/// into the caller's own `return` statement (a construction call always
-/// returns `nil, err`; an op method returns its own zero value).
+/// The error-handling block after a call assigns `err_var`: each error the
+/// op declares (`@errors`, in declared order) is recognized the way its own
+/// `go` block says, a sentinel by identity (`errors.Is`) or a pointer type
+/// by type (`errors.As`), and built from the sources the block maps each
+/// field to; anything else (including an error with no `go` block, or no
+/// declared errors at all) becomes a `ContractError` naming the extern.
+/// `ret` turns a built error expression into the caller's own `return`
+/// statement (a construction call always returns `nil, err`; an op method
+/// returns its own zero value).
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn error_block(
     refs: &mut Vec<Symbol>,
     module: &Module,
     config: &CasingConfig,
     lib: &ExtLib,
-    errors: &[ErrorBinding],
+    errors: &[String],
     contract_name: &str,
     err_var: &str,
     ret: &dyn Fn(String) -> String,
 ) -> String {
     let contract = error_names().contract;
     let mut arms = String::new();
-    if !errors.is_empty() {
+    let bindings: Vec<(&String, ForeignLang)> = errors
+        .iter()
+        .filter_map(|id| ForeignLang::of_error(module, id, "go").map(|fl| (id, fl)))
+        .collect();
+    if !bindings.is_empty() {
         if let Some(alias) = import_lib(refs, lib) {
             refs.push(import("errors", "errors"));
-            for binding in errors {
-                let literal = declared_error_literal(module, config, &binding.r#type, err_var);
-                arms.push_str(&format!(
-                    "\tif errors.Is({err_var}, {alias}.{sentinel}) {{\n\t\t{ret_stmt}\n\t}}\n",
-                    sentinel = binding.sentinel,
-                    ret_stmt = ret(literal),
-                ));
+            for (i, (id, fl)) in bindings.iter().enumerate() {
+                let sentinel = qualify(&fl.name, &alias, module);
+                if fl.name.starts_with('*') {
+                    // A pointer type: matched by type, the matched value
+                    // being where the fields come from.
+                    let target = format!("{err_var}As{i}");
+                    let literal = declared_error_literal(module, config, id, &target, &fl.fields);
+                    arms.push_str(&format!(
+                        "\tvar {target} {sentinel}\n\tif errors.As({err_var}, &{target}) {{\n\t\t{ret_stmt}\n\t}}\n",
+                        ret_stmt = ret(literal),
+                    ));
+                } else {
+                    let literal = declared_error_literal(module, config, id, err_var, &fl.fields);
+                    arms.push_str(&format!(
+                        "\tif errors.Is({err_var}, {sentinel}) {{\n\t\t{ret_stmt}\n\t}}\n",
+                        ret_stmt = ret(literal),
+                    ));
+                }
             }
         }
     }

@@ -1,17 +1,19 @@
 // Capability 8: construction by `new`. ConstantCalculator is a class; the
-// `new` marker opts the binding into `new Symbol(args)` instead of a plain
-// call.
+// callee spelling carries the `new`, so the binding renders as
+// `new ConstantCalculator(value)` instead of a plain call.
 ext mathkit {
-  ts: "@tono-ext-fixture/mathkit"
+  ts { #(@tono-ext-fixture/mathkit) }
 
-  type calculator("Calculator", float) {
-    extern compute(): float {
-      ts { call: "compute"() sync }
+  struct calculator {
+    ts { #(Calculator<number>) }
+
+    op compute(): float {
+      ts { call: #(compute)() }
     }
   }
 
-  extern from_constant(value: float): calculator {
-    ts { call: "ConstantCalculator"(value) new }
+  op from_constant(value: float): calculator {
+    ts { call: #(new ConstantCalculator)(value) }
   }
 }
 

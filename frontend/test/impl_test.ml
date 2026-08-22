@@ -158,16 +158,16 @@ let op_impl_conflicts_with_ext_impl () =
     "op impl and ext impl both bind the same op" [ "TC0050" ]
     (codes
        "ext bus {\n\
-       \  go: \"github.com/x/bus\"\n\
+       \  go { #(github.com/x/bus) }\n\
        \  struct go_ack { OK: bool }\n\
-       \  type publisher {\n\
-       \    extern send(topic: string): ack {\n\
-       \      go { call: \"Send\"(topic) yields: (a: go_ack) returns: ack { \
+       \  struct publisher {\n\
+       \    op send(topic: string): ack {\n\
+       \      go { call: #(Send)(topic) yields: (a: go_ack) returns: ack { \
         accepted: .a.OK } }\n\
        \    }\n\
        \  }\n\
-       \  extern connect(endpoint: string): publisher {\n\
-       \    go { call: \"Connect\"(endpoint) }\n\
+       \  op connect(endpoint: string): publisher {\n\
+       \    go { call: #(Connect)(endpoint) }\n\
        \  }\n\
         }\n\
         pub struct ack { accepted: bool }\n\

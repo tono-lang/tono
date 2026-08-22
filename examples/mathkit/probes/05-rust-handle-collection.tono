@@ -1,24 +1,25 @@
 // Capability 5: a collection of handles as an argument. from_fallback takes
 // Vec<Box<dyn Calculator<T>>>, the handles the caller already built. The
-// handle is held behind the trait (the "interface" marker), so it is
-// already stored as Box<dyn Calculator<f64>>; the variadic logical
-// parameter's own list literal collects the two already-built handles into
-// exactly that Vec.
+// handle is stored as Box<dyn Calculator<f64>>, so the caller's list literal
+// collects the two already-built handles into exactly that Vec.
 ext mathkit {
-  rust: "mathkit"
+  rust { #(mathkit) }
 
-  type calculator(rust: "Calculator", float) interface {
-    extern compute(): float {
-      rust { call: "compute"() }
+  struct calculator {
+    rust { #(Box<dyn Calculator<f64>>) }
+
+    @async(rust)
+    op compute(): float {
+      rust { call: #(compute)() }
     }
   }
 
-  extern from_constant(value: float): calculator {
-    rust { call: "from_constant"(value) sync }
+  op from_constant(value: float): calculator {
+    rust { call: #(from_constant)(value) }
   }
 
-  extern from_fallback(strategy: string, calcs: calculator variadic): calculator {
-    rust { call: "from_fallback"(strategy, calcs) sync }
+  op from_fallback(strategy: string, calcs: []calculator): calculator {
+    rust { call: #(from_fallback)(strategy, calcs: #(Vec<Box<dyn Calculator<f64>>>)) }
   }
 }
 

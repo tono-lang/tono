@@ -33,6 +33,10 @@ let escaped_string (s : string) : string =
   Buffer.add_char b '"';
   Buffer.contents b
 
+(* A foreign spelling prints back exactly as it was written: the lexer keeps
+   the bytes between the parentheses verbatim, so nothing is escaped. *)
+let foreign_spelling (s : string) : string = "#(" ^ s ^ ")"
+
 let string_literal (s : string) : string =
   (* A multi-line string (a doc, typically) prints in triple-quote form so it
      stays readable and round-trips its newlines verbatim. The triple-quote lexer
@@ -144,10 +148,11 @@ and print_call_arg (a : Ast.call_arg) : string =
   | Ast.CaCall nc -> print_nested_call nc
   | Ast.CaList (items, _) ->
       "[" ^ String.concat ", " (List.map print_call_arg items) ^ "]"
-  | Ast.CaType (n, _) -> "type " ^ n
+  | Ast.CaParamAs (n, _, sp, _) -> n ^ ": " ^ foreign_spelling sp
+  | Ast.CaForeign (s, _) -> foreign_spelling s
 
 and print_nested_call (nc : Ast.nested_call) : string =
-  string_literal nc.Ast.nc_symbol
+  foreign_spelling nc.Ast.nc_symbol
   ^ "("
   ^ String.concat ", " (List.map print_call_arg nc.Ast.nc_args)
   ^ ")"
@@ -383,19 +388,51 @@ let braced_at ~(indent : string) (header : string) (lines : string list) :
   | [] -> indent ^ header ^ " {}"
   | ls -> indent ^ header ^ " {\n" ^ String.concat "\n" ls ^ "\n" ^ indent ^ "}"
 
+(* A language block on a struct (or the ext header's module path): the
+   head spelling first, then each field's spelling, on one line when short.
+   Two spaces separate the head from the fields, so the eye finds the
+   positional element before the keyed ones. *)
+let print_lang_block ~indent (b : Ast.lang_block) : string =
+  let fields =
+    List.map
+      (fun (n, _, sp, _) -> n ^ ": " ^ foreign_spelling sp)
+      b.Ast.lb_fields
+  in
+  let one_line =
+    indent ^ b.Ast.lb_lang ^ " { "
+    ^ String.concat "  " (foreign_spelling b.Ast.lb_head :: fields)
+    ^ " }"
+  in
+  if String.length one_line <= 100 then one_line
+  else
+    braced_at ~indent b.Ast.lb_lang
+      (List.map
+         (fun l -> indent ^ "  " ^ l)
+         (foreign_spelling b.Ast.lb_head :: fields))
+
 let print_lang_path ~indent (lp : Ast.lang_path) : string =
-  indent ^ lp.Ast.lp_lang ^ ": " ^ escaped_string lp.Ast.lp_path
+  indent ^ lp.Ast.lp_lang ^ " { " ^ foreign_spelling lp.Ast.lp_path ^ " }"
 
 let print_foreign_field ~indent (f : Ast.foreign_field) : string =
   indent ^ f.Ast.ff_name ^ ": " ^ print_ty f.Ast.ff_type
 
-let print_foreign_struct ~indent (s : Ast.foreign_struct) : string =
-  braced_at ~indent
-    ("struct " ^ s.Ast.fs_name)
-    (List.map (print_foreign_field ~indent:(indent ^ "  ")) s.Ast.fs_fields)
+(* Sections of a body separated by a blank line whenever both are non-empty;
+   whitespace is insignificant to the grammar, so this only needs to be
+   deterministic. *)
+let join_sections (sections : string list list) : string list =
+  List.fold_left
+    (fun acc lines ->
+      match (acc, lines) with
+      | _, [] -> acc
+      | [], ls -> ls
+      | acc, ls -> acc @ ("" :: ls))
+    [] sections
 
 let print_yields_ty (t : Ast.yields_ty) : string =
-  match t with Ast.YType t -> print_ty t | Ast.YError _ -> "error"
+  match t with
+  | Ast.YType t -> print_ty t
+  | Ast.YError _ -> "error"
+  | Ast.YForeign (s, _) -> foreign_spelling s
 
 let print_yields ~indent (ys : Ast.yields_pos list) : string =
   indent ^ "yields: ("
@@ -419,53 +456,36 @@ let print_returns ~indent (r : Ast.returns_lit) : string =
     ("returns: " ^ print_ty r.Ast.rl_type)
     (List.map (print_returns_field ~indent:(indent ^ "  ")) r.Ast.rl_fields)
 
-let print_errors ~indent (es : Ast.error_map_entry list) : string =
-  braced_at ~indent "errors:"
-    (List.map
-       (fun (e : Ast.error_map_entry) ->
-         indent ^ "  " ^ escaped_string e.em_sentinel ^ " => " ^ e.em_type)
-       es)
-
-let print_call ~indent ?receiver (symbol : string) (args : Ast.call_arg list) :
-    string =
-  let receiver =
-    match receiver with Some r -> escaped_string r ^ "." | None -> ""
-  in
-  indent ^ "call: " ^ receiver ^ escaped_string symbol ^ "("
+let print_call ~indent (symbol : string) (args : Ast.call_arg list) : string =
+  indent ^ "call: " ^ foreign_spelling symbol ^ "("
   ^ String.concat ", " (List.map print_call_arg args)
   ^ ")"
 
+(* A binding with only a call: line prints on one line, the common case
+   ("go { call: #(Compute)(#(ctx context.Context)) }"); one with yields or
+   returns opens a block. *)
 let print_extern_lang_body ~indent (b : Ast.extern_lang_body) : string =
   let inner = indent ^ "  " in
-  let call_line =
-    [
-      print_call ~indent:inner ?receiver:b.Ast.elb_call_receiver
-        b.elb_call_symbol b.elb_call_args;
-    ]
-  in
-  let yields_line =
-    match b.Ast.elb_yields with
-    | Some ys -> [ print_yields ~indent:inner ys ]
-    | None -> []
-  in
-  let returns_lines =
-    match b.Ast.elb_returns with
-    | Some r -> [ print_returns ~indent:inner r ]
-    | None -> []
-  in
-  let errors_lines =
-    if b.Ast.elb_errors = [] then []
-    else [ print_errors ~indent:inner b.elb_errors ]
-  in
-  let sync_lines = if b.Ast.elb_sync then [ inner ^ "sync" ] else [] in
-  let infallible_lines =
-    if b.Ast.elb_infallible then [ inner ^ "infallible" ] else []
-  in
-  let ctx_lines = if b.Ast.elb_ctx then [ inner ^ "ctx" ] else [] in
-  let new_lines = if b.Ast.elb_new then [ inner ^ "new" ] else [] in
-  braced_at ~indent b.Ast.elb_lang
-    (call_line @ sync_lines @ infallible_lines @ ctx_lines @ new_lines
-   @ yields_line @ returns_lines @ errors_lines)
+  match (b.Ast.elb_yields, b.Ast.elb_returns) with
+  | None, None ->
+      indent ^ b.Ast.elb_lang ^ " { "
+      ^ print_call ~indent:"" b.Ast.elb_call_symbol b.Ast.elb_call_args
+      ^ " }"
+  | yields, returns ->
+      let call_line =
+        [ print_call ~indent:inner b.elb_call_symbol b.elb_call_args ]
+      in
+      let yields_line =
+        match yields with
+        | Some ys -> [ print_yields ~indent:inner ys ]
+        | None -> []
+      in
+      let returns_lines =
+        match returns with
+        | Some r -> [ print_returns ~indent:inner r ]
+        | None -> []
+      in
+      braced_at ~indent b.Ast.elb_lang (call_line @ yields_line @ returns_lines)
 
 let print_extern ~indent (e : Ast.extern_decl) : string =
   let inner = indent ^ "  " in
@@ -473,48 +493,54 @@ let print_extern ~indent (e : Ast.extern_decl) : string =
     String.concat ", "
       (List.map
          (fun (p : Ast.extern_param) ->
-           p.Ast.ep_name ^ ": " ^ print_ty p.ep_type
-           ^ if p.ep_variadic then " variadic" else "")
+           p.Ast.ep_name ^ ": " ^ print_ty p.ep_type)
          e.Ast.ed_params)
   in
   let header =
-    "extern " ^ e.Ast.ed_name ^ "(" ^ params ^ "): " ^ print_ty e.ed_return
+    "op " ^ e.Ast.ed_name ^ "(" ^ params ^ "): " ^ print_ty e.ed_return
   in
-  braced_at ~indent header
-    (List.map (print_extern_lang_body ~indent:inner) e.Ast.ed_langs)
+  let above =
+    String.concat ""
+      (List.map (fun t -> indent ^ print_trait t ^ "\n") e.Ast.ed_traits)
+  in
+  above
+  ^ braced_at ~indent header
+      (List.map (print_extern_lang_body ~indent:inner) e.Ast.ed_langs)
+
+(* Ops are blocks, so they are separated from each other by a blank line. *)
+let print_externs ~indent (es : Ast.extern_decl list) : string list =
+  match List.map (print_extern ~indent) es with
+  | [] -> []
+  | first :: rest -> first :: List.concat_map (fun o -> [ ""; o ]) rest
+
+let print_foreign_struct ~indent (s : Ast.foreign_struct) : string =
+  let inner = indent ^ "  " in
+  braced_at ~indent
+    ("struct " ^ s.Ast.fs_name)
+    (join_sections
+       [
+         List.map (print_foreign_field ~indent:inner) s.Ast.fs_fields;
+         List.map (print_lang_block ~indent:inner) s.Ast.fs_langs;
+       ])
 
 let print_opaque_type ~indent (t : Ast.opaque_type) : string =
   let inner = indent ^ "  " in
-  let instance =
-    match t.Ast.opq_instance with
-    | None -> ""
-    | Some i ->
-        let names =
-          match i.Ast.oi_names with
-          | Ast.OnShared (name, _) -> escaped_string name
-          | Ast.OnPerLang entries ->
-              String.concat ", "
-                (List.map
-                   (fun (e : Ast.opaque_name_entry) ->
-                     e.one_lang ^ ": " ^ escaped_string e.one_name)
-                   entries)
-        in
-        "(" ^ names ^ ", " ^ print_ty i.Ast.oi_arg ^ ")"
-  in
-  let marker = if t.Ast.opq_interface then " interface" else "" in
   braced_at ~indent
-    ("type " ^ t.Ast.opq_name ^ instance ^ marker)
-    (List.map (print_extern ~indent:inner) t.Ast.opq_methods)
+    ("struct " ^ t.Ast.opq_name)
+    (join_sections
+       [
+         List.map (print_lang_block ~indent:inner) t.Ast.opq_langs;
+         print_externs ~indent:inner t.Ast.opq_methods;
+       ])
 
-(* Sections (lang paths, structs, opaque types, free externs) are separated
-   by a blank line whenever a later section is non-empty; whitespace is
-   insignificant to the grammar, so this only needs to be deterministic. *)
 let print_ext_lib_body ~indent (b : Ast.ext_lib_body) : string list =
-  let section lines = if lines = [] then [] else "" :: lines in
-  List.map (print_lang_path ~indent) b.Ast.elib_langs
-  @ section (List.map (print_foreign_struct ~indent) b.elib_structs)
-  @ section (List.map (print_opaque_type ~indent) b.elib_types)
-  @ section (List.map (print_extern ~indent) b.elib_externs)
+  join_sections
+    [
+      List.map (print_lang_path ~indent) b.Ast.elib_langs;
+      List.map (print_foreign_struct ~indent) b.elib_structs;
+      List.map (print_opaque_type ~indent) b.elib_types;
+      print_externs ~indent b.elib_externs;
+    ]
 
 let print_decl (d : Ast.decl) : string =
   let pub = if d.Ast.pub then "pub " else "" in
@@ -527,10 +553,18 @@ let print_decl (d : Ast.decl) : string =
       in
       let body =
         match kind with
-        | Ast.DStruct { params; members; ops } ->
+        | Ast.DStruct { params; members; ops; slangs } ->
             (* An entry prints its ops after the fields, separated by a blank
-               line so the construction surface reads apart from the methods. *)
-            let member_lines = List.map print_member members in
+               line so the construction surface reads apart from the methods;
+               an error struct's language blocks follow the fields the same
+               way. *)
+            let member_lines =
+              join_sections
+                [
+                  List.map print_member members;
+                  List.map (print_lang_block ~indent:"  ") slangs;
+                ]
+            in
             (* Ops are blocks (signature plus a trait per line), so they are
                separated from each other the same way declarations are. *)
             let op_lines =

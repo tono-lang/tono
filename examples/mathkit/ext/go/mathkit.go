@@ -40,6 +40,10 @@ func WithPrecision(digits int) Option {
 // not know.
 var ErrNoStrategy = errors.New("mathkit: unknown fallback strategy")
 
+// ErrParse is wrapped by every formula that does not parse, so a caller
+// recognises the failure with errors.Is.
+var ErrParse = errors.New("mathkit: cannot parse expression")
+
 type constant[T any] struct{ value T }
 
 func (c *constant[T]) Compute(ctx context.Context) (T, error) { return c.value, nil }
@@ -61,7 +65,7 @@ func (f *formula[T]) Compute(ctx context.Context) (T, error) {
 	var zero T
 	fields := strings.Fields(f.expr)
 	if len(fields) != 3 {
-		return zero, fmt.Errorf("mathkit: cannot parse %q", f.expr)
+		return zero, fmt.Errorf("%w: %q", ErrParse, f.expr)
 	}
 	a, err := strconv.ParseFloat(fields[0], 64)
 	if err != nil {

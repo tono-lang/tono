@@ -9,6 +9,25 @@ pub struct Ack {
     pub accepted: bool,
 }
 
+/// The library's own error: a variant per failure, the shape a real library
+/// exposes and a generated SDK recognizes by pattern.
+#[derive(Debug)]
+pub enum BusError {
+    Busy,
+    Other(String),
+}
+
+impl std::fmt::Display for BusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BusError::Busy => write!(f, "busy"),
+            BusError::Other(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+impl std::error::Error for BusError {}
+
 // Deliberately not `Clone`: a real handle (a connection, a pool, a
 // provider) typically is not, and the generated SDK must move it rather
 // than assume it can be cloned, both when it is injected and when it is
@@ -17,7 +36,7 @@ pub struct Publisher {
     endpoint: String,
 }
 
-pub async fn connect(endpoint: String, token: String) -> Result<Publisher, String> {
+pub async fn connect(endpoint: String, token: String) -> Result<Publisher, BusError> {
     let _ = token;
     Ok(Publisher { endpoint })
 }
@@ -28,14 +47,14 @@ pub struct Relay {
     tag: String,
 }
 
-pub async fn attach(source: Publisher, tag: String) -> Result<Relay, String> {
+pub async fn attach(source: Publisher, tag: String) -> Result<Relay, BusError> {
     Ok(Relay { source, tag })
 }
 
 impl Relay {
-    pub async fn send(&self, topic: String, body: String) -> Result<Ack, String> {
+    pub async fn send(&self, topic: String, body: String) -> Result<Ack, BusError> {
         if topic == "busy" {
-            return Err("busy".to_string());
+            return Err(BusError::Busy);
         }
         Ok(Ack {
             id: format!("{}:{}:{}:{}", self.source.endpoint, self.tag, topic, body),

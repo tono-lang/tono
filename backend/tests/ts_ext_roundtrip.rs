@@ -91,10 +91,20 @@ fn appendix_model() -> Model {
             ForeignStruct {
                 name: "ts_opts".into(),
                 fields: vec![string_field("region"), string_field("service")],
+                langs: vec![tono_backend::ir::ForeignLang {
+                    lang: "ts".into(),
+                    name: "LoadOptions".into(),
+                    fields: Default::default(),
+                }],
             },
             ForeignStruct {
                 name: "ts_config".into(),
                 fields: vec![string_field("host"), string_field("token")],
+                langs: vec![tono_backend::ir::ForeignLang {
+                    lang: "ts".into(),
+                    name: "Config".into(),
+                    fields: Default::default(),
+                }],
             },
         ],
         types: vec![],
@@ -109,8 +119,11 @@ fn appendix_model() -> Model {
         structs: vec![],
         types: vec![OpaqueType {
             name: "publisher".into(),
-            interface: false,
-            instance: None,
+            langs: vec![tono_backend::ir::ForeignLang {
+                lang: "ts".into(),
+                name: "Publisher".into(),
+                fields: Default::default(),
+            }],
             methods: vec![],
         }],
         externs: vec![connect_publisher_extern("companybus#publisher")],
@@ -265,11 +278,15 @@ fn handle_call_model() -> Model {
                 name: "ok".into(),
                 r#type: Tref::Prim(Prim::Bool),
             }],
+            langs: vec![],
         }],
         types: vec![OpaqueType {
             name: "publisher".into(),
-            interface: false,
-            instance: None,
+            langs: vec![tono_backend::ir::ForeignLang {
+                lang: "ts".into(),
+                name: "Publisher".into(),
+                fields: Default::default(),
+            }],
             methods: vec![send],
         }],
         externs: vec![connect_publisher_extern("companybus#publisher")],

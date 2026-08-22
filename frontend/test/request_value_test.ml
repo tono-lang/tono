@@ -17,10 +17,10 @@ let has code src = List.mem code (codes src)
 
 let ext_block =
   {|ext companyauth {
-  go: "github.com/company/auth"
+  go { #(github.com/company/auth) }
 
-  extern sign(req: http.request): string {
-    go { call: "Sign"(req) }
+  op sign(req: http.request): string {
+    go { call: #(Sign)(req) }
   }
 }
 |}

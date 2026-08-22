@@ -50,24 +50,31 @@ and ctor_arg = {
 and call_lit = LStr of string | LInt of int | LFloat of float
 
 (* One argument to a call expression (see [call_expr]): the caller's own
-   parameter by name, a field-reference path, a struct-literal mapper — the
-   same shape [ctor_arg] already gives [@body(name { field: value })] — a
+   parameter by name, a field-reference path, a struct-literal mapper (the
+   same shape [ctor_arg] already gives [@body(name { field: value })]), a
    bare literal, a nested foreign-symbol call ([nested_call]), or a list
-   literal (the caller's own value for a [variadic] logical parameter, e.g.
-   [mathkit.from_formula(.expr, [mathkit.with_precision(.digits)])]), or a
-   class reference ([type handle]): a declared opaque handle of the same
-   [ext] block passed as a value, for a library that takes the class itself
-   and constructs on its own. tono never constructs or inspects it, so what
-   crosses is only the handle's foreign name; the name is resolved against
-   the block's handles in the typechecker, not here. *)
+   literal (the caller's own value for a collection parameter).
+
+   Two forms exist only inside a language block's own [call:] line, where
+   the library's shape is declared: [CaParamAs] forwards a parameter that
+   crosses the boundary under a foreign spelling different from tono's own
+   mapping ([values: #(Vec<f64>)], [calcs: #(...Calculator[float64])]), and
+   [CaForeign] is a position whose content is not a tono value at all but a
+   declaration of what the target binds there ([#(ctx context.Context)]).
+
+   A bare name is a parameter; whether it instead names an opaque handle of
+   the same [ext] block (a class reference the library constructs on its
+   own) is resolved in the typechecker against the block's declarations,
+   not here: the grammar has one shape for both. *)
 and call_arg =
   | CaParam of string * Span.span
+  | CaParamAs of string * Span.span * string * Span.span
   | CaRef of ref_path
   | CaCtor of ctor_arg
   | CaLit of call_lit * Span.span
   | CaCall of nested_call
   | CaList of call_arg list * Span.span
-  | CaType of string * Span.span
+  | CaForeign of string * Span.span
 
 (* A bare foreign-symbol call standing in a [call:] argument position, e.g.
    the [WithPrecision(precision)] inside [call: "FromFormula"(expr,
@@ -198,15 +205,18 @@ type ext_sig = { esig_in : ty; esig_out : ty }
 (* ── FFI library blocks: ext <name> { ... } ──────────────────────────────
    The new form of [ext], distinct from the legacy hook/contract/constraint/
    impl kinds above. Declares where a third-party library lives per
-   language, its foreign shapes, and the extern functions/methods that call
-   into it. Surface-and-IR only for now: no typecheck resolves these against
-   each other yet (that is a later task; see [Lower.lower_ext_lib]). *)
+   language, its foreign shapes, and the ops that call into it. Two rules
+   carry the whole block: a foreign spelling is [#(...)], emitted verbatim
+   and never text; and everything specific to one language lives in that
+   language's block, at every level (the header, a struct, a field, an op). *)
 
-(* "lang: "module/path"" — one per-language module path. *)
+(* [lang { #(module/path) }] in the ext header: one per-language module
+   path. *)
 type lang_path = {
   lp_lang : string;
   lp_lang_span : Span.span;
   lp_path : string;
+  lp_path_span : Span.span;
 }
 
 (* A field of a foreign struct, named and cased exactly as the foreign side
@@ -217,18 +227,42 @@ type foreign_field = {
   ff_type : ty;
 }
 
-(* [struct go_config { Host: string, ... }] inside an [ext] block: a foreign
-   shape, never a top-level [DStruct] and never role-classified. *)
+(* One language's block on a struct: [rust { #(FormulaOptions)  precision:
+   #(Option<u8>) }]. The first element is positional and names the foreign
+   thing; what it is depends on the struct: the foreign type of a foreign
+   form, the whole storage type of an opaque handle, the sentinel (or error
+   type) of an error struct. The keyed entries name a tono field and give
+   its foreign spelling (a field type, or where the field comes from on an
+   error value). *)
+type lang_block = {
+  lb_lang : string;
+  lb_lang_span : Span.span;
+  lb_head : string;
+  lb_head_span : Span.span;
+  lb_fields : (string * Span.span * string * Span.span) list;
+  lb_span : Span.span;
+}
+
+(* [struct formula_options { precision: u8  rust { ... } }] inside an [ext]
+   block: a foreign shape, never a top-level [DStruct] and never
+   role-classified. Each language block names the type as that target
+   spells it; a target with no block does not have the form. *)
 type foreign_struct = {
   fs_name : string;
   fs_name_span : Span.span;
   fs_fields : foreign_field list;
+  fs_langs : lang_block list;
   fs_span : Span.span;
 }
 
-(* A [yields:] position's type: an ordinary tono type, or the reserved
-   [error] sentinel — valid only here, nowhere else in the grammar. *)
-type yields_ty = YType of ty | YError of Span.span
+(* A [yields:] position's type: an ordinary tono type, the reserved [error]
+   sentinel (valid only here, nowhere else in the grammar), or a foreign
+   spelling of what the call really returns, for the target to coerce into
+   the declared logical type. *)
+type yields_ty =
+  | YType of ty
+  | YError of Span.span
+  | YForeign of string * Span.span
 
 type yields_pos = {
   yp_name : string;
@@ -253,112 +287,49 @@ type returns_lit = {
   rl_span : Span.span;
 }
 
-(* One [errors: { "sentinel" => TypeName }] entry. *)
-type error_map_entry = {
-  em_sentinel : string;
-  em_sentinel_span : Span.span;
-  em_type : string;
-  em_type_span : Span.span;
-}
-
-(* One per-language block inside an [extern]'s body. [call:] is mandatory
+(* One per-language block inside an ext op's body. [call:] is mandatory
    (its absence is diagnosed, not encoded as an option); the rest are
-   optional lines. *)
+   optional lines. The callee is a foreign spelling, verbatim: a function
+   (`#(Load)`), a generic instantiation (`#(FromConstant[float64])`), a
+   class constructed with `new` (`#(new ConstantCalculator)`), or a static
+   method on a type (`#(FormulaCalculator::parse)`); the target reads only
+   the head identifier out of it, to import. *)
 type extern_lang_body = {
   elb_lang : string;
   elb_lang_span : Span.span;
-  elb_call_receiver : string option;
-  elb_call_receiver_span : Span.span option;
   elb_call_symbol : string;
   elb_call_symbol_span : Span.span;
   elb_call_args : call_arg list;
   elb_yields : yields_pos list option;
   elb_returns : returns_lit option;
-  elb_errors : error_map_entry list;
-  elb_sync : bool;
-  (* Marks a call with no error return (Go's own convention: every call is
-     fallible by default, `(value, error)`; this opts a single-return
-     foreign function like [uuid.NewString() string] out of that shape).
-     Other targets ignore it the same way Go ignores [sync]. *)
-  elb_infallible : bool;
-  (* Opts the call into receiving the target's own cancellation/deadline
-     context in its idiomatic position (Go: `ctx context.Context` as the
-     first parameter). Only meaningful on a foreign handle's own method
-     call; targets that have not landed the equivalent convention ignore
-     it the same way Go ignores [sync]. *)
-  elb_ctx : bool;
-  (* Opts the call into being constructed with `new` (TypeScript's own
-     class-construction syntax) instead of called plainly. Other targets
-     ignore it: neither Go nor Rust has a `new` distinct from an ordinary
-     call. *)
-  elb_new : bool;
   elb_span : Span.span;
 }
 
-type extern_param = {
-  ep_name : string;
-  ep_name_span : Span.span;
-  ep_type : ty;
-  (* Marks this logical parameter as accepting a collection of values
-     (Go's `opts ...Option`, Rust's `Vec<T>`, TypeScript's `T[]`): the call
-     site binds a list for it, and each language's own `call:` materializes
-     it in its own idiom. *)
-  ep_variadic : bool;
-}
+type extern_param = { ep_name : string; ep_name_span : Span.span; ep_type : ty }
 
-(* [extern name(params): type { lang { ... } ... }] — a free function inside
-   an [ext] block, or a method inside a [type] opaque-handle block. *)
+(* [op name(params): type { lang { ... } ... }]: a free function inside an
+   [ext] block, or a method inside an opaque handle's struct. The traits
+   are the ones the rest of the language already has ([@async] listing the
+   targets where the foreign call is asynchronous, [@errors], [@doc]). *)
 type extern_decl = {
   ed_name : string;
   ed_name_span : Span.span;
+  ed_traits : trait list;
   ed_params : extern_param list;
   ed_return : ty;
   ed_langs : extern_lang_body list;
   ed_span : Span.span;
 }
 
-(* One [lang: "ForeignName"] entry inside an instantiation: the same logical
-   handle can name a different foreign type per language (an interface in one
-   target, a trait in another, with each library free to spell its own). *)
-type opaque_name_entry = {
-  one_lang : string;
-  one_lang_span : Span.span;
-  one_name : string;
-  one_name_span : Span.span;
-}
-
-(* The foreign-name part of an instantiation: either one string shared by
-   every language, or one entry per language the ext declares a module path
-   for. Kept as the surface wrote it so the formatter round-trips. *)
-type opaque_names =
-  | OnShared of string * Span.span
-  | OnPerLang of opaque_name_entry list
-
-(* [type name("ForeignName", Arg) { ... }] or
-   [type name(go: "GoName", rust: "RustName", Arg) { ... }] — declares which
-   instantiation of a foreign generic type this opaque handle names: the
-   foreign type's own name (a string, so the origin stays visible; per
-   language when the targets spell it differently) and the tono type argument
-   it is monomorphized with. Absent for a foreign type that is not generic;
-   the handle then keeps being written as [type name { ... }] and its
-   foreign identifier is derived from [opq_name] itself, as before. *)
-type opaque_instance = {
-  oi_names : opaque_names;
-  oi_arg : ty;
-  oi_arg_span : Span.span;
-  oi_span : Span.span;
-}
-
-(* [type name { extern ... }] — an opaque foreign handle whose only members
-   are extern methods; never serializes, never crosses the wire. The
-   [interface] marker declares the foreign type is abstract (a Go interface,
-   held by value), not a concrete struct held by pointer; tono cannot infer
-   that from the foreign name alone, and the two spell differently in Go. *)
+(* [struct calculator { go { #(Calculator[float64]) } op ... }]: an opaque
+   foreign handle: no fields, only methods; never serializes, never crosses
+   the wire. Each language block spells the whole storage type, verbatim:
+   that is what absorbs an interface held by value in Go, a boxed trait in
+   Rust, and a generic instantiation that differs per target. *)
 type opaque_type = {
   opq_name : string;
   opq_name_span : Span.span;
-  opq_instance : opaque_instance option;
-  opq_interface : bool;
+  opq_langs : lang_block list;
   opq_methods : extern_decl list;
   opq_span : Span.span;
 }
@@ -469,9 +440,16 @@ type test_item =
     }
 
 type decl_kind =
-  | DStruct of { params : string list; members : member list; ops : decl list }
+  | DStruct of {
+      params : string list;
+      members : member list;
+      ops : decl list;
+      slangs : lang_block list;
+    }
     (* [ops] are operations declared in the struct body (an "entry"); each is a
-       full decl with [dkind = DOp]. A plain data struct has none. *)
+       full decl with [dkind = DOp]. A plain data struct has none. [slangs]
+       are the language blocks of an error struct: how each target
+       recognizes the foreign error and where each field comes from. *)
   | DEnum of { cases : enum_case list }
   | DUnion of { params : string list; variants : union_variant list }
   | DOp of {

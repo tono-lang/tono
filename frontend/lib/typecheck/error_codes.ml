@@ -191,7 +191,7 @@ let extern_yields_multiple_errors = register "TC0073"
 let extern_yields_required = register "TC0074"
 let extern_returns_type_mismatch = register "TC0075"
 let extern_returns_ref_unknown = register "TC0076"
-let extern_error_sentinel_unknown = register "TC0077"
+let extern_error_unknown = register "TC0077"
 let extern_param_unconsumed = register "TC0078"
 let ext_lib_module_path_conflict = register "TC0079"
 let extern_duplicate_name = register "TC0080"
@@ -249,40 +249,41 @@ let match_null_arm_not_optional = register "TC0090"
    is by definition absent, so there is nothing for "._" to name). *)
 let match_subject_ref_invalid = register "TC0091"
 
-(* An opaque foreign type's instantiation clause (the foreign name plus
-   argument in "type Name(\"Foreign\", Arg) { ... }") is declared more than
-   once with the same foreign name and argument, across a module's "ext"
-   library blocks. *)
-let instance_duplicate = register "TC0092"
+(* A language block on a top-level struct that is not an error struct: the
+   block says how a target recognizes a foreign error and where each field
+   comes from, which only an error (a struct with @status or @errorCode)
+   has a use for. *)
+let struct_lang_block_misplaced = register "TC0092"
 
-(* The `ctx` marker on a language block that is not a foreign handle's own
-   method: it has no idiomatic scope to receive the target's cancellation/
-   deadline context outside a handle method call. *)
-let extern_ctx_on_free_call = register "TC0093"
+(* @async on an ext op naming a target that has no asynchronous call (Go
+   has no await), or one the ext declares no module path for: the trait
+   lists where the foreign call is asynchronous, so a target it cannot
+   apply to is an error, not a no-op. *)
+let extern_async_target_invalid = register "TC0093"
 
 (* A field's own "= .field.method(args)" source names a method whose
    declared logical return is not the field's declared type: the value is
    stored as-is, so the two must agree. *)
 let handle_call_type_mismatch = register "TC0094"
 
-(* A keyed instantiation name list ("type x(go: \"A\", rust: \"B\", arg)")
-   that is not exactly one entry per language the "ext" declares a module
-   path for: a language named twice, a language the ext declares no module
-   path for (same spirit as TC0081), or a declared language left without a
-   name (the emitter for that target would have nothing to spell). *)
-let instance_names_mismatch = register "TC0095"
+(* A language block that does not fit its struct: the same language twice
+   on one struct, a language the enclosing ext declares no module path for
+   (same spirit as TC0081), or, on a top-level error struct, a language that
+   is not a target at all. *)
+let lang_block_mismatch = register "TC0095"
 
-(* A call: line whose receiver is a foreign type name (Type.method) on a
-   handle's own method: the handle is already the receiver there, so naming
-   a type as well says two receivers for one call. *)
-let extern_receiver_on_method = register "TC0096"
+(* A trait on an ext op that is not one the boundary accepts (@async,
+   @errors, @doc): the op's behaviour is declared by its language blocks,
+   and a trait from the rest of the language has no meaning there. *)
+let extern_trait_invalid = register "TC0096"
 
-(* A call: line with a type receiver and the "new" marker: a static method
-   is called on the type, it does not construct it, so "new" has nothing to
-   apply to. *)
-let extern_receiver_with_new = register "TC0097"
+(* A keyed entry of a language block naming no field of its struct, or a
+   keyed entry on an opaque handle at all (a handle has no fields; its block
+   is only the storage type). *)
+let lang_block_field_unknown = register "TC0097"
 
-(* A call: argument passing a class reference ("type name") whose name is
-   not an opaque handle declared in the same ext block: only a declared
-   handle carries the foreign name the emitter spells for it. *)
-let extern_type_arg_unknown = register "TC0098"
+(* A bare name in a call: line that is both a logical parameter of the op
+   and an opaque handle of the same ext block: the parameter would be read
+   where the class reference was meant (or the other way round), so the
+   collision is named instead of resolved one way. *)
+let extern_name_ambiguous = register "TC0098"

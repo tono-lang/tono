@@ -499,12 +499,6 @@ mod tests {
                     call_args: vec![],
                     yields: vec![],
                     returns: None,
-                    errors: vec![],
-                    sync: false,
-                    infallible: false,
-                    ctx: false,
-                    receiver: None,
-                    is_new: false,
                 })
                 .collect::<Vec<_>>()
         };
@@ -519,6 +513,8 @@ mod tests {
                     params: vec![],
                     r#return: Tref::Prim(Prim::String),
                     langs: extern_langs(),
+                    r#async: vec![],
+                    errors: vec![],
                 }],
             },
             ExtLib {
@@ -527,13 +523,25 @@ mod tests {
                 structs: vec![],
                 types: vec![OpaqueType {
                     name: "Publisher".into(),
-                    interface: false,
-                    instance: None,
+                    langs: ["go", "ts", "rust"]
+                        .into_iter()
+                        .map(|l| crate::ir::ForeignLang {
+                            lang: l.into(),
+                            name: if l == "go" {
+                                "*Handle".into()
+                            } else {
+                                "Handle".into()
+                            },
+                            fields: Default::default(),
+                        })
+                        .collect(),
                     methods: vec![ExternDecl {
                         name: "send".into(),
                         params: vec![],
                         r#return: Tref::Prim(Prim::String),
                         langs: extern_langs(),
+                        r#async: vec![],
+                        errors: vec![],
                     }],
                 }],
                 externs: vec![],
