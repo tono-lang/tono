@@ -151,6 +151,12 @@ let ext_construct_doc_is_present () =
    grammar does not spell. *)
 let ext_lib_docs_cover_the_grammar () =
   let grammar = Vocab.lang_fields @ [ Vocab.request_ref ] in
+  (* Fixed, not merely complete: the documented set is this literal list,
+     so a documented new word fails here rather than slipping in. *)
+  Alcotest.(check (list string))
+    "the documented ext vocabulary is exactly this"
+    [ "call"; "yields"; "returns"; "request" ]
+    (List.map fst Hover_docs.ext_lib_docs);
   let documented = List.map fst Hover_docs.ext_lib_docs in
   let missing = List.filter (fun w -> not (List.mem w documented)) grammar in
   let extra = List.filter (fun w -> not (List.mem w grammar)) documented in

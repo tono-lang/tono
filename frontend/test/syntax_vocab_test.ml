@@ -83,6 +83,55 @@ let constructs_is_the_union () =
     "is_construct miss" false
     (Syntax_vocab.is_construct "hook")
 
+(* The ext block's vocabulary is closed and this test fixes it, not just its
+   completeness: a new word (or trait, or target) fails here by construction
+   and has to come with an amendment to the RFC that names it. *)
+let ext_vocabulary_is_pinned () =
+  Alcotest.(check (list string))
+    "language block lines"
+    [ "call"; "yields"; "returns" ]
+    Ext_lib_vocab.lang_fields;
+  Alcotest.(check (list string))
+    "traits an ext op accepts"
+    [ "async"; "errors"; "doc" ]
+    Ext_lib_vocab.op_traits;
+  Alcotest.(check (list string))
+    "targets with an asynchronous call" [ "ts"; "rust" ]
+    Ext_lib_vocab.async_targets;
+  Alcotest.(check (list string))
+    "targets a block can name" [ "go"; "ts"; "rust" ] Ext_lib_vocab.targets;
+  Alcotest.(check string)
+    "reserved yields position" "error" Ext_lib_vocab.error_sentinel;
+  Alcotest.(check string)
+    "request reference" "request" Ext_lib_vocab.request_ref;
+  (* The declarations of the block are keywords the lexer already owns;
+     nothing contextual opens one. *)
+  List.iter
+    (fun w ->
+      Alcotest.(check bool)
+        (w ^ " is a keyword") true
+        (List.mem_assoc w Token.keywords))
+    [ "ext"; "struct"; "op" ];
+  (* A stray word inside a language block is refused by the parser, naming
+     the three lines it accepts. *)
+  let _, diags =
+    Parser.parse
+      "ext lib {\n\
+      \  go { #(x) }\n\
+      \  op f(): string {\n\
+      \    go { call: #(F)() sync }\n\
+      \  }\n\
+       }"
+  in
+  Alcotest.(check bool)
+    "a marker word is refused" true
+    (List.exists
+       (fun (d : Diagnostic.t) ->
+         String.equal d.message
+           "unexpected token in a language block: expected 'call', 'yields', \
+            'returns'")
+       diags)
+
 let () =
   Alcotest.run "syntax_vocab"
     [
@@ -96,5 +145,7 @@ let () =
             contextual_words_parse_in_position;
           Alcotest.test_case "constructs is the union" `Quick
             constructs_is_the_union;
+          Alcotest.test_case "ext vocabulary is pinned" `Quick
+            ext_vocabulary_is_pinned;
         ] );
     ]
