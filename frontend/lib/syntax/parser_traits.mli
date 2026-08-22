@@ -11,8 +11,13 @@ val parse_ctor_arg : Parser_state.t -> string -> Span.span -> Ast.trait_arg
 (* trait ::= "@" name ("::" name)* ("(" arg ("," arg)* ")")? *)
 val parse_trait : Parser_state.t -> Ast.trait
 
-(* Zero or more traits at the cursor; stops at the first non-"@" token. *)
-val parse_trailing_traits : Parser_state.t -> Ast.trait list
+(* Zero or more traits at the cursor, on any line; stops at the first
+   non-"@" token. The traits written before the item they belong to. *)
+val parse_leading_traits : Parser_state.t -> Ast.trait list
+
+(* Zero or more traits continuing the current line; stops at the first
+   non-"@" token or at a trait that opens a line of its own. *)
+val parse_inline_traits : Parser_state.t -> Ast.trait list
 
 (* match ::= "match" ref "{" (pattern "=>" value)* "}" *)
 val parse_field_match : Parser_state.t -> Ast.field_match

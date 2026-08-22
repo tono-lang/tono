@@ -20,7 +20,7 @@ let trait_diags src =
 
 let member_diags src =
   let st, ld = state src in
-  let _ = Parser.parse_member st in
+  let _ = Parser.parse_member st ~leading:[] in
   ld @ Parser_state.diagnostics st
 
 let struct_diags src =
@@ -121,9 +121,9 @@ let struct_name_missing () =
 let struct_braces_missing () = nonempty "no braces" (struct_diags "struct s")
 
 let struct_body_recovery () =
-  (* Stray ',' is skipped and a stray '@' is reported, then parsing resumes and
+  (* Stray ',' is skipped and a stray '?' is reported, then parsing resumes and
      still finds the well-formed member. *)
-  let src = "struct s { , @ a: i64 }" in
+  let src = "struct s { , ? a: i64 }" in
   nonempty "stray token reported" (struct_diags src);
   let st, _ = state src in
   let decl = Parser.parse_struct st ~pub:false ~dtraits:[] in
@@ -133,6 +133,22 @@ let struct_body_recovery () =
         "recovered member" [ "a" ]
         (List.map (fun (m : Ast.member) -> m.mname) members)
   | _ -> Alcotest.fail "expected a struct"
+
+let struct_body_stray_at () =
+  (* A lone '@' opens a trait that has no name: it is diagnosed, and the
+     nameless trait is dropped with the item it would have decorated. *)
+  let diags = struct_diags "struct s { @ }" in
+  nonempty "stray '@' reported" diags;
+  let mentions_trait_name (d : Diagnostic.t) =
+    let m = d.message and n = String.length "trait name" in
+    let rec go i =
+      i + n <= String.length m && (String.sub m i n = "trait name" || go (i + 1))
+    in
+    go 0
+  in
+  Alcotest.(check bool)
+    "names the missing trait name" true
+    (List.exists mentions_trait_name diags)
 
 let generics_errors () =
   nonempty "bad type parameter" (struct_diags "struct s[1] { a: i64 }");
@@ -275,6 +291,7 @@ let () =
           Alcotest.test_case "name missing" `Quick struct_name_missing;
           Alcotest.test_case "braces missing" `Quick struct_braces_missing;
           Alcotest.test_case "body recovery" `Quick struct_body_recovery;
+          Alcotest.test_case "body stray at" `Quick struct_body_stray_at;
           Alcotest.test_case "generics errors" `Quick generics_errors;
           Alcotest.test_case "repetition paths" `Quick repetition_paths;
         ] );

@@ -53,13 +53,13 @@ pub struct client {
   api_token: string @arg
   endpoint: string @env("GITHUB_ENDPOINT") @default("https://api.github.com")
 
+  @http(method: "GET", path: "/users/{.user_ref.username}", endpoint: .endpoint)
   op get_user(user_ref: user_ref): user
-    @http(method: "GET", path: "/users/{.user_ref.username}", endpoint: .endpoint)
 
   op save_note(note: note): note @errors(overloaded)
 
+  @http(method: "GET", path: "/ping", endpoint: .endpoint)
   op ping()
-    @http(method: "GET", path: "/ping", endpoint: .endpoint)
 }
 
 ext impl save_note {
@@ -215,8 +215,8 @@ pub struct row { n: i64 }
 pub struct row_ref { id: string }
 pub struct client {
   endpoint: string @env("EP") @default("https://x")
+  @http(method: "GET", path: "/rows/{id}", endpoint: .endpoint)
   op get(row_ref: row_ref): row
-    @http(method: "GET", path: "/rows/{id}", endpoint: .endpoint)
 }
 test "t" {
   c: client {}
@@ -535,8 +535,8 @@ let ambiguous_shape () =
 pub struct boom { message: string }
 pub struct client {
   endpoint: string @env("EP") @default("https://x")
+  @http(method: "POST", path: "/run", endpoint: .endpoint)
   op run(boom): boom @errors(boom)
-    @http(method: "POST", path: "/run", endpoint: .endpoint)
 }
 test "t" {
   c: client {}
@@ -558,8 +558,8 @@ pub struct user { login: string }
 pub struct user_ref { username: string }
 pub struct client {
   endpoint: string @env("EP") @default("https://x")
+  @http(method: "GET", path: "/u/{.user_ref.username}", endpoint: .endpoint)
   op get_user(user_ref: user_ref): user
-    @http(method: "GET", path: "/u/{.user_ref.username}", endpoint: .endpoint)
 }
 test "t" {
   c: client {}

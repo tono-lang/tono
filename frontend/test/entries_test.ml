@@ -60,12 +60,12 @@ pub struct client {
   max_retries: i32 @with @default(3)
   settings: conf @bind(api_key, .api_key)
 
+  @http(method: "POST", path: "/notes/{id}", endpoint: .endpoint)
+  @header("X-Client-Name", .client_name)
+  @timeout(.timeout)
+  @retry(.max_retries)
+  @errors(overloaded)
   op save_note(note: note): note
-    @http(method: "POST", path: "/notes/{id}", endpoint: .endpoint)
-    @header("X-Client-Name", .client_name)
-    @timeout(.timeout)
-    @retry(.max_retries)
-    @errors(overloaded)
   op ping()
 }
 
@@ -315,13 +315,13 @@ pub struct probe_client {
   api_key: string @arg
   endpoint: string @env("ENDPOINT")
 
+  @http(method: "POST", path: "/probe/{.input.id}", endpoint: .endpoint)
+  @query("q", .input.filter)
+  @header("X-Key", .input.x_key)
+  @header("X-Client", .api_key)
+  @header("X-Combo", "v-{.api_key}")
+  @body(probe_body { note: .input.note })
   op probe(input: probe_input): probe_output
-    @http(method: "POST", path: "/probe/{.input.id}", endpoint: .endpoint)
-    @query("q", .input.filter)
-    @header("X-Key", .input.x_key)
-    @header("X-Client", .api_key)
-    @header("X-Combo", "v-{.api_key}")
-    @body(probe_body { note: .input.note })
 }
 |}
 

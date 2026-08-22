@@ -55,35 +55,35 @@ pub struct client {
   timeout: duration @with @default("0ms")
 
   @doc("Retries on transport failure or a declared retryable error; never times out a single attempt.")
+  @http(method: "POST", path: "/x", endpoint: .endpoint)
+  @body(.input)
+  @retry(.max_retries)
+  @errors(overloaded, quota_exceeded, not_found, bad_gateway, service_unavailable)
   op retrying(input: thing): thing
-    @http(method: "POST", path: "/x", endpoint: .endpoint)
-    @body(.input)
-    @retry(.max_retries)
-    @errors(overloaded, quota_exceeded, not_found, bad_gateway, service_unavailable)
 
   @doc("Retries on transport failure (including a per-attempt timeout); never inspects a declared error.")
+  @http(method: "POST", path: "/x", endpoint: .endpoint)
+  @body(.input)
+  @retry(.max_retries)
+  @timeout(.timeout)
   op retrying_with_timeout(input: thing): thing
-    @http(method: "POST", path: "/x", endpoint: .endpoint)
-    @body(.input)
-    @retry(.max_retries)
-    @timeout(.timeout)
 
   @doc("Never retries. Also stands in for the plain no-retry-declared vectors, since a fast response and a timed-out one behave the same when nothing loops.")
+  @http(method: "POST", path: "/x", endpoint: .endpoint)
+  @body(.input)
+  @timeout(.timeout)
   op timeout_only(input: thing): thing
-    @http(method: "POST", path: "/x", endpoint: .endpoint)
-    @body(.input)
-    @timeout(.timeout)
 
   @doc("Exercises declared-header resolution and path-segment url-encoding; no retry or timeout involved.")
+  @http(method: "GET", path: "/things/{.ref.id}", endpoint: .endpoint)
+  @header("Authorization", .auth_header)
+  @header("X-Client", .client_name)
   op fetch_thing(ref: thing_ref): thing
-    @http(method: "GET", path: "/things/{.ref.id}", endpoint: .endpoint)
-    @header("Authorization", .auth_header)
-    @header("X-Client", .client_name)
 
   @doc("Declares an exact success status: a response at that status decodes; any other status, including a plain 2xx, falls through to the error path.")
+  @http(method: "POST", path: "/x", endpoint: .endpoint, code: 201)
+  @body(.input)
   op strict_success(input: thing): thing
-    @http(method: "POST", path: "/x", endpoint: .endpoint, code: 201)
-    @body(.input)
 }
 
 // The two former "endpoint ref and declared headers resolve" vectors collapse

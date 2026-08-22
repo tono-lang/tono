@@ -27,6 +27,16 @@ let advance st =
 
 let at_eof st = (peek st).Token.kind = Token.Eof
 
+(* Whether the current token is the first one on its line. Line breaks are
+   otherwise insignificant, but a trait on a line of its own belongs to the
+   item after it while an inline one stays with its line, so this is the one
+   place the parser looks at layout. Comments are not tokens, so a trait under
+   a comment line still opens its own line. *)
+let starts_line st =
+  st.pos = 0
+  || (peek st).Token.span.start.line
+     > st.toks.(st.pos - 1).Token.span.finish.line
+
 let error st (span : Span.span) (message : string) =
   st.diags <- Diagnostic.error span message :: st.diags
 

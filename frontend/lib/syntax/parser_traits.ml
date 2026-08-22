@@ -352,9 +352,24 @@ let parse_trait st : Ast.trait =
   in
   { Ast.tname = name; targs = args; tspan = Span.merge at.span nspan }
 
-let parse_trailing_traits st : Ast.trait list =
+(* Every trait from the cursor on, whatever line it sits on: the traits
+   written before a declaration or a body item, which belong to it. Also the
+   sources of a match arm, where nothing else can start with "@" and a second
+   line of sources reads as a continuation. *)
+let parse_leading_traits st : Ast.trait list =
   let rec go acc =
     if (P.peek st).kind = Token.At then go (parse_trait st :: acc)
+    else List.rev acc
+  in
+  go []
+
+(* Only the traits that continue the current line: the inline form a member,
+   case, variant, union head, or op signature carries after it. A trait that
+   opens a line of its own is left in place for the item that follows it. *)
+let parse_inline_traits st : Ast.trait list =
+  let rec go acc =
+    if (P.peek st).kind = Token.At && not (P.starts_line st) then
+      go (parse_trait st :: acc)
     else List.rev acc
   in
   go []
@@ -416,7 +431,7 @@ let parse_field_match st : Ast.field_match =
         ignore (P.advance st);
         (Ast.AVName n, t.span)
     | Token.At ->
-        let traits = parse_trailing_traits st in
+        let traits = parse_leading_traits st in
         let last =
           match List.rev traits with
           | (tr : Ast.trait) :: _ -> tr.tspan

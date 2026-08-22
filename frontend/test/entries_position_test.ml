@@ -3,8 +3,7 @@ open Tono_frontend
 (* Positions where entry-model constructions used to be accepted and then
    dropped in silence: wire members carrying selection/derivation metadata,
    loose ops with entry-only protocol traits, templates inside @env names,
-   non-string header values, and duplicated non-repeatable traits (the
-   trailing-trait absorption footgun now yields a diagnostic). *)
+   non-string header values, and duplicated non-repeatable traits. *)
 
 let check src =
   let file, _ = Parser.parse src in
@@ -76,17 +75,25 @@ let header_literal_int_value_rejected () =
       @header(\"K\", 5)\n\
       }\n" ^ wire)
 
-let absorbed_doc_duplicate_rejected () =
-  (* The known footgun: a @doc on its own line between an op and the next
-     field binds to the op; with a @doc already there, the duplicate now
-     yields a diagnostic instead of silently doubling. *)
-  expect "absorbed doc duplicates" [ "TC0047" ]
+let own_line_doc_reaches_the_field_below () =
+  (* A @doc on its own line between an op and the next field belongs to the
+     field: the op keeps its inline @doc, nothing is doubled. *)
+  expect "own-line doc is not absorbed" []
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
      \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
       @doc(\"api\")\n\
      \  @doc(\"meant for the field below\")\n\
      \  k: string @env(\"K\")\n\
+      }\n" ^ wire)
+
+let inline_doc_duplicate_rejected () =
+  (* Two @doc on the same op line are still one declaration's traits. *)
+  expect "inline doc duplicates" [ "TC0047" ]
+    ("pub struct c {\n\
+     \  ep: string @env(\"EP\")\n\
+     \  op o(): r @http(method: \"GET\", path: \"/\", endpoint: .ep) \
+      @doc(\"api\") @doc(\"again\")\n\
       }\n" ^ wire)
 
 let duplicate_doc_on_decl_rejected () =
@@ -188,9 +195,9 @@ let body_ctor_field_literal_int_rejected () =
   expect "int field value in a @body ctor" [ "TC0044" ]
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
+     \  @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
+     \  @body(r { y: 5 })\n\
      \  op o(input: r): r\n\
-     \    @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
-     \    @body(r { y: 5 })\n\
       }\n" ^ wire)
 
 (* @body's ctor mapper rejects nesting a second ctor inside a field. *)
@@ -198,9 +205,9 @@ let body_ctor_field_nested_ctor_rejected () =
   expect "nested ctor in a @body ctor field" [ "TC0044" ]
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
+     \  @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
+     \  @body(r { y: r { y: \"x\" } })\n\
      \  op o(input: r): r\n\
-     \    @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
-     \    @body(r { y: r { y: \"x\" } })\n\
       }\n" ^ wire)
 
 (* A plain string literal is a legal @body ctor field value. *)
@@ -208,9 +215,9 @@ let body_ctor_field_literal_string_accepted () =
   expect "string field value in a @body ctor" []
     ("pub struct c {\n\
      \  ep: string @env(\"EP\")\n\
+     \  @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
+     \  @body(r { y: \"literal\" })\n\
      \  op o(input: r): r\n\
-     \    @http(method: \"POST\", path: \"/\", endpoint: .ep)\n\
-     \    @body(r { y: \"literal\" })\n\
       }\n" ^ wire)
 
 (* An entry op's own parameter, referenced directly as the endpoint, satisfies
@@ -686,8 +693,10 @@ let () =
             env_with_placeholder_rejected;
           Alcotest.test_case "int header value" `Quick
             header_literal_int_value_rejected;
-          Alcotest.test_case "absorbed doc duplicate" `Quick
-            absorbed_doc_duplicate_rejected;
+          Alcotest.test_case "own-line doc reaches the field below" `Quick
+            own_line_doc_reaches_the_field_below;
+          Alcotest.test_case "inline doc duplicate" `Quick
+            inline_doc_duplicate_rejected;
           Alcotest.test_case "duplicate decl doc" `Quick
             duplicate_doc_on_decl_rejected;
           Alcotest.test_case "repeatable traits legal" `Quick

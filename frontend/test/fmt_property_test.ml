@@ -283,9 +283,9 @@ let gen_variant =
 
 let gen_opt_ty = G.oneof [ G.return None; G.map Option.some gen_ty ]
 
-(* An op in an entry body takes neither "pub" nor traits above it: the grammar
-   gives it only the signature and its trailing traits. A present input always
-   carries a name; only a parameterless op has no name. *)
+(* An op in an entry body takes no "pub"; its traits print above the
+   signature like any declaration's. A present input always carries a name;
+   only a parameterless op has no name. *)
 let gen_pname = gen_lname
 
 let gen_entry_op =

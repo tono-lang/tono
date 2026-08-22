@@ -34,9 +34,9 @@ pub struct note { id: string }
 pub struct client {
   ep: string @env("EP")
 
+  @http(method: "GET", path: "/notes", endpoint: .ep)
+  %s
   op fetch(): note
-    @http(method: "GET", path: "/notes", endpoint: .ep)
-    %s
 }
 |}
     ext_block header_arg
@@ -80,8 +80,8 @@ pub struct note { id: string }
 pub struct client {
   ep: string @env("EP")
 
+  @http(method: "GET", path: "/notes", endpoint: .request)
   op fetch(): note
-    @http(method: "GET", path: "/notes", endpoint: .request)
 }
 |}
       ext_block
@@ -101,10 +101,10 @@ pub struct not_found { message: string }
 pub struct client {
   ep: string @env("EP")
 
+  @http(method: "GET", path: "/notes", endpoint: .ep)
+  @header("Authorization", companyauth.sign(.request))
+  @errors(not_found)
   op fetch(): note
-    @http(method: "GET", path: "/notes", endpoint: .ep)
-    @header("Authorization", companyauth.sign(.request))
-    @errors(not_found)
 }
 |}
       ext_block
@@ -130,9 +130,9 @@ pub struct note { id: string }
 pub struct client {
   ep: string @env("EP")
 
+  @http(method: "GET", path: "/notes", endpoint: .ep)
+  @query("sig", companyauth.sign(.request))
   op fetch(): note
-    @http(method: "GET", path: "/notes", endpoint: .ep)
-    @query("sig", companyauth.sign(.request))
 }
 |}
       ext_block

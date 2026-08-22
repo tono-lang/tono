@@ -7,8 +7,9 @@ val parse_type : Parser_state.t -> Ast.ty
 (* Parse a trait (`@name(args)`) from the cursor. *)
 val parse_trait : Parser_state.t -> Ast.trait
 
-(* Parse a member (`name: type @trait*`) from the cursor. *)
-val parse_member : Parser_state.t -> Ast.member
+(* Parse a member (`name: type @trait*`) from the cursor; [leading] are the
+   traits written on their own lines above it, already consumed. *)
+val parse_member : Parser_state.t -> leading:Ast.trait list -> Ast.member
 
 (* Parse a declaration; [pub] and [dtraits] are the visibility and shape-level
    traits already consumed before the keyword. *)

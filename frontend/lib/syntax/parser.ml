@@ -101,9 +101,14 @@ and parse_type_list st =
 
 (* ── Traits ────────────────────────────────────────────────────────────── *)
 
-(* Trait and reference parsing lives in [Parser_traits]; aliased locally. *)
+(* Trait and reference parsing lives in [Parser_traits]; aliased locally. A
+   trait on a line of its own belongs to the declaration or body item after
+   it ([parse_leading_traits], at every item start); a trait continuing a
+   line belongs to that line ([parse_inline_traits], after a signature, a
+   member, a case, a variant, or a union head). *)
 let parse_trait = Parser_traits.parse_trait
-let parse_trailing_traits = Parser_traits.parse_trailing_traits
+let parse_leading_traits = Parser_traits.parse_leading_traits
+let parse_inline_traits = Parser_traits.parse_inline_traits
 
 (* ── Members ───────────────────────────────────────────────────────────── *)
 
@@ -182,15 +187,16 @@ let parse_handle_call st ~what ~head_span : Ast.op_impl option =
 
 (* member ::= name ":" type trait* ("=" (match | call_expr | handle_call))?
    trait*
-   A trait may appear before the value, after it, or split across both (the
-   two lists are concatenated in source order into one [mtraits]): a source
-   marker paired with a call value reads naturally either way ("@with = ns.fn(...)"
-   marks the field injectable before showing its construction fallback;
-   "= ns.fn(...) @with" shows the fallback first), and the two spellings are
-   otherwise indistinguishable once parsed. The printer always emits the
-   trailing spelling; a member written with a leading trait round-trips
+   [leading] are the traits written on their own lines above the member. On
+   the member's line a trait may appear before the value, after it, or split
+   across both (the lists are concatenated in source order into one
+   [mtraits]): a source marker paired with a call value reads naturally
+   either way ("@with = ns.fn(...)" marks the field injectable before showing
+   its construction fallback; "= ns.fn(...) @with" shows the fallback first),
+   and the spellings are indistinguishable once parsed. The printer always
+   emits the inline trailing spelling; a member written otherwise round-trips
    through [fmt] into that canonical form rather than back to itself. *)
-let parse_member st : Ast.member =
+let parse_member st ~leading : Ast.member =
   let nt = P.peek st in
   let name =
     match nt.kind with
@@ -203,7 +209,7 @@ let parse_member st : Ast.member =
   in
   ignore (P.expect st Token.Colon "':' after member name");
   let ty = parse_type st in
-  let leading_traits = parse_trailing_traits st in
+  let head_traits = parse_inline_traits st in
   let mvalue =
     match (P.peek st).kind with
     | Token.Eq -> (
@@ -236,13 +242,13 @@ let parse_member st : Ast.member =
             None)
     | _ -> None
   in
-  let trailing_traits = parse_trailing_traits st in
+  let trailing_traits = parse_inline_traits st in
   {
     Ast.mname = name;
     mname_span = nt.span;
     mtype = ty;
     mvalue;
-    mtraits = leading_traits @ trailing_traits;
+    mtraits = leading @ head_traits @ trailing_traits;
   }
 
 (* generics ::= "[" name ("," name)* "]" *)
@@ -271,10 +277,10 @@ let parse_generics st : string list =
     ignore (P.expect st Token.RBracket "']' to close type parameters");
     ps)
 
-(* variant ::= name ( "(" type ")" )? trait*  — the name token is already
-   consumed and passed in, so the only caller that reaches here had an
-   identifier in hand. *)
-let parse_variant st ~name ~name_span : Ast.union_variant =
+(* variant ::= trait* name ( "(" type ")" )? trait*  — the name token is
+   already consumed and passed in, so the only caller that reaches here had
+   an identifier in hand; [leading] are the traits written above it. *)
+let parse_variant st ~leading ~name ~name_span : Ast.union_variant =
   let payload =
     match (P.peek st).kind with
     | Token.LParen ->
@@ -284,21 +290,42 @@ let parse_variant st ~name ~name_span : Ast.union_variant =
         Some t
     | _ -> None
   in
-  let traits = parse_trailing_traits st in
+  let traits = parse_inline_traits st in
   {
     Ast.vname = name;
     vname_span = name_span;
     vpayload = payload;
-    vtraits = traits;
+    vtraits = leading @ traits;
   }
 
+(* Traits written above a body item, when the cursor sits on one. A trait
+   block that no item follows (the body closes, or something that cannot
+   start an item comes next) is diagnosed here and dropped: with leading
+   traits there is nothing before them it could silently bind to, so the
+   accident the old trailing rule allowed now has a message instead. *)
+let parse_item_traits st ~(what : string) ~(starts_item : Token.kind -> bool) :
+    Ast.trait list =
+  match (P.peek st).kind with
+  | Token.At ->
+      let first = (P.peek st).span in
+      let traits = parse_leading_traits st in
+      if starts_item (P.peek st).kind then traits
+      else (
+        P.error st first
+          (Printf.sprintf "expected a %s after its traits, found %s" what
+             (Token.describe (P.peek st).kind));
+        [])
+  | _ -> []
+
 let parse_variants st : Ast.union_variant list =
+  let starts_item = function Token.Ident _ -> true | _ -> false in
   let rec go acc =
+    let leading = parse_item_traits st ~what:"variant" ~starts_item in
     match (P.peek st).kind with
     | Token.RBrace | Token.Eof -> List.rev acc
     | Token.Ident name ->
         let nt = P.advance st in
-        go (parse_variant st ~name ~name_span:nt.span :: acc)
+        go (parse_variant st ~leading ~name ~name_span:nt.span :: acc)
     | Token.Comma ->
         ignore (P.advance st);
         go acc
@@ -328,7 +355,7 @@ let parse_union st ~pub ~dtraits : Ast.decl =
   Parser_extern.check_not_error_name st "union" name nt.span;
   let params = parse_generics st in
   (* traits after the name (e.g. @discriminator) join the shape-level traits *)
-  let dtraits = dtraits @ parse_trailing_traits st in
+  let dtraits = dtraits @ parse_inline_traits st in
   ignore (P.expect st Token.LBrace "'{' to open the union body");
   let variants = parse_variants st in
   ignore (P.expect st Token.RBrace "'}' to close the union body");
@@ -340,9 +367,10 @@ let parse_union st ~pub ~dtraits : Ast.decl =
     dkind = Ast.DUnion { params; variants };
   }
 
-(* case ::= name ("=" int)? trait*  — the name token is already consumed and
-   passed in, so the only caller that reaches here had an identifier in hand. *)
-let parse_enum_case st ~name ~name_span : Ast.enum_case =
+(* case ::= trait* name ("=" int)? trait*  — the name token is already
+   consumed and passed in, so the only caller that reaches here had an
+   identifier in hand; [leading] are the traits written above it. *)
+let parse_enum_case st ~leading ~name ~name_span : Ast.enum_case =
   (* A case named 'null' would be unreachable as a match pattern: the match
      parser treats a bare 'null' token as the optional-subject absence
      pattern regardless of the enum it matches, so a case with this name
@@ -374,16 +402,18 @@ let parse_enum_case st ~name ~name_span : Ast.enum_case =
             None)
     | _ -> None
   in
-  let traits = parse_trailing_traits st in
-  { Ast.cname = name; cname_span = name_span; cint; ctraits = traits }
+  let traits = parse_inline_traits st in
+  { Ast.cname = name; cname_span = name_span; cint; ctraits = leading @ traits }
 
 let parse_enum_cases st : Ast.enum_case list =
+  let starts_item = function Token.Ident _ -> true | _ -> false in
   let rec go acc =
+    let leading = parse_item_traits st ~what:"case" ~starts_item in
     match (P.peek st).kind with
     | Token.RBrace | Token.Eof -> List.rev acc
     | Token.Ident name ->
         let nt = P.advance st in
-        go (parse_enum_case st ~name ~name_span:nt.span :: acc)
+        go (parse_enum_case st ~leading ~name ~name_span:nt.span :: acc)
     | Token.Comma ->
         ignore (P.advance st);
         go acc
@@ -483,9 +513,9 @@ let parse_op st ~pub ~dtraits : Ast.decl =
         Some (parse_type st)
     | _ -> None
   in
-  (* Trailing op traits (@http, @errors, @async, ...) join the shape traits;
-     lowering lifts @errors into Operation.errors and bags the rest. *)
-  let dtraits = dtraits @ parse_trailing_traits st in
+  (* Traits continuing the signature line join the ones written above the
+     op; lowering lifts @errors into Operation.errors and bags the rest. *)
+  let dtraits = dtraits @ parse_inline_traits st in
   let oimpl = parse_op_impl st in
   {
     Ast.dname = name;
@@ -498,14 +528,20 @@ let parse_op st ~pub ~dtraits : Ast.decl =
 (* ── Structs ───────────────────────────────────────────────────────────── *)
 
 (* The struct body: members interleaved with op declarations (a struct with ops
-   is an entry). Op traits trail the op line, so a trait written between an op
-   and the next item binds to the op, exactly as at the top level. *)
+   is an entry). A trait on its own line belongs to the member or op after
+   it, exactly as at the top level; only a trait continuing a line stays with
+   that line. *)
 let parse_struct_items st : Ast.member list * Ast.decl list =
+  let starts_item = function
+    | Token.Ident _ | Token.KwOp -> true
+    | _ -> false
+  in
   let rec go members ops =
+    let leading = parse_item_traits st ~what:"member or op" ~starts_item in
     match (P.peek st).kind with
     | Token.RBrace | Token.Eof -> (List.rev members, List.rev ops)
-    | Token.Ident _ -> go (parse_member st :: members) ops
-    | Token.KwOp -> go members (parse_op st ~pub:false ~dtraits:[] :: ops)
+    | Token.Ident _ -> go (parse_member st ~leading :: members) ops
+    | Token.KwOp -> go members (parse_op st ~pub:false ~dtraits:leading :: ops)
     | Token.Comma ->
         ignore (P.advance st);
         go members ops
@@ -580,7 +616,7 @@ let skip_balanced_braces st : unit =
 (* decl ::= trait* "pub"? (struct | union | enum | op | ext). Returns [None] when
    the keyword is missing so the file loop can resynchronize. *)
 let parse_decl st : Ast.decl option =
-  let dtraits = parse_trailing_traits st in
+  let dtraits = parse_leading_traits st in
   let pub =
     match (P.peek st).kind with
     | Token.KwPub ->

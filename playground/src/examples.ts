@@ -25,8 +25,8 @@ pub struct client {
   api_token: string @env("API_TOKEN")
   endpoint: string @env("API_ENDPOINT") @default("https://api.example.com")
 
+  @http(method: "GET", path: "/account", endpoint: .endpoint)
   op get_account(): account
-    @http(method: "GET", path: "/account", endpoint: .endpoint)
 }
 `;
 
@@ -42,9 +42,9 @@ pub struct client {
   auth_header: string @format("Bearer {.api_token}")
   endpoint: string @env("AUTH_ENDPOINT") @default("https://api.example.com")
 
+  @http(method: "GET", path: "/account", endpoint: .endpoint)
+  @header("Authorization", .auth_header)
   op get_account(): account
-    @http(method: "GET", path: "/account", endpoint: .endpoint)
-    @header("Authorization", .auth_header)
 }
 
 // Auth is 100% bespoke (there is no built-in scheme), but this scheme needs

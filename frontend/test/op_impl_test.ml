@@ -161,8 +161,8 @@ pub struct client {
   endpoint: string @arg
   bus: bus.publisher @with = bus.connect(.endpoint)
 
+  @http(method: "POST", path: "/x", endpoint: .endpoint)
   op publish(topic: string): ack
-    @http(method: "POST", path: "/x", endpoint: .endpoint)
     impl .bus.send(.topic, "body")
 }
 |}

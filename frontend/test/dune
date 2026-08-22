@@ -8,6 +8,7 @@
   struct_test
   core_test
   parse_error_test
+  trait_layout_test
   extern_parse_error_test
   extern_test
   extern_ir_decode_test

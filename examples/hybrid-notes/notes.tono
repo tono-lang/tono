@@ -29,21 +29,21 @@ pub struct client {
   api_token: string @env("NOTES_TOKEN")
   endpoint: string @env("NOTES_ENDPOINT") @default("https://api.example.com")
 
-  // Operation traits trail the signature: a trait written above an op would
-  // bind to whatever was declared before it.
+  // A trait on its own line belongs to the declaration after it, inside a
+  // struct exactly as at the top level; an inline one stays with its line.
+  @doc("Reads a note from the service.")
+  @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .endpoint)
+  @header("X-Api-Token", .api_token)
+  @errors(overloaded)
   op fetch_note(ref: note_ref): note
-    @doc("Reads a note from the service.")
-    @http(method: "GET", path: "/notes/{.ref.id}", endpoint: .endpoint)
-    @header("X-Api-Token", .api_token)
-    @errors(overloaded)
 
+  @doc("Writes a note through the local store.")
+  @errors(overloaded)
   op save_note(note: note): note
-    @doc("Writes a note through the local store.")
-    @errors(overloaded)
 
+  @doc("Archives a note through the local store.")
+  @errors(overloaded)
   op archive_note(ref: note_ref): note
-    @doc("Archives a note through the local store.")
-    @errors(overloaded)
 }
 
 // The typed form: the bound symbol speaks the operation's own types, so it owns

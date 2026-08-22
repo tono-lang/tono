@@ -16,6 +16,10 @@ val advance : t -> Token.t
 (* Whether the cursor is at the end-of-file token. *)
 val at_eof : t -> bool
 
+(* Whether the current token is the first one on its line (or the first in
+   the file). *)
+val starts_line : t -> bool
+
 (* Record an error diagnostic at a span. *)
 val error : t -> Span.span -> string -> unit
 
