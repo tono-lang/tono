@@ -180,3 +180,40 @@ impl<T: Send + Sync> Calculator<T> for FallbackCalculator<T> {
         })
     }
 }
+
+/// A session with a remote calculation service. Its name is the one every
+/// generated SDK's entry takes as well, on purpose: a spelling naming it is
+/// the library's, and the generated code must keep the crate path on it.
+pub struct Client {
+    addr: String,
+}
+
+/// Starts a session with the service at `addr`.
+pub fn open(addr: String) -> Result<Client, Error> {
+    Ok(Client { addr })
+}
+
+impl Client {
+    /// Answers the service's greeting.
+    pub fn ping(&self) -> Result<String, Error> {
+        Ok(format!("pong from {}", self.addr))
+    }
+}
+
+/// Keeps one value of the caller's own type: the library is generic over a
+/// type it never sees, the way a settings or cache library is.
+pub struct Memo<T> {
+    value: T,
+}
+
+/// Keeps `value` for a later [`Memo::recall`].
+pub fn remember<T>(value: T) -> Result<Memo<T>, Error> {
+    Ok(Memo { value })
+}
+
+impl<T: Clone> Memo<T> {
+    /// Answers the value [`remember`] kept.
+    pub fn recall(&self) -> Result<T, Error> {
+        Ok(self.value.clone())
+    }
+}

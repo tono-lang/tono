@@ -1,0 +1,27 @@
+// Capability 13: a foreign type whose name collides with a generated one.
+// The library exports `Client`, and so does every generated SDK entry; the
+// spelling `#(Client)` is the library's, and the emitted Rust must keep the
+// crate path on it whatever the module generates under the same name.
+ext mathkit {
+  rust { #(mathkit) }
+
+  struct session {
+    rust { #(Client) }
+
+    op ping(): string {
+      rust { call: #(ping)() }
+    }
+  }
+
+  op open(addr: string): session {
+    rust { call: #(open)(addr) }
+  }
+}
+
+pub struct client {
+  addr: string @arg
+  session: mathkit.session = mathkit.open(.addr)
+
+  op ping(): string
+    impl .session.ping()
+}

@@ -137,3 +137,32 @@ export class AnswerCalculator implements Calculator<number> {
 export function instantiate<T>(clazz: new () => Calculator<T>): Calculator<T> {
   return new clazz();
 }
+
+// A session with a remote calculation service. Its name is the one every
+// generated SDK's entry takes as well, on purpose: a spelling naming it is
+// the library's, and the generated code must import it from here.
+export class Client {
+  constructor(private readonly addr: string) {}
+
+  ping(): string {
+    return `pong from ${this.addr}`;
+  }
+}
+
+export function open(addr: string): Client {
+  return new Client(addr);
+}
+
+// Keeps one value of the caller's own type: the library is generic over a
+// type it never sees, the way a settings or cache library is.
+export class Memo<T> {
+  constructor(private readonly value: T) {}
+
+  recall(): T {
+    return this.value;
+  }
+}
+
+export function remember<T>(value: T): Memo<T> {
+  return new Memo<T>(value);
+}
