@@ -357,14 +357,14 @@ fn call_assign_names_the_type_argument_on_a_generic_constructor() {
     let mut lib = simple_go_lib(
         "cfgkit",
         "new_env_source",
-        "NewEnvSource[Settings]",
+        "NewEnvSource[.settings]",
         source_ref.clone(),
     );
     lib.types = vec![OpaqueType {
         name: "source".into(),
         langs: vec![crate::ir::ForeignLang {
             lang: "go".into(),
-            name: "*Source[Settings]".into(),
+            name: "*Source[.settings]".into(),
             fields: Default::default(),
         }],
         methods: vec![],
@@ -377,8 +377,8 @@ fn call_assign_names_the_type_argument_on_a_generic_constructor() {
     let mut source_field = field("source", source_ref, vec![]);
     source_field.call = Some(call.clone());
     let mut module = bare_module();
-    // `Settings` is one of the module's own generated types, so the
-    // spelling keeps it bare inside the instantiation.
+    // `.settings` references one of the module's own generated types, so
+    // the spelling renders it bare inside the instantiation.
     module.shapes.push(structure("m#settings", vec![]));
     module.ext_libs = vec![lib];
     module.shapes.push(Shape {

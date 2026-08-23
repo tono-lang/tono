@@ -1,0 +1,33 @@
+// Capability 14: a generated type inside a foreign spelling. Memo[T] is
+// generic over the caller's own type, here the tono struct `reading`: the
+// spelling references it as `.reading`, the module's type by its own name,
+// which the emitter renders as the type it generates and never qualifies
+// by the package; every other word of the spelling is the library's.
+ext mathkit {
+  go { #(tono-ext-fixture/mathkit) }
+
+  struct memo {
+    go { #(*Memo[.reading]) }
+
+    op recall(): reading {
+      go { call: #(Recall)(#(ctx context.Context)) }
+    }
+  }
+
+  op remember(seed: reading): memo {
+    go { call: #(Remember[.reading])(seed) }
+  }
+}
+
+struct reading {
+  value: float
+  label: string
+}
+
+pub struct client {
+  seed: reading @arg
+  memo: mathkit.memo = mathkit.remember(.seed)
+
+  op recall(): reading
+    impl .memo.recall()
+}

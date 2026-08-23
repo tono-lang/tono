@@ -1,0 +1,28 @@
+// Capability 13: a foreign type whose name collides with a generated one.
+// The library exports `Client`, and so does every generated SDK entry; the
+// spelling `#(Client)` is the library's, and the emitted TypeScript must
+// import it from the library whatever the module generates under the same
+// name.
+ext mathkit {
+  ts { #(@tono-ext-fixture/mathkit) }
+
+  struct session {
+    ts { #(Client) }
+
+    op ping(): string {
+      ts { call: #(ping)() }
+    }
+  }
+
+  op open(addr: string): session {
+    ts { call: #(open)(addr) }
+  }
+}
+
+pub struct client {
+  addr: string @arg
+  session: mathkit.session = mathkit.open(.addr)
+
+  op ping(): string
+    impl .session.ping()
+}

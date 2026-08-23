@@ -223,7 +223,7 @@ pub(super) fn render_arg(
         // infallible call, the shape the bench's own nested calls have.
         CallArg::SymbolCall(sc) => format!(
             "{}({})",
-            sc.symbol,
+            spell(&sc.symbol, module),
             sc.args
                 .iter()
                 .map(|a| render_arg(entry, config, module, lib, a, params, site_args, ref_expr))
@@ -234,34 +234,27 @@ pub(super) fn render_arg(
         // imported identifier (the library constructs it; tono only names
         // it). The import itself is collected by `class_reference_imports`
         // at the call site that owns the seam's refs.
-        CallArg::TypeRef(handle) => class_reference_name(lib, handle, module),
+        CallArg::TypeRef(handle) => class_reference_name(lib, handle),
     }
 }
 
-/// Whether a word of a foreign spelling is one of this module's own
-/// generated types, which a spelling can use without importing it from
-/// the library.
-pub(super) fn is_local_type(module: &Module, word: &str) -> bool {
-    module
-        .shapes
-        .iter()
-        .any(|s| pascal(crate::codegen::entries::local_name(&s.id)) == word)
+/// A spelling as the emitted TypeScript writes it: verbatim, with a
+/// reference to one of the module's own types rendered as the type it
+/// generates (`Memo<.reading>` is `Memo<Reading>`). The library's names
+/// are not qualified here: `import_spelling` brings them into scope.
+pub(super) fn spell(spelling: &str, module: &Module) -> String {
+    foreign_spelling::render(spelling, &crate::codegen::entries::generated_type(module))
 }
 
 /// The library identifiers a spelling names, to import from the lib's own
 /// TypeScript module: `new ConstantCalculator` imports `ConstantCalculator`,
 /// `FormulaCalculator.parse` imports `FormulaCalculator`,
-/// `Calculator<number>[]` imports `Calculator`. Builtins and the module's
-/// own generated types need no import.
-pub(super) fn import_spelling(
-    spelling: &str,
-    lib: &ExtLib,
-    module: &Module,
-    refs: &mut Vec<Symbol>,
-) {
-    let names = foreign_spelling::library_names(spelling, &|w| {
-        foreign_spelling::ts_builtin(w) || is_local_type(module, w)
-    });
+/// `Calculator<number>[]` imports `Calculator`. Builtins need no import,
+/// and a reference to one of the module's own types is not the library's
+/// to import; every other word is, whatever the module generates under the
+/// same name.
+pub(super) fn import_spelling(spelling: &str, lib: &ExtLib, refs: &mut Vec<Symbol>) {
+    let names = foreign_spelling::library_names(spelling, &foreign_spelling::ts_builtin);
     if names.is_empty() {
         return;
     }
@@ -285,7 +278,7 @@ pub(super) fn import_spelling(
 /// (`AnswerCalculator`), the one thing that can stand as a value. A handle
 /// with no `ts` block has no class to pass;
 /// `validate_calls::handle_storage_declared` refuses it first.
-pub(super) fn class_reference_name(lib: &ExtLib, handle: &str, module: &Module) -> String {
+pub(super) fn class_reference_name(lib: &ExtLib, handle: &str) -> String {
     let ty = lib.types.iter().find(|t| t.name == handle).unwrap_or_else(|| {
         panic!(
             "a class reference names undeclared handle {handle:?} in ext lib {:?} (the frontend should have rejected this)",
@@ -297,38 +290,31 @@ pub(super) fn class_reference_name(lib: &ExtLib, handle: &str, module: &Module) 
             "handle {handle:?} declares no ts block; validate_calls::handle_storage_declared should have refused it"
         )
     });
-    foreign_spelling::library_names(storage, &|w| {
-        foreign_spelling::ts_builtin(w) || is_local_type(module, w)
-    })
-    .into_iter()
-    .next()
-    .unwrap_or_else(|| storage.to_string())
+    foreign_spelling::library_names(storage, &foreign_spelling::ts_builtin)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| storage.to_string())
 }
 
 /// One import per class reference anywhere in a `call:` line's argument
 /// tree, from the lib's own TypeScript module path (the same module the
 /// call's symbol comes from).
-pub(super) fn class_reference_imports(
-    args: &[CallArg],
-    lib: &ExtLib,
-    module: &Module,
-    refs: &mut Vec<Symbol>,
-) {
+pub(super) fn class_reference_imports(args: &[CallArg], lib: &ExtLib, refs: &mut Vec<Symbol>) {
     for arg in args {
         match arg {
             CallArg::TypeRef(handle) => {
-                let name = class_reference_name(lib, handle, module);
-                import_spelling(&name, lib, module, refs);
+                let name = class_reference_name(lib, handle);
+                import_spelling(&name, lib, refs);
             }
             // A nested foreign call names a symbol of the same module.
             CallArg::SymbolCall(sc) => {
-                import_spelling(&sc.symbol, lib, module, refs);
-                class_reference_imports(&sc.args, lib, module, refs);
+                import_spelling(&sc.symbol, lib, refs);
+                class_reference_imports(&sc.args, lib, refs);
             }
-            CallArg::List(items) => class_reference_imports(items, lib, module, refs),
+            CallArg::List(items) => class_reference_imports(items, lib, refs),
             CallArg::Ctor(ctor) => {
                 for v in ctor.fields.values() {
-                    class_reference_imports(std::slice::from_ref(v), lib, module, refs);
+                    class_reference_imports(std::slice::from_ref(v), lib, refs);
                 }
             }
             CallArg::Param(_)
@@ -476,7 +462,7 @@ fn call_body(
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
-    class_reference_imports(&lang.call_args, l.lib, module, refs);
+    class_reference_imports(&lang.call_args, l.lib, refs);
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
@@ -544,11 +530,12 @@ fn call_body(
     // target is awaited. The surrounding seam stays `async` regardless (an
     // entry with any extern-call field is already async-constructed; this
     // one call's own expression is the only thing that changes).
-    import_spelling(&lang.symbol, l.lib, module, refs);
-    let call_expr = match foreign_spelling::constructed(&lang.symbol) {
+    import_spelling(&lang.symbol, l.lib, refs);
+    let symbol = spell(&lang.symbol, module);
+    let call_expr = match foreign_spelling::constructed(&symbol) {
         Some(class) => format!("new {class}({args})"),
-        None if l.decl.is_async("ts") => format!("await {}({args})", lang.symbol),
-        None => format!("{}({args})", lang.symbol),
+        None if l.decl.is_async("ts") => format!("await {symbol}({args})"),
+        None => format!("{symbol}({args})"),
     };
 
     format!(
@@ -582,10 +569,10 @@ pub(super) fn sentinel_switch(
         let class_name = sentinel_error_class(type_name);
         sentinel_types.insert(type_name.to_string());
         refs.push(module_symbol(&class_name, module));
-        import_spelling(&fl.name, lib, module, refs);
+        import_spelling(&fl.name, lib, refs);
         checks.push_str(&format!(
             "  if (e instanceof {sentinel}) {{ {t} }}\n",
-            sentinel = fl.name,
+            sentinel = spell(&fl.name, module),
             t = throw(format!("new {class_name}(e)")),
         ));
     }

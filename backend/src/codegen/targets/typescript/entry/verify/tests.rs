@@ -250,3 +250,35 @@ fn run_reports_the_compiler_line_for_a_wrong_binding() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A spelling that references a generated type (`Dial<.summary>`) cannot
+/// be written without the generated SDK: the handle, its methods and any
+/// call spelling it are listed as skipped with why, and nothing else in
+/// the probe is affected.
+#[test]
+fn a_generated_type_reference_skips_the_binding_with_why() {
+    let mut m = gearbox_module();
+    let dial = m.ext_libs[0].types[0]
+        .langs
+        .iter_mut()
+        .find(|l| l.lang == "ts")
+        .unwrap();
+    dial.name = "Dial<.summary>".into();
+    let open = m.ext_libs[0]
+        .externs
+        .iter_mut()
+        .find(|d| d.name == "open")
+        .unwrap();
+    let open_ts = open.langs.iter_mut().find(|l| l.lang == "ts").unwrap();
+    open_ts.symbol = "new Dial<.summary>".into();
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(!p.source.contains("type TonoHandle_dial"), "{}", p.source);
+    assert!(!p.source.contains(".summary"), "{}", p.source);
+    for why in [
+        "handle dial: #(Dial<.summary>) references .summary, a type the generated SDK defines",
+        "method dial.read: #(Dial<.summary>) references .summary, a type the generated SDK defines",
+        "op open: #(new Dial<.summary>) references .summary, a type the generated SDK defines",
+    ] {
+        assert!(p.skipped.contains(&why.to_string()), "{:?}", p.skipped);
+    }
+}

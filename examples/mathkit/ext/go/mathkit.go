@@ -171,3 +171,33 @@ func FromFallback[T any](strategy string, calcs ...Calculator[T]) (Calculator[T]
 	}
 	return &fallback[T]{strategy: strategy, calcs: calcs}, nil
 }
+
+// Client is a session with a remote calculation service. Its name is the
+// one every generated SDK's entry takes as well, on purpose: a spelling
+// naming it is the library's, and the generated code must keep the package
+// selector on it.
+type Client struct{ addr string }
+
+// Open starts a session with the service at addr.
+func Open(addr string) (*Client, error) {
+	return &Client{addr: addr}, nil
+}
+
+// Ping answers the service's greeting.
+func (c *Client) Ping() (string, error) {
+	return "pong from " + c.addr, nil
+}
+
+// Memo keeps one value of the caller's own type: the library is generic
+// over a type it never sees, the way a settings or cache library is.
+type Memo[T any] struct{ value T }
+
+// Remember keeps value for a later Recall.
+func Remember[T any](value T) (*Memo[T], error) {
+	return &Memo[T]{value: value}, nil
+}
+
+// Recall answers the value Remember kept.
+func (m *Memo[T]) Recall(ctx context.Context) (T, error) {
+	return m.value, nil
+}

@@ -35,3 +35,13 @@ bench	rust	service.tono	pass
 12-ts-class-reference	typescript	probes/12-ts-class-reference.tono	pass
 12-rust-class-reference-refused	rust	probes/12-rust-class-reference-refused.tono	refused
 12-go-class-reference-refused	go	probes/12-go-class-reference-refused.tono	refused
+# 13: the library's Client shares its name with the generated entry's; the
+# spelling is the library's and keeps the package selector either way.
+13-go-name-collision	go	probes/13-go-name-collision.tono	pass
+13-rust-name-collision	rust	probes/13-rust-name-collision.tono	pass
+13-ts-name-collision	typescript	probes/13-ts-name-collision.tono	pass
+# 14: a generated type inside a spelling is referenced by its own name
+# (`Memo[.reading]`), never found by matching a word against the module.
+14-go-generated-type-reference	go	probes/14-go-generated-type-reference.tono	pass
+14-rust-generated-type-reference	rust	probes/14-rust-generated-type-reference.tono	pass
+14-ts-generated-type-reference	typescript	probes/14-ts-generated-type-reference.tono	pass

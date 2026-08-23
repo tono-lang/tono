@@ -169,7 +169,7 @@ fn a_handle_without_storage_skips_its_methods() {
     assert!(!p.source.contains("tonoProbe_dial_read"));
     assert!(p
         .skipped
-        .contains(&"method dial.read: the handle declares no go storage".to_string()));
+        .contains(&"method dial.read: the handle dial declares no go block".to_string()));
 }
 
 /// The real toolchain, when installed: the probe against a stand-in module
@@ -226,4 +226,30 @@ fn run_reports_the_compiler_line_for_a_wrong_binding() {
         "the scratch directory is removed"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A spelling that references a generated type (`Dial[.summary]`) cannot
+/// be written without the generated SDK: the handle, its methods and any
+/// call spelling it are listed as skipped with why, and nothing else in
+/// the probe is affected.
+#[test]
+fn a_generated_type_reference_skips_the_binding_with_why() {
+    let mut m = gearbox_module();
+    m.ext_libs[0].types[0].langs[0].name = "Dial[.summary]".into();
+    let open = m.ext_libs[0]
+        .externs
+        .iter_mut()
+        .find(|d| d.name == "open")
+        .unwrap();
+    open.langs[0].symbol = "Open[.summary]".into();
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(!p.source.contains("var _ gearbox.Dial"), "{}", p.source);
+    assert!(!p.source.contains(".summary"), "{}", p.source);
+    for why in [
+        "handle dial: #(Dial[.summary]) references .summary, a type the generated SDK defines",
+        "method dial.read: #(Dial[.summary]) references .summary, a type the generated SDK defines",
+        "op open: #(Open[.summary]) references .summary, a type the generated SDK defines",
+    ] {
+        assert!(p.skipped.contains(&why.to_string()), "{:?}", p.skipped);
+    }
 }

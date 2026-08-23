@@ -18,6 +18,7 @@ use crate::ir::{
 mod checks;
 mod order;
 pub mod plan;
+pub(crate) mod spellings;
 mod validate;
 mod validate_calls;
 mod validate_ownership;
@@ -74,6 +75,44 @@ pub enum FieldShape<'a> {
 /// The local (snake) name of a shape id (`notes#client` -> `client`).
 pub fn local_name(id: &str) -> &str {
     id.rsplit('#').next().unwrap_or(id)
+}
+
+/// The name every target generates the module's own type `canonical` (a
+/// shape's local name, what a foreign spelling references as
+/// `.canonical`) under; `None` when the module declares no such type.
+/// Type names are PascalCase in all three targets, so the rendering is
+/// the same everywhere a spelling is emitted.
+pub fn generated_type_name(module: &Module, canonical: &str) -> Option<String> {
+    module
+        .shapes
+        .iter()
+        .find(|s| local_name(&s.id) == canonical)
+        .map(|s| {
+            crate::codegen::casing::transform(
+                local_name(&s.id),
+                crate::codegen::symbol::SymbolKind::Type,
+                &crate::codegen::casing::CasingConfig::new(
+                    crate::codegen::casing::CaseStyle::Pascal,
+                ),
+                None,
+            )
+        })
+}
+
+/// The resolver a target hands `foreign_spelling::qualify` for the
+/// generated-type references of `module`'s spellings. A reference no
+/// shape answers is refused before any emitter runs
+/// (`validate_calls::spelling_references_resolve`), so reaching one here
+/// is a generator bug.
+pub fn generated_type(module: &Module) -> impl Fn(&str) -> String + '_ {
+    move |name| {
+        generated_type_name(module, name).unwrap_or_else(|| {
+            panic!(
+                "a foreign spelling references .{name}, which module {} does not declare; validate_calls::spelling_references_resolve should have refused it",
+                module.name
+            )
+        })
+    }
 }
 
 /// Every entry of a module, fields already in resolution order.
