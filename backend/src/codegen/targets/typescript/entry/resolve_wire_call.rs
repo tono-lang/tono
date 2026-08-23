@@ -90,11 +90,12 @@ fn call_wire_stmt(
     let lib = find_lib(module, &call.ns);
     let decl = find_extern(lib, &call.fn_name);
     let lang = find_ts_lang(decl);
-    super::ext_call::import_spelling(&lang.symbol, lib, module, refs);
-    let callee = match crate::codegen::foreign_spelling::constructed(&lang.symbol) {
+    super::ext_call::import_spelling(&lang.symbol, lib, refs);
+    let symbol = super::ext_call::spell(&lang.symbol, module);
+    let callee = match crate::codegen::foreign_spelling::constructed(&symbol) {
         Some(class) => format!("new {class}"),
-        None if decl.is_async("ts") => format!("await {}", lang.symbol),
-        None => lang.symbol.clone(),
+        None if decl.is_async("ts") => format!("await {symbol}"),
+        None => symbol,
     };
     refs.push(module_symbol(
         &crate::codegen::ops::error_names().contract,

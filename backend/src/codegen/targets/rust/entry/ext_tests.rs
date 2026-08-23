@@ -9,6 +9,7 @@ use super::*;
 use crate::codegen::entries::module_entries;
 use crate::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use crate::codegen::ops::op_impl_call;
+use crate::codegen::targets::rust::entry::pascal;
 use crate::codegen::targets::rust::types::rust_casing;
 use crate::ir::{
     CallCtor, EntryCall, EntryField, ExtLib, ExternDecl, ExternParam, LangPath, Member, Model,
@@ -749,4 +750,39 @@ fn impl_call_body_renders_spelled_and_nested_arguments() {
     assert!(text.contains("some_handle::Tag("), "{text}");
     assert!(text.contains("some_handle::Opts { n: 1 }"), "{text}");
     assert!(text.contains("recv.do_it(&"), "{text}");
+}
+
+/// A word of a spelling is the library's whatever the module generates
+/// under the same name: `Client` is crate-qualified the same with and
+/// without a `client` entry in the module, and a generated type enters a
+/// spelling only as a reference (`Memo<.reading>`), rendered bare.
+#[test]
+fn qualify_keeps_the_crate_path_on_a_word_that_collides_with_a_generated_type() {
+    let without = bare_module();
+    let mut with = bare_module();
+    with.shapes.push(Shape {
+        id: "m#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![],
+            operations: vec![],
+        },
+        traits: vec![],
+    });
+    with.shapes.push(Shape {
+        id: "m#reading".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![],
+        },
+        traits: vec![],
+    });
+    assert_eq!(qualify("Client", "redis", &without), "redis::Client");
+    assert_eq!(
+        qualify("Client", "redis", &with),
+        qualify("Client", "redis", &without)
+    );
+    assert_eq!(
+        qualify("Memo<.reading>", "kit", &with),
+        "kit::Memo<Reading>"
+    );
 }

@@ -132,18 +132,54 @@ fn handle_go_type_keeps_a_builtin_type_argument_bare() {
     );
 }
 
-/// A type argument that is one of the module's own generated types stays
-/// bare too: it lives in the same package as the generated client.
+/// A type argument that references one of the module's own generated
+/// types (`.app_config`) renders as that type, bare: it lives in the same
+/// package as the generated client.
 #[test]
-fn handle_go_type_keeps_a_local_type_argument_bare() {
+fn handle_go_type_renders_a_generated_type_reference_bare() {
     let mut lib = handle_lib("cfgkit", "env_source");
-    lib.types[0].langs = vec![storage("go", "*Source[AppConfig]")];
+    lib.types[0].langs = vec![storage("go", "*Source[.app_config]")];
     let mut refs = Vec::new();
     assert_eq!(
         ext::handle_go_type(&lib, &lib.types[0], &bare_module(), &mut refs),
         Some("*cfgkit.Source[AppConfig]".to_string())
     );
     assert!(!refs.is_empty(), "the library's own import is registered");
+}
+
+/// A word of a spelling is the library's whatever the module generates
+/// under the same name: `*Client` is qualified the same with and without
+/// a `client` entry in the module.
+#[test]
+fn qualify_keeps_the_selector_on_a_word_that_collides_with_a_generated_type() {
+    let without = bare_module();
+    let mut with = bare_module();
+    with.shapes.push(Shape {
+        id: "m#client".into(),
+        kind: ShapeKind::Entry {
+            fields: vec![],
+            operations: vec![],
+        },
+        traits: vec![],
+    });
+    assert_eq!(ext::qualify("*Client", "redis", &without), "*redis.Client");
+    assert_eq!(
+        ext::qualify("*Client", "redis", &with),
+        ext::qualify("*Client", "redis", &without)
+    );
+    assert_eq!(
+        ext::qualify("Remember[.app_config]", "kit", &with),
+        "kit.Remember[AppConfig]"
+    );
+}
+
+/// A reference no shape answers never reaches the emitter
+/// (`validate_calls::spelling_references_resolve` refuses it); reaching
+/// one is a generator bug, reported as such.
+#[test]
+#[should_panic(expected = "references .nothing")]
+fn qualify_panics_on_a_reference_validation_should_have_refused() {
+    ext::qualify("Memo[.nothing]", "kit", &bare_module());
 }
 
 /// Only the `go` block reaches this emitter; another language's spelling
@@ -178,7 +214,7 @@ fn handle_go_type_is_none_without_a_go_block() {
 fn handle_adapter_decl_names_the_real_instantiated_type() {
     let module = bare_module();
     let mut lib = handle_lib("cfgkit", "env_source");
-    lib.types[0].langs = vec![storage("go", "*Source[AppConfig]")];
+    lib.types[0].langs = vec![storage("go", "*Source[.app_config]")];
     let handle = &lib.types[0];
     let decl = ext::handle_adapter_decl(&module, &go_casing(), &lib, handle)
         .expect("send is a Go-bound method");

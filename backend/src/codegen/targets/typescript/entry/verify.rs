@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::ext_call::{class_reference_name, is_local_type};
+use super::ext_call::class_reference_name;
 use super::ext_handle_iface::ts_lang;
 use super::ts_type;
 use crate::codegen::foreign_spelling;
@@ -26,14 +26,28 @@ const PROBE_FILE: &str = "probe.ts";
 const LIB: &str = "tonoLib";
 
 /// The spelling with the library's identifiers reached through the probe's
-/// namespace import.
+/// namespace import. A reference to a generated type never gets here:
+/// `sdk_terms` lists the binding as skipped first.
 fn qualify(spelling: &str, module: &Module) -> String {
     foreign_spelling::qualify(
         spelling,
         &format!("{LIB}."),
-        &|w| foreign_spelling::ts_builtin(w) || is_local_type(module, w),
+        &foreign_spelling::ts_builtin,
         false,
+        &crate::codegen::entries::generated_type(module),
     )
+}
+
+/// Whether a spelling can be written without the generated SDK: one that
+/// references a generated type (`Memo<.reading>`) cannot, and the binding
+/// is listed with why.
+fn sdk_terms(spelling: &str) -> Result<(), String> {
+    match foreign_spelling::references(spelling).first() {
+        Some(name) => Err(format!(
+            "#({spelling}) references .{name}, a type the generated SDK defines"
+        )),
+        None => Ok(()),
+    }
 }
 
 fn handle_alias(name: &str) -> String {
@@ -82,14 +96,16 @@ fn probe_type(module: &Module, lib: &ExtLib, t: &Tref) -> Result<String, String>
         Tref::Ref { id, .. } => {
             let name = crate::codegen::entries::local_name(id);
             if let Some(handle) = lib.types.iter().find(|h| h.name == name) {
-                handle
+                let storage = handle
                     .storage("ts")
                     .ok_or_else(|| format!("the handle {name} declares no ts block"))?;
+                sdk_terms(storage)?;
                 return Ok(handle_alias(&handle.name));
             }
             if let Some(form) = lib.structs.iter().find(|s| s.name == name) {
                 let ts = ts_block(&form.langs)
                     .ok_or_else(|| format!("the struct {name} declares no ts block"))?;
+                sdk_terms(&ts.name)?;
                 return Ok(qualify(&ts.name, module));
             }
             Err(format!("{name} is a type the generated SDK defines"))
@@ -124,10 +140,7 @@ fn arg_expr(
             if declared.is_none() {
                 return Err(format!("the handle {handle} declares no ts block"));
             }
-            Ok(format!(
-                "{LIB}.{}",
-                class_reference_name(lib, handle, module)
-            ))
+            Ok(format!("{LIB}.{}", class_reference_name(lib, handle)))
         }
         CallArg::SymbolCall(sc) => {
             let args = sc
@@ -148,6 +161,7 @@ fn arg_expr(
                 .find(|s| s.name == c.name)
                 .and_then(|s| ts_block(&s.langs))
                 .ok_or_else(|| format!("the struct literal {} has no ts block", c.name))?;
+            sdk_terms(&form.name)?;
             let fields = c
                 .fields
                 .iter()
@@ -224,6 +238,9 @@ fn op_line(
     decl: &ExternDecl,
     lang: &ExternLang,
 ) -> Result<String, String> {
+    for sp in crate::codegen::entries::spellings::of_lang(lang) {
+        sdk_terms(sp)?;
+    }
     let mut ps = params(module, lib, decl, lang)?;
     let mut prelude = Vec::new();
     let args = lang
@@ -234,9 +251,10 @@ fn op_line(
         .join(", ");
     let call = match owner {
         Some(handle) => {
-            handle
+            let storage = handle
                 .storage("ts")
                 .ok_or_else(|| "the handle declares no ts storage".to_string())?;
+            sdk_terms(storage)?;
             ps.insert(0, format!("tonoRecv: {}", handle_alias(&handle.name)));
             format!("tonoRecv.{}({args})", lang.symbol)
         }
@@ -277,8 +295,13 @@ pub fn probe(module: &Module, lib: &ExtLib) -> Probe {
     probe.push_plain("");
     for handle in &lib.types {
         if let Some(storage) = handle.storage("ts") {
+            let key = SiteKey::handle(&handle.name);
+            if let Err(why) = sdk_terms(storage) {
+                probe.skip(&key, &why);
+                continue;
+            }
             probe.push(
-                &SiteKey::handle(&handle.name),
+                &key,
                 &format!(
                     "type {} = {};",
                     handle_alias(&handle.name),
@@ -292,6 +315,10 @@ pub fn probe(module: &Module, lib: &ExtLib) -> Probe {
             continue;
         };
         let key = SiteKey::form(&form.name);
+        if let Err(why) = sdk_terms(&ts.name) {
+            probe.skip(&key, &why);
+            continue;
+        }
         // A form is read (a `yields` position) or built (a struct literal,
         // checked at its call); here the fields are checked to exist.
         let reads: Vec<String> = form

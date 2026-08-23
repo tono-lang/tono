@@ -137,7 +137,7 @@ fn call_parts(
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
-    class_reference_imports(&lang.call_args, l.lib, module, refs);
+    class_reference_imports(&lang.call_args, l.lib, refs);
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());

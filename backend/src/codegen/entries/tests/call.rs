@@ -633,3 +633,46 @@ fn a_handle_with_no_block_for_the_target_has_no_storage_and_is_refused() {
     assert!(err.contains("no storage type"), "{err}");
     assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
 }
+
+/// A reference inside a spelling (`Memo[.reading]`) names one of the
+/// module's own types; one no shape answers is refused before any emitter
+/// runs, naming the site and the reference. A word of a spelling is never
+/// matched against the module's types, so a library name colliding with a
+/// generated one is not a diagnostic.
+#[test]
+fn a_spelling_reference_must_name_a_declared_type() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go"]);
+    lib.langs = vec![crate::ir::LangPath {
+        lang: "go".into(),
+        path: "ns-lib".into(),
+    }];
+    lib.externs[0].langs[0].symbol = "Remember[.nothing]".into();
+    module.ext_libs = vec![lib];
+    let err = super::validate_entries(&model_of(module.clone()), &[TargetKind::Go]).unwrap_err();
+    assert!(
+        err.contains(
+            "ns.load: the go block spells #(Remember[.nothing]), which references .nothing"
+        ) && err.contains("declares no type named nothing"),
+        "{err}"
+    );
+
+    module.ext_libs[0].externs[0].langs[0].symbol = "Remember[.client]".into();
+    let resolved = super::validate_entries(&model_of(module.clone()), &[TargetKind::Go]);
+    assert!(
+        !resolved.as_ref().is_err_and(|e| e.contains("references")),
+        "{resolved:?}"
+    );
+
+    // The collision itself: the library's own `Client`, bare, in a module
+    // generating a `Client` of its own, is the library's word and passes.
+    module.ext_libs[0].externs[0].langs[0].symbol = "*Client".into();
+    let collision = super::validate_entries(&model_of(module), &[TargetKind::Go]);
+    assert!(
+        !collision.as_ref().is_err_and(|e| e.contains("references")),
+        "{collision:?}"
+    );
+}

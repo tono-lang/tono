@@ -325,6 +325,8 @@ pub fn validate_entries(model: &crate::ir::Model, targets: &[TargetKind]) -> Res
                 ));
             }
         }
+        super::validate_calls::spelling_references_resolve(module)
+            .map_err(|e| format!("module {}: {e}", module.name))?;
         let entries = module_entries(module);
         if entries.is_empty() {
             continue;

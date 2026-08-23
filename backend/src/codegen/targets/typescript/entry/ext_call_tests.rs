@@ -544,3 +544,46 @@ fn json_literal_renders_arrays_and_objects() {
     );
     assert_eq!(json_literal(&serde_json::json!({"k": true})), "{ k: true }");
 }
+
+/// A word of a spelling is the library's whatever the module generates
+/// under the same name: `Client` is imported from the library with and
+/// without a `client` entry in the module. A generated type enters a
+/// spelling only as a reference (`Memo<.reading>`), which is not imported
+/// and renders as the generated name where the spelling is written.
+#[test]
+fn import_spelling_imports_a_word_that_collides_with_a_generated_type() {
+    let mut module = appendix_module(appendix_fields());
+    assert!(
+        module
+            .shapes
+            .iter()
+            .any(|s| crate::codegen::entries::local_name(&s.id) == "client"),
+        "the fixture generates a Client of its own"
+    );
+    let lib = &module.ext_libs[0];
+    let mut refs = Vec::new();
+    import_spelling("Client", lib, &mut refs);
+    assert!(
+        refs.iter().any(|s| s.name == "Client"
+            && s.import
+                .as_ref()
+                .is_some_and(|i| i.module == "@company/config")),
+        "{refs:?}"
+    );
+    let mut refs = Vec::new();
+    import_spelling("Memo<.reading>", lib, &mut refs);
+    assert_eq!(
+        refs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["Memo"]
+    );
+    module.shapes.push(Shape {
+        id: "m#reading".into(),
+        kind: ShapeKind::Structure {
+            params: vec![],
+            members: vec![],
+        },
+        traits: vec![],
+    });
+    assert_eq!(spell("Memo<.reading>", &module), "Memo<Reading>");
+    assert_eq!(spell("new Client", &module), "new Client");
+}

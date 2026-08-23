@@ -179,27 +179,21 @@ pub(super) fn foreign_handle<'a>(t: &Tref, module: &'a Module) -> Option<(&'a Ex
         .then(|| (lib, ty.to_string()))
 }
 
-/// Whether a word of a foreign spelling is one of this module's own
-/// generated types (a tono shape rendered in the same Go package), which a
-/// spelling can use without the package selector: `Source[AppSettings]`.
-pub(super) fn is_local_type(module: &Module, word: &str) -> bool {
-    module
-        .shapes
-        .iter()
-        .any(|s| pascal(crate::codegen::entries::local_name(&s.id)) == word)
-}
-
 /// A foreign spelling with the library's identifiers qualified by its
 /// package selector: `Calculator[float64]` becomes
-/// `mathkit.Calculator[float64]`, `*Source[AppSettings]` becomes
-/// `*settingskit.Source[AppSettings]`. Go builtins and the module's own
-/// generated types stay bare; a head the author qualified stays as written.
+/// `mathkit.Calculator[float64]`, `*Source[.app_settings]` becomes
+/// `*settingskit.Source[AppSettings]`. Go builtins stay bare, a reference
+/// to one of the module's own types renders as the type this package
+/// generates (in scope without a selector), and a head the author
+/// qualified stays as written. Every other word is the library's, whatever
+/// the module generates under the same name.
 pub(super) fn qualify(spelling: &str, alias: &str, module: &Module) -> String {
     foreign_spelling::qualify(
         spelling,
         &format!("{alias}."),
-        &|w| go_builtin(w) || is_local_type(module, w),
+        &go_builtin,
         true,
+        &crate::codegen::entries::generated_type(module),
     )
 }
 

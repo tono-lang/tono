@@ -9,9 +9,9 @@ ext settingskit {
   rust { #(settingskit) }
 
   struct env_source {
-    go { #(*Source[AppSettings]) }
-    ts { #(Source<AppSettings>) }
-    rust { #(Source<AppSettings>) }
+    go { #(*Source[.app_settings]) }
+    ts { #(Source<.app_settings>) }
+    rust { #(Source<.app_settings>) }
 
     @async(ts, rust)
     op get(): app_settings {
@@ -25,7 +25,7 @@ ext settingskit {
 
   @async(ts, rust)
   op new_env_source(service: string, region: string): env_source {
-    go { call: #(NewEnvSource[AppSettings])(service, region) }
+    go { call: #(NewEnvSource[.app_settings])(service, region) }
     ts { call: #(newEnvSource)(service, region) }
     rust { call: #(new_env_source)(service, region) }
   }

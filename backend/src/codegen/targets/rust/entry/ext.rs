@@ -50,7 +50,7 @@ use super::resolve_call::{
     CallScope,
 };
 use super::transport::FieldCtx;
-use super::{field_snake, pascal, rust_type, LANG};
+use super::{field_snake, rust_type, LANG};
 
 /// The `ExtLib` and opaque type a `Tref` names, when it names a foreign
 /// handle declared in one of this module's own `ext` blocks (its id is
@@ -79,27 +79,21 @@ fn crate_ident(lib: &ExtLib) -> Option<String> {
         .map(|l| l.path.replace('-', "_"))
 }
 
-/// Whether a word of a foreign spelling is one of this module's own
-/// generated types (a tono shape in scope through `types::*`), which a
-/// spelling can use without the crate path: `Source<AppSettings>`.
-pub(super) fn is_local_type(module: &Module, word: &str) -> bool {
-    module
-        .shapes
-        .iter()
-        .any(|s| pascal(crate::codegen::entries::local_name(&s.id)) == word)
-}
-
 /// A foreign spelling with the library's identifiers qualified by the
 /// crate: `Box<dyn Calculator<f64>>` becomes `Box<dyn mathkit::Calculator<f64>>`,
-/// `FormulaCalculator::parse` becomes `mathkit::FormulaCalculator::parse`.
-/// Rust keywords, primitives, the prelude and the module's own generated
-/// types stay bare; a head the author qualified stays as written.
+/// `FormulaCalculator::parse` becomes `mathkit::FormulaCalculator::parse`,
+/// `Memo<.reading>` becomes `mathkit::Memo<Reading>`. Rust keywords,
+/// primitives and the prelude stay bare, a reference to one of the
+/// module's own types renders as the type in scope through `types::*`,
+/// and a head the author qualified stays as written. Every other word is
+/// the library's, whatever the module generates under the same name.
 pub(super) fn qualify(spelling: &str, krate: &str, module: &Module) -> String {
     foreign_spelling::qualify(
         spelling,
         &format!("{krate}::"),
-        &|w| rust_builtin(w) || w == krate || is_local_type(module, w),
+        &|w| rust_builtin(w) || w == krate,
         false,
+        &crate::codegen::entries::generated_type(module),
     )
 }
 

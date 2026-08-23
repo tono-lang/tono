@@ -12,6 +12,7 @@ async fn main() {
     };
     let client = Client::new(seed.clone()).await.expect("construct");
     let got = client.recall().expect("recall");
-    assert_eq!(got, seed, "recall");
+    assert_eq!(got.value, seed.value, "recall value");
+    assert_eq!(got.label, seed.label, "recall label");
     println!("probe 14 (rust generated type reference): ok");
 }

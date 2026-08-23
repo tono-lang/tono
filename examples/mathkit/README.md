@@ -36,9 +36,9 @@ synchronous in TypeScript.
 
 | target | where | shape kept on purpose |
 |---|---|---|
-| Go | `ext/go` | `Calculator[T]` is an interface; `FromFormula(expr, opts ...Option)` with `WithPrecision(int) Option`; `FromFallback(strategy, calcs ...Calculator[T])` |
-| Rust | `ext/rust` | `Calculator<T>` is a trait; `from_constant`, `from_formula`, `from_series`, `from_fallback` each return a different concrete struct; `FormulaOptions { precision: Option<u8> }` by value; `Vec<Box<dyn Calculator<T>>>`; no handle is `Clone` |
-| TypeScript | `ext/ts` | every constructor is a class (`new`); `FormulaOptions` is an optional object; `Calculator<T>[]`; `compute()` is synchronous |
+| Go | `ext/go` | `Calculator[T]` is an interface; `FromFormula(expr, opts ...Option)` with `WithPrecision(int) Option`; `FromFallback(strategy, calcs ...Calculator[T])`; a `Client` type (the name every generated entry takes too); `Memo[T]`, generic over a type the library never sees |
+| Rust | `ext/rust` | `Calculator<T>` is a trait; `from_constant`, `from_formula`, `from_series`, `from_fallback` each return a different concrete struct; `FormulaOptions { precision: Option<u8> }` by value; `Vec<Box<dyn Calculator<T>>>`; no handle is `Clone`; a `Client` type; `Memo<T>` |
+| TypeScript | `ext/ts` | every constructor is a class (`new`); `FormulaOptions` is an optional object; `Calculator<T>[]`; `compute()` is synchronous; a `Client` class; `Memo<T>` |
 
 ## Files
 
@@ -89,6 +89,8 @@ that diverges from the stand-in library, reported on the `.tono`), `gen-red`,
 | 10 | a handle composed and read separately | fallback + a read of one of its inputs | `10-ownership-refused` | refused, as intended: single ownership is the rule, and the generator names the field and both readers |
 | 11 | a static method as the constructor: the call's receiver is the foreign type itself | `FormulaCalculator.parse(expr)` (TS), `FormulaCalculator::parse(expr)` (Rust) | `11-ts-static-method`, `11-rust-static-method`, `11-go-package-function` | pass: the receiver is inside the spelling (`#(FormulaCalculator.parse)`, `#(FormulaCalculator::parse)`), imported in TypeScript and crate-qualified at its head in Rust; Go has no static method and nothing to refuse: its block writes the package function the library exposes there |
 | 12 | a class reference as an argument: the library takes the class itself and constructs it | `instantiate(AnswerCalculator)` (TS, `new () => T`) | `12-ts-class-reference`, `12-rust-class-reference-refused`, `12-go-class-reference-refused` | pass: a bare name in a `call:` argument that is a handle of the same ext block (and no parameter) passes its class, the head of the handle's `ts` storage type; Rust and Go have no type as a value, so their generation refuses the binding naming the site (refused, as intended) |
+| 13 | a foreign type whose name collides with a generated one | the library's `Client` next to the generated `Client` | `13-go-name-collision`, `13-rust-name-collision`, `13-ts-name-collision` | pass: every word of a spelling is the library's, never matched against the module's own types, so `#(*Client)` stays `mathkit.Client` (Go), `mathkit::Client` (Rust), an import from the library (TypeScript) whatever the module generates under the same name |
+| 14 | a generated type inside a foreign spelling | `Memo[T]` instantiated over the tono struct `reading` | `14-go-generated-type-reference`, `14-rust-generated-type-reference`, `14-ts-generated-type-reference` | pass: the module's own type enters a spelling only as an explicit reference, `#(*Memo[.reading])`, `#(Remember[.reading])`, rendered as the generated `Reading` and never qualified; a reference no type answers is refused at generation, naming the site |
 
 Every capability passes today, capability 10 by being refused (the one that
 is a rule, not a gap).
@@ -101,7 +103,7 @@ typescript`, `bench rust`: pass). Go stops at generation (`bench go`,
 gen-red): its declared-test emitter does not carry what the bench needs (a
 `[]float @arg` pinned in a test renders as `[]float64("")`, and four stubs of
 the same handle type in one test emit the same fake type four times). That
-blocker is not among the twelve capabilities; it is the first thing the bench
+blocker is not among the fourteen capabilities; it is the first thing the bench
 found, and the probes report every Go capability green around it.
 
 ### The error struct

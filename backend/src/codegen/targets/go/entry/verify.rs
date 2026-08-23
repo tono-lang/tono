@@ -24,6 +24,29 @@ use crate::ir::{
 
 const PROBE_FILE: &str = "probe.go";
 
+/// Whether a spelling can be written without the generated SDK: one that
+/// references a generated type (`Memo[.reading]`) cannot, and the binding
+/// is listed with why.
+fn sdk_terms(spelling: &str) -> Result<(), String> {
+    match crate::codegen::foreign_spelling::references(spelling).first() {
+        Some(name) => Err(format!(
+            "#({spelling}) references .{name}, a type the generated SDK defines"
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The handle's declared Go storage, qualified, when the probe can spell
+/// it: `Err` names a reference to a generated type or a missing go block.
+fn handle_storage(lib: &ExtLib, handle: &OpaqueType, module: &Module) -> Result<String, String> {
+    let storage = handle
+        .storage("go")
+        .ok_or_else(|| format!("the handle {} declares no go block", handle.name))?;
+    sdk_terms(storage)?;
+    handle_go_type(lib, handle, module, &mut Vec::new())
+        .ok_or_else(|| "the lib declares no go module path".to_string())
+}
+
 /// The Go type a declared position has in the probe, when it can be spelled
 /// without the generated SDK: builtins, lists and maps of them, handles by
 /// their storage, foreign forms by their name. `Err` says what cannot be
@@ -63,13 +86,13 @@ fn probe_type(module: &Module, lib: &ExtLib, t: &Tref) -> Result<String, String>
         Tref::Ref { id, .. } => {
             let name = crate::codegen::entries::local_name(id);
             if let Some(handle) = lib.types.iter().find(|h| h.name == name) {
-                return handle_go_type(lib, handle, module, &mut Vec::new())
-                    .ok_or_else(|| format!("the handle {name} declares no go block"));
+                return handle_storage(lib, handle, module);
             }
             if let Some(form) = lib.structs.iter().find(|s| s.name == name) {
                 let go = form
                     .lang("go")
                     .ok_or_else(|| format!("the struct {name} declares no go block"))?;
+                sdk_terms(&go.name)?;
                 return Ok(qualify(&go.name, &lib_ident(&lib.name), module));
             }
             Err(format!("{name} is a type the generated SDK defines"))
@@ -118,6 +141,7 @@ fn arg_expr(
                 .find(|s| s.name == c.name)
                 .and_then(|s| s.lang("go"))
                 .ok_or_else(|| format!("the struct literal {} has no go block", c.name))?;
+            sdk_terms(&form.name)?;
             let fields = c
                 .fields
                 .iter()
@@ -202,12 +226,14 @@ fn op_line(
     decl: &ExternDecl,
     lang: &ExternLang,
 ) -> Result<String, String> {
+    for sp in crate::codegen::entries::spellings::of_lang(lang) {
+        sdk_terms(sp)?;
+    }
     let mut ps = params(module, lib, decl, lang)?;
     let head = match owner {
         None => qualify(&lang.symbol, alias, module),
         Some(handle) => {
-            let storage = handle_go_type(lib, handle, module, &mut Vec::new())
-                .ok_or_else(|| "the handle declares no go storage".to_string())?;
+            let storage = handle_storage(lib, handle, module)?;
             ps.insert(0, format!("tonoRecv {storage}"));
             format!("tonoRecv.{}", lang.symbol)
         }
@@ -270,8 +296,12 @@ pub fn probe(module: &Module, lib: &ExtLib) -> Probe {
 
     for handle in &lib.types {
         let key = SiteKey::handle(&handle.name);
-        if let Some(storage) = handle_go_type(lib, handle, module, &mut Vec::new()) {
-            probe.push(&key, &format!("var _ {storage}"));
+        if handle.storage("go").is_none() {
+            continue;
+        }
+        match handle_storage(lib, handle, module) {
+            Ok(storage) => probe.push(&key, &format!("var _ {storage}")),
+            Err(why) => probe.skip(&key, &why),
         }
     }
     for form in &lib.structs {
@@ -279,11 +309,15 @@ pub fn probe(module: &Module, lib: &ExtLib) -> Probe {
             continue;
         };
         let key = SiteKey::form(&form.name);
+        if let Err(why) = sdk_terms(&go.name) {
+            probe.skip(&key, &why);
+            continue;
+        }
         let ty = qualify(&go.name, &alias, module);
         let mut checks = Vec::new();
         for f in &form.fields {
             let field_ty = match go.fields.get(&f.name) {
-                Some(sp) => Ok(qualify(sp, &alias, module)),
+                Some(sp) => sdk_terms(sp).map(|()| qualify(sp, &alias, module)),
                 None => probe_type(module, lib, &f.r#type),
             };
             match field_ty {

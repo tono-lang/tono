@@ -367,6 +367,34 @@ pub(super) fn foreign_forms_declared(
     Ok(())
 }
 
+/// Every generated-type reference inside a spelling (`Memo[.reading]`)
+/// names a type this module declares. A word of a spelling is never
+/// matched against the module's types (a library's `Client` and the
+/// generated `Client` are told apart by the reference, not by the name),
+/// so an unresolved reference is the one way a spelling can name nothing.
+pub(super) fn spelling_references_resolve(module: &crate::ir::Module) -> Result<(), String> {
+    let mut sites: Vec<(String, String, String)> = Vec::new();
+    for lib in &module.ext_libs {
+        sites.extend(
+            super::spellings::of_lib(lib)
+                .into_iter()
+                .map(|(site, lang, sp)| (site, lang.to_string(), sp.to_string())),
+        );
+    }
+    sites.extend(super::spellings::of_errors(module));
+    for (site, lang, spelling) in sites {
+        for name in crate::codegen::foreign_spelling::references(&spelling) {
+            if super::generated_type_name(module, name).is_none() {
+                return Err(format!(
+                    "{site}: the {lang} block spells #({spelling}), which references .{name}, but module {} declares no type named {name}; a reference inside a spelling names one of this module's own types, every other word is the library's",
+                    module.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A foreign handle field (or a call yielding one) has a storage type for
 /// every target it is emitted in: the handle's block for that language.
 /// Nothing is derived from the handle's name.
