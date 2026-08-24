@@ -89,12 +89,16 @@ let rec encode_call_arg (a : Ir.call_arg) : Ir.json =
   | Ir.Ca_foreign s -> `Assoc [ ("foreign", `String s) ]
 
 and encode_call_ctor (c : Ir.call_ctor) : Ir.json =
+  let spelled =
+    match c.cc_as with None -> [] | Some sp -> [ ("as", `String sp) ]
+  in
   `Assoc
-    [
-      ("ctor", `String c.cc_name);
-      ( "fields",
-        `Assoc (List.map (fun (n, v) -> (n, encode_call_arg v)) c.cc_fields) );
-    ]
+    ([
+       ("ctor", `String c.cc_name);
+       ( "fields",
+         `Assoc (List.map (fun (n, v) -> (n, encode_call_arg v)) c.cc_fields) );
+     ]
+    @ spelled)
 
 and encode_entry_call (c : Ir.entry_call) : Ir.json =
   `Assoc
@@ -316,7 +320,14 @@ and decode_call_ctor kvs =
         Ok (n, a))
       fields_j
   in
-  Ok ({ Ir.cc_name = name; cc_fields = fields } : Ir.call_ctor)
+  let* cc_as =
+    match List.assoc_opt "as" kvs with
+    | None -> Ok None
+    | Some v ->
+        let* s = as_string v in
+        Ok (Some s)
+  in
+  Ok ({ Ir.cc_name = name; cc_fields = fields; cc_as } : Ir.call_ctor)
 
 and decode_entry_call j =
   let* kvs = as_assoc j in

@@ -25,6 +25,8 @@ let rec lower_call_arg ?(handles = []) ?(params = []) :
   | Ast.CaParamAs (n, _, sp, _) -> Ir.Ca_param_as (n, sp)
   | Ast.CaRef r -> Ir.Ca_ref r.segs
   | Ast.CaCtor c -> Ir.Ca_ctor (lower_call_ctor c)
+  | Ast.CaCtorAs (c, sp, _) ->
+      Ir.Ca_ctor { (lower_call_ctor c) with Ir.cc_as = Some sp }
   | Ast.CaLit (Ast.LStr s, _) -> Ir.Ca_lit (`String s)
   | Ast.CaLit (Ast.LInt n, _) -> Ir.Ca_lit (`Int n)
   | Ast.CaLit (Ast.LFloat f, _) -> Ir.Ca_lit (`Float f)
@@ -43,6 +45,7 @@ and lower_call_ctor (c : Ast.ctor_arg) : Ir.call_ctor =
     Ir.cc_name = c.ctor_name;
     cc_fields =
       List.map (fun (n, _, v) -> (n, lower_ctor_field_value v)) c.ctor_fields;
+    cc_as = None;
   }
 
 and lower_ctor_field_value : Ast.trait_arg -> Ir.call_arg = function

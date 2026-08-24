@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use super::ext::ext_render::{coerce, literal_of_json};
+use super::ext::ext_render::{coerce, form_coerce, literal_of_json};
 use super::ext::{binds_ctx, handle_go_type, lib_ident, qualify};
 use super::{go_type, go_type_label};
 use crate::codegen::verify::{
@@ -147,11 +147,18 @@ fn arg_expr(
                 .iter()
                 .map(|(k, v)| Ok(format!("{k}: {}", arg_expr(module, lib, alias, params, v)?)))
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok(format!(
+            let literal = format!(
                 "{}{{{}}}",
                 qualify(&form.name, alias, module),
                 fields.join(", ")
-            ))
+            );
+            // A spelled literal crosses here exactly as the emitted call
+            // passes it (`&mathkit.Options{..}`); the form itself is still
+            // probed as the value type its block declares.
+            match &c.spelling {
+                None => Ok(literal),
+                Some(spelling) => form_coerce(module, lib, form, spelling, &literal),
+            }
         }
         CallArg::TypeRef(_) => Err("Go has no class reference to pass".to_string()),
         CallArg::List(_) | CallArg::Ref(_) | CallArg::Call(_) => {

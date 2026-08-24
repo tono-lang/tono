@@ -55,6 +55,21 @@ pub(super) fn coerce(t: &Tref, spelling: &str, expr: &str) -> Result<String, Str
     Ok(expr.to_string())
 }
 
+/// The conversion a struct literal of the form `form_type` goes through to
+/// cross as `spelling`: an object literal is structural, so any
+/// non-primitive spelling passes it as it is for `tsc` to grade against the
+/// library (TypeScript has no pointer to take; `&Options` is not a type
+/// here and the compiler says so). A primitive spelling names a type no
+/// object literal can cross as, and is refused naming both.
+pub(super) fn form_coerce(form_type: &str, spelling: &str, expr: &str) -> Result<String, String> {
+    if PRIMITIVES.contains(&spelling) {
+        return Err(format!(
+            "cannot pass a {form_type} literal as {spelling} in TypeScript: no conversion from {form_type} to {spelling}"
+        ));
+    }
+    Ok(expr.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +123,25 @@ mod tests {
         assert_eq!(
             coerce(&prim(Prim::String), "`a-${string}`", "v").unwrap(),
             "v"
+        );
+    }
+
+    /// An object literal is structural: any type name passes it for the
+    /// compiler to grade, and only a primitive is refused.
+    #[test]
+    fn a_form_literal_passes_structurally_and_refuses_a_primitive() {
+        assert_eq!(
+            form_coerce("Options", "Options", "{ a: 1 }").unwrap(),
+            "{ a: 1 }"
+        );
+        assert_eq!(
+            form_coerce("Options", "Partial<Options>", "{ a: 1 }").unwrap(),
+            "{ a: 1 }"
+        );
+        let err = form_coerce("Options", "string", "{ a: 1 }").unwrap_err();
+        assert!(
+            err.contains("no conversion from Options to string"),
+            "{err}"
         );
     }
 

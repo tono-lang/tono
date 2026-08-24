@@ -58,7 +58,10 @@ and call_lit = LStr of string | LInt of int | LFloat of float
    Two forms exist only inside a language block's own [call:] line, where
    the library's shape is declared: [CaParamAs] forwards a parameter that
    crosses the boundary under a foreign spelling different from tono's own
-   mapping ([values: #(Vec<f64>)], [calcs: #(...Calculator[float64])]), and
+   mapping ([values: #(Vec<f64>)], [calcs: #(...Calculator[float64])]),
+   [CaCtorAs] is the same annotation on a struct literal ([opts { addr:
+   addr }: #(&Options)] for a library that takes a pointer to the form: the
+   form's type stays the type, the [&] belongs to the argument), and
    [CaForeign] is a position whose content is not a tono value at all but a
    declaration of what the target binds there ([#(ctx context.Context)]).
 
@@ -71,6 +74,7 @@ and call_arg =
   | CaParamAs of string * Span.span * string * Span.span
   | CaRef of ref_path
   | CaCtor of ctor_arg
+  | CaCtorAs of ctor_arg * string * Span.span
   | CaLit of call_lit * Span.span
   | CaCall of nested_call
   | CaList of call_arg list * Span.span

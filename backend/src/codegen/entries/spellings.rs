@@ -7,7 +7,8 @@ use crate::ir::{CallArg, ExtLib, ExternLang, ForeignLang, Module};
 
 /// The spellings inside a call's argument tree: a parameter's own spelling,
 /// a declared position, a nested symbol call's callee (and its own
-/// arguments), the arguments of a struct literal or a list.
+/// arguments), a struct literal's own spelling and its arguments, a list's
+/// items.
 pub(crate) fn of_args<'a>(args: &'a [CallArg], out: &mut Vec<&'a str>) {
     for arg in args {
         match arg {
@@ -17,6 +18,7 @@ pub(crate) fn of_args<'a>(args: &'a [CallArg], out: &mut Vec<&'a str>) {
                 of_args(&sc.args, out);
             }
             CallArg::Ctor(c) => {
+                out.extend(c.spelling.as_deref());
                 for v in c.fields.values() {
                     of_args(std::slice::from_ref(v), out);
                 }
@@ -158,6 +160,7 @@ mod tests {
                 CallArg::Ctor(CallCtor {
                     name: "opts".into(),
                     fields: ctor_fields,
+                    spelling: Some("&Options".into()),
                 }),
                 CallArg::List(vec![
                     CallArg::Ref(vec!["x".into()]),
@@ -180,6 +183,7 @@ mod tests {
                 "[]float64",
                 "ctx context.Context",
                 "WithPrecision",
+                "&Options",
                 "int",
                 "uint8",
                 "[]byte"

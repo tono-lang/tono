@@ -641,6 +641,7 @@ fn an_injected_handle_nested_in_a_ctor_argument_is_still_refused() {
     let ctor_arg = CallArg::Ctor(CallCtor {
         name: "opts".into(),
         fields: std::collections::BTreeMap::from([("x".to_string(), call_ref(&["injected"]))]),
+        spelling: None,
     });
     let m = model_with_forwarding_call(injected_source(), vec![ctor_arg]);
     let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();

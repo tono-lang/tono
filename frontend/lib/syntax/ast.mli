@@ -40,6 +40,7 @@ and call_arg =
   | CaParamAs of string * Span.span * string * Span.span
   | CaRef of ref_path
   | CaCtor of ctor_arg
+  | CaCtorAs of ctor_arg * string * Span.span
   | CaLit of call_lit * Span.span
   | CaCall of nested_call
   | CaList of call_arg list * Span.span

@@ -361,6 +361,7 @@ fn every_variant_args(head: CallArg) -> Vec<CallArg> {
             fields: [("retries".to_string(), CallArg::Lit(serde_json::json!(3)))]
                 .into_iter()
                 .collect(),
+            spelling: None,
         }),
         CallArg::Call(Box::new(EntryCall {
             ns: "companyauth".into(),
@@ -510,6 +511,7 @@ fn ctor_expr_builds_a_form_from_its_rust_block() {
         fields: [("n".to_string(), CallArg::Lit(serde_json::json!("x")))]
             .into_iter()
             .collect(),
+        spelling: None,
     };
     let out = ctor_expr(
         &module,
@@ -519,6 +521,55 @@ fn ctor_expr_builds_a_form_from_its_rust_block() {
         &["\"x\".to_string()".to_string()],
     );
     assert_eq!(out, "company_config::Opts { n: Some(\"x\".to_string()) }");
+}
+
+/// The literal under a spelling of its own goes through the same conversion
+/// a spelled parameter does: `&Opts` lends it for the call, `Option<Opts>`
+/// wraps it, the form's own type passes it as is, and a spelling with no
+/// conversion is refused naming both types.
+#[test]
+fn a_spelled_form_literal_is_lent_or_wrapped() {
+    let module = module_of(vec![]);
+    let mut lib = lib("companyconfig", "company-config", vec![]);
+    lib.structs = vec![crate::ir::ForeignStruct {
+        name: "opts".into(),
+        fields: vec![],
+        langs: vec![crate::ir::ForeignLang {
+            lang: "rust".into(),
+            name: "Opts".into(),
+            fields: Default::default(),
+        }],
+    }];
+    let literal = |spelling: &str| CallCtor {
+        name: "opts".into(),
+        fields: Default::default(),
+        spelling: Some(spelling.into()),
+    };
+    let render =
+        |spelling: &str| ctor_expr(&module, &lib, "company_config", &literal(spelling), &[]);
+    assert_eq!(render("&Opts"), "&company_config::Opts {  }");
+    assert_eq!(render("Option<Opts>"), "Some(company_config::Opts {  })");
+    assert_eq!(render("Opts"), "company_config::Opts {  }");
+    let coerces = |spelling: &str| {
+        crate::codegen::targets::rust::entry::form_spelling_coerces(
+            &module,
+            &lib,
+            &lib.structs[0],
+            spelling,
+        )
+    };
+    assert!(coerces("&Opts").is_ok());
+    let err = coerces("u8").unwrap_err();
+    assert!(
+        err.contains("no conversion from company_config::Opts to u8"),
+        "{err}"
+    );
+    let mut blockless = lib.structs[0].clone();
+    blockless.langs.clear();
+    assert!(crate::codegen::targets::rust::entry::form_spelling_coerces(
+        &module, &lib, &blockless, "u8"
+    )
+    .is_ok());
 }
 
 /// A spelled parameter and a nested foreign call inside a field's own

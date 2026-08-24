@@ -198,7 +198,12 @@ fn arg_expr(
                 qualify(&block.name, module),
                 fields.join(", ")
             ));
-            Ok(name)
+            // A spelled literal crosses here exactly as the emitted call
+            // passes it.
+            match &c.spelling {
+                None => Ok(name),
+                Some(spelling) => super::ext_coerce::form_coerce(&block.name, spelling, &name),
+            }
         }
         CallArg::Foreign(_) => Err("TypeScript binds no position of its own".to_string()),
         CallArg::List(_) | CallArg::Ref(_) | CallArg::Call(_) => {

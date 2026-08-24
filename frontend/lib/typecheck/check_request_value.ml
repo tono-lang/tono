@@ -60,7 +60,8 @@ let check_request_value (op : Ast.decl) : Diagnostic.t list =
     | Ast.CaRef _ | Ast.CaLit _ -> []
     | Ast.CaParam (_, span)
     | Ast.CaParamAs (_, span, _, _)
-    | Ast.CaForeign (_, span) ->
+    | Ast.CaForeign (_, span)
+    | Ast.CaCtorAs (_, _, span) ->
         [ bad_param span ]
     | Ast.CaCtor c ->
         List.concat_map

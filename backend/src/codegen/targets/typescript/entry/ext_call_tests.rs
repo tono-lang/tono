@@ -621,3 +621,44 @@ fn a_spelled_ctor_field_converts_inside_the_literal() {
     let out = rendered_text(&module);
     assert!(out.contains("region: Number("), "{out}");
 }
+
+/// A struct literal under a spelling of its own passes as the literal it
+/// is (an object literal is structural; the spelling is for `tsc` to grade
+/// against the library), and a primitive spelling is refused by name before
+/// generation, whether or not the form declares a ts block.
+#[test]
+fn a_spelled_ctor_literal_passes_structurally() {
+    let mut module = appendix_module(appendix_fields());
+    module.ext_libs[0].structs[0].langs = vec![crate::ir::ForeignLang {
+        lang: "ts".into(),
+        name: "TsOpts".into(),
+        fields: Default::default(),
+    }];
+    let load = &mut module.ext_libs[0].externs[0];
+    if let CallArg::Ctor(ctor) = &mut load.langs[0].call_args[0] {
+        ctor.spelling = Some("Readonly<TsOpts>".into());
+    } else {
+        panic!("the appendix load call starts with its options literal");
+    }
+    let out = rendered_text(&module);
+    assert!(out.contains("{ region:"), "{out}");
+    assert!(!out.contains("Readonly"), "{out}");
+
+    let form = &module.ext_libs[0].structs[0];
+    assert!(
+        crate::codegen::targets::typescript::entry::form_spelling_coerces(form, "Readonly<TsOpts>")
+            .is_ok()
+    );
+    let err = crate::codegen::targets::typescript::entry::form_spelling_coerces(form, "number")
+        .unwrap_err();
+    assert!(err.contains("no conversion from TsOpts to number"), "{err}");
+    let mut blockless = form.clone();
+    blockless.langs.clear();
+    let err =
+        crate::codegen::targets::typescript::entry::form_spelling_coerces(&blockless, "number")
+            .unwrap_err();
+    assert!(
+        err.contains(&format!("no conversion from {} to number", form.name)),
+        "{err}"
+    );
+}

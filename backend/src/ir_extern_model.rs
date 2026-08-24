@@ -68,6 +68,13 @@ pub enum CallArg {
 pub struct CallCtor {
     pub name: String,
     pub fields: BTreeMap<String, CallArg>,
+    /// The literal under a foreign spelling of its own (wire key `as`, the
+    /// same annotation a parameter carries): what it crosses the boundary
+    /// as, `&Options` for a library that takes the form by pointer. The
+    /// form's own type stays what its language block declares; the `&`
+    /// belongs to the argument. Absent for a literal passed as the form's
+    /// own type.
+    pub spelling: Option<String>,
 }
 
 /// A bare foreign-symbol call nested inside a `call:` line's own argument
@@ -120,9 +127,12 @@ impl Serialize for CallArg {
                 m.end()
             }
             CallArg::Ctor(c) => {
-                let mut m = s.serialize_map(Some(2))?;
+                let mut m = s.serialize_map(Some(2 + usize::from(c.spelling.is_some())))?;
                 m.serialize_entry("ctor", &c.name)?;
                 m.serialize_entry("fields", &c.fields)?;
+                if let Some(sp) = &c.spelling {
+                    m.serialize_entry("as", sp)?;
+                }
                 m.end()
             }
             CallArg::SymbolCall(sc) => {
@@ -221,14 +231,22 @@ fn call_arg_from_value(v: &Value) -> Result<CallArg, String> {
             Ok(CallArg::Call(Box::new(c)))
         }
         ["ctor"] => {
-            ensure_only(obj, &["ctor", "fields"])?;
+            ensure_only(obj, &["ctor", "fields", "as"])?;
             let name = obj["ctor"].as_str().ok_or("expected a string")?.to_string();
             let fields_obj = obj["fields"].as_object().ok_or("expected an object")?;
             let mut fields = BTreeMap::new();
             for (k, fv) in fields_obj {
                 fields.insert(k.clone(), call_arg_from_value(fv)?);
             }
-            Ok(CallArg::Ctor(CallCtor { name, fields }))
+            let spelling = match obj.get("as") {
+                None => None,
+                Some(sp) => Some(sp.as_str().ok_or("expected a string")?.to_string()),
+            };
+            Ok(CallArg::Ctor(CallCtor {
+                name,
+                fields,
+                spelling,
+            }))
         }
         ["symbol"] => {
             ensure_only(obj, &["symbol", "symbol_args"])?;
@@ -483,7 +501,13 @@ mod tests {
         fields.insert("region".to_string(), CallArg::Param("region".into()));
         roundtrip(&CallArg::Ctor(CallCtor {
             name: "ts_opts".into(),
+            fields: fields.clone(),
+            spelling: None,
+        }));
+        roundtrip(&CallArg::Ctor(CallCtor {
+            name: "go_opts".into(),
             fields,
+            spelling: Some("&Options".into()),
         }));
         roundtrip(&CallArg::SymbolCall(SymbolCall {
             symbol: "WithPrecision".into(),

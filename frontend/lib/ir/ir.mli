@@ -197,7 +197,13 @@ and call_arg =
   | Ca_type of string
   | Ca_foreign of string
 
-and call_ctor = { cc_name : string; cc_fields : (string * call_arg) list }
+and call_ctor = {
+  cc_name : string;
+  cc_fields : (string * call_arg) list;
+  cc_as : string option;
+      (* the literal under a foreign spelling of its own: what it crosses the
+         boundary as ([&Options] for a library taking a pointer to it) *)
+}
 
 (* A bare foreign-symbol call nested inside a [call:] line's own argument
    list, e.g. [WithPrecision(precision)]. *)

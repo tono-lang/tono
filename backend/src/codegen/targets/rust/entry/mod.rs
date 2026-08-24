@@ -753,3 +753,18 @@ pub fn param_spelling_coerces(
 ) -> Result<(), String> {
     resolve_call::coerce(module, lib, t, spelling, "v").map(|_| ())
 }
+
+/// Whether Rust can pass a literal of the foreign form `form` under
+/// `spelling` (see `resolve_call::form_coerce`); the reason names both
+/// types when it cannot. A form with no `rust` block is refused on its own.
+pub fn form_spelling_coerces(
+    module: &Module,
+    lib: &crate::ir::ExtLib,
+    form: &crate::ir::ForeignStruct,
+    spelling: &str,
+) -> Result<(), String> {
+    match form.lang("rust") {
+        Some(block) => resolve_call::form_coerce(module, lib, block, spelling, "v").map(|_| ()),
+        None => Ok(()),
+    }
+}
