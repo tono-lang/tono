@@ -6,7 +6,7 @@
 #
 # outcome: pass | frontend-red | check-red | gen-red | build-red | test-red | run-red | refused
 # id	target	source	expected
-bench	go	service.tono	gen-red
+bench	go	service.tono	build-red
 bench	typescript	service.tono	pass
 bench	rust	service.tono	pass
 01-go-interface-handle	go	probes/01-go-interface-handle.tono	pass

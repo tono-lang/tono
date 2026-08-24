@@ -103,12 +103,14 @@ refused (each a rule, not a gap).
 
 The full three-target file compiles through the frontend; TypeScript and
 Rust generate, build, run their declared tests and the driver (`bench
-typescript`, `bench rust`: pass). Go stops at generation (`bench go`,
-gen-red): its declared-test emitter does not carry what the bench needs (a
-`[]float @arg` pinned in a test renders as `[]float64("")`, and four stubs of
-the same handle type in one test emit the same fake type four times). That
-blocker is not among the fourteen capabilities; it is the first thing the bench
-found, and the probes report every Go capability green around it.
+typescript`, `bench rust`: pass). Go generates (a `[]float @arg` pinned in a
+test renders as the typed slice literal `[]float64{..}`) but stops at the
+build (`bench go`, build-red), on two counts: the generated `client.go`
+returns `&InvalidExpression{..}` where an `error` is expected, and the error
+struct has no `Error()` method; and four stubs of the same handle type in one
+test emit the same fake type four times. Neither blocker is among the
+fourteen capabilities; they are what the bench found next, and the probes
+report every Go capability green around them.
 
 ### The error struct
 

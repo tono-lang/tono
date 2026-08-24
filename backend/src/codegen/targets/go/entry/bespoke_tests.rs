@@ -9,10 +9,12 @@ use super::tests::{entry_text, fixture_module};
 use crate::codegen::targets::go::types::go_casing;
 use crate::codegen::targets::go::GoRules;
 use crate::codegen::test_support::{
-    eq, impl_extension, notes_bed, push_entry_op_wire, rendered, request_pattern, wired, with_tests,
+    bare_entry_field, eq, impl_extension, member, notes_bed, push_entry_field, push_entry_op_wire,
+    rendered, request_pattern, structure, wired, with_tests,
 };
 use crate::ir::{
-    HttpAnswer, StubAnswer, StubDep, TestConstruction, TestDecl, TestExpect, TestPattern, TestStub,
+    HttpAnswer, Prim, Source, StubAnswer, StubDep, TestConstruction, TestDecl, TestExpect,
+    TestPattern, TestStub, Tref,
 };
 
 /// An `ext impl` binding for the fixture's `save_note`, typed or raw.
@@ -270,4 +272,145 @@ fn two_entries_with_tests_share_the_package_without_redefining_symbols() {
             .collect()
     };
     assert!(funcs(&client).is_disjoint(&funcs(&admin)));
+}
+
+/// The fixture entry with three more `@arg` fields, each a shape whose JSON
+/// spelling is not Go: a list of floats, a list of strings, and a structure
+/// holding a list and an optional scalar.
+fn module_with_composite_args() -> crate::ir::Module {
+    let mut module = fixture_module();
+    module.shapes.push(structure(
+        "notes#reading",
+        vec![
+            member("xs", Tref::List(Box::new(Tref::Prim(Prim::I32))), true),
+            member("tag", Tref::Prim(Prim::String), false),
+            member(
+                "again",
+                Tref::Ref {
+                    id: "notes#reading".into(),
+                    args: vec![],
+                },
+                false,
+            ),
+        ],
+    ));
+    let list = |inner: Prim| Tref::List(Box::new(Tref::Prim(inner)));
+    push_entry_field(
+        &mut module,
+        bare_entry_field("samples", list(Prim::Float), vec![Source::Arg]),
+    );
+    push_entry_field(
+        &mut module,
+        bare_entry_field("names", list(Prim::String), vec![Source::Arg]),
+    );
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "inner",
+            Tref::Ref {
+                id: "notes#reading".into(),
+                args: vec![],
+            },
+            vec![Source::Arg],
+        ),
+    );
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "weights",
+            Tref::Map(
+                Box::new(Tref::Prim(Prim::String)),
+                Box::new(Tref::Prim(Prim::I32)),
+            ),
+            vec![Source::Arg],
+        ),
+    );
+    push_entry_field(
+        &mut module,
+        bare_entry_field("count", Tref::Prim(Prim::I32), vec![Source::Arg]),
+    );
+    push_entry_field(
+        &mut module,
+        bare_entry_field("strict", Tref::Prim(Prim::Bool), vec![Source::Arg]),
+    );
+    module
+}
+
+/// The hermetic test file of the fixture's echo test, its construction
+/// pinning `values` on top of the bed's `api_key` (or nothing at all, when
+/// `values` is empty, so every `@arg` falls back to its zero value).
+fn hermetic_with_values(values: Vec<(&str, serde_json::Value)>) -> String {
+    let bed = notes_bed();
+    let mut tests = bed.impl_echo_tests();
+    tests.truncate(1);
+    if values.is_empty() {
+        tests[0].constructions[0].values.clear();
+    }
+    for (key, value) in values {
+        tests[0].constructions[0]
+            .values
+            .insert(key.to_string(), value);
+    }
+    let mut module = with_tests(module_with_composite_args(), tests);
+    module.extensions = vec![impl_ext(false)];
+    let files = super::vector_tests::test_files(&module, &go_casing());
+    rendered(&files[0].file.decls, &GoRules::default())
+}
+
+#[test]
+fn a_pinned_list_or_structure_is_a_typed_composite_literal() {
+    let hermetic = hermetic_with_values(vec![
+        ("samples", serde_json::json!([1.0, 2.0, 3.0])),
+        ("names", serde_json::json!(["x", "y"])),
+        ("inner", serde_json::json!({"xs": [1, 2], "tag": "t"})),
+    ]);
+    // A list is `[]T{..}` typed by the parameter, a structure is `T{..}`
+    // naming its members by their Go field names; the optional scalar member
+    // is a pointer field, bound through a closure since a literal has no
+    // address.
+    assert!(
+        hermetic.contains(
+            "c, err := New(\"k\", []float64{float64(1.0), float64(2.0), float64(3.0)}, []string{\"x\", \"y\"}, Reading{Xs: []int32{int32(1), int32(2)}, Tag: func() *string { v := \"t\"; return &v }()}, nil, 0, false)"
+        ),
+        "{hermetic}"
+    );
+}
+
+#[test]
+fn an_empty_list_is_an_empty_composite_literal_and_an_unpinned_one_is_nil() {
+    let hermetic = hermetic_with_values(vec![
+        ("samples", serde_json::json!([])),
+        ("inner", serde_json::json!({"xs": [], "again": {"xs": [3]}})),
+        ("weights", serde_json::json!({"a": 1, "b": 2})),
+        ("count", serde_json::json!(7)),
+        ("strict", serde_json::json!(true)),
+    ]);
+    // `names` is left unpinned: the zero value of a slice is nil. A map is
+    // its own composite literal; an optional structure member is addressable
+    // as a literal, so it takes a plain `&`.
+    assert!(
+        hermetic.contains(
+            "c, err := New(\"k\", []float64{}, nil, Reading{Xs: []int32{}, Again: &Reading{Xs: []int32{int32(3)}}}, map[string]int32{\"a\": int32(1), \"b\": int32(2)}, int32(7), true)"
+        ),
+        "{hermetic}"
+    );
+}
+
+#[test]
+fn every_unpinned_argument_is_its_type_zero_value() {
+    let hermetic = hermetic_with_values(vec![]);
+    assert!(
+        hermetic.contains("c, err := New(\"\", nil, nil, Reading{}, nil, 0, false)"),
+        "{hermetic}"
+    );
+}
+
+#[test]
+fn an_unpinned_structure_argument_is_its_empty_literal() {
+    let hermetic = hermetic_with_values(vec![("names", serde_json::json!(["only"]))]);
+    assert!(
+        hermetic
+            .contains("c, err := New(\"k\", nil, []string{\"only\"}, Reading{}, nil, 0, false)"),
+        "{hermetic}"
+    );
 }

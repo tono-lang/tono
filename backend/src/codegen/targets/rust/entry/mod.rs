@@ -268,6 +268,15 @@ pub(super) fn literal(t: &Tref, v: &serde_json::Value, module: &Module) -> Strin
         }
         Tref::Prim(Prim::Bytes) => "Vec::new()".into(),
         Tref::Ref { id, .. } => literal_enum(id, v, module),
+        Tref::List(inner) => {
+            let items: Vec<String> = v
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|item| literal(inner, item, module))
+                .collect();
+            format!("vec![{}]", items.join(", "))
+        }
         _ => "Default::default()".into(),
     }
 }
