@@ -101,16 +101,17 @@ refused (each a rule, not a gap).
 
 ### The bench proper (`service.tono`)
 
-The full three-target file compiles through the frontend; TypeScript and
-Rust generate, build, run their declared tests and the driver (`bench
-typescript`, `bench rust`: pass). Go generates (a `[]float @arg` pinned in a
-test renders as the typed slice literal `[]float64{..}`) but stops at the
-build (`bench go`, build-red), on two counts: the generated `client.go`
-returns `&InvalidExpression{..}` where an `error` is expected, and the error
-struct has no `Error()` method; and four stubs of the same handle type in one
-test emit the same fake type four times. Neither blocker is among the
-fourteen capabilities; they are what the bench found next, and the probes
-report every Go capability green around them.
+The full three-target file compiles through the frontend, and all three
+targets generate, build, run their declared tests and the driver (`bench
+typescript`, `bench rust`, `bench go`: pass). The last two Go blockers were
+not among the capabilities; the bench found them next, and each is now
+emitted: an error only an `ext` op declares (here `invalid_expression`,
+raised by `from_formula` at construction, never by an operation on the wire)
+gains the same `Error()` method a wire-declared error has, so the
+constructor can return `&InvalidExpression{..}` as an `error`; and a
+declared test stubbing several constructors of one handle type declares one
+fake for that type, since the fake answers by handle method, not by which
+constructor built it.
 
 ### The error struct
 

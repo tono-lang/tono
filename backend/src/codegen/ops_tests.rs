@@ -443,3 +443,46 @@ fn duplicate_status_and_code_on_a_nested_entry_op_is_rejected_at_generation() {
     let err = validate_error_codes(&m).unwrap_err();
     assert!(err.contains("m#a") && err.contains("m#b"), "{err}");
 }
+
+/// The errors an `ext` library's own ops declare (free externs and handle
+/// methods alike) resolve like a module operation's, once each and in
+/// first appearance order; a reference to no shape is skipped.
+#[test]
+fn ext_op_errors_are_the_union_over_externs_and_handle_methods() {
+    use crate::ir::{ExtLib, ExternDecl, OpaqueType};
+    fn extern_decl(name: &str, errors: &[&str]) -> ExternDecl {
+        ExternDecl {
+            name: name.into(),
+            params: vec![],
+            r#return: Tref::Prim(crate::ir::Prim::String),
+            langs: vec![],
+            r#async: vec![],
+            errors: errors.iter().map(|e| e.to_string()).collect(),
+        }
+    }
+    let shapes = vec![
+        error_shape(
+            "m#busy",
+            vec![trait_of("retryable", serde_json::Value::Null)],
+        ),
+        error_shape("m#rejected", vec![]),
+    ];
+    let mut with_ext = module(shapes, vec![]);
+    with_ext.ext_libs = vec![ExtLib {
+        name: "lib".into(),
+        langs: vec![],
+        structs: vec![],
+        types: vec![OpaqueType {
+            name: "handle".into(),
+            langs: vec![],
+            methods: vec![extern_decl("send", &["m#rejected", "m#busy"])],
+        }],
+        externs: vec![extern_decl("connect", &["m#busy", "m#missing"])],
+    }];
+    let errors = ext_declared_errors(&with_ext);
+    let ids: Vec<&str> = errors.iter().map(|e| e.shape_id.as_str()).collect();
+    assert_eq!(ids, vec!["m#busy", "m#rejected"]);
+    assert!(errors[0].retryable);
+    assert_eq!(errors[0].status, None);
+    assert!(ext_declared_errors(&module(vec![], vec![])).is_empty());
+}

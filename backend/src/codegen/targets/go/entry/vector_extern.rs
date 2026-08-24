@@ -1,23 +1,26 @@
 //! The extern-stub fakes a hermetic declared test needs: the seam
 //! constructor's per-field override arguments (a decoded literal for a
-//! plain field's free-fn stub, a fresh fake handle for a foreign-handle
-//! field), the fake handle type itself (one method per declared method,
-//! panicking on an unstubbed call so the interface's compiler-enforced
-//! method set never falls through silently), and one canned answer as a
-//! fake method body. Split out of `vector_tests` to keep it under the
-//! file-size ceiling; `use super::*` reaches the parent's `TestCtx` and
-//! rendering helpers.
+//! plain field's free-fn stub, a fake handle for a foreign-handle field),
+//! the fake handle type itself (one per handle type per test, with one
+//! method per declared method, panicking on an unstubbed call so the
+//! interface's compiler-enforced method set never falls through silently),
+//! and one canned answer as a fake method body. Split out of
+//! `vector_tests` to keep it under the file-size ceiling; `use super::*`
+//! reaches the parent's `TestCtx` and rendering helpers.
 
 use super::*;
 
 /// The seam constructor's per-field override arguments, in the same order
 /// [`super::constructor::overridable_fields`] declares them: `nil` for a
 /// field nothing stubs (the real call still runs), a pointer to a decoded
-/// literal for a plain field's free-fn stub, and a fresh fake handle for a
+/// literal for a plain field's free-fn stub, and a fake handle for a
 /// foreign-handle field (built from the matching handle-method stub(s), so
-/// the real library is never reached). Returns the preamble statements the
-/// non-nil arguments need (temp vars, fake struct construction) alongside
-/// the argument expressions themselves.
+/// the real library is never reached). The fake is declared once per
+/// handle type: it answers by handle method, never by which constructor
+/// the field stubs, so several stubbed constructors of one handle in a
+/// test share it (declaring it per stub redeclares the same type). Returns
+/// the preamble statements the non-nil arguments need (temp vars, fake
+/// struct construction) alongside the argument expressions themselves.
 pub(super) fn extern_override_args(
     ctx: &TestCtx<'_>,
     refs: &mut Vec<Symbol>,
@@ -25,6 +28,7 @@ pub(super) fn extern_override_args(
 ) -> (String, Vec<String>) {
     let mut pre = String::new();
     let mut args = Vec::new();
+    let mut faked: Vec<String> = Vec::new();
     for f in super::super::constructor::overridable_fields(ctx.entry) {
         let call = f.call.as_ref().expect("overridable field carries a call");
         let stub = ctx.test.extern_stubs.iter().find(|s| {
@@ -44,8 +48,11 @@ pub(super) fn extern_override_args(
                     .iter()
                     .find(|t| t.name == ty)
                     .expect("declared handle type");
-                let (ident, decl) = handle_fake_decl(ctx, lib, handle);
-                extra_decls.push(decl);
+                let ident = fake_type_name(ctx, handle);
+                if !faked.contains(&ident) {
+                    extra_decls.push(handle_fake_decl(ctx, lib, handle));
+                    faked.push(ident.clone());
+                }
                 args.push(format!("&{ident}{{}}"));
             }
             None => {
@@ -74,14 +81,21 @@ pub(super) fn extern_override_args(
     (pre, args)
 }
 
+/// The fake's type name: the test's own function name plus the handle
+/// type, so one test faking two handle types declares two distinct types
+/// and two tests faking the same handle never collide in the package.
+fn fake_type_name(ctx: &TestCtx<'_>, handle: &OpaqueType) -> String {
+    format!("{}{}Fake", test_fn_name(ctx), pascal(&handle.name))
+}
+
 /// The fake type + methods a handle-method stub needs to satisfy the
 /// handle's own generated interface without the real library: the stubbed
 /// method returns the canned answer (or the declared error), and any other
 /// declared method panics naming the call, so a call this test never
 /// expects cannot silently fall through (the interface's method set is
 /// compiler-enforced, so every method must exist).
-fn handle_fake_decl(ctx: &TestCtx<'_>, lib: &ExtLib, handle: &OpaqueType) -> (String, Decl) {
-    let type_name = format!("{}Fake", test_fn_name(ctx));
+fn handle_fake_decl(ctx: &TestCtx<'_>, lib: &ExtLib, handle: &OpaqueType) -> Decl {
+    let type_name = fake_type_name(ctx, handle);
     let mut decl_refs = Vec::new();
     let mut methods = String::new();
     for m in &handle.methods {
@@ -119,20 +133,17 @@ fn handle_fake_decl(ctx: &TestCtx<'_>, lib: &ExtLib, handle: &OpaqueType) -> (St
             params.join(", "),
         ));
     }
-    (
-        type_name.clone(),
-        Decl::raw_with(
-            format!(
-                "// {type_name} fakes the {lib}.{ty} handle for {test:?}: every method the\n\
-                 // interface declares is implemented, so a call this test never expects\n\
-                 // fails loudly instead of compiling away silently.\n\
-                 type {type_name} struct{{}}\n{methods}",
-                lib = lib.name,
-                ty = handle.name,
-                test = ctx.test.name,
-            ),
-            decl_refs,
+    Decl::raw_with(
+        format!(
+            "// {type_name} fakes the {lib}.{ty} handle for {test:?}: every method the\n\
+             // interface declares is implemented, so a call this test never expects\n\
+             // fails loudly instead of compiling away silently.\n\
+             type {type_name} struct{{}}\n{methods}",
+            lib = lib.name,
+            ty = handle.name,
+            test = ctx.test.name,
         ),
+        decl_refs,
     )
 }
 
