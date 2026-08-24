@@ -34,8 +34,10 @@ echo "compiling $example/src to IR..."
 
 echo "generating the SDK..."
 # A fresh directory each run so a renamed or removed module leaves no stale file.
+# The native manifests (Cargo.toml, go.mod) are scaffolded by gen, so the
+# committed SDK is a buildable package, not a bag of sources.
 rm -rf "$example/sdk"
 "$tono" gen --target rust,go,typescript --out "$example/sdk" \
-  --go-module "$go_module" <"$example/ir.json"
+  --package payments-sdk --go-module "$go_module" <"$example/ir.json"
 
 echo "done. SDK written to $example/sdk/"
