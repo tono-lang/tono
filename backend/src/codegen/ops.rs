@@ -169,6 +169,32 @@ pub fn module_declared_errors(module: &Module) -> Vec<DeclaredError> {
     out
 }
 
+/// Every error shape an `ext` library's own operations declare (a free
+/// extern or a handle method), in order of first appearance. These never
+/// enter the wire taxonomy (nothing decodes them off a response), but a
+/// target that builds one when it recognizes the foreign failure still
+/// needs it to be an error value there, even when no module operation
+/// declares it.
+pub fn ext_declared_errors(module: &Module) -> Vec<DeclaredError> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    let ops = module.ext_libs.iter().flat_map(|lib| {
+        lib.externs
+            .iter()
+            .chain(lib.types.iter().flat_map(|t| t.methods.iter()))
+    });
+    for id in ops.flat_map(|decl| decl.errors.iter()) {
+        if seen.contains(&id.as_str()) {
+            continue;
+        }
+        if let Some(shape) = shape_by_id(module, id) {
+            seen.push(id);
+            out.push(declared_error(shape));
+        }
+    }
+    out
+}
+
 /// The shapes that are only ever a declared operation error and never a
 /// member type, an operation input, or an operation output anywhere in the
 /// module. A client only ever *decodes* an error response, never encodes one

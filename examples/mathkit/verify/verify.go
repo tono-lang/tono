@@ -13,6 +13,11 @@ import (
 	"example.com/mathkit/mathkit"
 )
 
+// The declared error crosses the boundary as a Go error value: the
+// constructor returns it where an error is expected, so the SDK's own type
+// must satisfy the interface, not only be constructible.
+var _ error = (*mathkit.InvalidExpression)(nil)
+
 func main() {
 	c, err := mathkit.New(1.5, "2 * 3", 2, []float64{1, 2, 3})
 	if err != nil {

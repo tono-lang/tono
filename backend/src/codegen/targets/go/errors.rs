@@ -11,7 +11,8 @@
 
 use crate::codegen::casing::{transform, CasingConfig};
 use crate::codegen::ops::{
-    self, error_names, error_type_name, module_declared_errors, DeclaredError, ErrorNames,
+    self, error_names, error_type_name, ext_declared_errors, module_declared_errors, DeclaredError,
+    ErrorNames,
 };
 use crate::codegen::symbol::{Symbol, SymbolKind};
 use crate::codegen::targets::go::types::{go_casing, type_expr_of, LANG};
@@ -249,7 +250,7 @@ fn taxonomy_decls(sealed: bool, liveness: &TaxonomyLiveness) -> Vec<Decl> {
 /// beside the type they describe (see [`declared_error_const_decl`]), not
 /// literals in the decoder that happens to consult them.
 fn declared_error_decls(module: &Module, sealed: bool) -> Vec<Decl> {
-    module_declared_errors(module)
+    go_declared_errors(module)
         .iter()
         .flat_map(|err| {
             let ty = error_type_name(err);
@@ -266,6 +267,22 @@ fn declared_error_decls(module: &Module, sealed: bool) -> Vec<Decl> {
             decls
         })
         .collect()
+}
+
+/// The declared errors this target makes error values of: the ones the
+/// module's operations declare (decoded off a response) and the ones an ext
+/// op declares (built as `&Shape{..}` and returned as `error` when the
+/// foreign failure is recognized), each once. The second set is what an
+/// error reached only through a field's construction call falls into: no
+/// operation on the wire names it, but the constructor still returns it.
+fn go_declared_errors(module: &Module) -> Vec<DeclaredError> {
+    let mut errors = module_declared_errors(module);
+    for err in ext_declared_errors(module) {
+        if !errors.iter().any(|e| e.shape_id == err.shape_id) {
+            errors.push(err);
+        }
+    }
+    errors
 }
 
 /// The named constants a declared error's own status and `@errorCode` become,
@@ -496,6 +513,42 @@ mod tests {
         // @retryable the predicate reports false.
         assert!(out.contains("func (e *RateLimited) Error() string { return \"rate_limited\" }"));
         assert!(out.contains("func (e *RateLimited) Retryable() bool { return false }"));
+    }
+
+    /// An error only an ext op declares (reached through a field's
+    /// construction call, never through an operation on the wire) is still
+    /// returned as `error` by the constructor that recognizes the foreign
+    /// failure, so it gains the same methods a wire-declared error does,
+    /// and an error both declare gains them once.
+    #[test]
+    fn an_error_declared_only_by_an_ext_op_is_an_error_value() {
+        use crate::codegen::targets::go::entry::ext_fixtures::reference_example_module;
+        use crate::ir::ShapeKind;
+        let error_method = "func (e *Overloaded) Error() string { return \"overloaded\" }";
+        let both = reference_example_module();
+        let out = rendered(
+            &taxonomy_and_declared_decls(&both, &TaxonomyLiveness::all_live()),
+            &GoRules::default(),
+        );
+        assert_eq!(out.matches(error_method).count(), 1, "{out}");
+
+        let mut ext_only = reference_example_module();
+        for shape in &mut ext_only.shapes {
+            if let ShapeKind::Entry { operations, .. } = &mut shape.kind {
+                for op in operations {
+                    if let ShapeKind::Operation { errors, .. } = &mut op.kind {
+                        errors.clear();
+                    }
+                }
+            }
+        }
+        assert!(module_declared_errors(&ext_only).is_empty());
+        let out = rendered(
+            &taxonomy_and_declared_decls(&ext_only, &TaxonomyLiveness::all_live()),
+            &GoRules::default(),
+        );
+        assert_eq!(out.matches(error_method).count(), 1, "{out}");
+        assert!(out.contains("func (e *Overloaded) Retryable() bool { return true }"));
     }
 
     #[test]

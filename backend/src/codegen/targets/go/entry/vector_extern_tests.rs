@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use crate::codegen::declared_tests::{self, PlannedTest};
 use crate::codegen::entries::plan;
-use crate::codegen::targets::go::entry::ext_fixtures;
+use crate::codegen::targets::go::entry::ext_fixtures::{self, composed_handles_module};
 use crate::codegen::targets::go::entry::vector_tests::vector_extern::{
     extern_override_args, fake_method_body, handle_fake_decl,
 };
@@ -25,6 +25,19 @@ use crate::ir::{
     AnswerError, CallArg, Empty, ExtLib, ExternLang, ExternStub, ExternStubTarget, HttpAnswer,
     LangPath, OpaqueType, Prim, StubAnswer, TestConstruction, Tref,
 };
+
+fn free_stub(lib: &str, fn_: &str) -> ExternStub {
+    ExternStub {
+        binding: None,
+        target: ExternStubTarget::Free {
+            lib: lib.into(),
+            fn_: fn_.into(),
+        },
+        answers: vec![StubAnswer::Value {
+            value: serde_json::Value::Null,
+        }],
+    }
+}
 
 fn appendix_ctx<'a>(
     module: &'a crate::ir::Module,
@@ -160,7 +173,7 @@ fn a_foreign_handle_stub_builds_a_fake_and_an_unstubbed_method_panics() {
     let (_pre, args) = extern_override_args(&ctx, &mut refs, &mut extra_decls);
     assert_eq!(args.len(), 2);
     assert!(args[1].starts_with('&'));
-    assert!(args[1].ends_with("Fake{}"));
+    assert!(args[1].ends_with("PublisherFake{}"), "{}", args[1]);
     assert_eq!(extra_decls.len(), 1);
     let text = rendered(&extra_decls, &GoRules::default());
     assert!(text.contains("struct{}"));
@@ -218,7 +231,7 @@ fn a_method_without_a_go_binding_is_skipped_in_the_fake() {
             errors: vec![],
         }],
     };
-    let (_ident, decl) = handle_fake_decl(&ctx, &lib, &handle);
+    let decl = handle_fake_decl(&ctx, &lib, &handle);
     let text = rendered(std::slice::from_ref(&decl), &GoRules::default());
     assert!(text.contains("struct{}"));
     assert!(!text.contains("func ("));
@@ -270,7 +283,7 @@ fn a_ctx_marked_method_fake_takes_the_context_first() {
             errors: vec![],
         }],
     };
-    let (_ident, decl) = handle_fake_decl(&ctx, &lib, &handle);
+    let decl = handle_fake_decl(&ctx, &lib, &handle);
     let text = rendered(std::slice::from_ref(&decl), &GoRules::default());
     assert!(
         text.contains("Send(ctx context.Context, topic string) (bool, error) {"),
@@ -363,4 +376,60 @@ fn fake_method_body_renders_the_defensive_http_dead_branch() {
     let mut refs = Vec::new();
     let body = fake_method_body(&ctx, &ret, &answer, &mut refs);
     assert!(body.contains("return zero, nil"));
+}
+
+/// Several stubbed constructors of one handle type in a single test share
+/// one fake: the composed fixture builds `primary`, `secondary` and
+/// `combined` through three different `compose` constructors, all of them
+/// `resource`, and the seam receives the same fake three times while the
+/// file declares it once. Declaring it per stub was a compile error (the
+/// same type redeclared in one block), and the fake is keyed by handle
+/// type, not by constructor, since it answers by handle method.
+#[test]
+fn several_constructors_of_one_handle_share_a_single_fake_per_test() {
+    let module = composed_handles_module();
+    let (entries, multi, _bound) =
+        plan::entry_setup(&module, &BINDING_LANGS).expect("the fixture declares an entry");
+    let n = names(&entries[0], multi);
+    let config = go_casing();
+    let construction = TestConstruction {
+        binding: "c".into(),
+        entry: "client".into(),
+        values: BTreeMap::new(),
+    };
+    let stubs = [
+        free_stub("compose", "new_primary"),
+        free_stub("compose", "new_secondary"),
+        free_stub("compose", "new_combined"),
+    ];
+    let test = PlannedTest {
+        name: "the composed handle answers",
+        construction: &construction,
+        stub: None,
+        extern_stubs: stubs.iter().collect(),
+        call: None,
+        op: None,
+        outcome: None,
+        requests: None,
+        hermetic: true,
+    };
+    let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &test);
+    let mut refs = Vec::new();
+    let mut extra_decls = Vec::new();
+    let (_pre, args) = extern_override_args(&ctx, &mut refs, &mut extra_decls);
+    assert_eq!(
+        args,
+        vec![
+            "&TestTheComposedHandleAnswersResourceFake{}".to_string(),
+            "&TestTheComposedHandleAnswersResourceFake{}".to_string(),
+            "&TestTheComposedHandleAnswersResourceFake{}".to_string(),
+        ]
+    );
+    assert_eq!(extra_decls.len(), 1, "one fake type for one handle type");
+    let text = rendered(&extra_decls, &GoRules::default());
+    assert_eq!(
+        text.matches("type TestTheComposedHandleAnswersResourceFake struct{}")
+            .count(),
+        1
+    );
 }
