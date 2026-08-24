@@ -163,20 +163,23 @@ fn call_parts(
     // own `error` slot (a thrown Promise rejection is the only error channel
     // this target has), and `ctx` has no idiomatic TypeScript convention to
     // occupy, so it is ignored the same way Go ignores `sync`.
-    let assign = match lang.yields.iter().find(|y| !y.is_error) {
-        // No yields: the interface honestly types `raw` as `unknown` (see
-        // the module doc for why). `void` accepts any resolved value as-is;
-        // any other declared type narrows through the site's own return
-        // type, trusting the frontend-checked contract that this call hands
-        // back exactly what was declared, not a guess this module invents.
-        None if site.ret == "void" => "return raw;".to_string(),
-        None => format!("return raw as {};", site.ret),
-        Some(y) => {
-            let returns = lang.returns.as_ref().unwrap_or_else(|| {
-                panic!(
-                    "handle method {call_name} declares a yields position but no returns to project it into (validate_entries should have rejected this)"
-                )
-            });
+    let assign = match (
+        lang.yields.iter().find(|y| !y.is_error),
+        lang.returns.as_ref(),
+    ) {
+        // No projection: the interface honestly types `raw` as `unknown`
+        // (see the module doc for why), whether the binding left the
+        // positions to the convention or named the one it returns. `void`
+        // accepts any resolved value as-is; any other declared type narrows
+        // through the site's own return type, trusting the frontend-checked
+        // contract that this call hands back exactly what was declared, not
+        // a guess this module invents.
+        (_, None) if site.ret == "void" => "return raw;".to_string(),
+        (_, None) => format!("return raw as {};", site.ret),
+        (None, Some(_)) => panic!(
+            "handle method {call_name} declares a returns but no yields position to project from (validate_entries should have rejected this)"
+        ),
+        (Some(y), Some(returns)) => {
             let projected = returns
                 .fields
                 .iter()

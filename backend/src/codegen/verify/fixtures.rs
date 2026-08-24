@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use crate::ir::{
     CallArg, CallCtor, ExtLib, ExternDecl, ExternLang, ExternParam, ForeignField, ForeignLang,
-    ForeignStruct, LangPath, Module, OpaqueType, Prim, Shape, ShapeKind, SymbolCall, Tref,
-    YieldsPos,
+    ForeignStruct, LangPath, Module, OpaqueType, Prim, ReturnsField, ReturnsLit, ReturnsValue,
+    Shape, ShapeKind, SymbolCall, Tref, YieldsPos,
 };
 
 fn prim(p: Prim) -> Tref {
@@ -215,8 +215,9 @@ pub fn gearbox() -> ExtLib {
                     ),
                 ],
             ),
-            // `yields` naming positions: a form plus a count in Go (implicit
-            // trailing error), an explicit error position in TypeScript.
+            // `yields` naming positions to project from: a form plus a
+            // count in Go (the `returns:` keeps the convention's trailing
+            // error), an explicit error position in TypeScript.
             decl(
                 "describe",
                 vec![param("name", prim(Prim::String))],
@@ -237,6 +238,19 @@ pub fn gearbox() -> ExtLib {
                                 foreign: None,
                             },
                         ],
+                        returns: Some(ReturnsLit {
+                            r#type: reference("svc#summary"),
+                            fields: vec![
+                                ReturnsField {
+                                    name: "label".into(),
+                                    value: ReturnsValue::Field(vec!["opts".into(), "label".into()]),
+                                },
+                                ReturnsField {
+                                    name: "count".into(),
+                                    value: ReturnsValue::Field(vec!["n".into()]),
+                                },
+                            ],
+                        }),
                         ..lang("go", "Describe", vec![CallArg::Param("name".into())])
                     },
                     ExternLang {

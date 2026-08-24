@@ -7,8 +7,9 @@
 //! declared storage, the context where a position declares it); the call
 //! is assigned to results typed by the target's convention (see
 //! `ext::build_call`: an implicit trailing `error` unless a `yields:`
-//! position marks it). Nothing is inferred from the library: a binding the
-//! probe cannot express in declared terms is listed as skipped, with why.
+//! position marks it, or the `yields:` list is the call's whole signature).
+//! Nothing is inferred from the library: a binding the probe cannot express
+//! in declared terms is listed as skipped, with why.
 
 use std::path::Path;
 
@@ -218,7 +219,9 @@ fn results(
             );
         }
     }
-    if !explicit_error {
+    // A projecting binding keeps the convention's trailing error; a list
+    // that is the signature has only what it declares (see `ext::build_call`).
+    if !explicit_error && !lang.yields_is_signature() {
         out.push("error".to_string());
     }
     Ok(out)

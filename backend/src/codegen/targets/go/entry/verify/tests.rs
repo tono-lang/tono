@@ -1,7 +1,7 @@
 use super::*;
 use crate::codegen::verify::fixtures::gearbox_module;
 use crate::codegen::verify::SiteKind;
-use crate::ir::Prim;
+use crate::ir::{Prim, YieldsPos};
 
 fn gearbox_probe() -> Probe {
     let m = gearbox_module();
@@ -314,6 +314,33 @@ fn a_chained_method_is_probed_off_the_last_link() {
     assert!(
         p.source.contains(
             "tonoR0, tonoR1 = tonoRecv.Read(ctx).Result(\"fast\"); _, _ = tonoR0, tonoR1"
+        ),
+        "{}",
+        p.source
+    );
+}
+
+/// A `yields` list that is the call's signature is probed with exactly the
+/// declared results: a constructor returning only the handle gets one
+/// result and no `error`, the same line `ext::build_call` assigns.
+#[test]
+fn a_signature_yields_list_is_probed_without_the_implicit_error() {
+    let mut m = gearbox_module();
+    let decl = m.ext_libs[0]
+        .externs
+        .iter_mut()
+        .find(|d| d.name == "open")
+        .unwrap();
+    decl.langs[0].yields = vec![YieldsPos {
+        name: "c".into(),
+        r#type: Some(decl.r#return.clone()),
+        is_error: false,
+        foreign: None,
+    }];
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(
+        p.source.contains(
+            "func tonoProbe_open(value float64) { var tonoR0 gearbox.Dial[float64]; tonoR0 = gearbox.Open[float64](value); _ = tonoR0 }"
         ),
         "{}",
         p.source

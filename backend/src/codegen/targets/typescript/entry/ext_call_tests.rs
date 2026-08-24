@@ -663,3 +663,17 @@ fn a_spelled_ctor_literal_passes_structurally() {
         "{err}"
     );
 }
+
+/// A `yields` list with no `returns:` names what the call returns and
+/// projects nothing: the seam hands the raw result back as is, exactly as
+/// a binding with no `yields` does.
+#[test]
+fn a_signature_yields_list_passes_the_raw_result_through() {
+    let mut module = appendix_module(appendix_fields());
+    let load = &mut module.ext_libs[0].externs[0].langs[0];
+    assert!(!load.yields.is_empty());
+    load.returns = None;
+    let out = rendered_text(&module);
+    assert!(!out.contains("raw.host"), "{out}");
+    assert!(out.contains("return raw;"), "{out}");
+}

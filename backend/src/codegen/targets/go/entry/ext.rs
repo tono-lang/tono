@@ -343,15 +343,20 @@ fn build_call(
     let mut yields_vars: HashMap<String, String> = HashMap::new();
     let mut err_var: Option<String> = Some(format!("{prefix}Err"));
     if lang.yields.is_empty() {
-        // "sem yields: o retorno já é o tipo lógico" — the raw call result
-        // is the target's own declared type, with no projection.
+        // No yields: the raw call result already is the declared type and
+        // the error sits where Go's convention puts it, last.
         let tmp = format!("{prefix}Result");
         lhs.push(tmp.clone());
         if let Some(err_var) = &err_var {
             lhs.push(err_var.clone());
         }
         yields_vars.insert(String::new(), tmp);
-    } else if has_error_pos {
+    } else if has_error_pos || lang.yields_is_signature() {
+        // The declared positions are exactly what the call returns: an
+        // error position wherever it sits, or none at all when the list is
+        // the signature and places no error (a constructor that returns
+        // only the handle).
+        err_var = None;
         for y in &lang.yields {
             if y.is_error {
                 let v = format!("{prefix}{}", pascal(&y.name));
@@ -364,6 +369,8 @@ fn build_call(
             }
         }
     } else {
+        // Projection: the positions name what `returns:` reads, and the
+        // error keeps the convention's trailing slot.
         for y in &lang.yields {
             let v = format!("{prefix}{}", pascal(&y.name));
             lhs.push(v.clone());
@@ -383,10 +390,10 @@ fn build_call(
 
 /// A field's own `= ns.fn(args)` construction call: the call itself, its
 /// `yields`-position bindings (implicit trailing `error` unless an explicit
-/// position is marked, matching each target's own idiomatic error-return
-/// convention), the sentinel-to-error mapping, and the `returns:` projection
-/// (or the bare call result when the extern's return already is the logical
-/// type).
+/// position is marked or the list is the call's own signature, see
+/// `ExternLang::yields_is_signature`), the sentinel-to-error mapping, and
+/// the `returns:` projection (or the bare call result when the extern's
+/// return already is the logical type).
 pub(super) fn call_assign(
     r: &mut Resolver<'_, '_>,
     field: &EntryField,

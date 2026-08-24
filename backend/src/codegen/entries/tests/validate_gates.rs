@@ -564,7 +564,7 @@ fn handle_field(name: &str, lib: &str, handle: &str, sources: Vec<Source>) -> En
     f
 }
 
-fn call_ref(path: &[&str]) -> CallArg {
+pub(super) fn call_ref(path: &[&str]) -> CallArg {
     CallArg::Ref(path.iter().map(|s| (*s).to_string()).collect())
 }
 
@@ -573,7 +573,10 @@ fn call_ref(path: &[&str]) -> CallArg {
 /// case below differs only in `source`'s own sourcing and in how the
 /// forwarding argument nests a `Ref` to it, so this is the one place that
 /// shape is spelled out.
-fn model_with_forwarding_call(source: EntryField, combined_args: Vec<CallArg>) -> crate::ir::Model {
+pub(super) fn model_with_forwarding_call(
+    source: EntryField,
+    combined_args: Vec<CallArg>,
+) -> crate::ir::Model {
     let mut combined = handle_field("combined", "lib", "handle", vec![]);
     combined.call = Some(EntryCall {
         ns: "lib".into(),
@@ -593,7 +596,7 @@ fn model_with_forwarding_call(source: EntryField, combined_args: Vec<CallArg>) -
 
 /// A `lib#handle` field this generator itself constructs (`primary =
 /// lib.make()`), the forwardable counterpart of [`injected_source`].
-fn constructed_primary() -> EntryField {
+pub(super) fn constructed_primary() -> EntryField {
     let mut primary = handle_field("primary", "lib", "handle", vec![]);
     primary.call = Some(EntryCall {
         ns: "lib".into(),

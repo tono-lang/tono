@@ -12,7 +12,7 @@ use crate::codegen::fixtures::handle_source::{
 use crate::codegen::pipeline::generate_target;
 use crate::codegen::targets::rust::types::rust_casing;
 use crate::codegen::{CodegenConfig, TargetKind};
-use crate::ir::{Model, ShapeKind, TONO_IR_VERSION};
+use crate::ir::{Model, Prim, ShapeKind, Tref, YieldsPos, TONO_IR_VERSION};
 
 fn entry_text(model: &Model) -> String {
     let files = generate_target(
@@ -120,4 +120,27 @@ fn a_call_hermetic_only_through_handle_method_stubs_generates_no_test_file() {
     let planned = crate::codegen::declared_tests::entry_tests(&module).expect("the test plans");
     assert!(planned[0].tests[0].hermetic && planned[0].tests[0].stub.is_none());
     assert!(super::super::vector_tests::test_files(&module, &rust_casing()).is_empty());
+}
+
+/// A handle method whose `yields` list is its signature and places no
+/// `error` binds the value itself: there is no `Result` to match, and the
+/// op's own `Ok` wraps what the call returned.
+#[test]
+fn impl_call_body_with_a_signature_yields_list_binds_the_plain_value() {
+    let model = super::tests::handle_call_model(
+        vec![],
+        vec![YieldsPos {
+            name: "v".into(),
+            r#type: Some(Tref::Prim(Prim::String)),
+            is_error: false,
+            foreign: None,
+        }],
+        None,
+        vec![],
+        true,
+    );
+    let (body, _) = super::tests::call_op_body(&model, true);
+    assert!(body.contains("let v = recv.do_it("), "{body}");
+    assert!(body.contains("Ok(v)"), "{body}");
+    assert!(!body.contains("Err(e)"), "{body}");
 }

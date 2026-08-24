@@ -13,6 +13,7 @@
   extern_test
   extern_ir_decode_test
   extern_typecheck_test
+  extern_yields_signature_test
   foreign_spelling_test
   lang_block_test
   ext_lib_collisions_test

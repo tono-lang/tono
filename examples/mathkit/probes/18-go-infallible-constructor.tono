@@ -1,0 +1,42 @@
+// Capability 18 (Go): a constructor that returns only the handle, with no
+// error channel. Dial(addr) answers a *Client and nothing else, while Open
+// next to it returns (*Client, error). Omitting yields: means the target's
+// convention, so `open` writes nothing; `dial` declares the one position
+// the call returns, `yields: (c: session)`, and that list is the call's
+// whole signature: the position is consumed by the op's own return, no
+// returns: is needed (a handle is never projected), and no error is
+// implied. The check probe and the generated call both bind one value.
+ext mathkit {
+  go { #(tono-ext-fixture/mathkit) }
+
+  struct session {
+    go { #(*Client) }
+
+    op ping(): string {
+      go { call: #(Ping)() }
+    }
+  }
+
+  op dial(addr: string): session {
+    go {
+      call: #(Dial)(addr)
+      yields: (c: session)
+    }
+  }
+
+  op open(addr: string): session {
+    go { call: #(Open)(addr) }
+  }
+}
+
+pub struct client {
+  addr: string @arg
+  direct: mathkit.session = mathkit.dial(.addr)
+  checked: mathkit.session = mathkit.open(.addr)
+
+  op ping_direct(): string
+    impl .direct.ping()
+
+  op ping_checked(): string
+    impl .checked.ping()
+}

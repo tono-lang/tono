@@ -2,16 +2,18 @@
    per language binding: a call: arg naming an undeclared logical parameter
    (TC0070); a ctor literal projected into a declared foreign struct
    disagreeing in field name or type with the parameter it forwards
-   (TC0071); a yields: position nothing in returns: consumes (TC0072); more
-   than one "error"-typed yields: position (TC0073); a returns: with no
-   yields: to project from (TC0074); a returns: that builds a type other
-   than the op's own declared logical return (TC0075); a returns: field ref
-   whose head is not a declared yields: name (TC0076); @errors naming a type
-   that does not resolve (TC0077); a logical parameter this language's call:
-   never consumes (TC0078); a language block that does not fit its struct
-   (TC0092, TC0095, TC0097); @async naming a target without an asynchronous
-   call (TC0093); a trait the boundary does not accept (TC0096); a bare name
-   that is both a parameter and a handle (TC0098).
+   (TC0071); a yields: position nothing consumes, neither a returns: ref nor
+   the op's own return (TC0072); more than one "error"-typed yields:
+   position (TC0073); a returns: with no yields: to project from (TC0074); a
+   returns: that builds a type other than the op's own declared logical
+   return (TC0075); a returns: field ref whose head is not a declared
+   yields: name (TC0076); @errors naming a type that does not resolve
+   (TC0077); a logical parameter this language's call: never consumes
+   (TC0078); a language block that does not fit its struct (TC0092, TC0095,
+   TC0097); @async naming a target without an asynchronous call (TC0093); a
+   trait the boundary does not accept (TC0096); a bare name that is both a
+   parameter and a handle (TC0098); a returns: building an opaque handle
+   (TC0099).
 
    The cross-file closed accounting (decision K: TC0079-TC0081) lives in
    [Check_ext_lib_project], split out to keep this file under the line-count
@@ -195,29 +197,55 @@ let consumed_heads (r : Ast.returns_lit option) : string list =
               match fm.Ast.subject.Ast.segs with h :: _ -> Some h | [] -> None))
         rl.Ast.rl_fields
 
-(* Every typed yields: position must be consumed by a returns: ref reading
-   it. The reserved "error" position is consumed by the boundary itself
-   (it feeds the op's declared errors and the contract wrap), and a
-   position under a foreign spelling is the value the target coerces into
-   the declared return, so neither needs a reader. *)
-let check_yields_consumption (b : Ast.extern_lang_body) : Diagnostic.t list =
+(* Every typed yields: position must be consumed: by a returns: ref reading
+   it, or, when the binding projects nothing, by the op's own return (the
+   position already is the declared logical type, so the list is the
+   call's whole signature and the value needs no reader). The reserved
+   "error" position is consumed by the boundary itself (it feeds the op's
+   declared errors and the contract wrap), and a position under a foreign
+   spelling is the value the target coerces into the declared return, so
+   neither needs a reader either. *)
+let check_yields_consumption (ed_return : Ast.ty) (b : Ast.extern_lang_body) :
+    Diagnostic.t list =
   match b.Ast.elb_yields with
   | None -> []
   | Some ys ->
       let consumed = consumed_heads b.Ast.elb_returns in
+      let is_the_return (t : Ast.ty) =
+        Option.is_none b.Ast.elb_returns
+        && String.equal (Printer.print_ty t) (Printer.print_ty ed_return)
+      in
       List.concat_map
         (fun (y : Ast.yields_pos) ->
           match y.Ast.yp_ty with
           | Ast.YError _ | Ast.YForeign _ -> []
-          | Ast.YType _ ->
-              if List.mem y.Ast.yp_name consumed then []
+          | Ast.YType t ->
+              if List.mem y.Ast.yp_name consumed || is_the_return t then []
               else
                 [
                   err Error_codes.extern_yields_position_dead y.Ast.yp_name_span
-                    "yields position '%s' is never consumed by 'returns:'"
-                    y.Ast.yp_name;
+                    "yields position '%s' is never consumed: no 'returns:' \
+                     reads it and it is not the op's own return '%s'"
+                    y.Ast.yp_name
+                    (Printer.print_ty ed_return);
                 ])
         ys
+
+(* A returns: cannot build an opaque handle: a handle has no fields to
+   project into, it is what the call itself returns. The binding declares
+   the call's positions with yields: alone. *)
+let check_returns_not_handle ~(handles : string list) (b : Ast.extern_lang_body)
+    : Diagnostic.t list =
+  match b.Ast.elb_returns with
+  | Some rl when List.mem (Printer.print_ty rl.Ast.rl_type) handles ->
+      [
+        err Error_codes.extern_returns_handle rl.Ast.rl_span
+          "'returns:' builds '%s', an opaque handle: a handle is what the call \
+           returns, never a projection; declare the call's positions with \
+           'yields:' alone"
+          (Printer.print_ty rl.Ast.rl_type);
+      ]
+  | _ -> []
 
 (* At most one yields: position may be the reserved "error" type. *)
 let check_single_error_position (ys : Ast.yields_pos list) : Diagnostic.t list =
@@ -409,12 +437,13 @@ let check_extern ~(tbl : Symtab.t) ~(langs : string list)
         @ List.concat_map
             (fun a -> check_ctor_projection_arg structs e.Ast.ed_params a)
             (call_line_args b)
-        @ check_yields_consumption b
+        @ check_yields_consumption e.Ast.ed_return b
         @ (match b.Ast.elb_yields with
           | Some ys -> check_single_error_position ys
           | None -> [])
         @ check_returns_requires_yields b
         @ check_returns_type e.Ast.ed_return b
+        @ check_returns_not_handle ~handles b
         @ check_returns_refs b
         @ check_param_consumption e.Ast.ed_params b)
       e.Ast.ed_langs

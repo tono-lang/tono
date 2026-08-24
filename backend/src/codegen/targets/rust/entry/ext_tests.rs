@@ -361,7 +361,7 @@ fn entry_field(name: &str, target: Tref, sources: Vec<Source>) -> EntryField {
 /// a declared handle whose single method's own `langs[0].call_args` is
 /// whatever the caller supplies -- the same knob Go's and TypeScript's own
 /// `ArgCtx`-equivalent tests turn to exercise every `CallArg` variant.
-fn handle_call_model(
+pub(super) fn handle_call_model(
     method_call_args: Vec<CallArg>,
     method_yields: Vec<YieldsPos>,
     method_returns: Option<ReturnsLit>,
@@ -527,7 +527,7 @@ fn handle_call_model(
     }
 }
 
-fn call_op_body(model: &Model, has_output: bool) -> (String, bool) {
+pub(super) fn call_op_body(model: &Model, has_output: bool) -> (String, bool) {
     let module = &model.modules[0];
     let entries = module_entries(module);
     let entry = entries

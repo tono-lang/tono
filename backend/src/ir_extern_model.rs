@@ -346,6 +346,28 @@ pub struct ExternLang {
     pub returns: Option<ReturnsLit>,
 }
 
+impl ExternLang {
+    /// Whether the `yields` list is the call's whole signature. With no
+    /// `returns:` to feed, every position is one the call really returns
+    /// (the value position consumed by the op's own return, an error
+    /// channel only where an `error` position places it): naming the
+    /// positions is the one way to say the call returns something other
+    /// than the target's convention. With a `returns:`, the positions name
+    /// what to project from and the error keeps the convention unless a
+    /// position marks it.
+    pub fn yields_is_signature(&self) -> bool {
+        !self.yields.is_empty() && self.returns.is_none()
+    }
+
+    /// Whether the call has no error channel at this boundary: its
+    /// signature is declared and places no `error`. A binding that leaves
+    /// the positions to the convention, or projects through `returns:`,
+    /// always has the target's own channel.
+    pub fn is_infallible(&self) -> bool {
+        self.yields_is_signature() && !self.yields.iter().any(|y| y.is_error)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternParam {
     pub name: String,

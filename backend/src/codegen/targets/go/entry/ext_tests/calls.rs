@@ -568,3 +568,73 @@ fn impl_call_body_reads_a_ref_argument_off_the_input_param_and_off_an_entry_fiel
     let out = impl_call_for(&module, Some("payload"), &call);
     assert!(out.contains(".Send(input, c.settings.Region)"));
 }
+
+/// A `yields` list with no `returns:` is the call's whole signature: the
+/// LHS binds exactly the declared positions, and with no `error` among
+/// them there is no error variable and no error branch (a constructor
+/// that returns only the handle, `Open(addr) *Client`). The projection
+/// role keeps the convention's trailing error, so both readings are pinned
+/// here.
+#[test]
+fn call_assign_binds_only_the_declared_positions_when_yields_is_the_signature() {
+    let lib_with = |yields: Vec<YieldsPos>, returns: Option<crate::ir::ReturnsLit>| ExtLib {
+        name: "lib".into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: "company/lib".into(),
+        }],
+        structs: vec![],
+        types: vec![],
+        externs: vec![ExternDecl {
+            name: "fetch".into(),
+            params: vec![],
+            r#return: string_t(),
+            langs: vec![ExternLang {
+                lang: "go".into(),
+                symbol: "Fetch".into(),
+                call_args: vec![],
+                yields,
+                returns,
+                chain: None,
+            }],
+            r#async: vec![],
+            errors: vec![],
+        }],
+    };
+    let position = YieldsPos {
+        name: "body".into(),
+        r#type: Some(string_t()),
+        is_error: false,
+        foreign: None,
+    };
+    let call = EntryCall {
+        ns: "lib".into(),
+        func: "fetch".into(),
+        args: vec![],
+    };
+
+    let (module, config_field) =
+        module_with_call_field(vec![lib_with(vec![position.clone()], None)], call.clone());
+    let out = call_assign_for(&module, &config_field);
+    assert!(out.contains("configBody := lib.Fetch()"), "{out}");
+    assert!(!out.contains("configErr"), "{out}");
+    assert!(out.contains("s.Config = configBody"), "{out}");
+
+    // The same position read by a returns: projects, and the error keeps
+    // the convention's last slot.
+    let returns = crate::ir::ReturnsLit {
+        r#type: string_t(),
+        fields: vec![crate::ir::ReturnsField {
+            name: "text".into(),
+            value: crate::ir::ReturnsValue::Field(vec!["body".into()]),
+        }],
+    };
+    let (module, config_field) =
+        module_with_call_field(vec![lib_with(vec![position], Some(returns))], call);
+    let out = call_assign_for(&module, &config_field);
+    assert!(
+        out.contains("configBody, configErr := lib.Fetch()"),
+        "{out}"
+    );
+    assert!(out.contains("if configErr != nil"), "{out}");
+}

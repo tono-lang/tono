@@ -547,7 +547,8 @@ pub(super) fn ok_assign(
 /// module's own `ext_libs`, emits the awaited call in the declared argument
 /// order, destructures `yields`, projects `returns:`, and maps `errors:` —
 /// or, absent `yields`, treats the call as a plain `Result<T, E>` whose `Ok`
-/// assigns straight into `dest`.
+/// assigns straight into `dest`. A `yields` list that is the call's own
+/// signature and places no `error` is a plain value, assigned as is.
 pub(super) fn call_assign(
     r: &mut Resolver<'_, '_>,
     field: &EntryField,
@@ -570,6 +571,12 @@ pub(super) fn call_assign(
     let target = field.target.clone();
     let module = r.module;
     let store = move |expr: &str| super::ext::wrap_constructed(&target, module, expr);
+
+    // A declared signature with no error channel is a plain value, not a
+    // `Result`: the call binds straight into the slot.
+    if lang.is_infallible() {
+        return format!("{dest} = {};", store(&expr));
+    }
 
     let ok_positions: Vec<&YieldsPos> = yields.iter().filter(|y| !y.is_error).collect();
 

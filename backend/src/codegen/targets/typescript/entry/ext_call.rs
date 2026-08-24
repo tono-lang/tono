@@ -333,25 +333,27 @@ fn call_body(
     // catch below is the only error channel a thrown Promise rejection
     // gives this target); `validate_entries` guarantees at most one
     // non-error position, which is the only one worth projecting.
-    let assign = match lang.yields.iter().find(|y| !y.is_error) {
-        // No yields: the extern's own construction result already is the
-        // logical value (see the module doc). For a foreign-handle field
-        // that "already is" now has a real generated interface to be, so
-        // the seam narrows the honestly-`unknown` raw result into it here,
-        // once, at the exact tono-declared construction boundary -- not a
-        // reusable projection, just this one field trusting the frontend's
-        // own guarantee that this call's declared logical type is the
-        // field's own declared type.
-        None if foreign_handle(&field.target, module) => {
+    let assign = match (
+        lang.yields.iter().find(|y| !y.is_error),
+        lang.returns.as_ref(),
+    ) {
+        // No projection: the extern's own construction result already is
+        // the logical value (see the module doc), whether the binding left
+        // the positions to the convention or named the one it returns. For
+        // a foreign-handle field that "already is" now has a real generated
+        // interface to be, so the seam narrows the honestly-`unknown` raw
+        // result into it here, once, at the exact tono-declared
+        // construction boundary -- not a reusable projection, just this one
+        // field trusting the frontend's own guarantee that this call's
+        // declared logical type is the field's own declared type.
+        (_, None) if foreign_handle(&field.target, module) => {
             format!("return raw as {};", field_ts_type(&field.target, module))
         }
-        None => "return raw;".to_string(),
-        Some(y) => {
-            let returns = lang.returns.as_ref().unwrap_or_else(|| {
-                panic!(
-                    "extern {call_name} declares a yields position but no returns to project it into (validate_entries should have rejected this)"
-                )
-            });
+        (_, None) => "return raw;".to_string(),
+        (None, Some(_)) => panic!(
+            "extern {call_name} declares a returns but no yields position to project from (validate_entries should have rejected this)"
+        ),
+        (Some(y), Some(returns)) => {
             let projected = returns
                 .fields
                 .iter()

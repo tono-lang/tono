@@ -64,3 +64,8 @@ bench	rust	service.tono	pass
 17-go-value-from-returned-object	go	probes/17-go-value-from-returned-object.tono	pass
 17-ts-value-from-returned-object-refused	typescript	probes/17-ts-value-from-returned-object-refused.tono	refused
 17-rust-value-from-returned-object-refused	rust	probes/17-rust-value-from-returned-object-refused.tono	refused
+# 18: the constructor returns only the handle (Dial(addr) *Client), next to
+# one that returns (T, error). Omitting yields: is the convention; a yields:
+# with no returns: is the call's whole signature, so `(c: session)` binds one
+# value and implies no error.
+18-go-infallible-constructor	go	probes/18-go-infallible-constructor.tono	pass

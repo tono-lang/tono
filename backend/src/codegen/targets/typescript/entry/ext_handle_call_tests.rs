@@ -549,3 +549,19 @@ fn a_handle_method_stub_answering_a_shape_no_ts_sentinel_maps_throws_a_plain_err
     );
     assert!(!out.contains("ThrottledError"), "{out}");
 }
+
+/// A handle method whose `yields` list projects nothing narrows the raw
+/// result to the op's own output, the way a method with no `yields` does.
+#[test]
+fn a_signature_yields_list_narrows_the_raw_result_to_the_op_s_own_output() {
+    let mut module = module_with_ops(vec![status_op()]);
+    let status = module.ext_libs[0].types[0]
+        .methods
+        .iter_mut()
+        .find(|m| m.name == "status")
+        .unwrap();
+    status.langs[0].returns = None;
+    let out = rendered_text(&module);
+    assert!(!out.contains("switch (raw.code)"), "{out}");
+    assert!(out.contains("return raw as Status;"), "{out}");
+}
