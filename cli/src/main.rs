@@ -26,6 +26,7 @@ mod gen;
 mod gen_ext;
 mod init;
 mod init_ext;
+mod native_manifest;
 #[cfg(feature = "playground")]
 mod playground;
 mod preview;
@@ -48,7 +49,7 @@ use crate::preview::pipeline::Verdict;
 
 pub(crate) const USAGE: &str = "usage: tono (\n  \
     init [--target <list>] [--yes] [--root <path>]\n  \
-    gen (--target <list> --out <dir> [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [--clean] [<ir.json>]\n    \
+    gen (--target <list> --out <dir> [--package <name>] [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [--clean] [<ir.json>]\n    \
     (with no <ir.json> and nothing piped in, the project's .tono sources are compiled;\n    \
      --clean also removes generated files this run did not produce)\n  \
     check <file.tono> [--lib-root <lang>=<dir>]... [--config <tono.toml>]\n    \

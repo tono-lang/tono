@@ -267,9 +267,11 @@ pub(crate) fn scaffold_rust(
 ) -> std::io::Result<()> {
     let src = root.join("src");
     // An SDK with no files for this target still scaffolds: the directories
-    // exist regardless of what write_sources created.
+    // exist regardless of what write_sources created. Rust paths already
+    // carry the crate's `src/` segment, so they are stripped against the
+    // crate root, not nested under `src/` a second time.
     std::fs::create_dir_all(&src)?;
-    write_sources(files, TargetKind::Rust, &src)?;
+    write_sources(files, TargetKind::Rust, root)?;
     std::fs::write(src.join("main.rs"), snippet)?;
     std::fs::write(
         root.join("Cargo.toml"),
@@ -562,13 +564,14 @@ mod tests {
         let root = scratch("rust-scaffold");
         let files = vec![GeneratedFile {
             target: TargetKind::Rust,
-            path: std::path::PathBuf::from("rust/lib.rs"),
+            path: std::path::PathBuf::from("rust/src/lib.rs"),
             text: "pub mod nothing {}\n".into(),
         }];
         scaffold_rust(&files, &root, "fn main() {}\n").expect("scaffold");
         let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml");
         assert!(!manifest.contains("sdk-http-runtime-rs"));
         assert!(root.join("src/main.rs").is_file());
+        assert!(root.join("src/lib.rs").is_file());
         let _ = std::fs::remove_dir_all(&root);
     }
 

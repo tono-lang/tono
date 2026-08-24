@@ -77,8 +77,11 @@ fn scaffold(target: TargetKind, files: &[GeneratedFile], scratch: &Path) -> io::
 /// each top-level one, built with `cargo build`. serde is a dependency because the
 /// generated types derive it.
 fn scaffold_rust(files: &[GeneratedFile], scratch: &Path) -> io::Result<CheckPlan> {
+    // Rust paths already carry the crate's `src/` segment, so stripping the
+    // target prefix lays the sources out exactly as Cargo expects them.
     let src = scratch.join("src");
-    write_sources(files, TargetKind::Rust, &src)?;
+    fs::create_dir_all(&src)?;
+    write_sources(files, TargetKind::Rust, scratch)?;
 
     // The crate root declares each top-level generated module (a bare file, or a
     // directory carrying its own `mod.rs`); anything nested is declared by those.
@@ -256,8 +259,12 @@ mod tests {
     fn rust_scaffold_lays_out_a_crate_and_declares_each_module() {
         let dir = scratch("rust-scaffold");
         let files = vec![
-            file(TargetKind::Rust, "rust/payments.rs", "pub struct Charge;\n"),
-            file(TargetKind::Rust, "rust/payments_serde.rs", "// serde\n"),
+            file(
+                TargetKind::Rust,
+                "rust/src/payments.rs",
+                "pub struct Charge;\n",
+            ),
+            file(TargetKind::Rust, "rust/src/payments_serde.rs", "// serde\n"),
         ];
         let plan = scaffold_rust(&files, &dir).expect("scaffold");
 
@@ -283,7 +290,7 @@ mod tests {
         let dir = scratch("rust-nested");
         let files = vec![file(
             TargetKind::Rust,
-            "rust/payments/common.rs",
+            "rust/src/payments/common.rs",
             "pub struct Card;\n",
         )];
         scaffold_rust(&files, &dir).expect("scaffold");
@@ -332,11 +339,11 @@ mod tests {
     fn write_sources_only_writes_the_requested_target() {
         let dir = scratch("write-filter");
         let files = vec![
-            file(TargetKind::Rust, "rust/a.rs", "rust\n"),
+            file(TargetKind::Rust, "rust/src/a.rs", "rust\n"),
             file(TargetKind::Go, "go/a.go", "go\n"),
         ];
         write_sources(&files, TargetKind::Rust, &dir).expect("write");
-        assert!(dir.join("a.rs").exists());
+        assert!(dir.join("src/a.rs").exists());
         assert!(!dir.join("a.go").exists());
         let _ = fs::remove_dir_all(&dir);
     }

@@ -2,7 +2,7 @@
 // holds the value `new ConstantCalculator(base)` returned and reads through
 // it.
 import { expect, test } from "vitest";
-import { Client } from "./mathkit";
+import { Client } from "mathkit-sdk/mathkit";
 
 test("probe 08 (ts new construction)", async () => {
   const client = await Client.create(2.5);

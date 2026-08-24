@@ -2,7 +2,7 @@
 // holds the library's Client (not its own generated Client) and reads
 // through it.
 import { expect, test } from "vitest";
-import { Client } from "./mathkit";
+import { Client } from "mathkit-sdk/mathkit";
 
 test("probe 13 (ts name collision)", async () => {
   const client = await Client.create("calc.local");

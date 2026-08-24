@@ -4,7 +4,7 @@
 // calculator, the constant one, so combined_value is the base; the series
 // answers its last value.
 import { expect, test } from "vitest";
-import { Client } from "./mathkit";
+import { Client } from "mathkit-sdk/mathkit";
 
 test("the generated client runs against the stand-in library", async () => {
   const client = await Client.create(1.5, "2 * 3", 2, [1, 2, 3]);

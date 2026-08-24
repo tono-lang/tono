@@ -3,7 +3,7 @@
 //! back through both operations. The fallback answers its first calculator,
 //! the constant one, so combined_value is the base; the series answers its
 //! last value.
-use example_mathkit::mathkit::Client;
+use mathkit_sdk::mathkit::Client;
 
 #[tokio::main]
 async fn main() {

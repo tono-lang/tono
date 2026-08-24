@@ -89,11 +89,11 @@ fn a_test_group_takes_the_name_its_runner_discovers() {
     );
     assert_eq!(
         path_of(TargetKind::Rust, &hermetic),
-        "rust/payments/charges/client_test.rs"
+        "rust/src/payments/charges/client_test.rs"
     );
     assert_eq!(
         path_of(TargetKind::Rust, &live),
-        "rust/payments/charges/client_live_test.rs"
+        "rust/src/payments/charges/client_live_test.rs"
     );
 }
 
@@ -101,14 +101,14 @@ fn a_test_group_takes_the_name_its_runner_discovers() {
 fn rust_and_typescript_map_every_group_to_a_file() {
     assert_eq!(
         path_of(TargetKind::Rust, &Group::types("payments.common")),
-        "rust/payments/common/types.rs"
+        "rust/src/payments/common/types.rs"
     );
     // Rust fences with visibility, so nothing moves and no file is named for
     // its audience: the SDK-root group is a module named for its contents,
     // and a module's internal group rides its public file as `pub(crate)`.
     assert_eq!(
         path_of(TargetKind::Rust, &Group::root("duration")),
-        "rust/duration.rs"
+        "rust/src/duration.rs"
     );
     assert_eq!(
         path_of(
@@ -121,7 +121,7 @@ fn rust_and_typescript_map_every_group_to_a_file() {
     // fenced where it sits.
     assert_eq!(
         path_of(TargetKind::Rust, &Group::codec("payments.charges")),
-        "rust/payments/charges/codec.rs"
+        "rust/src/payments/charges/codec.rs"
     );
     assert_eq!(
         path_of(

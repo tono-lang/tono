@@ -18,8 +18,7 @@ use tono_backend::config as manifest;
 use tono_backend::ir::{decode_model, Model};
 
 use crate::frontend::{Frontend, FrontendError};
-use crate::gen_ext;
-use crate::{discover_manifest, flag_value, read_stdin};
+use crate::{discover_manifest, flag_value, gen_ext, init, native_manifest, read_stdin};
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let mut targets_csv: Option<String> = None;
@@ -27,6 +26,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut manifest_path: Option<String> = None;
     let mut ir_path: Option<String> = None;
     let mut clean = false;
+    let mut package: Option<String> = None;
     let mut config = CodegenConfig::default();
 
     let mut i = 0;
@@ -34,6 +34,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         match args[i].as_str() {
             "--target" => targets_csv = Some(flag_value(args, &mut i, "--target")?),
             "--out" => out = Some(flag_value(args, &mut i, "--out")?),
+            // The crate/package name a scaffolded native manifest declares
+            // (flag path only; the project manifest carries its own).
+            "--package" => package = Some(flag_value(args, &mut i, "--package")?),
             // The project manifest, when not driving generation from flags.
             "--config" => manifest_path = Some(flag_value(args, &mut i, "--config")?),
             // Collapse the module hierarchy into flat single-segment packages.
@@ -58,17 +61,22 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Explicit --target/--out selects the flag path (a single output root, module
     // hooks from flags); otherwise the project manifest drives generation.
     if targets_csv.is_some() || out.is_some() {
-        gen_from_flags(&targets_csv, &out, &config, &ir_path, clean)
+        gen_from_flags(&targets_csv, &out, &package, &config, &ir_path, clean)
     } else {
+        if package.is_some() {
+            eprintln!("--package is ignored: the project manifest names each target's package");
+        }
         gen_from_manifest(manifest_path.as_deref(), &ir_path, clean)
     }
 }
 
 /// Flag path: an explicit target list and one output root, with the module hooks
-/// taken from flags. Each file lands under `<out>/<target>/`.
+/// taken from flags. Each file lands under `<out>/<target>/`, with the native
+/// build manifest scaffolded when absent so the output builds as it lands.
 fn gen_from_flags(
     targets_csv: &Option<String>,
     out: &Option<String>,
+    package: &Option<String>,
     config: &CodegenConfig,
     ir_path: &Option<String>,
     clean: bool,
@@ -82,6 +90,7 @@ fn gen_from_flags(
     // module path, or two modules mapping to the same package) instead of writing
     // silently-broken source.
     check_layout(&model, &targets, config)?;
+    let package = package.clone().unwrap_or_else(|| "sdk".to_string());
     let mut warned = std::collections::HashSet::new();
     for target in &targets {
         let mut written = Vec::new();
@@ -96,8 +105,20 @@ fn gen_from_flags(
             write_generated(&dest, file.target, &formatted)?;
             written.push(dest);
         }
+        let out_dir = out_root.join(target.dir());
+        // Go's package is its module path; --go-module names it when given.
+        let native_package = match target {
+            TargetKind::Go => config
+                .go_module
+                .clone()
+                .unwrap_or_else(|| init::default_package(TargetKind::Go, &package)),
+            _ => package.clone(),
+        };
+        // No manifest means no ext version pins, so only the emitted source's
+        // own requirements are declared here.
+        native_manifest::ensure(*target, &out_dir, &native_package, &model, &[])?;
         // Each target owns `<out>/<target>/`; a sweep stays inside it.
-        report_target(*target, &out_root.join(target.dir()), &written, clean)?;
+        report_target(*target, &out_dir, &written, clean)?;
     }
     Ok(())
 }
@@ -138,6 +159,12 @@ fn gen_from_manifest(
         ext_deps.push(gen_ext::ext_deps_for(&model, &cfg, target.kind)?);
     }
 
+    let package_default = cfg
+        .project
+        .name
+        .as_deref()
+        .map(init::slugify)
+        .unwrap_or_else(|| init::slugify(&init::project_name_default(&base)));
     for (target, deps) in cfg.targets.iter().zip(&ext_deps) {
         let out_dir = base.join(&target.out);
         let mut written = Vec::new();
@@ -154,38 +181,14 @@ fn gen_from_manifest(
             write_generated(&dest, target.kind, &formatted)?;
             written.push(dest);
         }
-        if !deps.is_empty() {
-            merge_native_manifest(target.kind, &out_dir, deps)?;
-        }
+        let package = target
+            .package
+            .clone()
+            .unwrap_or_else(|| init::default_package(target.kind, &package_default));
+        native_manifest::ensure(target.kind, &out_dir, &package, &model, deps)?;
         report_target(target.kind, &out_dir, &written, clean)?;
     }
     Ok(())
-}
-
-type ManifestMerge = fn(&str, &[(String, String)]) -> String;
-
-/// Patch the ext dependencies into the native build manifest `tono init`
-/// scaffolds (`go.mod`, `Cargo.toml`), if it is already on disk. Silently
-/// skipped when absent: generation never creates this file, only merges into
-/// what `init` already wrote, the same guard `write_generated` applies to
-/// `package.json`.
-fn merge_native_manifest(
-    kind: TargetKind,
-    out_dir: &Path,
-    deps: &[(String, String)],
-) -> Result<(), String> {
-    let (file_name, merge): (&str, ManifestMerge) = match kind {
-        TargetKind::Go => ("go.mod", gen_ext::merge_go_mod),
-        TargetKind::Rust => ("Cargo.toml", gen_ext::merge_cargo_toml),
-        TargetKind::TypeScript => return Ok(()),
-    };
-    let dest = out_dir.join(file_name);
-    if !dest.is_file() {
-        return Ok(());
-    }
-    let existing = fs::read_to_string(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-    let merged = merge(&existing, deps);
-    fs::write(&dest, merged).map_err(|e| format!("{}: {e}", dest.display()))
 }
 
 /// The formatted files a manifest target generates: each entry is the path

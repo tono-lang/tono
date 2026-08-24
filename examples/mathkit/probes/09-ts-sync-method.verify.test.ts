@@ -2,7 +2,7 @@
 // holds the value `new SeriesCalculator(samples)` returned, and compute()
 // answers synchronously (no Promise) inside the async method wrapper.
 import { expect, test } from "vitest";
-import { Client } from "./mathkit";
+import { Client } from "mathkit-sdk/mathkit";
 
 test("probe 09 (ts sync method)", async () => {
   const client = await Client.create([1, 2, 3]);

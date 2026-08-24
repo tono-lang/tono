@@ -137,15 +137,59 @@ pub fn merge_go_mod(existing: &str, deps: &[(String, String)]) -> String {
 /// real TOML editor is not reliable, so generation owns the whole line for a
 /// dependency it manages, the same way it owns `package.json`'s `exports`.
 pub fn merge_cargo_toml(existing: &str, deps: &[(String, String)]) -> String {
+    let quoted: Vec<(String, String)> = deps
+        .iter()
+        .map(|(krate, version)| (krate.clone(), format!("\"{version}\"")))
+        .collect();
+    upsert_toml_table(existing, "[dependencies]", &quoted, true)
+}
+
+/// Ensure each `(crate, raw TOML value)` line is present in the manifest's
+/// `[dependencies]` table, inserting the missing ones and leaving an existing
+/// line exactly as the project wrote it. These are the emitted source's own
+/// requirements (serde, the transport stack), so unlike an ext pin the
+/// project may retune them (a different feature set, a stricter version)
+/// without generation fighting back.
+pub fn ensure_cargo_deps(existing: &str, deps: &[(&str, &str)]) -> String {
+    let raw: Vec<(String, String)> = deps
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    upsert_toml_table(existing, "[dependencies]", &raw, false)
+}
+
+/// Ensure each `(feature, raw TOML value)` entry is present in the manifest's
+/// `[features]` table, inserting the missing ones and never rewriting an
+/// existing entry: a project that took reqwest out of its default features
+/// made a call generation must not undo.
+pub fn ensure_cargo_features(existing: &str, features: &[(&str, &str)]) -> String {
+    let raw: Vec<(String, String)> = features
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    upsert_toml_table(existing, "[features]", &raw, false)
+}
+
+/// The shared line-level TOML table editor behind the Cargo merges: find (or
+/// append) `header`, then for each `(key, raw value)` entry either replace
+/// the existing `key = ...` line (`overwrite`) or leave it alone, inserting a
+/// missing entry right after the header. Everything outside that one table is
+/// left byte-for-byte untouched.
+fn upsert_toml_table(
+    existing: &str,
+    header: &str,
+    entries: &[(String, String)],
+    overwrite: bool,
+) -> String {
     let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
-    let header_idx = lines.iter().position(|l| l.trim() == "[dependencies]");
+    let header_idx = lines.iter().position(|l| l.trim() == header);
     let (header_idx, mut lines) = match header_idx {
         Some(idx) => (idx, lines),
         None => {
             if !lines.is_empty() {
                 lines.push(String::new());
             }
-            lines.push("[dependencies]".to_string());
+            lines.push(header.to_string());
             (lines.len() - 1, lines)
         }
     };
@@ -156,17 +200,21 @@ pub fn merge_cargo_toml(existing: &str, deps: &[(String, String)]) -> String {
         .map(|rel| header_idx + 1 + rel)
         .unwrap_or(lines.len());
 
-    for (krate, version) in deps {
+    for (key, value) in entries {
         let existing_line = lines[header_idx + 1..body_end]
             .iter()
             .position(|l| {
-                l.trim_start().starts_with(&format!("{krate} ")) || l.trim_start() == *krate
+                let trimmed = l.trim_start();
+                trimmed.strip_prefix(key.as_str()).is_some_and(|rest| {
+                    rest.is_empty() || rest.starts_with(' ') || rest.starts_with('=')
+                })
             })
             .map(|rel| header_idx + 1 + rel);
-        match existing_line {
-            Some(idx) => lines[idx] = format!("{krate} = \"{version}\""),
-            None => {
-                lines.insert(header_idx + 1, format!("{krate} = \"{version}\""));
+        match (existing_line, overwrite) {
+            (Some(idx), true) => lines[idx] = format!("{key} = {value}"),
+            (Some(_), false) => {}
+            (None, _) => {
+                lines.insert(header_idx + 1, format!("{key} = {value}"));
             }
         }
     }
@@ -239,5 +287,58 @@ mod tests {
         );
         assert!(out.contains("[dependencies]"));
         assert!(out.contains("company-config = \"1.2.0\""));
+    }
+
+    #[test]
+    fn ensure_cargo_deps_adds_a_missing_line_and_keeps_an_existing_one() {
+        let existing = "[package]\nname = \"x\"\n\n[dependencies]\nserde = \"1.0.200\"\n";
+        let out = ensure_cargo_deps(
+            existing,
+            &[
+                ("serde", "{ version = \"1\", features = [\"derive\"] }"),
+                ("tokio", "{ version = \"1\", features = [\"time\"] }"),
+            ],
+        );
+        // The project's own serde line survives; only the missing dep lands.
+        assert!(out.contains("serde = \"1.0.200\""), "{out}");
+        assert!(!out.contains("serde = { version"), "{out}");
+        assert!(
+            out.contains("tokio = { version = \"1\", features = [\"time\"] }"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn ensure_cargo_deps_does_not_mistake_a_prefixed_name_for_a_match() {
+        let out = ensure_cargo_deps(
+            "[dependencies]\nserde_json = \"1\"\n",
+            &[("serde", "\"1\"")],
+        );
+        assert!(out.contains("serde = \"1\""), "{out}");
+        assert!(out.contains("serde_json = \"1\""), "{out}");
+    }
+
+    #[test]
+    fn ensure_cargo_features_creates_the_table_and_respects_existing_entries() {
+        let out = ensure_cargo_features(
+            "[package]\nname = \"x\"\n",
+            &[
+                ("default", "[\"reqwest\"]"),
+                ("reqwest", "[\"dep:reqwest\"]"),
+            ],
+        );
+        assert!(out.contains("[features]"), "{out}");
+        assert!(out.contains("default = [\"reqwest\"]"), "{out}");
+
+        // A project that emptied its default features keeps that call.
+        let pruned = ensure_cargo_features(
+            "[features]\ndefault = []\nreqwest = [\"dep:reqwest\"]\n",
+            &[
+                ("default", "[\"reqwest\"]"),
+                ("reqwest", "[\"dep:reqwest\"]"),
+            ],
+        );
+        assert!(pruned.contains("default = []"), "{pruned}");
+        assert!(!pruned.contains("default = [\"reqwest\"]"), "{pruned}");
     }
 }

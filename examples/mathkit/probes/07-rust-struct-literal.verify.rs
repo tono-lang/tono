@@ -1,7 +1,7 @@
 //! Runs the generated SDK against the stand-in crate for real: the options
 //! struct is spelled by the library's own name and its `precision` field
 //! wrapped in `Some(..)` from the bare `u8` the logical parameter carries.
-use example_mathkit::mathkit::Client;
+use mathkit_sdk::mathkit::Client;
 
 #[tokio::main]
 async fn main() {

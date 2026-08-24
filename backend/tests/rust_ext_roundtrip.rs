@@ -59,14 +59,14 @@ fn write_sdk(model: &Model) -> PathBuf {
     assert!(!files.is_empty(), "expected generated Rust files");
 
     for file in &files {
-        // Every generated path is rooted at "rust/"; the sdk crate's own
-        // library root is "src/", so strip the target prefix rather than
-        // nest it again.
+        // Every generated path is rooted at "rust/" and already carries the
+        // crate's `src/` segment, so stripping the target prefix lays the
+        // sources out at the sdk crate's own root.
         let rel = file
             .path
             .strip_prefix("rust")
             .unwrap_or(file.path.as_path());
-        let out = src.join(rel);
+        let out = dir.join(rel);
         std::fs::create_dir_all(out.parent().unwrap()).unwrap();
         std::fs::write(out, &file.text).unwrap();
     }

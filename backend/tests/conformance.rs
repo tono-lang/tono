@@ -111,12 +111,9 @@ fn rust_output() -> Option<Vec<String>> {
     }
     let dir = tests_dir().join("rust");
     // The generated SDK is the harness crate's library; the driver is a binary
-    // that consumes it from outside.
-    write_sdk(
-        &dir.join("src"),
-        TargetKind::Rust,
-        &rust::types::rust_casing(),
-    );
+    // that consumes it from outside. Rust paths already carry the crate's
+    // `src/` segment, so the stripped tree lands at the crate root.
+    write_sdk(&dir, TargetKind::Rust, &rust::types::rust_casing());
     let out = run(
         &dir,
         "cargo",

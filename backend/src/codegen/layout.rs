@@ -44,6 +44,11 @@ pub(crate) const INTERNAL_DIR: &str = "internal";
 /// the modules rather than under `internal/`: a consumer names these types.
 pub(crate) const GO_SUPPORT_PACKAGE: &str = group::SUPPORT;
 
+/// The directory a Rust crate's sources live in. Cargo looks for the library
+/// root at `src/lib.rs`, so the emitted crate keeps that layout and the
+/// manifest beside `src/` needs no explicit `[lib]` target.
+pub(crate) const RUST_SRC: &str = "src";
+
 /// The Go package name / Rust module leaf for a dotted module: its last segment.
 pub(crate) fn package_name(module: &str) -> &str {
     module.rsplit('.').next().unwrap_or(module)
@@ -83,7 +88,13 @@ pub fn go_needs_module_path(model: &Model) -> bool {
 
 /// Where a group's source file lands, relative to the output root.
 pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
-    let root = PathBuf::from(target.dir());
+    let root = match target {
+        // Cargo's library root is `src/lib.rs`, so the Rust sources sit one
+        // directory below the target root, leaving the crate manifest beside
+        // them at the root.
+        TargetKind::Rust => Path::new(target.dir()).join(RUST_SRC),
+        _ => PathBuf::from(target.dir()),
+    };
     let ext = target.extension();
     // A test group's file name is what each target's test runner discovers:
     // `_test.go` for `go test`, `.test.ts` for Vitest, and a `_test.rs` module
@@ -197,6 +208,8 @@ fn go_package_of(path: &str) -> Option<(&str, bool)> {
 /// (an external crate or a standard-library module).
 pub fn rust_path(path: &str) -> Option<String> {
     let file = target_relative_path(TargetKind::Rust, &Group::from_path(path)?);
+    // `src/` places the file for Cargo; the module tree starts below it.
+    let file = file.strip_prefix(RUST_SRC).map(Path::to_path_buf).ok()?;
     let segments: Vec<String> = file
         .with_extension("")
         .iter()

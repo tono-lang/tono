@@ -22,6 +22,7 @@ pub mod group;
 pub mod imports;
 pub mod layout;
 pub mod modules;
+pub mod native_manifest;
 pub mod ops;
 pub mod output;
 pub mod pipeline;
