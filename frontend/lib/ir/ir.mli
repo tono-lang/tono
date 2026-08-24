@@ -286,6 +286,7 @@ type extern_lang = {
   el_lang : string;
   el_symbol : string;
   el_call_args : call_arg list;
+  el_chain : symbol_call option;
   el_yields : yields_pos list;
   el_returns : returns_lit option;
 }

@@ -89,6 +89,14 @@ ext companybus {
     op get(): ack {
       go { call: #(Get)() }
     }
+
+    op latest(key: string): ack {
+      go {
+        call: #(Fetch)(#(ctx context.Context), key).#(Result)()
+        yields: (a: go_ack)
+        returns: ack { id: .a.ID, accepted: .a.OK }
+      }
+    }
   }
 }
 
@@ -173,6 +181,34 @@ let lower_and_roundtrip () =
       let b = Ir_json.to_canonical_string (Ir_json.encode_model decoded) in
       Alcotest.(check string) "round-trip" a b
 
+(* The method chained on the returned object lowers into its own slot of
+   the binding, as the symbol-call node a nested argument already uses, and
+   never into the callee spelling or the argument list. *)
+let chain_lowers () =
+  let file, _ = Parser.parse src in
+  let model = Lower.lower_file ~module_name:"notes" ~diags:(ref []) file in
+  let bus =
+    List.find (fun (l : Ir.ext_lib) -> l.xl_name = "companybus") model.ext_libs
+  in
+  let source =
+    List.find
+      (fun (t : Ir.opaque_type) -> t.opq_name = "ack_source")
+      bus.xl_types
+  in
+  let latest =
+    List.find
+      (fun (m : Ir.extern_decl) -> m.x_name = "latest")
+      source.opq_methods
+  in
+  let go = List.hd latest.x_langs in
+  Alcotest.(check string) "callee stays the first call" "Fetch" go.el_symbol;
+  Alcotest.(check int)
+    "the first call keeps its arguments" 2
+    (List.length go.el_call_args);
+  match go.el_chain with
+  | Some { Ir.scl_symbol = "Result"; scl_args = [] } -> ()
+  | _ -> Alcotest.fail "expected the chain Result() on the binding"
+
 (* The checked-in golden fixture is this very source, lowered: the backend's
    round-trip test reads it as the frontend's encoding of the ext surface.
    Set TONO_WRITE_FIXTURES=1 to rewrite it after an IR change. *)
@@ -206,6 +242,8 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "lowers and round-trips" `Quick lower_and_roundtrip;
+          Alcotest.test_case "chain lowers into its own slot" `Quick
+            chain_lowers;
           Alcotest.test_case "golden fixture is current" `Quick
             golden_fixture_matches;
         ] );

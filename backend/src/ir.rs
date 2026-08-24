@@ -110,7 +110,7 @@ pub use crate::ir_tests_model::*;
 /// v29 added an operation's `output_nullable` flag (omitted when false): a
 /// declared `T?` return, mirroring the member-level `required` flag since
 /// nullability is not a type node.
-pub const TONO_IR_VERSION: u32 = 30;
+pub const TONO_IR_VERSION: u32 = 31;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

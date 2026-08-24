@@ -472,6 +472,7 @@ fn module_with_sign_extern() -> Module {
                 call_args: vec![CallArg::Ref(vec!["request".into()])],
                 yields: vec![],
                 returns: None,
+                chain: None,
             }],
             r#async: vec![],
             errors: vec![],

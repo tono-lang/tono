@@ -30,6 +30,7 @@ fn go_lang(symbol: &str) -> ExternLang {
         call_args: vec![],
         yields: vec![],
         returns: None,
+        chain: None,
     }
 }
 

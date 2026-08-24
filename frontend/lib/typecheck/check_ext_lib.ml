@@ -301,11 +301,17 @@ let check_returns_refs (b : Ast.extern_lang_body) : Diagnostic.t list =
           | [] -> [])
         rl.Ast.rl_fields
 
+(* The arguments a language block's call: line passes: the call's own and
+   the chained method's, which the rules over arguments treat alike. *)
+let call_line_args (b : Ast.extern_lang_body) : Ast.call_arg list =
+  b.Ast.elb_call_args
+  @ match b.Ast.elb_call_chain with None -> [] | Some nc -> nc.Ast.nc_args
+
 (* Every logical parameter must be consumed by this language's own call:,
    recursively through any ctor projection or nested call. *)
 let check_param_consumption (params : Ast.extern_param list)
     (b : Ast.extern_lang_body) : Diagnostic.t list =
-  let referenced = List.concat_map collect_call_arg b.Ast.elb_call_args in
+  let referenced = List.concat_map collect_call_arg (call_line_args b) in
   List.filter_map
     (fun (p : Ast.extern_param) ->
       if List.mem p.Ast.ep_name referenced then None
@@ -399,10 +405,10 @@ let check_extern ~(tbl : Symtab.t) ~(langs : string list)
       (fun (b : Ast.extern_lang_body) ->
         List.concat_map
           (unknown_param_call_arg ~declared ~handles)
-          b.Ast.elb_call_args
+          (call_line_args b)
         @ List.concat_map
             (fun a -> check_ctor_projection_arg structs e.Ast.ed_params a)
-            b.Ast.elb_call_args
+            (call_line_args b)
         @ check_yields_consumption b
         @ (match b.Ast.elb_yields with
           | Some ys -> check_single_error_position ys

@@ -109,6 +109,17 @@ let valid_round_trips () =
 let missing_ext_lib_name () =
   ok_decode "ext lib missing name" (model_with (without "name" ext_lib))
 
+(* The chain key carries the method called on the returned object, encoded
+   as the symbol-call argument form; any other argument form there is a
+   parameter or a literal, not a call, and is refused. *)
+let chain_not_a_symbol_call () =
+  let bad_lang =
+    with_ "chain" (`Assoc [ ("param", `String "x") ]) extern_lang
+  in
+  let bad_decl = with_ "langs" (`List [ bad_lang ]) extern_decl in
+  ok_decode "chain that is not a symbol call"
+    (model_with (with_ "externs" (`List [ bad_decl ]) ext_lib))
+
 let missing_lang_path_lang () =
   let bad_lang_path = without "lang" lang_path in
   ok_decode "lang path missing lang"
@@ -224,6 +235,8 @@ let () =
       ( "missing keys",
         [
           Alcotest.test_case "ext lib name" `Quick missing_ext_lib_name;
+          Alcotest.test_case "chain not a symbol call" `Quick
+            chain_not_a_symbol_call;
           Alcotest.test_case "lang path lang" `Quick missing_lang_path_lang;
           Alcotest.test_case "lang path path" `Quick missing_lang_path_path;
           Alcotest.test_case "foreign struct name" `Quick

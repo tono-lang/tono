@@ -313,7 +313,29 @@ fn build_call(
         Callee::Package(alias) => qualify(&lang.symbol, alias, module),
         Callee::Receiver(recv) => format!("{recv}.{}", lang.symbol),
     };
-    let call_expr = format!("{head}({})", call_args.join(", "));
+    let mut call_expr = format!("{head}({})", call_args.join(", "));
+    // The chained method reads off whatever the call returned, so it is
+    // written as one expression: the first call yields the object and
+    // nothing else, the last link carries the values the LHS binds.
+    if let Some(chain) = &lang.chain {
+        let chain_args: Vec<String> = chain
+            .args
+            .iter()
+            .map(|a| {
+                call_arg_expr(
+                    refs,
+                    module,
+                    lib,
+                    a,
+                    decl_params,
+                    call_args_src,
+                    ctx_expr,
+                    ref_expr,
+                )
+            })
+            .collect();
+        call_expr = format!("{call_expr}.{}({})", chain.symbol, chain_args.join(", "));
+    }
 
     let prefix = camel(var_prefix);
     let has_error_pos = has_error_position(lang);

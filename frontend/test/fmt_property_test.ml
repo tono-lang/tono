@@ -430,10 +430,21 @@ let gen_returns_lit =
   and+ fields = G.list_size (G.int_range 1 2) gen_returns_field in
   { Ast.rl_type = ty; rl_fields = fields; rl_span = dspan }
 
+let gen_chain =
+  let+ symbol = gen_spelling
+  and+ args = G.list_size (G.int_range 0 2) (gen_call_arg 1) in
+  {
+    Ast.nc_symbol = symbol;
+    nc_symbol_span = dspan;
+    nc_args = args;
+    nc_span = dspan;
+  }
+
 let gen_extern_lang_body =
   let+ lang = gen_lang
   and+ symbol = gen_spelling
   and+ args = G.list_size (G.int_range 0 2) (gen_call_arg 1)
+  and+ chain = G.oneof [ G.return None; G.map Option.some gen_chain ]
   and+ yields =
     G.oneof
       [
@@ -455,6 +466,7 @@ let gen_extern_lang_body =
     elb_call_symbol = symbol;
     elb_call_symbol_span = dspan;
     elb_call_args = args;
+    elb_call_chain = chain;
     elb_yields = yields;
     elb_returns = returns;
     elb_span = dspan;

@@ -312,6 +312,7 @@ fn handle_lib(lib_name: &str, type_name: &str) -> ExtLib {
                     call_args: vec![CallArg::Param("topic".into())],
                     yields: vec![],
                     returns: None,
+                    chain: None,
                 }],
                 r#async: vec![],
                 errors: vec![],

@@ -400,6 +400,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
                         }),
                     }],
                 }),
+                chain: None,
             }],
             r#async: vec!["ts".into()],
             errors: vec![],

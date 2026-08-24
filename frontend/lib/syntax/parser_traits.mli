@@ -27,6 +27,12 @@ val parse_field_match : Parser_state.t -> Ast.field_match
    "ns." prefix. *)
 val parse_call_args : Parser_state.t -> Ast.call_arg list
 
+(* "#(symbol)" "(" call_arg ("," call_arg)* ")"  -- the spelling has already
+   been consumed at [symbol]/[symbol_span]; the cursor sits on "(". A nested
+   call in an argument, or the method a [call:] line chains on the returned
+   object. *)
+val parse_nested_call : Parser_state.t -> string -> Span.span -> Ast.nested_call
+
 (* call_expr ::= "." name "(" call_arg ("," call_arg)* ")"  -- [ns]/[ns_span]
    have already been consumed by the caller; the cursor sits on the '.'. *)
 val parse_call_expr :

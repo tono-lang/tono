@@ -346,11 +346,15 @@ type returns_lit = { rvl_type : tref; rvl_fields : returns_field list }
 (* One per-language block inside an ext op's body. [el_symbol] is the
    callee's whole foreign spelling: a function, a generic instantiation
    ([FromConstant[float64]]), a class under [new] ([new ConstantCalculator]),
-   a static method on a type ([FormulaCalculator::parse]). *)
+   a static method on a type ([FormulaCalculator::parse]). [el_chain] is the
+   one method chained on the object the call returned ([Result()] after
+   [Get(ctx, key)]): the same symbol-and-arguments node a nested call in an
+   argument uses, and the link the yields/returns convention describes. *)
 type extern_lang = {
   el_lang : string;
   el_symbol : string;
   el_call_args : call_arg list;
+  el_chain : symbol_call option;
   el_yields : yields_pos list; (* [] when no yields: line *)
   el_returns : returns_lit option;
 }

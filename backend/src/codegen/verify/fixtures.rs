@@ -34,6 +34,7 @@ fn lang(lang: &str, symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
         call_args,
         yields: vec![],
         returns: None,
+        chain: None,
     }
 }
 

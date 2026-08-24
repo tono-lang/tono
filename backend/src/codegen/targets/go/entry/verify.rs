@@ -250,6 +250,19 @@ fn op_line(
         .iter()
         .map(|a| arg_expr(module, lib, alias, &decl.params, a))
         .collect::<Result<Vec<_>, _>>()?;
+    // The chained method is probed exactly as the emitter writes it: one
+    // expression, the results bound off its last link.
+    let chain = match &lang.chain {
+        None => String::new(),
+        Some(chain) => {
+            let chain_args = chain
+                .args
+                .iter()
+                .map(|a| arg_expr(module, lib, alias, &decl.params, a))
+                .collect::<Result<Vec<_>, _>>()?;
+            format!(".{}({})", chain.symbol, chain_args.join(", "))
+        }
+    };
     let rs = results(module, lib, alias, decl, lang)?;
     let names: Vec<String> = (0..rs.len()).map(|i| format!("tonoR{i}")).collect();
     let decls: Vec<String> = names
@@ -263,7 +276,7 @@ fn op_line(
         None => format!("tonoProbe_{}", decl.name),
     };
     Ok(format!(
-        "func {fname}({}) {{ {}; {} = {head}({}); {blanks} = {} }}",
+        "func {fname}({}) {{ {}; {} = {head}({}){chain}; {blanks} = {} }}",
         ps.join(", "),
         decls.join("; "),
         names.join(", "),

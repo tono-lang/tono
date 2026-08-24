@@ -262,6 +262,16 @@ fn op_line(
     for sp in crate::codegen::entries::spellings::of_lang(lang) {
         sdk_terms(sp)?;
     }
+    // Generation refuses a chained call for TypeScript (which link is
+    // awaited is undeclared); the probe has no expression to mirror, so
+    // the binding is listed as skipped rather than graded against a
+    // shape the emitter never writes.
+    if let Some(chain) = &lang.chain {
+        return Err(format!(
+            "TypeScript has no chained call to probe (.{}(..) on the returned object)",
+            chain.symbol
+        ));
+    }
     let mut ps = params(module, lib, decl)?;
     let mut prelude = Vec::new();
     let args = lang

@@ -95,6 +95,7 @@ pub fn go_extern(
             call_args,
             yields,
             returns,
+            chain: None,
         }],
         r#async: vec![],
         errors: errors.into_iter().map(String::from).collect(),

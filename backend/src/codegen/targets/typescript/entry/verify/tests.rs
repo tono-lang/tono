@@ -312,3 +312,32 @@ fn a_generated_type_reference_skips_the_binding_with_why() {
         assert!(p.skipped.contains(&why.to_string()), "{:?}", p.skipped);
     }
 }
+
+/// Generation refuses a chained call for TypeScript, so the probe has no
+/// expression to mirror: the binding is listed as skipped with why, and
+/// the rest of the library is still probed.
+#[test]
+fn a_chained_call_skips_the_binding_with_why() {
+    let mut m = gearbox_module();
+    let read = m.ext_libs[0].types[0]
+        .methods
+        .iter_mut()
+        .find(|d| d.name == "read")
+        .unwrap();
+    let ts = read.langs.iter_mut().find(|l| l.lang == "ts").unwrap();
+    ts.chain = Some(crate::ir::SymbolCall {
+        symbol: "result".into(),
+        args: vec![],
+    });
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(!p.source.contains("tonoProbe_dial_read"), "{}", p.source);
+    assert!(p.source.contains("tonoProbe_open"), "{}", p.source);
+    assert!(
+        p.skipped.contains(
+            &"method dial.read: TypeScript has no chained call to probe (.result(..) on the returned object)"
+                .to_string()
+        ),
+        "{:?}",
+        p.skipped
+    );
+}

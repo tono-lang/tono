@@ -104,7 +104,7 @@
    spelling of its own ([opts { .. }: #(&Options)]), the same annotation a
    parameter carries, for a library that takes the form by pointer. Absent
    for a literal passed as the form's own type. *)
-let current_ir_version = 30
+let current_ir_version = 31
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

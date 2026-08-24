@@ -428,6 +428,7 @@ fn bus_lib_with_send_bound_for(langs: &[&str]) -> ExtLib {
                         call_args: vec![],
                         yields: vec![],
                         returns: None,
+                        chain: None,
                     })
                     .collect(),
                 r#async: vec![],
@@ -527,6 +528,7 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
                     call_args: vec![],
                     yields: vec![],
                     returns: None,
+                    chain: None,
                 }],
                 r#async: vec![],
                 errors: vec![],
@@ -545,6 +547,7 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
+                chain: None,
             }],
             r#async: vec![],
             errors: vec![],

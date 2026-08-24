@@ -39,6 +39,7 @@ fn plain_lang(lang: &str, symbol: &str, call_args: Vec<CallArg>, ctx: bool) -> E
         call_args,
         yields: vec![],
         returns: None,
+        chain: None,
     }
 }
 

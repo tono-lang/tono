@@ -83,8 +83,10 @@ cp -R "$bench/ext/ts" "$check_ts/node_modules/@tono-ext-fixture/mathkit"
 # Go has no static method), capability 12 on Go and Rust (a class
 # reference has nothing to render as, neither has a type as a value), and
 # capability 15 on Rust (a spelling asking for a conversion the target
-# cannot write is refused naming both types).
-refusal_markers="is owned by that call|has no static method to call|has no class reference to pass|no conversion from"
+# cannot write is refused naming both types), and capability 17 on Rust and
+# TypeScript (a method chained on the returned object has no declared
+# convention for its second link there, so the binding is refused).
+refusal_markers="is owned by that call|has no static method to call|has no class reference to pass|no conversion from|has no chained call"
 
 # The project manifest each check generates under: one enabled target, the
 # ext version pins the generated manifest carries, written next to the IR the

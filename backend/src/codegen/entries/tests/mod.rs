@@ -6,6 +6,8 @@ use serde_json::json;
 // to keep this file under the line-count gate; they reuse the fixtures below
 // through `super::*`.
 mod call;
+// The per-target capability gates over a `call:` line's shapes, likewise.
+mod call_capabilities;
 // The handle-method field-source tests, likewise.
 mod handle_call;
 // The `validate_entries` gate tests (generated-identifier collisions, the

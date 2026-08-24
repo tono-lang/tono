@@ -78,12 +78,15 @@ pub struct CallCtor {
 }
 
 /// A bare foreign-symbol call nested inside a `call:` line's own argument
-/// list: no declared `extern` to resolve against, just a symbol string and
-/// its own argument list, recursing through `CallArg` the same way a
-/// language block's own `call:` line does.
-#[derive(Debug, Clone, PartialEq)]
+/// list, or chained on the object the line's call returned: no declared
+/// `extern` to resolve against, just a symbol string and its own argument
+/// list, recursing through `CallArg` the same way a language block's own
+/// `call:` line does. Its own wire shape (`symbol`, `symbol_args`) is the
+/// one the `CallArg::SymbolCall` variant writes inline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SymbolCall {
     pub symbol: String,
+    #[serde(rename = "symbol_args", default)]
     pub args: Vec<CallArg>,
 }
 
@@ -325,12 +328,18 @@ pub struct ReturnsLit {
 /// (`FromConstant[float64]`), a class under `new` (`new ConstantCalculator`),
 /// a static method on a type (`FormulaCalculator::parse`). Each emitter
 /// reads the identifiers out of it to import, and writes the rest as is.
+/// `chain` is the one method the line calls on the object the call
+/// returned (`Result()` after `Get(ctx, key)`): the value and the error
+/// come out of that link, so `yields` and the return convention describe
+/// it, and a target that cannot write the chain refuses the binding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternLang {
     pub lang: String,
     pub symbol: String,
     #[serde(default)]
     pub call_args: Vec<CallArg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<SymbolCall>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub yields: Vec<YieldsPos>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -630,6 +639,7 @@ mod tests {
             call_args: vec![],
             yields: vec![],
             returns: None,
+            chain: None,
         };
         let mut decl = ExternDecl {
             name: "load".into(),
@@ -651,6 +661,44 @@ mod tests {
         let back: ExternDecl = serde_json::from_str(&json).unwrap();
         assert_eq!(back, decl);
         assert!(back.is_async("rust") && !back.is_async("ts"));
+    }
+
+    /// The chained method rides its own key of the binding, in the shape a
+    /// nested call already has as an argument, and is omitted when absent
+    /// (the common case, so a binding without one reads as before).
+    #[test]
+    fn extern_lang_chain_round_trips_and_is_omitted_when_absent() {
+        let plain = ExternLang {
+            lang: "go".into(),
+            symbol: "Read".into(),
+            call_args: vec![CallArg::Param("key".into())],
+            yields: vec![],
+            returns: None,
+            chain: None,
+        };
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("chain").is_none(), "{json}");
+
+        let chained = ExternLang {
+            chain: Some(SymbolCall {
+                symbol: "Result".into(),
+                args: vec![CallArg::Lit(serde_json::json!(1))],
+            }),
+            ..plain
+        };
+        let json = serde_json::to_value(&chained).unwrap();
+        assert_eq!(
+            json["chain"],
+            serde_json::json!({"symbol": "Result", "symbol_args": [{"lit": 1}]})
+        );
+        let back: ExternLang = serde_json::from_value(json).unwrap();
+        assert_eq!(back, chained);
+        // A chain with no arguments decodes without the key, as an
+        // argument's nested call does.
+        let bare: SymbolCall =
+            serde_json::from_value(serde_json::json!({"symbol": "Result"})).unwrap();
+        assert_eq!(bare.symbol, "Result");
+        assert!(bare.args.is_empty());
     }
 
     #[test]

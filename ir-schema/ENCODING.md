@@ -272,10 +272,14 @@ Every string that is not a tono name is a foreign spelling, the text of a
   declared error shapes the call can raise, by shape id, in test order; how
   a target recognizes each one lives on that shape (below).
 - An `extern_lang` (one per language block) is
-  `{"lang", "symbol", "call_args": [<call_arg>], "yields"?, "returns"?}`.
+  `{"lang", "symbol", "call_args": [<call_arg>], "chain"?, "yields"?, "returns"?}`.
   `symbol` is the callee's whole foreign spelling (`FromConstant[float64]`,
-  `new ConstantCalculator`, `FormulaCalculator::parse`). `yields` is
-  omitted when empty; `returns` when absent. A `yields` position is
+  `new ConstantCalculator`, `FormulaCalculator::parse`). `chain` (omitted
+  when absent) is the one method the line calls on the object the call
+  returned, `{"symbol": <string>, "symbol_args": [<call_arg>]}` (the same
+  shape a nested foreign call has as an argument): the value and the
+  error come out of that link, so `yields` and the return convention
+  describe it. `yields` is omitted when empty; `returns` when absent. A `yields` position is
   `{"name", "type"?, "is_error"?, "foreign"?}`: `type` is the tono type it
   carries, absent for the reserved `error` sentinel (`is_error`: `true`)
   and for a position under a foreign spelling (`foreign`: what the call

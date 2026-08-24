@@ -194,6 +194,7 @@ let erase_extern_lang_body (b : Ast.extern_lang_body) =
     Ast.elb_lang_span = dspan;
     elb_call_symbol_span = dspan;
     elb_call_args = List.map erase_call_arg b.Ast.elb_call_args;
+    elb_call_chain = Option.map erase_nested_call b.Ast.elb_call_chain;
     elb_yields = Option.map (List.map erase_yields_pos) b.Ast.elb_yields;
     elb_returns = Option.map erase_returns_lit b.Ast.elb_returns;
     elb_span = dspan;

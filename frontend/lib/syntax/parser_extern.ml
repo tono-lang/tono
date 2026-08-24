@@ -231,16 +231,56 @@ let parse_returns ~parse_type_no_error st : Ast.returns_lit =
       Span.merge kw.span (match close with Some t -> t.span | None -> kw.span);
   }
 
-(* call ::= "call" ":" "#(...)" "(" call_arg ("," call_arg)* ")" -- the
-   callee is one foreign spelling, verbatim: what it is (a function, a
+(* ("." "#(...)" "(" call_arg ("," call_arg)* ")")? -- the one method the
+   line may chain on the object the call returned. What follows the dot is
+   a call, always: a bare spelling would read a field of the returned
+   object, which is a projection (yields:/returns:), and a second link
+   would make the line a pipeline rather than a declared call. Both are
+   refused here, so call: stays a call and never an expression. *)
+let parse_call_chain st : Ast.nested_call option =
+  match (P.peek st).kind with
+  | Token.Dot -> (
+      let dot = P.advance st in
+      match (P.peek st).kind with
+      | Token.Foreign symbol -> (
+          let symbol_span = (P.advance st).span in
+          match (P.peek st).kind with
+          | Token.LParen ->
+              let chain =
+                Parser_traits.parse_nested_call st symbol symbol_span
+              in
+              (match (P.peek st).kind with
+              | Token.Dot ->
+                  P.error st (P.peek st).span
+                    "a 'call:' line chains at most one method on the returned \
+                     object; a longer chain is not a declared call"
+              | _ -> ());
+              Some { chain with Ast.nc_span = Span.merge dot.span symbol_span }
+          | _ ->
+              P.error st symbol_span
+                "the method chained on the returned object is a call and takes \
+                 '(...)'; a field of the returned object is read through \
+                 'yields:' and 'returns:'";
+              None)
+      | _ ->
+          P.error st (P.peek st).span
+            "a '.' after the call's arguments chains one method on the \
+             returned object, spelled '#(...)'; 'call:' takes no expression";
+          None)
+  | _ -> None
+
+(* call ::= "call" ":" "#(...)" "(" call_arg ("," call_arg)* ")" chain? --
+   the callee is one foreign spelling, verbatim: what it is (a function, a
    class under `new`, a static method on a type) is the target's business. *)
-let parse_call_line st : string * Span.span * Ast.call_arg list =
+let parse_call_line st :
+    string * Span.span * Ast.call_arg list * Ast.nested_call option =
   ignore (P.advance st);
   (* 'call' *)
   ignore (P.expect st Token.Colon "':' after 'call'");
   let symbol, symbol_span = expect_foreign st "as the callee after 'call:'" in
   let args = Parser_traits.parse_call_args st in
-  (symbol, symbol_span, args)
+  let chain = parse_call_chain st in
+  (symbol, symbol_span, args, chain)
 
 (* lang_body ::= lang "{" ("call:" | "yields:" | "returns:")* "}"
    -- "call:" is required; its absence is diagnosed but the rest still parses. *)
@@ -275,12 +315,12 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
   in
   go ();
   let close = P.expect st Token.RBrace "'}' to close the language block" in
-  let symbol, symbol_span, args =
+  let symbol, symbol_span, args, chain =
     match !call with
     | Some c -> c
     | None ->
         P.error st lang_span "a language block requires a 'call:' line";
-        ("", lang_span, [])
+        ("", lang_span, [], None)
   in
   {
     Ast.elb_lang = lang;
@@ -288,6 +328,7 @@ let parse_extern_lang_body ~parse_type ~parse_type_no_error st :
     elb_call_symbol = symbol;
     elb_call_symbol_span = symbol_span;
     elb_call_args = args;
+    elb_call_chain = chain;
     elb_yields = !yields;
     elb_returns = !returns;
     elb_span =

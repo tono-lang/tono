@@ -187,6 +187,20 @@ impl TargetKind {
             Self::Go | Self::Rust => false,
         }
     }
+
+    /// Whether this target can write a `call:` line's chained method, the
+    /// one called on the object the call returned (`Get(ctx, key).Result()`).
+    /// Go can: it has no asynchrony to place, so the chain is one
+    /// expression whose last link carries the return convention. Rust and
+    /// TypeScript cannot yet: `@async` names one foreign call, and a chain
+    /// has two, so which link is awaited (or carries the `?`) is undeclared;
+    /// their generation refuses the binding rather than guess.
+    pub fn emits_chained_call(self) -> bool {
+        match self {
+            Self::Go => true,
+            Self::Rust | Self::TypeScript => false,
+        }
+    }
 }
 
 /// A generated source file: which target produced it (so a caller knows which

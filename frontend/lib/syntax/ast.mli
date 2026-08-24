@@ -192,6 +192,7 @@ type extern_lang_body = {
   elb_call_symbol : string;
   elb_call_symbol_span : Span.span;
   elb_call_args : call_arg list;
+  elb_call_chain : nested_call option;
   elb_yields : yields_pos list option;
   elb_returns : returns_lit option;
   elb_span : Span.span;

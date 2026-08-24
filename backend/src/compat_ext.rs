@@ -223,6 +223,7 @@ mod tests {
                         call_args: vec![CallArg::Param("service".into())],
                         yields: vec![],
                         returns: None,
+                        chain: None,
                     }],
                     r#async: vec![],
                     errors: vec![],
@@ -239,6 +240,30 @@ mod tests {
         let mut out = Vec::new();
         diff_ext_libs(&base, &curr, &mut out);
         assert!(out.is_empty());
+    }
+
+    /// Chaining a method on the returned object changes what the generated
+    /// code calls, with the tono-facing signature untouched: behavioral,
+    /// like any other change to the binding's call shape.
+    #[test]
+    fn a_method_chained_on_the_returned_object_is_behavioral() {
+        let base = model(base_module());
+        let mut changed = base_module();
+        changed.ext_libs[0].externs[0].langs[0].chain = Some(crate::ir::SymbolCall {
+            symbol: "Result".into(),
+            args: vec![],
+        });
+        let curr = model(changed);
+
+        let mut out = Vec::new();
+        diff_ext_libs(&base, &curr, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].category, Category::Behavioral);
+        assert!(
+            out[0].detail.contains("foreign call binding changed"),
+            "{}",
+            out[0].detail
+        );
     }
 
     #[test]
@@ -294,6 +319,7 @@ mod tests {
                     call_args: vec![],
                     yields: vec![],
                     returns: None,
+                    chain: None,
                 }],
                 r#async: vec![],
                 errors: vec![],

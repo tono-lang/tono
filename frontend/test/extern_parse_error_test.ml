@@ -439,9 +439,62 @@ let kind_dispatch_disambiguation () =
   | Some { dkind = Ast.DExtLib _; _ } -> ()
   | _ -> Alcotest.fail "expected 'ext mylib' to parse as DExtLib"
 
+(* The boundary of call:: a "." after the arguments chains exactly one
+   method on the returned object, spelled and called. Each case below is
+   something that would make the line an expression instead, and each is
+   refused with the message that says where the intended thing goes. *)
+let chain_without_call () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go { #(example.com/mylib) }
+         op load(key: string): string {
+           go { call: #(Get)(key).#(Val) }
+         }
+       }|}
+  in
+  Alcotest.(check bool)
+    "a bare spelling after the dot is a field read, refused" true
+    (has_message ~sub:"is a call and takes '(...)'" ds)
+
+let chain_twice () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go { #(example.com/mylib) }
+         op load(key: string): string {
+           go { call: #(Get)(key).#(Result)().#(String)() }
+         }
+       }|}
+  in
+  Alcotest.(check bool)
+    "a second link is refused" true
+    (has_message ~sub:"at most one method on the returned object" ds)
+
+let chain_tono_path () =
+  let ds =
+    file_diags
+      {|ext mylib {
+         go { #(example.com/mylib) }
+         op load(key: string): string {
+           go { call: #(Get)(key).val }
+         }
+       }|}
+  in
+  Alcotest.(check bool)
+    "a tono path on the result is refused" true
+    (has_message ~sub:"'call:' takes no expression" ds)
+
 let () =
   Alcotest.run "extern-parse-error"
     [
+      ( "call chain",
+        [
+          Alcotest.test_case "field read after the dot" `Quick
+            chain_without_call;
+          Alcotest.test_case "second link" `Quick chain_twice;
+          Alcotest.test_case "tono path on the result" `Quick chain_tono_path;
+        ] );
       ( "language block",
         [
           Alcotest.test_case "missing call line" `Quick missing_call_line;

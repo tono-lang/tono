@@ -58,3 +58,9 @@ bench	rust	service.tono	pass
 # keeps the plain type, so the form's own probe and the call site compile
 # together (a `&` on the block satisfied the call and broke the probe).
 16-go-pointer-argument	go	probes/16-go-pointer-argument.tono	pass
+# 17: the value comes from a method of the object the call returned
+# (Read(ctx, key).Result()): Go writes the chain as one expression; Rust and
+# TypeScript refuse it, since @async names one call and a chain has two.
+17-go-value-from-returned-object	go	probes/17-go-value-from-returned-object.tono	pass
+17-ts-value-from-returned-object-refused	typescript	probes/17-ts-value-from-returned-object-refused.tono	refused
+17-rust-value-from-returned-object-refused	rust	probes/17-rust-value-from-returned-object-refused.tono	refused

@@ -98,6 +98,37 @@ struct app_config { endpoint: string }
 
 let clean () = Alcotest.(check (list string)) "no codes" [] (codes base)
 
+(* ── The chained method's arguments are the call's own ──────────────────── *)
+
+(* A parameter consumed only by the method chained on the returned object
+   is consumed (no TC0078), and an undeclared name there is TC0070 like
+   anywhere else in the line: the chain is part of call:, not a second
+   binding with rules of its own. *)
+let chain_args_are_call_args () =
+  let consumed =
+    {|ext lib {
+  go { #(github.com/x/y) }
+
+  op load(key: string, mode: string): string {
+    go { call: #(Get)(key).#(Result)(mode) }
+  }
+}
+|}
+  in
+  Alcotest.(check int) "parses clean" 0 (parse_diag_count consumed);
+  Alcotest.(check (list string)) "no codes" [] (codes consumed);
+  let unknown =
+    {|ext lib {
+  go { #(github.com/x/y) }
+
+  op load(key: string): string {
+    go { call: #(Get)(key).#(Result)(bogus) }
+  }
+}
+|}
+  in
+  Alcotest.(check bool) "unknown param in the chain" true (has "TC0070" unknown)
+
 (* ── TC0070: call: names an undeclared logical parameter ────────────────── *)
 
 let unknown_call_param () =
@@ -698,6 +729,11 @@ let () =
   Alcotest.run "extern_typecheck"
     [
       ("baseline", [ Alcotest.test_case "clean ext block" `Quick clean ]);
+      ( "call chain",
+        [
+          Alcotest.test_case "chain arguments are call arguments" `Quick
+            chain_args_are_call_args;
+        ] );
       ( "grammar",
         [
           Alcotest.test_case "leading and trailing trait order" `Quick
