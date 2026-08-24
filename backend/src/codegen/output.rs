@@ -142,10 +142,9 @@ impl TargetKind {
             Self::Rust => crate::codegen::targets::rust::entry::param_spelling_coerces(
                 module, lib, t, spelling,
             ),
-            // TypeScript is structurally typed: the value passes as it is
-            // and `tsc` grades the spelling against the library's own
-            // declaration.
-            Self::TypeScript => Ok(()),
+            Self::TypeScript => {
+                crate::codegen::targets::typescript::entry::param_spelling_coerces(t, spelling)
+            }
         }
     }
 

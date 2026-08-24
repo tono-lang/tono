@@ -587,3 +587,37 @@ fn import_spelling_imports_a_word_that_collides_with_a_generated_type() {
     assert_eq!(spell("Memo<.reading>", &module), "Memo<Reading>");
     assert_eq!(spell("new Client", &module), "new Client");
 }
+
+/// A parameter spelled on the other side of the number/bigint divide
+/// converts at the call: an i64 (a bigint here) crosses as `Number(..)`
+/// when the binding says the library takes a number.
+#[test]
+fn a_spelled_parameter_converts_across_the_bigint_divide() {
+    let mut module = appendix_module(appendix_fields());
+    let connect = &mut module.ext_libs[1].externs[0];
+    connect.params[0].r#type = Tref::Prim(Prim::I64);
+    connect.langs[0].call_args[0] = CallArg::ParamAs {
+        name: "endpoint".into(),
+        spelling: "number".into(),
+    };
+    let out = rendered_text(&module);
+    assert!(out.contains("connect(Number("), "{out}");
+}
+
+/// A form field the ts block spells under its own type converts inside the
+/// struct literal, the same rule a spelled parameter follows.
+#[test]
+fn a_spelled_ctor_field_converts_inside_the_literal() {
+    let mut module = appendix_module(appendix_fields());
+    let opts = &mut module.ext_libs[0].structs[0];
+    opts.fields[0].r#type = Tref::Prim(Prim::I64);
+    opts.langs = vec![crate::ir::ForeignLang {
+        lang: "ts".into(),
+        name: "TsOpts".into(),
+        fields: std::collections::BTreeMap::from([("region".to_string(), "number".to_string())]),
+    }];
+    let region = &mut module.ext_libs[0].externs[0];
+    region.params[1].r#type = Tref::Prim(Prim::I64);
+    let out = rendered_text(&module);
+    assert!(out.contains("region: Number("), "{out}");
+}

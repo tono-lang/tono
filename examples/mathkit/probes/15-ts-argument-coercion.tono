@@ -1,0 +1,28 @@
+// Capability 15: an argument that must convert at the boundary, not just
+// be respelled. The logical parameter is an i64 (a bigint in TypeScript)
+// and the library constructor takes a number: `seed: #(number)` makes the
+// generated call convert, Number(seed), instead of passing the bigint the
+// compiler would reject.
+ext mathkit {
+  ts { #(@tono-ext-fixture/mathkit) }
+
+  struct calculator {
+    ts { #(Calculator<number>) }
+
+    op compute(): float {
+      ts { call: #(compute)() }
+    }
+  }
+
+  op from_seed(seed: i64): calculator {
+    ts { call: #(new ConstantCalculator)(seed: #(number)) }
+  }
+}
+
+pub struct client {
+  seed: i64 @arg
+  constant: mathkit.calculator = mathkit.from_seed(.seed)
+
+  op value(): float
+    impl .constant.compute()
+}

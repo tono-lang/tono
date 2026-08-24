@@ -1,0 +1,36 @@
+// Capability 15 (Rust): there is no implicit numeric narrowing. The form
+// spells precision as Option<u8> while the logical field is an i64; Rust
+// will not write a silent truncation, so generation refuses the binding
+// and names both types. Narrowing the logical type (precision: u8) is the
+// author's move, not the emitter's.
+ext mathkit {
+  rust { #(mathkit) }
+
+  struct formula_options {
+    precision: i64
+
+    rust { #(FormulaOptions)  precision: #(Option<u8>) }
+  }
+
+  struct calculator {
+    rust { #(Box<dyn Calculator<f64>>) }
+
+    @async(rust)
+    op compute(): float {
+      rust { call: #(compute)() }
+    }
+  }
+
+  op from_formula(expr: string, precision: i64): calculator {
+    rust { call: #(from_formula)(expr: #(&str), formula_options { precision: precision }) }
+  }
+}
+
+pub struct client {
+  expr: string @arg
+  precision: i64 @arg
+  formula: mathkit.calculator = mathkit.from_formula(.expr, .precision)
+
+  op value(): float
+    impl .formula.compute()
+}

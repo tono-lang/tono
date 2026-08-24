@@ -500,10 +500,18 @@ fn op_method(
 
 use plan::err_var;
 
+/// Whether TypeScript can coerce a logical value of `t` into `spelling`
+/// (see `ext_coerce::coerce`); the reason names both types when it cannot.
+pub fn param_spelling_coerces(t: &Tref, spelling: &str) -> Result<(), String> {
+    ext_coerce::coerce(t, spelling, "v").map(|_| ())
+}
+
 mod checks;
 mod class;
 mod decode;
+mod ext_args;
 mod ext_call;
+mod ext_coerce;
 pub mod ext_fixtures;
 mod ext_handle_call;
 mod ext_handle_iface;
