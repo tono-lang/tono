@@ -404,6 +404,15 @@ fn a_call_field_with_every_call_arg_variant_and_a_nested_call_emits_without_pani
             foreign: None,
         })
         .collect();
+    // The positions are read by a projection, so the call keeps the
+    // convention's `Result` and the tuple destructures out of `Ok`.
+    load.returns = Some(ReturnsLit {
+        r#type: shape_ref("m#app_config"),
+        fields: vec![ReturnsField {
+            name: "endpoint".into(),
+            value: ReturnsValue::Field(vec!["a".into()]),
+        }],
+    });
     let mut config_lib = lib(
         "companyconfig",
         "company_config",
@@ -613,4 +622,26 @@ fn a_call_field_lends_a_spelled_parameter_and_qualifies_a_nested_call() {
     let out = entry_text(&module, &rust_casing());
     assert!(out.contains("&(s.region).clone()"), "{out}");
     assert!(out.contains("company_config::Retries(3)"), "{out}");
+}
+
+/// A `yields` list that is the call's signature and places no `error` is a
+/// plain value: the call assigns straight into the slot, with no `Result`
+/// to match.
+#[test]
+fn a_signature_yields_list_without_an_error_binds_the_plain_value() {
+    let mut module = region_load_module(true);
+    module.ext_libs[0].externs[0].langs[0].yields = vec![YieldsPos {
+        name: "cfg".into(),
+        r#type: Some(Tref::Prim(Prim::String)),
+        is_error: false,
+        foreign: None,
+    }];
+    let out = entry_text(&module, &rust_casing());
+    assert!(
+        out.contains("config = company_config::Client::load(")
+            || out.contains("config = company_config::Client::load("),
+        "{out}"
+    );
+    assert!(!out.contains("Ok(cfg)"), "{out}");
+    assert!(!out.contains("Ok(v)"), "{out}");
 }

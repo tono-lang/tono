@@ -287,3 +287,9 @@ let lang_block_field_unknown = register "TC0097"
    where the class reference was meant (or the other way round), so the
    collision is named instead of resolved one way. *)
 let extern_name_ambiguous = register "TC0098"
+
+(* A returns: whose type is an opaque handle of the same ext block. A handle
+   is what the call itself returns, never a projection: there are no fields
+   to build it from, so the binding declares the call's positions with
+   yields: alone (and the target compiler grades the value). *)
+let extern_returns_handle = register "TC0099"

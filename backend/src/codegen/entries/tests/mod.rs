@@ -14,6 +14,7 @@ mod handle_call;
 // mixed loose/entry module rules) live in their own submodule for the same
 // reason.
 mod validate_gates;
+mod yields_signature;
 
 fn field(name: &str, sources: Vec<Source>) -> EntryField {
     EntryField {

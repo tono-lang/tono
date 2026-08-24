@@ -225,15 +225,32 @@ fn extern_binds_every_target(
         };
         // A hand-fed IR bypasses the frontend's own "every yields: position
         // is consumed" rule (`tono gen` accepts raw IR directly), so this
-        // reasserts it at generation time: a non-error position with
-        // nothing declared to project it into would meet an emitter as a
-        // pipeline defect instead of an authoring error.
-        let projects = lang.yields.iter().any(|y| !y.is_error);
-        if projects && lang.returns.is_none() {
-            return Err(format!(
-                "{site}: the {} block declares yields but no returns to project them into",
-                target.binding_langs()[0],
-            ));
+        // reasserts it at generation time: with no returns: the list is the
+        // call's signature and its value position must be the op's own
+        // return; a position of any other type has nothing declared to
+        // project it into and would meet an emitter as a pipeline defect
+        // instead of an authoring error.
+        if lang.returns.is_none() {
+            if let Some(dead) = lang.yields.iter().find(|y| {
+                !y.is_error && y.foreign.is_none() && y.r#type.as_ref() != Some(&decl.r#return)
+            }) {
+                return Err(format!(
+                    "{site}: the {} block declares yields position {} that no returns: projects and that is not the op's own return",
+                    target.binding_langs()[0],
+                    dead.name,
+                ));
+            }
+        }
+        // A handle is what the call returns, never a projection: there are
+        // no fields to build it from.
+        if let Some(crate::ir::Tref::Ref { id, .. }) = lang.returns.as_ref().map(|r| &r.r#type) {
+            let name = super::local_name(id);
+            if lib.types.iter().any(|t| t.name == name) {
+                return Err(format!(
+                    "{site}: the {} block's returns: builds {name}, an opaque handle; a handle is what the call returns, declare its positions with yields: alone",
+                    target.binding_langs()[0],
+                ));
+            }
         }
         // A single call expression can only ever produce one value in
         // TypeScript (no multi-return), so a binding naming more than one

@@ -186,6 +186,14 @@ func Open(addr string) (*Client, error) {
 	return &Client{addr: addr}, nil
 }
 
+// Dial starts a session with the service at addr and cannot fail: it
+// returns only the handle, the shape of a Go client constructor that
+// connects lazily. A generated SDK must bind one value here, never
+// (T, error), while Open next to it keeps the error.
+func Dial(addr string) *Client {
+	return &Client{addr: addr}
+}
+
 // Ping answers the service's greeting ("pong" unless the session was
 // opened with one of its own).
 func (c *Client) Ping() (string, error) {

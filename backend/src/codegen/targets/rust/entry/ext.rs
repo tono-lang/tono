@@ -494,7 +494,20 @@ pub(super) fn impl_call_body(c: &ImplCall<'_>) -> (String, bool) {
     let binding = ok_pattern(&l.lang.yields);
     let value = ok_value(&binding, l.lang.returns.as_ref(), c.has_output);
     let mapped = error_match(c.module, l.lib, &recv_name, &c.call.method, &l.decl.errors);
+    let call = method_call(c.module, l.lib, "recv", &l.lang.symbol, &args);
 
+    // A declared signature with no error channel binds the value itself;
+    // anything else is the `Result` the convention gives the call.
+    let outcome = if l.lang.is_infallible() {
+        format!("let {binding} = {call}{awaited};\nOk({value})")
+    } else {
+        format!(
+            "match {call}{awaited} {{\n\
+             \x20   Ok({binding}) => Ok({value}),\n\
+             \x20   Err(e) => Err({mapped}),\n\
+             }}"
+        )
+    };
     let body = format!(
         "let recv = match &{stored} {{\n\
          \x20   Some(v) => v,\n\
@@ -502,12 +515,8 @@ pub(super) fn impl_call_body(c: &ImplCall<'_>) -> (String, bool) {
          \x20       return Err(TonoError::Config(ConfigError {{ message: {miss:?}.to_string() }}));\n\
          \x20   }}\n\
          }};\n\
-         match {call}{awaited} {{\n\
-         \x20   Ok({binding}) => Ok({value}),\n\
-         \x20   Err(e) => Err({mapped}),\n\
-         }}",
+         {outcome}",
         miss = format!("{call_name}: the {recv_name} handle is not configured"),
-        call = method_call(c.module, l.lib, "recv", &l.lang.symbol, &args),
     );
     (body, l.decl.is_async(LANG))
 }
@@ -555,6 +564,15 @@ pub(super) fn handle_call_assign(
     // The outcome is bound before it is matched so the receiver borrow ends
     // with the call: the assignment below writes another field of the same
     // draft, which a still-live borrow of the receiver's slot would block.
+    // A declared signature with no error channel is the value itself, so
+    // the binding is the outcome and there is nothing to match.
+    let settle = if l.lang.is_infallible() {
+        format!("let {binding} = outcome;\n{assign}")
+    } else {
+        format!(
+            "match outcome {{\n    Ok({binding}) => {{ {assign} }}\n    Err(e) => {{ return Err({mapped}); }}\n}}"
+        )
+    };
     format!(
         "let recv = match &{stored} {{\n\
          \x20   Some(v) => v,\n\
@@ -563,7 +581,7 @@ pub(super) fn handle_call_assign(
          \x20   }}\n\
          }};\n\
          let outcome = {call}{awaited};\n\
-         match outcome {{\n    Ok({binding}) => {{ {assign} }}\n    Err(e) => {{ return Err({mapped}); }}\n}}",
+         {settle}",
         miss = format!("{call_name}: the {recv_name} handle is not configured"),
         call = method_call(r.module, l.lib, "recv", &l.lang.symbol, &args),
     )

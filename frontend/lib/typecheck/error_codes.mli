@@ -187,5 +187,7 @@ val lang_block_field_unknown : string
 (** A call: line with a type receiver and the "new" marker at once. *)
 
 val extern_name_ambiguous : string
+
+val extern_returns_handle : string
 (** A call: argument passing a class reference that names no opaque handle of
     its own ext block. *)
