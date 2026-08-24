@@ -136,7 +136,7 @@ fn gen_compiles_the_project_sources_when_no_ir_is_given() {
     );
     for module in ["payments", "billing"] {
         assert!(
-            dir.join("dist/rust")
+            dir.join("dist/rust/src")
                 .join(module)
                 .join("types.rs")
                 .is_file(),

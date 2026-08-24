@@ -98,13 +98,13 @@ fn rust_folds_a_modules_internal_group_into_its_public_file() {
         !paths.iter().any(|p| p.contains("internal")),
         "no Rust file is named for its audience, got {paths:?}"
     );
-    let types = text_at(&files, "rust/payments/types.rs");
+    let types = text_at(&files, "rust/src/payments/types.rs");
     assert!(types.contains("pub struct Charge {"));
     // The ledger is reached from nothing public, so it is the module's own
     // business and rides the same file, out of reach.
     assert!(types.contains("pub(crate) struct Ledger {"));
     assert!(types.contains("#[allow(dead_code)]"));
-    assert!(text_at(&files, "rust/payments/mod.rs").contains("pub mod types;"));
+    assert!(text_at(&files, "rust/src/payments/mod.rs").contains("pub mod types;"));
 }
 
 #[test]
@@ -128,10 +128,10 @@ fn generate_splits_each_target_that_has_serialization_to_emit() {
     assert_eq!(
         paths,
         vec![
-            format!("rust{sep}number.rs"),
-            format!("rust{sep}payments{sep}types.rs"),
-            format!("rust{sep}lib.rs"),
-            format!("rust{sep}payments{sep}mod.rs"),
+            format!("rust{sep}src{sep}number.rs"),
+            format!("rust{sep}src{sep}payments{sep}types.rs"),
+            format!("rust{sep}src{sep}lib.rs"),
+            format!("rust{sep}src{sep}payments{sep}mod.rs"),
             format!("go{sep}payments{sep}types.go"),
             format!("typescript{sep}number.ts"),
             format!("typescript{sep}payments{sep}types.ts"),
@@ -147,12 +147,12 @@ fn generate_splits_each_target_that_has_serialization_to_emit() {
         .iter()
         .filter(|f| f.path.extension().is_some_and(|e| e != "json"))
         .all(|f| f.text.starts_with(BANNER)));
-    assert!(text_at(&files, "rust/number.rs").contains("pub mod i64_string"));
+    assert!(text_at(&files, "rust/src/number.rs").contains("pub mod i64_string"));
     // One module shares nothing, so the branded well-known types would ride
     // its public group rather than a group of their own; no field names one,
     // so none is emitted at all.
-    assert!(!text_at(&files, "rust/payments/types.rs").contains("pub struct Timestamp"));
-    assert!(text_at(&files, "rust/payments/types.rs").contains("pub struct Charge"));
+    assert!(!text_at(&files, "rust/src/payments/types.rs").contains("pub struct Timestamp"));
+    assert!(text_at(&files, "rust/src/payments/types.rs").contains("pub struct Charge"));
     assert!(text_at(&files, "go/payments/types.go").contains("package payments"));
     assert!(text_at(&files, "go/payments/types.go").contains("type Charge struct"));
     assert!(text_at(&files, "typescript/payments/types.ts").contains("export interface Charge"));
@@ -177,8 +177,12 @@ fn a_union_module_splits_go_and_typescript_but_rusts_derive_keeps_it_single() {
     // both get an internal group. Rust's tagged-union enum derives its serde on
     // the type with no wide integer, bytes, or open enum in the module, so
     // there is nothing internal for it to hold.
-    assert!(paths.contains(&"rust/payments/types.rs".replace('/', std::path::MAIN_SEPARATOR_STR)));
-    assert!(!paths.contains(&"rust/payments/codec.rs".replace('/', std::path::MAIN_SEPARATOR_STR)));
+    assert!(
+        paths.contains(&"rust/src/payments/types.rs".replace('/', std::path::MAIN_SEPARATOR_STR))
+    );
+    assert!(
+        !paths.contains(&"rust/src/payments/codec.rs".replace('/', std::path::MAIN_SEPARATOR_STR))
+    );
     let go_types = text_at(&files, "go/payments/types.go");
     let go_internal = text_at(&files, "go/payments/codec.go");
     // Both groups keep their banner and the module's package clause; the split
@@ -254,7 +258,7 @@ fn a_module_with_operations_generates_the_error_surface_in_every_target() {
 
     // Rust: the enum root, the Api payload enum, the async client trait, and
     // the discriminator in the internal group.
-    let rust_types = text_of("rust/payments/types.rs");
+    let rust_types = text_of("rust/src/payments/types.rs");
     assert!(rust_types.contains("pub enum TonoError {"));
     assert!(rust_types.contains("Undeclared(APIError),"));
     assert!(rust_types.contains("async fn get_charge(&self) -> Result<Charge, TonoError>;"));
@@ -405,8 +409,8 @@ fn dotted_modules_map_to_idiomatic_sub_packages() {
     let paths = paths_of(&files);
     // Rust and TypeScript use the dotted path as a file path; Go nests the
     // file inside a package directory named for the last segment.
-    assert!(paths.contains(&"rust/payments/common/types.rs".to_string()));
-    assert!(paths.contains(&"rust/payments/charge/types.rs".to_string()));
+    assert!(paths.contains(&"rust/src/payments/common/types.rs".to_string()));
+    assert!(paths.contains(&"rust/src/payments/charge/types.rs".to_string()));
     assert!(paths.contains(&"go/payments/common/types.go".to_string()));
     assert!(paths.contains(&"typescript/payments/common/types.ts".to_string()));
     assert!(paths.contains(&"typescript/payments/charge/types.ts".to_string()));
@@ -416,7 +420,7 @@ fn dotted_modules_map_to_idiomatic_sub_packages() {
     // to the importing file. The Go cross-package import needs the module path
     // and is covered by [`go_module_prefix_makes_cross_package_imports_absolute`];
     // emitting it without a module path is rejected by [`check_layout`].
-    assert!(text_at(&files, "rust/payments/charge/types.rs")
+    assert!(text_at(&files, "rust/src/payments/charge/types.rs")
         .contains("use crate::payments::common::types::Money;"));
     assert!(
         text_at(&files, "typescript/payments/charge/types.ts").contains("from \"../common/types\"")
@@ -426,11 +430,11 @@ fn dotted_modules_map_to_idiomatic_sub_packages() {
 
     // Rust gets a module tree so the crate paths resolve, and each module
     // re-exports its public groups.
-    assert!(paths.contains(&"rust/payments/mod.rs".to_string()));
-    let namespace = text_at(&files, "rust/payments/mod.rs");
+    assert!(paths.contains(&"rust/src/payments/mod.rs".to_string()));
+    let namespace = text_at(&files, "rust/src/payments/mod.rs");
     assert!(namespace.contains("pub mod common;"));
     assert!(namespace.contains("pub mod charge;"));
-    assert!(text_at(&files, "rust/payments/common/mod.rs").contains("pub use types::*;"));
+    assert!(text_at(&files, "rust/src/payments/common/mod.rs").contains("pub use types::*;"));
     // TypeScript gets a barrel per module, and the package's exports map lists
     // exactly those.
     assert!(text_at(&files, "typescript/payments/common/index.ts").contains("from \"./types\";"));
@@ -459,9 +463,9 @@ fn flatten_collapses_modules_into_flat_packages() {
     };
     let files = generate(&sub_package_model(), &[TargetKind::Rust], &config).unwrap();
     let paths = paths_of(&files);
-    assert!(paths.contains(&"rust/payments_common/types.rs".to_string()));
-    assert!(paths.contains(&"rust/payments_charge/types.rs".to_string()));
-    assert!(text_at(&files, "rust/payments_charge/types.rs")
+    assert!(paths.contains(&"rust/src/payments_common/types.rs".to_string()));
+    assert!(paths.contains(&"rust/src/payments_charge/types.rs".to_string()));
+    assert!(text_at(&files, "rust/src/payments_charge/types.rs")
         .contains("use crate::payments_common::types::Money;"));
 }
 
@@ -474,9 +478,9 @@ fn remap_rewrites_the_module_prefix_in_paths_and_imports() {
     };
     let files = generate(&sub_package_model(), &[TargetKind::Rust], &config).unwrap();
     let paths = paths_of(&files);
-    assert!(paths.contains(&"rust/billing/common/types.rs".to_string()));
-    assert!(paths.contains(&"rust/billing/charge/types.rs".to_string()));
-    assert!(text_at(&files, "rust/billing/charge/types.rs")
+    assert!(paths.contains(&"rust/src/billing/common/types.rs".to_string()));
+    assert!(paths.contains(&"rust/src/billing/charge/types.rs".to_string()));
+    assert!(text_at(&files, "rust/src/billing/charge/types.rs")
         .contains("use crate::billing::common::types::Money;"));
 }
 
@@ -602,12 +606,12 @@ fn rust_entry_resolution_helpers_prune_to_only_what_the_model_uses() {
     );
     let files = generate(&plain, &[TargetKind::Rust], &CodegenConfig::default()).unwrap();
     let paths = paths_of(&files);
-    assert!(paths.contains(&"rust/env.rs".to_string()));
+    assert!(paths.contains(&"rust/src/env.rs".to_string()));
     assert!(!paths.iter().any(|p| p.contains("casing")));
     assert!(!paths.iter().any(|p| p.contains("duration")));
-    let env = text_at(&files, "rust/env.rs");
+    let env = text_at(&files, "rust/src/env.rs");
     assert!(env.contains("pub fn read_env"));
-    let entry = text_at(&files, "rust/payments/client.rs");
+    let entry = text_at(&files, "rust/src/payments/client.rs");
     assert!(entry.contains("use crate::env::read_env;"));
 
     // A single `@str::kebab` transform pulls in exactly that transform (and
@@ -626,8 +630,8 @@ fn rust_entry_resolution_helpers_prune_to_only_what_the_model_uses() {
     );
     let files = generate(&kebabed, &[TargetKind::Rust], &CodegenConfig::default()).unwrap();
     let paths = paths_of(&files);
-    assert!(paths.contains(&"rust/casing.rs".to_string()));
-    let casing = text_at(&files, "rust/casing.rs");
+    assert!(paths.contains(&"rust/src/casing.rs".to_string()));
+    let casing = text_at(&files, "rust/src/casing.rs");
     assert!(casing.contains("fn str_kebab"));
     assert!(!casing.contains("fn str_snake"));
     assert!(!casing.contains("fn str_pascal"));
@@ -714,7 +718,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
         ],
     };
     let files = generate(&model, &[TargetKind::Rust], &CodegenConfig::default()).unwrap();
-    let entry = text_at(&files, "rust/payments/charges/client.rs");
+    let entry = text_at(&files, "rust/src/payments/charges/client.rs");
     assert!(entry.contains("use crate::payments::charges::types::*;"));
     // The op's input type is declared in the entry's own module, already
     // covered by the glob above; a second, individually-collected import

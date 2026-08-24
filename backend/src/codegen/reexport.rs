@@ -85,7 +85,9 @@ fn declare(name: &str, decl: RustDecl) -> String {
 /// groups so a consumer names `sdk::payments::Charge` rather than reaching into
 /// the group a declaration happens to live in.
 pub fn rust_module_tree(groups: &[Group]) -> Vec<GeneratedFile> {
-    let root = PathBuf::from(TargetKind::Rust.dir());
+    // The crate root is `src/`, where Cargo looks for `lib.rs`; the walk up
+    // from each group stops there, never at the target directory itself.
+    let root = PathBuf::from(TargetKind::Rust.dir()).join(layout::RUST_SRC);
     let mut dirs: BTreeMap<PathBuf, RustDir> = BTreeMap::new();
     dirs.entry(root.clone()).or_default();
     for group in groups {
@@ -274,7 +276,7 @@ mod tests {
     #[test]
     fn the_crate_root_declares_its_children_and_keeps_the_shared_group_private() {
         let files = rust_module_tree(&payments());
-        let lib = text_at(&files, "rust/lib.rs");
+        let lib = text_at(&files, "rust/src/lib.rs");
         assert!(lib.contains("pub mod payments;"));
         // The shared group is a private module named for its contents:
         // unreachable from outside the crate, reachable from inside it.
@@ -288,7 +290,7 @@ mod tests {
     #[test]
     fn a_module_declares_its_groups_and_re_exports_the_public_ones() {
         let files = rust_module_tree(&payments());
-        let charges = text_at(&files, "rust/payments/charges/mod.rs");
+        let charges = text_at(&files, "rust/src/payments/charges/mod.rs");
         assert!(charges.contains("pub mod types;"));
         assert!(charges.contains("pub mod client;"));
         assert!(charges.contains("pub use types::*;"));
@@ -299,7 +301,7 @@ mod tests {
         assert!(!charges.contains("internal"));
         assert!(charges.contains("pub mod types;"));
         // The namespace directory above the modules only declares them.
-        let namespace = text_at(&files, "rust/payments/mod.rs");
+        let namespace = text_at(&files, "rust/src/payments/mod.rs");
         assert!(namespace.contains("pub mod charges;"));
         assert!(namespace.contains("pub mod common;"));
     }
@@ -340,7 +342,7 @@ mod tests {
         groups.push(Group::tests("payments.charges", "client", false));
         groups.push(Group::tests("payments.charges", "client", true));
         let rust = rust_module_tree(&groups);
-        let charges = text_at(&rust, "rust/payments/charges/mod.rs");
+        let charges = text_at(&rust, "rust/src/payments/charges/mod.rs");
         // Compiled only under `cargo test`, never re-exported: the shipped SDK
         // carries the file without building it.
         assert!(charges.contains("#[cfg(test)]\nmod client_test;"));
@@ -362,8 +364,8 @@ mod tests {
             Group::module_internal("notes"),
         ];
         let rust = rust_module_tree(&groups);
-        assert!(text_at(&rust, "rust/lib.rs").contains("pub mod notes;"));
-        assert!(text_at(&rust, "rust/notes/mod.rs").contains("pub use admin::*;"));
+        assert!(text_at(&rust, "rust/src/lib.rs").contains("pub mod notes;"));
+        assert!(text_at(&rust, "rust/src/notes/mod.rs").contains("pub use admin::*;"));
         let ts = typescript_barrels(&exporting(groups));
         assert!(text_at(&ts, "typescript/notes/index.ts").contains("from \"./admin\";"));
         assert!(text_at(&ts, "typescript/package.json").contains("\"./notes\""));

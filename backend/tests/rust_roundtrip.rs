@@ -58,8 +58,7 @@ fn generated_rust_compiles_and_round_trips() {
         &rust_casing(),
     )
     .expect("generates");
-    let root = dir.join("src");
-    let _ = std::fs::remove_dir_all(root.join("models"));
+    let _ = std::fs::remove_dir_all(dir.join("src").join("models"));
     let formatter = Formatter::new("rustfmt", vec!["--edition".into(), "2021".into()]);
     for file in files {
         let formatted = formatter.run(&file.text);
@@ -68,11 +67,13 @@ fn generated_rust_compiles_and_round_trips() {
             "rustfmt must format cleanly: {:?}",
             formatted.warning
         );
+        // Generated paths already carry the crate's `src/` segment, so
+        // stripping the target prefix lands them at the harness crate's root.
         let relative = file
             .path
             .strip_prefix(TargetKind::Rust.dir())
             .expect("target-rooted path");
-        let out = root.join(relative);
+        let out = dir.join(relative);
         std::fs::create_dir_all(out.parent().expect("a parent")).expect("create module dir");
         std::fs::write(&out, &formatted.text).expect("write models source");
     }

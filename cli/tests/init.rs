@@ -122,7 +122,8 @@ fn gen_works_immediately_after_init_with_no_extra_flags() {
     assert!(ok, "init failed: {stderr}");
 
     assert!(gen_via_stdin(&dir), "gen should auto-discover tono.toml");
-    for (sub, ext) in [("rust", "rs"), ("go", "go"), ("typescript", "ts")] {
+    // Rust sources sit under the crate's `src/`; the other targets are flat.
+    for (sub, ext) in [("rust/src", "rs"), ("go", "go"), ("typescript", "ts")] {
         let path = dir
             .join("dist")
             .join(sub)
