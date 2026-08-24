@@ -25,11 +25,12 @@ use tono_backend::codegen::fixtures::per_lang_handle::per_lang_handle_model;
 use tono_backend::codegen::modules::CodegenConfig;
 use tono_backend::codegen::pipeline::generate_target;
 use tono_backend::codegen::targets::go::entry::ext_fixtures::{
-    composed_handles_model, ctx_extern_model, reference_example_model,
+    composed_handles_model, ctx_extern_model, field, member, reference_example_model, string_t,
+    structure,
 };
 use tono_backend::codegen::targets::go::types::go_casing;
 use tono_backend::codegen::{Formatter, TargetKind};
-use tono_backend::ir::Model;
+use tono_backend::ir::{Model, Prim, ShapeKind, Source, Tref};
 
 fn have(tool: &str, probe: &str) -> bool {
     Command::new(tool)
@@ -204,6 +205,87 @@ fn the_appendix_worked_example_declared_tests_pass_hermetically() {
     assert!(
         test.status.success(),
         "the generated hermetic declared tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&test.stdout),
+        String::from_utf8_lossy(&test.stderr)
+    );
+    let out = String::from_utf8_lossy(&test.stdout);
+    assert!(
+        out.contains("PASS"),
+        "expected at least one passing test:\n{out}"
+    );
+}
+
+/// The appendix fixture with three more `@arg` fields whose pinned values
+/// have no Go spelling in JSON (a list of floats, an empty list of strings,
+/// a structure holding a list and an optional scalar), pinned by every
+/// declared test's construction. `write_sdk` proves the emitted `_test.go`
+/// is what gofmt accepts; `go test` proves it compiles and still passes.
+#[test]
+fn a_pinned_list_or_structure_argument_formats_compiles_and_passes() {
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        eprintln!("skipping under cargo-llvm-cov; run via `cargo test --test go_ext_roundtrip`");
+        return;
+    }
+    if !have("go", "version") || !have("gofmt", "-h") {
+        eprintln!("skipping: Go toolchain (go/gofmt) not available");
+        return;
+    }
+    let _guard = FIXTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut model = reference_example_model();
+    let module = &mut model.modules[0];
+    module.shapes.push(structure(
+        "m#reading",
+        vec![
+            member("xs", Tref::List(Box::new(Tref::Prim(Prim::I32))), true),
+            member("tag", string_t(), false),
+        ],
+    ));
+    for shape in &mut module.shapes {
+        if let ShapeKind::Entry { fields, .. } = &mut shape.kind {
+            fields.push(field(
+                "samples",
+                Tref::List(Box::new(Tref::Prim(Prim::Float))),
+                vec![Source::Arg],
+            ));
+            fields.push(field(
+                "names",
+                Tref::List(Box::new(string_t())),
+                vec![Source::Arg],
+            ));
+            fields.push(field(
+                "inner",
+                Tref::Ref {
+                    id: "m#reading".into(),
+                    args: vec![],
+                },
+                vec![Source::Arg],
+            ));
+        }
+    }
+    for test in &mut module.tests {
+        for construction in &mut test.constructions {
+            let values = &mut construction.values;
+            values.insert("samples".into(), serde_json::json!([1.0, 2.0, 3.0]));
+            values.insert("names".into(), serde_json::json!([]));
+            values.insert(
+                "inner".into(),
+                serde_json::json!({"xs": [1, 2], "tag": "t"}),
+            );
+        }
+    }
+    let dir = write_sdk(&model, APPENDIX_GO_MOD_DEPS);
+    let test = Command::new("go")
+        .arg("test")
+        .arg("./...")
+        .arg("-run")
+        .arg("Test")
+        .arg("-v")
+        .current_dir(&dir)
+        .output()
+        .expect("run go test");
+    assert!(
+        test.status.success(),
+        "the declared tests with composite pinned arguments failed:\n{}\n{}",
         String::from_utf8_lossy(&test.stdout),
         String::from_utf8_lossy(&test.stderr)
     );

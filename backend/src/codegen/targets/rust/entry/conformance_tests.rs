@@ -9,8 +9,8 @@ use super::*;
 use crate::codegen::targets::rust::rust_casing;
 use crate::codegen::test_support::{bare_entry_field, push_entry_field, rendered};
 use crate::ir::{
-    FieldPattern, HttpAnswer, RequestPattern, StubAnswer, StubDep, TaxonomyPattern, TestCall,
-    TestConstruction, TestDecl, TestExpect, TestPattern, TestStub,
+    FieldPattern, HttpAnswer, RequestPattern, Source, StubAnswer, StubDep, TaxonomyPattern,
+    TestCall, TestConstruction, TestDecl, TestExpect, TestPattern, TestStub,
 };
 
 fn construction() -> TestConstruction {
@@ -301,4 +301,39 @@ fn impl_stubbed_tests_are_skipped_for_rust() {
     // Only impl-stubbed tests: nothing is emitted at all.
     module.tests = vec![impl_test];
     assert!(super::vector_tests::test_files(&module, &rust_casing()).is_empty());
+}
+
+#[test]
+fn a_pinned_list_is_a_vec_literal() {
+    let mut module = simple_entry_module();
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "samples",
+            Tref::List(Box::new(Tref::Prim(Prim::Float))),
+            vec![Source::Arg],
+        ),
+    );
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "names",
+            Tref::List(Box::new(Tref::Prim(Prim::String))),
+            vec![Source::Arg],
+        ),
+    );
+    let mut construction = construction();
+    construction
+        .values
+        .insert("samples".into(), serde_json::json!([1.0, 2.0, 3.0]));
+    let mut test = create_charge_tests().remove(0);
+    test.constructions = vec![construction];
+    module.tests = vec![test];
+    let files = super::vector_tests::test_files(&module, &rust_casing());
+    let hermetic = rendered(&files[0].file.decls, &RustRules::default());
+    // The pinned list is a `vec!` of typed literals; the unpinned `names`
+    // gets the empty one.
+    assert!(hermetic.contains(
+        "let c = Client::new_with_transport(Some(transport), \"k\".to_string(), vec![1f64, 2f64, 3f64], vec![]).expect(\"construct client\");"
+    ), "{hermetic}");
 }

@@ -5,8 +5,10 @@
 use super::super::tests::fixture_module;
 use crate::codegen::targets::typescript::types::ts_casing;
 use crate::codegen::targets::typescript::TsRules;
-use crate::codegen::test_support::{impl_extension, notes_bed, rendered, wired, with_tests};
-use crate::ir::TestPattern;
+use crate::codegen::test_support::{
+    bare_entry_field, impl_extension, notes_bed, push_entry_field, rendered, wired, with_tests,
+};
+use crate::ir::{Prim, Source, TestPattern, Tref};
 
 /// An `ext impl` binding for the fixture's `save_note`.
 fn impl_ext() -> crate::ir::Extension {
@@ -139,4 +141,27 @@ fn a_single_http_answer_returns_directly_without_sequence_machinery() {
     );
     assert!(!text.contains("const responses"));
     assert!(!text.contains("Math.min"));
+}
+
+#[test]
+fn a_pinned_list_is_an_array_literal() {
+    let bed = notes_bed();
+    let mut module = fixture_module();
+    push_entry_field(
+        &mut module,
+        bare_entry_field(
+            "samples",
+            Tref::List(Box::new(Tref::Prim(Prim::Float))),
+            vec![Source::Arg],
+        ),
+    );
+    let mut test = bed.outcome_test("answers", TestPattern::Eq(bed.input.clone()));
+    test.constructions[0]
+        .values
+        .insert("samples".into(), serde_json::json!([1.0, 2.0, 3.0]));
+    let module = wired(module, vec![test]);
+    let files = super::test_files(&module, &ts_casing());
+    let text = rendered(&files[0].file.decls, &TsRules);
+    // The JSON spelling of a list of scalars is already the TypeScript one.
+    assert!(text.contains("const c = Client.forTest({ transport }, \"k\", [1.0,2.0,3.0]);"));
 }

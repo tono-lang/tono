@@ -216,9 +216,12 @@ fn construction_args(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> (String, Stri
         .entry
         .args()
         .iter()
-        .map(|f| match ctx.values().get(&f.name) {
-            Some(v) => super::literal(&f.target, v),
-            None => super::literal(&f.target, &serde_json::Value::String(String::new())),
+        .map(|f| {
+            push_type_symbols(&f.target, refs);
+            match ctx.values().get(&f.name) {
+                Some(v) => pinned_literal(ctx.module, ctx.config, &f.target, v),
+                None => zero_literal(ctx.module, &f.target),
+            }
         })
         .collect();
     let opts: Vec<String> = ctx
@@ -231,7 +234,7 @@ fn construction_args(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> (String, Stri
             Some(format!(
                 "{}({})",
                 with_option_name(ctx.entry.name, f, ctx.multi),
-                super::literal(&f.target, v)
+                pinned_literal(ctx.module, ctx.config, &f.target, v)
             ))
         })
         .collect();
@@ -491,7 +494,7 @@ fn declared_error_literal(ctx: &TestCtx<'_>, shape: &str, data: &serde_json::Val
                     Some(format!(
                         "{}: {}, ",
                         super::field_pascal(&member.name, ctx.config),
-                        super::literal(&member.target, value)
+                        pinned_literal(ctx.module, ctx.config, &member.target, value)
                     ))
                 })
                 .collect()
@@ -654,6 +657,9 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Vec<Decl> {
 #[path = "vector_extern.rs"]
 mod vector_extern;
 use vector_extern::extern_override_args;
+#[path = "vector_values.rs"]
+mod values;
+use values::{pinned_literal, zero_literal};
 
 /// One live test: no stub and no pinned environment; construction reads the
 /// ambient env (real credentials), and the same expectations verify that the
