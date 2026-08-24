@@ -1,0 +1,27 @@
+// Capability 17, the Rust side: a chain is two calls and @async names one,
+// so which link is awaited (and which carries the ?) is undeclared. The
+// generator refuses the binding naming the chained method; this probe
+// passes when generation is refused.
+ext mathkit {
+  rust { #(mathkit) }
+
+  struct session {
+    rust { #(Client) }
+
+    op read(key: string): string {
+      rust { call: #(read)(key).#(result)() }
+    }
+  }
+
+  op open(addr: string): session {
+    rust { call: #(open)(addr) }
+  }
+}
+
+pub struct client {
+  addr: string @arg
+  session: mathkit.session = mathkit.open(.addr)
+
+  op read(key: string): string
+    impl .session.read(.key)
+}

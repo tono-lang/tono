@@ -297,13 +297,17 @@ type returns_lit = {
    (`#(Load)`), a generic instantiation (`#(FromConstant[float64])`), a
    class constructed with `new` (`#(new ConstantCalculator)`), or a static
    method on a type (`#(FormulaCalculator::parse)`); the target reads only
-   the head identifier out of it, to import. *)
+   the head identifier out of it, to import. [elb_call_chain] is the one
+   method the line may chain on the object the call returned
+   (`#(Get)(key).#(Result)()`): the value, and the error, come out of that
+   method rather than the call itself, so yields/returns describe it. *)
 type extern_lang_body = {
   elb_lang : string;
   elb_lang_span : Span.span;
   elb_call_symbol : string;
   elb_call_symbol_span : Span.span;
   elb_call_args : call_arg list;
+  elb_call_chain : nested_call option;
   elb_yields : yields_pos list option;
   elb_returns : returns_lit option;
   elb_span : Span.span;

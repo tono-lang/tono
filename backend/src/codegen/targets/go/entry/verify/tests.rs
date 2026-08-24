@@ -292,3 +292,30 @@ fn a_generated_type_reference_skips_the_binding_with_why() {
         assert!(p.skipped.contains(&why.to_string()), "{:?}", p.skipped);
     }
 }
+
+/// A method chained on the returned object is probed exactly as the emitter
+/// writes it, one expression, with the results bound off its last link: the
+/// library's own compiler then grades that Read returns something with a
+/// Result answering (float64, error).
+#[test]
+fn a_chained_method_is_probed_off_the_last_link() {
+    let mut m = gearbox_module();
+    let read = m.ext_libs[0].types[0]
+        .methods
+        .iter_mut()
+        .find(|d| d.name == "read")
+        .unwrap();
+    let go = read.langs.iter_mut().find(|l| l.lang == "go").unwrap();
+    go.chain = Some(crate::ir::SymbolCall {
+        symbol: "Result".into(),
+        args: vec![CallArg::Lit(serde_json::json!("fast"))],
+    });
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(
+        p.source.contains(
+            "tonoR0, tonoR1 = tonoRecv.Read(ctx).Result(\"fast\"); _, _ = tonoR0, tonoR1"
+        ),
+        "{}",
+        p.source
+    );
+}

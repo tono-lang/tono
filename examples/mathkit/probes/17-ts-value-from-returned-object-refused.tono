@@ -1,0 +1,27 @@
+// Capability 17, the TypeScript side: a chain is two calls and @async names
+// one, so which link is awaited is undeclared. The generator refuses the
+// binding naming the chained method; this probe passes when generation is
+// refused (tono check skips the binding it has no expression to mirror).
+ext mathkit {
+  ts { #(@tono-ext-fixture/mathkit) }
+
+  struct session {
+    ts { #(Client) }
+
+    op read(key: string): string {
+      ts { call: #(read)(key).#(result)() }
+    }
+  }
+
+  op open(addr: string): session {
+    ts { call: #(open)(addr) }
+  }
+}
+
+pub struct client {
+  addr: string @arg
+  session: mathkit.session = mathkit.open(.addr)
+
+  op read(key: string): string
+    impl .session.read(.key)
+}

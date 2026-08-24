@@ -249,6 +249,7 @@ mod tests {
                         call_args: vec![CallArg::Ref(vec!["request".into()])],
                         yields: vec![],
                         returns: None,
+                        chain: None,
                     }],
                     r#async: if sync { vec![] } else { vec!["rust".into()] },
                     errors: vec![],

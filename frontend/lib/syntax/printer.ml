@@ -457,10 +457,16 @@ let print_returns ~indent (r : Ast.returns_lit) : string =
     ("returns: " ^ print_ty r.Ast.rl_type)
     (List.map (print_returns_field ~indent:(indent ^ "  ")) r.Ast.rl_fields)
 
-let print_call ~indent (symbol : string) (args : Ast.call_arg list) : string =
-  indent ^ "call: " ^ foreign_spelling symbol ^ "("
-  ^ String.concat ", " (List.map print_call_arg args)
+let print_call ~indent (b : Ast.extern_lang_body) : string =
+  indent ^ "call: "
+  ^ foreign_spelling b.Ast.elb_call_symbol
+  ^ "("
+  ^ String.concat ", " (List.map print_call_arg b.Ast.elb_call_args)
   ^ ")"
+  ^
+  match b.Ast.elb_call_chain with
+  | None -> ""
+  | Some nc -> "." ^ print_nested_call nc
 
 (* A binding with only a call: line prints on one line, the common case
    ("go { call: #(Compute)(#(ctx context.Context)) }"); one with yields or
@@ -469,13 +475,9 @@ let print_extern_lang_body ~indent (b : Ast.extern_lang_body) : string =
   let inner = indent ^ "  " in
   match (b.Ast.elb_yields, b.Ast.elb_returns) with
   | None, None ->
-      indent ^ b.Ast.elb_lang ^ " { "
-      ^ print_call ~indent:"" b.Ast.elb_call_symbol b.Ast.elb_call_args
-      ^ " }"
+      indent ^ b.Ast.elb_lang ^ " { " ^ print_call ~indent:"" b ^ " }"
   | yields, returns ->
-      let call_line =
-        [ print_call ~indent:inner b.elb_call_symbol b.elb_call_args ]
-      in
+      let call_line = [ print_call ~indent:inner b ] in
       let yields_line =
         match yields with
         | Some ys -> [ print_yields ~indent:inner ys ]

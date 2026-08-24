@@ -227,3 +227,38 @@ func Connect(opt *Options) (*Client, error) {
 	}
 	return &Client{addr: opt.Addr, greeting: opt.Greeting}, nil
 }
+
+// ErrMissing is the error a Reading carries for a key the session has no
+// value for.
+var ErrMissing = errors.New("mathkit: no such key")
+
+// Reading is what Read answers: the value and the error travel inside it
+// and are read later through Result, the command shape of Go clients. The
+// call itself returns only the object, never (T, error).
+type Reading struct {
+	value string
+	err   error
+}
+
+// Result answers what Read found, or the error it hit.
+func (r *Reading) Result() (string, error) {
+	return r.value, r.err
+}
+
+// Read looks key up in the session. It never fails by itself: the outcome,
+// value or error, is inside the Reading, so a generated SDK must call
+// Result on what Read returned to reach either.
+func (c *Client) Read(ctx context.Context, key string) *Reading {
+	switch key {
+	case "addr":
+		return &Reading{value: c.addr}
+	case "greeting":
+		greeting := c.greeting
+		if greeting == "" {
+			greeting = "pong"
+		}
+		return &Reading{value: greeting}
+	default:
+		return &Reading{err: fmt.Errorf("%w: %q", ErrMissing, key)}
+	}
+}

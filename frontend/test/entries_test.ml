@@ -260,8 +260,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_30 () =
-  Alcotest.(check int) "wire version" 30 Ir_json.current_ir_version
+let version_is_31 () =
+  Alcotest.(check int) "wire version" 31 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -634,7 +634,7 @@ let () =
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 30" `Quick version_is_30;
+          Alcotest.test_case "version 31" `Quick version_is_31;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",

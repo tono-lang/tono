@@ -1,0 +1,30 @@
+// Capability 17 (Go): the value comes from a method of the object the call
+// returned. Read(ctx, key) answers a *Reading, and the value and the error
+// come out of Result() on it: the call itself returns one value, never
+// (T, error). The call: line chains that method,
+// `#(Read)(#(ctx context.Context), key).#(Result)()`, and the return
+// convention describes the last link; the context stays on the first call,
+// where the library takes it.
+ext mathkit {
+  go { #(tono-ext-fixture/mathkit) }
+
+  struct session {
+    go { #(*Client) }
+
+    op read(key: string): string {
+      go { call: #(Read)(#(ctx context.Context), key).#(Result)() }
+    }
+  }
+
+  op open(addr: string): session {
+    go { call: #(Open)(addr) }
+  }
+}
+
+pub struct client {
+  addr: string @arg
+  session: mathkit.session = mathkit.open(.addr)
+
+  op read(key: string): string
+    impl .session.read(.key)
+}

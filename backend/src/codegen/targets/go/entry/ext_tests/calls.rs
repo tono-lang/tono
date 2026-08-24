@@ -35,6 +35,7 @@ fn a_versioned_go_module_path_still_selects_by_the_ext_lib_name() {
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
+                chain: None,
             }],
             r#async: vec![],
             errors: vec![],
@@ -179,6 +180,7 @@ fn lib_missing(lib_langs: Vec<LangPath>, fn_name: &str, fn_lang: &str) -> ExtLib
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
+                chain: None,
             }],
             r#async: vec![],
             errors: vec![],
@@ -210,6 +212,7 @@ fn simple_go_lib(lib_name: &str, fn_name: &str, symbol: &str, return_ty: Tref) -
                 call_args: vec![],
                 yields: vec![],
                 returns: None,
+                chain: None,
             }],
             r#async: vec![],
             errors: vec![],
@@ -327,6 +330,7 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
                     },
                 ],
                 returns: None,
+                chain: None,
             }],
             r#async: vec![],
             errors: vec![],
@@ -341,6 +345,53 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
     let out = call_assign_for(&module, &config_field);
     assert!(out.contains("configErr, configBody := lib.Fetch()"));
     assert!(out.contains("s.Config = configBody"));
+}
+
+/// The value comes from a method of the object the call returned
+/// (`Read(ctx, key).Result()`): the chain is written as one expression,
+/// the chained method's own arguments rendered like the call's, and the
+/// LHS binds what the last link returns under the ordinary convention.
+#[test]
+fn call_assign_writes_the_chained_method_as_one_expression() {
+    let lib = ExtLib {
+        name: "lib".into(),
+        langs: vec![LangPath {
+            lang: "go".into(),
+            path: "company/lib".into(),
+        }],
+        structs: vec![],
+        types: vec![],
+        externs: vec![ExternDecl {
+            name: "fetch".into(),
+            params: vec![],
+            r#return: string_t(),
+            langs: vec![ExternLang {
+                lang: "go".into(),
+                symbol: "Fetch".into(),
+                call_args: vec![CallArg::Lit(serde_json::json!("key"))],
+                yields: vec![],
+                returns: None,
+                chain: Some(crate::ir::SymbolCall {
+                    symbol: "Result".into(),
+                    args: vec![CallArg::Lit(serde_json::json!(2))],
+                }),
+            }],
+            r#async: vec![],
+            errors: vec![],
+        }],
+    };
+    let call = EntryCall {
+        ns: "lib".into(),
+        func: "fetch".into(),
+        args: vec![],
+    };
+    let (module, config_field) = module_with_call_field(vec![lib], call);
+    let out = call_assign_for(&module, &config_field);
+    assert!(
+        out.contains("configResult, configErr := lib.Fetch(\"key\").Result(2)"),
+        "{out}"
+    );
+    assert!(out.contains("s.Config = configResult"), "{out}");
 }
 
 /// The motivating case for generic handle instantiation: a free extern

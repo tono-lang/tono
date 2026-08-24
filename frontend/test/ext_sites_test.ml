@@ -29,6 +29,10 @@ let src =
     go { call: #(Tune[float64])(name, #(WithPrecision)(4), "fine") }
     ts { call: #(tune)([1, 2], .name) }
   }
+
+  op fetch(key: string): string {
+    go { call: #(Fetch)(#(ctx context.Context), key).#(Result)() }
+  }
 }
 |}
 
@@ -51,7 +55,14 @@ let span s =
   | None -> "<missing>"
 
 let every_binding_has_a_site () =
-  Alcotest.(check int) "site count" 11 (List.length (sites ()))
+  Alcotest.(check int) "site count" 12 (List.length (sites ()))
+
+(* The method chained on the returned object is part of the call: line, so
+   a finding about the binding covers it. *)
+let chained_method_extends_the_call_line () =
+  Alcotest.(check string)
+    "go op call with a chain" "31:16-63"
+    (span (find Ext_sites.Op ~name:"fetch" "go"))
 
 let path_site_points_at_the_spelling () =
   Alcotest.(check string) "go path" "2:8-31" (span (find Ext_sites.Path "go"))
@@ -113,7 +124,7 @@ let cli_lists_one_object_per_line () =
   in
   Alcotest.(check int) "exit" 0 o.code;
   let lines = String.split_on_char '\n' (String.trim o.out) in
-  Alcotest.(check int) "lines" 11 (List.length lines);
+  Alcotest.(check int) "lines" 12 (List.length lines);
   Alcotest.(check bool)
     "first is the go path" true
     (String.length (List.hd lines) > 0
@@ -155,6 +166,8 @@ let () =
           Alcotest.test_case "method site" `Quick
             method_site_spans_the_call_line;
           Alcotest.test_case "op site" `Quick op_site_spans_the_call_line;
+          Alcotest.test_case "chained method" `Quick
+            chained_method_extends_the_call_line;
           Alcotest.test_case "nested call and literal" `Quick
             nested_call_and_literal_extend_the_call_line;
           Alcotest.test_case "json" `Quick json_shape;

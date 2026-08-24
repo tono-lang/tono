@@ -31,10 +31,16 @@ pub(crate) fn of_args<'a>(args: &'a [CallArg], out: &mut Vec<&'a str>) {
 }
 
 /// The spellings of one language block of an op: the callee, every
-/// spelling in its arguments, every `yields` position spelled foreign.
+/// spelling in its arguments, the method chained on the returned object
+/// and the spellings in its own arguments, every `yields` position spelled
+/// foreign.
 pub(crate) fn of_lang(lang: &ExternLang) -> Vec<&str> {
     let mut out = vec![lang.symbol.as_str()];
     of_args(&lang.call_args, &mut out);
+    if let Some(chain) = &lang.chain {
+        out.push(&chain.symbol);
+        of_args(&chain.args, &mut out);
+    }
     out.extend(lang.yields.iter().filter_map(|y| y.foreign.as_deref()));
     out
 }
@@ -131,7 +137,27 @@ mod tests {
                 foreign: Some("[]byte".into()),
             }],
             returns: None,
+            chain: None,
         }
+    }
+
+    /// The chained method and the spellings inside its own arguments are
+    /// walked after the call's, so a rule over spellings (a generated-type
+    /// reference, a probe's vocabulary) sees the whole line.
+    #[test]
+    fn the_chained_method_and_its_arguments_are_walked() {
+        let mut l = lang("Read", vec![CallArg::Param("key".into())]);
+        l.chain = Some(SymbolCall {
+            symbol: "Result[.reading]".into(),
+            args: vec![CallArg::ParamAs {
+                name: "n".into(),
+                spelling: "int".into(),
+            }],
+        });
+        assert_eq!(
+            of_lang(&l),
+            vec!["Read", "Result[.reading]", "int", "[]byte"]
+        );
     }
 
     #[test]

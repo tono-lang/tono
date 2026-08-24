@@ -500,6 +500,7 @@ mod tests {
                     call_args: vec![],
                     yields: vec![],
                     returns: None,
+                    chain: None,
                 })
                 .collect::<Vec<_>>()
         };

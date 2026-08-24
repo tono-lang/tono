@@ -30,15 +30,16 @@ let rec lower_call_arg ?(handles = []) ?(params = []) :
   | Ast.CaLit (Ast.LStr s, _) -> Ir.Ca_lit (`String s)
   | Ast.CaLit (Ast.LInt n, _) -> Ir.Ca_lit (`Int n)
   | Ast.CaLit (Ast.LFloat f, _) -> Ir.Ca_lit (`Float f)
-  | Ast.CaCall nc ->
-      Ir.Ca_symbol_call
-        {
-          Ir.scl_symbol = nc.nc_symbol;
-          scl_args = List.map (lower_call_arg ~handles ~params) nc.nc_args;
-        }
+  | Ast.CaCall nc -> Ir.Ca_symbol_call (lower_nested_call ~handles ~params nc)
   | Ast.CaList (items, _) ->
       Ir.Ca_list (List.map (lower_call_arg ~handles ~params) items)
   | Ast.CaForeign (s, _) -> Ir.Ca_foreign s
+
+and lower_nested_call ~handles ~params (nc : Ast.nested_call) : Ir.symbol_call =
+  {
+    Ir.scl_symbol = nc.nc_symbol;
+    scl_args = List.map (lower_call_arg ~handles ~params) nc.nc_args;
+  }
 
 and lower_call_ctor (c : Ast.ctor_arg) : Ir.call_ctor =
   {
@@ -153,6 +154,7 @@ let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags ~handles
     Ir.el_lang = b.elb_lang;
     el_symbol = b.elb_call_symbol;
     el_call_args = List.map (lower_call_arg ~handles ~params) b.elb_call_args;
+    el_chain = Option.map (lower_nested_call ~handles ~params) b.elb_call_chain;
     el_yields =
       (match b.elb_yields with
       | None -> []

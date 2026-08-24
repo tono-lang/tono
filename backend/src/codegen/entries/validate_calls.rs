@@ -249,6 +249,7 @@ fn extern_binds_every_target(
             }
         }
         class_reference_renders(site, *target, lang)?;
+        chained_call_renders(site, *target, lang)?;
         foreign_positions_bind(site, *target, lang)?;
         param_spellings_coerce(site, *target, module, lib, decl, lang)?;
         foreign_forms_declared(site, *target, module, lib, lang)?;
@@ -277,6 +278,27 @@ pub(super) fn class_reference_renders(
         Some(handle) if !target.emits_class_reference_args() => Err(format!(
             "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument; {} has no class reference to pass, bind a function that constructs it instead",
             target.binding_langs()[0],
+            target.dir()
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// A `call:` line chaining a method on the returned object
+/// (`#(Get)(key).#(Result)()`) is rejected for a target that cannot write
+/// the chain (see [`TargetKind::emits_chained_call`]), naming the site and
+/// the chained method, before any emitter could write a call whose second
+/// link has no declared convention.
+pub(super) fn chained_call_renders(
+    site: &str,
+    target: TargetKind,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    match &lang.chain {
+        Some(chain) if !target.emits_chained_call() => Err(format!(
+            "{site}: the {} block's call: line calls #({}) on the object the call returned; {} has no chained call: @async names one foreign call, and a chain of two leaves the second link's convention undeclared",
+            target.binding_langs()[0],
+            chain.symbol,
             target.dir()
         )),
         _ => Ok(()),

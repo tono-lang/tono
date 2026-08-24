@@ -82,6 +82,9 @@ let encode_extern_lang (l : Ir.extern_lang) : Ir.json =
        ("symbol", `String l.el_symbol);
        ("call_args", `List (List.map encode_call_arg l.el_call_args));
      ]
+    @ (match l.el_chain with
+      | None -> []
+      | Some sc -> [ ("chain", encode_call_arg (Ir.Ca_symbol_call sc)) ])
     @ (if l.el_yields = [] then []
        else [ ("yields", `List (List.map encode_yields_pos l.el_yields)) ])
     @
@@ -237,6 +240,15 @@ let decode_extern_lang j =
   let* lang = field kvs "lang" "language block" as_string in
   let* symbol = field kvs "symbol" "language block" as_string in
   let* call_args = list_field kvs "call_args" decode_call_arg in
+  let* chain =
+    match List.assoc_opt "chain" kvs with
+    | None -> Ok None
+    | Some v -> (
+        let* a = decode_call_arg v in
+        match a with
+        | Ir.Ca_symbol_call sc -> Ok (Some sc)
+        | _ -> err "language block chain must be a symbol call")
+  in
   let* yields = list_field kvs "yields" decode_yields_pos in
   let* returns =
     match List.assoc_opt "returns" kvs with
@@ -250,6 +262,7 @@ let decode_extern_lang j =
        el_lang = lang;
        el_symbol = symbol;
        el_call_args = call_args;
+       el_chain = chain;
        el_yields = yields;
        el_returns = returns;
      }

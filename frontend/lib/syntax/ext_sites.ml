@@ -32,12 +32,13 @@ let call_arg_span (a : Ast.call_arg) : Span.span =
   | Ast.CaCall nc -> nc.nc_span
 
 (* The [call:] line is what a target-side finding is attributed to: from the
-   callee spelling to the last argument, the part of the block that names
-   what is checked. *)
+   callee spelling to the last argument, or to the method chained on the
+   returned object, the part of the block that names what is checked. *)
 let call_span (b : Ast.extern_lang_body) : Span.span =
-  match List.rev b.elb_call_args with
-  | [] -> b.elb_call_symbol_span
-  | last :: _ -> Span.merge b.elb_call_symbol_span (call_arg_span last)
+  match (b.elb_call_chain, List.rev b.elb_call_args) with
+  | Some nc, _ -> Span.merge b.elb_call_symbol_span nc.nc_span
+  | None, [] -> b.elb_call_symbol_span
+  | None, last :: _ -> Span.merge b.elb_call_symbol_span (call_arg_span last)
 
 let of_extern ~ext ~owner (d : Ast.extern_decl) : site list =
   List.map
