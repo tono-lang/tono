@@ -172,6 +172,7 @@ pub fn load_config_extern(app_config_id: &str) -> ExternDecl {
             call_args: vec![CallArg::Ctor(CallCtor {
                 name: "ts_opts".into(),
                 fields: load_ctor_fields,
+                spelling: None,
             })],
             yields: vec![YieldsPos {
                 name: "cfg".into(),

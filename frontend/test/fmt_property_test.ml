@@ -210,6 +210,8 @@ let rec gen_call_arg n =
          Ast.CaRef r);
         (let+ c = gen_ctor_arg in
          Ast.CaCtor c);
+        (let+ c = gen_ctor_arg and+ sp = gen_spelling in
+         Ast.CaCtorAs (c, sp, dspan));
         (let+ n = gen_lname and+ sp = gen_spelling in
          Ast.CaParamAs (n, dspan, sp, dspan));
         (let+ sp = gen_spelling in

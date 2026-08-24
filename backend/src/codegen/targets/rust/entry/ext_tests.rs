@@ -566,6 +566,7 @@ fn impl_call_body_renders_every_call_arg_variant() {
                 fields: [("n".to_string(), CallArg::Lit(serde_json::json!(3)))]
                     .into_iter()
                     .collect(),
+                spelling: None,
             }),
             CallArg::Call(Box::new(EntryCall {
                 ns: "other".into(),
@@ -740,6 +741,7 @@ fn impl_call_body_renders_spelled_and_nested_arguments() {
                 fields: [("n".to_string(), CallArg::Lit(serde_json::json!(1)))]
                     .into_iter()
                     .collect(),
+                spelling: None,
             }),
         ],
         vec![],

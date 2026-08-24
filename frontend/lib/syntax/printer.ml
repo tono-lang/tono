@@ -142,6 +142,7 @@ and print_call_arg (a : Ast.call_arg) : string =
   | Ast.CaParam (n, _) -> n
   | Ast.CaRef r -> print_ref r
   | Ast.CaCtor c -> print_ctor_lit c
+  | Ast.CaCtorAs (c, sp, _) -> print_ctor_lit c ^ ": " ^ foreign_spelling sp
   | Ast.CaLit (Ast.LStr s, _) -> string_literal s
   | Ast.CaLit (Ast.LInt n, _) -> string_of_int n
   | Ast.CaLit (Ast.LFloat f, _) -> float_literal f

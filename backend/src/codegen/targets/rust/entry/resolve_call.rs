@@ -63,19 +63,55 @@ pub(super) fn coerce(
     spelling: &str,
     expr: &str,
 ) -> Result<String, String> {
-    let krate = lib
-        .langs
+    coerce_from(
+        module,
+        &crate_of(lib),
+        &spelled_type(module, ty),
+        spelling,
+        expr,
+    )
+}
+
+/// The same conversion for a struct literal spelled under its own Rust
+/// type (`&Opts` lends the literal for the call, `Option<Opts>` wraps it):
+/// the form's type is what its `rust` block declares, the spelling says
+/// how the literal crosses. `validate_calls::foreign_forms_declared`
+/// refuses a spelling with no conversion before generation.
+pub(super) fn form_coerce(
+    module: &Module,
+    lib: &ExtLib,
+    block: &ForeignLang,
+    spelling: &str,
+    literal: &str,
+) -> Result<String, String> {
+    let krate = crate_of(lib);
+    let form_type = ext::qualify(&block.name, &krate, module);
+    coerce_from(module, &krate, &form_type, spelling, literal)
+}
+
+fn crate_of(lib: &ExtLib) -> String {
+    lib.langs
         .iter()
         .find(|l| l.lang == "rust")
         .map(|l| l.path.replace('-', "_"))
-        .unwrap_or_default();
-    let default = spelled_type(module, ty);
-    let qualified = ext::qualify(spelling, &krate, module);
+        .unwrap_or_default()
+}
+
+/// The conversion from `default`, the Rust type a value already has at the
+/// boundary, into `spelling`, the type the binding asks for.
+fn coerce_from(
+    module: &Module,
+    krate: &str,
+    default: &str,
+    spelling: &str,
+    expr: &str,
+) -> Result<String, String> {
+    let qualified = ext::qualify(spelling, krate, module);
     if qualified == default {
         return Ok(expr.to_string());
     }
     if let Some(inner) = foreign_spelling::rust_option(spelling) {
-        if ext::qualify(inner, &krate, module) == default {
+        if ext::qualify(inner, krate, module) == default {
             return Ok(format!("Some({expr})"));
         }
     }
@@ -83,7 +119,7 @@ pub(super) fn coerce(
     // the value is lent for the call.
     if let Some(inner) = spelling.strip_prefix('&') {
         let inner = inner.trim_start();
-        if ext::qualify(inner, &krate, module) == default || (inner == "str" && default == "String")
+        if ext::qualify(inner, krate, module) == default || (inner == "str" && default == "String")
         {
             return Ok(format!("&{expr}"));
         }
@@ -138,11 +174,17 @@ pub(super) fn ctor_expr(
             format!("{field_name}: {expr}")
         })
         .collect();
-    format!(
+    let literal = format!(
         "{} {{ {} }}",
         ext::qualify(&block.name, krate, module),
         rendered.join(", ")
-    )
+    );
+    match &ctor.spelling {
+        None => literal,
+        Some(spelling) => form_coerce(module, lib, block, spelling, &literal).unwrap_or_else(|e| {
+            panic!("{e}; validate_calls::foreign_forms_declared should have refused it")
+        }),
+    }
 }
 
 pub(super) fn find_rust_lang(decl: &ExternDecl) -> &ExternLang {

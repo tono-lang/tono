@@ -142,6 +142,45 @@ fn argument_shapes_the_probe_refuses_are_named() {
     );
 }
 
+/// A struct literal under a spelling of its own is probed exactly as the
+/// emitter passes it (`&gearbox.Options{..}`), while the form itself stays
+/// probed as the value type its block declares: the two are graded together
+/// by one compile, which is where `#(&Options)` on the block itself failed.
+#[test]
+fn a_spelled_form_literal_is_probed_by_address() {
+    let m = gearbox_module();
+    let lib = &m.ext_libs[0];
+    let literal = |spelling: &str| {
+        CallArg::Ctor(crate::ir::CallCtor {
+            name: "dial_options".into(),
+            fields: std::collections::BTreeMap::from([(
+                "label".to_string(),
+                CallArg::Lit(serde_json::json!("x")),
+            )]),
+            spelling: Some(spelling.into()),
+        })
+    };
+    assert_eq!(
+        arg_expr(&m, lib, "gearbox", &[], &literal("&Options")).unwrap(),
+        "&gearbox.Options{label: \"x\"}"
+    );
+    assert_eq!(
+        arg_expr(&m, lib, "gearbox", &[], &literal("Options")).unwrap(),
+        "gearbox.Options{label: \"x\"}"
+    );
+    let err = arg_expr(&m, lib, "gearbox", &[], &literal("*Options")).unwrap_err();
+    assert!(
+        err.contains("no conversion from gearbox.Options to *Options"),
+        "{err}"
+    );
+    assert!(
+        gearbox_probe()
+            .source
+            .contains("func tonoForm_dial_options(tonoForm gearbox.Options)"),
+        "the form is probed as a value whatever an argument spells"
+    );
+}
+
 #[test]
 fn a_yields_position_the_probe_cannot_spell_skips_the_binding() {
     let mut m = gearbox_module();

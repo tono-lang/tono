@@ -110,6 +110,7 @@ fn bus_lib() -> ExtLib {
                 CallArg::Ctor(CallCtor {
                     name: "opts".into(),
                     fields: ctor_fields,
+                    spelling: None,
                 }),
             ],
             yields: vec![],

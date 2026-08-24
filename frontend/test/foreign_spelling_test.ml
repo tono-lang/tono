@@ -88,6 +88,11 @@ let src =
     }
   }
 
+  struct options {
+    addr: string
+    go { #(Options) }
+  }
+
   op from_constant(value: float): calculator {
     go { call: #(FromConstant[float64])(value) }
     ts { call: #(new ConstantCalculator)(value) }
@@ -108,6 +113,10 @@ let src =
 
   op instantiate(): calculator {
     ts { call: #(instantiate)(answer_calculator) }
+  }
+
+  op connect(addr: string): calculator {
+    go { call: #(Connect[float64])(options { addr: addr }: #(&Options)) }
   }
 }
 
@@ -156,6 +165,35 @@ let parameter_under_its_own_spelling () =
     "param_as in go" true
     ((lang fs "go").el_call_args = [ Ir.Ca_param_as ("values", "[]float64") ])
 
+(* The same annotation on a struct literal: the form's type stays the type
+   the block declares (#(Options)); the spelling on the argument says how
+   the literal crosses (a pointer to it). *)
+let struct_literal_under_its_own_spelling () =
+  let lib = lowered () in
+  let connect = extern_named lib "connect" in
+  Alcotest.(check bool)
+    "ctor carries its spelling" true
+    ((lang connect "go").el_call_args
+    = [
+        Ir.Ca_ctor
+          {
+            Ir.cc_name = "options";
+            cc_fields = [ ("addr", Ir.Ca_param "addr") ];
+            cc_as = Some "&Options";
+          };
+      ]);
+  let form =
+    List.find
+      (fun (s : Ir.foreign_struct) -> s.Ir.fgs_name = "options")
+      lib.Ir.xl_structs
+  in
+  Alcotest.(check bool)
+    "the form's own type has no &" true
+    (List.exists
+       (fun (b : Ir.foreign_lang) ->
+         b.Ir.fl_lang = "go" && b.Ir.fl_head = "Options")
+       form.Ir.fgs_langs)
+
 let nested_call_and_bound_position () =
   let lib = lowered () in
   let ff = extern_named lib "from_formula" in
@@ -196,6 +234,7 @@ let prints_back_and_roundtrips () =
       "call: #(new ConstantCalculator)(value)";
       "call: #(FormulaCalculator::parse)(expr, precision)";
       "values: #(Vec<f64>)";
+      "options { addr: addr }: #(&Options)";
       "#(ctx context.Context)";
       "#(WithPrecision)(precision)";
       "rust { #(Box<dyn Calculator<f64>>) }";
@@ -254,6 +293,16 @@ let spelling_required_after_parameter_colon () =
        (fun (d : Diagnostic.t) -> contains d.message "foreign spelling")
        diags)
 
+let spelling_required_after_literal_colon () =
+  let _, diags = Parser.parse (with_call "#(instantiate)(answer { }: seed)") in
+  Alcotest.(check bool)
+    "a parse diagnostic" true
+    (List.exists
+       (fun (d : Diagnostic.t) ->
+         contains d.message "foreign spelling"
+         && contains d.message "struct literal")
+       diags)
+
 let callee_must_be_a_spelling () =
   let _, diags = Parser.parse (with_call "\"instantiate\"(answer)") in
   Alcotest.(check bool)
@@ -279,6 +328,8 @@ let () =
             callee_is_the_whole_spelling;
           Alcotest.test_case "parameter under its own spelling" `Quick
             parameter_under_its_own_spelling;
+          Alcotest.test_case "struct literal under its own spelling" `Quick
+            struct_literal_under_its_own_spelling;
           Alcotest.test_case "nested call and bound position" `Quick
             nested_call_and_bound_position;
           Alcotest.test_case "handle name is a class reference" `Quick
@@ -294,6 +345,8 @@ let () =
             unknown_bare_name_rejected;
           Alcotest.test_case "spelling after colon" `Quick
             spelling_required_after_parameter_colon;
+          Alcotest.test_case "spelling after a literal's colon" `Quick
+            spelling_required_after_literal_colon;
           Alcotest.test_case "callee must be a spelling" `Quick
             callee_must_be_a_spelling;
         ] );

@@ -53,3 +53,8 @@ bench	rust	service.tono	pass
 15-ts-argument-coercion	typescript	probes/15-ts-argument-coercion.tono	pass
 15-go-argument-coercion	go	probes/15-go-argument-coercion.tono	pass
 15-rust-numeric-refused	rust	probes/15-rust-numeric-refused.tono	refused
+# 16: the constructor takes a pointer to its options struct. The argument
+# spells the crossing (`options { .. }: #(&Options)`) and the form's block
+# keeps the plain type, so the form's own probe and the call site compile
+# together (a `&` on the block satisfied the call and broke the probe).
+16-go-pointer-argument	go	probes/16-go-pointer-argument.tono	pass

@@ -175,9 +175,27 @@ and parse_call_arg st : Ast.call_arg =
       let nt = P.advance st in
       match (P.peek st).kind with
       | Token.LBrace -> (
-          match parse_ctor_arg st n nt.span with
-          | Ast.ACtor c -> Ast.CaCtor c
-          | _ -> assert false)
+          let c =
+            match parse_ctor_arg st n nt.span with
+            | Ast.ACtor c -> c
+            | _ -> assert false
+          in
+          match (P.peek st).kind with
+          | Token.Colon -> (
+              (* [name { ... }: #(spelling)]: the literal crosses under a
+                 foreign spelling of its own, the same annotation a parameter
+                 takes. Only a spelling may follow the colon. *)
+              ignore (P.advance st);
+              match (P.peek st).kind with
+              | Token.Foreign sp ->
+                  let ft = P.advance st in
+                  Ast.CaCtorAs (c, sp, ft.span)
+              | _ ->
+                  P.error st (P.peek st).span
+                    "expected a foreign spelling '#(...)' after the struct \
+                     literal's ':'";
+                  Ast.CaCtor c)
+          | _ -> Ast.CaCtor c)
       | Token.Colon -> (
           (* [name: #(spelling)]: the parameter crosses under a foreign
              spelling of its own. Only a spelling may follow the colon. *)

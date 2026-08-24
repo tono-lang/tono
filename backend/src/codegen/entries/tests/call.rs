@@ -607,6 +607,72 @@ fn a_typescript_spelling_coerces_across_bigint_and_refuses_other_primitives() {
     assert!(err.contains("no conversion from string to number"), "{err}");
 }
 
+/// A struct literal under a spelling of its own (`opts { .. }: #(&Options)`)
+/// must be coercible into that spelling for every target the binding
+/// covers: each target names both types when it has no conversion, and the
+/// site is named. The form's own block keeps the plain type either way.
+#[test]
+fn a_spelled_form_literal_must_coerce_for_each_target() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "rust", "ts"]);
+    lib.langs = ["go", "rust", "ts"]
+        .into_iter()
+        .map(|l| crate::ir::LangPath {
+            lang: l.into(),
+            path: "ns-lib".into(),
+        })
+        .collect();
+    lib.structs = vec![crate::ir::ForeignStruct {
+        name: "opts".into(),
+        fields: vec![],
+        langs: ["go", "rust", "ts"]
+            .into_iter()
+            .map(|l| crate::ir::ForeignLang {
+                lang: l.into(),
+                name: "Options".into(),
+                fields: Default::default(),
+            })
+            .collect(),
+    }];
+    let spelled = |spelling: &str| {
+        vec![CallArg::Ctor(crate::ir::CallCtor {
+            name: "opts".into(),
+            fields: Default::default(),
+            spelling: Some(spelling.into()),
+        })]
+    };
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.call_args = spelled("&Options");
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module.clone());
+    let all = [TargetKind::Go, TargetKind::Rust, TargetKind::TypeScript];
+    assert!(super::validate_entries(&model, &all).is_ok());
+
+    for lang in module.ext_libs[0].externs[0].langs.iter_mut() {
+        lang.call_args = spelled("string");
+    }
+    let model = model_of(module);
+    for (target, from) in [
+        (TargetKind::Go, "ns.Options"),
+        (TargetKind::Rust, "ns_lib::Options"),
+        (TargetKind::TypeScript, "Options"),
+    ] {
+        let err = super::validate_entries(&model, &[target]).unwrap_err();
+        assert!(
+            err.contains("passes the opts literal as #(string)"),
+            "{err}"
+        );
+        assert!(
+            err.contains(&format!("no conversion from {from} to string")),
+            "{err}"
+        );
+    }
+}
+
 /// A struct literal in a binding names a form that must exist for the
 /// target (a block for its language), and a field the block spells must be
 /// coercible from the form's declared type.
@@ -642,6 +708,7 @@ fn a_foreign_form_must_declare_a_block_for_the_target_it_is_built_in() {
         lang.call_args = vec![CallArg::List(vec![CallArg::Ctor(crate::ir::CallCtor {
             name: "opts".into(),
             fields: Default::default(),
+            spelling: None,
         })])];
     }
     module.ext_libs = vec![lib];

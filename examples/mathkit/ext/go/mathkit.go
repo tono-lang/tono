@@ -201,3 +201,16 @@ func Remember[T any](value T) (*Memo[T], error) {
 func (m *Memo[T]) Recall(ctx context.Context) (T, error) {
 	return m.value, nil
 }
+
+// Options configures a session. Connect takes it by pointer, the way a Go
+// client library takes its options struct: a generated SDK must pass the
+// address of the literal it builds, while the type itself stays Options.
+type Options struct{ Addr string }
+
+// Connect starts a session with the service opt names.
+func Connect(opt *Options) (*Client, error) {
+	if opt == nil {
+		return nil, errors.New("mathkit: nil options")
+	}
+	return &Client{addr: opt.Addr}, nil
+}

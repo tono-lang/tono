@@ -331,7 +331,8 @@ pub(super) fn param_spellings_coerce(
 
 /// Every foreign struct literal in a binding names a form that exists for
 /// the target (the form declares a block for it), with every spelled field
-/// coercible from the form's own declared type.
+/// coercible from the form's own declared type, and the literal itself
+/// coercible into the spelling its argument declares (`&Options`).
 pub(super) fn foreign_forms_declared(
     site: &str,
     target: TargetKind,
@@ -340,7 +341,8 @@ pub(super) fn foreign_forms_declared(
     lang: &crate::ir::ExternLang,
 ) -> Result<(), String> {
     let binding_lang = target.binding_langs()[0];
-    for name in ctor_names(&lang.call_args) {
+    for ctor in ctors(&lang.call_args) {
+        let name = ctor.name.as_str();
         let Some(form) = lib.structs.iter().find(|s| s.name == name) else {
             continue;
         };
@@ -360,6 +362,13 @@ pub(super) fn foreign_forms_declared(
             if let Err(reason) = target.param_spelling_coerces(module, lib, &ff.r#type, spelling) {
                 return Err(format!(
                     "{site}: struct {name} spells {field} as #({spelling}) for {binding_lang}; {reason}"
+                ));
+            }
+        }
+        if let Some(spelling) = &ctor.spelling {
+            if let Err(reason) = target.form_spelling_coerces(module, lib, form, spelling) {
+                return Err(format!(
+                    "{site}: the {binding_lang} block's call: line passes the {name} literal as #({spelling}); {reason}"
                 ));
             }
         }
@@ -471,19 +480,20 @@ fn spelled_params(args: &[crate::ir::CallArg]) -> Vec<(&str, &str)> {
     out
 }
 
-fn ctor_names(args: &[crate::ir::CallArg]) -> Vec<&str> {
+/// Every struct literal in a call's argument tree, outermost first.
+fn ctors(args: &[crate::ir::CallArg]) -> Vec<&crate::ir::CallCtor> {
     use crate::ir::CallArg;
     let mut out = Vec::new();
     for a in args {
         match a {
             CallArg::Ctor(ctor) => {
-                out.push(ctor.name.as_str());
+                out.push(ctor);
                 for v in ctor.fields.values() {
-                    out.extend(ctor_names(std::slice::from_ref(v)));
+                    out.extend(ctors(std::slice::from_ref(v)));
                 }
             }
-            CallArg::List(items) => out.extend(ctor_names(items)),
-            CallArg::SymbolCall(sc) => out.extend(ctor_names(&sc.args)),
+            CallArg::List(items) => out.extend(ctors(items)),
+            CallArg::SymbolCall(sc) => out.extend(ctors(&sc.args)),
             _ => {}
         }
     }

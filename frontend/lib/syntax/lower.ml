@@ -132,6 +132,10 @@ and json_of_call_arg : Ast.call_arg -> Ir.json = function
   | Ast.CaRef r ->
       `Assoc [ ("field", `List (List.map (fun s -> `String s) r.Ast.segs)) ]
   | Ast.CaCtor c -> json_of_arg (Ast.ACtor c)
+  | Ast.CaCtorAs (c, sp, _) -> (
+      match json_of_arg (Ast.ACtor c) with
+      | `Assoc kvs -> `Assoc (kvs @ [ ("as", `String sp) ])
+      | other -> other)
   | Ast.CaLit (Ast.LStr s, _) -> `Assoc [ ("lit", `String s) ]
   | Ast.CaLit (Ast.LInt n, _) -> `Assoc [ ("lit", `Int n) ]
   | Ast.CaLit (Ast.LFloat f, _) -> `Assoc [ ("lit", `Float f) ]

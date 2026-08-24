@@ -126,7 +126,8 @@ fn argument_shapes_the_probe_refuses_are_named() {
         err(
             CallArg::Ctor(crate::ir::CallCtor {
                 name: "rust_only".into(),
-                fields: Default::default()
+                fields: Default::default(),
+                spelling: None,
             }),
             &mut prelude
         ),
@@ -141,6 +142,32 @@ fn argument_shapes_the_probe_refuses_are_named() {
         "tonoLib.pick(2)"
     );
     assert!(prelude.is_empty());
+}
+
+/// A struct literal under a spelling of its own is probed as the literal
+/// the emitter passes (structural), and a primitive spelling is named.
+#[test]
+fn a_spelled_form_literal_is_probed_as_the_literal() {
+    let m = gearbox_module();
+    let lib = &m.ext_libs[0];
+    let literal = |spelling: &str| {
+        CallArg::Ctor(crate::ir::CallCtor {
+            name: "dial_options".into(),
+            fields: Default::default(),
+            spelling: Some(spelling.into()),
+        })
+    };
+    let mut prelude = Vec::new();
+    assert_eq!(
+        arg_expr(&m, lib, &[], &literal("Options"), &mut prelude).unwrap(),
+        "tonoA0"
+    );
+    assert_eq!(prelude.len(), 1);
+    let err = arg_expr(&m, lib, &[], &literal("number"), &mut prelude).unwrap_err();
+    assert!(
+        err.contains("no conversion from DialOptions to number"),
+        "{err}"
+    );
 }
 
 #[test]

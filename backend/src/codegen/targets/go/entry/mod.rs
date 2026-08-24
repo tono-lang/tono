@@ -484,3 +484,18 @@ pub fn param_spelling_coerces(
 ) -> Result<(), String> {
     ext::coerce(module, lib, t, spelling, "v", None).map(|_| ())
 }
+
+/// Whether Go can pass a literal of the foreign form `form` under
+/// `spelling` (see `ext_render::form_coerce`); the reason names both types
+/// when it cannot. A form with no `go` block is refused on its own.
+pub fn form_spelling_coerces(
+    module: &Module,
+    lib: &crate::ir::ExtLib,
+    form: &crate::ir::ForeignStruct,
+    spelling: &str,
+) -> Result<(), String> {
+    match form.lang("go") {
+        Some(block) => ext::form_coerce(module, lib, block, spelling, "v").map(|_| ()),
+        None => Ok(()),
+    }
+}

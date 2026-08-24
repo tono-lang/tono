@@ -28,6 +28,7 @@ let call_arg_span (a : Ast.call_arg) : Span.span =
       s
   | Ast.CaRef r -> r.ref_span
   | Ast.CaCtor c -> c.ctor_span
+  | Ast.CaCtorAs (c, _, s) -> Span.merge c.ctor_span s
   | Ast.CaCall nc -> nc.nc_span
 
 (* The [call:] line is what a target-side finding is attributed to: from the

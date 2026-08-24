@@ -184,6 +184,7 @@ pub fn gearbox() -> ExtLib {
                                     ("precision".to_string(), CallArg::Param("precision".into())),
                                     ("label".to_string(), CallArg::Lit(serde_json::json!("fine"))),
                                 ]),
+                                spelling: None,
                             }),
                         ],
                     ),
@@ -328,6 +329,7 @@ pub fn gearbox() -> ExtLib {
                     vec![CallArg::Ctor(CallCtor {
                         name: "rust_only".into(),
                         fields: BTreeMap::new(),
+                        spelling: None,
                     })],
                 )],
             ),

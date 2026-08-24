@@ -469,6 +469,7 @@ fn call_arg_expr_covers_every_variant() {
     let ctor = CallArg::Ctor(CallCtor {
         name: "publish_opts".into(),
         fields,
+        spelling: None,
     });
     let expr = ext::call_arg_expr(
         &mut refs,
@@ -494,6 +495,7 @@ fn call_arg_expr_ctor_is_nil_without_a_go_module_path() {
     let ctor = CallArg::Ctor(CallCtor {
         name: "publisher".into(),
         fields,
+        spelling: None,
     });
     let mut ref_expr = |_: &[String]| String::new();
     assert_eq!(
@@ -623,6 +625,7 @@ fn declared_error_literal_is_a_zero_value_without_a_mapped_member() {
 
 mod calls;
 mod composed_handles;
+mod forms;
 mod handle_source;
 
 /// The shared per-language-name fixture, rendered end to end: the "go"
@@ -735,46 +738,6 @@ fn call_arg_expr_coerces_a_spelled_parameter() {
         err.contains("no conversion from uint8 to map[string]int"),
         "{err}"
     );
-}
-
-/// A struct literal names the form's own Go type from its `go` block, and
-/// converts a field the block spells under another type.
-#[test]
-fn call_arg_expr_builds_a_form_from_its_go_block() {
-    let mut lib = handle_lib("bus", "publisher");
-    let mut fields = std::collections::BTreeMap::new();
-    fields.insert("Digits".to_string(), "int".to_string());
-    lib.structs.push(crate::ir::ForeignStruct {
-        name: "opts".into(),
-        fields: vec![crate::ir::ForeignField {
-            name: "Digits".into(),
-            r#type: Tref::Prim(Prim::U8),
-        }],
-        langs: vec![ForeignLang {
-            lang: "go".into(),
-            name: "Options".into(),
-            fields,
-        }],
-    });
-    let mut ctor_fields = std::collections::BTreeMap::new();
-    ctor_fields.insert("Digits".to_string(), CallArg::Lit(serde_json::json!(3)));
-    let ctor = CallArg::Ctor(CallCtor {
-        name: "opts".into(),
-        fields: ctor_fields,
-    });
-    let mut refs = Vec::new();
-    let mut ref_expr = |_: &[String]| String::new();
-    let expr = ext::call_arg_expr(
-        &mut refs,
-        &bare_module(),
-        &lib,
-        &ctor,
-        &[],
-        &[],
-        "ctx",
-        &mut ref_expr,
-    );
-    assert_eq!(expr, "bus.Options{Digits: int(3)}");
 }
 
 /// An error the op declares but that has no `go` block is not recognized

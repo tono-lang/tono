@@ -515,6 +515,22 @@ pub fn param_spelling_coerces(t: &Tref, spelling: &str) -> Result<(), String> {
     ext_coerce::coerce(t, spelling, "v").map(|_| ())
 }
 
+/// Whether TypeScript can pass a literal of the foreign form `form` under
+/// `spelling` (see `ext_coerce::form_coerce`); the reason names both types
+/// when it cannot.
+pub fn form_spelling_coerces(
+    form: &crate::ir::ForeignStruct,
+    spelling: &str,
+) -> Result<(), String> {
+    let form_type = form
+        .langs
+        .iter()
+        .find(|l| l.lang == "ts" || l.lang == "typescript")
+        .map(|b| b.name.as_str())
+        .unwrap_or(&form.name);
+    ext_coerce::form_coerce(form_type, spelling, "v").map(|_| ())
+}
+
 mod checks;
 mod class;
 mod decode;

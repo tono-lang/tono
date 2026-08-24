@@ -32,7 +32,7 @@ let err code span fmt = Printf.ksprintf (Diagnostic.error ~code span) fmt
 let rec collect_call_arg : Ast.call_arg -> string list = function
   | Ast.CaParam (n, _) | Ast.CaParamAs (n, _, _, _) -> [ n ]
   | Ast.CaRef _ | Ast.CaLit _ | Ast.CaForeign _ -> []
-  | Ast.CaCtor c ->
+  | Ast.CaCtor c | Ast.CaCtorAs (c, _, _) ->
       List.concat_map (fun (_, _, v) -> collect_trait_arg v) c.Ast.ctor_fields
   | Ast.CaCall nc -> List.concat_map collect_call_arg nc.Ast.nc_args
   | Ast.CaList (items, _) -> List.concat_map collect_call_arg items
@@ -78,7 +78,7 @@ let rec unknown_param_call_arg ~(declared : string list)
             "'%s' is not a declared logical parameter of this op" n;
         ]
   | Ast.CaRef _ | Ast.CaLit _ | Ast.CaForeign _ -> []
-  | Ast.CaCtor c ->
+  | Ast.CaCtor c | Ast.CaCtorAs (c, _, _) ->
       List.concat_map
         (fun (_, span, v) -> unknown_param_trait_arg declared span v)
         c.Ast.ctor_fields
@@ -172,7 +172,8 @@ let rec check_ctor_projection_arg
     (structs : (string, Ast.foreign_struct) Hashtbl.t)
     (params : Ast.extern_param list) : Ast.call_arg -> Diagnostic.t list =
   function
-  | Ast.CaCtor c -> check_ctor_projection structs params c
+  | Ast.CaCtor c | Ast.CaCtorAs (c, _, _) ->
+      check_ctor_projection structs params c
   | Ast.CaCall nc ->
       List.concat_map (check_ctor_projection_arg structs params) nc.Ast.nc_args
   | Ast.CaList (items, _) ->

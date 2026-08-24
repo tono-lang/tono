@@ -127,7 +127,11 @@ pub(super) fn render_arg(
         // A foreign struct literal: each field's value converted when the
         // form's ts block spells the field under its own type, the same
         // rule a spelled parameter follows.
-        CallArg::Ctor(CallCtor { name, fields }) => {
+        CallArg::Ctor(CallCtor {
+            name,
+            fields,
+            spelling,
+        }) => {
             let form = lib.structs.iter().find(|s| s.name == *name);
             let block = form.and_then(|f| {
                 f.langs
@@ -153,7 +157,16 @@ pub(super) fn render_arg(
                     format!("{k}: {value}")
                 })
                 .collect::<Vec<_>>();
-            format!("{{ {} }}", rendered.join(", "))
+            let literal = format!("{{ {} }}", rendered.join(", "));
+            match spelling {
+                None => literal,
+                Some(spelling) => {
+                    let form_type = block.map(|b| b.name.as_str()).unwrap_or(name);
+                    ext_coerce::form_coerce(form_type, spelling, &literal).unwrap_or_else(|e| {
+                        panic!("{e}; validate_calls::foreign_forms_declared should have refused it")
+                    })
+                }
+            }
         }
         // A cross-extern call as a call argument (`ns.fn(...)` naming a
         // *declared* extern, reached today only from a ctor field's own

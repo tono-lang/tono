@@ -58,6 +58,36 @@ pub(in super::super) fn coerce(
     ))
 }
 
+/// The conversion a struct literal spelled under its own Go type goes
+/// through: `&T` takes the address of the literal (`&mathkit.Options{..}`,
+/// for a library that takes the form by pointer), the form's own type
+/// passes it as is. The form's type is what its `go` block declares; the
+/// `&` belongs to the argument, never to that declaration (the check
+/// probes the form as a value, `func(tonoForm mathkit.Options)`). Anything
+/// else has no conversion Go can write, and
+/// `validate_calls::foreign_forms_declared` refuses it before generation.
+pub(in super::super) fn form_coerce(
+    module: &Module,
+    lib: &ExtLib,
+    block: &ForeignLang,
+    spelling: &str,
+    literal: &str,
+) -> Result<String, String> {
+    let alias = lib_ident(&lib.name);
+    let form_type = qualify(&block.name, &alias, module);
+    if qualify(spelling, &alias, module) == form_type {
+        return Ok(literal.to_string());
+    }
+    if let Some(inner) = spelling.strip_prefix('&') {
+        if qualify(inner.trim_start(), &alias, module) == form_type {
+            return Ok(format!("&{literal}"));
+        }
+    }
+    Err(format!(
+        "cannot pass a {form_type} literal as {spelling} in Go: no conversion from {form_type} to {spelling}"
+    ))
+}
+
 /// The Go type a logical type already has at the boundary: a handle's
 /// declared storage (or a slice of them), else the ordinary mapping.
 fn spelled_type(module: &Module, t: &Tref) -> String {
@@ -204,8 +234,9 @@ pub(in super::super) fn call_arg_expr(
 
 /// A foreign struct literal: the form's own Go type, from its `go` block,
 /// with each field's value converted when the block spells the field under
-/// its own type. A form with no `go` block does not exist in Go;
-/// `validate_calls::foreign_form_declared` refuses the binding first.
+/// its own type, and the whole literal converted when the argument spells
+/// how it crosses (`&Options`). A form with no `go` block does not exist in
+/// Go; `validate_calls::foreign_form_declared` refuses the binding first.
 #[allow(clippy::too_many_arguments)]
 fn ctor_expr(
     refs: &mut Vec<Symbol>,
@@ -249,11 +280,17 @@ fn ctor_expr(
             format!("{name}: {expr}")
         })
         .collect();
-    format!(
+    let literal = format!(
         "{}{{{}}}",
         qualify(&block.name, &alias, module),
         fields.join(", ")
-    )
+    );
+    match &ctor.spelling {
+        None => literal,
+        Some(spelling) => form_coerce(module, lib, block, spelling, &literal).unwrap_or_else(|e| {
+            panic!("{e}; validate_calls::foreign_forms_declared should have refused it")
+        }),
+    }
 }
 
 fn yields_path_expr(yields_vars: &HashMap<String, String>, path: &[String]) -> String {

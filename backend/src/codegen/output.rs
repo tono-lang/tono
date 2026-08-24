@@ -148,6 +148,32 @@ impl TargetKind {
         }
     }
 
+    /// Whether this target can pass a struct literal of the foreign form
+    /// `form` under the spelling its argument declares (`opts { .. }:
+    /// #(&Options)`, for a library that takes the form by pointer): the
+    /// form's own type is what its language block declares, and the
+    /// spelling says how the literal crosses. Each target knows its own
+    /// conversions, and names both types when it has none.
+    pub fn form_spelling_coerces(
+        self,
+        module: &crate::ir::Module,
+        lib: &crate::ir::ExtLib,
+        form: &crate::ir::ForeignStruct,
+        spelling: &str,
+    ) -> Result<(), String> {
+        match self {
+            Self::Go => crate::codegen::targets::go::entry::form_spelling_coerces(
+                module, lib, form, spelling,
+            ),
+            Self::Rust => crate::codegen::targets::rust::entry::form_spelling_coerces(
+                module, lib, form, spelling,
+            ),
+            Self::TypeScript => {
+                crate::codegen::targets::typescript::entry::form_spelling_coerces(form, spelling)
+            }
+        }
+    }
+
     /// Whether this target can pass a declared handle's class itself as a
     /// `call:` argument (`type handle`, for a library that takes the class
     /// and constructs on its own). TypeScript has the class as a value
