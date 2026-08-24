@@ -3,7 +3,7 @@
 use crate::duration::parse_duration_ms;
 use crate::env::read_env;
 use crate::http::{
-    backoff_delay_ms, check_transport, default_random, default_sleep, has_header,
+    backoff_delay_ms, check_transport, default_random, default_sleep, has_header, http_send,
     http_send_with_timeout, resolve_max_retries, set_header, RandomFn, SleepFn,
 };
 use crate::support::{ClientOptions, Duration, HttpRequest, HttpTransport};
@@ -212,6 +212,45 @@ impl Client {
             }
             return Err(err);
         }
+    }
+    pub async fn latest_charge(&self) -> Result<Option<Charge>, TonoError> {
+        let url = format!(
+            "{}{}",
+            self.settings.endpoint,
+            "/charges/latest".to_string()
+        );
+        let mut headers: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        set_header(&mut headers, "X-API-Key", self.settings.api_key.clone());
+        for (k, v) in &self.options.headers {
+            set_header(&mut headers, k, v.clone());
+        }
+        let request = HttpRequest {
+            method: "GET".to_string(),
+            url: url.clone(),
+            headers: headers.clone(),
+            body: None,
+        };
+        let outcome = match http_send(&self.options, request).await {
+            Ok(response) => response,
+            Err(cause) => return Err(TonoError::Transport(TransportError { cause })),
+        };
+        if outcome.status >= 200 && outcome.status < 300 {
+            return {
+                let body = &outcome.body;
+                let trimmed = body.trim();
+                if trimmed.is_empty() || trimmed == "null" {
+                    Ok(None)
+                } else {
+                    let decoded = decode_charge(body);
+                    decoded.map(Some)
+                }
+            };
+        }
+        Err(TonoError::Api(APIFailure::Undeclared(APIError {
+            status: outcome.status,
+            body: outcome.body,
+        })))
     }
 }
 

@@ -77,6 +77,9 @@ and shape_kind =
       input : tref option;
       input_name : string option;
       output : tref option;
+      output_nullable : bool;
+          (* a declared [T?] return: the call can yield no value; mirrors the
+             member-level [required] flag, since nullability is not a type node *)
       errors : tref list;
           (* tref so an operation can apply a generic directly *)
       wire : wire_binding option;

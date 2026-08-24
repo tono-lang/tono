@@ -249,6 +249,7 @@ fn diff_entry_ops(id: &str, base: &[Shape], curr: &[Shape], out: &mut Vec<Change
                         input: bin,
                         input_name: _,
                         output: bout,
+                        output_nullable: bnul,
                         errors: berr,
                         wire: _,
                         impl_call: _,
@@ -257,13 +258,16 @@ fn diff_entry_ops(id: &str, base: &[Shape], curr: &[Shape], out: &mut Vec<Change
                         input: cin,
                         input_name: _,
                         output: cout,
+                        output_nullable: cnul,
                         errors: cerr,
                         wire: _,
                         impl_call: _,
                     },
                 ) = (&b.kind, &c.kind)
                 {
-                    crate::compat::diff_operation(op_id, bin, bout, berr, cin, cout, cerr, out);
+                    crate::compat::diff_operation(
+                        op_id, bin, bout, *bnul, berr, cin, cout, *cnul, cerr, out,
+                    );
                 }
                 diff_descriptor(op_id, &b.traits, &c.traits, out);
             }

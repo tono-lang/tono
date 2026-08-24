@@ -634,6 +634,7 @@ let resolver_tolerates_value_template () =
             input = None;
             input_name = None;
             output = None;
+            output_nullable = false;
             errors = [];
             wire = None;
             impl_call = None;

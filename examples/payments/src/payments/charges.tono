@@ -52,6 +52,13 @@ pub struct client {
   @retry(.max_retries)
   @errors(card_declined, not_found)
   op create_charge(input: charge): charge
+
+  // The nullable return: the service answers an empty body when the lookup
+  // matches nothing, and the SDK surfaces that as the language's own absence
+  // instead of a decode failure.
+  @http(method: "GET", path: "/charges/latest", endpoint: .endpoint)
+  @header("X-API-Key", .api_key)
+  op latest_charge(): charge?
 }
 
 // Only the construction surface is declared-testable here: a create_charge

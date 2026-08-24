@@ -76,6 +76,7 @@ pub fn composed_handles_module() -> Module {
             input: None,
             input_name: None,
             output: Some(value_t.clone()),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {
@@ -92,6 +93,7 @@ pub fn composed_handles_module() -> Module {
             input: None,
             input_name: None,
             output: Some(value_t.clone()),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {

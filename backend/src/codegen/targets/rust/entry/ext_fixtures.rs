@@ -244,6 +244,7 @@ pub fn rust_ext_fixture_model() -> Model {
             input: Some(ref_to("m#note")),
             input_name: Some("payload".into()),
             output: Some(ref_to("m#ack")),
+            output_nullable: false,
             errors: vec![ref_to("m#overloaded")],
             wire: None,
             impl_call: Some(OpImplCall {

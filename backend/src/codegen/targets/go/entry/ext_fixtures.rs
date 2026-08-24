@@ -268,6 +268,7 @@ pub fn reference_example_module() -> Module {
                 id: "m#ack".into(),
                 args: vec![],
             }),
+            output_nullable: false,
             errors: vec![Tref::Ref {
                 id: "m#overloaded".into(),
                 args: vec![],
@@ -613,6 +614,7 @@ pub fn ctx_extern_module() -> Module {
             input: Some(string_t()),
             input_name: Some("id".into()),
             output: Some(string_t()),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {

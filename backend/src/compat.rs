@@ -390,6 +390,7 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
                 input: bi,
                 input_name: _,
                 output: bo,
+                output_nullable: bn,
                 errors: be,
                 wire: _,
                 impl_call: _,
@@ -398,11 +399,12 @@ fn diff_shape(b: &Shape, c: &Shape, current: &BTreeMap<&str, &Shape>, out: &mut 
                 input: ci,
                 input_name: _,
                 output: co,
+                output_nullable: cn,
                 errors: ce,
                 wire: _,
                 impl_call: _,
             },
-        ) => diff_operation(&b.id, bi, bo, be, ci, co, ce, out),
+        ) => diff_operation(&b.id, bi, bo, *bn, be, ci, co, *cn, ce, out),
         (ShapeKind::Service { operations: bo }, ShapeKind::Service { operations: co }) => {
             diff_service(&b.id, bo, co, current, out)
         }
@@ -680,9 +682,11 @@ pub(crate) fn diff_operation(
     id: &str,
     bi: &Option<Tref>,
     bo: &Option<Tref>,
+    bn: bool,
     be: &[Tref],
     ci: &Option<Tref>,
     co: &Option<Tref>,
+    cn: bool,
     ce: &[Tref],
     out: &mut Vec<Change>,
 ) {
@@ -698,6 +702,19 @@ pub(crate) fn diff_operation(
             key: format!("change-operation {id}$output"),
             category: Category::SourceBreaking,
             detail: format!("output {} -> {}", render_opt(bo), render_opt(co)),
+        });
+    } else if bn != cn {
+        // The output type itself is unchanged but its nullability is not:
+        // every target spells the return differently (Option<T>, *T,
+        // T | null), so callers break either way the flag flips.
+        out.push(Change {
+            key: format!("change-operation {id}$output"),
+            category: Category::SourceBreaking,
+            detail: format!(
+                "output nullability {} -> {}",
+                if bn { "T?" } else { "T" },
+                if cn { "T?" } else { "T" }
+            ),
         });
     }
     if !same_set(be, ce) {

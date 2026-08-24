@@ -190,6 +190,7 @@ pub fn create_charge_operation() -> Shape {
             input_name: None,
             input: Some(reference("models#Account")),
             output: Some(reference("models#Account")),
+            output_nullable: false,
             errors: vec![
                 reference("models#payment_declined"),
                 reference("models#rate_limited"),

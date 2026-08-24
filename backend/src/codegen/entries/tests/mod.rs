@@ -301,6 +301,7 @@ fn entry_with_op_traits(traits: Vec<(&str, serde_json::Value)>) -> Module {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: None,

@@ -200,6 +200,50 @@ let bind_only_config () =
   | Ir.Config _ -> ()
   | _ -> Alcotest.fail "bind-only conf did not classify as config"
 
+(* A declared [T?] op return lowers to the operation-level flag; the sibling
+   [T] return stays unflagged, and a member's own [?] keeps riding
+   [required]. *)
+let nullable_op_return_lowered () =
+  let m =
+    compile
+      "struct note { id: string, tag: string? }\n\
+       pub struct client {\n\
+      \  endpoint: string @env(\"ENDPOINT\")\n\
+      \  @http(method: \"GET\", path: \"/latest\", endpoint: .endpoint)\n\
+      \  op latest_note(): note?\n\
+      \  @http(method: \"GET\", path: \"/pinned\", endpoint: .endpoint)\n\
+      \  op pinned_note(): note\n\
+       }"
+  in
+  let op_nullable id =
+    match
+      List.find_map
+        (fun (s : Ir.shape) ->
+          match s.kind with
+          | Ir.Entry { operations; _ } ->
+              List.find_opt (fun (o : Ir.shape) -> o.id = id) operations
+          | _ -> None)
+        m.shapes
+    with
+    | Some { kind = Ir.Operation { output; output_nullable; _ }; _ } ->
+        (output, output_nullable)
+    | _ -> Alcotest.failf "operation %s not found" id
+  in
+  (match op_nullable "m#client.latest_note" with
+  | Some (Ir.Ref ("m#note", [])), true -> ()
+  | _ -> Alcotest.fail "latest_note did not lower to a nullable note output");
+  (match op_nullable "m#client.pinned_note" with
+  | Some (Ir.Ref ("m#note", [])), false -> ()
+  | _ -> Alcotest.fail "pinned_note did not stay non-nullable");
+  match (shape_by_id m "m#note").kind with
+  | Ir.Structure { members; _ } ->
+      let req name =
+        (List.find (fun (mm : Ir.member) -> mm.name = name) members).required
+      in
+      Alcotest.(check bool) "id required" true (req "id");
+      Alcotest.(check bool) "tag nullable" false (req "tag")
+  | _ -> Alcotest.fail "note did not lower to a structure"
+
 (* ── IR round-trip: encode(model) decodes back to the same model ───────── *)
 
 let ir_roundtrip () =
@@ -216,8 +260,8 @@ let ir_roundtrip () =
         (Ir_json.to_canonical_string json)
         (Ir_json.to_canonical_string (Ir_json.encode_model decoded))
 
-let version_is_27 () =
-  Alcotest.(check int) "wire version" 28 Ir_json.current_ir_version
+let version_is_29 () =
+  Alcotest.(check int) "wire version" 29 Ir_json.current_ir_version
 
 (* ── fmt: the new forms print and re-parse to the same text ────────────── *)
 
@@ -584,11 +628,13 @@ let () =
           Alcotest.test_case "entry surface" `Quick lowered_entry;
           Alcotest.test_case "config surface" `Quick lowered_config;
           Alcotest.test_case "bind-only config" `Quick bind_only_config;
+          Alcotest.test_case "nullable op return" `Quick
+            nullable_op_return_lowered;
         ] );
       ( "ir",
         [
           Alcotest.test_case "round-trip" `Quick ir_roundtrip;
-          Alcotest.test_case "version 27" `Quick version_is_27;
+          Alcotest.test_case "version 29" `Quick version_is_29;
         ] );
       ("fmt", [ Alcotest.test_case "round-trip" `Quick fmt_roundtrip ]);
       ( "protocol",

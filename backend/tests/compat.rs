@@ -159,6 +159,7 @@ fn removed_shape_severity_follows_the_reference_position() {
                 args: vec![],
             }),
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: None,
@@ -206,6 +207,7 @@ fn unchanged_entry_and_config_produce_no_changes() {
                         input_name: None,
                         input: None,
                         output: None,
+                        output_nullable: false,
                         errors: vec![],
                         wire: None,
                         impl_call: None,
@@ -222,6 +224,41 @@ fn unchanged_entry_and_config_produce_no_changes() {
 }
 
 #[test]
+fn flipping_an_ops_output_nullability_is_source_breaking() {
+    // Same output type both sides; only the declared `?` changes. Every
+    // target spells the return differently (Option<T>, *T, T | null), so
+    // the flip alone must surface as a source break.
+    let op = |nullable: bool| Shape {
+        id: "billing#client.find".into(),
+        kind: ShapeKind::Operation {
+            input_name: None,
+            input: None,
+            output: Some(Tref::Ref {
+                id: "billing#Card".into(),
+                args: vec![],
+            }),
+            output_nullable: nullable,
+            errors: vec![],
+            wire: None,
+            impl_call: None,
+        },
+        traits: vec![],
+    };
+    let before = model(vec![
+        structure("billing#Card", vec![]),
+        entry("billing#client", vec![], vec![op(false)]),
+    ]);
+    let after = model(vec![
+        structure("billing#Card", vec![]),
+        entry("billing#client", vec![], vec![op(true)]),
+    ]);
+    let report = diff(&before, &after);
+    let change = find(&report, "change-operation billing#client.find$output");
+    assert_eq!(change.category, Category::SourceBreaking);
+    assert_eq!(change.detail, "output nullability T -> T?");
+}
+
+#[test]
 fn removing_an_op_from_an_entry_is_source_breaking() {
     let op = Shape {
         id: "billing#client.save".into(),
@@ -229,6 +266,7 @@ fn removing_an_op_from_an_entry_is_source_breaking() {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: None,
@@ -625,6 +663,7 @@ fn an_operation_signature_change_is_source_breaking() {
                         args: vec![],
                     }),
                     output: None,
+                    output_nullable: false,
                     errors: vec![],
                     wire: None,
                     impl_call: None,

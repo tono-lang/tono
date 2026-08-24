@@ -185,6 +185,7 @@ mod tests {
                 input,
                 input_name: None,
                 output,
+                output_nullable: false,
                 errors,
                 wire: None,
                 impl_call: None,
@@ -267,6 +268,7 @@ mod tests {
                 input: None,
                 input_name: None,
                 output: None,
+                output_nullable: false,
                 errors: vec![],
                 wire: None,
                 impl_call: None

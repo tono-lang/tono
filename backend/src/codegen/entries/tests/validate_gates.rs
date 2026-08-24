@@ -41,6 +41,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: None,
@@ -53,6 +54,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: None,
@@ -81,6 +83,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: None,
@@ -157,6 +160,7 @@ fn validation_rejects_the_cases_no_layer_would_diagnose() {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: Some(Box::new(crate::ir::WireBinding {
                 method: "GET".into(),
@@ -337,6 +341,7 @@ fn a_loose_operation_with_a_wire_binding_is_rejected() {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: Some(Box::new(crate::ir::WireBinding {
                 method: "GET".into(),
@@ -369,6 +374,7 @@ fn entry_with_handle_call() -> Shape {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(crate::ir::OpImplCall {
@@ -671,6 +677,7 @@ fn model_with_forwarded_and_op_read(as_arg: bool) -> crate::ir::Model {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(crate::ir::OpImplCall {

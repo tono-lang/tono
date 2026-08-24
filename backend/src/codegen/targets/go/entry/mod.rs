@@ -104,6 +104,18 @@ pub(super) fn go_type(t: &Tref) -> String {
     render_type(&type_expr_of(t), &crate::codegen::targets::go::SlotRules)
 }
 
+/// The Go spelling of an operation's return position: a nullable (`T?`)
+/// return becomes a pointer so it can be absent, except a collection, which
+/// is already nullable (nil), mirroring `render_field`'s pointer rule.
+pub(super) fn go_ret_type(t: &Tref, nullable: bool) -> String {
+    let base = go_type(t);
+    if nullable && !matches!(t, Tref::List(_) | Tref::Map(_, _)) {
+        format!("*{base}")
+    } else {
+        base
+    }
+}
+
 /// The Go spelling of a type as *data*: the name that goes into a message a
 /// consumer reads, not into a code position. A slot would be wrong here twice
 /// over: it never reaches the renderer intact through a quoted literal, and a

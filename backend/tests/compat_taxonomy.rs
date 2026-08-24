@@ -33,6 +33,7 @@ fn wire_op(id: &str) -> Shape {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),

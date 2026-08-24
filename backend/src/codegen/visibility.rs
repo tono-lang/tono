@@ -336,6 +336,7 @@ mod tests {
                 }),
                 input_name: None,
                 output: None,
+                output_nullable: false,
                 errors: vec![Tref::Ref {
                     id: "m#not_found".into(),
                     args: vec![],

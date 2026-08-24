@@ -379,8 +379,17 @@ fn op_method(
     if let Some(t) = output {
         refs.extend(type_refs(t, module));
     }
+    let output_nullable = crate::codegen::ops::op_output_nullable(op);
     let ret = output
-        .map(|t| render_type(&type_expr_of(t), &TsRules))
+        .map(|t| {
+            let expr = type_expr_of(t);
+            let expr = if output_nullable {
+                crate::codegen::tree::TypeExpr::nullable(expr)
+            } else {
+                expr
+            };
+            render_type(&expr, &TsRules)
+        })
         .unwrap_or_else(|| "void".to_string());
 
     // A constrained input is validated before it leaves the process, so a bad
@@ -454,7 +463,7 @@ fn op_method(
         refs.push(module_symbol(&en.api, module));
         throw(format!("new {}(outcome.status, outcome.body)", en.api))
     };
-    let success_block = decode::success_block(output, module, &ret, &throw, refs);
+    let success_block = decode::success_block(output, output_nullable, module, &ret, &throw, refs);
     let http_method = wire.method.clone();
     // The frontend guarantees an endpoint/@header/path-template/@retry field
     // reference resolves to a value already sitting, typed, on the resolved

@@ -87,6 +87,7 @@ pub(super) fn method(m: Method<'_>) -> String {
             module,
             input_ty,
             output,
+            output_nullable: crate::codegen::ops::op_output_nullable(op),
             discriminator,
             symbol: binding.symbol,
             local,
@@ -119,6 +120,7 @@ struct RawBody<'a> {
     module: &'a Module,
     input_ty: Option<&'a str>,
     output: Option<&'a Tref>,
+    output_nullable: bool,
     discriminator: Option<&'a str>,
     symbol: &'a str,
     local: &'a str,
@@ -157,7 +159,7 @@ fn raw_body(b: RawBody<'_>) -> String {
             api = en.api,
         ),
     };
-    let success = decode::success_block(b.output, b.module, "&raw_body");
+    let success = decode::success_block(b.output, b.output_nullable, b.module, "&raw_body");
     format!(
         "{payload}{boundary}        let raw_body = String::from_utf8_lossy(&outcome.body).into_owned();\n        if !outcome.success {{\n            return {failure};\n        }}\n        {success}",
     )

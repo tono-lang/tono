@@ -479,6 +479,13 @@ let take_trait name (traits : Ast.trait list) =
 let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~pname ~input ~output
     ~oimpl ~pub_trait : Ir.shape =
   let lower_opt = Option.map (lower_type ~params:[] ~resolve ~diags) in
+  (* A [T?] return is carried as a flag next to [output], the same shape as a
+     member's [required]: nullability is not a type node in the IR. *)
+  let output, output_nullable =
+    match output with
+    | Some (Ast.TNullable (t, _)) -> (Some t, true)
+    | o -> (o, false)
+  in
   (* @errors(A, B) lists the operation's error types by name; repeated
      @errors traits accumulate. A non-name argument has no type to point
      at, so it is diagnosed rather than silently dropped. Only same-module
@@ -508,6 +515,7 @@ let lower_op_shape ~id ~resolve ~diags (d : Ast.decl) ~pname ~input ~output
           input = lower_opt input;
           input_name = pname;
           output = lower_opt output;
+          output_nullable;
           errors;
           wire = None;
           (* Protocol resolution happens strictly after lowering. *)

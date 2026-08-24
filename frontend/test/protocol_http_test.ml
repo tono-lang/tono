@@ -19,6 +19,7 @@ let op ?(traits = []) ?pname ?input ?output ?(errors = []) id : Ir.shape =
           input;
           input_name = pname;
           output;
+          output_nullable = false;
           errors;
           wire = None;
           impl_call = None;

@@ -97,6 +97,7 @@ pub(super) fn method_decl(m: Method<'_>) -> Decl {
         )),
     );
 
+    let output_nullable = crate::codegen::ops::op_output_nullable(op);
     let seam = impl_seam_var(n, op);
     let body = if binding.raw {
         raw_body(RawBody {
@@ -104,6 +105,7 @@ pub(super) fn method_decl(m: Method<'_>) -> Decl {
             module,
             input_present: input.is_some(),
             output,
+            output_nullable,
             symbol: &seam,
             boundary: &boundary,
             ret_zero,
@@ -137,7 +139,12 @@ pub(super) fn method_decl(m: Method<'_>) -> Decl {
             method = sig.split('(').next().unwrap_or(sig),
             sym = binding.symbol,
             module_path = binding.module,
-            signature = bound_signature(binding, input.map(go_type), output.map(go_type), n),
+            signature = bound_signature(
+                binding,
+                input.map(go_type),
+                output.map(|t| super::go_ret_type(t, output_nullable)),
+                n
+            ),
             client = n.client,
         ),
         refs,
@@ -156,6 +163,7 @@ struct RawBody<'a> {
     module: &'a Module,
     input_present: bool,
     output: Option<&'a crate::ir::Tref>,
+    output_nullable: bool,
     symbol: &'a str,
     boundary: &'a str,
     ret_zero: &'a str,
@@ -198,6 +206,7 @@ fn raw_body(b: RawBody<'_>) -> String {
     };
     let success = success_block(
         b.output,
+        b.output_nullable,
         b.module,
         &Payload {
             text: "string(outcome.Body)",

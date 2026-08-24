@@ -318,6 +318,17 @@ pub fn op_io(op: &Shape) -> (Option<&Tref>, Option<&Tref>) {
     }
 }
 
+/// Whether the operation declared a nullable (`T?`) return: the call can
+/// yield no value, and every target spells the return type accordingly.
+pub fn op_output_nullable(op: &Shape) -> bool {
+    match &op.kind {
+        ShapeKind::Operation {
+            output_nullable, ..
+        } => *output_nullable,
+        _ => false,
+    }
+}
+
 /// The typed wire binding a Protocol pass resolved for this operation, meant
 /// to be read directly by a target. `None` for a purely local operation.
 pub fn wire_binding(op: &Shape) -> Option<&crate::ir::WireBinding> {
@@ -397,7 +408,14 @@ pub fn client_decl(
                         }]
                     })
                     .unwrap_or_default(),
-                ret: output.map(type_expr_of),
+                ret: output.map(|t| {
+                    let ty = type_expr_of(t);
+                    if op_output_nullable(op) {
+                        TypeExpr::nullable(ty)
+                    } else {
+                        ty
+                    }
+                }),
                 err: err.clone(),
                 is_async: effect_of(op) == Effect::Async,
                 doc: doc_of(&op.traits),

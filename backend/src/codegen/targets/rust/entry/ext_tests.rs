@@ -390,6 +390,7 @@ fn handle_call_model(
                 id: "m#out".into(),
                 args: vec![],
             }),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {

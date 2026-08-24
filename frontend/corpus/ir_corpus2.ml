@@ -35,6 +35,7 @@ let resolved_wire : Ir.model =
             input = Some (ref_ "payments#Charge" []);
             input_name = None;
             output = Some (ref_ "payments#Charge" []);
+            output_nullable = false;
             errors = [];
             wire =
               Some

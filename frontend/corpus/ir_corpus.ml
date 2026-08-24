@@ -59,6 +59,7 @@ let list_charges : Ir.model =
             input = None;
             input_name = None;
             output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
+            output_nullable = false;
             errors = [];
             wire = None;
             impl_call = None;
@@ -82,8 +83,26 @@ let list_charges : Ir.model =
   }
 
 (* Example: nullability is two-state. [note] and [metadata] are nullable (T?);
-   the others are present (T). *)
+   the others are present (T). The lookup operation returns [Charge?]: the
+   member-level flag and the operation-level flag are pinned side by side. *)
 let nullable_charge : Ir.model =
+  let find_charge_op : Ir.shape =
+    {
+      id = "payments#FindCharge";
+      kind =
+        Ir.Operation
+          {
+            input = None;
+            input_name = None;
+            output = Some (ref_ "payments#Charge" []);
+            output_nullable = true;
+            errors = [];
+            wire = None;
+            impl_call = None;
+          };
+      traits = [];
+    }
+  in
   let charge : Ir.shape =
     {
       id = "payments#Charge";
@@ -109,7 +128,7 @@ let nullable_charge : Ir.model =
         {
           mod_name = "payments";
           shapes = [ charge ];
-          operations = [];
+          operations = [ find_charge_op ];
           extensions = [];
           ext_libs = [];
           tests = [];
@@ -290,6 +309,7 @@ let service_api : Ir.model =
             input = Some (ref_ "payments#ListChargesRequest" []);
             input_name = None;
             output = Some (ref_ "core#Page" [ ref_ "payments#Charge" [] ]);
+            output_nullable = false;
             errors = [ ref_ "payments#NotFound" [] ];
             wire = None;
             impl_call = None;
@@ -425,6 +445,7 @@ let entries_client : Ir.model =
             input = Some (ref_ "notes#note" []);
             input_name = None;
             output = Some (ref_ "notes#note" []);
+            output_nullable = false;
             errors = [ ref_ "notes#overloaded" [] ];
             wire = None;
             impl_call = None;
@@ -596,6 +617,7 @@ let bespoke_impl : Ir.model =
             input = Some (ref_ input []);
             input_name = None;
             output = Some (ref_ output []);
+            output_nullable = false;
             errors = [ ref_ "notes#overloaded" [] ];
             wire = None;
             impl_call = None;

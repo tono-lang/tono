@@ -13,6 +13,7 @@ fn op(id: &str, traits: Vec<Trait>, errors: Vec<Tref>) -> Shape {
             input_name: None,
             input: Some(Tref::Prim(Prim::String)),
             output: Some(Tref::Prim(Prim::String)),
+            output_nullable: false,
             errors,
             wire: None,
             impl_call: None,
@@ -28,6 +29,7 @@ fn http_op(id: &str) -> Shape {
             input_name: None,
             input: Some(Tref::Prim(Prim::String)),
             output: Some(Tref::Prim(Prim::String)),
+            output_nullable: false,
             errors: vec![],
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),

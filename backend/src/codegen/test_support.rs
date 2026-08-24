@@ -227,6 +227,7 @@ pub fn operation(id: &str, traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
             input_name: None,
             input: Some(reference("m#charge_input")),
             output: Some(reference("m#charge")),
+            output_nullable: false,
             errors: errors.into_iter().map(reference).collect(),
             wire: None,
             impl_call: None,

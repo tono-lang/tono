@@ -3,6 +3,7 @@
 package charges
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,6 +62,7 @@ type Client struct {
 // ClientAPI is the operation surface of Client, for mocking.
 type ClientAPI interface {
 	CreateCharge(ctx context.Context, input Charge) (Charge, error)
+	LatestCharge(ctx context.Context) (*Charge, error)
 }
 
 var _ ClientAPI = (*Client)(nil)
@@ -191,6 +193,39 @@ func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error)
 	}
 
 	return zero, DecodeCreateChargeError(outcome.Status, []byte(outcome.Body))
+}
+
+func (c *Client) LatestCharge(ctx context.Context) (*Charge, error) {
+	var zero *Charge
+	requestURL := c.settings.Endpoint + "/charges/latest"
+
+	headers := map[string]string{}
+	transport.SetHeader(headers, "X-API-Key", c.settings.APIKey)
+	for name, value := range c.settings.Headers {
+		transport.SetHeader(headers, name, value)
+	}
+
+	outcome := transport.Send(ctx, c.settings.HTTPClient, c.settings.Transport, transport.Request{
+		Method:  "GET",
+		URL:     requestURL,
+		Headers: headers,
+	})
+	if outcome.Cause != nil {
+		return zero, &TransportError{Cause: outcome.Cause}
+	}
+
+	if outcome.Status >= 200 && outcome.Status < 300 {
+		if trimmed := bytes.TrimSpace([]byte(outcome.Body)); len(trimmed) == 0 || string(trimmed) == "null" {
+			return nil, nil
+		}
+		out, path, ok := DecodeCharge([]byte(outcome.Body))
+		if !ok {
+			return zero, &DecodeError{Path: path, Expected: "Charge", Raw: outcome.Body}
+		}
+		return &out, nil
+	}
+
+	return zero, &APIError{Status: outcome.Status, Body: outcome.Body}
 }
 
 func DecodeCreateChargeError(status int, body []byte) error {

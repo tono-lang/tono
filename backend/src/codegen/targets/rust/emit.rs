@@ -362,6 +362,7 @@ mod tests {
                 input: None,
                 input_name: None,
                 output: None,
+                output_nullable: false,
                 errors: vec![],
                 wire: Some(wire),
                 impl_call: None,

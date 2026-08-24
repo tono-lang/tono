@@ -233,6 +233,7 @@ fn publish_op() -> Shape {
                 id: "m#ack".into(),
                 args: vec![],
             }),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(super::super::ext_fixtures::send_op_impl_call()),
@@ -252,6 +253,7 @@ fn no_input_op(id: &str, method: &str, output: Tref) -> Shape {
             input: None,
             input_name: None,
             output: Some(output),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {
@@ -293,6 +295,7 @@ fn echo_op() -> Shape {
             }),
             input_name: Some("msg".into()),
             output: Some(Tref::Prim(Prim::String)),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {

@@ -6,6 +6,7 @@ import {
   assertExclusiveTransport,
   formatScalar,
   hasHeader,
+  httpSend,
   httpSendWithTimeout,
   resolveMaxRetries,
   retryDelay,
@@ -209,6 +210,43 @@ export class Client {
       }
       throw err;
     }
+  }
+  async latestCharge(): Promise<Charge | null> {
+    const url = this.settings.endpoint + "/charges/latest";
+
+    const headers: Record<string, string> = {};
+    setHeader(headers, "X-API-Key", formatScalar(this.settings.apiKey));
+    for (const [k, v] of Object.entries(this.options.headers ?? {}))
+      setHeader(headers, k, v);
+
+    const request: HttpRequest = {
+      method: "GET",
+      url,
+      headers: { ...headers },
+      body: undefined,
+    };
+
+    let response: HttpResponse;
+    try {
+      response = await httpSend(this.options, request, undefined);
+    } catch (cause) {
+      throw new TransportError(cause);
+    }
+    const outcome = response;
+
+    if (response.status >= 200 && response.status < 300) {
+      const rawBody = outcome.body.trim();
+      if (rawBody === "" || rawBody === "null") {
+        return null;
+      }
+      try {
+        return parseCharge(outcome.body);
+      } catch (path) {
+        throw new DecodeError(path as string, "Charge", outcome.body);
+      }
+    }
+
+    throw new APIError(outcome.status, outcome.body);
   }
 }
 

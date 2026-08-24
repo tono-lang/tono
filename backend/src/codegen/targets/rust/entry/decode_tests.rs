@@ -35,6 +35,7 @@ fn success_block_with_no_required_members_skips_the_presence_probe() {
             id: "m#note".into(),
             args: vec![],
         }),
+        false,
         &module,
         "body",
     );
@@ -51,6 +52,7 @@ fn success_block_with_required_members_calls_the_shared_per_type_decode() {
             id: "m#charge".into(),
             args: vec![],
         }),
+        false,
         &module_of(vec![charge_shape()]),
         "body",
     );
@@ -81,7 +83,7 @@ fn output_decode_decl_skips_a_shape_with_no_required_member() {
 #[test]
 fn success_block_of_a_bare_i64_output_parses_the_wire_string() {
     let module = module_of(vec![]);
-    let out = success_block(Some(&Tref::Prim(Prim::I64)), &module, "body");
+    let out = success_block(Some(&Tref::Prim(Prim::I64)), false, &module, "body");
     assert!(out.contains("let wire: String = serde_json::from_str(body)"));
     assert!(out.contains("wire.parse::<i64>()"));
 }
@@ -89,7 +91,7 @@ fn success_block_of_a_bare_i64_output_parses_the_wire_string() {
 #[test]
 fn success_block_of_a_bare_u64_output_parses_the_wire_string() {
     let module = module_of(vec![]);
-    let out = success_block(Some(&Tref::Prim(Prim::U64)), &module, "body");
+    let out = success_block(Some(&Tref::Prim(Prim::U64)), false, &module, "body");
     assert!(out.contains("let wire: String = serde_json::from_str(body)"));
     assert!(out.contains("wire.parse::<u64>()"));
 }
