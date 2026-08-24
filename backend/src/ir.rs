@@ -107,7 +107,10 @@ pub use crate::ir_tests_model::*;
 /// handle passed as a class reference, for a library that takes the class
 /// itself and constructs on its own; carried as the handle's tono name and
 /// spelled by each emitter as that handle's foreign name.
-pub const TONO_IR_VERSION: u32 = 28;
+/// v29 added an operation's `output_nullable` flag (omitted when false): a
+/// declared `T?` return, mirroring the member-level `required` flag since
+/// nullability is not a type node.
+pub const TONO_IR_VERSION: u32 = 29;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -588,6 +591,11 @@ pub enum ShapeKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_name: Option<String>,
         output: Option<Tref>,
+        /// A declared `T?` return: the call can yield no value. Mirrors the
+        /// member-level `required` flag, since nullability is not a type
+        /// node; the frontend omits the key when it is false.
+        #[serde(default, skip_serializing_if = "is_false")]
+        output_nullable: bool,
         #[serde(default)]
         errors: Vec<Tref>,
         // Boxed: WireBinding is far larger than the other Operation fields, and

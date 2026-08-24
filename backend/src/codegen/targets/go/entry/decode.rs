@@ -40,6 +40,7 @@ pub(super) struct Payload<'a> {
 /// field or loosening a bound does not break the client.
 pub(super) fn success_block(
     output: Option<&Tref>,
+    nullable: bool,
     module: &Module,
     payload: &Payload<'_>,
     fail: &dyn Fn(String) -> String,
@@ -47,6 +48,26 @@ pub(super) fn success_block(
 ) -> String {
     let en = error_names();
     let (text, bytes) = (payload.text, payload.bytes);
+    // A nullable (`T?`) output treats an empty or JSON-null success body as
+    // the declared absence, before any typed decode runs; a present body
+    // decodes exactly like the non-nullable form and returns its address
+    // (a collection returns itself, nil already being its absence).
+    let absent_prefix = if nullable && output.is_some() {
+        refs.push(import("bytes", "bytes"));
+        format!(
+            "\tif trimmed := bytes.TrimSpace({bytes}); len(trimmed) == 0 || string(trimmed) == \"null\" {{\n\
+             \t\treturn nil, nil\n\t}}\n"
+        )
+    } else {
+        String::new()
+    };
+    let present = |t: &Tref| {
+        if nullable && !matches!(t, Tref::List(_) | Tref::Map(_, _)) {
+            "&out"
+        } else {
+            "out"
+        }
+    };
     match output {
         // A 64-bit integer rides the wire as a string, so the success body is
         // a JSON string decoded and parsed, not a bare number.
@@ -64,13 +85,15 @@ pub(super) fn success_block(
                 "strconv.ParseInt"
             };
             format!(
-                "\tvar wire string\n\
+                "{absent_prefix}\
+                 \tvar wire string\n\
                  \tif err := json.Unmarshal({bytes}, &wire); err != nil {{\n\
                  \t\treturn zero, {fail_decode}\n\t}}\n\
                  \tout, err := {parse}(wire, 10, 64)\n\
                  \tif err != nil {{\n\
                  \t\treturn zero, {fail_decode}\n\t}}\n\
-                 \treturn out, nil"
+                 \treturn {ret}, nil",
+                ret = present(t),
             )
         }
         Some(t) => {
@@ -91,10 +114,12 @@ pub(super) fn success_block(
                     decode = en.decode,
                 ));
                 format!(
-                    "\tout, path, ok := {decode_fn}({bytes})\n\
+                    "{absent_prefix}\
+                     \tout, path, ok := {decode_fn}({bytes})\n\
                      \tif !ok {{\n\t\treturn zero, {fail_decode}\n\t}}\n\
-                     \treturn out, nil",
+                     \treturn {ret}, nil",
                     decode_fn = output_decode_fn_name(&ty),
+                    ret = present(t),
                 )
             } else {
                 refs.push(import("json", "encoding/json"));
@@ -103,10 +128,12 @@ pub(super) fn success_block(
                     decode = en.decode,
                 ));
                 format!(
-                    "\tvar out {ty}\n\
+                    "{absent_prefix}\
+                     \tvar out {ty}\n\
                      \tif err := json.Unmarshal({bytes}, &out); err != nil {{\n\
                      \t\treturn zero, {fail_decode}\n\t}}\n\
-                     \treturn out, nil",
+                     \treturn {ret}, nil",
+                    ret = present(t),
                 )
             }
         }

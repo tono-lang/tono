@@ -58,6 +58,7 @@ fn service_with_op(op_ids: Vec<&str>, keep_op_shape: bool) -> Model {
                 input_name: None,
                 input: None,
                 output: None,
+                output_nullable: false,
                 errors: vec![],
                 wire: None,
                 impl_call: None,

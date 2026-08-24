@@ -11,10 +11,14 @@ use super::*;
 
 /// The zero-value declaration and the return prefix a method needs to bail out
 /// early. `var zero T` is the one zero spelling valid for every Go type (a
-/// composite literal is not, for primitives).
-pub(super) fn zero_of(output: Option<&Tref>) -> (String, &'static str) {
+/// composite literal is not, for primitives). A nullable return's zero is the
+/// nil of its pointer (or collection) spelling.
+pub(super) fn zero_of(output: Option<&Tref>, nullable: bool) -> (String, &'static str) {
     match output {
-        Some(t) => (format!("\tvar zero {}\n", go_type(t)), "zero, "),
+        Some(t) => (
+            format!("\tvar zero {}\n", go_ret_type(t, nullable)),
+            "zero, ",
+        ),
         None => (String::new(), ""),
     }
 }
@@ -133,8 +137,9 @@ pub(super) fn op_method_decl(
     let en = error_names();
     let (sig, mut refs) = method_signature(op, config);
     let (input, output) = crate::codegen::ops::op_io(op);
+    let output_nullable = crate::codegen::ops::op_output_nullable(op);
     let fail = |expr: String| expr;
-    let (zero_decl, ret_zero) = zero_of(output);
+    let (zero_decl, ret_zero) = zero_of(output, output_nullable);
     // The zero value and the decode both name the output type in opaque text.
     if let Some(t) = output {
         push_type_symbols(t, &mut refs);
@@ -214,6 +219,7 @@ pub(super) fn op_method_decl(
     };
     let success = decode::success_block(
         output,
+        output_nullable,
         module,
         &if wire.response_bindings.is_empty() {
             decode::Payload {

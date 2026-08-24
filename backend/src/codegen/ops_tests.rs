@@ -16,6 +16,7 @@ fn op(traits: Vec<Trait>, errors: Vec<&str>) -> Shape {
             input: None,
             input_name: None,
             output: None,
+            output_nullable: false,
             errors: errors
                 .into_iter()
                 .map(|id| Tref::Ref {
@@ -92,6 +93,7 @@ fn a_declared_error_also_used_as_an_operation_input_is_not_error_only() {
         }),
         input_name: None,
         output: None,
+        output_nullable: false,
         errors: vec![Tref::Ref {
             id: "m#retry_hint".into(),
             args: vec![],
@@ -157,6 +159,7 @@ fn a_declared_error_also_used_as_a_nested_entry_ops_input_is_not_error_only() {
         }),
         input_name: None,
         output: None,
+        output_nullable: false,
         errors: vec![Tref::Ref {
             id: "m#not_found".into(),
             args: vec![],

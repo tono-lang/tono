@@ -187,6 +187,7 @@ fn shape_kind() -> impl Strategy<Value = ShapeKind> {
                 input,
                 input_name: None,
                 output,
+                output_nullable: false,
                 errors,
                 wire: None,
                 impl_call: None,

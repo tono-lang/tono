@@ -231,6 +231,7 @@ fn ops_model() -> Model {
                 id: "payments#Charge".into(),
                 args: vec![],
             }),
+            output_nullable: false,
             errors: vec![Tref::Ref {
                 id: "payments#not_found".into(),
                 args: vec![],
@@ -694,6 +695,7 @@ fn rust_entry_op_types_skip_a_redundant_import_for_same_module_types() {
                                         id: "payments.common#money".into(),
                                         args: vec![],
                                     }),
+                                    output_nullable: false,
                                     errors: vec![],
                                     wire: Some(Box::new(WireBinding {
                                         uri: WireValue::Template(vec![TemplatePart::Lit(

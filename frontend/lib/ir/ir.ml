@@ -82,6 +82,9 @@ and shape_kind =
           (* the declared parameter name; [None] for the unnamed legacy form,
              where [.input] has no user-given name to resolve *)
       output : tref option;
+      output_nullable : bool;
+          (* a declared [T?] return: the call can yield no value; mirrors the
+             member-level [required] flag, since nullability is not a type node *)
       errors : tref list;
       wire : wire_binding option;
       impl_call : op_impl_call option;

@@ -167,7 +167,14 @@ pub(super) fn method(m: Method<'_>) -> String {
         } else {
             throw(format!("{discriminator}(outcome.code, outcome.body)"))
         };
-        let success = success_block(output, module, ret, throw, refs);
+        let success = success_block(
+            output,
+            crate::codegen::ops::op_output_nullable(op),
+            module,
+            ret,
+            throw,
+            refs,
+        );
         format!(
             "    let outcome;\n\
              \x20   try {{\n\

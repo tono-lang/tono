@@ -106,6 +106,7 @@ fn ext_module(tests: Vec<TestDecl>) -> Module {
             input_name: None,
             input: Some(Tref::Prim(Prim::String)),
             output: Some(Tref::Prim(Prim::String)),
+            output_nullable: false,
             errors: vec![Tref::Ref {
                 id: "notes#overloaded".into(),
                 args: vec![],

@@ -167,6 +167,7 @@ pub fn per_lang_handle_module(lang: &str) -> Module {
             input: None,
             input_name: None,
             output: Some(string_t()),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {

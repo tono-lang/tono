@@ -205,6 +205,7 @@ fn appendix_model() -> Model {
                 id: "main#note".into(),
                 args: vec![],
             }),
+            output_nullable: false,
             errors: vec![],
             wire: Some(Box::new(tono_backend::ir::WireBinding {
                 method: "GET".into(),
@@ -342,6 +343,7 @@ fn handle_call_model() -> Model {
             }),
             input_name: Some("msg".into()),
             output: Some(ack_t.clone()),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(send_op_impl_call()),
@@ -360,6 +362,7 @@ fn handle_call_model() -> Model {
             }),
             input_name: Some("msg".into()),
             output: Some(ack_t),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(tono_backend::ir::OpImplCall {

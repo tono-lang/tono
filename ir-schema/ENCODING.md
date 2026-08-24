@@ -151,7 +151,10 @@ construction kinds (`entry` and `config`, below).
   native doc comment.
 - `operation` carries `input`/`output` as a type reference or `null`, and
   `errors` as an array of type references. They are type references (not bare
-  ids) so an operation can return an applied generic directly. `wire` (the
+  ids) so an operation can return an applied generic directly.
+  `output_nullable: true` (v29) marks a declared `T?` return, the same
+  two-state rule as a member's `required` (nullability is not a type node);
+  the key is omitted when false. `wire` (the
   resolved HTTP binding, see below) is present only on an operation with an
   `@http` trait; the key is omitted otherwise. `impl_call` (v15) is present
   only on an operation with its own `impl .field.method(args)` body

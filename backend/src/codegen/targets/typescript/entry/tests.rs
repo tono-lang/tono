@@ -758,3 +758,38 @@ fn an_http_endpoint_binding_reads_the_typed_settings_field() {
     assert!(out.contains("const url = this.settings.endpoint + "));
     assert!(!out.contains("this.options.values?.[\"endpoint\"]"));
 }
+
+#[test]
+fn a_nullable_op_return_becomes_or_null_and_an_absent_body_returns_null() {
+    let mut module = with_descriptors(fixture_module());
+    // A second wire op alongside the non-nullable save_note, so the test
+    // measures the difference between T and T? in the same surface.
+    let shape = module
+        .shapes
+        .iter_mut()
+        .find(|s| s.id == "notes#client")
+        .expect("notes#client entry shape");
+    let ShapeKind::Entry { operations, .. } = &mut shape.kind else {
+        panic!("notes#client is not an entry shape");
+    };
+    let mut op = operations[0].clone();
+    op.id = "notes#client.find_note".into();
+    let ShapeKind::Operation {
+        output_nullable, ..
+    } = &mut op.kind
+    else {
+        panic!("cloned shape is not an operation");
+    };
+    *output_nullable = true;
+    operations.push(op);
+
+    let out = text(&module);
+    // The declared T stays T; the declared T? admits null.
+    assert!(out.contains("async saveNote(input: Note): Promise<Note> {"));
+    assert!(out.contains("async findNote(input: Note): Promise<Note | null> {"));
+    // An empty or JSON-null success body is the declared absence; a present
+    // body runs the same strict decode.
+    assert!(out.contains("const rawBody = outcome.body.trim();"));
+    assert!(out.contains("if (rawBody === \"\" || rawBody === \"null\") {"));
+    assert!(out.contains("return null;"));
+}

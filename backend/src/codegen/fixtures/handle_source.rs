@@ -297,6 +297,7 @@ fn http_op(id: &str, method: &str, path: Vec<TemplatePart>, endpoint_field: &str
             input: Some(reference(input)),
             input_name: Some(input_name.into()),
             output: Some(reference("kvs#item")),
+            output_nullable: false,
             errors: vec![],
             wire: Some(Box::new(WireBinding {
                 method: method.into(),
@@ -370,6 +371,7 @@ pub fn handle_source_module(lang: &str) -> Module {
             input: None,
             input_name: None,
             output: Some(reference("kvs#cfg")),
+            output_nullable: false,
             errors: vec![],
             wire: None,
             impl_call: Some(OpImplCall {

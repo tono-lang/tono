@@ -30,12 +30,22 @@ use super::module_symbol;
 /// field or loosening a bound does not break the client.
 pub(super) fn success_block(
     output: Option<&Tref>,
+    nullable: bool,
     module: &Module,
     ret: &str,
     throw: &dyn Fn(String) -> String,
     refs: &mut Vec<Symbol>,
 ) -> String {
     let en = error_names();
+    // A nullable (`T?`) output treats an empty or JSON-null success body as
+    // the declared absence, before any typed decode runs; a present body
+    // decodes exactly like the non-nullable form.
+    let absent_prefix = if nullable && output.is_some() {
+        "    const rawBody = outcome.body.trim();\n    if (rawBody === \"\" || rawBody === \"null\") {\n      return null;\n    }\n"
+    } else {
+        ""
+    };
+    let with_prefix = |block: String| format!("{absent_prefix}{block}");
     match output {
         Some(Tref::Ref { id, .. }) => {
             refs.push(module_symbol(&en.decode, module));
@@ -51,17 +61,17 @@ pub(super) fn success_block(
                     "new {}(path as string, \"{out_name}\", outcome.body)",
                     en.decode
                 ));
-                format!(
+                with_prefix(format!(
                     "    try {{\n      return parse{out_name}(outcome.body);\n    }} catch (path) {{\n      {fail}\n    }}",
-                )
+                ))
             } else {
                 let t = throw(format!(
                     "new {}(\"$\", \"{out_name}\", outcome.body)",
                     en.decode
                 ));
-                format!(
+                with_prefix(format!(
                     "    try {{\n      return decode{out_name}(JSON.parse(outcome.body));\n    }} catch {{\n      {t}\n    }}",
-                )
+                ))
             }
         }
         Some(t) => {
@@ -73,13 +83,13 @@ pub(super) fn success_block(
                 t,
             );
             if decode == "JSON.parse(outcome.body)" {
-                format!("    return {decode} as {ret};")
+                with_prefix(format!("    return {decode} as {ret};"))
             } else {
                 refs.push(module_symbol(&en.decode, module));
-                format!(
+                with_prefix(format!(
                     "    try {{\n      return {decode} as {ret};\n    }} catch {{\n      {t}\n    }}",
                     t = throw(format!("new {}(\"$\", {ret:?}, outcome.body)", en.decode)),
-                )
+                ))
             }
         }
         None => "    return;".to_string(),

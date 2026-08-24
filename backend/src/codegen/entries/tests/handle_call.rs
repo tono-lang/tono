@@ -312,6 +312,7 @@ fn a_field_source_forwarding_a_handle_owns_it() {
                 input_name: None,
                 input: None,
                 output: None,
+                output_nullable: false,
                 errors: vec![],
                 wire: None,
                 impl_call: Some(handle_call("other", "read", vec![])),

@@ -97,7 +97,10 @@
 (* v27 widened call_arg with Ca_type: a declared opaque handle passed as a
    class reference (the library constructs it), carried as the handle's
    tono name and spelled by each emitter as that handle's foreign name. *)
-let current_ir_version = 28
+(* v29 added an operation's "output_nullable" flag (omitted when false): a
+   declared [T?] return, mirroring the member-level "required" flag since
+   nullability is not a type node. *)
+let current_ir_version = 29
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry
@@ -182,7 +185,9 @@ let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("kind", `String "service");
         ("operations", `List (List.map (fun s -> `String s) operations));
       ]
-  | Operation { input; input_name; output; errors; wire; impl_call } -> (
+  | Operation
+      { input; input_name; output; output_nullable; errors; wire; impl_call }
+    -> (
       let opt = function None -> `Null | Some t -> encode_tref t in
       [
         ("kind", `String "operation");
@@ -190,6 +195,9 @@ let rec encode_shape_kind_fields (k : Ir.shape_kind) : (string * Ir.json) list =
         ("output", opt output);
         ("errors", `List (List.map encode_tref errors));
       ]
+      (* Omitted when false, like the extension [raw] flag: the non-nullable
+         return is the default. *)
+      @ (if output_nullable then [ ("output_nullable", `Bool true) ] else [])
       @ (match input_name with
         | None -> []
         | Some n -> [ ("input_name", `String n) ])
@@ -334,6 +342,11 @@ let rec decode_shape_kind kvs =
             Ok (Some s)
       in
       let* output = decode_tref_opt (get "output") in
+      let* output_nullable =
+        match get "output_nullable" with
+        | None -> Ok false
+        | Some v -> Ir_json_base.as_bool v
+      in
       let* errors =
         match get "errors" with
         | None -> Ok []
@@ -349,7 +362,17 @@ let rec decode_shape_kind kvs =
             let* c = decode_op_impl_call v in
             Ok (Some c)
       in
-      Ok (Ir.Operation { input; input_name; output; errors; wire; impl_call })
+      Ok
+        (Ir.Operation
+           {
+             input;
+             input_name;
+             output;
+             output_nullable;
+             errors;
+             wire;
+             impl_call;
+           })
   | "entry" ->
       let* fields = decode_fields (get "fields") in
       let* operations =

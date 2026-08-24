@@ -310,7 +310,15 @@ pub(super) fn op_seam_decls(
             refs.extend(super::type_refs(t, module));
         }
         let ret = output
-            .map(|t| render_type(&type_expr_of(t), &TsRules))
+            .map(|t| {
+                let expr = type_expr_of(t);
+                let expr = if crate::codegen::ops::op_output_nullable(op) {
+                    crate::codegen::tree::TypeExpr::nullable(expr)
+                } else {
+                    expr
+                };
+                render_type(&expr, &TsRules)
+            })
             .unwrap_or_else(|| "void".to_string());
         let throw = |expr: String| format!("throw {expr};");
         let body = impl_call_body(

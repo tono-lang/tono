@@ -606,7 +606,17 @@ fn op_method(
     if let Some(t) = output {
         push_type_symbols(t, &module.name, refs);
     }
-    let ret = output.map(rust_type).unwrap_or_else(|| "()".into());
+    let output_nullable = crate::codegen::ops::op_output_nullable(op);
+    let ret = output
+        .map(|t| {
+            let base = rust_type(t);
+            if output_nullable {
+                format!("Option<{base}>")
+            } else {
+                base
+            }
+        })
+        .unwrap_or_else(|| "()".into());
 
     let mut validate_block = String::new();
     if let Some(Tref::Ref { id, .. }) = input {
@@ -671,7 +681,7 @@ fn op_method(
     };
 
     let discriminator = surface::discriminator_fn_name(n, op);
-    let success = decode::success_block(output, module, "&outcome.body");
+    let success = decode::success_block(output, output_nullable, module, "&outcome.body");
     let fields = transport::FieldCtx {
         entry,
         module,

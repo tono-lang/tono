@@ -155,6 +155,7 @@ let gen_shape_kind : Ir.shape_kind G.t =
            input;
            input_name = None;
            output;
+           output_nullable = false;
            errors;
            wire = None;
            impl_call = None;

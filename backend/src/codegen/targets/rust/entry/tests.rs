@@ -52,6 +52,7 @@ fn push_client_op(
             input,
             input_name: None,
             output,
+            output_nullable: false,
             errors,
             wire: None,
             impl_call: None,
@@ -108,6 +109,7 @@ pub(super) fn simple_entry_module() -> Module {
                 id: "m#charge".into(),
                 args: vec![],
             }),
+            output_nullable: false,
             errors: vec![Tref::Ref {
                 id: "m#payment_declined".into(),
                 args: vec![],
@@ -320,6 +322,7 @@ fn a_multi_entry_module_prefixes_settings_descriptors_and_discriminators() {
             input_name: None,
             input: None,
             output: None,
+            output_nullable: false,
             errors: vec![],
             wire: Some(Box::new(WireBinding {
                 method: "GET".into(),
@@ -552,6 +555,7 @@ fn an_operation_with_neither_a_descriptor_nor_an_impl_fails_loudly() {
                         input_name: None,
                         input: None,
                         output: None,
+                        output_nullable: false,
                         errors: vec![],
                         wire: None,
                         impl_call: None,
@@ -690,4 +694,44 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(out.contains("operation has no implementation for Rust"));
     // The entry doc rides the client type.
     assert!(out.contains("/// The matrix entry."));
+}
+
+#[test]
+fn a_nullable_op_return_becomes_option_and_an_absent_body_decodes_to_none() {
+    let mut module = simple_entry_module();
+    // A second wire op alongside the non-nullable create_charge, so the test
+    // measures the difference between T and T? in the same surface.
+    let shape = module
+        .shapes
+        .iter_mut()
+        .find(|s| s.id == "m#client")
+        .expect("m#client entry shape");
+    let ShapeKind::Entry { operations, .. } = &mut shape.kind else {
+        panic!("m#client is not an entry shape");
+    };
+    let mut op = operations[0].clone();
+    op.id = "m#client.find_charge".into();
+    let ShapeKind::Operation {
+        output_nullable, ..
+    } = &mut op.kind
+    else {
+        panic!("cloned shape is not an operation");
+    };
+    *output_nullable = true;
+    operations.push(op);
+
+    let out = text(&module);
+    // The declared T stays T; the declared T? becomes Option<T>.
+    assert!(out.contains(
+        "pub async fn create_charge(&self, input: Charge) -> Result<Charge, TonoError> {"
+    ));
+    assert!(out.contains(
+        "pub async fn find_charge(&self, input: Charge) -> Result<Option<Charge>, TonoError> {"
+    ));
+    // An empty or JSON-null success body is the declared absence; a present
+    // body runs the same strict decode and wraps.
+    assert!(out.contains("if trimmed.is_empty() || trimmed == \"null\" {"));
+    assert!(out.contains("Ok(None)"));
+    assert!(out.contains("let decoded = decode_charge(body);"));
+    assert!(out.contains("decoded.map(Some)"));
 }

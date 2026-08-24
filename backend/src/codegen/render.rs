@@ -710,6 +710,7 @@ mod tests {
                 input_name: None,
                 input: None,
                 output: None,
+                output_nullable: false,
                 errors: vec![],
                 wire: None,
                 impl_call: None,

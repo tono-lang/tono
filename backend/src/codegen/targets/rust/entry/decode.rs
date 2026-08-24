@@ -30,11 +30,42 @@ use super::rust_type;
 /// The tail of a client method: an expression of type `Result<Output,
 /// TonoError>` decoding `body_expr` (already the `&str` success body) into
 /// the declared output, ready to sit as the last (semicolon-less) line of the
-/// `Success` match arm.
-pub(super) fn success_block(output: Option<&Tref>, module: &Module, body_expr: &str) -> String {
-    match output {
-        None => "Ok(())".to_string(),
-        Some(Tref::Ref { id, .. }) => {
+/// `Success` match arm. A nullable (`T?`) output treats an empty or JSON-null
+/// success body as the declared absence (`Ok(None)`) before any typed decode
+/// runs; a present body decodes exactly like the non-nullable form, wrapped
+/// in `Some`.
+pub(super) fn success_block(
+    output: Option<&Tref>,
+    nullable: bool,
+    module: &Module,
+    body_expr: &str,
+) -> String {
+    let Some(out) = output else {
+        return "Ok(())".to_string();
+    };
+    if nullable {
+        let decoded = decode_expr(out, module, "body");
+        // A single-expression decode binds bare (a redundant block would trip
+        // the generated SDK's unused_braces lint); the multi-statement i64
+        // form keeps its block.
+        let bind = if decoded.contains('\n') {
+            format!("let decoded = {{\n{decoded}\n    }};")
+        } else {
+            format!("let decoded = {decoded};")
+        };
+        return format!(
+            "let body = {body_expr};\n\
+             let trimmed = body.trim();\n\
+             if trimmed.is_empty() || trimmed == \"null\" {{\n\
+             \x20   Ok(None)\n\
+             }} else {{\n\
+             \x20   {bind}\n\
+             \x20   decoded.map(Some)\n\
+             }}"
+        );
+    }
+    match out {
+        Tref::Ref { id, .. } => {
             let ty = type_ident_from_id(id);
             let out_shape = module.shapes.iter().find(|s| s.id == *id);
             if out_shape.is_some_and(shape_has_required) {
@@ -42,32 +73,54 @@ pub(super) fn success_block(output: Option<&Tref>, module: &Module, body_expr: &
                 // the call site is just the call.
                 format!("{}({body_expr})", output_decode_fn_name(&ty))
             } else {
+                format!(
+                    "let body = {body_expr};\n{}",
+                    decode_expr(out, module, "body")
+                )
+            }
+        }
+        _ => format!(
+            "let body = {body_expr};\n{}",
+            decode_expr(out, module, "body")
+        ),
+    }
+}
+
+/// The `Result<T, TonoError>` expression decoding the already-bound `&str`
+/// named by `body_ref` into `t`, shared by the nullable and plain forms of
+/// [`success_block`].
+fn decode_expr(t: &Tref, module: &Module, body_ref: &str) -> String {
+    match t {
+        Tref::Ref { id, .. } => {
+            let ty = type_ident_from_id(id);
+            let out_shape = module.shapes.iter().find(|s| s.id == *id);
+            if out_shape.is_some_and(shape_has_required) {
+                format!("{}({body_ref})", output_decode_fn_name(&ty))
+            } else {
                 let fail = format!(
-                    "TonoError::Decode(DecodeError {{ path: \"$\".to_string(), expected: {ty:?}.to_string(), raw: body.to_string() }})"
+                    "TonoError::Decode(DecodeError {{ path: \"$\".to_string(), expected: {ty:?}.to_string(), raw: {body_ref}.to_string() }})"
                 );
-                format!("let body = {body_expr};\nserde_json::from_str::<{ty}>(body).map_err(|_| {fail})")
+                format!("serde_json::from_str::<{ty}>({body_ref}).map_err(|_| {fail})")
             }
         }
         // A bare 64-bit integer output rides the wire as a JSON string; every
         // other bare primitive (and any container/enum, which decode through
         // their own derived/hand-written `Deserialize`) parses directly.
-        Some(t @ Tref::Prim(Prim::I64 | Prim::U64)) => {
+        Tref::Prim(Prim::I64 | Prim::U64) => {
             let ty = rust_type(t);
             let fail = format!(
-                "TonoError::Decode(DecodeError {{ path: \"$\".to_string(), expected: {ty:?}.to_string(), raw: body.to_string() }})"
+                "TonoError::Decode(DecodeError {{ path: \"$\".to_string(), expected: {ty:?}.to_string(), raw: {body_ref}.to_string() }})"
             );
             format!(
-                "let body = {body_expr};\nlet wire: String = serde_json::from_str(body).map_err(|_| {fail})?;\nwire.parse::<{ty}>().map_err(|_| {fail})",
+                "let wire: String = serde_json::from_str({body_ref}).map_err(|_| {fail})?;\nwire.parse::<{ty}>().map_err(|_| {fail})",
             )
         }
-        Some(t) => {
+        _ => {
             let ty = rust_type(t);
             let fail = format!(
-                "TonoError::Decode(DecodeError {{ path: \"$\".to_string(), expected: {ty:?}.to_string(), raw: body.to_string() }})"
+                "TonoError::Decode(DecodeError {{ path: \"$\".to_string(), expected: {ty:?}.to_string(), raw: {body_ref}.to_string() }})"
             );
-            format!(
-                "let body = {body_expr};\nserde_json::from_str::<{ty}>(body).map_err(|_| {fail})"
-            )
+            format!("serde_json::from_str::<{ty}>({body_ref}).map_err(|_| {fail})")
         }
     }
 }

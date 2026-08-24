@@ -289,7 +289,8 @@ pub(super) fn method_signature(op: &Shape, config: &CasingConfig) -> (String, Ve
     let ret = match output {
         Some(t) => {
             push_type_symbols(t, &mut refs);
-            format!("({}, error)", go_type(t))
+            let nullable = crate::codegen::ops::op_output_nullable(op);
+            format!("({}, error)", go_ret_type(t, nullable))
         }
         None => "error".to_string(),
     };
