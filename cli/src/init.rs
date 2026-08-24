@@ -193,7 +193,7 @@ fn run_update(manifest_path: &Path, targets_csv: &Option<String>, yes: bool) -> 
         // that needs it. Scaffolding is a no-op when the file is already there.
         if let InitTarget::Generatable(kind) = target {
             if let Some((out, package)) = scaffold_site(&cfg, kind, is_new, &package_default) {
-                scaffold_native_manifest(kind, &base.join(out), &package)?;
+                crate::native_manifest::scaffold(kind, &base.join(out), &package)?;
             }
         }
     }
@@ -327,7 +327,7 @@ fn run_fresh(
             // The same values the block just rendered declares, so the native
             // manifest and the config agree from the start.
             let package = default_package(kind, &package_default);
-            scaffold_native_manifest(kind, &cwd.join("dist").join(kind.dir()), &package)?;
+            crate::native_manifest::scaffold(kind, &cwd.join("dist").join(kind.dir()), &package)?;
         }
     }
     scaffold_gitignore(&cwd)?;
@@ -434,58 +434,11 @@ fn target_block(target: InitTarget, package_default: &str) -> String {
 /// it as a module path, the others take the project slug as-is. Applied once,
 /// here: callers pass the result around verbatim so a path the manifest
 /// already spells out in full is never prefixed a second time.
-fn default_package(kind: TargetKind, base: &str) -> String {
+pub(crate) fn default_package(kind: TargetKind, base: &str) -> String {
     match kind {
         TargetKind::Go => format!("example.com/{base}"),
         _ => base.to_string(),
     }
-}
-
-// --- native manifest scaffolding ------------------------------------------
-
-/// Write a minimal native manifest for `kind` under `dir`, unless one is
-/// already there. Deliberately not a complete, buildable project: generated
-/// entry/client code emits its own HTTP transport inline, so no runtime
-/// dependency needs wiring in beyond what each target's own manifest already
-/// declares.
-fn scaffold_native_manifest(kind: TargetKind, dir: &Path, package: &str) -> Result<(), String> {
-    let (file_name, contents): (&str, String) = match kind {
-        TargetKind::Rust => (
-            "Cargo.toml",
-            format!(
-                "[package]\n\
-                 name = \"{package}\"\n\
-                 version = \"0.1.0\"\n\
-                 edition = \"2021\"\n\
-                 \n\
-                 [dependencies]\n\
-                 serde = {{ version = \"1\", features = [\"derive\"] }}\n\
-                 serde_json = \"1\"\n"
-            ),
-        ),
-        TargetKind::Go => (
-            "go.mod",
-            format!(
-                "module {package}\n\
-                 \n\
-                 go 1.21\n"
-            ),
-        ),
-        TargetKind::TypeScript => (
-            "package.json",
-            format!("{{\n  \"name\": \"{package}\",\n  \"version\": \"0.1.0\",\n  \"type\": \"module\"\n}}\n"),
-        ),
-    };
-
-    let path = dir.join(file_name);
-    if path.exists() {
-        eprintln!("{}: already exists, skipping", path.display());
-        return Ok(());
-    }
-    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    fs::write(&path, contents).map_err(|e| format!("{}: {e}", path.display()))?;
-    eprintln!("wrote {}", path.display());
-    Ok(())
 }
 
 // --- root/name detection ---------------------------------------------------
@@ -552,7 +505,7 @@ fn scan_for_tono_files(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
 }
 
 /// The project name default: the working directory's own name.
-fn project_name_default(dir: &Path) -> String {
+pub(crate) fn project_name_default(dir: &Path) -> String {
     let absolute = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     absolute
         .file_name()
@@ -562,7 +515,7 @@ fn project_name_default(dir: &Path) -> String {
 
 /// Lowercase, `[a-z0-9-]`, no repeated or trailing separators: a reasonable
 /// default `package` for any of the three target ecosystems.
-fn slugify(name: &str) -> String {
+pub(crate) fn slugify(name: &str) -> String {
     let mut out = String::new();
     for ch in name.chars().flat_map(char::to_lowercase) {
         if ch.is_ascii_alphanumeric() {
