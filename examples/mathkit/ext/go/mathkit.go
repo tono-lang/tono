@@ -176,16 +176,24 @@ func FromFallback[T any](strategy string, calcs ...Calculator[T]) (Calculator[T]
 // one every generated SDK's entry takes as well, on purpose: a spelling
 // naming it is the library's, and the generated code must keep the package
 // selector on it.
-type Client struct{ addr string }
+type Client struct {
+	addr     string
+	greeting string
+}
 
 // Open starts a session with the service at addr.
 func Open(addr string) (*Client, error) {
 	return &Client{addr: addr}, nil
 }
 
-// Ping answers the service's greeting.
+// Ping answers the service's greeting ("pong" unless the session was
+// opened with one of its own).
 func (c *Client) Ping() (string, error) {
-	return "pong from " + c.addr, nil
+	greeting := c.greeting
+	if greeting == "" {
+		greeting = "pong"
+	}
+	return greeting + " from " + c.addr, nil
 }
 
 // Memo keeps one value of the caller's own type: the library is generic
@@ -205,12 +213,17 @@ func (m *Memo[T]) Recall(ctx context.Context) (T, error) {
 // Options configures a session. Connect takes it by pointer, the way a Go
 // client library takes its options struct: a generated SDK must pass the
 // address of the literal it builds, while the type itself stays Options.
-type Options struct{ Addr string }
+type Options struct {
+	Addr     string
+	Greeting string
+}
 
-// Connect starts a session with the service opt names.
+// Connect starts a session with the service opt names. The session keeps
+// what it read from opt, not opt itself: every literal a caller builds is
+// its own address, and two sessions never share one.
 func Connect(opt *Options) (*Client, error) {
 	if opt == nil {
 		return nil, errors.New("mathkit: nil options")
 	}
-	return &Client{addr: opt.Addr}, nil
+	return &Client{addr: opt.Addr, greeting: opt.Greeting}, nil
 }

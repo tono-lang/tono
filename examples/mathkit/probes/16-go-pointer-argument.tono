@@ -1,15 +1,17 @@
 // Capability 16 (Go): a pointer to a struct literal. Connect takes
 // `opt *Options`. The form's go block names the type as the library spells
 // it, `#(Options)`, and the argument spells how the literal crosses,
-// `options { Addr: addr }: #(&Options)`, the same annotation a parameter
-// takes. The & belongs to the argument: written on the block it would
-// satisfy the call and break the form's own probe (a type, not a parameter
-// list), which is why this probe compiles both together.
+// `options { Addr: addr, Greeting: greeting }: #(&Options)`, the same
+// annotation a parameter takes. The & belongs to the argument: written on
+// the block it would satisfy the call and break the form's own probe (a
+// type, not a parameter list), which is why this probe compiles both
+// together.
 ext mathkit {
   go { #(tono-ext-fixture/mathkit) }
 
   struct options {
     Addr: string
+    Greeting: string
     go { #(Options) }
   }
 
@@ -21,14 +23,15 @@ ext mathkit {
     }
   }
 
-  op connect(addr: string): session {
-    go { call: #(Connect)(options { Addr: addr }: #(&Options)) }
+  op connect(addr: string, greeting: string): session {
+    go { call: #(Connect)(options { Addr: addr, Greeting: greeting }: #(&Options)) }
   }
 }
 
 pub struct client {
   addr: string @arg
-  session: mathkit.session = mathkit.connect(.addr)
+  greeting: string @arg
+  session: mathkit.session = mathkit.connect(.addr, .greeting)
 
   op ping(): string
     impl .session.ping()

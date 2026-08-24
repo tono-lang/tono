@@ -1,6 +1,7 @@
-// Runs the generated SDK against the stand-in library for real: the options
-// literal the client builds reaches Connect by address, and the session it
-// opens answers through the address the literal carried.
+// Runs the generated SDK against the stand-in library for real: each client
+// builds its own options literal and hands Connect its address, so two
+// sessions opened from different arguments answer with what their own
+// literal carried (an empty greeting falls back to the library's "pong").
 package main
 
 import (
@@ -12,19 +13,21 @@ import (
 )
 
 func main() {
-	client, err := mathkit.New("calc.local")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "construction failed:", err)
-		os.Exit(1)
+	cases := []struct{ addr, greeting, want string }{
+		{"calc.local", "hello", "hello from calc.local"},
+		{"calc.remote", "", "pong from calc.remote"},
 	}
-	got, err := client.Ping(context.Background())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ping failed:", err)
-		os.Exit(1)
-	}
-	if got != "pong from calc.local" {
-		fmt.Fprintf(os.Stderr, "ping: got %q, want %q\n", got, "pong from calc.local")
-		os.Exit(1)
+	for _, c := range cases {
+		client, err := mathkit.New(c.addr, c.greeting)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "construction for %s failed: %v\n", c.addr, err)
+			os.Exit(1)
+		}
+		got, err := client.Ping(context.Background())
+		if err != nil || got != c.want {
+			fmt.Fprintf(os.Stderr, "ping %s: got %q, %v; want %q\n", c.addr, got, err, c.want)
+			os.Exit(1)
+		}
 	}
 	fmt.Println("ok")
 }
