@@ -53,7 +53,10 @@ cp -R "$work"/sdk/go/. "$work/go/"
 # the bespoke file is dropped into the module's package directory rather than
 # imported.
 cp "$example/ext/go/notes.go" "$work/go/notes/bespoke.go"
-(cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 \
+# The bespoke impl calls into the ext runtime, a dependency of the user's own
+# code: this hybrid project pins it in its module file (the one gen
+# scaffolded), the way any Go project pins an unpublished dependency.
+(cd "$work/go" \
     && go mod edit -require=github.com/tono-lang/tono/runtimes/ext-go@v0.0.0 \
     && go mod edit -replace=github.com/tono-lang/tono/runtimes/ext-go="$root/runtimes/ext-go" \
     && go mod tidy >/dev/null \

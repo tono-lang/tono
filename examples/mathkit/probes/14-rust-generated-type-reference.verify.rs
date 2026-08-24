@@ -1,8 +1,8 @@
 //! Runs the generated SDK against the stand-in crate for real: the memo is
 //! instantiated over the generated `Reading` type, and what `recall` answers
 //! is the `Reading` the constructor remembered.
-use example_mathkit::mathkit::types::Reading;
-use example_mathkit::mathkit::Client;
+use mathkit_sdk::mathkit::types::Reading;
+use mathkit_sdk::mathkit::Client;
 
 #[tokio::main]
 async fn main() {

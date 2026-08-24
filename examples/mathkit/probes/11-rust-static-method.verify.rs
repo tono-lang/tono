@@ -2,7 +2,7 @@
 //! holds the value `FormulaCalculator::parse(expr)` returned, an associated
 //! function reached through the type, behind `Box<dyn Calculator<f64>>`,
 //! and compute() evaluates the formula.
-use example_mathkit::mathkit::Client;
+use mathkit_sdk::mathkit::Client;
 
 #[tokio::main]
 async fn main() {

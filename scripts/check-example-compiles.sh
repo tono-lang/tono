@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Verify the committed example SDKs actually compile in each language. The drift
-# guard only proves the output is unchanged; this proves it is correct. Each SDK
-# is built in a throwaway project so nothing leaks into the repo.
+# guard only proves the output is unchanged; this proves it is correct.
 #
-# The example is a two-module project, so the SDKs are laid out as emission
-# groups: Rust modules of a crate (whose root the codegen now emits), Go packages
-# under a module path, and TypeScript files under sub-paths with a package
-# manifest. Only the Go module path is the consumer's to provide.
+# Every build here runs on the package `tono gen` wrote, exactly as it landed:
+# the build manifest is the generated one, and nothing is written into the
+# generated tree. What a consumer would add lives outside it (a driver crate or
+# module, a tsconfig pointing in, a stand-in library pinned through a cargo
+# `[patch]` in a parent config or a `go.work`). Committed SDKs are copied to a
+# throwaway directory first so build artifacts never land in the repo.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -16,163 +17,39 @@ go_module="example.com/sdk"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# Every Rust build (the generated crates and their driver crates) shares one
+# target directory, compiling the common dependencies once.
+export CARGO_TARGET_DIR="$work/cargo-target"
+
+tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"
+vitest="$root/backend/codegen-tests/typescript/node_modules/.bin/vitest"
+
+# A tsconfig that typechecks a generated package from outside it: written to
+# $1, including $2 (a directory relative to $1's own directory).
+write_tsconfig() {
+    cat >"$1" <<TSCONFIG
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2020",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM"],
+    "skipLibCheck": true
+  },
+  "include": ["$2/**/*.ts"],
+  "exclude": ["**/*.test.ts", "**/node_modules/**"]
+}
+TSCONFIG
+}
+
 echo "rust..."
-mkdir -p "$work/rust/src"
-# The crate root is generated: it declares each module and marks the shared
-# internal group crate-visible, so nothing outside the crate can reach it.
-cp -R "$sdk"/rust/. "$work/rust/src/"
-cat >"$work/rust/Cargo.toml" <<EOF
-[package]
-name = "example_rust"
-version = "0.0.0"
-edition = "2021"
-[lib]
-name = "example_rust"
-path = "src/lib.rs"
-[[bin]]
-name = "verify"
-path = "verify/main.rs"
-[features]
-default = ["reqwest"]
-reqwest = ["dep:reqwest"]
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
-[workspace]
-EOF
-# A driver that constructs the generated entry client, points it at a local
-# in-process server (via the entry's declared @env override, the only
-# construction-time seam this entry exposes), and drives one real op call
-# through the hand-written Rust HTTP runtime end to end: request assembly
-# (header binding, endpoint ref), the transport call, and response decoding
-# (including a cross-module union field, same as the Go verify driver).
-mkdir -p "$work/rust/verify"
-cat >"$work/rust/verify/main.rs" <<'EOF'
-use example_rust::payments::charges::{Charge, Client};
-use example_rust::payments::common::{Card, PaymentMethod, Status};
-use example_rust::support::Timestamp;
-
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-#[tokio::main]
-async fn main() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let port = listener.local_addr().expect("local_addr").port();
-
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 4096];
-        let header_end = loop {
-            let n = socket.read(&mut chunk).await.expect("read headers");
-            assert!(n > 0, "connection closed before headers completed");
-            buf.extend_from_slice(&chunk[..n]);
-            if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
-                break pos;
-            }
-        };
-        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-        let content_length: usize = headers
-            .lines()
-            .find_map(|l| {
-                let lower = l.to_ascii_lowercase();
-                lower
-                    .strip_prefix("content-length:")
-                    .map(|v| v.trim().parse().expect("content-length"))
-            })
-            .unwrap_or(0);
-        let body_start = header_end + 4;
-        while buf.len() < body_start + content_length {
-            let n = socket.read(&mut chunk).await.expect("read body");
-            assert!(n > 0, "connection closed before body completed");
-            buf.extend_from_slice(&chunk[..n]);
-        }
-        let body = String::from_utf8_lossy(&buf[body_start..body_start + content_length]).to_string();
-
-        assert!(
-            headers.starts_with("POST /charges "),
-            "unexpected request line: {headers}"
-        );
-        assert!(
-            headers.to_ascii_lowercase().contains("x-api-key: test-key"),
-            "declared header did not resolve from the client values: {headers}"
-        );
-        // i64 rides the wire as a string, not a bare JSON number.
-        assert!(
-            body.contains("\"amount\":\"1000\""),
-            "request body missing the bound member: {body}"
-        );
-
-        // i64/u64 ride the wire as strings, not bare JSON numbers.
-        let response_body = "{\"id\":\"c1\",\"amount\":\"1000\",\"fee\":\"0\",\"receipt\":\"aGk=\",\"currency\":\"usd\",\
-             \"tags\":[],\"metadata\":{},\"created\":\"2024-01-01T00:00:00Z\",\"status\":\"active\",\
-             \"method\":{\"kind\":\"card\",\"last4\":\"4242\"}}";
-        // create_charge declares @http(code: 201): the server must answer
-        // exactly that status for the client to decode the body as a success.
-        let response = format!(
-            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            response_body.len(),
-            response_body,
-        );
-        socket.write_all(response.as_bytes()).await.expect("write response");
-        socket.flush().await.expect("flush");
-    });
-
-    // The entry's base URL resolves only from @env (no @with override is
-    // declared for it), so the env var is the construction-time seam this
-    // verify driver has to point at the local server.
-    std::env::set_var("PAYMENTS_ENDPOINT", format!("http://127.0.0.1:{port}"));
-
-    let client = Client::builder("test-key".to_string())
-        .build()
-        .expect("build client");
-
-    // `fee` is @deprecated on the schema itself (folded into `amount`); a
-    // consumer still has to set it (the field is not optional), same as any
-    // other caller migrating off it.
-    #[allow(deprecated)]
-    let input = Charge {
-        id: "ignored-by-the-server".to_string(),
-        amount: 1000,
-        fee: 0,
-        receipt: b"hi".to_vec(),
-        currency: "usd".to_string(),
-        note: None,
-        tags: vec![],
-        metadata: Default::default(),
-        created: Timestamp("2024-01-01T00:00:00Z".to_string()),
-        status: Status::Active,
-        method: PaymentMethod::Card(Card {
-            last4: "4242".to_string(),
-        }),
-    };
-
-    let charge = client.create_charge(input).await.expect("create_charge");
-    assert_eq!(charge.id, "c1");
-    assert_eq!(charge.amount, 1000);
-    assert_eq!(charge.currency, "usd");
-    assert_eq!(charge.receipt, b"hi");
-    match charge.method {
-        PaymentMethod::Card(card) => assert_eq!(card.last4, "4242"),
-        other => panic!("union payload did not survive the round trip: {other:?}"),
-    }
-
-    server.await.expect("server task");
-    println!("rust runtime verify: ok");
-}
-EOF
-# Deny warnings so a deprecated field (or any other lint) in the generated SDK
-# fails here rather than in a downstream consumer's stricter build.
+# The committed crate, built exactly as generated. Deny warnings so a
+# deprecated field (or any other lint) in the generated SDK fails here rather
+# than in a downstream consumer's stricter build.
+cp -R "$sdk/rust" "$work/rust"
 (cd "$work/rust" && RUSTFLAGS="-D warnings" cargo build --quiet \
-    && RUSTFLAGS="-D warnings" cargo run --quiet --bin verify \
     && RUSTFLAGS="-D warnings" cargo test --quiet)
 
 # The reqwest feature is the default-on native transport; with it off, the
@@ -181,6 +58,28 @@ EOF
 echo "rust --no-default-features..."
 (cd "$work/rust" && RUSTFLAGS="-D warnings" cargo build --quiet --lib --no-default-features)
 
+# A driver that constructs the generated entry client, points it at a local
+# in-process server (via the entry's declared @env override, the only
+# construction-time seam this entry exposes), and drives one real op call
+# through the generated crate end to end: request assembly (header binding,
+# endpoint ref), the transport call, and response decoding (including a
+# cross-module union field, same as the Go verify driver). A consumer crate,
+# depending on the generated package by path.
+echo "rust runtime verify..."
+mkdir -p "$work/rust-verify/src"
+cp "$root/examples/payments/verify/verify.rs" "$work/rust-verify/src/main.rs"
+cat >"$work/rust-verify/Cargo.toml" <<EOF
+[package]
+name = "verify"
+version = "0.0.0"
+edition = "2021"
+[dependencies]
+payments-sdk = { path = "$work/rust" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+[workspace]
+EOF
+(cd "$work/rust-verify" && RUSTFLAGS="-D warnings" cargo run --quiet)
+
 # Rust fences with visibility rather than with a location: a declaration no
 # public type reaches is `pub(crate)`, so a consumer crate cannot name it however
 # it spells the path.
@@ -188,7 +87,7 @@ echo "rust visibility fence..."
 mkdir -p "$work/rust-fence/src"
 cat >"$work/rust-fence/src/main.rs" <<'EOF'
 fn main() {
-    let _: Option<example_rust::payments::charges::HTTPCode> = None;
+    let _: Option<payments_sdk::payments::charges::HTTPCode> = None;
 }
 EOF
 cat >"$work/rust-fence/Cargo.toml" <<EOF
@@ -197,7 +96,7 @@ name = "rust_fence"
 version = "0.0.0"
 edition = "2021"
 [dependencies]
-example_rust = { path = "$work/rust" }
+payments-sdk = { path = "$work/rust" }
 [workspace]
 EOF
 (
@@ -214,13 +113,17 @@ EOF
 )
 
 echo "go..."
-mkdir -p "$work/go"
-cp -R "$sdk"/go/. "$work/go/"
+# The committed module, built exactly as generated: the go.mod is the one gen
+# scaffolds, so no `go mod init` and no appended lines.
+cp -R "$sdk/go" "$work/go"
+(cd "$work/go" && go build ./... && go test ./...)
+
 # A driver that round-trips a charge through JSON, proving the cross-module union
 # field (Method, whose type lives in the common package) actually decodes and not
-# just that the package compiles.
-mkdir -p "$work/go/verify"
-cat >"$work/go/verify/main.go" <<EOF
+# just that the package compiles. A consumer module, pinning the SDK the way a
+# consumer pins a private dependency.
+mkdir -p "$work/go-verify"
+cat >"$work/go-verify/main.go" <<EOF
 package main
 
 import (
@@ -255,12 +158,15 @@ func main() {
 	}
 }
 EOF
-# The generated entry client drives the hand-written Go HTTP runtime; the
-# throwaway module resolves it from this repo, the way a consumer pins it.
-# tidy keeps stderr so a resolution failure names its cause.
-(cd "$work/go" && go mod init "$go_module" >/dev/null 2>&1 \
-    && go mod tidy >/dev/null \
-    && go build ./... && go run ./verify && go test ./...)
+cat >"$work/go-verify/go.mod" <<EOF
+module example.com/verify
+
+go 1.21
+
+require $go_module v0.0.0
+replace $go_module => $work/go
+EOF
+(cd "$work/go-verify" && go run .)
 
 # Every group Go moves under internal/ (the SDK's shared helpers, and each
 # module's own hidden declarations) is fenced off by the toolchain: a module
@@ -296,29 +202,12 @@ EOF
 )
 
 echo "typescript..."
-tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"
-vitest="$root/backend/codegen-tests/typescript/node_modules/.bin/vitest"
-# The TypeScript SDK is a nested tree (a file per module) split into types and
-# serde modules; a tsconfig compiles every generated module together so
-# cross-module and serde imports resolve, closing the Protocol/Target seam end
-# to end. No path mapping is needed: each entry carries its own transport.
+# The committed package, typechecked exactly as generated: the tsconfig sits
+# outside the package and points in. No path mapping is needed: each entry
+# carries its own transport.
 mkdir -p "$work/ts"
-cp -R "$sdk"/typescript/. "$work/ts/"
-cat >"$work/ts/tsconfig.json" <<EOF
-{
-  "compilerOptions": {
-    "strict": true,
-    "noEmit": true,
-    "target": "ES2020",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "lib": ["ES2020", "DOM"],
-    "skipLibCheck": true
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["**/*.test.ts"]
-}
-EOF
+cp -R "$sdk/typescript" "$work/ts/pkg"
+write_tsconfig "$work/ts/tsconfig.json" "pkg"
 (cd "$work/ts" && "$tsc" -p tsconfig.json)
 
 # TypeScript has no per-symbol visibility, so its fence is two things: the
@@ -407,8 +296,9 @@ EOF
 
 echo "auth-bearer..."
 # The recipe is source only, so its Settings bridge only exists after a
-# regeneration; this is its compile gate: frontend -> gen -> tsc. No bespoke
-# code is copied in: the header derives entirely from @format + @header.
+# regeneration; this is its compile gate: frontend -> gen -> the target
+# toolchains on the output as it landed. No bespoke code is copied in: the
+# header derives entirely from @format + @header.
 #
 # Go is built too: this entry is the one whose fields resolve from the
 # environment with nothing consuming them declaratively, which is exactly the
@@ -420,123 +310,85 @@ fi
 mkdir -p "$work/auth"
 "$frontend" compile "$root/examples/auth-bearer/auth.tono" --module auth >"$work/auth/ir.json"
 "$root/target/debug/tono" gen --target go,typescript --out "$work/auth/out" \
-    --go-module example.com/auth "$work/auth/ir.json"
-(cd "$work/auth/out/go" && go mod init example.com/auth >/dev/null 2>&1 \
-    && go mod tidy >/dev/null \
-    && go build ./...)
-(cd "$work/auth/out/go" && go test ./...)
-cat >"$work/auth/out/typescript/tsconfig.json" <<EOF
-{
-  "compilerOptions": {
-    "strict": true,
-    "noEmit": true,
-    "target": "ES2020",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "lib": ["ES2020", "DOM"],
-    "skipLibCheck": true
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["**/*.test.ts"]
-}
-EOF
-(cd "$work/auth/out/typescript" && "$tsc" -p tsconfig.json)
+    --package auth-sdk --go-module example.com/auth "$work/auth/ir.json"
+(cd "$work/auth/out/go" && go build ./... && go test ./...)
+write_tsconfig "$work/auth/tsconfig.json" "out/typescript"
+(cd "$work/auth" && "$tsc" -p tsconfig.json)
 
 echo "segmented-config..."
 # The map-indexed match recipe: a field indexed by another field's value
 # (`by_segment[.seg]`), its mandatory `null` arm, and `._` reading the
-# looked-up value back. Compiled the same way as auth-bearer (frontend ->
-# gen -> go build/test, tsc); both declared tests supply the map/key
-# directly as construction values, so nothing depends on the environment.
+# looked-up value back. Compiled the same way as auth-bearer; both declared
+# tests supply the map/key directly as construction values, so nothing
+# depends on the environment.
 mkdir -p "$work/segmented"
 "$frontend" compile "$root/examples/segmented-config/service.tono" --module segmentedconfig >"$work/segmented/ir.json"
 "$root/target/debug/tono" gen --target go,typescript --out "$work/segmented/out" \
-    --go-module example.com/segmentedconfig "$work/segmented/ir.json"
-(cd "$work/segmented/out/go" && go mod init example.com/segmentedconfig >/dev/null 2>&1 \
-    && go mod tidy >/dev/null \
-    && go build ./...)
-(cd "$work/segmented/out/go" && go test ./...)
-cat >"$work/segmented/out/typescript/tsconfig.json" <<EOF
-{
-  "compilerOptions": {
-    "strict": true,
-    "noEmit": true,
-    "target": "ES2020",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "lib": ["ES2020", "DOM"],
-    "skipLibCheck": true
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["**/*.test.ts"]
-}
-EOF
-(cd "$work/segmented/out/typescript" && "$tsc" -p tsconfig.json)
+    --package segmentedconfig-sdk --go-module example.com/segmentedconfig "$work/segmented/ir.json"
+(cd "$work/segmented/out/go" && go build ./... && go test ./...)
+write_tsconfig "$work/segmented/tsconfig.json" "out/typescript"
+(cd "$work/segmented" && "$tsc" -p tsconfig.json)
 (cd "$work/segmented/out/typescript" && "$vitest" run)
+
+# The project manifest an ext example generates under: one enabled target per
+# call, the ext version pins the generated manifests carry. Written next to
+# the IR the way a real project's tono.toml sits next to its sources.
+#   $1: directory  $2: project name  $3: go module path  $4: ext name
+write_ext_tono_toml() {
+    cat >"$1/tono.toml" <<TOML
+[project]
+name = "$2"
+
+[target.go]
+enabled = true
+package = "$3"
+out = "out/go"
+
+[target.typescript]
+enabled = true
+package = "$2"
+out = "out/typescript"
+
+[target.rust]
+enabled = true
+package = "$2"
+out = "out/rust"
+
+[ext.$4]
+go = "v0.0.0"
+ts = "0.0.0"
+rust = "0.0.0"
+TOML
+}
 
 echo "config-lib..."
 # The `ext <lib> { extern ... }` FFI recipe: a config field constructed by a
 # declarative call into a third-party library, exercised for real against a
-# stand-in package per target (under ext/), the way a real dependency would
-# be pinned. Every generated declared test stubs the library call
-# (`stub configlib.load`), so this also proves each target's construction
-# override for an extern-call field, not just that the SDK compiles.
+# stand-in package per target (under ext/), pinned the way a consumer pins a
+# private dependency: a `go.work` beside the output, a cargo `[patch]` in the
+# parent config, a node_modules one level up. Every generated declared test
+# stubs the library call (`stub configlib.load`), so this also proves each
+# target's construction override for an extern-call field, not just that the
+# SDK compiles.
 mkdir -p "$work/config-lib"
 "$frontend" compile "$root/examples/config-lib/service.tono" --module configsvc >"$work/config-lib/ir.json"
-"$root/target/debug/tono" gen --target go,typescript,rust --out "$work/config-lib/out" \
-    --go-module example.com/configsvc "$work/config-lib/ir.json"
+write_ext_tono_toml "$work/config-lib" configsvc-sdk example.com/configsvc configlib
+"$root/target/debug/tono" gen --config "$work/config-lib/tono.toml" "$work/config-lib/ir.json"
 
-(cd "$work/config-lib/out/go" && go mod init example.com/configsvc >/dev/null 2>&1 \
-    && cat >>go.mod <<EOF
-require github.com/example/configlib v0.0.0
-replace github.com/example/configlib => $root/examples/config-lib/ext/go
-EOF
-    go mod tidy >/dev/null \
-    && go build ./...)
-(cd "$work/config-lib/out/go" && go test ./...)
+(cd "$work/config-lib" && go work init ./out/go >/dev/null && go work use "$root/examples/config-lib/ext/go")
+(cd "$work/config-lib/out/go" && go build ./... && go test ./...)
 
-mkdir -p "$work/config-lib/rust-sdk/src"
-cp -R "$work/config-lib/out/rust/." "$work/config-lib/rust-sdk/src/"
-cat >"$work/config-lib/rust-sdk/Cargo.toml" <<EOF
-[package]
-name = "example_configsvc"
-version = "0.0.0"
-edition = "2021"
-[lib]
-name = "example_configsvc"
-path = "src/lib.rs"
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+mkdir -p "$work/config-lib/.cargo"
+cat >"$work/config-lib/.cargo/config.toml" <<EOF
+[patch.crates-io]
 configlib = { path = "$root/examples/config-lib/ext/rust" }
-[features]
-default = ["reqwest"]
-reqwest = ["dep:reqwest"]
-[workspace]
 EOF
-(cd "$work/config-lib/rust-sdk" && cargo build --quiet && cargo test --quiet)
+(cd "$work/config-lib/out/rust" && cargo build --quiet && cargo test --quiet)
 
-mkdir -p "$work/config-lib/out/typescript/node_modules/@example"
-cp -R "$root/examples/config-lib/ext/ts/configlib" "$work/config-lib/out/typescript/node_modules/@example/"
-cat >"$work/config-lib/out/typescript/tsconfig.json" <<EOF
-{
-  "compilerOptions": {
-    "strict": true,
-    "noEmit": true,
-    "target": "ES2020",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "lib": ["ES2020", "DOM"],
-    "skipLibCheck": true
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["**/*.test.ts"]
-}
-EOF
-(cd "$work/config-lib/out/typescript" && "$tsc" -p tsconfig.json)
+mkdir -p "$work/config-lib/node_modules/@example"
+cp -R "$root/examples/config-lib/ext/ts/configlib" "$work/config-lib/node_modules/@example/"
+write_tsconfig "$work/config-lib/tsconfig.json" "out/typescript"
+(cd "$work/config-lib" && "$tsc" -p tsconfig.json)
 (cd "$work/config-lib/out/typescript" && "$vitest" run)
 
 echo "settings-source..."
@@ -553,62 +405,24 @@ echo "settings-source..."
 # so its SDK only has to compile.
 mkdir -p "$work/settings-source"
 "$frontend" compile "$root/examples/settings-source/service.tono" --module settingssource >"$work/settings-source/ir.json"
-"$root/target/debug/tono" gen --target go,typescript,rust --out "$work/settings-source/out" \
-    --go-module example.com/settingssource "$work/settings-source/ir.json"
-(cd "$work/settings-source/out/go" && go mod init example.com/settingssource >/dev/null 2>&1 \
-    && cat >>go.mod <<EOF
-require github.com/example/settingskit v0.0.0
-replace github.com/example/settingskit => $root/examples/settings-source/ext/go
-EOF
-    go mod tidy >/dev/null \
-    && go build ./...)
-(cd "$work/settings-source/out/go" && go test ./...)
+write_ext_tono_toml "$work/settings-source" settingssource-sdk example.com/settingssource settingskit
+"$root/target/debug/tono" gen --config "$work/settings-source/tono.toml" "$work/settings-source/ir.json"
 
-mkdir -p "$work/settings-source/rust-sdk/src"
-cp -R "$work/settings-source/out/rust/." "$work/settings-source/rust-sdk/src/"
-cat >"$work/settings-source/rust-sdk/Cargo.toml" <<EOF
-[package]
-name = "example_settingssource"
-version = "0.0.0"
-edition = "2021"
-[lib]
-name = "example_settingssource"
-path = "src/lib.rs"
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+(cd "$work/settings-source" && go work init ./out/go >/dev/null && go work use "$root/examples/settings-source/ext/go")
+(cd "$work/settings-source/out/go" && go build ./... && go test ./...)
+
+mkdir -p "$work/settings-source/.cargo"
+cat >"$work/settings-source/.cargo/config.toml" <<EOF
+[patch.crates-io]
 settingskit = { path = "$root/examples/settings-source/ext/rust" }
-[features]
-default = ["reqwest"]
-reqwest = ["dep:reqwest"]
-[workspace]
 EOF
-(cd "$work/settings-source/rust-sdk" && cargo build --quiet && cargo test --quiet)
+(cd "$work/settings-source/out/rust" && cargo build --quiet && cargo test --quiet)
 
-mkdir -p "$work/settings-source/out/typescript/node_modules/@example"
-cp -R "$root/examples/settings-source/ext/ts/settingskit" "$work/settings-source/out/typescript/node_modules/@example/"
-cat >"$work/settings-source/out/typescript/tsconfig.json" <<EOF
-{
-  "compilerOptions": {
-    "strict": true,
-    "noEmit": true,
-    "target": "ES2020",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "lib": ["ES2020", "DOM"],
-    "skipLibCheck": true
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["**/*.test.ts"]
-}
-EOF
-(cd "$work/settings-source/out/typescript" && "$tsc" -p tsconfig.json)
+mkdir -p "$work/settings-source/node_modules/@example"
+cp -R "$root/examples/settings-source/ext/ts/settingskit" "$work/settings-source/node_modules/@example/"
+write_tsconfig "$work/settings-source/tsconfig.json" "out/typescript"
+(cd "$work/settings-source" && "$tsc" -p tsconfig.json)
 (cd "$work/settings-source/out/typescript" && "$vitest" run)
-
-echo "all generated SDKs compile"
 
 echo "provider-config..."
 # The handle-method field-source recipe: a foreign provider constructed
@@ -619,16 +433,23 @@ echo "provider-config..."
 # proves the hermetic fake honours the method's `ctx` slot.
 mkdir -p "$work/provider-config"
 "$frontend" compile "$root/examples/provider-config/service.tono" --module providerconfig >"$work/provider-config/ir.json"
-"$root/target/debug/tono" gen --target go --out "$work/provider-config/out" \
-    --go-module example.com/providerconfig "$work/provider-config/ir.json"
-(cd "$work/provider-config/out/go" && go mod init example.com/providerconfig >/dev/null 2>&1 \
-    && cat >>go.mod <<EOF
-require github.com/example/envkit v0.0.0
-replace github.com/example/envkit => $root/examples/provider-config/ext/go
-EOF
-    go mod tidy >/dev/null \
-    && go build ./...)
-(cd "$work/provider-config/out/go" && go test ./...)
+cat >"$work/provider-config/tono.toml" <<TOML
+[project]
+name = "providerconfig-sdk"
+
+[target.go]
+enabled = true
+package = "example.com/providerconfig"
+out = "out/go"
+
+[ext.envkit]
+go = "v0.0.0"
+TOML
+"$root/target/debug/tono" gen --config "$work/provider-config/tono.toml" "$work/provider-config/ir.json"
+(cd "$work/provider-config" && go work init ./out/go >/dev/null && go work use "$root/examples/provider-config/ext/go")
+(cd "$work/provider-config/out/go" && go build ./... && go test ./...)
+
+echo "all generated SDKs compile"
 
 echo "ffi bench..."
 # The FFI bench (examples/mathkit): one library declared with the shapes real

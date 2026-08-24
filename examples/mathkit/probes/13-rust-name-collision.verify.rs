@@ -1,7 +1,7 @@
 //! Runs the generated SDK against the stand-in crate for real: the client
 //! holds the crate's `Client` (not its own generated `Client`) and reads
 //! through it.
-use example_mathkit::mathkit::Client;
+use mathkit_sdk::mathkit::Client;
 
 #[tokio::main]
 async fn main() {

@@ -2,7 +2,7 @@
 //! constructors of the same logical handle return two different concrete
 //! types, both held behind `Box<dyn Calculator<f64>>`, and each answers its
 //! own operation. The series calculator answers its last value.
-use example_mathkit::mathkit::Client;
+use mathkit_sdk::mathkit::Client;
 
 #[tokio::main]
 async fn main() {

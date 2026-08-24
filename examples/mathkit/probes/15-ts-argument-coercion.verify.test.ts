@@ -2,7 +2,7 @@
 // seed the client takes crosses the constructor as a number, and the value
 // read back proves the conversion happened before construction.
 import { expect, test } from "vitest";
-import { Client } from "./mathkit";
+import { Client } from "mathkit-sdk/mathkit";
 
 test("probe 15 (ts argument coercion)", async () => {
   const client = await Client.create(21n);

@@ -7,6 +7,12 @@
 # compiler against the stand-in library, the generated declared tests, and a
 # driver that runs the SDK against the library for real.
 #
+# Every check compiles the package `tono gen` wrote, exactly as it landed: the
+# build manifest is the generated one, and the stand-in library is pinned the
+# way a consumer pins a private dependency, from outside the package (a cargo
+# `[patch]` in a parent config, a `go.work`, a `node_modules` one level up).
+# The harness writes nothing into the generated tree.
+#
 # The bench was written before the emitters could pass it, so most checks are
 # expected red today. examples/mathkit/gate.tsv records the outcome each check
 # must reach; a check that ends anywhere else fails this gate, whether it
@@ -48,8 +54,8 @@ done
 # toolchain, the same one the committed examples are formatted with.
 export PATH="$root/backend/codegen-tests/typescript/node_modules/.bin:$PATH"
 
-# Every Rust check wraps the generated modules in its own throwaway crate with
-# the same dependencies; one target directory per run compiles those once.
+# One target directory per run compiles the shared dependencies once across
+# the generated crates and their verify drivers.
 export CARGO_TARGET_DIR="$work/cargo-target"
 
 # `tono check` resolves each language's library the way the generated SDK
@@ -80,6 +86,31 @@ cp -R "$bench/ext/ts" "$check_ts/node_modules/@tono-ext-fixture/mathkit"
 # cannot write is refused naming both types).
 refusal_markers="is owned by that call|has no static method to call|has no class reference to pass|no conversion from"
 
+# The project manifest each check generates under: one enabled target, the
+# ext version pins the generated manifest carries, written next to the IR the
+# way a real project's tono.toml sits next to its sources.
+write_tono_toml() {
+    local dir="$1" target="$2"
+    local package="mathkit-sdk"
+    if [[ "$target" = go ]]; then
+        package="example.com/mathkit"
+    fi
+    cat >"$dir/tono.toml" <<TOML
+[project]
+name = "mathkit-sdk"
+
+[target.$target]
+enabled = true
+package = "$package"
+out = "out/$target"
+
+[ext.mathkit]
+rust = "0.0.0"
+go = "v0.0.0"
+ts = "0.0.0"
+TOML
+}
+
 # One check. Prints the outcome it reached to stdout; every tool log goes to
 # $work/<id>/log so a mismatch can quote it.
 run_check() {
@@ -100,7 +131,8 @@ run_check() {
         echo check-red
         return
     fi
-    if ! "$tono" gen --target "$target" --out "$dir/out" --go-module example.com/mathkit "$dir/ir.json" >>"$log" 2>&1; then
+    write_tono_toml "$dir" "$target"
+    if ! "$tono" gen --config "$dir/tono.toml" "$dir/ir.json" >>"$log" 2>&1; then
         if grep -Eq "$refusal_markers" "$log"; then
             echo refused
         else
@@ -121,21 +153,17 @@ run_check() {
     esac
 }
 
-# Build the generated Go against the stand-in package (a `replace` at the
-# import path the .tono declares, the way a consumer pins a private
-# dependency), run the generated declared tests, then the driver.
+# Build the generated Go package as it landed. A `go.work` beside the output
+# pins the stand-in at the import path the .tono declares, the way a consumer
+# workspace pins a private dependency; the generated go.mod is not edited.
+# The driver is its own module in the same workspace, importing the SDK by
+# its module path from outside it.
 run_go() {
     local dir="$1" driver="$2"
     local log="$dir/log"
     local sdk="$dir/out/go"
-    (
-        cd "$sdk" && go mod init example.com/mathkit >/dev/null 2>&1 &&
-            cat >>go.mod <<GOMOD
-require tono-ext-fixture/mathkit v0.0.0
-replace tono-ext-fixture/mathkit => $bench/ext/go
-GOMOD
-        go mod tidy >/dev/null 2>&1 && go build ./...
-    ) >>"$log" 2>&1 || {
+    (cd "$dir" && go work init ./out/go && go work use "$bench/ext/go") >>"$log" 2>&1
+    (cd "$sdk" && go build ./...) >>"$log" 2>&1 || {
         echo build-red
         return
     }
@@ -147,48 +175,40 @@ GOMOD
         echo no-driver
         return
     fi
-    mkdir -p "$sdk/verify"
-    cp "$driver" "$sdk/verify/main.go"
-    (cd "$sdk" && go mod tidy >/dev/null 2>&1 && go run ./verify) >>"$log" 2>&1 || {
+    mkdir -p "$dir/verify"
+    cp "$driver" "$dir/verify/main.go"
+    cat >"$dir/verify/go.mod" <<GOMOD
+module example.com/verify
+
+go 1.21
+
+require example.com/mathkit v0.0.0
+GOMOD
+    (cd "$dir" && go work use ./verify && cd verify && go run .) >>"$log" 2>&1 || {
         echo run-red
         return
     }
     echo pass
 }
 
-# Wrap the generated Rust modules in a crate that depends on the stand-in
-# crate by path, build it, run its declared tests, then the driver binary.
+# Build the generated crate as it landed. The stand-in crate is pinned from
+# outside the package: a cargo `[patch]` in the parent directory's config,
+# which cargo discovers walking up from the crate. The driver is its own
+# consumer crate depending on the SDK by path.
 run_rust() {
     local dir="$1" driver="$2"
     local log="$dir/log"
-    local crate="$dir/crate"
-    mkdir -p "$crate/src"
-    cp -R "$dir/out/rust/." "$crate/src/"
-    cat >"$crate/Cargo.toml" <<CARGO
-[package]
-name = "example_mathkit"
-version = "0.0.0"
-edition = "2021"
-[lib]
-name = "example_mathkit"
-path = "src/lib.rs"
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tono_ext = { package = "sdk-ext-runtime-rs", path = "$root/runtimes/ext-rust" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+    local sdk="$dir/out/rust"
+    mkdir -p "$dir/.cargo"
+    cat >"$dir/.cargo/config.toml" <<CFG
+[patch.crates-io]
 mathkit = { path = "$bench/ext/rust" }
-[features]
-default = ["reqwest"]
-reqwest = ["dep:reqwest"]
-[workspace]
-CARGO
-    (cd "$crate" && cargo build --quiet) >>"$log" 2>&1 || {
+CFG
+    (cd "$sdk" && cargo build --quiet) >>"$log" 2>&1 || {
         echo build-red
         return
     }
-    (cd "$crate" && cargo test --quiet) >>"$log" 2>&1 || {
+    (cd "$sdk" && cargo test --quiet) >>"$log" 2>&1 || {
         echo test-red
         return
     }
@@ -196,34 +216,41 @@ CARGO
         echo no-driver
         return
     fi
-    mkdir -p "$crate/verify"
-    cp "$driver" "$crate/verify/main.rs"
-    cat >>"$crate/Cargo.toml" <<CARGO
-[[bin]]
+    mkdir -p "$dir/verify/src"
+    cp "$driver" "$dir/verify/src/main.rs"
+    cat >"$dir/verify/Cargo.toml" <<CARGO
+[package]
 name = "verify"
-path = "verify/main.rs"
+version = "0.0.0"
+edition = "2021"
+[dependencies]
+mathkit-sdk = { path = "../out/rust" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+[workspace]
 CARGO
-    (cd "$crate" && cargo run --quiet --bin verify) >>"$log" 2>&1 || {
+    (cd "$dir/verify" && cargo run --quiet) >>"$log" 2>&1 || {
         echo run-red
         return
     }
     echo pass
 }
 
-# Install the stand-in package into a throwaway node_modules (the way a
-# consumer's install would place it), typecheck the generated modules, run
-# the generated declared tests, then the driver test.
+# Typecheck the generated package as it landed: the tsconfig sits outside the
+# package and points in, the stand-in package sits in a node_modules one
+# level up (where module resolution walks), and the SDK itself is linked
+# there under its package name so the driver imports it as a consumer.
 run_typescript() {
     local dir="$1" driver="$2"
     local log="$dir/log"
     local sdk="$dir/out/typescript"
-    mkdir -p "$sdk/node_modules/@tono-ext-fixture"
+    mkdir -p "$dir/node_modules/@tono-ext-fixture"
     # The package's own name is "@tono-ext-fixture/mathkit" (ext/ts/package.json),
     # not "ts" (the source directory's own name): node module resolution walks
     # node_modules/<package name>, so the copy must land under that name, not
     # the source directory's own.
-    cp -R "$bench/ext/ts" "$sdk/node_modules/@tono-ext-fixture/mathkit"
-    cat >"$sdk/tsconfig.json" <<TSCONFIG
+    cp -R "$bench/ext/ts" "$dir/node_modules/@tono-ext-fixture/mathkit"
+    ln -s ../out/typescript "$dir/node_modules/mathkit-sdk"
+    cat >"$dir/tsconfig.json" <<TSCONFIG
 {
   "compilerOptions": {
     "strict": true,
@@ -234,11 +261,11 @@ run_typescript() {
     "lib": ["ES2020", "DOM"],
     "skipLibCheck": true
   },
-  "include": ["**/*.ts"],
-  "exclude": ["**/*.test.ts"]
+  "include": ["out/typescript/**/*.ts"],
+  "exclude": ["**/*.test.ts", "**/node_modules/**"]
 }
 TSCONFIG
-    (cd "$sdk" && "$tsc" -p tsconfig.json) >>"$log" 2>&1 || {
+    (cd "$dir" && "$tsc" -p tsconfig.json) >>"$log" 2>&1 || {
         echo build-red
         return
     }
@@ -252,8 +279,8 @@ TSCONFIG
         echo no-driver
         return
     fi
-    cp "$driver" "$sdk/verify.test.ts"
-    (cd "$sdk" && "$vitest" run verify.test.ts) >>"$log" 2>&1 || {
+    cp "$driver" "$dir/verify.test.ts"
+    (cd "$dir" && "$vitest" run verify.test.ts) >>"$log" 2>&1 || {
         echo run-red
         return
     }

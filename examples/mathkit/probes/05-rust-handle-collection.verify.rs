@@ -2,7 +2,7 @@
 //! already-built handles are collected into the variadic logical
 //! parameter's own list, spread into the library's `Vec<Box<dyn
 //! Calculator<f64>>>`, and the fallback answers the first success.
-use example_mathkit::mathkit::Client;
+use mathkit_sdk::mathkit::Client;
 
 #[tokio::main]
 async fn main() {
