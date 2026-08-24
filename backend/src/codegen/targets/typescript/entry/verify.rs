@@ -3,10 +3,12 @@
 //! tree so the package resolves through the same `node_modules` the
 //! generated SDK imports from.
 //!
-//! A probe function's parameters carry what the binding says crosses (a
-//! parameter's own spelling, else the default TypeScript mapping, a handle
-//! by its declared storage); a struct literal is first bound to the form it
-//! names, so the object is checked against the library's own type; the
+//! A probe function's parameters carry the default TypeScript mapping (a
+//! handle by its declared storage); a parameter under its own spelling goes
+//! through the same conversion the emitter applies, at the argument, so
+//! `tsc` grades exactly what the generated call crosses; a struct literal
+//! is first bound to the form it names, spelled fields converted, so the
+//! object is checked against the library's own type; the
 //! call's value is assigned to the declared return, wrapped in `Promise`
 //! when the op declares the call asynchronous here (see `ext_call`). A
 //! binding the probe cannot express in declared terms is listed as skipped.
@@ -20,7 +22,9 @@ use crate::codegen::foreign_spelling;
 use crate::codegen::verify::{
     parse_tsc_errors, run_probe, Probe, ProbeRun, RunOutcome, Scratch, SiteKey,
 };
-use crate::ir::{CallArg, ExtLib, ExternDecl, ExternLang, Module, OpaqueType, Prim, Tref};
+use crate::ir::{
+    CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpaqueType, Prim, Tref,
+};
 
 const PROBE_FILE: &str = "probe.ts";
 const LIB: &str = "tonoLib";
@@ -125,11 +129,23 @@ fn literal(v: &serde_json::Value) -> String {
 fn arg_expr(
     module: &Module,
     lib: &ExtLib,
+    params: &[ExternParam],
     arg: &CallArg,
     prelude: &mut Vec<String>,
 ) -> Result<String, String> {
     match arg {
-        CallArg::Param(n) | CallArg::ParamAs { name: n, .. } => Ok(n.clone()),
+        CallArg::Param(n) => Ok(n.clone()),
+        // A parameter under its own spelling goes through the same
+        // conversion the emitter applies (`ext_coerce::coerce`): the
+        // probe's parameter keeps the default type, so `tsc` grades
+        // exactly what the generated call crosses.
+        CallArg::ParamAs { name, spelling } => {
+            let param = params
+                .iter()
+                .find(|p| &p.name == name)
+                .ok_or_else(|| format!("{name} is not a parameter of the op"))?;
+            super::ext_coerce::coerce(&param.r#type, spelling, name)
+        }
         CallArg::Lit(v) => Ok(literal(v)),
         CallArg::TypeRef(handle) => {
             let declared = lib
@@ -146,7 +162,7 @@ fn arg_expr(
             let args = sc
                 .args
                 .iter()
-                .map(|a| arg_expr(module, lib, a, prelude))
+                .map(|a| arg_expr(module, lib, params, a, prelude))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(format!(
                 "{}({})",
@@ -155,22 +171,31 @@ fn arg_expr(
             ))
         }
         CallArg::Ctor(c) => {
-            let form = lib
-                .structs
-                .iter()
-                .find(|s| s.name == c.name)
+            let form = lib.structs.iter().find(|s| s.name == c.name);
+            let block = form
                 .and_then(|s| ts_block(&s.langs))
                 .ok_or_else(|| format!("the struct literal {} has no ts block", c.name))?;
-            sdk_terms(&form.name)?;
+            sdk_terms(&block.name)?;
             let fields = c
                 .fields
                 .iter()
-                .map(|(k, v)| Ok(format!("{k}: {}", arg_expr(module, lib, v, prelude)?)))
+                .map(|(k, v)| {
+                    let mut value = arg_expr(module, lib, params, v, prelude)?;
+                    // A spelled field converts here exactly as the emitted
+                    // literal converts it.
+                    if let (Some(spelling), Some(ff)) = (
+                        block.fields.get(k),
+                        form.and_then(|f| f.fields.iter().find(|ff| &ff.name == k)),
+                    ) {
+                        value = super::ext_coerce::coerce(&ff.r#type, spelling, &value)?;
+                    }
+                    Ok(format!("{k}: {value}"))
+                })
                 .collect::<Result<Vec<_>, String>>()?;
             let name = format!("tonoA{}", prelude.len());
             prelude.push(format!(
                 "const {name}: {} = {{ {} }};",
-                qualify(&form.name, module),
+                qualify(&block.name, module),
                 fields.join(", ")
             ));
             Ok(name)
@@ -182,23 +207,14 @@ fn arg_expr(
     }
 }
 
-fn params(
-    module: &Module,
-    lib: &ExtLib,
-    decl: &ExternDecl,
-    lang: &ExternLang,
-) -> Result<Vec<String>, String> {
+/// The probe's parameter list: every declared parameter under its default
+/// TypeScript type (what the generated call site holds; a spelling of its
+/// own is applied at the argument, as the emitter does).
+fn params(module: &Module, lib: &ExtLib, decl: &ExternDecl) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for p in &decl.params {
-        let spelled = lang.call_args.iter().find_map(|a| match a {
-            CallArg::ParamAs { name, spelling } if name == &p.name => Some(spelling.as_str()),
-            _ => None,
-        });
-        let ty = match spelled {
-            Some(sp) => qualify(sp, module),
-            None => probe_type(module, lib, &p.r#type)
-                .map_err(|why| format!("parameter {}: {why}", p.name))?,
-        };
+        let ty = probe_type(module, lib, &p.r#type)
+            .map_err(|why| format!("parameter {}: {why}", p.name))?;
         out.push(format!("{}: {ty}", p.name));
     }
     Ok(out)
@@ -241,12 +257,12 @@ fn op_line(
     for sp in crate::codegen::entries::spellings::of_lang(lang) {
         sdk_terms(sp)?;
     }
-    let mut ps = params(module, lib, decl, lang)?;
+    let mut ps = params(module, lib, decl)?;
     let mut prelude = Vec::new();
     let args = lang
         .call_args
         .iter()
-        .map(|a| arg_expr(module, lib, a, &mut prelude))
+        .map(|a| arg_expr(module, lib, &decl.params, a, &mut prelude))
         .collect::<Result<Vec<_>, _>>()?
         .join(", ");
     let call = match owner {

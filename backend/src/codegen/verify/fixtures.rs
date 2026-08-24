@@ -331,6 +331,22 @@ pub fn gearbox() -> ExtLib {
                     })],
                 )],
             ),
+            // A parameter that must convert at the boundary, not just be
+            // respelled: an i64 is a bigint in TypeScript, and the binding
+            // says it crosses as number.
+            decl(
+                "reseed",
+                vec![param("seed", prim(Prim::I64))],
+                dial.clone(),
+                vec![lang(
+                    "ts",
+                    "reseed",
+                    vec![CallArg::ParamAs {
+                        name: "seed".into(),
+                        spelling: "number".into(),
+                    }],
+                )],
+            ),
         ],
     }
 }

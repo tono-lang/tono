@@ -72,11 +72,13 @@ cp -R "$bench/ext/ts" "$check_ts/node_modules/@tono-ext-fixture/mathkit"
 
 # The generation-time refusals the bench asserts, each by the phrase the
 # generator names the rule with: capability 10 (a handle forwarded to
-# another call is owned by that call, so a second reader is refused) and
+# another call is owned by that call, so a second reader is refused),
 # capability 11 on Go (a static method receiver has nothing to render as,
-# Go has no static method) and capability 12 on Go and Rust (a class
-# reference has nothing to render as, neither has a type as a value).
-refusal_markers="is owned by that call|has no static method to call|has no class reference to pass"
+# Go has no static method), capability 12 on Go and Rust (a class
+# reference has nothing to render as, neither has a type as a value), and
+# capability 15 on Rust (a spelling asking for a conversion the target
+# cannot write is refused naming both types).
+refusal_markers="is owned by that call|has no static method to call|has no class reference to pass|no conversion from"
 
 # One check. Prints the outcome it reached to stdout; every tool log goes to
 # $work/<id>/log so a mismatch can quote it.

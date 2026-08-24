@@ -19,9 +19,10 @@ function tonoProbe_dial_read(tonoRecv: TonoHandle_dial): void { const tonoR: Pro
 function tonoProbe_dial_label(tonoRecv: TonoHandle_dial, text: string): void { const tonoR: string = tonoRecv.label(text); }
 function tonoProbe_open(value: number): void { const tonoR: TonoHandle_dial = new tonoLib.Dial(value); }
 function tonoProbe_tune(name: string, precision: number): void { const tonoA0: tonoLib.DialOptions = { label: \"fine\", precision: precision }; const tonoR: TonoHandle_dial = tonoLib.Dial.tune(name, tonoA0); }
-function tonoProbe_merge(dials: tonoLib.Dial<number>[]): void { const tonoR: TonoHandle_dial = tonoLib.merge(dials); }
+function tonoProbe_merge(dials: TonoHandle_dial[]): void { const tonoR: TonoHandle_dial = tonoLib.merge(dials); }
 function tonoProbe_describe(name: string): void { const tonoR: tonoLib.RawSummary = tonoLib.describe(name); }
 function tonoProbe_instantiate(): void { const tonoR: TonoHandle_dial = tonoLib.instantiate(tonoLib.Dial); }
+function tonoProbe_reseed(seed: bigint): void { const tonoR: TonoHandle_dial = tonoLib.reseed(Number(seed)); }
 ";
     assert_eq!(p.source, expected);
 }
@@ -36,7 +37,8 @@ fn every_probe_line_maps_to_its_binding() {
     assert_eq!(at(5), &SiteKey::op(Some("dial"), "read"));
     assert_eq!(at(8), &SiteKey::op(None, "tune"));
     assert_eq!(at(11), &SiteKey::op(None, "instantiate"));
-    assert_eq!(p.lines.len(), 10);
+    assert_eq!(at(12), &SiteKey::op(None, "reseed"));
+    assert_eq!(p.lines.len(), 11);
 }
 
 #[test]
@@ -114,7 +116,8 @@ fn argument_shapes_the_probe_refuses_are_named() {
     let m = gearbox_module();
     let lib = &m.ext_libs[0];
     let mut prelude = Vec::new();
-    let err = |a: CallArg, prelude: &mut Vec<String>| arg_expr(&m, lib, &a, prelude).unwrap_err();
+    let err =
+        |a: CallArg, prelude: &mut Vec<String>| arg_expr(&m, lib, &[], &a, prelude).unwrap_err();
     assert_eq!(
         err(CallArg::Ref(vec!["x".into()]), &mut prelude),
         "an argument shape the probe does not express"
@@ -134,7 +137,7 @@ fn argument_shapes_the_probe_refuses_are_named() {
         args: vec![CallArg::Lit(serde_json::json!(2))],
     });
     assert_eq!(
-        arg_expr(&m, lib, &nested, &mut prelude).unwrap(),
+        arg_expr(&m, lib, &[], &nested, &mut prelude).unwrap(),
         "tonoLib.pick(2)"
     );
     assert!(prelude.is_empty());

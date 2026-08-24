@@ -45,3 +45,11 @@ bench	rust	service.tono	pass
 14-go-generated-type-reference	go	probes/14-go-generated-type-reference.tono	pass
 14-rust-generated-type-reference	rust	probes/14-rust-generated-type-reference.tono	pass
 14-ts-generated-type-reference	typescript	probes/14-ts-generated-type-reference.tono	pass
+# 15: an argument that must convert at the boundary (an i64 into a narrower
+# numeric parameter): TypeScript converts across the bigint divide
+# (Number(..)), Go writes its builtin conversion (int(..)), and Rust has no
+# implicit numeric narrowing, so its generation refuses the binding naming
+# both types (refused, as intended).
+15-ts-argument-coercion	typescript	probes/15-ts-argument-coercion.tono	pass
+15-go-argument-coercion	go	probes/15-go-argument-coercion.tono	pass
+15-rust-numeric-refused	rust	probes/15-rust-numeric-refused.tono	refused

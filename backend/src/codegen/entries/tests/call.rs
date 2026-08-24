@@ -522,8 +522,9 @@ fn a_class_reference_in_wire_position_is_refused_for_every_target() {
 
 /// A parameter spelled under its own foreign type must be one the target
 /// can coerce into: `&str` is a Rust conversion (a `String` is lent), Go
-/// has none for it, and TypeScript passes the value structurally. The
-/// refusal names the site, the parameter and both types.
+/// has none for it, and TypeScript passes it structurally (`&str` is not a
+/// TypeScript primitive, so `tsc` grades it). The refusal names the site,
+/// the parameter and both types.
 #[test]
 fn a_parameter_spelling_is_checked_against_what_the_target_can_coerce() {
     let mut module = module_of(vec![entry_shape(
@@ -566,6 +567,44 @@ fn a_parameter_spelling_is_checked_against_what_the_target_can_coerce() {
     assert!(err.contains("no conversion"), "{err}");
     assert!(super::validate_entries(&model, &[TargetKind::Rust]).is_ok());
     assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
+}
+
+/// TypeScript converts across the number/bigint divide (an i64 spelled
+/// `number`) and refuses any other primitive spelling, naming both types
+/// the way Go and Rust already do.
+#[test]
+fn a_typescript_spelling_coerces_across_bigint_and_refuses_other_primitives() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field(
+            "config",
+            "ns",
+            "load",
+            vec![CallArg::Lit(serde_json::json!(1))],
+        )],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["ts"]);
+    lib.langs = vec![crate::ir::LangPath {
+        lang: "ts".into(),
+        path: "ns-lib".into(),
+    }];
+    lib.externs[0].params = vec![crate::ir::ExternParam {
+        name: "port".into(),
+        r#type: Tref::Prim(crate::ir::Prim::I64),
+    }];
+    lib.externs[0].langs[0].call_args = vec![CallArg::ParamAs {
+        name: "port".into(),
+        spelling: "number".into(),
+    }];
+    module.ext_libs = vec![lib];
+    let model = model_of(module.clone());
+    assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
+
+    module.ext_libs[0].externs[0].params[0].r#type = Tref::Prim(crate::ir::Prim::String);
+    let model = model_of(module);
+    let err = super::validate_entries(&model, &[TargetKind::TypeScript]).unwrap_err();
+    assert!(err.contains("passes port as #(number)"), "{err}");
+    assert!(err.contains("no conversion from string to number"), "{err}");
 }
 
 /// A struct literal in a binding names a form that must exist for the

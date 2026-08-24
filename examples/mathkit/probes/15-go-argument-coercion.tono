@@ -1,0 +1,28 @@
+// Capability 15 (Go): the same crossing conversion, written as Go's own
+// builtin conversion. The logical parameter is an i64 and WithPrecision
+// takes an int: `digits: #(int)` makes the generated call convert,
+// int(digits), instead of passing the int64 the compiler would reject.
+ext mathkit {
+  go { #(tono-ext-fixture/mathkit) }
+
+  struct calculator {
+    go { #(Calculator[float64]) }
+
+    op compute(): float {
+      go { call: #(Compute)(#(ctx context.Context)) }
+    }
+  }
+
+  op from_formula(expr: string, digits: i64): calculator {
+    go { call: #(FromFormula[float64])(expr, #(WithPrecision)(digits: #(int))) }
+  }
+}
+
+pub struct client {
+  expr: string @arg
+  digits: i64 @arg
+  formula: mathkit.calculator = mathkit.from_formula(.expr, .digits)
+
+  op value(): float
+    impl .formula.compute()
+}
