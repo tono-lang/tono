@@ -159,6 +159,7 @@ fn rendered_decls(module: &Module) -> Vec<Decl> {
     let emission = emit(module, &ts_casing());
     let mut decls = emission.shared;
     decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
+    decls.extend(emission.ext.into_iter().flat_map(|(_, d)| d));
     decls
 }
 
@@ -167,35 +168,50 @@ fn rendered_text(module: &Module) -> String {
 }
 
 #[test]
-fn a_plain_call_field_awaits_the_foreign_symbol_through_its_seam() {
+fn a_plain_call_field_awaits_the_foreign_symbol_through_its_resolver() {
     // The import statement itself is a later file-assembly concern
     // (`repoint_to_groups`/`fill_symbol_slots`), not exercised by this
     // leaf-level harness; the ref that drives it is asserted separately
-    // by checking the seam `Decl`'s own `refs`.
+    // by checking the resolver `Decl`'s own `refs`.
     let module = appendix_module(appendix_fields());
     let decls = rendered_decls(&module);
-    let seam_decl = decls
+    let resolver = decls
         .iter()
-        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("let configExt")))
-        .expect("config seam decl");
-    let refs = crate::codegen::tree::item_refs(seam_decl);
+        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("export async function resolveConfig(")))
+        .expect("config resolver decl");
+    let refs = crate::codegen::tree::item_refs(resolver);
     assert!(
         refs.iter().any(|s| s.name == "load"
             && s.import
                 .as_ref()
                 .is_some_and(|i| i.module == "@company/config")),
-        "the seam must import the foreign symbol `load` from its declared module: {refs:?}"
+        "the resolver must import the foreign symbol `load` from its declared module: {refs:?}"
     );
     let out = rendered_text(&module);
-    assert!(out.contains("const raw = await load("), "{out}");
-    assert!(out.contains("s.config = await configExt(s);"), "{out}");
-    // The `Ctor` argument's foreign field names ride verbatim, in the
-    // ts language block's own order; the values are the resolved
-    // sibling fields (`s.<field>`), not bare identifiers.
+    // The resolver takes exactly the fields the declaration reads, and the
+    // factory stores what it returns.
     assert!(
-        out.contains("{ region: s.region, service: s.service }"),
+        out.contains("export async function resolveConfig(service: string, region: string): Promise<AppConfig> {"),
         "{out}"
     );
+    assert!(out.contains("const raw = await load("), "{out}");
+    assert!(
+        out.contains("const configValue = await resolveConfig(s.service, s.region);\n    s.config = configValue;"),
+        "{out}"
+    );
+    // The `Ctor` argument's foreign field names ride verbatim, in the
+    // ts language block's own order; the values are the resolver's own
+    // parameters, never a read off the settings. (`config` itself binds as
+    // `configValue`: the factory's own `config` parameter is the `@with`
+    // object, which a field of that name must not shadow.)
+    assert!(
+        out.contains("{ region: region, service: service }"),
+        "{out}"
+    );
+    // Nothing test-only exists in production: no module-level mutable
+    // binding, no exported swapper, no branch.
+    assert!(!out.contains("ForTest"), "{out}");
+    assert!(!out.contains("export let"), "{out}");
 }
 
 #[test]
@@ -210,11 +226,21 @@ fn a_yields_projection_reads_the_foreign_verbatim_member_and_casts_to_the_logica
 #[test]
 fn a_bare_call_with_no_yields_assigns_the_raw_result_directly() {
     let out = rendered_text(&appendix_module(appendix_fields()));
-    // The `@with` fallback wraps the call assignment inside its own
-    // presence check; the leaf itself is still a bare pass-through
-    // (through the seam).
-    assert!(out.contains("s.bus = await busExt(s);"), "{out}");
+    // The `@with` fallback wraps the resolver call inside its own presence
+    // check; the resolver narrows the library's value to the handle's
+    // generated interface once, at the construction boundary.
+    assert!(
+        out.contains("if (config.bus !== undefined) {\n      s.bus = config.bus;\n    } else {\n      const bus = await resolveBus(s.config);\n      s.bus = bus;\n    }"),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "export async function resolveBus(configValue: AppConfig): Promise<PublisherHandle> {"
+        ),
+        "{out}"
+    );
     assert!(out.contains("await connect("), "{out}");
+    assert!(out.contains("return raw as PublisherHandle;"), "{out}");
 }
 
 #[test]
@@ -281,11 +307,12 @@ fn no_foreign_form_is_exported_by_the_barrel() {
 }
 
 /// A declared test stubbing `companyconfig.load` (a free extern-fn call
-/// reached during construction): the generated hermetic test swaps the
-/// `config` field's seam for the canned logical answer, never awaiting
-/// the real `load` import at all.
+/// reached during construction): the generated hermetic test assembles the
+/// settings itself and assigns the decoded logical answer where the
+/// resolver would have stored its result, never calling the resolver and
+/// never awaiting the real `load` import at all.
 #[test]
-fn a_free_extern_fn_stub_swaps_the_seam_in_the_generated_hermetic_test() {
+fn a_free_extern_fn_stub_assigns_the_decoded_answer_in_the_generated_hermetic_test() {
     use crate::ir::{ExternStub, ExternStubTarget, StubAnswer, TestConstruction, TestDecl};
     use std::collections::BTreeMap;
 
@@ -336,12 +363,22 @@ fn a_free_extern_fn_stub_swaps_the_seam_in_the_generated_hermetic_test() {
         .expect("a hermetic test file");
     let out = rendered(&hermetic.file.decls, &TsRules);
     assert!(
-        out.contains("swapConfigExtForTest"),
-        "the test must swap the free-fn extern seam: {out}"
+        out.contains("const s = Client[\"newSettings\"](\"svc\", \"us\");"),
+        "{out}"
     );
     assert!(
-        !out.contains("await load("),
-        "a hermetic test must never reach the real import: {out}"
+        out.contains("s.config = decodeAppConfig({\"endpoint\":\"e\",\"token\":\"t\"});"),
+        "the test assigns the decoded answer where the resolver would have stored it: {out}"
+    );
+    assert!(out.contains("s.bus = {} as PublisherHandle;"), "{out}");
+    assert!(out.contains("Client[\"fromSettings\"](s);"), "{out}");
+    assert!(
+        !out.contains("resolveConfig(") && !out.contains("resolveBus("),
+        "a stubbed construction's resolver is never called: {out}"
+    );
+    assert!(
+        !out.contains("await load(") && !out.contains("ForTest"),
+        "a hermetic test must never reach the real import or a seam: {out}"
     );
 }
 
@@ -431,8 +468,8 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
 }
 
 /// A static method (`#(Type.method)(args)`) is called on the imported type:
-/// the seam imports the type the spelling names, not the method, and calls
-/// `Type.method(..)` through it.
+/// the resolver imports the type the spelling names, not the method, and
+/// calls `Type.method(..)` through it.
 #[test]
 fn a_static_method_receiver_imports_the_type_and_calls_its_member() {
     let mut module = appendix_module(appendix_fields());
@@ -440,17 +477,17 @@ fn a_static_method_receiver_imports_the_type_and_calls_its_member() {
     assert_eq!(load.symbol, "load");
     load.symbol = "ConfigLoader.load".into();
     let decls = rendered_decls(&module);
-    let seam_decl = decls
+    let resolver = decls
         .iter()
-        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("let configExt")))
-        .expect("config seam decl");
-    let refs = crate::codegen::tree::item_refs(seam_decl);
+        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("export async function resolveConfig(")))
+        .expect("config resolver decl");
+    let refs = crate::codegen::tree::item_refs(resolver);
     assert!(
         refs.iter().any(|s| s.name == "ConfigLoader"
             && s.import
                 .as_ref()
                 .is_some_and(|i| i.module == "@company/config")),
-        "the seam must import the receiver type: {refs:?}"
+        "the resolver must import the receiver type: {refs:?}"
     );
     assert!(
         !refs.iter().any(|s| s.name == "load"),
@@ -464,8 +501,8 @@ fn a_static_method_receiver_imports_the_type_and_calls_its_member() {
 }
 
 /// A class reference (`type handle`) passes the handle's class itself: the
-/// seam imports the class from the lib's module and writes the identifier
-/// where the argument goes, nested calls included.
+/// resolver imports the class from the lib's module and writes the
+/// identifier where the argument goes, nested calls included.
 #[test]
 fn a_class_reference_imports_the_handle_class_and_passes_it() {
     let mut module = appendix_module(appendix_fields());
@@ -479,17 +516,17 @@ fn a_class_reference_imports_the_handle_class_and_passes_it() {
         }),
     ];
     let decls = rendered_decls(&module);
-    let seam_decl = decls
+    let resolver = decls
         .iter()
-        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("let busExt")))
-        .expect("bus seam decl");
-    let refs = crate::codegen::tree::item_refs(seam_decl);
+        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("export async function resolveBus(")))
+        .expect("bus resolver decl");
+    let refs = crate::codegen::tree::item_refs(resolver);
     assert!(
         refs.iter().any(|s| s.name == "Publisher"
             && s.import
                 .as_ref()
                 .is_some_and(|i| i.module == "@company/bus")),
-        "the seam must import the handle's class: {refs:?}"
+        "the resolver must import the handle's class: {refs:?}"
     );
     let out = rendered_text(&module);
     assert!(
@@ -665,8 +702,8 @@ fn a_spelled_ctor_literal_passes_structurally() {
 }
 
 /// A `yields` list with no `returns:` names what the call returns and
-/// projects nothing: the seam hands the raw result back as is, exactly as
-/// a binding with no `yields` does.
+/// projects nothing: the resolver hands the raw result back as is, exactly
+/// as a binding with no `yields` does.
 #[test]
 fn a_signature_yields_list_passes_the_raw_result_through() {
     let mut module = appendix_module(appendix_fields());

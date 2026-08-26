@@ -1,16 +1,19 @@
 //! Native Vitest files generated from the module's declared tests.
 //!
-//! Each test runs the real client method through the real construction path;
-//! only the declared stub point is swapped: an `.http` stub answers through
-//! the class seam (`Client.forTest`), an `.impl` stub goes through the
-//! exported per-operation swapper ([`super::impl_op::swap_fn_name`]). A test
-//! whose call has no stub runs against the real dependency, so it lands in the
-//! live file, gated behind `TONO_LIVE_TESTS=1` so it stays out of a default
-//! `vitest` run; a construction-only test is hermetic by nature. A call whose
-//! own dependency is neither `.http` nor `.impl` is an extern handle method
-//! reached through the op's own `impl` body: hermetic on its `extern_stubs`
-//! coverage alone, with the handle-method stub swapping the op's own seam
-//! ([`super::ext_handle_call::op_seam_decls`]; see `vector_extern`).
+//! Each test runs the real client method over a client it assembled itself.
+//! An entry with a foreign construction is assembled through the class's
+//! own private steps, reached by element access (`Client["newSettings"]`,
+//! `Client["fromSettings"]`, the escape hatch TypeScript keeps for exactly
+//! this): the shared settings step, then a fake assigned where every stubbed
+//! construction would have stored its value (see `vector_extern`), the
+//! canonical transport assigned where an `.http` stub answers, then the last
+//! step. An entry with no foreign construction is constructed normally, and
+//! an `.http` stub is assigned over its frozen options. An `.impl` stub goes
+//! through the exported per-operation swapper
+//! ([`super::impl_op::swap_fn_name`]). A test whose call has no stub runs
+//! against the real dependency, so it lands in the live file, gated behind
+//! `TONO_LIVE_TESTS=1` so it stays out of a default `vitest` run; a
+//! construction-only test is hermetic by nature.
 //!
 //! Unlike Go's shared package scope, each test file is its own ES module, so
 //! it imports the surface it exercises. Each test body is self-contained
@@ -40,7 +43,7 @@ use expects::{eq_assert, failure_asserts, request_asserts, struct_asserts};
 
 #[path = "vector_extern.rs"]
 mod extern_stubs;
-use extern_stubs::wrap_extern_stubs;
+use extern_stubs::assembly_steps;
 
 const BINDING_LANGS: [&str; 2] = ["ts", "typescript"];
 
@@ -445,17 +448,20 @@ fn invoke_and_expect(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
 }
 
 /// Whether this entry's construction is async: true whenever a declared
-/// field resolves through an `extern` call, which forces the class's own
-/// constructor private and construction through `static async create`/
-/// `forTest` instead (see `class.rs::class_decl`'s `is_async`).
+/// field resolves through a foreign call, which forces the class's own
+/// constructor private and construction through `static async create`
+/// (see `class.rs::class_decl`'s `is_async`).
 fn construction_is_async(ctx: &TestCtx<'_>) -> bool {
-    ctx.entry.fields.iter().any(|f| f.call.is_some())
+    ctx.entry
+        .fields
+        .iter()
+        .any(|f| f.call.is_some() || f.handle_call.is_some())
 }
 
-/// The bare (non-`forTest`) construction expression for a test: `new
-/// Client(args)` when construction is synchronous, or `await
-/// Client.create(args)` when an `extern`-call field makes the constructor
-/// private and construction async (same distinction `class_decl` draws).
+/// The plain construction expression for a test: `new Client(args)` when
+/// construction is synchronous, or `await Client.create(args)` when a
+/// foreign construction makes the constructor private and construction
+/// async (same distinction `class_decl` draws).
 fn construction_expr(ctx: &TestCtx<'_>, args: &str) -> String {
     if construction_is_async(ctx) {
         format!("await {client}.create({args})", client = ctx.n.client)
@@ -464,9 +470,42 @@ fn construction_expr(ctx: &TestCtx<'_>, args: &str) -> String {
     }
 }
 
-/// One hermetic test: pin the environment, install the declared stub, build
-/// the client through the real construction path, run the call, assert. A
-/// construction-only test just constructs and asserts its outcome.
+/// The client a hermetic test runs against, bound to `c`: assembled through
+/// the class's own steps with the test's fakes when the entry has a foreign
+/// construction (a stubbed construction never runs; the settings hold the
+/// fake), or constructed plainly otherwise, with an `.http` stub's transport
+/// assigned over the frozen options afterwards. `transport` says whether an
+/// `.http` stub declared a `transport` binding to assign.
+fn assembled_client(ctx: &TestCtx<'_>, transport: bool, refs: &mut Vec<Symbol>) -> String {
+    let args = construction_args(ctx);
+    if construction_is_async(ctx) {
+        let steps = assembly_steps(ctx, refs, "");
+        let transport_line = if transport {
+            "s.transport = transport;\n"
+        } else {
+            ""
+        };
+        format!(
+            "const s = {client}[\"newSettings\"]({args});\n{steps}{transport_line}const c = {client}[\"fromSettings\"](s);\n",
+            client = ctx.n.client,
+        )
+    } else if transport {
+        refs.push(support_symbol("HttpTransport"));
+        format!(
+            "const c = new {client}({args});\n\
+             const options = c[\"options\"] as {{ transport?: HttpTransport; fetch?: typeof fetch }};\n\
+             options.transport = transport;\n\
+             options.fetch = undefined;\n",
+            client = ctx.n.client,
+        )
+    } else {
+        format!("const c = new {client}({args});\n", client = ctx.n.client)
+    }
+}
+
+/// One hermetic test: pin the environment, install the declared stubs,
+/// assemble the client, run the call, assert. A construction-only test just
+/// constructs and asserts its outcome.
 fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>) -> String {
     refs.push(module_symbol(&ctx.n.client, ctx.module));
     let args = construction_args(ctx);
@@ -483,20 +522,10 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
                         _ => None,
                     })
                     .collect();
-                let seam_call = if args.is_empty() {
-                    "{ transport }".to_string()
-                } else {
-                    format!("{{ transport }}, {args}")
-                };
-                let await_ = if construction_is_async(ctx) {
-                    "await "
-                } else {
-                    ""
-                };
                 format!(
-                    "{setup}const c = {await_}{client}.forTest({seam_call});\n{invoke}",
+                    "{setup}{construct}{invoke}",
                     setup = transport_block(&answers),
-                    client = ctx.n.client,
+                    construct = assembled_client(ctx, true, refs),
                     invoke = invoke_and_expect(ctx, refs),
                 )
             }
@@ -539,8 +568,8 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
                     ""
                 };
                 let inner = format!(
-                    "const c = {construct};\n{invoke}",
-                    construct = construction_expr(ctx, &args),
+                    "{construct}{invoke}",
+                    construct = assembled_client(ctx, false, refs),
                     invoke = invoke_and_expect(ctx, refs),
                 );
                 // The seam is module state, so the swap is restored however
@@ -555,15 +584,15 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
         }
     } else if ctx.test.call.is_some() {
         // A call with no call-scoped stub: the op's own `impl .h.m()` body,
-        // hermetic through the handle-method stub `wrap_extern_stubs`
-        // installs on the op's seam below.
+        // hermetic through the fake handle the assembly installed.
         format!(
-            "const c = {construct};\n{invoke}",
-            construct = construction_expr(ctx, &args),
+            "{construct}{invoke}",
+            construct = assembled_client(ctx, false, refs),
             invoke = invoke_and_expect(ctx, refs),
         )
-    } else {
-        // Construction-only: the outcome pattern reads the construction error.
+    } else if ctx.test.extern_stubs.is_empty() {
+        // Construction-only, nothing stubbed: the outcome pattern reads the
+        // construction error of the plain constructor.
         match ctx.test.outcome {
             None | Some(TestPattern::Ok(_)) => {
                 format!("{};\n", construction_expr(ctx, &args))
@@ -574,8 +603,19 @@ fn hermetic_case(ctx: &TestCtx<'_>, uses_env: &mut bool, refs: &mut Vec<Symbol>)
                 asserts = failure_asserts(ctx, pattern, refs),
             ),
         }
+    } else {
+        // Construction-only with stubs: the assembly is the construction,
+        // and the outcome pattern reads its error.
+        let assembly = assembled_client(ctx, false, refs);
+        match ctx.test.outcome {
+            None | Some(TestPattern::Ok(_)) => assembly,
+            Some(pattern) => format!(
+                "let caught: unknown;\ntry {{\n{assembly}}} catch (e) {{\n  caught = e;\n}}\n{asserts}",
+                assembly = indent(&assembly, "  "),
+                asserts = failure_asserts(ctx, pattern, refs),
+            ),
+        }
     };
-    let body = wrap_extern_stubs(ctx, body, refs);
     let pins = env_pins(ctx);
     let inner = if pins.is_empty() {
         indent(&body, "  ")

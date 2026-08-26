@@ -20,7 +20,7 @@ use crate::ir::{
 use super::{module_entries, source_stub, EntryModel};
 
 mod build;
-pub use build::{build_field, build_requires, presence_kind, Presence};
+pub use build::{build_field, build_requires, build_requires_for, presence_kind, Presence};
 
 mod select;
 
@@ -37,6 +37,11 @@ pub use dedup::{
 pub struct EntryEmission {
     pub shared: Vec<Decl>,
     pub per_entry: Vec<(String, Vec<Decl>)>,
+    /// The construction glue per `ext` library the module's entries call
+    /// into (one resolver function per foreign construction), keyed by the
+    /// library's name: each lands in a file of its own. A library no entry
+    /// constructs through has no entry here.
+    pub ext: Vec<(String, Vec<Decl>)>,
 }
 
 impl EntryEmission {
@@ -45,6 +50,16 @@ impl EntryEmission {
         Self {
             shared: Vec::new(),
             per_entry: Vec::new(),
+            ext: Vec::new(),
+        }
+    }
+
+    /// File one resolver under its library, keeping the libraries in the
+    /// order they are first reached and the resolvers in construction order.
+    pub fn push_ext(&mut self, lib: &str, decl: Decl) {
+        match self.ext.iter_mut().find(|(name, _)| name == lib) {
+            Some((_, decls)) => decls.push(decl),
+            None => self.ext.push((lib.to_string(), vec![decl])),
         }
     }
 }
@@ -77,8 +92,21 @@ pub fn emit_fields(
     e: &mut dyn Emitter,
     depth: usize,
 ) -> String {
+    emit_fields_of(&entry.fields, entry, module, e, depth)
+}
+
+/// [`emit_fields`] over a chosen subset of the entry's fields (already in
+/// resolution order): the shared settings step and the constructor's tail
+/// each render their own half.
+pub fn emit_fields_of(
+    fields: &[&EntryField],
+    entry: &EntryModel,
+    module: &Module,
+    e: &mut dyn Emitter,
+    depth: usize,
+) -> String {
     let mut out = String::new();
-    for field in &entry.fields {
+    for field in fields {
         let block = render(&build_field(field, entry, module, e), depth, e);
         if block.is_empty() {
             continue;

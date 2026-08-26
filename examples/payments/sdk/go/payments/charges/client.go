@@ -67,6 +67,60 @@ type ClientAPI interface {
 
 var _ ClientAPI = (*Client)(nil)
 
+// New constructs Client: positional @arg values, options for @with,
+// declared sources resolved top-down, then the declared validation.
+func New(apiKey string, opts ...ClientOption) (*Client, error) {
+	s, err := newSettings(apiKey, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return newClient(s)
+}
+
+// newSettings resolves every construction value of Client that no
+// foreign call reaches, in declared order, then runs the consumed-chain
+// requires and the declared validation over them.
+func newSettings(apiKey string, opts ...ClientOption) (Settings, error) {
+	w := clientOptions{}
+	for _, opt := range opts {
+		opt(&w)
+	}
+	s := Settings{Headers: map[string]string{}}
+	s.APIKey = apiKey
+
+	s.Endpoint = resolveSettingEndpoint()
+
+	s.Timeout = resolveSettingTimeout(w.timeout)
+
+	s.MaxRetries = resolveSettingMaxRetries(w.maxRetries)
+
+	violations := []Violation{}
+	if len([]rune(s.APIKey)) < 1 {
+		violations = append(violations, Violation{Field: "api_key", Constraint: "length", Message: "api_key length must be >= 1"})
+	}
+	if len(violations) > 0 {
+		return s, &ValidationError{Violations: violations}
+	}
+	return s, nil
+}
+
+// newClient builds Client over assembled settings: the runtime values
+// freeze here, after every construction value resolved.
+func newClient(s Settings) (*Client, error) {
+	timeoutDuration := time.Duration(0)
+	{
+		d, err := time.ParseDuration(string(s.Timeout))
+		if err != nil {
+			return nil, &ConfigError{Message: fmt.Sprintf("timeout: invalid duration %q", string(s.Timeout))}
+		}
+		timeoutDuration = d
+	}
+	if s.HTTPClient != nil && s.Transport != nil {
+		return nil, errors.New("Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both")
+	}
+	return &Client{settings: s, timeoutDuration: timeoutDuration}, nil
+}
+
 // resolveSettingEndpoint resolves the endpoint construction value.
 func resolveSettingEndpoint() string {
 	if v, ok := os.LookupEnv("PAYMENTS_ENDPOINT"); ok && v != "" {
@@ -91,57 +145,6 @@ func resolveSettingMaxRetries(with *int32) int32 {
 		return *with
 	}
 	return int32(2)
-}
-
-// New constructs Client: positional @arg values, options for @with,
-// declared sources resolved top-down, then the declared validation.
-func New(apiKey string, opts ...ClientOption) (*Client, error) {
-	return newWithTransport(nil, apiKey, opts...)
-}
-
-// newWithTransport is New plus the seams the generated tests use: a non-nil
-// canonical transport replaces whatever construction resolved; a non-nil
-// field override skips that field's own real `extern` construction call
-// outright, so a hermetic test never reaches the real library, not just
-// avoids calling it at runtime.
-func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...ClientOption) (*Client, error) {
-	w := clientOptions{}
-	for _, opt := range opts {
-		opt(&w)
-	}
-	s := Settings{Headers: map[string]string{}}
-
-	s.APIKey = apiKey
-
-	s.Endpoint = resolveSettingEndpoint()
-
-	s.Timeout = resolveSettingTimeout(w.timeout)
-
-	s.MaxRetries = resolveSettingMaxRetries(w.maxRetries)
-
-	violations := []Violation{}
-	if len([]rune(s.APIKey)) < 1 {
-		violations = append(violations, Violation{Field: "api_key", Constraint: "length", Message: "api_key length must be >= 1"})
-	}
-	if len(violations) > 0 {
-		return nil, &ValidationError{Violations: violations}
-	}
-	timeoutDuration := time.Duration(0)
-	{
-		d, err := time.ParseDuration(string(s.Timeout))
-		if err != nil {
-			return nil, &ConfigError{Message: fmt.Sprintf("timeout: invalid duration %q", string(s.Timeout))}
-		}
-		timeoutDuration = d
-	}
-	if canonical != nil {
-		s.Transport = canonical
-		s.HTTPClient = nil
-	}
-	if s.HTTPClient != nil && s.Transport != nil {
-		return nil, errors.New("Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both")
-	}
-	return &Client{settings: s, timeoutDuration: timeoutDuration}, nil
 }
 
 func (c *Client) CreateCharge(ctx context.Context, input Charge) (Charge, error) {

@@ -220,3 +220,49 @@ pub(super) fn validate_extern_coverage(
     }
     Ok(())
 }
+
+/// TypeScript has no adapter behind a handle's generated interface: the
+/// interface speaks the foreign shape, and a generated test's fake handle
+/// answers in that shape, rebuilt by inverting the method's `returns:`
+/// projection over field paths (`vector_extern::raw_answer`). A projection
+/// through a `match` has no inverse, so a handle-method stub of such a
+/// method cannot be honored in TypeScript; refused here, naming the method,
+/// rather than generating a test that answers the wrong shape.
+pub(super) fn validate_method_stubs_fakeable_in_typescript(module: &Module) -> Result<(), String> {
+    for test in &module.tests {
+        for stub in &test.extern_stubs {
+            let ExternStubTarget::Method { lib, ty, method } = &stub.target else {
+                continue;
+            };
+            if !stub
+                .answers
+                .iter()
+                .any(|a| matches!(a, StubAnswer::Value { .. }))
+            {
+                continue;
+            }
+            let projects_through_match = module
+                .ext_libs
+                .iter()
+                .filter(|l| l.name == *lib)
+                .flat_map(|l| l.types.iter().filter(|t| t.name == *ty))
+                .flat_map(|t| t.methods.iter().filter(|m| m.name == *method))
+                .flat_map(|m| m.langs.iter())
+                .filter(|l| l.lang == "ts" || l.lang == "typescript")
+                .filter_map(|l| l.returns.as_ref())
+                .any(|returns| {
+                    returns
+                        .fields
+                        .iter()
+                        .any(|f| matches!(f.value, crate::ir::ReturnsValue::Select(_)))
+                });
+            if projects_through_match {
+                return Err(format!(
+                    "test '{}' in module '{}': stubs '{lib}.{ty}.{method}' with a value, but the method's ts binding projects its result through a match, which a TypeScript fake handle cannot answer in the foreign shape; stub the operation or the field that reads it instead",
+                    test.name, module.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}

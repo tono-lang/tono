@@ -133,32 +133,24 @@ fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
     let mut module = simple_entry_module();
     module.tests = create_charge_tests();
     let text = emitted_text(&module);
-    // The public surface is unchanged; the body moved into the crate-visible
-    // variant the generated tests construct through.
+    // Production carries no seam at all, with or without declared tests:
+    // `new` is the sole constructor, resolving settings then building the
+    // client.
     assert!(text.contains(
-        "pub fn new(api_key: String) -> Result<Self, TonoError> {\n        Self::new_with_transport(None, api_key)\n    }"
+        "pub fn new(api_key: String) -> Result<Self, TonoError> {\n        let s = Self::new_settings(api_key)?;\n        Self::new_client(s)\n    }"
     ));
-    assert!(text.contains(
-        "pub(crate) fn new_with_transport(transport: Option<HttpTransport>, api_key: String) -> Result<Self, TonoError> {"
-    ));
-    // The override lands after source resolution and right before the
-    // options freeze, so the test transport wins over anything bespoke set.
-    let resolved = text
-        .find("s.client_name = resolve_setting_client_name(")
-        .expect("source resolution");
-    let over = text
-        .find("if let Some(t) = transport {")
-        .expect("transport override");
-    let freeze = text
-        .find("let options = ClientOptions {")
-        .expect("options freeze");
-    assert!(resolved < over && over < freeze);
-    assert!(text.contains("s.transport = Some(t);"));
-    assert!(text.contains("s.client = None;"));
-    // Without declared tests the seam is not emitted at all.
-    module.tests.clear();
-    let plain = entry_text(&module, &rust_casing());
-    assert!(!plain.contains("new_with_transport"));
+    assert!(!text.contains("new_with_transport"));
+    assert!(text
+        .contains("pub(crate) fn new_settings(api_key: String) -> Result<Settings, TonoError> {"));
+    assert!(text.contains("pub(crate) fn new_client(s: Settings) -> Result<Self, TonoError> {"));
+    // A generated test builds the client itself: settings, then the
+    // transport injected directly, then the client, with no branch in `new`
+    // deciding between production and test.
+    let files = super::vector_tests::test_files(&module, &rust_casing());
+    let hermetic = rendered(&files[0].file.decls, &RustRules::default());
+    assert!(hermetic.contains("let mut s = Client::new_settings(\"k\".to_string())?;"));
+    assert!(hermetic.contains("s.transport = Some(transport);"));
+    assert!(hermetic.contains("s.client = None;"));
 }
 
 #[test]
@@ -175,10 +167,11 @@ fn a_with_bearing_entry_routes_build_through_the_seam() {
     );
     let text = emitted_text(&module);
     assert!(text.contains(
-        "pub fn build(self) -> Result<Client, TonoError> {\n        self.build_with_transport(None)\n    }"
+        "pub fn build(self) -> Result<Client, TonoError> {\n        let ClientBuilder { api_key, timeout_ms } = self;\n        let s = Client::new_settings(api_key, timeout_ms)?;\n        Client::new_client(s)\n    }"
     ));
+    assert!(!text.contains("build_with_transport"));
     assert!(text.contains(
-        "pub(crate) fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<Client, TonoError> {"
+        "pub(crate) fn new_settings(api_key: String, timeout_ms: Option<i32>) -> Result<Settings, TonoError> {"
     ));
 }
 
@@ -201,7 +194,7 @@ fn declared_tests_generate_a_hermetic_and_a_live_rust_test_file() {
     // with the @arg value from the pinned construction values.
     assert!(hermetic.contains("std::env::set_var(\"CLIENT_NAME\", \"demo\");"));
     assert!(hermetic.contains(
-        "let c = Client::new_with_transport(Some(transport), \"k\".to_string()).expect(\"construct client\");"
+        "let c = (|| -> Result<Client, TonoError> {\n        let mut s = Client::new_settings(\"k\".to_string())?;\n        s.transport = Some(transport);\n        #[cfg(feature = \"reqwest\")]\n        {\n            s.client = None;\n        }\n        Ok::<_, TonoError>(Client::new_client(s)?)\n    })().expect(\"construct client\");"
     ));
     // The stubbed transport records every canonical request and answers its
     // single canned response directly (no sequence index); the input decodes
@@ -333,7 +326,10 @@ fn a_pinned_list_is_a_vec_literal() {
     let hermetic = rendered(&files[0].file.decls, &RustRules::default());
     // The pinned list is a `vec!` of typed literals; the unpinned `names`
     // gets the empty one.
-    assert!(hermetic.contains(
-        "let c = Client::new_with_transport(Some(transport), \"k\".to_string(), vec![1f64, 2f64, 3f64], vec![]).expect(\"construct client\");"
-    ), "{hermetic}");
+    assert!(
+        hermetic.contains(
+            "let mut s = Client::new_settings(\"k\".to_string(), vec![1f64, 2f64, 3f64], vec![])?;"
+        ),
+        "{hermetic}"
+    );
 }

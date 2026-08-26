@@ -1,7 +1,8 @@
 //! Coverage for the extern-stub fakes a hermetic declared test needs
-//! ([`super`]): the seam constructor's per-field override arguments, the
-//! fake handle type a foreign-handle stub builds, and the canned answer a
-//! fake method body renders. The shared appendix fixture already wires a
+//! ([`super`]): the assembly steps putting each fake where the stubbed
+//! construction would have stored its value, the fake handle type a
+//! foreign-handle stub builds, and the canned answer a fake method body
+//! renders. The shared appendix fixture already wires a
 //! plain free-fn stub and a stubbed handle method through the real
 //! validation pipeline, so most scenarios here reuse it as-is; the branches
 //! that pipeline never reaches (no stub at all, an unstubbed handle method,
@@ -14,7 +15,7 @@ use crate::codegen::declared_tests::{self, PlannedTest};
 use crate::codegen::entries::plan;
 use crate::codegen::targets::go::entry::ext_fixtures::{self, composed_handles_module};
 use crate::codegen::targets::go::entry::vector_tests::vector_extern::{
-    extern_override_args, fake_method_body, handle_fake_decl,
+    assembly_steps, fake_method_body, handle_fake_decl,
 };
 use crate::codegen::targets::go::entry::vector_tests::{TestCtx, BINDING_LANGS};
 use crate::codegen::targets::go::entry::{names, Names};
@@ -93,8 +94,10 @@ fn appendix_setup_with_tests(
     (entries, multi, n, config, planned)
 }
 
+/// A construction nothing stubs keeps the real resolver call in the test's
+/// assembly, exactly as the constructor runs it.
 #[test]
-fn a_field_with_no_matching_stub_pushes_a_nil_override_for_every_field() {
+fn a_field_with_no_matching_stub_keeps_its_resolver_call() {
     let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config) = appendix_setup(&module);
     let construction = TestConstruction {
@@ -116,14 +119,25 @@ fn a_field_with_no_matching_stub_pushes_a_nil_override_for_every_field() {
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &test);
     let mut refs = Vec::new();
     let mut extra_decls = Vec::new();
-    let (pre, args) = extern_override_args(&ctx, &mut refs, &mut extra_decls);
-    assert_eq!(args, vec!["nil".to_string(), "nil".to_string()]);
+    let (pre, steps) = assembly_steps(&ctx, &mut refs, &mut extra_decls);
     assert!(pre.is_empty());
     assert!(extra_decls.is_empty());
+    assert!(
+        steps.contains("\t\tconfig, err := resolveConfig(s.Service, s.Region)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\ts.Config = config\n"),
+        "{steps}"
+    );
+    assert!(
+        steps.contains("\t\tbus, err := resolveBus(s.Config)\n"),
+        "{steps}"
+    );
+    assert!(
+        steps.contains("\t\ts.bus = &companybusPublisherIfaceAdapter{real: bus}\n"),
+        "{steps}"
+    );
 }
 
 #[test]
-fn a_plain_free_fn_stub_decodes_a_literal_into_an_override_var() {
+fn a_plain_free_fn_stub_decodes_a_literal_and_assigns_it() {
     let module = ext_fixtures::reference_example_module();
     let (entries, multi, n, config) = appendix_setup(&module);
     let construction = TestConstruction {
@@ -155,11 +169,18 @@ fn a_plain_free_fn_stub_decodes_a_literal_into_an_override_var() {
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &test);
     let mut refs = Vec::new();
     let mut extra_decls = Vec::new();
-    let (pre, args) = extern_override_args(&ctx, &mut refs, &mut extra_decls);
-    assert!(pre.contains("var configOverrideVal"));
-    assert!(pre.contains("json.Unmarshal([]byte(`{\"endpoint\":\"https://api.example.com\",\"token\":\"s3cr3t\"}`), &configOverrideVal)"));
-    assert_eq!(args[0], "&configOverrideVal");
-    assert_eq!(args[1], "nil");
+    let (pre, steps) = assembly_steps(&ctx, &mut refs, &mut extra_decls);
+    // The literal decodes before the assembly (a decode failure fails the
+    // test through `t`), and the assembly assigns it where the resolver
+    // would have stored its result; the unstubbed field keeps its call.
+    assert!(pre.contains("var configStub "), "{pre}");
+    assert!(pre.contains("json.Unmarshal([]byte(`{\"endpoint\":\"https://api.example.com\",\"token\":\"s3cr3t\"}`), &configStub)"));
+    assert!(steps.contains("\t\ts.Config = configStub\n"), "{steps}");
+    assert!(!steps.contains("resolveConfig"), "{steps}");
+    assert!(
+        steps.contains("bus, err := resolveBus(s.Config)"),
+        "{steps}"
+    );
     assert!(extra_decls.is_empty());
 }
 
@@ -170,10 +191,10 @@ fn a_foreign_handle_stub_builds_a_fake_and_an_unstubbed_method_panics() {
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[0]);
     let mut refs = Vec::new();
     let mut extra_decls = Vec::new();
-    let (_pre, args) = extern_override_args(&ctx, &mut refs, &mut extra_decls);
-    assert_eq!(args.len(), 2);
-    assert!(args[1].starts_with('&'));
-    assert!(args[1].ends_with("PublisherFake{}"), "{}", args[1]);
+    let (_pre, steps) = assembly_steps(&ctx, &mut refs, &mut extra_decls);
+    assert!(steps.contains("\t\ts.bus = &"), "{steps}");
+    assert!(steps.contains("PublisherFake{}\n"), "{steps}");
+    assert!(!steps.contains("resolveBus"), "{steps}");
     assert_eq!(extra_decls.len(), 1);
     let text = rendered(&extra_decls, &GoRules::default());
     assert!(text.contains("struct{}"));
@@ -187,7 +208,7 @@ fn a_stubbed_handle_method_renders_the_canned_value_answer() {
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &planned[0].tests[1]);
     let mut refs = Vec::new();
     let mut extra_decls = Vec::new();
-    let (_pre, _args) = extern_override_args(&ctx, &mut refs, &mut extra_decls);
+    let (_pre, _steps) = assembly_steps(&ctx, &mut refs, &mut extra_decls);
     let text = rendered(&extra_decls, &GoRules::default());
     assert!(text.contains("json.Unmarshal"));
     assert!(text.contains("return out, nil"));
@@ -381,10 +402,12 @@ fn fake_method_body_renders_the_defensive_http_dead_branch() {
 /// Several stubbed constructors of one handle type in a single test share
 /// one fake: the composed fixture builds `primary`, `secondary` and
 /// `combined` through three different `compose` constructors, all of them
-/// `resource`, and the seam receives the same fake three times while the
-/// file declares it once. Declaring it per stub was a compile error (the
-/// same type redeclared in one block), and the fake is keyed by handle
-/// type, not by constructor, since it answers by handle method.
+/// `resource`. Only `combined` is stored (the other two are forwarded into
+/// its construction, so the settings never hold them and the assembly
+/// needs no line for them), and the file declares the fake once. Declaring
+/// it per stub was a compile error (the same type redeclared in one block),
+/// and the fake is keyed by handle type, not by constructor, since it
+/// answers by handle method.
 #[test]
 fn several_constructors_of_one_handle_share_a_single_fake_per_test() {
     let module = composed_handles_module();
@@ -416,14 +439,10 @@ fn several_constructors_of_one_handle_share_a_single_fake_per_test() {
     let ctx = appendix_ctx(&module, &entries, multi, &n, &config, &test);
     let mut refs = Vec::new();
     let mut extra_decls = Vec::new();
-    let (_pre, args) = extern_override_args(&ctx, &mut refs, &mut extra_decls);
+    let (_pre, steps) = assembly_steps(&ctx, &mut refs, &mut extra_decls);
     assert_eq!(
-        args,
-        vec![
-            "&TestTheComposedHandleAnswersResourceFake{}".to_string(),
-            "&TestTheComposedHandleAnswersResourceFake{}".to_string(),
-            "&TestTheComposedHandleAnswersResourceFake{}".to_string(),
-        ]
+        steps,
+        "\t\ts.combined = &TestTheComposedHandleAnswersResourceFake{}\n"
     );
     assert_eq!(extra_decls.len(), 1, "one fake type for one handle type");
     let text = rendered(&extra_decls, &GoRules::default());

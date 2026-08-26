@@ -19,6 +19,7 @@ mod checks;
 mod order;
 pub mod plan;
 pub(crate) mod spellings;
+mod split;
 mod validate;
 mod validate_calls;
 mod validate_ownership;
@@ -26,6 +27,9 @@ pub mod wire;
 
 pub use checks::{needs_presence_guard, value_path_access, value_path_frozen_expr};
 use order::resolution_order;
+pub use split::{
+    call_deps, has_wire_ops, is_foreign, model_has_wire_ops, ConstructionSplit, TailStep,
+};
 pub(crate) use validate::is_foreign_ref;
 pub use validate::validate_entries;
 

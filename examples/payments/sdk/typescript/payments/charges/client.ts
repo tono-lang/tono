@@ -94,6 +94,30 @@ export class Client {
   private readonly options: ClientOptions;
   private readonly timeoutMs: number;
   constructor(apiKey: string, config: ClientConfig = {}) {
+    const s = Client.newSettings(apiKey, config);
+    try {
+      this.timeoutMs = durationToMs(String(s.timeout));
+    } catch {
+      throw new ConfigError(
+        `timeout: invalid duration ${JSON.stringify(String(s.timeout))}`,
+      );
+    }
+    this.settings = s;
+    this.options = {
+      fetch: s.fetch,
+      transport: s.transport,
+      headers: s.headers,
+    };
+    assertExclusiveTransport(this.options);
+  }
+
+  // newSettings resolves every construction value of Client that no foreign
+  // call reaches, in declared order, then runs the consumed-chain requires
+  // and the declared validation over them.
+  private static newSettings(
+    apiKey: string,
+    config: ClientConfig = {},
+  ): Settings {
     const s: Settings = {
       apiKey: "",
       endpoint: "",
@@ -101,7 +125,6 @@ export class Client {
       maxRetries: 0,
       headers: {},
     };
-
     s.apiKey = apiKey;
 
     s.endpoint = resolveSettingEndpoint();
@@ -121,38 +144,7 @@ export class Client {
     if (violations.length > 0) {
       throw new ValidationError(violations);
     }
-    try {
-      this.timeoutMs = durationToMs(String(s.timeout));
-    } catch {
-      throw new ConfigError(
-        `timeout: invalid duration ${JSON.stringify(String(s.timeout))}`,
-      );
-    }
-    this.settings = s;
-    this.options = {
-      fetch: s.fetch,
-      transport: s.transport,
-      headers: s.headers,
-    };
-    assertExclusiveTransport(this.options);
-  }
-
-  // forTest is the constructor plus the transport seam the generated
-  // tests construct through: the real construction path runs first, then
-  // the canonical transport wins over anything bespoke.
-  static forTest(
-    seam: { transport: HttpTransport },
-    apiKey: string,
-    config: ClientConfig = {},
-  ): Client {
-    const client = new Client(apiKey, config);
-    const options = client.options as {
-      transport?: HttpTransport;
-      fetch?: typeof fetch;
-    };
-    options.transport = seam.transport;
-    options.fetch = undefined;
-    return client;
+    return s;
   }
 
   async createCharge(input: Charge): Promise<Charge> {

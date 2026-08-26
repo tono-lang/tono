@@ -33,7 +33,9 @@ pub(super) fn config_interfaces(module: &Module, config: &CasingConfig) -> Vec<D
         .collect()
 }
 
-/// The Settings interface: every resolved field plus the transport slots.
+/// The Settings interface: every stored field (a handle forwarded into
+/// another construction call never enters it), plus the transport slots when
+/// an operation goes over the wire at all.
 pub(super) fn settings_interface(
     entry: &EntryModel<'_>,
     n: &Names,
@@ -41,8 +43,8 @@ pub(super) fn settings_interface(
     entry_module: &Module,
 ) -> Decl {
     let mut fields = String::new();
-    let mut refs = vec![support_symbol("HttpTransport")];
-    for f in entry.declared() {
+    let mut refs = Vec::new();
+    for f in entry.stored(entry_module) {
         fields.push_str(&format!(
             "{doc}  {}: {};\n",
             field_camel_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
@@ -51,7 +53,8 @@ pub(super) fn settings_interface(
         ));
         refs.extend(type_refs(&f.target, entry_module));
     }
-    Decl::raw_with(
+    let text = if crate::codegen::entries::has_wire_ops(entry_module) {
+        refs.push(support_symbol("HttpTransport"));
         format!(
             "// {settings} are the resolved construction values of the {entry} entry.\n\
              // Exactly one transport slot may be set: fetch (native) or transport\n\
@@ -60,9 +63,16 @@ pub(super) fn settings_interface(
              export interface {settings} {{\n{fields}  fetch?: typeof fetch;\n  transport?: HttpTransport;\n  headers: Record<string, string>;\n}}",
             settings = n.settings,
             entry = entry.name,
-        ),
-        refs,
-    )
+        )
+    } else {
+        format!(
+            "// {settings} are the resolved construction values of the {entry} entry.\n\
+             export interface {settings} {{\n{fields}}}",
+            settings = n.settings,
+            entry = entry.name,
+        )
+    };
+    Decl::raw_with(text, refs)
 }
 
 /// The optional config object: one optional property per `@with` field.

@@ -1,42 +1,25 @@
 //! The generated constructor: source resolution in dependency order, the
 //! consumed-chain requires, declared validation, and the frozen runtime
 //! values.
+//!
+//! `New` is three steps. `newSettings` resolves every construction value no
+//! foreign call reaches (the `@arg` values, the env chains, the defaults,
+//! the derivations over those) and runs the requires and the declared
+//! validation over them. `New` then runs the foreign constructions in
+//! resolution order, each a call to its own resolver (see `ext_resolver`),
+//! storing what an operation reads and handing a forwarded handle straight
+//! to the resolver that consumes it. `newClient` freezes the runtime values
+//! and builds the client. A generated test composes the same three steps
+//! with its fakes in place of the resolver calls, so no step carries a
+//! branch deciding between production and test.
 
-use std::collections::HashMap;
-
-use super::resolve::{config_errorf, FieldOverride};
+use super::resolve::config_errorf;
 use super::*;
+use crate::codegen::entries::has_wire_ops;
 use crate::codegen::entries::plan;
 use plan::push_gap;
 
-/// The seam constructor's override parameter name for a field with its own
-/// `extern` construction call.
-pub(super) fn override_param_name(field_name: &str) -> String {
-    format!("{}Override", camel(field_name))
-}
-
-/// The entry fields a declared test may stub during construction: every
-/// field with its own `extern` construction call, in declared order.
-pub(super) fn overridable_fields<'a>(entry: &'a EntryModel<'a>) -> Vec<&'a EntryField> {
-    entry
-        .fields
-        .iter()
-        .copied()
-        .filter(|f| f.call.is_some())
-        .collect()
-}
-
-/// The generated constructor. The body follows the declared order exactly:
-/// sources resolve top-down, then the consumed chains and declared
-/// constraints validate last, and the resolved values are frozen into the
-/// runtime options.
-///
-/// With `test_seam`, the whole body moves into an unexported variant taking a
-/// transport, and the public constructor delegates with none: a generated test
-/// runs the real construction path (resolution, validation) and only the
-/// transport is swapped, so the test sees exactly the request the SDK would
-/// send.
-#[allow(clippy::too_many_arguments)]
+/// The generated constructor and its two steps.
 pub(super) fn new_decl(
     entry: &EntryModel<'_>,
     n: &Names,
@@ -44,18 +27,12 @@ pub(super) fn new_decl(
     config: &CasingConfig,
     helpers: &mut Helpers,
     multi: bool,
-    test_seam: bool,
 ) -> Vec<Decl> {
-    let en = error_names();
-    let mut refs = Vec::new();
-    let mut resolve_fns: Vec<Decl> = Vec::new();
-    // Every declared field's type can surface in the body as a zero value, a
-    // default cast or a parse, all of them opaque text, so the references are
-    // declared once here rather than at each spelling.
-    for field in entry.declared() {
-        push_field_type_symbols(&field.target, module, &mut refs);
-    }
-    let mut body = String::new();
+    let mut decls = Vec::new();
+    // The standalone `resolveSetting*` functions the plan splits off a
+    // guaranteed env chain, emitted after the three steps.
+    let mut split_off: Vec<Decl> = Vec::new();
+    let split = entry.construction_split(module);
 
     // Constructor signature: positional @arg fields, then the options.
     let args = entry.args();
@@ -75,96 +52,198 @@ pub(super) fn new_decl(
             )
         })
         .collect();
-    let opts_param = if entry.with_fields().is_empty() {
-        String::new()
-    } else {
+    let has_opts = !entry.with_fields().is_empty();
+    let opts_param = if has_opts {
         format!(
             "{}opts ...{}",
             if params.is_empty() { "" } else { ", " },
             n.option
         )
+    } else {
+        String::new()
     };
+    let pass_args: Vec<String> = args
+        .iter()
+        .map(|f| plan::arg_camel(&f.name, &f.traits, LANG))
+        .collect();
+    let pass_call = {
+        let mut parts = pass_args.clone();
+        if has_opts {
+            parts.push("opts...".to_string());
+        }
+        parts.join(", ")
+    };
+    let settings_fn = settings_fn_name(n);
+    let client_fn = client_fn_name(n);
 
-    if !entry.with_fields().is_empty() {
+    // The `@with` carrier is folded from the options wherever a `@with`
+    // field resolves: in the settings step, and again in `New` when a
+    // foreign construction has an injected shortcut.
+    let fold_opts = format!(
+        "\tw := {carrier}{{}}\n\tfor _, opt := range opts {{\n\t\topt(&w)\n\t}}\n",
+        carrier = n.carrier
+    );
+    let tail_has_with = split.tail.iter().any(|s| {
+        s.field()
+            .sources
+            .iter()
+            .any(|src| matches!(src, Source::With))
+    });
+
+    // newSettings: the shared step.
+    {
+        let mut refs = Vec::new();
+        for field in entry.declared() {
+            push_field_type_symbols(&field.target, module, &mut refs);
+        }
+        let mut body = String::new();
+        if has_opts {
+            body.push_str(&fold_opts);
+        }
         body.push_str(&format!(
-            "\tw := {carrier}{{}}\n\tfor _, opt := range opts {{\n\t\topt(&w)\n\t}}\n",
-            carrier = n.carrier
+            "\ts := {settings}{{{init}}}\n",
+            settings = n.settings,
+            init = if has_wire_ops(module) {
+                "Headers: map[string]string{}"
+            } else {
+                ""
+            },
+        ));
+        let keep: Vec<&str> = split.settings.iter().map(|f| f.name.as_str()).collect();
+        let (steps, resolve_fns) = resolution_steps(
+            entry,
+            module,
+            config,
+            helpers,
+            multi,
+            &mut refs,
+            &split.settings,
+            &keep,
+            "s",
+        );
+        body.push_str(&steps);
+        body.push_str("\treturn s, nil\n");
+        split_off.extend(resolve_fns);
+        decls.push(Decl::raw_with(
+            format!(
+                "// {settings_fn} resolves every construction value of {client} that no\n\
+                 // foreign call reaches, in declared order, then runs the consumed-chain\n\
+                 // requires and the declared validation over them.\n\
+                 func {settings_fn}({params}{opts_param}) ({settings}, error) {{\n{body}}}",
+                client = n.client,
+                params = params.join(", "),
+                settings = n.settings,
+            ),
+            refs,
         ));
     }
-    body.push_str(&format!(
-        "\ts := {settings}{{Headers: map[string]string{{}}}}\n",
-        settings = n.settings
-    ));
 
-    // The declared-test seam gets one optional override per field with its
-    // own `extern` construction call: a non-nil value skips the real call,
-    // which is what lets a hermetic test avoid the real library. A
-    // foreign-handle field's override carries its own interface type
-    // directly (already nilable); every other field's override is a
-    // pointer, since the field's own zero value cannot double as "unset".
-    let overrides: HashMap<String, FieldOverride> = if test_seam {
-        overridable_fields(entry)
-            .into_iter()
-            .map(|f| {
-                let pointer = ext::foreign_handle(&f.target, module).is_none();
-                (
-                    f.name.clone(),
-                    FieldOverride {
-                        var: override_param_name(&f.name),
-                        pointer,
-                    },
-                )
-            })
-            .collect()
-    } else {
-        HashMap::new()
-    };
+    // New: the settings step, the foreign constructions, the client.
+    {
+        let mut refs = Vec::new();
+        let mut body = format!(
+            "\ts, err := {settings_fn}({pass_call})\n\tif err != nil {{\n\t\treturn nil, err\n\t}}\n"
+        );
+        if tail_has_with {
+            body.push_str(&fold_opts);
+        }
+        let tail_fields: Vec<&EntryField> = split.tail.iter().map(|s| s.field()).collect();
+        let keep: Vec<&str> = tail_fields.iter().map(|f| f.name.as_str()).collect();
+        let (steps, resolve_fns) = resolution_steps(
+            entry,
+            module,
+            config,
+            helpers,
+            multi,
+            &mut refs,
+            &tail_fields,
+            &keep,
+            "nil",
+        );
+        body.push_str(&steps);
+        body.push_str(&format!("\treturn {client_fn}(s)\n"));
+        split_off.extend(resolve_fns);
+        let doc = format!(
+            "// {new_fn} constructs {client}: positional @arg values, options for @with,\n\
+             // declared sources resolved top-down, then the declared validation.\n",
+            new_fn = n.new_fn,
+            client = n.client,
+        );
+        decls.insert(
+            0,
+            Decl::raw_with(
+                format!(
+                    "{doc}func {new_fn}({params}{opts_param}) (*{client}, error) {{\n{body}}}",
+                    new_fn = n.new_fn,
+                    client = n.client,
+                    params = params.join(", "),
+                ),
+                refs,
+            ),
+        );
+    }
 
+    decls.push(client_decl(entry, n, module, config));
+    decls.extend(split_off);
+    decls
+}
+
+/// The resolution of `fields` (a half of the construction split), then the
+/// consumed-chain requires and the declared validation of those fields, as
+/// the body lines of the function resolving them, plus the standalone
+/// resolver functions the plan split off (a guaranteed env chain's own
+/// `resolveSetting*`). A foreign construction renders as a call to its
+/// resolver through the plan's own leaf; everything else through the plan.
+/// `fail_value` is what a failure returns beside its error (the settings
+/// step returns the settings it was building, `New` returns nil).
+#[allow(clippy::too_many_arguments)]
+fn resolution_steps(
+    entry: &EntryModel<'_>,
+    module: &Module,
+    config: &CasingConfig,
+    helpers: &mut Helpers,
+    multi: bool,
+    refs: &mut Vec<Symbol>,
+    fields: &[&EntryField],
+    keep: &[&str],
+    fail_value: &'static str,
+) -> (String, Vec<Decl>) {
+    let en = error_names();
+    let mut body = String::new();
+    let mut resolve_fns: Vec<Decl> = Vec::new();
     let mut r = Resolver {
         entry,
         module,
         config,
         helpers,
-        refs: &mut refs,
+        refs,
         body: &mut body,
         resolve_fns: &mut resolve_fns,
         multi,
-        overrides: &overrides,
+        fail_value,
     };
-    let fields = plan::emit_fields(entry, module, &mut r, 1);
-    if !fields.is_empty() {
+    let rendered = plan::emit_fields_of(fields, entry, module, &mut r, 1);
+    if !rendered.is_empty() {
         push_gap(r.body);
-        r.body.push_str(&fields);
+        r.body.push_str(&rendered);
     }
 
     // Consumed chains must hold a value once construction finishes; an absent
     // one reports the chain at this single point instead of failing the first
     // call obscurely. The selection of which fields need a check lives in the
     // shared plan; this target only spells each check (and pulls the errors
-    // import it needs).
-    {
-        let mut r = Resolver {
-            entry,
-            module,
-            config,
-            helpers,
-            refs: &mut refs,
-            body: &mut body,
-            resolve_fns: &mut resolve_fns,
-            multi,
-            overrides: &overrides,
-        };
-        let requires = plan::build_requires(entry, module, &mut r);
-        let text = plan::render(&requires, 1, &r);
-        if !text.is_empty() {
-            push_gap(r.body);
-            r.body.push_str(&text);
-        }
+    // import it needs). A check reads the head's error variable, so it sits in
+    // the function that resolved the head.
+    let requires = plan::build_requires_for(entry, module, &mut r, &|head| keep.contains(&head));
+    let text = plan::render(&requires, 1, &r);
+    if !text.is_empty() {
+        push_gap(r.body);
+        r.body.push_str(&text);
     }
 
-    // Declared validation runs last, over what bespoke left in place.
+    // Declared validation runs last, over what resolved.
     let mut guards = String::new();
-    for field in &entry.fields {
+    for field in fields {
         if field.constraints.is_empty() {
             continue;
         }
@@ -216,9 +295,9 @@ pub(super) fn new_decl(
         }
     }
     if !guards.is_empty() {
-        push_gap(&mut body);
-        body.push_str(&format!(
-            "\tviolations := []{violation}{{}}\n{guards}\tif len(violations) > 0 {{\n\t\treturn nil, &{validation}{{Violations: violations}}\n\t}}\n",
+        push_gap(r.body);
+        r.body.push_str(&format!(
+            "\tviolations := []{violation}{{}}\n{guards}\tif len(violations) > 0 {{\n\t\treturn {fail_value}, &{validation}{{Violations: violations}}\n\t}}\n",
             violation = en.violation,
             validation = en.validation,
         ));
@@ -226,15 +305,23 @@ pub(super) fn new_decl(
 
     // Every error var has been written and every check that reads one has been
     // emitted, so this is the point where an unread one can be told apart.
-    body.push_str(&discard_unread_errs(&body, entry));
+    let discard = discard_unread_errs(r.body, fields);
+    r.body.push_str(&discard);
+    (body, resolve_fns)
+}
 
+/// `newClient`: the last step, over assembled settings. Each distinct
+/// `@timeout` field converts once, eagerly, so a malformed value still fails
+/// construction (ConfigError) rather than surfacing at the first call that
+/// happens to need it; every other wire position reads the typed Settings
+/// directly at the call site, so nothing else is frozen here. With a wire
+/// operation the mutually exclusive transport slots are rejected here too,
+/// so a misconfigured client fails to build instead of failing obscurely on
+/// its first call.
+fn client_decl(entry: &EntryModel<'_>, n: &Names, module: &Module, config: &CasingConfig) -> Decl {
+    let mut refs = Vec::new();
+    let mut body = String::new();
     let mut client_fields = vec!["settings: s".to_string()];
-
-    // Each distinct @timeout field converts once, eagerly, so a malformed
-    // value still fails construction (ConfigError) rather than surfacing at
-    // the first call that happens to need it. Every other wire position
-    // (endpoint, @header, path templates, @retry) reads the typed Settings
-    // directly at the call site, so nothing else is frozen here.
     for (key, segments) in surface::timeout_paths(entry) {
         let Some(vp) = entry
             .value_paths(module)
@@ -250,10 +337,13 @@ pub(super) fn new_decl(
         let ident = super::timeout_field_ident(entry, config, &segments);
         refs.push(import("time", "time"));
         refs.push(import("fmt", "fmt"));
-        let fail = config_errorf(&format!(
-            "\"{path}: invalid duration %q\", string({expr})",
-            path = vp.path,
-        ));
+        let fail = config_errorf(
+            "nil",
+            &format!(
+                "\"{path}: invalid duration %q\", string({expr})",
+                path = vp.path
+            ),
+        );
         let parse = format!(
             "\t\td, err := time.ParseDuration(string({expr}))\n\
              \t\tif err != nil {{\n\t\t\t{fail}\n\t\t}}\n\
@@ -266,111 +356,42 @@ pub(super) fn new_decl(
         }
         client_fields.push(format!("{ident}: {ident}"));
     }
-
-    if test_seam {
+    if has_wire_ops(module) {
+        refs.push(import("errors", "errors"));
         body.push_str(
-            "\tif canonical != nil {\n\t\ts.Transport = canonical\n\t\ts.HTTPClient = nil\n\t}\n",
+            "\tif s.HTTPClient != nil && s.Transport != nil {\n\
+             \t\treturn nil, errors.New(\"Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both\")\n\
+             \t}\n",
         );
     }
-    // The mutually exclusive transport slots are rejected at construction, so
-    // a misconfigured client fails to build instead of failing obscurely on
-    // its first call.
-    refs.push(import("errors", "errors"));
-    body.push_str(
-        "\tif s.HTTPClient != nil && s.Transport != nil {\n\
-         \t\treturn nil, errors.New(\"Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both\")\n\
-         \t}\n",
-    );
     body.push_str(&format!(
         "\treturn &{client}{{{fields}}}, nil\n",
         client = n.client,
         fields = client_fields.join(", "),
     ));
-
-    let doc = format!(
-        "// {new_fn} constructs {client}: positional @arg values, options for @with,\n\
-         // declared sources resolved top-down, then the declared validation.\n",
-        new_fn = n.new_fn,
-        client = n.client,
-    );
-    let text = if test_seam {
-        let seam_fn = seam_fn_name(&n.new_fn);
-        let pass_args: Vec<String> = args
-            .iter()
-            .map(|f| plan::arg_camel(&f.name, &f.traits, LANG))
-            .collect();
-        let overridable = overridable_fields(entry);
-        // Go requires the variadic `opts ...Option` parameter last, so every
-        // override is threaded between the positional args and it, in both
-        // the signature and the wrapper's forwarding call.
-        let mut seam_param_parts: Vec<String> = params.clone();
-        let mut override_nil_parts: Vec<&str> = Vec::new();
-        for f in &overridable {
-            push_field_type_symbols(&f.target, module, &mut refs);
-            let storage = field_go_type_storage(&f.target, module);
-            let ty = if ext::foreign_handle(&f.target, module).is_none() {
-                format!("*{storage}")
-            } else {
-                storage
-            };
-            seam_param_parts.push(format!("{} {ty}", override_param_name(&f.name)));
-            override_nil_parts.push("nil");
-        }
-        if !entry.with_fields().is_empty() {
-            seam_param_parts.push(format!("opts ...{}", n.option));
-        }
-        let seam_params = if seam_param_parts.is_empty() {
-            String::new()
-        } else {
-            format!(", {}", seam_param_parts.join(", "))
-        };
-        let mut pass_parts = pass_args.clone();
-        pass_parts.extend(override_nil_parts.iter().map(|s| s.to_string()));
-        if !entry.with_fields().is_empty() {
-            pass_parts.push("opts...".to_string());
-        }
-        let pass_call = if pass_parts.is_empty() {
-            String::new()
-        } else {
-            format!(", {}", pass_parts.join(", "))
-        };
-        refs.push(super::support_symbol("HTTPTransport"));
+    let client_fn = client_fn_name(n);
+    Decl::raw_with(
         format!(
-            "{doc}func {new_fn}({params}{opts_param}) (*{client}, error) {{\n\
-             \treturn {seam_fn}(nil{pass_call})\n\
-             }}\n\n\
-             // {seam_fn} is {new_fn} plus the seams the generated tests use: a non-nil\n\
-             // canonical transport replaces whatever construction resolved; a non-nil\n\
-             // field override skips that field's own real `extern` construction call\n\
-             // outright, so a hermetic test never reaches the real library, not just\n\
-             // avoids calling it at runtime.\n\
-             func {seam_fn}(canonical {transport}{seam_params}) (*{client}, error) {{\n{body}}}",
-            new_fn = n.new_fn,
+            "// {client_fn} builds {client} over assembled settings: the runtime values\n\
+             // freeze here, after every construction value resolved.\n\
+             func {client_fn}(s {settings}) (*{client}, error) {{\n{body}}}",
             client = n.client,
-            params = params.join(", "),
-            transport = super::shared_slot("HTTPTransport"),
-        )
-    } else {
-        format!(
-            "{doc}func {new_fn}({params}{opts_param}) (*{client}, error) {{\n{body}}}",
-            new_fn = n.new_fn,
-            client = n.client,
-            params = params.join(", "),
-        )
-    };
-    resolve_fns.push(Decl::raw_with(text, refs));
-    resolve_fns
+            settings = n.settings,
+        ),
+        refs,
+    )
 }
 
-/// The unexported name of the constructor variant carrying the transport seam:
-/// `New` -> `newWithTransport`, `NewAdmin` -> `newAdminWithTransport`.
-pub(super) fn seam_fn_name(new_fn: &str) -> String {
-    let mut chars = new_fn.chars();
-    let lowered = match chars.next() {
-        Some(first) => first.to_lowercase().chain(chars).collect(),
-        None => String::new(),
-    };
-    format!("{lowered}WithTransport")
+/// The unexported name of the shared settings step: `newSettings`, or
+/// `newAdminSettings` beside `NewAdmin` in a multi-entry module.
+pub(super) fn settings_fn_name(n: &Names) -> String {
+    format!("new{}", n.settings)
+}
+
+/// The unexported name of the last step: `newClient` beside `New`, or
+/// `newAdmin` beside `NewAdmin`.
+pub(super) fn client_fn_name(n: &Names) -> String {
+    format!("new{}", n.client)
 }
 
 pub(super) use plan::err_var;
@@ -384,9 +405,8 @@ pub(super) use plan::err_var;
 /// consumption (the checks are chosen by the shared plan, further down), the
 /// error is kept and explicitly discarded: the chain still records why it
 /// failed, and the emitted source compiles.
-fn discard_unread_errs(body: &str, entry: &EntryModel<'_>) -> String {
-    entry
-        .fields
+fn discard_unread_errs(body: &str, fields: &[&EntryField]) -> String {
+    fields
         .iter()
         .map(|f| err_var(&f.name))
         .filter(|err| {

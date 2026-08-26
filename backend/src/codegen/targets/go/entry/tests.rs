@@ -35,11 +35,14 @@ pub(super) fn entry_text(module: &Module) -> String {
 fn the_construction_surface_is_new_options_settings_and_the_mock_interface() {
     let module = fixture_module();
     let types = entry_text(&module);
-    // Settings carry every resolved field plus the transport slots.
+    // Settings carry every resolved field; the transport slots exist only
+    // when an operation goes over the wire (this fixture's op is bespoke, so
+    // no transport of any kind is emitted).
     assert!(types.contains("type Settings struct {"));
-    assert!(types.contains("\tHTTPClient *http.Client\n"));
-    assert!(types.contains("\tTransport  support.HTTPTransport\n"));
-    assert!(types.contains("\tHeaders    map[string]string\n"));
+    assert!(!types.contains("HTTPClient"));
+    assert!(!types.contains("Transport"));
+    assert!(!types.contains("Headers"));
+    assert!(!types.contains("net/http"));
     // The config is a construction-only struct, hidden (unexported) from the
     // package's public surface.
     assert!(types.contains("type conf struct {"));
@@ -461,7 +464,7 @@ fn a_total_select_without_wildcard_fails_construction_on_an_open_enum_value() {
     push_entry_field(&mut module, choice);
     let serde = entry_text(&module);
     assert!(serde.contains(
-            "return nil, &ConfigError{Message: fmt.Sprintf(\"choice: match on client_name: unmatched value %v\", s.ClientName)}"
+            "return s, &ConfigError{Message: fmt.Sprintf(\"choice: match on client_name: unmatched value %v\", s.ClientName)}"
         ));
 }
 
@@ -671,7 +674,7 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     assert!(serde.contains("case 1:"));
     assert!(serde.contains("pickedErr = &ConfigError{Message: \"not configured\"}"));
     assert!(serde.contains(
-        "return nil, &ConfigError{Message: fmt.Sprintf(\"sure_pick: match on sure_name: unmatched value %v\", s.SureName)}"
+        "return s, &ConfigError{Message: fmt.Sprintf(\"sure_pick: match on sure_name: unmatched value %v\", s.SureName)}"
     ));
     // Composition: binds layered over member chains, an int member parsing.
     assert!(serde.contains("composed.Key = s.Naming"));

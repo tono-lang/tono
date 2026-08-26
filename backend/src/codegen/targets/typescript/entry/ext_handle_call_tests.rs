@@ -342,29 +342,22 @@ fn rendered_text(module: &Module) -> String {
     let emission = emit(module, &ts_casing());
     let mut decls = emission.shared;
     decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
+    decls.extend(emission.ext.into_iter().flat_map(|(_, d)| d));
     rendered(&decls, &TsRules)
 }
 
 #[test]
 fn a_handle_method_call_awaits_the_receiver_typed_by_its_own_generated_interface() {
     let out = rendered_text(&module_with_ops(vec![publish_op()]));
-    // The call itself lives in the op's module-scoped seam (read off its
-    // `Settings` parameter), and the method goes through that seam, so a
-    // declared test can stub the handle method by swapping one binding.
+    // The call goes straight to the handle the settings hold, inline in the
+    // method: a declared test stubs the handle itself with a fake whose
+    // methods answer, so there is no seam and nothing to swap.
     assert!(
-        out.contains("let publishHandleCall: (s: Settings, input: PublishInput) => Promise<Ack> = async (s, input) => {"),
+        out.contains("async publish(input: PublishInput): Promise<Ack> {\n    try {\n      const raw = await this.settings.bus.send(this.settings.topic, input.body);"),
         "{out}"
     );
-    assert!(
-        out.contains("const raw = await s.bus.send(s.topic, input.body);"),
-        "{out}"
-    );
-    assert!(
-        out.contains("return await publishHandleCall(this.settings, input);"),
-        "{out}"
-    );
-    // Without a declared test there is no swapper to export.
-    assert!(!out.contains("swapPublishHandleCallForTest"), "{out}");
+    assert!(!out.contains("HandleCall"), "{out}");
+    assert!(!out.contains("ForTest"), "{out}");
     assert!(out.contains("export interface PublisherHandle {"), "{out}");
     assert!(
         out.contains("send(topic: string, body: string): Promise<RawAck>;"),
@@ -403,7 +396,10 @@ fn an_unmapped_failure_falls_back_to_contract_error_naming_the_call() {
 #[test]
 fn a_method_with_no_yields_narrows_the_honestly_unknown_raw_result_to_the_op_s_own_output() {
     let out = rendered_text(&module_with_ops(vec![heartbeat_op()]));
-    assert!(out.contains("const raw = await s.bus.ping();"), "{out}");
+    assert!(
+        out.contains("const raw = await this.settings.bus.ping();"),
+        "{out}"
+    );
     assert!(out.contains("ping(): Promise<unknown>;"), "{out}");
     assert!(out.contains("return raw as string;"), "{out}");
 }
@@ -420,7 +416,7 @@ fn a_match_inside_returns_lowers_to_an_immediately_invoked_switch() {
 fn a_call_template_s_literal_list_and_ctor_arguments_render_verbatim() {
     let out = rendered_text(&module_with_ops(vec![tag_op()]));
     assert!(
-        out.contains("await s.bus.tag(\"v1\", [\"a\", \"b\"], { k: \"v\" });"),
+        out.contains("await this.settings.bus.tag(\"v1\", [\"a\", \"b\"], { k: \"v\" });"),
         "{out}"
     );
 }
@@ -428,14 +424,18 @@ fn a_call_template_s_literal_list_and_ctor_arguments_render_verbatim() {
 #[test]
 fn a_bare_reference_to_the_op_s_own_input_reads_the_whole_parameter() {
     let out = rendered_text(&module_with_ops(vec![echo_op()]));
-    assert!(out.contains("await s.bus.echo(input);"), "{out}");
+    assert!(
+        out.contains("await this.settings.bus.echo(input);"),
+        "{out}"
+    );
 }
 
 /// A declared test whose call is an `impl .bus.send(..)` op, hermetic
 /// through its extern stubs alone (no call-scoped stub): the generated test
-/// swaps the op's own seam for the canned logical answer, and the handle
-/// field's constructor stub installs a fake handle whose methods only fail
-/// loudly, so neither the real constructor nor the real method is reached.
+/// assigns a fake handle where the constructor stub would have stored the
+/// real one, its stubbed method answering in the foreign shape (the op's
+/// own projection runs over it) and every other method failing loudly, so
+/// neither the real constructor nor the real method is reached.
 fn stubbed_publish_module(answer: crate::ir::StubAnswer) -> Module {
     use crate::ir::{ExternStub, ExternStubTarget, TestCall, TestConstruction, TestDecl};
     use std::collections::BTreeMap;
@@ -491,32 +491,43 @@ fn hermetic_test_text(module: &Module) -> String {
 }
 
 #[test]
-fn a_handle_method_stub_on_the_called_op_swaps_the_op_s_seam_in_the_generated_hermetic_test() {
+fn a_handle_method_stub_on_the_called_op_answers_through_the_fake_handle_in_the_generated_hermetic_test(
+) {
     let module = stubbed_publish_module(crate::ir::StubAnswer::Value {
         value: serde_json::json!({"ok": "yes"}),
     });
     let out = hermetic_test_text(&module);
+    // The test assembles the settings itself and puts the fake where the
+    // resolver would have stored the real handle; the stubbed method
+    // answers the foreign shape the op's projection reads (`{ ok: raw.ok }`
+    // inverted), typed as the interface declares it.
     assert!(
-        out.contains("swapPublishHandleCallForTest(async () => decodeAck({\"ok\":\"yes\"}))"),
-        "the op's seam must be swapped for the decoded logical answer: {out}"
+        out.contains("const s = Client[\"newSettings\"](\"news\");"),
+        "{out}"
     );
-    // The handle field's own stub installs a fake satisfying the handle
-    // interface, never a decoder the module does not have.
-    assert!(out.contains("swapBusExtForTest(async () => ({"), "{out}");
+    assert!(out.contains("s.bus = {"), "{out}");
     assert!(
-        out.contains("bus.publisher.send: no stub for this call in test"),
+        out.contains("send: async () => ({ ok: \"yes\" } as RawAck),"),
+        "the fake answers the foreign shape: {out}"
+    );
+    assert!(out.contains("} as PublisherHandle;"), "{out}");
+    assert!(
+        out.contains("bus.publisher.ping: no stub for this call in test"),
+        "{out}"
+    );
+    assert!(
+        out.contains("const c = Client[\"fromSettings\"](s);"),
         "{out}"
     );
     assert!(!out.contains("decodePublisher"), "{out}");
-    // Hermetic on the extern stubs alone: bare construction, no transport.
-    assert!(out.contains("const c = await Client.create("), "{out}");
-    assert!(!out.contains("forTest"), "{out}");
-    // And the client exports the swapper for the tested entry.
-    let client = rendered_text(&module);
+    assert!(!out.contains("resolveBus("), "{out}");
     assert!(
-        client.contains("export function swapPublishHandleCallForTest("),
-        "{client}"
+        !out.contains("ForTest") && !out.contains("forTest"),
+        "{out}"
     );
+    // And the client exports nothing test-only.
+    let client = rendered_text(&module);
+    assert!(!client.contains("ForTest"), "{client}");
 }
 
 #[test]

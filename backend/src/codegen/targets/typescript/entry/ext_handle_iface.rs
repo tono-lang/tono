@@ -111,21 +111,7 @@ fn method_signature(
         .map(|p| format!("{}: {}", camel(&p.name), ts_type(&p.r#type)))
         .collect::<Vec<_>>()
         .join(", ");
-    let yields_type = lang
-        .yields
-        .iter()
-        .find(|y| !y.is_error)
-        .and_then(|y| y.r#type.as_ref());
-    let (ret, struct_id) = match yields_type {
-        Some(crate::ir::Tref::Ref { id, .. }) if resolve_foreign_struct(id, module).is_some() => {
-            (foreign_struct_type_name(id), Some(id.clone()))
-        }
-        // A yields position naming anything else (a foreign primitive, an
-        // opaque handle) or no yields position at all: the raw call result
-        // has no struct shape this module can name a companion type for,
-        // so `unknown` is the honest answer.
-        _ => ("unknown".to_string(), None),
-    };
+    let (ret, struct_id) = method_return(lang, module);
     // `lang.symbol` is the real method name on the foreign/handle object
     // (whatever the actual runtime call site invokes), never cased: an
     // interface member key must match it verbatim, or the generated call
@@ -137,6 +123,33 @@ fn method_signature(
         ret
     };
     (format!("{}({params}): {ret};", lang.symbol), struct_id)
+}
+
+/// The foreign shape a handle method's interface returns (before the
+/// `Promise` an async binding wraps it in) and the foreign struct id it
+/// names, when it names one: the companion type of a `yields` position
+/// naming a foreign struct, `unknown` otherwise (a foreign primitive, an
+/// opaque handle, or no yields position at all: the raw call result has no
+/// struct shape this module can name a companion type for, so `unknown` is
+/// the honest answer).
+fn method_return(lang: &crate::ir::ExternLang, module: &Module) -> (String, Option<String>) {
+    let yields_type = lang
+        .yields
+        .iter()
+        .find(|y| !y.is_error)
+        .and_then(|y| y.r#type.as_ref());
+    match yields_type {
+        Some(crate::ir::Tref::Ref { id, .. }) if resolve_foreign_struct(id, module).is_some() => {
+            (foreign_struct_type_name(id), Some(id.clone()))
+        }
+        _ => ("unknown".to_string(), None),
+    }
+}
+
+/// [`method_return`]'s type alone, for a test's fake handle to spell its
+/// answer under the same type the interface declares.
+pub(super) fn method_return_type(lang: &crate::ir::ExternLang, module: &Module) -> String {
+    method_return(lang, module).0
 }
 
 /// A handle's own generated interface: one method per declared method

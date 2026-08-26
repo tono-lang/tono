@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 232
+assertion_line: 236
 expression: "render_sdk(entries_module(), TargetKind::TypeScript, None)"
 ---
 // ==== typescript/env.ts ====
@@ -373,8 +373,22 @@ export class Client {
   private readonly options: ClientOptions;
   private readonly timeoutMs: number;
   constructor(apiKey: string, seg: string, config: ClientConfig = {}) {
-    const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, seg: "", bySegment: "", headers: {} };
+    const s = Client.newSettings(apiKey, seg, config);
+    try {
+      this.timeoutMs = durationToMs(String(s.timeout));
+    } catch {
+      throw new ConfigError(`timeout: invalid duration ${JSON.stringify(String(s.timeout))}`);
+    }
+    this.settings = s;
+    this.options = { fetch: s.fetch, transport: s.transport, headers: s.headers };
+    assertExclusiveTransport(this.options);
+  }
 
+  // newSettings resolves every construction value of Client that no foreign
+  // call reaches, in declared order, then runs the consumed-chain requires
+  // and the declared validation over them.
+  private static newSettings(apiKey: string, seg: string, config: ClientConfig = {}): Settings {
+    const s: Settings = { apiKey: "", clientName: "", clientKey: "", endpointEnv: "", endpointVersion: "", endpointV1: "", endpointV2: "", endpoint: "", timeout: "" as Duration, maxRetries: 0, settings: {} as Conf, creds: {} as Credentials, labels: {}, seg: "", bySegment: "", headers: {} };
     s.apiKey = apiKey;
 
     s.clientName = resolveSettingClientName(config.clientName);
@@ -540,14 +554,7 @@ export class Client {
     if (violations.length > 0) {
       throw new ValidationError(violations);
     }
-    try {
-      this.timeoutMs = durationToMs(String(s.timeout));
-    } catch {
-      throw new ConfigError(`timeout: invalid duration ${JSON.stringify(String(s.timeout))}`);
-    }
-    this.settings = s;
-    this.options = { fetch: s.fetch, transport: s.transport, headers: s.headers };
-    assertExclusiveTransport(this.options);
+    return s;
   }
 
   async saveNote(input: Note): Promise<Note> {

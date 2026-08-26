@@ -36,21 +36,16 @@ use std::fmt::Write as _;
 
 use crate::codegen::casing::CasingConfig;
 use crate::codegen::conventions::type_ident_from_id;
-use crate::codegen::entries::plan::Emitter;
 use crate::codegen::entries::EntryModel;
 use crate::codegen::foreign_spelling::{self, rust_builtin};
 use crate::ir::{
-    CallArg, EntryCall, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpImplCall,
-    OpaqueType, ReturnsField, ReturnsLit, ReturnsValue, Tref, YieldsPos,
+    ArmValue, CallArg, EntryCall, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpImplCall,
+    OpaqueType, ReturnsField, ReturnsLit, ReturnsValue, Select, Tref, YieldsPos,
 };
 
-use super::resolve::Resolver;
-use super::resolve_call::{
-    call_arg_expr, error_match, find_extern, find_lib, find_rust_lang, json_literal, ok_assign,
-    CallScope,
-};
+use super::resolve_call::{error_match, find_extern, find_lib, find_rust_lang, json_literal};
 use super::transport::FieldCtx;
-use super::{field_snake, rust_type, LANG};
+use super::{field_snake, pattern_literal, rust_type, LANG};
 
 /// The `ExtLib` and opaque type a `Tref` names, when it names a foreign
 /// handle declared in one of this module's own `ext` blocks (its id is
@@ -172,28 +167,21 @@ pub(super) fn wrap_stored(t: &Tref, module: &Module, expr: &str) -> String {
     }
 }
 
-/// A value a foreign constructor (or handle method) just yielded, on its way
-/// into a construction slot: the target coerces it into the declared
-/// storage, boxing it when the slot holds a trait object (see
-/// [`boxed_wrap`]), then wraps it like every other stored value.
-pub(super) fn wrap_constructed(t: &Tref, module: &Module, expr: &str) -> String {
-    match boxed_wrap(t, module) {
-        Some(wrap) => wrap_stored(t, module, &format!("{wrap}({expr})")),
-        None => wrap_stored(t, module, expr),
-    }
-}
-
 /// The declared handle method [`impl_call_body`] resolves against: the
 /// receiver field's own handle type, the method's `ExternDecl` and its
 /// `rust` language block.
-struct Lookup<'a> {
-    lib: &'a ExtLib,
-    decl: &'a ExternDecl,
-    lang: &'a ExternLang,
-    params: &'a [ExternParam],
+pub(super) struct Lookup<'a> {
+    pub(super) lib: &'a ExtLib,
+    pub(super) decl: &'a ExternDecl,
+    pub(super) lang: &'a ExternLang,
+    pub(super) params: &'a [ExternParam],
 }
 
-fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> Lookup<'a> {
+pub(super) fn lookup<'a>(
+    module: &'a Module,
+    entry: &EntryModel<'_>,
+    call: &OpImplCall,
+) -> Lookup<'a> {
     let head = call.recv.first().unwrap_or_else(|| {
         panic!("an op's own impl call has no receiver (validate_entries should have rejected this)")
     });
@@ -385,7 +373,7 @@ impl ArgCtx<'_> {
 /// `yields`' non-error positions bound out of `Ok(..)`: one binds bare, more
 /// than one destructures the tuple the single native success value must be
 /// (mirrors `resolve_call::ok_pattern`).
-fn ok_pattern(yields: &[YieldsPos]) -> String {
+pub(super) fn ok_pattern(yields: &[YieldsPos]) -> String {
     let positions: Vec<&YieldsPos> = yields.iter().filter(|y| !y.is_error).collect();
     match positions.as_slice() {
         [] => "v".to_string(),
@@ -404,8 +392,19 @@ fn ok_pattern(yields: &[YieldsPos]) -> String {
 /// binding field by field into the op's declared output, its absence hands
 /// the binding straight back (the target compiler grades whether that value
 /// really is the declared output), and an op with no output at all returns
-/// unit.
-fn ok_value(binding: &str, returns: Option<&ReturnsLit>, has_output: bool) -> String {
+/// unit. `full_select` renders a `returns:` field's own `match .subject {
+/// .. }` selection whole (every `Field`/`Lit` arm becomes a real match arm);
+/// a construction resolver has nothing else to resolve a nested source
+/// cascade against either, so it takes the same subject-only fallback for a
+/// `Sources`/`Subject` arm an op body's own projection does (see
+/// [`select_expr`]) — `impl_call_body`'s op-method projection passes `false`
+/// throughout, since a bespoke op body reaches no `returns:` field at all.
+pub(super) fn ok_value(
+    binding: &str,
+    returns: Option<&ReturnsLit>,
+    has_output: bool,
+    full_select: bool,
+) -> String {
     if !has_output {
         return "()".to_string();
     }
@@ -425,19 +424,50 @@ fn ok_value(binding: &str, returns: Option<&ReturnsLit>, has_output: bool) -> St
         .map(|ReturnsField { name, value }| {
             let expr = match value {
                 ReturnsValue::Field(path) => path.join("."),
-                // A `returns:` match inside a handle method's own projection
-                // has no field/env scope to resolve against at this call
-                // site; the construction-scope spelling
-                // (`resolve_call::select_expr`) is the only one that exists,
-                // and it is not reachable from here. Reading the subject
-                // straight through keeps the arm total and fails loudly at
-                // the target compiler if the shape does not match.
+                ReturnsValue::Select(select) if full_select => select_expr(select),
+                // An op body's own projection has no field/env scope to
+                // resolve a nested source cascade against at this call site;
+                // reading the subject straight through keeps the arm total
+                // and fails loudly at the target compiler if the shape does
+                // not match.
                 ReturnsValue::Select(select) => select.subject.join("."),
             };
             format!("{name}: {expr}")
         })
         .collect();
     format!("{ty} {{ {} }}", fields.join(", "))
+}
+
+/// A `match .subject { .. }` selection inside a `returns:` field, spelled as
+/// a standalone expression: the same Display-string comparison the shared
+/// plan's own switch leaves use, so one form covers a string, a numeric, or
+/// an open-enum subject alike. A `Field`/`Lit` arm value is text the
+/// declaration already wrote out in full (the foreign binding's own field
+/// path, or a literal); a `Sources`/`Subject` arm has no field/env context to
+/// resolve a nested cascade against here, so it falls back to the subject
+/// itself, same as an absent `returns:` field would.
+fn select_expr(select: &Select) -> String {
+    let subject = select.subject.join(".");
+    let mut arms = String::new();
+    for arm in &select.arms {
+        let value = match &arm.value {
+            ArmValue::Field(path) => path.join("."),
+            ArmValue::Lit(v) => json_literal(v),
+            ArmValue::Sources(_) | ArmValue::Subject => subject.clone(),
+        };
+        match &arm.pattern {
+            Some(pat) => {
+                let _ = write!(arms, "{} => {value}, ", pattern_literal(pat));
+            }
+            None => {
+                let _ = write!(arms, "_ => {value}, ");
+            }
+        }
+    }
+    if select.arms.iter().all(|a| a.pattern.is_some()) {
+        let _ = write!(arms, "_ => {subject}.clone(), ");
+    }
+    format!("match ({subject}).to_string().as_str() {{ {arms}}}")
 }
 
 /// Everything [`impl_call_body`] needs beyond the entry itself.
@@ -492,7 +522,7 @@ pub(super) fn impl_call_body(c: &ImplCall<'_>) -> (String, bool) {
 
     let awaited = if l.decl.is_async(LANG) { ".await" } else { "" };
     let binding = ok_pattern(&l.lang.yields);
-    let value = ok_value(&binding, l.lang.returns.as_ref(), c.has_output);
+    let value = ok_value(&binding, l.lang.returns.as_ref(), c.has_output, false);
     let mapped = error_match(c.module, l.lib, &recv_name, &c.call.method, &l.decl.errors);
     let call = method_call(c.module, l.lib, "recv", &l.lang.symbol, &args);
 
@@ -521,77 +551,17 @@ pub(super) fn impl_call_body(c: &ImplCall<'_>) -> (String, bool) {
     (body, l.decl.is_async(LANG))
 }
 
-/// A field's own `= .field.method(args)` construction source: the receiver
-/// read back off the in-progress settings draft `s` (the handle field
-/// resolved earlier in the same constructor, an `Option` slot that is
-/// diagnosed rather than unwrapped when unset), the declared call through
-/// it, and the `yields`/`returns` projection assigned into `dest` with the
-/// same `Ok`/`Err` shape a free extern call takes (`resolve_call::
-/// call_assign`), the `errors:` sentinels mapped onto the same closed
-/// taxonomy. The receiver is borrowed, never moved: reading a method
-/// leaves the handle in its slot for every later reader (an op's own `impl`
-/// body, another field), which is what lets this form coexist with them
-/// where forwarding the handle into another call could not.
-pub(super) fn handle_call_assign(
-    r: &mut Resolver<'_, '_>,
-    field: &crate::ir::EntryField,
-    call: &OpImplCall,
-    dest: &str,
-) -> String {
-    let l = lookup(r.module, r.entry, call);
-    let recv_name = call.recv.join(".");
-    let call_name = format!("{recv_name}.{}", call.method);
-    let scope = CallScope {
-        lib: l.lib,
-        params: l.params,
-        entry_args: &call.args,
-        call_name: call_name.clone(),
-    };
-    let args: Vec<String> = l
-        .lang
-        .call_args
-        .iter()
-        .map(|a| call_arg_expr(r, &scope, a))
-        .collect();
-    let stored = r.path_expr(&call.recv);
-    let awaited = if l.decl.is_async(LANG) { ".await" } else { "" };
-    let binding = ok_pattern(&l.lang.yields);
-    let mapped = error_match(r.module, l.lib, &recv_name, &call.method, &l.decl.errors);
-    let target = field.target.clone();
-    let module = r.module;
-    let store = move |expr: &str| wrap_constructed(&target, module, expr);
-    let assign = ok_assign(dest, &binding, l.lang.returns.as_ref(), &store);
-    // The outcome is bound before it is matched so the receiver borrow ends
-    // with the call: the assignment below writes another field of the same
-    // draft, which a still-live borrow of the receiver's slot would block.
-    // A declared signature with no error channel is the value itself, so
-    // the binding is the outcome and there is nothing to match.
-    let settle = if l.lang.is_infallible() {
-        format!("let {binding} = outcome;\n{assign}")
-    } else {
-        format!(
-            "match outcome {{\n    Ok({binding}) => {{ {assign} }}\n    Err(e) => {{ return Err({mapped}); }}\n}}"
-        )
-    };
-    format!(
-        "let recv = match &{stored} {{\n\
-         \x20   Some(v) => v,\n\
-         \x20   None => {{\n\
-         \x20       return Err(TonoError::Config(ConfigError {{ message: {miss:?}.to_string() }}));\n\
-         \x20   }}\n\
-         }};\n\
-         let outcome = {call}{awaited};\n\
-         {settle}",
-        miss = format!("{call_name}: the {recv_name} handle is not configured"),
-        call = method_call(r.module, l.lib, "recv", &l.lang.symbol, &args),
-    )
-}
-
 /// A handle method call: `recv.method(args)` for a bare method name, or
 /// the path form when the spelling is a path (`Calculator::compute`): the
 /// method is called through its trait or type with the receiver first,
 /// which is what brings a trait into scope on a concretely held handle.
-fn method_call(module: &Module, lib: &ExtLib, recv: &str, symbol: &str, args: &[String]) -> String {
+pub(super) fn method_call(
+    module: &Module,
+    lib: &ExtLib,
+    recv: &str,
+    symbol: &str,
+    args: &[String],
+) -> String {
     if symbol.contains("::") {
         let krate = crate_ident(lib).unwrap_or_default();
         let mut all = vec![recv.to_string()];

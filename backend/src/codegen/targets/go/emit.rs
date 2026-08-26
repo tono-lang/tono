@@ -200,6 +200,12 @@ pub fn emit_module(
     for (name, decls) in entries.per_entry {
         files.push(ModuleFile::new(Group::entry(&module.name, &name), decls));
     }
+    // The construction glue of each `ext` library the entries call into, in
+    // a file named for the library: the constructor reads as the sequence of
+    // resolver calls, and the foreign calls sit together per library.
+    for (lib, decls) in entries.ext {
+        files.push(ModuleFile::new(Group::ext(&module.name, &lib), decls));
+    }
     // A pure-types module (no union, no @entries, no union-bearing container)
     // has nothing to serialize, and one whose every shape is reachable from its
     // surface hides nothing.

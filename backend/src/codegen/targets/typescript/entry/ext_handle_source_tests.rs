@@ -1,7 +1,8 @@
 //! A field sourced from a foreign handle's method (`= .field.method(args)`):
-//! its module-scoped seam reads the receiver off the in-progress draft,
-//! projects `yields`/`returns` into the field's own type, and the field's
-//! resolution step is the same one-line hand-off a free call takes. The
+//! its resolver takes the receiver (and every sibling an argument reads) as
+//! a parameter, projects `yields`/`returns` into the field's own type, and
+//! the field's resolution step is the same call-and-store a free call
+//! takes, so the generated test runs the same resolver over its fake. The
 //! end-to-end `tsc` proof is `ts_ext_roundtrip::
 //! a_field_sourced_from_a_handle_method_compiles_against_the_real_library`;
 //! this module exercises the emitter's own branches directly.
@@ -14,43 +15,55 @@ fn rendered_text(module: &Module) -> String {
     let emission = emit(module, &ts_casing());
     let mut decls = emission.shared;
     decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
+    decls.extend(emission.ext.into_iter().flat_map(|(_, d)| d));
     rendered(&decls, &TsRules)
 }
 
 #[test]
-fn the_field_seam_reads_the_receiver_off_the_draft_and_projects_the_yields() {
+fn the_field_resolver_takes_the_receiver_and_projects_the_yields() {
     let out = rendered_text(&handle_source_module("ts"));
     assert!(
-        out.contains("let configExt: (s: Settings) => Promise<Cfg> = async (s) => {"),
+        out.contains(
+            "export async function resolveConfig(provider: ProviderHandle): Promise<Cfg> {"
+        ),
         "{out}"
     );
-    assert!(out.contains("const raw = await s.provider.get();"), "{out}");
+    assert!(out.contains("const raw = await provider.get();"), "{out}");
     assert!(
         out.contains("return { endpointRead: raw.readUrl, endpointWrite: raw.writeUrl };"),
         "{out}"
     );
-    assert!(out.contains("s.config = await configExt(s);"), "{out}");
-    // The argument reads its sibling off the same draft, and `@with` keeps
-    // the injected value ahead of the call.
     assert!(
-        out.contains("const raw = await s.provider.getFor(s.region);"),
+        out.contains(
+            "const configValue = await resolveConfig(s.provider);\n    s.config = configValue;"
+        ),
         "{out}"
     );
-    assert!(out.contains("s.scoped = await scopedExt(s);"), "{out}");
-    // Construction became async because of the handle-method source alone
-    // is not observable here (the free constructor call already forces
-    // it); the op reading the same handle renders through its own seam,
-    // off the resolved settings the method hands it.
+    // The argument is a parameter of its own, and `@with` keeps the
+    // injected value ahead of the call.
     assert!(
-        out.contains("return await probeHandleCall(this.settings);"),
+        out.contains("export async function resolveScoped(provider: ProviderHandle, region: string): Promise<Cfg> {"),
         "{out}"
     );
-    // Without a declared test there is no swapper to export.
-    assert!(!out.contains("swapConfigExtForTest"), "{out}");
+    assert!(
+        out.contains("const raw = await provider.getFor(region);"),
+        "{out}"
+    );
+    assert!(
+        out.contains("} else {\n      const scoped = await resolveScoped(s.provider, s.region);\n      s.scoped = scoped;"),
+        "{out}"
+    );
+    // The op reading the same handle calls it inline, off the resolved
+    // settings.
+    assert!(
+        out.contains("const raw = await this.settings.provider.getFor(this.settings.region);"),
+        "{out}"
+    );
+    assert!(!out.contains("ForTest"), "{out}");
 }
 
 #[test]
-fn a_tested_entry_exports_the_swapper_for_the_field_seam() {
+fn a_tested_entry_exports_nothing_test_only() {
     let mut module = handle_source_module("ts");
     module.tests.push(crate::ir::TestDecl {
         name: "constructs".into(),
@@ -65,10 +78,14 @@ fn a_tested_entry_exports_the_swapper_for_the_field_seam() {
         expects: vec![],
     });
     let out = rendered_text(&module);
+    assert!(!out.contains("ForTest"), "{out}");
+    assert!(!out.contains("forTest"), "{out}");
+    assert!(!out.contains("export let"), "{out}");
+    // The steps a test composes are private statics of the class, not
+    // exports: the barrel and the exports map never see them.
+    assert!(out.contains("private static newSettings("), "{out}");
     assert!(
-        out.contains(
-            "export function swapConfigExtForTest(next: typeof configExt): typeof configExt {"
-        ),
+        out.contains("private static fromSettings(s: Settings): Client {"),
         "{out}"
     );
 }
@@ -98,15 +115,18 @@ fn an_entry_whose_only_call_is_a_handle_method_source_still_constructs_asynchron
     }
     let out = rendered_text(&module);
     assert!(out.contains("static async create("), "{out}");
-    assert!(out.contains("s.config = await configExt(s);"), "{out}");
+    assert!(
+        out.contains("const configValue = await resolveConfig(s.provider);"),
+        "{out}"
+    );
 }
 
 /// A handle-method stub on the method a `= .provider.get()` field reads:
-/// the generated hermetic test swaps that field's own seam for the canned
-/// logical value, alongside the constructor stub's fake handle (whose every
-/// method, stubbed or not, only fails loudly: the stubbed one rides the seam).
+/// the generated hermetic test assigns the constructor stub's fake handle,
+/// whose stubbed methods answer in the foreign shape (the projection
+/// inverted), then runs the same resolver the factory runs over it.
 #[test]
-fn a_handle_method_stub_on_a_field_source_swaps_that_field_s_seam() {
+fn a_handle_method_stub_on_a_field_source_answers_through_the_fake_handle() {
     let mut module = handle_source_module("ts");
     module.tests.push(handle_source_test(
         "resolves the field from the stub",
@@ -119,24 +139,27 @@ fn a_handle_method_stub_on_a_field_source_swaps_that_field_s_seam() {
         .find(|f| f.group.tests_of() == Some(("client", false)))
         .expect("a hermetic test file");
     let out = rendered(&hermetic.file.decls, &TsRules);
+    assert!(out.contains("s.provider = {"), "{out}");
     assert!(
-        out.contains("swapConfigExtForTest(async () => decodeCfg("),
-        "the field's seam must be swapped for the decoded logical answer: {out}"
+        out.contains("get: async () => ({ readUrl: \"r\", writeUrl: \"w\" }"),
+        "the fake answers the foreign shape the field's projection reads: {out}"
     );
     assert!(
-        out.contains("swapProviderExtForTest(async () => ({"),
+        out.contains("getFor: async () => ({ readUrl: \"sr\", writeUrl: \"sw\" }"),
         "{out}"
     );
+    assert!(out.contains("} as ProviderHandle;"), "{out}");
+    // The field resolves through the same resolver the factory runs, over
+    // the fake.
     assert!(
-        out.contains("envkit.provider.get: no stub for this call in test"),
+        out.contains("const configValue = await resolveConfig(s.provider);"),
         "{out}"
     );
+    assert!(out.contains("s.config = configValue;"), "{out}");
     assert!(
-        out.contains("envkit.provider.get_for: no stub for this call in test"),
+        out.contains("const scoped = await resolveScoped(s.provider, s.region);"),
         "{out}"
     );
-    assert!(
-        out.contains("swapScopedExtForTest(async () => decodeCfg("),
-        "{out}"
-    );
+    assert!(out.contains("s.scoped = scoped;"), "{out}");
+    assert!(!out.contains("ForTest"), "{out}");
 }

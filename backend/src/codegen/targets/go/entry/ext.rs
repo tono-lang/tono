@@ -2,10 +2,11 @@
 //! calling a declared foreign library from generated Go.
 //!
 //! Three sites read this module: a field's own `= ns.fn(args)` construction
-//! call ([`call_assign`], wired as `Resolver::call_assign`), the foreign
-//! opaque-handle type a field or config member can carry ([`foreign_handle`],
-//! [`handle_go_type`]), and an op's own `impl .field.method(args)` body
-//! (`impl_op`, which reuses [`call_arg_expr`] and [`error_block`] here).
+//! call (`ext_resolver`, which builds one named resolver function per call
+//! from [`build_call`] and [`error_block`]), the foreign opaque-handle type a
+//! field or config member can carry ([`foreign_handle`], [`handle_go_type`]),
+//! and an op's own `impl .field.method(args)` body (`impl_op`, which reuses
+//! [`call_arg_expr`] and [`error_block`] here).
 //!
 //! Verification is the target compiler, not this emitter: every value this
 //! module reads off a `yields` position, an `errors:` sentinel, or a foreign
@@ -26,79 +27,14 @@ use crate::codegen::ops::error_names;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::tree::Decl;
 use crate::ir::{
-    ArmValue, CallArg, CallCtor, EntryCall, EntryField, ExtLib, ExternDecl, ExternLang,
-    ExternParam, ForeignLang, Module, OpaqueType, Prim, ReturnsLit, ReturnsValue, ShapeKind, Tref,
+    ArmValue, CallArg, CallCtor, ExtLib, ExternDecl, ExternLang, ExternParam, ForeignLang, Module,
+    OpaqueType, Prim, ReturnsLit, ReturnsValue, ShapeKind, Tref,
 };
 
-use super::resolve::Resolver;
 use super::{
-    camel, entry_field_ident, field_pascal, field_path_expr, go_type, import, literal, pascal,
-    pattern_literal, push_type_symbols,
+    camel, field_pascal, field_path_expr, go_type, import, literal, pascal, pattern_literal,
+    push_type_symbols,
 };
-
-/// A sibling entry field's read expression off `s` (field construction
-/// scope): the head honors `@rename(go)` unless it is itself a foreign
-/// handle (unexported regardless), every later segment is a plain member
-/// access into whatever that field resolved to.
-///
-/// Every use of this function feeds a real foreign call's own argument list
-/// (a field's own construction call, `build_call` in [`call_assign`]), never
-/// a tono-facing position. So when the referenced field is itself a foreign
-/// handle *this generator itself constructed* (`field.call` ran the real
-/// construction call and stored its result through [`call_assign`]'s own
-/// adapter wrap), the stored value is unwrapped back to the real value the
-/// foreign function actually declares its parameter as: the adapter exists
-/// for the tono/library boundary, not for one foreign call feeding another.
-///
-/// A handle field with no `call` (`@arg`/`@with`) holds whatever the caller
-/// supplied to satisfy the interface, which is not guaranteed to be this
-/// generator's own adapter type: unwrapping it the same way would be an
-/// unchecked type assertion that panics at runtime on any other conforming
-/// value (a hermetic test's fake, most obviously). Passing such a field into
-/// another foreign call is rejected up front, at generation time, by
-/// `entries::validate::injected_handle_forwarded_to_another_call` (naming
-/// both fields and the call), so this function never actually runs against
-/// that combination; the interface value is still read as-is here rather
-/// than unwrapped, so a bypass of that gate (hand-fed IR, a future caller of
-/// this function) fails `go build` instead of panicking.
-pub(super) fn sibling_path_expr(
-    entry: &EntryModel<'_>,
-    module: &Module,
-    config: &CasingConfig,
-    path: &[String],
-) -> String {
-    let mut out = "s".to_string();
-    let mut head_handle = None;
-    for (i, seg) in path.iter().enumerate() {
-        out.push('.');
-        if i == 0 {
-            out.push_str(&entry_field_ident(entry, module, config, seg));
-            head_handle = entry
-                .fields
-                .iter()
-                .find(|f| f.name == *seg && f.call.is_some())
-                .and_then(|f| foreign_handle(&f.target, module));
-        } else {
-            out.push_str(&field_pascal(seg, config));
-        }
-    }
-    // A handle is opaque (it declares methods, never members), so a
-    // multi-segment path can never resolve through one: `tono check` rejects
-    // `.handle.member` before this ever runs. Asserted rather than silently
-    // falling through to the unwrapped spelling, which would hand the
-    // adapter to whatever segment follows instead of failing loudly.
-    debug_assert!(
-        head_handle.is_none() || path.len() == 1,
-        "a foreign handle field cannot have a member path: {path:?}"
-    );
-    if path.len() == 1 {
-        if let Some((lib, type_name)) = head_handle {
-            let adapter = handle_adapter_ident(&lib.name, &type_name);
-            return format!("{out}.(*{adapter}).real");
-        }
-    }
-    out
-}
 
 /// A valid Go identifier derived from the `ext` block's own declared name,
 /// not from the import path: non-identifier bytes become `_`, and a result
@@ -228,8 +164,8 @@ pub(super) fn handle_symbol(lib: &ExtLib) -> Option<Symbol> {
 #[path = "ext_handle.rs"]
 mod ext_handle;
 pub(super) use ext_handle::{
-    handle_adapter_decl, handle_adapter_ident, handle_call_assign, handle_iface_decl,
-    handle_iface_type, method_signature,
+    handle_adapter_decl, handle_adapter_ident, handle_iface_decl, handle_iface_type,
+    method_signature,
 };
 
 #[path = "ext_render.rs"]
@@ -246,10 +182,10 @@ pub(super) use ext_render::declared_error_literal;
 /// Go statement(s) up to and including the call itself, the yields-bound
 /// variable names (empty-string key for the no-`yields` case), and the
 /// error variable's own name.
-struct CallResult {
-    stmt: String,
-    yields_vars: HashMap<String, String>,
-    err_var: Option<String>,
+pub(super) struct CallResult {
+    pub(super) stmt: String,
+    pub(super) yields_vars: HashMap<String, String>,
+    pub(super) err_var: Option<String>,
 }
 
 /// What a binding's callee spelling is called on: the library's package
@@ -281,7 +217,7 @@ pub(super) fn binds_ctx(lang: &ExternLang) -> bool {
 /// op's), so two calls sharing a scope never collide. `ctx_expr` is what a
 /// declared context position reads as at this call site.
 #[allow(clippy::too_many_arguments)]
-fn build_call(
+pub(super) fn build_call(
     refs: &mut Vec<Symbol>,
     module: &Module,
     lib: &ExtLib,
@@ -386,103 +322,6 @@ fn build_call(
         yields_vars,
         err_var,
     }
-}
-
-/// A field's own `= ns.fn(args)` construction call: the call itself, its
-/// `yields`-position bindings (implicit trailing `error` unless an explicit
-/// position is marked or the list is the call's own signature, see
-/// `ExternLang::yields_is_signature`), the sentinel-to-error mapping, and
-/// the `returns:` projection (or the bare call result when the extern's
-/// return already is the logical type).
-pub(super) fn call_assign(
-    r: &mut Resolver<'_, '_>,
-    field: &EntryField,
-    call: &EntryCall,
-    dest: &str,
-) -> String {
-    let Some(lib) = find_lib(r.module, &call.ns) else {
-        return format!("// unresolved ext lib {:?}\n{dest} = nil", call.ns);
-    };
-    let Some(decl) = find_extern(lib, &call.func) else {
-        return format!(
-            "// unresolved extern {:?}.{:?}\n{dest} = nil",
-            call.ns, call.func
-        );
-    };
-    let Some(lang) = go_lang(decl) else {
-        return format!(
-            "// {:?}.{:?} declares no Go binding\n{dest} = nil",
-            call.ns, call.func
-        );
-    };
-    let Some(alias) = import_lib(r.refs, lib) else {
-        return format!("// {:?} declares no Go module path\n{dest} = nil", call.ns);
-    };
-
-    let (entry, module, config) = (r.entry, r.module, r.config);
-    let mut ref_expr = move |path: &[String]| sibling_path_expr(entry, module, config, path);
-    // A field's own construction call has no caller context to thread
-    // through: a declared context position reads the background context
-    // for this one-shot resolution.
-    if binds_ctx(lang) {
-        r.refs.push(import("context", "context"));
-    }
-    let built = build_call(
-        r.refs,
-        module,
-        lib,
-        lang,
-        &Callee::Package(alias),
-        &decl.params,
-        &call.args,
-        &field.name,
-        BACKGROUND_CTX,
-        &mut ref_expr,
-    );
-
-    let mut out = built.stmt;
-    if let Some(err_var) = &built.err_var {
-        out.push_str(&error_block(
-            r.refs,
-            r.module,
-            r.config,
-            lib,
-            &decl.errors,
-            &format!("{}.{}", call.ns, call.func),
-            err_var,
-            &|expr| format!("return nil, {expr}"),
-        ));
-    }
-
-    match &lang.returns {
-        None => {
-            let value = built
-                .yields_vars
-                .get("")
-                .cloned()
-                .or_else(|| built.yields_vars.values().next().cloned())
-                .unwrap_or_else(|| "nil".to_string());
-            // The field's own static type is the generated interface, never
-            // the real construction call's own concrete return type (its
-            // methods return the foreign package's own types, not the
-            // logical ones the interface declares), so the raw value is
-            // wrapped in the matching adapter before it is stored.
-            match foreign_handle(&field.target, r.module) {
-                Some((handle_lib, type_name)) => out.push_str(&format!(
-                    "{dest} = &{adapter}{{real: {value}}}\n",
-                    adapter = handle_adapter_ident(&handle_lib.name, &type_name),
-                )),
-                None => out.push_str(&format!("{dest} = {value}\n")),
-            }
-        }
-        Some(returns) => {
-            let (pre, expr) =
-                returns_expr(r.module, r.config, returns, &built.yields_vars, &field.name);
-            out.push_str(&pre);
-            out.push_str(&format!("{dest} = {expr}\n"));
-        }
-    }
-    out
 }
 
 /// An op's own `impl .field.method(args)` body: a call into an entry

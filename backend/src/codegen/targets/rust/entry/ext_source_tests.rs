@@ -32,24 +32,34 @@ fn entry_text(model: &Model) -> String {
 #[test]
 fn the_field_borrows_the_receiver_awaits_the_call_and_projects_the_yields() {
     let out = entry_text(&handle_source_model("rust"));
-    assert!(out.contains("let recv = match &s.provider {"), "{out}");
+    // The receiver is the resolver's own parameter (a reference to the
+    // slot), not a read off the in-progress settings draft: the call site
+    // passes `&s.provider` in, once, and the resolver takes it from there.
+    assert!(
+        out.contains("s.config = resolve_config(&s.provider).await?;"),
+        "{out}"
+    );
+    assert!(out.contains("let recv = match provider {"), "{out}");
     assert!(
         out.contains("provider.get: the provider handle is not configured"),
         "{out}"
     );
     assert!(out.contains("let outcome = recv.get().await;"), "{out}");
     assert!(
-        out.contains("Ok(c) => { s.config = Cfg { endpoint_read: c.read_url, endpoint_write: c.write_url }; }"),
+        out.contains(
+            "Ok(c) => Ok(Cfg { endpoint_read: c.read_url, endpoint_write: c.write_url }),"
+        ),
         "{out}"
     );
     assert!(
         out.contains("contract_name: \"provider.get\".to_string()"),
         "{out}"
     );
-    // The argument is cloned off the draft (never moved), and the op reading
-    // the same handle still renders off the client.
+    // The argument is cloned off the resolver's own parameter (never
+    // moved), and the op reading the same handle still renders off the
+    // client.
     assert!(
-        out.contains("let outcome = recv.get_for((s.region).clone()).await;"),
+        out.contains("let outcome = recv.get_for((region).clone()).await;"),
         "{out}"
     );
     assert!(
@@ -75,7 +85,7 @@ fn a_sync_method_without_yields_assigns_the_bare_result() {
         modules: vec![module],
     });
     assert!(out.contains("let outcome = recv.get();"), "{out}");
-    assert!(out.contains("Ok(v) => { s.config = v; }"), "{out}");
+    assert!(out.contains("Ok(v) => Ok(v),"), "{out}");
 }
 
 #[test]

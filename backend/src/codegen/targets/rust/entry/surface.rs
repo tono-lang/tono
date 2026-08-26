@@ -37,8 +37,12 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
         .collect()
 }
 
-/// The `Settings` struct: every resolved entry field plus the transport
-/// slots.
+/// The `Settings` struct: every resolved, *stored* entry field (a forwarded
+/// handle has no field at all: its single reader takes it straight from its
+/// own resolver, so its absence here is the ownership rule made visible in
+/// the structure) plus the transport slots, present only when the module
+/// declares a wire operation (an ext-only module has nothing to inject a
+/// transport into).
 pub(super) fn settings_struct_decl(
     entry: &EntryModel<'_>,
     n: &Names,
@@ -47,7 +51,7 @@ pub(super) fn settings_struct_decl(
 ) -> Decl {
     let mut fields = String::new();
     let mut refs = Vec::new();
-    for f in entry.declared() {
+    for f in entry.stored(module) {
         fields.push_str(&format!(
             "{doc}    pub {}: {},\n",
             field_snake_ren(&f.name, rename_of(&f.traits, LANG).as_deref(), config),
@@ -56,19 +60,22 @@ pub(super) fn settings_struct_decl(
         ));
         push_field_type_symbols(&f.target, module, &mut refs);
     }
-    refs.push(support_symbol("HttpTransport"));
+    let transport_fields = if crate::codegen::entries::has_wire_ops(module) {
+        refs.push(support_symbol("HttpTransport"));
+        "    #[cfg(feature = \"reqwest\")]\n\
+         \x20   pub client: Option<reqwest::Client>,\n\
+         \x20   pub transport: Option<HttpTransport>,\n\
+         \x20   pub headers: std::collections::HashMap<String, String>,\n"
+    } else {
+        ""
+    };
     let text = format!(
         "/// {settings} are the resolved construction values of the {entry} entry.\n\
          /// Exactly one transport slot may be set: `client` (native `reqwest`,\n\
          /// present only with the crate's default-on `reqwest` feature) or\n\
          /// `transport` (canonical). `headers` are the base request headers; a\n\
          /// declared `@header` wins only where nothing else set the name.\n\
-         pub(crate) struct {settings} {{\n\
-         {fields}    #[cfg(feature = \"reqwest\")]\n\
-         \x20   pub client: Option<reqwest::Client>,\n\
-         \x20   pub transport: Option<HttpTransport>,\n\
-         \x20   pub headers: std::collections::HashMap<String, String>,\n\
-         }}",
+         pub(crate) struct {settings} {{\n{fields}{transport_fields}}}",
         settings = n.settings,
         entry = entry.name,
     );

@@ -1,12 +1,13 @@
-//! The `call_assign`/`impl_call_body` happy-path (a full appendix-like
-//! module through `emit`) and defensive-fallback tests, split out of
-//! `ext_tests` to keep it under the file-size ceiling; the fixtures
-//! (`field`, `structure`, `bare_module`, `handle_lib`, `entry_text`, ...)
-//! come from the parent module via `super::*`.
+//! The resolver/`impl_call_body` happy-path (a full appendix-like module
+//! through `emit`) and defensive-fallback tests, split out of `ext_tests` to
+//! keep it under the file-size ceiling; the fixtures (`field`, `structure`,
+//! `bare_module`, `handle_lib`, `entry_text`, ...) come from the parent
+//! module via `super::*`.
 
 use super::*;
+use crate::codegen::targets::go::entry::ext_resolver;
 
-// --- call_assign / impl_call_body: happy paths and defensive fallbacks -
+// --- resolvers / impl_call_body: happy paths and defensive fallbacks ----
 
 /// A `/vN` Go module path (a real one: `github.com/golang-jwt/jwt/v5`) has a
 /// last path segment ("v5") that is a legal Go identifier on its own, but is
@@ -75,14 +76,19 @@ fn the_appendix_module_wires_the_call_handle_and_impl_call() {
     let module = crate::codegen::targets::go::entry::ext_fixtures::reference_example_module();
     let text = entry_text(&module);
 
-    // Field-construction call: import, call, yields naming, returns
-    // projection with a hoisted match.
-    assert!(text.contains(":= companyconfig.Load(s.Service, s.Region)"));
+    // Field-construction call: its own resolver takes exactly the fields
+    // the declaration reads (import, call, yields naming, returns
+    // projection with a hoisted match), and the constructor stores what it
+    // returns.
+    assert!(text.contains("func resolveConfig(service string, region string) (AppConfig, error) {"));
+    assert!(text.contains(":= companyconfig.Load(service, region)"));
     assert!(text.contains("configErr != nil"));
     assert!(text.contains("switch configCfg.Env {"));
     assert!(text.contains("var configEndpoint string"));
-    assert!(text.contains("s.Config = AppConfig{"));
+    assert!(text.contains("return AppConfig{"));
     assert!(text.contains("Token: configCfg.Credentials.Secret"));
+    assert!(text.contains("config, err := resolveConfig(s.Service, s.Region)"));
+    assert!(text.contains("s.Config = config\n"));
 
     // The handle field is unexported and, in its own storage position
     // (Settings/carrier), spelled as tono's own generated interface rather
@@ -103,8 +109,14 @@ fn the_appendix_module_wires_the_call_handle_and_impl_call() {
     assert!(text.contains("w.bus = &companybusPublisherIfaceAdapter{real: v}"));
     assert!(text.contains("if w.bus != nil {"));
     assert!(text.contains("s.bus = w.bus"));
-    assert!(text.contains(":= companybus.Connect(s.Config.Endpoint, s.Config.Token)"));
-    assert!(text.contains("s.bus = &companybusPublisherIfaceAdapter{real: busResult}"));
+    assert!(text.contains("func resolveBus(config AppConfig) (*companybus.Publisher, error) {"));
+    assert!(text.contains(":= companybus.Connect(config.Endpoint, config.Token)"));
+    assert!(text.contains("return busResult, nil"));
+    assert!(text.contains("bus, err := resolveBus(s.Config)"));
+    assert!(text.contains("s.bus = &companybusPublisherIfaceAdapter{real: bus}"));
+    // No branch of the production constructor decides between the real
+    // call and a test's fake: the test assigns the fake itself.
+    assert!(!text.contains("Override"));
 
     // The adapter method: the real call, the declared sentinel mapped to its
     // typed error, and the return projected into the logical shape — all the
@@ -239,45 +251,42 @@ fn module_with_call_field(ext_libs: Vec<ExtLib>, call: EntryCall) -> (Module, En
     (module, config_field)
 }
 
-/// Build the entry, the `Resolver`, and run `call_assign` for `config_field`
-/// against `module` in one call, so each case below reads as the one thing
-/// that differs (the module's own `ext_libs`) rather than repeating the
-/// `Resolver` plumbing.
-fn call_assign_for(module: &Module, config_field: &EntryField) -> String {
+/// The resolver of `config_field` (the text of its function) followed by
+/// the constructor's call to it, against `module`, so each case below reads
+/// as the one thing that differs (the module's own `ext_libs`) rather than
+/// repeating the plumbing.
+fn resolver_for(module: &Module, config_field: &EntryField) -> String {
     let entries = module_entries(module);
     let entry = &entries[0];
     let config = go_casing();
-    let overrides = std::collections::HashMap::new();
-    let mut r = Resolver {
+    let decls: Vec<Decl> = ext_resolver::resolver_decls(entry, module, &config, false)
+        .into_iter()
+        .map(|r| r.decl)
+        .collect();
+    let mut text = rendered(&decls, &GoRules::default());
+    text.push_str(&ext_resolver::call_site_from_settings(
         entry,
         module,
-        config: &config,
-        helpers: &mut Helpers::default(),
-        refs: &mut Vec::new(),
-        body: &mut String::new(),
-        resolve_fns: &mut Vec::new(),
-        multi: false,
-        overrides: &overrides,
-    };
-    let call = config_field.call.clone().unwrap();
-    ext::call_assign(&mut r, config_field, &call, "s.Config")
+        &config,
+        false,
+        config_field,
+    ));
+    text
 }
 
+/// A construction whose library, extern, Go binding or Go module path is
+/// missing gets no resolver at all (the frontend refuses each of those
+/// before generation; the emitter stays total rather than trusting that),
+/// while the constructor still spells the call, so a bypass of the
+/// frontend fails `go build` on the missing function instead of
+/// miscompiling silently.
 #[test]
-fn call_assign_degrades_on_every_unresolved_lookup() {
+fn an_unresolved_construction_gets_no_resolver_but_keeps_its_call_site() {
     let call = EntryCall {
         ns: "nope".into(),
         func: "load".into(),
         args: vec![],
     };
-
-    let (module, config_field) = module_with_call_field(vec![], call.clone());
-    assert!(call_assign_for(&module, &config_field).contains("unresolved ext lib"));
-
-    let (module, config_field) =
-        module_with_call_field(vec![handle_lib("nope", "publisher")], call.clone());
-    assert!(call_assign_for(&module, &config_field).contains("unresolved extern"));
-
     let ts_only = lib_missing(
         vec![LangPath {
             lang: "ts".into(),
@@ -286,12 +295,19 @@ fn call_assign_degrades_on_every_unresolved_lookup() {
         "load",
         "ts",
     );
-    let (module, config_field) = module_with_call_field(vec![ts_only], call.clone());
-    assert!(call_assign_for(&module, &config_field).contains("declares no Go binding"));
-
     let no_go_path = lib_missing(vec![], "load", "go");
-    let (module, config_field) = module_with_call_field(vec![no_go_path], call);
-    assert!(call_assign_for(&module, &config_field).contains("declares no Go module path"));
+    for libs in [
+        vec![],
+        vec![handle_lib("nope", "publisher")],
+        vec![ts_only],
+        vec![no_go_path],
+    ] {
+        let (module, config_field) = module_with_call_field(libs, call.clone());
+        let out = resolver_for(&module, &config_field);
+        assert!(!out.contains("func resolveConfig"), "{out}");
+        assert!(out.contains("config, err := resolveConfig()"), "{out}");
+        assert!(out.contains("s.Config = config"), "{out}");
+    }
 }
 
 #[test]
@@ -342,9 +358,13 @@ fn call_assign_covers_an_explicit_error_position_and_a_bare_call_result() {
         args: vec![],
     };
     let (module, config_field) = module_with_call_field(vec![lib], call);
-    let out = call_assign_for(&module, &config_field);
-    assert!(out.contains("configErr, configBody := lib.Fetch()"));
-    assert!(out.contains("s.Config = configBody"));
+    let out = resolver_for(&module, &config_field);
+    assert!(
+        out.contains("configErr, configBody := lib.Fetch()"),
+        "{out}"
+    );
+    assert!(out.contains("return configBody, nil"), "{out}");
+    assert!(out.contains("s.Config = config\n"), "{out}");
 }
 
 /// The value comes from a method of the object the call returned
@@ -386,12 +406,12 @@ fn call_assign_writes_the_chained_method_as_one_expression() {
         args: vec![],
     };
     let (module, config_field) = module_with_call_field(vec![lib], call);
-    let out = call_assign_for(&module, &config_field);
+    let out = resolver_for(&module, &config_field);
     assert!(
         out.contains("configResult, configErr := lib.Fetch(\"key\").Result(2)"),
         "{out}"
     );
-    assert!(out.contains("s.Config = configResult"), "{out}");
+    assert!(out.contains("return configResult, nil"), "{out}");
 }
 
 /// The motivating case for generic handle instantiation: a free extern
@@ -440,14 +460,7 @@ fn call_assign_names_the_type_argument_on_a_generic_constructor() {
         },
         traits: vec![],
     });
-    // `call_assign` alone (unlike the full `emit` pipeline) does not resolve
-    // the argument's slot markers into their final text; strip them so this
-    // asserts the same thing `handle_go_type_spells_the_foreign_name_with_an_
-    // explicit_type_argument` above already proves for the slot form itself.
-    let out: String = call_assign_for(&module, &source_field)
-        .chars()
-        .filter(|c| *c != '\u{1}')
-        .collect();
+    let out = resolver_for(&module, &source_field);
     assert!(out.contains("cfgkit.NewEnvSource[Settings]()"), "{out}");
 }
 
@@ -615,10 +628,13 @@ fn call_assign_binds_only_the_declared_positions_when_yields_is_the_signature() 
 
     let (module, config_field) =
         module_with_call_field(vec![lib_with(vec![position.clone()], None)], call.clone());
-    let out = call_assign_for(&module, &config_field);
+    let out = resolver_for(&module, &config_field);
     assert!(out.contains("configBody := lib.Fetch()"), "{out}");
     assert!(!out.contains("configErr"), "{out}");
-    assert!(out.contains("s.Config = configBody"), "{out}");
+    // An infallible construction keeps the resolver's uniform signature,
+    // answering a nil error, so the call site reads the same everywhere.
+    assert!(out.contains("return configBody, nil"), "{out}");
+    assert!(!out.contains("var zero"), "{out}");
 
     // The same position read by a returns: projects, and the error keeps
     // the convention's last slot.
@@ -631,10 +647,11 @@ fn call_assign_binds_only_the_declared_positions_when_yields_is_the_signature() 
     };
     let (module, config_field) =
         module_with_call_field(vec![lib_with(vec![position], Some(returns))], call);
-    let out = call_assign_for(&module, &config_field);
+    let out = resolver_for(&module, &config_field);
     assert!(
         out.contains("configBody, configErr := lib.Fetch()"),
         "{out}"
     );
     assert!(out.contains("if configErr != nil"), "{out}");
+    assert!(out.contains("var zero string"), "{out}");
 }

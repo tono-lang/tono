@@ -1,27 +1,36 @@
 //! Native `cargo test` files generated from the module's declared tests.
 //!
-//! Each test runs the real client method through the real construction path;
-//! an `.http` stub answers through the constructor's seam
-//! (`new_with_transport`/`build_with_transport`), so the test sees exactly
-//! the request the SDK would send. A test whose call has no stub runs against
-//! the real dependency, so it lands in the live file and every live test
-//! carries `#[ignore]` to stay out of a default `cargo test` run. A test that
-//! stubs an `.impl` dependency generates nothing here: the Rust bespoke ops
-//! expose no swappable per-operation seam, so only the transport stub and the
-//! live path can be exercised natively. The same holds for a call whose own
-//! dependency is neither `.http` nor `.impl`: an extern handle method reached
-//! through the op's own `impl` body (hermetic on its `extern_stubs` coverage
-//! alone, with no call-scoped stub). This target emits that call but exposes
-//! no seam a test could swap the handle method through, so such a test also
-//! generates nothing here rather than a "hermetic" test that reaches the
-//! real library.
+//! Each test runs the real client method through the real construction path:
+//! it composes the same steps `new`/`build` does (`new_settings`, each
+//! foreign construction's own resolver, `new_client`), with the stubbed
+//! transport assigned directly into the resolved settings before
+//! `new_client` builds the client — no seam, no override parameter, no
+//! branch in production code deciding between this and a real caller. A test
+//! whose call has no stub runs against the real dependency through the
+//! public constructor unchanged, so it lands in the live file, and every
+//! live test carries `#[ignore]` to stay out of a default `cargo test` run.
+//! A test that stubs an `.impl` dependency generates nothing here: the Rust
+//! bespoke ops expose no swappable per-operation seam, so only the
+//! transport stub and the live path can be exercised natively. The same
+//! holds for a call whose own dependency is neither `.http` nor `.impl`: an
+//! extern handle method reached through the op's own `impl` body (hermetic
+//! on its `extern_stubs` coverage alone, with no call-scoped stub). This
+//! target emits that call but exposes no seam a test could swap the handle
+//! method through, so such a test also generates nothing here rather than a
+//! "hermetic" test that reaches the real library. Rust also has no fake for
+//! a foreign construction itself (a plain extern-stub or a handle-method
+//! stub on a construction-time call): the assembly always resolves those for
+//! real, so a construction that reaches one only stays hermetic through its
+//! `.http` stub.
 //!
 //! Each generated file is a `#[cfg(test)]` module of the SDK crate itself
 //! (the module tree declares it), which is what lets it reach the
-//! `pub(crate)` construction seam while the shipped surface stays clean.
+//! `pub(crate)` `new_settings`/`new_client` steps while the shipped surface
+//! stays clean.
 
 use super::*;
 use crate::codegen::declared_tests::{self, PlannedTest};
+use crate::codegen::entries::TailStep;
 
 #[path = "vector_expects.rs"]
 mod expects;
@@ -80,8 +89,16 @@ pub(crate) fn test_files(module: &Module, config: &CasingConfig) -> Vec<ModuleFi
                 hermetic_doc(),
                 glob_use(&Group::types(&module.name)),
                 glob_use(&Group::entry(&module.name, entry.name)),
-                env_lock_decl(),
             ];
+            // The hermetic assembly calls the same resolver functions `new`/
+            // `build` does (see `assembled_hermetic_client`), each living in
+            // its own library's group beside the entry's; a live test never
+            // reaches them (it goes through the public constructor as any
+            // other caller would), so this glob is hermetic-only.
+            for lib in ext_libs_touched(entry, module, config, multi) {
+                decls.push(glob_use(&Group::ext(&module.name, &lib)));
+            }
+            decls.push(env_lock_decl());
             decls.extend(hermetic);
             files.push(ModuleFile::new(
                 Group::tests(&module.name, entry.name, false),
@@ -128,9 +145,9 @@ fn hermetic_doc() -> Decl {
     Decl::raw(
         "// Generated from the entry's declared tests: each one runs the real\n\
          // construction path and the real method, with only the stubbed\n\
-         // transport swapped through the constructor's seam. Impl-stubbed tests\n\
-         // and tests riding only on extern handle-method stubs generate nothing\n\
-         // for Rust: neither has a swappable seam here."
+         // transport assigned directly into the resolved settings. Impl-stubbed\n\
+         // tests and tests riding only on extern handle-method stubs generate\n\
+         // nothing for Rust: neither has a fake this target can build."
             .to_string(),
     )
 }
@@ -150,6 +167,25 @@ fn live_doc() -> Decl {
 /// same technique the entry group itself uses to reach the taxonomy.
 fn glob_use(group: &Group) -> Decl {
     crate::codegen::targets::rust::emit::types_glob_use(group)
+}
+
+/// The distinct `ext` libraries the entry's own foreign constructions call
+/// into, in first-seen order — the same set `mod.rs`'s `emit` glob-imports
+/// into the entry's own group, needed here too since the hermetic assembly
+/// calls those same resolver functions.
+fn ext_libs_touched(
+    entry: &EntryModel<'_>,
+    module: &Module,
+    config: &CasingConfig,
+    multi: bool,
+) -> Vec<String> {
+    let mut libs = Vec::new();
+    for resolver in ext_resolver::resolver_decls(entry, module, config, multi) {
+        if !libs.contains(&resolver.lib) {
+            libs.push(resolver.lib);
+        }
+    }
+    libs
 }
 
 fn env_lock_decl() -> Decl {
@@ -248,23 +284,23 @@ fn with_fn_name(ctx: &TestCtx<'_>, f: &EntryField) -> String {
 }
 
 /// Whether this entry's construction itself is async: true whenever a
-/// declared field resolves through an `extern` call, which `constructor.rs`
-/// already lowers to an `async fn new`/`new_with_transport` (an arbitrary
-/// third-party symbol is always awaited, mirroring every other async-lowered
-/// leaf this target emits).
+/// declared field resolves through a foreign call or a handle method, which
+/// `constructor.rs` already lowers to an `async fn new`/`build` (an
+/// arbitrary third-party symbol is always awaited, mirroring every other
+/// async-lowered leaf this target emits).
 fn construction_is_async(ctx: &TestCtx<'_>) -> bool {
-    ctx.entry.declared().iter().any(|f| f.call.is_some())
+    ctx.entry
+        .declared()
+        .iter()
+        .any(|f| f.call.is_some() || f.handle_call.is_some())
 }
 
-/// The construction expression of one test, from the pinned construction
-/// values: `@arg` fields positionally, `@with` fields through the builder. A
-/// stubbed test goes through the transport seam; anything else through the
-/// public constructor. An unpinned `@arg` gets the type's zero value: its
-/// declared chain has nothing else to resolve from, and the zero value keeps
-/// a construction-failure expectation expressible.
-fn construction_expr(ctx: &TestCtx<'_>, transport: bool) -> String {
-    let args: Vec<String> = ctx
-        .entry
+/// The `@arg` values of one test's pinned construction, positionally. An
+/// unpinned `@arg` gets the type's zero value: its declared chain has
+/// nothing else to resolve from, and the zero value keeps a
+/// construction-failure expectation expressible.
+fn construction_args(ctx: &TestCtx<'_>) -> Vec<String> {
+    ctx.entry
         .args()
         .iter()
         .map(|f| match ctx.values().get(&f.name) {
@@ -275,19 +311,18 @@ fn construction_expr(ctx: &TestCtx<'_>, transport: bool) -> String {
                 ctx.module,
             ),
         })
-        .collect();
+        .collect()
+}
+
+/// The construction expression of one non-stubbed-transport test, from the
+/// pinned construction values: `@arg` fields positionally, `@with` fields
+/// through the builder, through the public constructor exactly as any other
+/// caller would use it.
+fn construction_expr(ctx: &TestCtx<'_>) -> String {
+    let args = construction_args(ctx);
     let client = &ctx.n.client;
     if ctx.entry.with_fields().is_empty() {
-        if transport {
-            let mut call = String::from("Some(transport)");
-            for a in &args {
-                call.push_str(", ");
-                call.push_str(a);
-            }
-            format!("{client}::new_with_transport({call})")
-        } else {
-            format!("{client}::new({})", args.join(", "))
-        }
+        format!("{client}::new({})", args.join(", "))
     } else {
         let with_calls: String = ctx
             .entry
@@ -302,13 +337,79 @@ fn construction_expr(ctx: &TestCtx<'_>, transport: bool) -> String {
                 ))
             })
             .collect();
-        let build = if transport {
-            "build_with_transport(Some(transport))"
-        } else {
-            "build()"
-        };
-        format!("{client}::builder({}){with_calls}.{build}", args.join(", "))
+        format!("{client}::builder({}){with_calls}.build()", args.join(", "))
     }
+}
+
+/// The `.http`-stubbed test's own construction: the same settings and the
+/// same foreign-construction resolvers `new`/`build` runs, in the same
+/// order, with the stubbed transport injected directly into the resolved
+/// settings before `new_client` builds the client — no seam, no override
+/// parameter, and no branch in the production constructor deciding between
+/// this and a real caller. Wrapped in an (awaited, when construction is
+/// async) closure so the `?` the shared resolution machinery already emits
+/// keeps working inside a test function that itself returns `()`.
+fn assembled_hermetic_client(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
+    let client = &ctx.n.client;
+    let args = construction_args(ctx);
+    let split = ctx.entry.construction_split(ctx.module);
+    let tail_fields: Vec<&EntryField> = split.tail.iter().map(TailStep::field).collect();
+    let mut helpers = Helpers::default();
+    let mut resolve_fns = Vec::new();
+    let with_fields = ctx.entry.with_fields();
+
+    let mut body = if with_fields.is_empty() {
+        format!(
+            "let mut s = {client}::new_settings({args})?;\n",
+            args = args.join(", "),
+        )
+    } else {
+        let with_calls: String = with_fields
+            .iter()
+            .filter_map(|f| {
+                let v = ctx.values().get(&f.name)?;
+                Some(format!(
+                    ".{}({})",
+                    with_fn_name(ctx, f),
+                    super::literal(&f.target, v, ctx.module)
+                ))
+            })
+            .collect();
+        format!(
+            "let builder = {client}::builder({args}){with_calls};\n\
+             let mut s = builder.new_settings()?;\n",
+            args = args.join(", "),
+        )
+    };
+    let arg_prefix: &'static str = if with_fields.is_empty() { "" } else { "self." };
+    body.push_str(&constructor::resolution_steps(
+        ctx.entry,
+        ctx.module,
+        ctx.config,
+        &mut helpers,
+        ctx.multi,
+        arg_prefix,
+        &tail_fields,
+        refs,
+        &mut resolve_fns,
+    ));
+    body.push_str(
+        "s.transport = Some(transport);\n#[cfg(feature = \"reqwest\")]\n{\n    s.client = None;\n}\n",
+    );
+    // `Ok::<_, TonoError>` rather than bare `Ok`: an `async {}` block (unlike
+    // the sync branch's closure) has no return-type annotation of its own,
+    // and nothing else here pins the `?` operator's error type.
+    body.push_str(&format!("Ok::<_, TonoError>({client}::new_client(s)?)"));
+
+    let wrapped = if construction_is_async(ctx) {
+        format!("async {{\n{}\n}}.await", indent(&body, 1))
+    } else {
+        format!(
+            "(|| -> Result<{client}, TonoError> {{\n{}\n}})()",
+            indent(&body, 1)
+        )
+    };
+    format!("let c = {wrapped}.expect(\"construct client\");\n")
 }
 
 /// The `.http` stub: the canned responses answered per call (the last one
@@ -433,7 +534,7 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>) -> Option<Decl> {
         let await_ = if is_async { ".await" } else { "" };
         body.push_str(&format!(
             "    let result = {expr}{await_};\n",
-            expr = construction_expr(ctx, false),
+            expr = construction_expr(ctx),
         ));
         body.push_str(&outcome_asserts(ctx, false));
         if is_async {
@@ -466,15 +567,7 @@ fn stubbed_call_body(ctx: &TestCtx<'_>, stub: &TestStub, refs: &mut Vec<Symbol>)
     refs.push(super::support_symbol("HttpResponse"));
     refs.push(super::support_symbol("HttpTransport"));
     let mut body = transport_block(&answers);
-    let await_ = if construction_is_async(ctx) {
-        ".await"
-    } else {
-        ""
-    };
-    body.push_str(&format!(
-        "    let c = {expr}{await_}.expect(\"construct client\");\n",
-        expr = construction_expr(ctx, true),
-    ));
+    body.push_str(&indent(&assembled_hermetic_client(ctx, refs), 1));
     body.push_str(&invoke_block(ctx, refs));
     let has_output = ctx.test.op.and_then(|op| op_io(op).1).is_some();
     body.push_str(&outcome_asserts(ctx, has_output));
@@ -504,7 +597,7 @@ fn live_test_decl(ctx: &TestCtx<'_>) -> Decl {
     };
     let mut body = format!(
         "    let c = {expr}{construct_await}.expect(\"construct client\");\n",
-        expr = construction_expr(ctx, false),
+        expr = construction_expr(ctx),
     );
     body.push_str(&invoke_block(ctx, &mut refs));
     let has_output = op_io(op).1.is_some();

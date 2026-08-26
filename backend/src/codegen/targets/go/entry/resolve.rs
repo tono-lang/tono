@@ -6,8 +6,6 @@
 //! `if v, ok := os.LookupEnv` env boundary, the typed `strconv`/`json.Decoder`
 //! parses, the branded-string casts) that no other target shares.
 
-use std::collections::HashMap;
-
 use super::*;
 use crate::codegen::entries::plan::{self, Cond, Emitter, Leaf};
 
@@ -27,33 +25,10 @@ pub(super) struct Resolver<'a, 'b> {
     pub(super) body: &'b mut String,
     pub(super) resolve_fns: &'b mut Vec<Decl>,
     pub(super) multi: bool,
-    /// The declared-test seam's per-field overrides, keyed by field name: a
-    /// non-nil override skips the field's real `extern` construction call
-    /// entirely, which is what lets a hermetic declared test avoid the real
-    /// library. Empty outside the test-seam constructor variant.
-    pub(super) overrides: &'b HashMap<String, FieldOverride>,
-}
-
-/// The seam constructor's override parameter for one field with its own
-/// `extern` construction call: `pointer` is a plain value field's override
-/// (`*T`, nil meaning "call the real thing"), and a foreign-handle field's
-/// override carries the handle's own interface type directly (already
-/// nilable, so no extra pointer indirection).
-#[derive(Clone)]
-pub(super) struct FieldOverride {
-    pub(super) var: String,
-    pub(super) pointer: bool,
-}
-
-impl FieldOverride {
-    /// The Go expression the override resolves to once its nil check passes.
-    fn value_expr(&self) -> String {
-        if self.pointer {
-            format!("*{}", self.var)
-        } else {
-            self.var.clone()
-        }
-    }
+    /// The first value a construction failure returns beside the error:
+    /// `nil` in a function returning the client, `s` in the settings step
+    /// (which returns the settings it was building).
+    pub(super) fail_value: &'static str,
 }
 
 /// The local variable names a map-indexed match binds: the looked-up value
@@ -106,9 +81,10 @@ impl Resolver<'_, '_> {
         match t {
             Tref::Prim(Prim::Bool) => {
                 self.import("fmt", "fmt");
-                let fail = config_errorf(&format!(
-                    "\"%s: invalid bool %q (want true/false/1/0)\", {label}, v"
-                ));
+                let fail = config_errorf(
+                    self.fail_value,
+                    &format!("\"%s: invalid bool %q (want true/false/1/0)\", {label}, v"),
+                );
                 format!(
                     "switch v {{\ncase \"true\", \"1\":\n\t{dest} = true\ncase \"false\", \"0\":\n\t{dest} = false\ndefault:\n\t{fail}\n}}"
                 )
@@ -116,10 +92,10 @@ impl Resolver<'_, '_> {
             Tref::Prim(p @ (Prim::I8 | Prim::I16 | Prim::I32 | Prim::I64)) => {
                 self.import("strconv", "strconv");
                 self.import("fmt", "fmt");
-                let fail = config_errorf(&format!(
-                    "\"%s: invalid {prim} %q\", {label}, v",
-                    prim = prim_name(p)
-                ));
+                let fail = config_errorf(
+                    self.fail_value,
+                    &format!("\"%s: invalid {prim} %q\", {label}, v", prim = prim_name(p)),
+                );
                 format!(
                     "n, err := strconv.ParseInt(v, 10, {bits})\nif err != nil {{\n\t{fail}\n}}\n{dest} = {cast}(n)",
                     bits = int_bits(p),
@@ -129,10 +105,10 @@ impl Resolver<'_, '_> {
             Tref::Prim(p @ (Prim::U8 | Prim::U16 | Prim::U32 | Prim::U64)) => {
                 self.import("strconv", "strconv");
                 self.import("fmt", "fmt");
-                let fail = config_errorf(&format!(
-                    "\"%s: invalid {prim} %q\", {label}, v",
-                    prim = prim_name(p)
-                ));
+                let fail = config_errorf(
+                    self.fail_value,
+                    &format!("\"%s: invalid {prim} %q\", {label}, v", prim = prim_name(p)),
+                );
                 format!(
                     "n, err := strconv.ParseUint(v, 10, {bits})\nif err != nil {{\n\t{fail}\n}}\n{dest} = {cast}(n)",
                     bits = int_bits(p),
@@ -143,7 +119,10 @@ impl Resolver<'_, '_> {
                 self.import("strconv", "strconv");
                 self.import("strings", "strings");
                 self.import("fmt", "fmt");
-                let fail = config_errorf(&format!("\"%s: invalid float %q\", {label}, v"));
+                let fail = config_errorf(
+                    self.fail_value,
+                    &format!("\"%s: invalid float %q\", {label}, v"),
+                );
                 // Decimal notation only: ParseFloat alone also accepts Inf,
                 // NaN, hex floats, and digit separators, which the TypeScript
                 // boundary rejects; the same env value must construct in both.
@@ -154,7 +133,10 @@ impl Resolver<'_, '_> {
             Tref::Prim(Prim::Bytes) => {
                 self.import("base64", "encoding/base64");
                 self.import("fmt", "fmt");
-                let fail = config_errorf(&format!("\"%s: invalid base64 %q\", {label}, v"));
+                let fail = config_errorf(
+                    self.fail_value,
+                    &format!("\"%s: invalid base64 %q\", {label}, v"),
+                );
                 // The env boundary carries bytes the same way the wire does:
                 // base64 text.
                 format!(
@@ -164,7 +146,10 @@ impl Resolver<'_, '_> {
             Tref::Prim(Prim::Duration) => {
                 self.import("time", "time");
                 self.import("fmt", "fmt");
-                let fail = config_errorf(&format!("\"%s: invalid duration %q\", {label}, v"));
+                let fail = config_errorf(
+                    self.fail_value,
+                    &format!("\"%s: invalid duration %q\", {label}, v"),
+                );
                 format!(
                     "if _, err := time.ParseDuration(v); err != nil {{\n\t{fail}\n}}\n{dest} = Duration(v)"
                 )
@@ -544,11 +529,14 @@ impl Emitter for Resolver<'_, '_> {
     ) -> Leaf {
         if guaranteed {
             self.import("fmt", "fmt");
-            Leaf(config_errorf(&format!(
-                "\"{field}: match on {subject}: unmatched value %v\", {subject_expr}",
-                field = field.name,
-                subject = subject_head,
-            )))
+            Leaf(config_errorf(
+                self.fail_value,
+                &format!(
+                    "\"{field}: match on {subject}: unmatched value %v\", {subject_expr}",
+                    field = field.name,
+                    subject = subject_head,
+                ),
+            ))
         } else {
             Leaf(format!(
                 "{} = {}",
@@ -607,7 +595,10 @@ impl Emitter for Resolver<'_, '_> {
                 // the wire key (the @wire override the codec serializes under), not
                 // the in-code member name.
                 let name = wire_key(m);
-                let fail = config_errorf(&format!("\"%s: missing field {name}\", {{LABEL}}"));
+                let fail = config_errorf(
+                    self.fail_value,
+                    &format!("\"%s: missing field {name}\", {{LABEL}}"),
+                );
                 required_checks.push_str(&format!(
                     "\tif rv, ok := probe[{name:?}]; !ok || string(rv) == \"null\" {{\n\t\t{fail}\n\t}}\n",
                 ));
@@ -615,7 +606,8 @@ impl Emitter for Resolver<'_, '_> {
         }
         let validate = if validation::shape_has_checks(shape) {
             format!(
-                "\tif invalid := Validate{ty}(decoded); invalid != nil {{\n\t\treturn nil, invalid\n\t}}\n"
+                "\tif invalid := Validate{ty}(decoded); invalid != nil {{\n\t\treturn {fail}, invalid\n\t}}\n",
+                fail = self.fail_value,
             )
         } else {
             String::new()
@@ -623,9 +615,10 @@ impl Emitter for Resolver<'_, '_> {
         // The decode body varies only by the env label; the cascade fills each
         // source's own `(lookup, label, miss)` in around this shared shape.
         let (dc, ec) = (dest.clone(), err.clone());
+        let fail_value = self.fail_value;
         let body = self.decode_cascade(field, &dest, &err, move |_, lookup, label, miss, pre| {
             let required = required_checks.replace("{LABEL}", label);
-            let fail = config_errorf(&format!("\"%s: %v\", {label}, err"));
+            let fail = config_errorf(fail_value, &format!("\"%s: %v\", {label}, err"));
             format!(
                 "{pre}if raw, ok := {lookup}; ok && raw != \"\" {{\n\
                  \tvar probe map[string]json.RawMessage\n\
@@ -653,8 +646,9 @@ impl Emitter for Resolver<'_, '_> {
             return out;
         };
         let (dc, ec) = (dest.clone(), err.clone());
+        let fail_value = self.fail_value;
         let body = self.decode_cascade(field, &dest, &err, move |_, lookup, label, miss, pre| {
-            let fail = config_errorf(&format!("\"%s: %v\", {label}, err"));
+            let fail = config_errorf(fail_value, &format!("\"%s: %v\", {label}, err"));
             format!(
                 "{pre}if raw, ok := {lookup}; ok && raw != \"\" {{\n\
                  \tif err := json.Unmarshal([]byte(raw), &{dc}); err != nil {{\n\t\t{fail}\n\t}}\n\
@@ -668,7 +662,8 @@ impl Emitter for Resolver<'_, '_> {
 
     fn require_member(&mut self, head: &str, member: &str, leaf: &Tref, name: &str) -> String {
         format!(
-            "if s.{head_ident}.{member_ident} == {zero} {{\n\treturn nil, &{config}{{Message: \"{name}: no value\"}}\n}}",
+            "if s.{head_ident}.{member_ident} == {zero} {{\n\treturn {fail}, &{config}{{Message: \"{name}: no value\"}}\n}}",
+            fail = self.fail_value,
             head_ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             member_ident = field_pascal(member, self.config),
             zero = cast_string(leaf, "\"\""),
@@ -679,14 +674,16 @@ impl Emitter for Resolver<'_, '_> {
     fn require_member_deferred(&mut self, name: &str, err: &str) -> String {
         let ident = err_var(err);
         format!(
-            "if {ident} != nil {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {ident}.Error(), Cause: {ident}}}\n}}",
+            "if {ident} != nil {{\n\treturn {fail}, &{config}{{Message: \"{name} <- \" + {ident}.Error(), Cause: {ident}}}\n}}",
+            fail = self.fail_value,
             config = error_names().config,
         )
     }
 
     fn require_string(&mut self, head: &str, target: &Tref) -> String {
         format!(
-            "if s.{ident} == {zero} {{\n\tif {err} == nil {{\n\t\treturn nil, &{config}{{Message: \"{name}: no value\"}}\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
+            "if s.{ident} == {zero} {{\n\tif {err} == nil {{\n\t\treturn {fail}, &{config}{{Message: \"{name}: no value\"}}\n\t}}\n\treturn {fail}, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
+            fail = self.fail_value,
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             zero = cast_string(target, "\"\""),
             err = err_var(head),
@@ -697,7 +694,8 @@ impl Emitter for Resolver<'_, '_> {
 
     fn require_bytes(&mut self, head: &str) -> String {
         format!(
-            "if len(s.{ident}) == 0 {{\n\tif {err} == nil {{\n\t\treturn nil, &{config}{{Message: \"{name}: no value\"}}\n\t}}\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
+            "if len(s.{ident}) == 0 {{\n\tif {err} == nil {{\n\t\treturn {fail}, &{config}{{Message: \"{name}: no value\"}}\n\t}}\n\treturn {fail}, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
+            fail = self.fail_value,
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             err = err_var(head),
             name = head,
@@ -705,48 +703,48 @@ impl Emitter for Resolver<'_, '_> {
         )
     }
 
-    /// A field's own `= ns.fn(args)` extern-call source: the call
-    /// itself, its `yields`/`returns` projection, and its declared
-    /// sentinel-to-error mapping. See [`super::ext::call_assign`].
+    /// A field's own `= ns.fn(args)` extern-call source: a call to the
+    /// field's resolver (see `ext_resolver`), which spells the destination
+    /// itself (a forwarded handle is bound to a local and never stored).
     fn call_assign(
         &mut self,
         field: &EntryField,
         call: &crate::ir::EntryCall,
         dest: &str,
     ) -> String {
-        // A declared test that stubs this field's own extern call names an
-        // override parameter the seam constructor carries; a non-nil value
-        // there skips the real call outright, which is what keeps the
-        // hermetic build free of a direct, unconditional reference to it.
-        match self.overrides.get(&field.name).cloned() {
-            Some(ov) => {
-                let value = ov.value_expr();
-                let real = super::ext::call_assign(self, field, call, dest);
-                format!(
-                    "if {var} != nil {{\n\t{dest} = {value}\n}} else {{\n{real}}}\n",
-                    var = ov.var
-                )
-            }
-            None => super::ext::call_assign(self, field, call, dest),
-        }
+        let _ = (call, dest);
+        super::ext_resolver::call_site_from_settings(
+            self.entry,
+            self.module,
+            self.config,
+            self.multi,
+            field,
+        )
     }
 
-    /// A field's own `= .field.method(args)` handle-method-call source:
-    /// see [`super::ext::handle_call_assign`]. The receiver is a handle
-    /// field, and a declared test that fakes that handle (its own override)
-    /// already redirects this call, so the field itself carries no seam.
+    /// A field's own `= .field.method(args)` handle-method-call source: the
+    /// same shape as [`Self::call_assign`], over the resolver that reads the
+    /// handle from the settings.
     fn handle_call_assign(
         &mut self,
         field: &EntryField,
         call: &crate::ir::OpImplCall,
         dest: &str,
     ) -> String {
-        super::ext::handle_call_assign(self, field, call, dest)
+        let _ = (call, dest);
+        super::ext_resolver::call_site_from_settings(
+            self.entry,
+            self.module,
+            self.config,
+            self.multi,
+            field,
+        )
     }
 
     fn require_numeric(&mut self, head: &str, _target: &Tref) -> String {
         format!(
-            "if {err} != nil && s.{ident} == 0 {{\n\treturn nil, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
+            "if {err} != nil && s.{ident} == 0 {{\n\treturn {fail}, &{config}{{Message: \"{name} <- \" + {err}.Error(), Cause: {err}}}\n}}",
+            fail = self.fail_value,
             ident = field_pascal_ren(head, self.entry.field_rename(head, LANG).as_deref(), self.config),
             err = err_var(head),
             name = head,
@@ -759,11 +757,12 @@ impl Emitter for Resolver<'_, '_> {
 /// category (message formatted from `sprintf_args`, the argument list a
 /// `fmt.Errorf` would take). Every bad env value, malformed blob, absent
 /// member, or unmatched select is a config problem, discriminable via
-/// `errors.As` from a transport, validation, or declared error. Callers that
-/// use this must import `fmt`.
-pub(super) fn config_errorf(sprintf_args: &str) -> String {
+/// `errors.As` from a transport, validation, or declared error. `fail` is
+/// the value returned beside the error (see `Resolver::fail_value`).
+/// Callers that use this must import `fmt`.
+pub(super) fn config_errorf(fail: &str, sprintf_args: &str) -> String {
     format!(
-        "return nil, &{config}{{Message: fmt.Sprintf({sprintf_args})}}",
+        "return {fail}, &{config}{{Message: fmt.Sprintf({sprintf_args})}}",
         config = error_names().config,
     )
 }

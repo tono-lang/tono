@@ -105,11 +105,20 @@ pub fn entry_tests(module: &Module) -> Result<Vec<EntryTests<'_>>, String> {
     Ok(groups)
 }
 
-/// Validate every module's declared tests; the pipeline runs this before any
-/// emitter reads them.
-pub fn validate_declared_tests(model: &Model) -> Result<(), String> {
+/// Validate every module's declared tests for the targets being generated;
+/// the pipeline runs this before any emitter reads them.
+pub fn validate_declared_tests(
+    model: &Model,
+    targets: &[crate::codegen::pipeline::TargetKind],
+) -> Result<(), String> {
     for module in &model.modules {
         entry_tests(module)?;
+        if targets
+            .iter()
+            .any(|t| matches!(t, crate::codegen::pipeline::TargetKind::TypeScript))
+        {
+            extern_coverage::validate_method_stubs_fakeable_in_typescript(module)?;
+        }
     }
     Ok(())
 }

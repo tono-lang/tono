@@ -35,28 +35,55 @@ fn a_composed_and_an_injected_handle_wire_all_three_fixes() {
         "constructor param must match the Settings field's storage type:\n{text}"
     );
     assert!(text.contains("\tinjected composeResourceIface\n"), "{text}");
-    assert!(text.contains("\tprimary composeResourceIface\n"), "{text}");
+    assert!(text.contains("\tcombined composeResourceIface\n"), "{text}");
+    // A handle forwarded into another construction call is owned by that
+    // call: the settings never hold it, so the ownership rule is visible in
+    // the structure, not only in the validation.
+    assert!(!text.contains("\tprimary composeResourceIface\n"), "{text}");
     assert!(
-        text.contains("\tsecondary composeResourceIface\n"),
+        !text.contains("\tsecondary composeResourceIface\n"),
         "{text}"
     );
-    assert!(text.contains("\tcombined composeResourceIface\n"), "{text}");
 
-    // Bug 3: primary/secondary are unwrapped back to the real library value
-    // (never tono's own adapter) before being handed to NewCombined, the
-    // library's own composition call.
+    // Bug 3: primary/secondary reach NewCombined as the library's own values
+    // (never tono's own adapter): each resolver returns the raw value, the
+    // constructor binds it to a local and hands it to the consuming
+    // resolver, whose parameters spell the library's type. No type
+    // assertion anywhere.
     assert!(
         text.contains(
-            "compose.NewCombined(s.B, s.primary.(*composeResourceIfaceAdapter).real, s.secondary.(*composeResourceIfaceAdapter).real)"
+            "func resolvePrimary(a string, b string, c string, d string) (*compose.Resource, error) {"
         ),
         "{text}"
     );
+    assert!(
+        text.contains(
+            "func resolveCombined(b string, primary *compose.Resource, secondary *compose.Resource) (*compose.Resource, error) {"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("compose.NewCombined(b, primary, secondary)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("primary, err := resolvePrimary(s.A, s.B, s.C, s.D)\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("secondary, err := resolveSecondary(s.B, s.C)\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("combined, err := resolveCombined(s.B, primary, secondary)\n"),
+        "{text}"
+    );
+    assert!(!text.contains(").real"), "no unwrap anywhere: {text}");
 
-    // The two construction calls being composed still assign through the
-    // adapter, same as every other handle-field construction.
-    assert!(text.contains("s.primary = &composeResourceIfaceAdapter{real: primaryResult}"));
-    assert!(text.contains("s.secondary = &composeResourceIfaceAdapter{real: secondaryResult}"));
-    assert!(text.contains("s.combined = &composeResourceIfaceAdapter{real: combinedResult}"));
+    // Only the stored handle wraps into the adapter, at the site that stores it.
+    assert!(text.contains("s.combined = &composeResourceIfaceAdapter{real: combined}"));
+    assert!(!text.contains("s.primary ="), "{text}");
+    assert!(!text.contains("s.secondary ="), "{text}");
 
     // The op bodies read straight off the interface, injected or composed
     // alike: no foreign-specific handling left at the call site.

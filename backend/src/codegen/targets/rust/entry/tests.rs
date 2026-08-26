@@ -226,8 +226,10 @@ fn a_with_bearing_entry_gets_a_builder() {
     assert!(out.contains("pub fn with_timeout_ms(mut self, v: i32) -> Self {"));
     assert!(out.contains("pub fn builder(api_key: String) -> ClientBuilder {"));
     assert!(out.contains("pub fn build(self) -> Result<Client, TonoError> {"));
-    // The @arg value is read off the builder's own field within `build`.
-    assert!(out.contains("s.api_key = self.api_key;"));
+    // `build` destructures the whole builder into locals before resolving
+    // anything, so `new_settings` owns exactly what it reads.
+    assert!(out.contains("let ClientBuilder { api_key, timeout_ms } = self;"));
+    assert!(out.contains("s.api_key = api_key;"));
 }
 
 #[test]
@@ -607,8 +609,10 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     let module = crate::codegen::test_support::entries_matrix_module();
     let out = text(&module);
     assert!(out.contains("pub struct API {"));
-    // The matrix module has @with fields, so it builds through a builder.
-    assert!(out.contains("s.u = self.u;"));
+    // The matrix module has @with fields, so it builds through a builder;
+    // `build` destructures it into locals before `new_settings` reads any
+    // of them.
+    assert!(out.contains("s.u = u;"));
 
     // Typed env boundaries: every narrow-int width spells its own parse and
     // range guard, plus float, bool, and duration.
@@ -654,10 +658,10 @@ fn the_matrix_module_exercises_every_resolution_idiom() {
     // Structured and whole-JSON sources: an explicit @with value wins over
     // the env fallback, and the structured one probes its required member
     // before the strict decode.
-    assert!(out.contains("if let Some(v) = self.creds.clone() {"));
+    assert!(out.contains("if let Some(v) = creds.clone() {"));
     assert!(out.contains("if probe.get(\"token\").map(|v| v.is_null()).unwrap_or(true) {"));
     assert!(out.contains("let decoded: Credentials = match serde_json::from_str(&raw) {"));
-    assert!(out.contains("if let Some(v) = self.labels.clone() {"));
+    assert!(out.contains("if let Some(v) = labels.clone() {"));
     assert!(out.contains("Ok(v) => { s.labels = v; }"));
     // Consumed-chain requires: a string-like field, a duration field (compared
     // against its branded zero, which needs PartialEq), and a numeric field

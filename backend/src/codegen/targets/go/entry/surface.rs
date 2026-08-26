@@ -3,6 +3,7 @@
 //! mock interface.
 
 use super::*;
+use crate::codegen::entries::has_wire_ops;
 
 /// The construction-only config structs. They never cross the wire, so the
 /// regular type emission skips them; the entry surface is what makes them
@@ -44,8 +45,10 @@ pub(super) fn config_structs(module: &Module, config: &CasingConfig) -> Vec<Decl
         .collect()
 }
 
-/// The `Settings` struct: every resolved entry field plus the transport slots
-/// (native client or canonical transport) and the base request headers.
+/// The `Settings` struct: every stored entry field (a handle forwarded into
+/// another construction call never enters it), plus the transport slots
+/// (native client or canonical transport) and the base request headers when
+/// an operation goes over the wire at all.
 pub(super) fn settings_decl(
     entry: &EntryModel<'_>,
     n: &Names,
@@ -53,11 +56,8 @@ pub(super) fn settings_decl(
     module: &Module,
 ) -> Decl {
     let mut fields = String::new();
-    let mut refs = vec![
-        import("http", "net/http"),
-        super::support_symbol("HTTPTransport"),
-    ];
-    for f in entry.declared() {
+    let mut refs = Vec::new();
+    for f in entry.stored(module) {
         push_field_type_symbols(&f.target, module, &mut refs);
         fields.push_str(&format!(
             "{doc}\t{} {}\n",
@@ -66,16 +66,27 @@ pub(super) fn settings_decl(
             doc = field_doc(&f.traits, "\t"),
         ));
     }
-    let text = format!(
-        "// {settings} are the resolved construction values of the {entry} entry.\n\
-         // Exactly one transport slot may be set: HTTPClient (native) or Transport\n\
-         // (canonical). Headers are the base request headers; a declared @header\n\
-         // wins only where nothing else set the name.\n\
-         type {settings} struct {{\n{fields}\n\tHTTPClient *http.Client\n\tTransport  {transport}\n\tHeaders    map[string]string\n}}",
-        settings = n.settings,
-        entry = entry.name,
-        transport = shared_slot("HTTPTransport"),
-    );
+    let text = if has_wire_ops(module) {
+        refs.push(import("http", "net/http"));
+        refs.push(super::support_symbol("HTTPTransport"));
+        format!(
+            "// {settings} are the resolved construction values of the {entry} entry.\n\
+             // Exactly one transport slot may be set: HTTPClient (native) or Transport\n\
+             // (canonical). Headers are the base request headers; a declared @header\n\
+             // wins only where nothing else set the name.\n\
+             type {settings} struct {{\n{fields}\n\tHTTPClient *http.Client\n\tTransport  {transport}\n\tHeaders    map[string]string\n}}",
+            settings = n.settings,
+            entry = entry.name,
+            transport = shared_slot("HTTPTransport"),
+        )
+    } else {
+        format!(
+            "// {settings} are the resolved construction values of the {entry} entry.\n\
+             type {settings} struct {{\n{fields}}}",
+            settings = n.settings,
+            entry = entry.name,
+        )
+    };
     Decl::raw_with(text, refs)
 }
 

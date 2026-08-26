@@ -14,7 +14,7 @@ use crate::ir::{
 /// head, recursing into a ctor field's values and a list's items. A `Param`/
 /// `Lit` reads nothing; a nested call (an arg that is itself a call) recurses
 /// the same way.
-fn call_arg_heads<'a>(arg: &'a CallArg, out: &mut Vec<&'a str>) {
+pub(super) fn call_arg_heads<'a>(arg: &'a CallArg, out: &mut Vec<&'a str>) {
     match arg {
         CallArg::Ref(path) => out.extend(path.first().map(String::as_str)),
         CallArg::Ctor(ctor) => {
@@ -109,7 +109,7 @@ fn own_dep_heads(field: &EntryField) -> Vec<&str> {
 /// A composed config also reads whatever its own members read: each member's
 /// `@env(.ref)`/`@format`/`match` resolves against the same sibling scope, so
 /// the config must be ordered after every entry field those members reach.
-fn dependencies<'a>(field: &'a EntryField, module: &'a Module) -> Vec<&'a str> {
+pub(super) fn dependencies<'a>(field: &'a EntryField, module: &'a Module) -> Vec<&'a str> {
     let mut deps = own_dep_heads(field);
     if let Tref::Ref { id, .. } = &field.target {
         if let Some(shape) = module.shapes.iter().find(|s| s.id == *id) {

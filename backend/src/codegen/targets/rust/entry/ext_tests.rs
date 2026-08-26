@@ -318,8 +318,15 @@ fn a_boxed_handle_is_held_as_a_trait_object_and_boxed_at_construction() {
         id: "bus#typed_publisher".into(),
         args: vec![],
     };
+    // `ext_resolver`'s own construction sites box a freshly yielded
+    // concrete value the same way: `boxed_wrap` names the box, `wrap_stored`
+    // wraps the boxed expression into the `Option` slot.
+    let boxed = match boxed_wrap(&target, &module) {
+        Some(wrap) => format!("{wrap}(v)"),
+        None => "v".to_string(),
+    };
     assert_eq!(
-        wrap_constructed(&target, &module, "v"),
+        wrap_stored(&target, &module, &boxed),
         "Some(Box::new(v))".to_string()
     );
     // An already-typed value (an injected handle, boxed by the caller) is
