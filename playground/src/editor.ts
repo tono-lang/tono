@@ -28,9 +28,9 @@ import {
   type DecorationSet,
 } from "@codemirror/view";
 import type { CompletionInfo, HoverInfo, LspPosition, LspRange } from "./compiler";
-import { highlightRanges } from "./highlight";
+import type { HighlightRange } from "./highlight";
 import { byteToCharMapper } from "./offsets";
-import type { Diagnostic, Target, TokenSpan } from "./types";
+import type { Diagnostic, Target } from "./types";
 
 /* CodeMirror positions are UTF-16 offsets; the analysis core speaks LSP
    positions (0-based line, UTF-16 character), so both mappings are exact. */
@@ -50,31 +50,24 @@ export interface IdeBackend {
   definition(source: string, pos: LspPosition): LspRange | null;
 }
 
-function buildDecorations(source: string, tokens: TokenSpan[]): DecorationSet {
-  const toChar = byteToCharMapper(source);
-  const mapped = tokens.map((t) => ({
-    ...t,
-    startOffset: toChar(t.startOffset),
-    endOffset: toChar(t.endOffset),
-  }));
+function buildDecorations(ranges: HighlightRange[]): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  for (const range of highlightRanges(source, mapped)) {
+  for (const range of ranges) {
     builder.add(range.from, range.to, Decoration.mark({ class: `cm-${range.cls}` }));
   }
   return builder.finish();
 }
 
-function tonoHighlighter(tokenize: (source: string) => TokenSpan[]): Extension {
+function tonoHighlighter(highlight: (source: string) => HighlightRange[]): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view.state.doc.toString(), tokenize(view.state.doc.toString()));
+        this.decorations = buildDecorations(highlight(view.state.doc.toString()));
       }
       update(update: ViewUpdate) {
         if (update.docChanged) {
-          const source = update.state.doc.toString();
-          this.decorations = buildDecorations(source, tokenize(source));
+          this.decorations = buildDecorations(highlight(update.state.doc.toString()));
         }
       }
     },
@@ -141,7 +134,7 @@ function jumpToDefinition(view: EditorView, ide: IdeBackend, pos: number): boole
 export function createEditor(options: {
   parent: HTMLElement;
   initialSource: string;
-  tokenize: (source: string) => TokenSpan[];
+  highlight: (source: string) => HighlightRange[];
   ide: IdeBackend;
   onChange: () => void;
   onCursor: (pos: number) => void;
@@ -166,7 +159,7 @@ export function createEditor(options: {
         ]),
         oneDark,
         lintGutter(),
-        tonoHighlighter(options.tokenize),
+        tonoHighlighter(options.highlight),
         autocompletion({ override: [ideCompletionSource(options.ide)] }),
         ideHoverTooltip(options.ide),
         EditorView.domEventHandlers({

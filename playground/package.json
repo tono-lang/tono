@@ -25,7 +25,8 @@
     "@lezer/highlight": "^1",
     "@typescript/vfs": "^1.6.4",
     "@valtown/codemirror-ts": "^2.3.1",
-    "esbuild-wasm": "^0.28.1"
+    "esbuild-wasm": "^0.28.1",
+    "web-tree-sitter": "^0.25.10"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^3.2.7",

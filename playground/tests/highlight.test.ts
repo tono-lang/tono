@@ -1,69 +1,61 @@
-import { describe, expect, it } from "vitest";
-import { highlightRanges } from "../src/highlight";
-import type { TokenSpan } from "../src/types";
+import { beforeAll, describe, expect, it } from "vitest";
+import { highlight, initTonoHighlighter } from "../src/highlight";
 
-const tok = (family: TokenSpan["family"], startOffset: number, endOffset: number): TokenSpan => ({
-  family,
-  startOffset,
-  endOffset,
+const here = new URL(".", import.meta.url);
+
+beforeAll(async () => {
+  // web-tree-sitter loads these as plain filesystem paths under Node; the
+  // `?url` defaults `initTonoHighlighter` otherwise uses are server paths
+  // meant for the browser's fetch, which don't resolve outside one.
+  await initTonoHighlighter({
+    treeSitter: new URL("../node_modules/web-tree-sitter/tree-sitter.wasm", here).pathname,
+    tono: new URL("../src/generated/tree-sitter-tono.wasm", here).pathname,
+  });
 });
 
-describe("highlightRanges", () => {
-  it("maps token families to classes and skips unstyled ones", () => {
-    const source = "pub struct card";
-    const ranges = highlightRanges(source, [
-      tok("keyword", 0, 3),
-      tok("keyword", 4, 10),
-      tok("ident", 11, 15),
-    ]);
-    expect(ranges).toEqual([
-      { from: 0, to: 3, cls: "tono-keyword" },
-      { from: 4, to: 10, cls: "tono-keyword" },
-    ]);
+function classesAt(source: string, text: string): string[] {
+  const at = source.indexOf(text);
+  if (at === -1) throw new Error(`fixture bug: ${JSON.stringify(text)} not found in source`);
+  return highlight(source)
+    .filter((r) => r.from === at && r.to === at + text.length)
+    .map((r) => r.cls);
+}
+
+describe("highlight", () => {
+  it("paints keywords, type names, and primitive types", () => {
+    const source = "pub struct card { last4: string }";
+    expect(classesAt(source, "pub")).toEqual(["tono-keyword"]);
+    expect(classesAt(source, "struct")).toEqual(["tono-keyword"]);
+    expect(classesAt(source, "card")).toEqual(["tono-type"]);
+    expect(classesAt(source, "string")).toEqual(["tono-type"]);
   });
 
-  it("recovers comments from gaps between tokens", () => {
-    const source = "pub // trailing\nident";
-    const ranges = highlightRanges(source, [tok("keyword", 0, 3), tok("ident", 16, 21)]);
-    expect(ranges).toContainEqual({ from: 4, to: 15, cls: "tono-comment" });
+  it("paints numbers and comments", () => {
+    const source = "// a doc comment\npub enum status { active = 1 }\n";
+    expect(classesAt(source, "// a doc comment")).toEqual(["tono-comment"]);
+    expect(classesAt(source, "1")).toEqual(["tono-number"]);
   });
 
-  it("recovers a comment after the last token", () => {
-    const source = "pub // done";
-    const ranges = highlightRanges(source, [tok("keyword", 0, 3)]);
-    expect(ranges).toContainEqual({ from: 4, to: 11, cls: "tono-comment" });
+  it("paints an attribute, its name, and a string argument", () => {
+    const source = '@doc("hi")\npub struct card { last4: string }';
+    expect(classesAt(source, "@")).toEqual(["tono-attribute"]);
+    expect(classesAt(source, "doc")).toEqual(["tono-attribute"]);
+    expect(classesAt(source, '"hi"')).toEqual(["tono-string"]);
   });
 
-  it("never scans inside string tokens for comments", () => {
-    const source = '@doc("http://x") a';
-    const ranges = highlightRanges(source, [
-      tok("attribute", 0, 1),
-      tok("ident", 1, 4),
-      tok("punct", 4, 5),
-      tok("string", 5, 15),
-      tok("punct", 15, 16),
-      tok("ident", 17, 18),
-    ]);
-    expect(ranges.filter((r) => r.cls === "tono-comment")).toEqual([]);
+  it("leaves plain identifiers and punctuation unstyled", () => {
+    const source = "pub struct card { last4: string }";
+    expect(classesAt(source, "last4")).toEqual([]);
+    expect(classesAt(source, "{")).toEqual([]);
   });
 
-  it("paints the identifier following @ as part of the attribute", () => {
-    const source = "@doc x";
-    const ranges = highlightRanges(source, [
-      tok("attribute", 0, 1),
-      tok("ident", 1, 4),
-      tok("ident", 5, 6),
-    ]);
-    expect(ranges).toEqual([
-      { from: 0, to: 1, cls: "tono-attribute" },
-      { from: 1, to: 4, cls: "tono-attribute" },
-    ]);
-  });
-
-  it("keeps ranges sorted for the editor's range builder", () => {
-    const source = "pub // c\npub";
-    const ranges = highlightRanges(source, [tok("keyword", 0, 3), tok("keyword", 9, 12)]);
+  it("keeps ranges sorted and non-overlapping for the editor's range builder", () => {
+    const source = '@doc("hi")\npub struct card { last4: string }\npub enum status { active }\n';
+    const ranges = highlight(source);
     const starts = ranges.map((r) => r.from);
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
+    for (let i = 1; i < ranges.length; i++) {
+      expect(ranges[i].from).toBeGreaterThanOrEqual(ranges[i - 1].to);
+    }
   });
 });
