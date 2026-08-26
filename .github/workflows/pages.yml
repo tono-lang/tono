@@ -52,7 +52,7 @@ jobs:
 
       - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
         with:
-          tool: wasm-pack@0.13.1
+          tool: wasm-pack@0.13.1,tree-sitter-cli@0.26.8
 
       - name: Build the embedded compiler halves
         run: opam exec -- playground/scripts/build-compiler.sh
