@@ -165,18 +165,24 @@ pub(super) fn import_lib(refs: &mut Vec<Symbol>, lib: &ExtLib) -> Option<String>
 }
 
 /// Whether a field/member's declared type is a foreign opaque handle from
-/// the module's own `ext_libs` (`"{lib}#{type}"`), and if so, which lib and
-/// type it names.
+/// the module's own `ext_libs`, and if so, which lib and type it names. A
+/// shape id is always `"{module_name}#{local_name}"` (the frontend's one
+/// universal convention, no exception for a type declared inside an `ext`
+/// block), so only the local name after `#` identifies it here; the ext
+/// block it belongs to can differ from the module's own name and is found
+/// by searching every lib's own types, not by matching the id's prefix
+/// against a lib name.
 pub(super) fn foreign_handle<'a>(t: &Tref, module: &'a Module) -> Option<(&'a ExtLib, String)> {
     let Tref::Ref { id, .. } = t else {
         return None;
     };
-    let (lib_name, ty) = id.split_once('#')?;
-    let lib = module.ext_libs.iter().find(|l| l.name == lib_name)?;
-    lib.types
-        .iter()
-        .any(|t| t.name == ty)
-        .then(|| (lib, ty.to_string()))
+    let ty = id.split_once('#').map_or(id.as_str(), |(_, ty)| ty);
+    module.ext_libs.iter().find_map(|lib| {
+        lib.types
+            .iter()
+            .any(|t| t.name == ty)
+            .then(|| (lib, ty.to_string()))
+    })
 }
 
 /// A foreign spelling with the library's identifiers qualified by its

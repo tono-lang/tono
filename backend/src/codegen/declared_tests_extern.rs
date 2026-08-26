@@ -111,17 +111,24 @@ impl ReachableExtern<'_> {
 }
 
 /// The foreign opaque handle a field's declared type names in the module's
-/// own `ext_libs` (`"{lib}#{type}"`), when it does. Mirrors the Go
-/// emitter's own `foreign_handle` (`targets/go/entry/ext.rs`), kept
-/// independent here since the planner runs before any target is chosen.
+/// own `ext_libs`. Mirrors the Go emitter's own `foreign_handle`
+/// (`targets/go/entry/ext.rs`), kept independent here since the planner
+/// runs before any target is chosen. A shape id is always
+/// `"{module_name}#{local_name}"`, so only the local name after `#`
+/// identifies it here; the ext block it belongs to can differ from the
+/// module's own name, so every lib's own types are searched rather than
+/// matching the id's prefix against a lib name.
 fn foreign_handle_type<'a>(target: &Tref, module: &'a Module) -> Option<(&'a str, &'a str)> {
     let Tref::Ref { id, .. } = target else {
         return None;
     };
-    let (lib_name, ty) = id.split_once('#')?;
-    let lib = module.ext_libs.iter().find(|l| l.name == lib_name)?;
-    let decl = lib.types.iter().find(|t| t.name == ty)?;
-    Some((lib.name.as_str(), decl.name.as_str()))
+    let ty = id.split_once('#').map_or(id.as_str(), |(_, ty)| ty);
+    module.ext_libs.iter().find_map(|lib| {
+        lib.types
+            .iter()
+            .find(|t| t.name == ty)
+            .map(|decl| (lib.name.as_str(), decl.name.as_str()))
+    })
 }
 
 /// The handle-method call `call` reaches, resolved against the entry's own
