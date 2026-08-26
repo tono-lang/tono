@@ -457,6 +457,11 @@ struct ClassParts<'a> {
     tail_body: String,
     /// The timeouts and the frozen options.
     finish_body: String,
+    /// `forTest`'s static factory: the real construction path plus the
+    /// transport seam a generated test constructs through. Empty when the
+    /// entry declares no test (nothing composes it) or has no wire operation
+    /// (nothing on `options` to swap).
+    for_test: String,
     methods: String,
     wire: bool,
 }
@@ -474,6 +479,59 @@ fn options_field(wire: bool) -> &'static str {
     }
 }
 
+/// `forTest`'s static factory: the real construction path (`create`, or the
+/// constructor on the sync shape) runs first, then the canonical transport
+/// replaces whatever construction resolved, so a test answers canonically
+/// without a server. `ClientOptions` spells its slots readonly, so the swap
+/// goes through a mutable view of the frozen options object (the object
+/// itself is a plain literal). Empty when the entry declares no test
+/// (nothing composes it) or has no wire operation (nothing on `options` to
+/// swap).
+#[allow(clippy::too_many_arguments)]
+fn for_test_block(
+    n: &Names,
+    params: &str,
+    pass: &str,
+    is_async: bool,
+    has_tests: bool,
+    wire: bool,
+    refs: &mut Vec<Symbol>,
+) -> String {
+    if !has_tests || !wire {
+        return String::new();
+    }
+    refs.push(support_symbol("HttpTransport"));
+    let sig_params = if params.is_empty() {
+        String::new()
+    } else {
+        format!(", {params}")
+    };
+    let (async_kw, construct, await_kw) = if is_async {
+        (
+            "async ",
+            format!("await {}.create({pass})", n.client),
+            "await ",
+        )
+    } else {
+        ("", format!("new {}({pass})", n.client), "")
+    };
+    format!(
+        "  // forTest is the constructor plus the transport seam the generated\n\
+         \x20 // tests construct through: the real construction path runs first, then\n\
+         \x20 // the canonical transport wins over anything bespoke.\n\
+         \x20 static {async_kw}forTest(seam: {{ transport: HttpTransport }}{sig_params}): {promise_open}{client}{promise_close} {{\n\
+         \x20   const client = {await_kw}{construct};\n\
+         \x20   const options = client.options as {{ transport?: HttpTransport; fetch?: typeof fetch }};\n\
+         \x20   options.transport = seam.transport;\n\
+         \x20   options.fetch = undefined;\n\
+         \x20   return client;\n\
+         \x20 }}\n\n",
+        client = n.client,
+        promise_open = if is_async { "Promise<" } else { "" },
+        promise_close = if is_async { ">" } else { "" },
+    )
+}
+
 fn sync_class_text(p: &ClassParts<'_>) -> String {
     format!(
         "{doc}// {client} is the generated SDK client the {entry_name} entry declares. The\n\
@@ -483,7 +541,7 @@ fn sync_class_text(p: &ClassParts<'_>) -> String {
          {options}\
          {timeout_field_decls}\
          \x20 constructor({params}) {{\n    const s = {client}.newSettings({pass});\n{finish}  }}\n\n\
-         {new_settings}{methods}}}",
+         {new_settings}{for_test}{methods}}}",
         doc = p.doc,
         client = p.client,
         entry_name = p.entry_name,
@@ -494,6 +552,7 @@ fn sync_class_text(p: &ClassParts<'_>) -> String {
         pass = p.pass,
         finish = p.finish_body,
         new_settings = new_settings_text(p.names, &p.params, &p.settings_body),
+        for_test = p.for_test,
         methods = p.methods,
     )
 }
@@ -536,7 +595,7 @@ fn async_class_text(p: &ClassParts<'_>, timeout_field_names: &[String]) -> Strin
          \x20 // fromSettings builds {client} over assembled settings: the runtime values\n\
          \x20 // freeze here, after every construction value resolved.\n\
          \x20 private static fromSettings(s: {settings}): {client} {{\n{finish}    return new {client}({create_return});\n  }}\n\n\
-         {methods}}}",
+         {for_test}{methods}}}",
         doc = p.doc,
         client = p.client,
         entry_name = p.entry_name,
@@ -548,6 +607,7 @@ fn async_class_text(p: &ClassParts<'_>, timeout_field_names: &[String]) -> Strin
         tail = p.tail_body,
         new_settings = new_settings_text(p.names, &p.params, &p.settings_body),
         finish = p.finish_body,
+        for_test = p.for_test,
         methods = p.methods,
     )
 }
@@ -572,6 +632,7 @@ pub(super) fn class_decl(
     bound: &[BoundExtension<'_>],
     helpers: &mut Helpers,
     multi: bool,
+    has_tests: bool,
 ) -> Vec<Decl> {
     let en = error_names();
     let split = entry.construction_split(module);
@@ -633,6 +694,15 @@ pub(super) fn class_decl(
         &mut refs,
         helpers,
     );
+    let for_test = for_test_block(
+        n,
+        &params.join(", "),
+        &pass.join(", "),
+        is_async,
+        has_tests,
+        wire,
+        &mut refs,
+    );
 
     let doc = doc_of(&entry.shape.traits)
         .map(|d| format!("// {}\n", d.replace('\n', "\n// ")))
@@ -649,6 +719,7 @@ pub(super) fn class_decl(
         settings_body,
         tail_body,
         finish_body,
+        for_test,
         methods,
         wire,
     };

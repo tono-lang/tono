@@ -290,6 +290,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             &bound,
             &mut helpers,
             multi,
+            has_tests,
         ));
         own.extend(discriminator_decls_for(entry, &n, module, &bound));
         per_entry.push((entry.name.to_string(), own));

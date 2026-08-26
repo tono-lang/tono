@@ -79,15 +79,18 @@ fn a_tested_entry_exports_nothing_test_only() {
     });
     let out = rendered_text(&module);
     assert!(!out.contains("ForTest"), "{out}");
-    assert!(!out.contains("forTest"), "{out}");
     assert!(!out.contains("export let"), "{out}");
-    // The steps a test composes are private statics of the class, not
-    // exports: the barrel and the exports map never see them.
+    // The steps a declared test composes are private statics of the class,
+    // not exports: the barrel and the exports map never see them.
     assert!(out.contains("private static newSettings("), "{out}");
     assert!(
         out.contains("private static fromSettings(s: Settings): Client {"),
         "{out}"
     );
+    // forTest is a different, intentionally public seam (a hand-written test
+    // injects a transport over the real construction path): the entry has a
+    // wire operation and a declared test, so it is still there.
+    assert!(out.contains("static async forTest("), "{out}");
 }
 
 #[test]

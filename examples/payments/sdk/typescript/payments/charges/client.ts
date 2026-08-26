@@ -147,6 +147,24 @@ export class Client {
     return s;
   }
 
+  // forTest is the constructor plus the transport seam the generated
+  // tests construct through: the real construction path runs first, then
+  // the canonical transport wins over anything bespoke.
+  static forTest(
+    seam: { transport: HttpTransport },
+    apiKey: string,
+    config: ClientConfig = {},
+  ): Client {
+    const client = new Client(apiKey, config);
+    const options = client.options as {
+      transport?: HttpTransport;
+      fetch?: typeof fetch;
+    };
+    options.transport = seam.transport;
+    options.fetch = undefined;
+    return client;
+  }
+
   async createCharge(input: Charge): Promise<Charge> {
     const invalid = validateCharge(input);
     if (invalid) {
