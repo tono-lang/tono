@@ -14,6 +14,13 @@
 //! composes the same steps with its fakes in place of the resolver calls, so
 //! no step carries a branch deciding between production and test.
 //!
+//! An entry with a declared test and a wire operation also keeps a
+//! `pub(crate)` `_with_transport` variant of `new`/`build` (`new`/`build`
+//! themselves delegate to it with `None`): the seam a hand-written,
+//! same-crate test (the cross-runtime parity harness among them) constructs
+//! through when it wants the real construction path but a fake transport.
+//! A generated declared test never reaches this seam; see `vector_tests`.
+//!
 //! Split out of `mod.rs` to stay under this repo's per-file line ceiling;
 //! `construction_decls` is `mod.rs`'s only caller.
 
@@ -49,6 +56,26 @@ fn has_retry(entry: &EntryModel<'_>) -> bool {
     )
 }
 
+/// The transport override an `_with_transport` variant splices between the
+/// settings/tail resolution and `new_client`: a `Some` transport replaces
+/// whatever construction resolved onto `s` (and clears the native
+/// `reqwest`-feature slot, so the two stay mutually exclusive the same way
+/// `new_client` itself enforces). Empty when the entry has no transport
+/// seam to carry.
+fn transport_patch_lines(transport_seam: bool) -> &'static str {
+    if transport_seam {
+        "        if let Some(t) = transport {\n\
+         \x20           s.transport = Some(t);\n\
+         \x20           #[cfg(feature = \"reqwest\")]\n\
+         \x20           {\n\
+         \x20               s.client = None;\n\
+         \x20           }\n\
+         \x20       }\n"
+    } else {
+        ""
+    }
+}
+
 /// The declared-validation guard access-prefix syntax the entry construction
 /// shares with structure validators.
 struct RustVal;
@@ -75,6 +102,7 @@ pub(super) fn construction_decls(
     bound: &[BoundExtension<'_>],
     helpers: &mut Helpers,
     multi: bool,
+    has_tests: bool,
 ) -> Vec<Decl> {
     let mut decls = Vec::new();
     let mut refs = vec![];
@@ -84,6 +112,11 @@ pub(super) fn construction_decls(
     let timeouts = timeout_fields(entry);
     let seam = has_retry(entry);
     let wire = crate::codegen::entries::has_wire_ops(module);
+    // The transport seam a hand-written test constructs through (`new`/
+    // `build` plus `_with_transport`): only worth emitting when there is a
+    // declared test to build it for, and only meaningful when there is a
+    // wire operation at all (nothing on `Settings` to override otherwise).
+    let transport_seam = has_tests && wire;
     let split = entry.construction_split(module);
     let tail_fields: Vec<&EntryField> = split.tail.iter().map(TailStep::field).collect();
     // A call-sourced field's emitted call is always awaited (`resolve_call`),
@@ -216,27 +249,43 @@ pub(super) fn construction_decls(
         );
         // An entry with no foreign construction never writes `s` again after
         // `new_settings` returns it: `mut` would be unused (and `-D warnings`
-        // rejects it), so it is only spelled when the tail actually assigns.
-        let s_let = if tail_fields.is_empty() {
+        // rejects it), so it is only spelled when the tail actually assigns,
+        // or the transport seam below always does.
+        let s_let = if tail_fields.is_empty() && !transport_seam {
             "let"
         } else {
             "let mut"
         };
         let body = format!(
-            "        {s_let} s = Self::new_settings({pass})?;\n{tail}\
+            "        {s_let} s = Self::new_settings({pass})?;\n{tail}{transport_patch}\
              \x20       Self::new_client(s)\n",
             pass = pass.join(", "),
             tail = indent(&tail_body, 2),
+            transport_patch = transport_patch_lines(transport_seam),
         );
-        decls.push(Decl::raw_with(
+        let methods = op_methods(entry, n, module, config, bound, &timeouts, &mut refs);
+        let text = if transport_seam {
+            refs.push(support_symbol("HttpTransport"));
+            let comma = if params.is_empty() { "" } else { ", " };
+            let awaited = if is_async { ".await" } else { "" };
+            format!(
+                "impl {client} {{\n{doc}    pub {effect}fn new({params}) -> Result<Self, TonoError> {{\n        Self::new_with_transport(None{comma}{pass}){awaited}\n    }}\n\n\
+                 \x20   /// `new` plus the transport seam a hand-written test constructs\n\
+                 \x20   /// through: a `Some` transport replaces whatever construction\n\
+                 \x20   /// resolved, so the test answers canonically without a server.\n\
+                 \x20   pub(crate) {effect}fn new_with_transport(transport: Option<HttpTransport>{comma}{params}) -> Result<Self, TonoError> {{\n{body}    }}\n{methods}}}",
+                client = n.client,
+                params = params.join(", "),
+                pass = pass.join(", "),
+            )
+        } else {
             format!(
                 "impl {client} {{\n{doc}    pub {effect}fn new({params}) -> Result<Self, TonoError> {{\n{body}    }}\n{methods}}}",
                 client = n.client,
                 params = params.join(", "),
-                methods = op_methods(entry, n, module, config, bound, &timeouts, &mut refs),
-            ),
-            refs,
-        ));
+            )
+        };
+        decls.push(Decl::raw_with(text, refs));
     } else {
         // A builder: the @arg fields are captured positionally at
         // `builder()`, the @with fields default to unset, and `build`
@@ -365,26 +414,41 @@ pub(super) fn construction_decls(
         let build_doc = "    /// Resolves the declared sources top-down, then the declared\n    /// validation.\n";
         // An entry with no foreign construction never writes `s` again after
         // `new_settings` returns it: `mut` would be unused (and `-D warnings`
-        // rejects it), so it is only spelled when the tail actually assigns.
-        let s_let = if tail_fields.is_empty() {
+        // rejects it), so it is only spelled when the tail actually assigns,
+        // or the transport seam below always does.
+        let s_let = if tail_fields.is_empty() && !transport_seam {
             "let"
         } else {
             "let mut"
         };
         let build_body = format!(
             "        let {builder} {{ {destructure} }} = self;\n\
-             \x20       {s_let} s = {client}::new_settings({settings_pass})?;\n{tail}\
+             \x20       {s_let} s = {client}::new_settings({settings_pass})?;\n{tail}{transport_patch}\
              \x20       {client}::new_client(s)\n",
             builder = n.builder,
             client = n.client,
             destructure = destructure.join(", "),
             settings_pass = settings_pass.join(", "),
             tail = indent(&tail_body, 2),
+            transport_patch = transport_patch_lines(transport_seam),
         );
-        let build_fns = format!(
-            "{build_doc}    pub {effect}fn build(self) -> Result<{client}, TonoError> {{\n{build_body}    }}\n",
-            client = n.client,
-        );
+        let build_fns = if transport_seam {
+            refs.push(support_symbol("HttpTransport"));
+            let awaited = if is_async { ".await" } else { "" };
+            format!(
+                "{build_doc}    pub {effect}fn build(self) -> Result<{client}, TonoError> {{\n        self.build_with_transport(None){awaited}\n    }}\n\n\
+                 \x20   /// `build` plus the transport seam a hand-written test constructs\n\
+                 \x20   /// through: a `Some` transport replaces whatever construction\n\
+                 \x20   /// resolved, so the test answers canonically without a server.\n\
+                 \x20   pub(crate) {effect}fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<{client}, TonoError> {{\n{build_body}    }}\n",
+                client = n.client,
+            )
+        } else {
+            format!(
+                "{build_doc}    pub {effect}fn build(self) -> Result<{client}, TonoError> {{\n{build_body}    }}\n",
+                client = n.client,
+            )
+        };
         decls.push(Decl::raw_with(
             format!(
                 "impl {builder} {{\n{with_methods}\n{build_fns}}}",

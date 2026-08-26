@@ -347,6 +347,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
         return EntryEmission::empty();
     };
+    let tested = crate::codegen::declared_tests::entries_with_tests(module);
     let mut helpers = Helpers::default();
     let mut shared = surface::config_structs(module, config);
     shared.extend(handle_iface_decls(module, config));
@@ -365,7 +366,16 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         let n = names(entry, multi);
         // The constructor comes right after the type.
         let mut decls = surface::entry_type_decls(entry, &n, module, config, multi);
-        decls.extend(new_decl(entry, &n, module, config, &mut helpers, multi));
+        let has_tests = tested.contains(entry.name);
+        decls.extend(new_decl(
+            entry,
+            &n,
+            module,
+            config,
+            &mut helpers,
+            multi,
+            has_tests,
+        ));
         for op in entry.operations {
             decls.push(op_method_decl(entry, &n, op, module, config, &bound));
         }

@@ -364,31 +364,55 @@ fn assembled_hermetic_client(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> Strin
             args = args.join(", "),
         )
     } else {
-        let with_calls: String = with_fields
+        // `new_settings` takes the `@arg` values plus every `@with` value
+        // `split.settings` resolves (see `constructor::new_decl`'s own
+        // `settings_with_fields`), positionally, the same as `build`'s own
+        // call after it destructures the builder. Each value is bound to a
+        // named local first, exactly as that destructure would leave it, so
+        // a tail step reading one as a sibling (see `constructor::
+        // resolution_steps`) finds the identifier its own codegen expects.
+        let settings_with_fields: Vec<&EntryField> = with_fields
             .iter()
-            .filter_map(|f| {
-                let v = ctx.values().get(&f.name)?;
-                Some(format!(
-                    ".{}({})",
-                    with_fn_name(ctx, f),
-                    super::literal(&f.target, v, ctx.module)
-                ))
-            })
+            .copied()
+            .filter(|f| split.settings.iter().any(|sf| sf.name == f.name))
+            .collect();
+        let mut lets = String::new();
+        for (f, expr) in ctx.entry.args().iter().zip(&args) {
+            lets.push_str(&format!(
+                "let {} = {expr};\n",
+                arg_snake(&f.name, &f.traits, LANG)
+            ));
+        }
+        for f in &settings_with_fields {
+            let value = match ctx.values().get(&f.name) {
+                Some(v) => format!("Some({})", super::literal(&f.target, v, ctx.module)),
+                None => "None".to_string(),
+            };
+            lets.push_str(&format!(
+                "let {} = {value};\n",
+                arg_snake(&f.name, &f.traits, LANG)
+            ));
+        }
+        let new_settings_args: Vec<String> = ctx
+            .entry
+            .args()
+            .iter()
+            .copied()
+            .chain(settings_with_fields.iter().copied())
+            .map(|f| arg_snake(&f.name, &f.traits, LANG))
             .collect();
         format!(
-            "let builder = {client}::builder({args}){with_calls};\n\
-             let mut s = builder.new_settings()?;\n",
-            args = args.join(", "),
+            "{lets}let mut s = {client}::new_settings({args})?;\n",
+            args = new_settings_args.join(", "),
         )
     };
-    let arg_prefix: &'static str = if with_fields.is_empty() { "" } else { "self." };
     body.push_str(&constructor::resolution_steps(
         ctx.entry,
         ctx.module,
         ctx.config,
         &mut helpers,
         ctx.multi,
-        arg_prefix,
+        "",
         &tail_fields,
         refs,
         &mut resolve_fns,

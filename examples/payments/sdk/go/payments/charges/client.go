@@ -121,6 +121,21 @@ func newClient(s Settings) (*Client, error) {
 	return &Client{settings: s, timeoutDuration: timeoutDuration}, nil
 }
 
+// newWithTransport is New plus the transport seam the generated tests
+// construct through: the real construction path runs first, then the
+// canonical transport wins over anything bespoke.
+func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...ClientOption) (*Client, error) {
+	c, err := New(apiKey, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if canonical != nil {
+		c.settings.Transport = canonical
+		c.settings.HTTPClient = nil
+	}
+	return c, nil
+}
+
 // resolveSettingEndpoint resolves the endpoint construction value.
 func resolveSettingEndpoint() string {
 	if v, ok := os.LookupEnv("PAYMENTS_ENDPOINT"); ok && v != "" {

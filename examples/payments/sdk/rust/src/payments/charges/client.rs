@@ -151,12 +151,29 @@ impl ClientBuilder {
     /// Resolves the declared sources top-down, then the declared
     /// validation.
     pub fn build(self) -> Result<Client, TonoError> {
+        self.build_with_transport(None)
+    }
+
+    /// `build` plus the transport seam a hand-written test constructs
+    /// through: a `Some` transport replaces whatever construction
+    /// resolved, so the test answers canonically without a server.
+    pub(crate) fn build_with_transport(
+        self,
+        transport: Option<HttpTransport>,
+    ) -> Result<Client, TonoError> {
         let ClientBuilder {
             api_key,
             timeout,
             max_retries,
         } = self;
-        let s = Client::new_settings(api_key, timeout, max_retries)?;
+        let mut s = Client::new_settings(api_key, timeout, max_retries)?;
+        if let Some(t) = transport {
+            s.transport = Some(t);
+            #[cfg(feature = "reqwest")]
+            {
+                s.client = None;
+            }
+        }
         Client::new_client(s)
     }
 }

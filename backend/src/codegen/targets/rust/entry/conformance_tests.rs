@@ -133,13 +133,17 @@ fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
     let mut module = simple_entry_module();
     module.tests = create_charge_tests();
     let text = emitted_text(&module);
-    // Production carries no seam at all, with or without declared tests:
-    // `new` is the sole constructor, resolving settings then building the
-    // client.
+    // Production keeps its own transport seam for a hand-written same-crate
+    // test (the cross-runtime parity harness among them): `new` delegates
+    // to `new_with_transport(None, ..)`, so a real caller sees no
+    // difference. A generated declared test never reaches this seam at all
+    // (see below): it composes the steps directly with its own fake.
     assert!(text.contains(
-        "pub fn new(api_key: String) -> Result<Self, TonoError> {\n        let s = Self::new_settings(api_key)?;\n        Self::new_client(s)\n    }"
+        "pub fn new(api_key: String) -> Result<Self, TonoError> {\n        Self::new_with_transport(None, api_key)\n    }"
     ));
-    assert!(!text.contains("new_with_transport"));
+    assert!(text.contains(
+        "pub(crate) fn new_with_transport(transport: Option<HttpTransport>, api_key: String) -> Result<Self, TonoError> {\n        let mut s = Self::new_settings(api_key)?;\n        if let Some(t) = transport {\n            s.transport = Some(t);\n            #[cfg(feature = \"reqwest\")]\n            {\n                s.client = None;\n            }\n        }\n        Self::new_client(s)\n    }"
+    ));
     assert!(text
         .contains("pub(crate) fn new_settings(api_key: String) -> Result<Settings, TonoError> {"));
     assert!(text.contains("pub(crate) fn new_client(s: Settings) -> Result<Self, TonoError> {"));
@@ -166,10 +170,14 @@ fn a_with_bearing_entry_routes_build_through_the_seam() {
         ),
     );
     let text = emitted_text(&module);
+    // `build` keeps its own transport seam for a hand-written same-crate
+    // test, mirroring `new`'s own delegation.
     assert!(text.contains(
-        "pub fn build(self) -> Result<Client, TonoError> {\n        let ClientBuilder { api_key, timeout_ms } = self;\n        let s = Client::new_settings(api_key, timeout_ms)?;\n        Client::new_client(s)\n    }"
+        "pub fn build(self) -> Result<Client, TonoError> {\n        self.build_with_transport(None)\n    }"
     ));
-    assert!(!text.contains("build_with_transport"));
+    assert!(text.contains(
+        "pub(crate) fn build_with_transport(self, transport: Option<HttpTransport>) -> Result<Client, TonoError> {\n        let ClientBuilder { api_key, timeout_ms } = self;\n        let mut s = Client::new_settings(api_key, timeout_ms)?;\n        if let Some(t) = transport {\n            s.transport = Some(t);\n            #[cfg(feature = \"reqwest\")]\n            {\n                s.client = None;\n            }\n        }\n        Client::new_client(s)\n    }"
+    ));
     assert!(text.contains(
         "pub(crate) fn new_settings(api_key: String, timeout_ms: Option<i32>) -> Result<Settings, TonoError> {"
     ));

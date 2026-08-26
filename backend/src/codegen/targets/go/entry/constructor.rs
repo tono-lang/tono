@@ -20,6 +20,7 @@ use crate::codegen::entries::plan;
 use plan::push_gap;
 
 /// The generated constructor and its two steps.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn new_decl(
     entry: &EntryModel<'_>,
     n: &Names,
@@ -27,6 +28,7 @@ pub(super) fn new_decl(
     config: &CasingConfig,
     helpers: &mut Helpers,
     multi: bool,
+    has_tests: bool,
 ) -> Vec<Decl> {
     let mut decls = Vec::new();
     // The standalone `resolveSetting*` functions the plan splits off a
@@ -184,8 +186,44 @@ pub(super) fn new_decl(
     }
 
     decls.push(client_decl(entry, n, module, config));
+    if has_tests && has_wire_ops(module) {
+        decls.push(with_transport_decl(n, &params, &opts_param, &pass_call));
+    }
     decls.extend(split_off);
     decls
+}
+
+/// `newWithTransport` is the transport seam a hand-written test constructs
+/// through: `New` runs first (so a test sees the same resolution and
+/// validation the real construction path does), then the canonical
+/// transport replaces whatever it resolved. Unlike the old single-body
+/// constructor, this does not thread a field-override parameter per foreign
+/// construction: a generated test composes `newSettings`/the tail's own
+/// resolvers directly with its fakes, so nothing here needs to skip a real
+/// call.
+fn with_transport_decl(n: &Names, params: &[String], opts_param: &str, pass_call: &str) -> Decl {
+    let transport = shared_slot("HTTPTransport");
+    // `opts_param` already carries its own leading ", " when `params` is
+    // non-empty (see its construction in `new_decl`), so the two join with
+    // no separator of this function's own.
+    let sig_params = format!("{}{opts_param}", params.join(", "));
+    Decl::raw_with(
+        format!(
+            "// newWithTransport is {new_fn} plus the transport seam the generated tests\n\
+             // construct through: the real construction path runs first, then the\n\
+             // canonical transport wins over anything bespoke.\n\
+             func newWithTransport(canonical {transport}{comma}{sig_params}) (*{client}, error) {{\n\
+             \tc, err := {new_fn}({pass_call})\n\
+             \tif err != nil {{\n\t\treturn nil, err\n\t}}\n\
+             \tif canonical != nil {{\n\t\tc.settings.Transport = canonical\n\t\tc.settings.HTTPClient = nil\n\t}}\n\
+             \treturn c, nil\n\
+             }}",
+            comma = if sig_params.is_empty() { "" } else { ", " },
+            new_fn = n.new_fn,
+            client = n.client,
+        ),
+        vec![support_symbol("HTTPTransport")],
+    )
 }
 
 /// The resolution of `fields` (a half of the construction split), then the

@@ -445,6 +445,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
         return EntryEmission::empty();
     };
+    let tested = crate::codegen::declared_tests::entries_with_tests(module);
     let mut shared = surface::config_structs(module, config);
     let decode_decls = plan::output_decode_decls(
         &entries,
@@ -478,6 +479,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             &bound,
             &mut helpers,
             multi,
+            tested.contains(entry.name),
         ));
         let mut own_libs: Vec<String> = Vec::new();
         for resolver in ext_resolver::resolver_decls(entry, module, config, multi) {
