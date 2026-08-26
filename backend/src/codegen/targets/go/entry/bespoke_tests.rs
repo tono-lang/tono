@@ -84,30 +84,35 @@ fn a_raw_impl_decodes_the_outcome_and_discriminates_by_code() {
 }
 
 #[test]
-fn declared_tests_swap_the_constructor_for_the_transport_seam_variant() {
+fn the_constructor_is_three_steps_a_test_can_compose() {
     let mut module = with_tests(fixture_module(), notes_bed().impl_echo_tests());
     module.extensions = vec![impl_ext(false)];
     let emission = super::emit(&module, &go_casing());
     let mut decls = emission.shared;
     decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
     let text = rendered(&decls, &GoRules::default());
-    // The public surface is unchanged; the body moved into the unexported
-    // variant the generated tests construct through.
+    // The public surface is `New` alone; it runs the shared settings step
+    // and the last step, which a generated test composes itself.
     assert!(text.contains(
-        "func New(apiKey string, opts ...ClientOption) (*Client, error) {\n\treturn newWithTransport(nil, apiKey, opts...)\n}"
-    ));
-    assert!(text.contains(
-        "func newWithTransport(canonical support.HTTPTransport, apiKey string, opts ...ClientOption) (*Client, error) {"
-    ));
-    // The override lands after source resolution and validation, so the test
-    // transport wins over anything bespoke.
-    assert!(text.contains(
-        "if canonical != nil {\n\t\ts.Transport = canonical\n\t\ts.HTTPClient = nil\n\t}"
-    ));
-    // Without declared tests the seam is not emitted at all.
-    module.tests.clear();
-    let plain = entry_text(&module);
-    assert!(!plain.contains("newWithTransport"));
+        "func New(apiKey string, opts ...ClientOption) (*Client, error) {\n\ts, err := newSettings(apiKey, opts...)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn newClient(s)\n}"
+    ), "{text}");
+    assert!(
+        text.contains("func newSettings(apiKey string, opts ...ClientOption) (Settings, error) {")
+    );
+    // The last step builds the client over the assembled settings; with no
+    // wire operation there is no transport to check (see the http stub test
+    // for the exclusivity check that a wired entry keeps here).
+    assert!(
+        text.contains(
+            "func newClient(s Settings) (*Client, error) {\n\treturn &Client{settings: s}, nil\n}"
+        ),
+        "{text}"
+    );
+    // No seam of any kind: nothing in production takes a transport or an
+    // override for a test's sake.
+    assert!(!text.contains("newWithTransport"));
+    assert!(!text.contains("canonical"));
+    assert!(!text.contains("Override"));
 }
 
 #[test]
@@ -171,12 +176,14 @@ fn an_http_stub_generates_a_request_matching_test() {
     assert_eq!(files.len(), 1);
     let text = rendered(&files[0].file.decls, &GoRules::default());
     // The stubbed transport records every canonical request and answers the
-    // canned sequence, the last response repeating; construction goes through
-    // the seam variant.
+    // canned sequence, the last response repeating; the test assembles the
+    // client itself, assigning the transport where the user would.
     assert!(text.contains("seen = append(seen, req)"));
     assert!(text.contains("responses := []support.HTTPResponse{{Status: 500,"));
     assert!(text.contains("if i >= len(responses) {"));
-    assert!(text.contains("c, err := newWithTransport(transport, \"k\")"));
+    assert!(text.contains(
+        "\tbuild := func() (*Client, error) {\n\t\ts, err := newSettings(\"k\")\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\ts.Transport = transport\n\t\treturn newClient(s)\n\t}\n\tc, err := build()\n"
+    ), "{text}");
     // The open struct pattern compares field by field over the wire form.
     assert!(text.contains("var got map[string]any"));
     assert!(text.contains("if err := json.Unmarshal(blob, &got); err != nil {"));

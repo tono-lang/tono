@@ -9,7 +9,7 @@ use crate::codegen::targets::rust::rust_casing;
 use crate::codegen::test_support::bare_entry_field;
 use crate::ir::{
     CallArg, EntryCall, EntryField, ExtLib, ExternDecl, ExternParam, LangPath, ReturnsField,
-    ReturnsLit, ReturnsValue, SelectArm, YieldsPos,
+    ReturnsLit, ReturnsValue, YieldsPos,
 };
 
 fn module_of(shapes: Vec<Shape>) -> Module {
@@ -258,47 +258,6 @@ fn json_literal_covers_every_json_value_kind() {
         json_literal(&serde_json::json!([1, 2])),
         "serde_json::json!([1,2])"
     );
-}
-
-#[test]
-fn ok_pattern_destructures_a_tuple_for_more_than_one_position() {
-    let a = YieldsPos {
-        name: "a".into(),
-        r#type: None,
-        is_error: false,
-        foreign: None,
-    };
-    let b = YieldsPos {
-        name: "b".into(),
-        r#type: None,
-        is_error: false,
-        foreign: None,
-    };
-    assert_eq!(ok_pattern(&[&a]), "a");
-    assert_eq!(ok_pattern(&[&a, &b]), "(a, b)");
-}
-
-#[test]
-fn select_expr_covers_a_field_arm_a_sources_arm_and_the_synthesized_default() {
-    let select = Select {
-        subject_index: None,
-        subject: vec!["cfg".into(), "env".into()],
-        arms: vec![
-            SelectArm {
-                pattern: Some(serde_json::json!("prod")),
-                value: ArmValue::Field(vec!["cfg".into(), "host".into()]),
-            },
-            SelectArm {
-                pattern: Some(serde_json::json!("dev")),
-                value: ArmValue::Sources(vec![]),
-            },
-        ],
-    };
-    let out = select_expr(&select);
-    assert!(out.contains("\"prod\" => cfg.host"), "{out}");
-    // Every declared arm carries a pattern, so the function synthesizes
-    // a trailing wildcard arm rather than leaving the match non-total.
-    assert!(out.contains("_ => cfg.env.clone()"), "{out}");
 }
 
 #[test]
@@ -620,13 +579,18 @@ fn a_call_field_lends_a_spelled_parameter_and_qualifies_a_nested_call() {
         )],
     )];
     let out = entry_text(&module, &rust_casing());
-    assert!(out.contains("&(s.region).clone()"), "{out}");
+    // The `&str` coercion happens inside the resolver, over its own
+    // `region` parameter (not a `s.`-prefixed settings read: that read is
+    // the call site's job, passing the already-resolved value in).
+    assert!(out.contains("&(region).clone()"), "{out}");
     assert!(out.contains("company_config::Retries(3)"), "{out}");
 }
 
 /// A `yields` list that is the call's signature and places no `error` is a
-/// plain value: the call assigns straight into the slot, with no `Result`
-/// to match.
+/// plain value: the resolver binds it through a plain `let`, with no
+/// `match` to run — but the resolver's own signature is always
+/// `Result<T, TonoError>` (every resolver is called through `?`), so an
+/// infallible call still returns through `Ok(..)`.
 #[test]
 fn a_signature_yields_list_without_an_error_binds_the_plain_value() {
     let mut module = region_load_module(true);
@@ -638,10 +602,9 @@ fn a_signature_yields_list_without_an_error_binds_the_plain_value() {
     }];
     let out = entry_text(&module, &rust_casing());
     assert!(
-        out.contains("config = company_config::Client::load(")
-            || out.contains("config = company_config::Client::load("),
+        out.contains("let cfg = company_config::Client::load((region).clone());"),
         "{out}"
     );
-    assert!(!out.contains("Ok(cfg)"), "{out}");
-    assert!(!out.contains("Ok(v)"), "{out}");
+    assert!(out.contains("Ok(cfg)"), "{out}");
+    assert!(!out.contains("match "), "{out}");
 }

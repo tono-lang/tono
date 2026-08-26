@@ -59,8 +59,7 @@ fn foreign_handle_detects_a_declared_opaque_type() {
     };
     let (lib, ty) = foreign_handle(&r("bus#publisher"), &module).expect("declared handle");
     assert_eq!((lib.name.as_str(), ty.name.as_str()), ("bus", "publisher"));
-    // A shape id is module-prefixed even inside an ext block ("m", the
-    // module's own name here, not "bus"); it still resolves.
+    // Module-prefixed ("m", not "bus") still resolves by type name alone.
     let (lib, ty) = foreign_handle(&r("m#publisher"), &module).expect("declared handle");
     assert_eq!((lib.name.as_str(), ty.name.as_str()), ("bus", "publisher"));
 }
@@ -321,8 +320,11 @@ fn a_boxed_handle_is_held_as_a_trait_object_and_boxed_at_construction() {
         id: "bus#typed_publisher".into(),
         args: vec![],
     };
+    // `ext_resolver` boxes a freshly yielded value the same way: `boxed_wrap`
+    // names the box, `wrap_stored` wraps it into the `Option` slot.
+    let boxed = boxed_wrap(&target, &module).map_or("v".to_string(), |w| format!("{w}(v)"));
     assert_eq!(
-        wrap_constructed(&target, &module, "v"),
+        wrap_stored(&target, &module, &boxed),
         "Some(Box::new(v))".to_string()
     );
     // An already-typed value (an injected handle, boxed by the caller) is

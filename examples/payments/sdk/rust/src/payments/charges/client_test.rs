@@ -2,9 +2,9 @@
 
 // Generated from the entry's declared tests: each one runs the real
 // construction path and the real method, with only the stubbed
-// transport swapped through the constructor's seam. Impl-stubbed tests
-// and tests riding only on extern handle-method stubs generate nothing
-// for Rust: neither has a swappable seam here.
+// transport assigned directly into the resolved settings. Impl-stubbed
+// tests and tests riding only on extern handle-method stubs generate
+// nothing for Rust: neither has a fake this target can build.
 
 use crate::payments::charges::types::*;
 

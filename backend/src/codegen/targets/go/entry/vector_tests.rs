@@ -1,18 +1,21 @@
 //! Native `go test` files generated from the module's declared tests.
 //!
-//! Each test runs the real client method through the real construction path;
-//! only the declared stub point is swapped: an `.http` stub answers through
-//! the constructor's seam ([`super::constructor::seam_fn_name`]), an `.impl`
-//! stub swaps the per-operation seam variable ([`super::impl_op::impl_seam_var`]).
-//! A test whose call has no stub runs against the real dependency, so it lands
-//! in the live file (`//go:build live`) and stays out of a default `go test`
-//! run; a construction-only test is hermetic by nature.
+//! Each test runs the real client method over a client it assembled itself:
+//! the constructor's shared settings step, then a fake assigned where every
+//! stubbed foreign construction would have stored its value, the canonical
+//! transport assigned where an `.http` stub answers, then the constructor's
+//! last step. An `.impl` stub swaps the per-operation seam variable
+//! ([`super::impl_op::impl_seam_var`]). A test whose call has no stub runs
+//! against the real dependency, so it lands in the live file (`//go:build
+//! live`) and stays out of a default `go test` run; a construction-only test
+//! is hermetic by nature.
 //!
 //! The test files sit in the generated package itself (`_test.go` beside the
-//! client), which is what lets them reach the unexported seams while the
-//! shipped surface stays clean. Every test body is self-contained straight-line
-//! code: the files declare no helper functions, so the test files of two
-//! entries in one module (one Go package) never redefine a symbol.
+//! client), which is what lets them reach the unexported steps and assign the
+//! unexported handle fields while the shipped surface stays clean. Every test
+//! body is self-contained: the files declare no helper functions, so the test
+//! files of two entries in one module (one Go package) never redefine a
+//! symbol.
 
 use std::collections::BTreeMap;
 
@@ -557,8 +560,11 @@ fn invoke_block(ctx: &TestCtx<'_>, refs: &mut Vec<Symbol>) -> String {
     text
 }
 
-/// One hermetic test: pin the environment, install the declared stub, build
-/// the client through the real construction path, run the call, assert. A
+/// One hermetic test: pin the environment, install the declared stubs, build
+/// the client through the same three steps the constructor runs (the shared
+/// settings step, the foreign constructions, the client), with a fake in
+/// place of every stubbed construction, then run the call and assert. A
+/// test with no construction stub at all builds through `New` itself; a
 /// construction-only test just constructs and asserts its outcome.
 fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Vec<Decl> {
     let mut refs = vec![import("testing", "testing")];
@@ -566,81 +572,63 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Vec<Decl> {
     let mut extra_decls = Vec::new();
     body.push_str(&env_pinning(ctx, &mut refs, first_unset));
     let (args, opts) = construction_args(ctx, &mut refs);
-    let (override_pre, override_args) = extern_override_args(ctx, &mut refs, &mut extra_decls);
-    body.push_str(&override_pre);
-    // Go requires the seam's variadic `opts ...Option` parameter last, so a
-    // field override (declared between the positional args and it) always
-    // sits ahead of `opts` in the call, matching how the seam declares them.
-    let overrides_joined = override_args.join(", ");
-    if ctx.test.call.is_some() {
-        let construct = match ctx.test.stub {
-            Some(stub) if stub.dep == StubDep::Http => {
-                refs.push(support_symbol("HTTPRequest"));
-                refs.push(support_symbol("HTTPResponse"));
-                refs.push(import("context", "context"));
-                let answers: Vec<&HttpAnswer> = stub
-                    .answers
-                    .iter()
-                    .filter_map(|a| match a {
-                        StubAnswer::Http(h) => Some(h),
-                        _ => None,
-                    })
-                    .collect();
-                body.push_str(&transport_block(&answers));
-                format!(
-                    "\tc, err := {seam}({call})\n",
-                    seam = super::constructor::seam_fn_name(&ctx.n.new_fn),
-                    call = join_args("transport", &[&args, &overrides_joined, &opts]),
-                )
-            }
-            Some(stub) => {
-                debug_assert_eq!(stub.dep, StubDep::Impl);
-                body.push_str(&impl_stub_block(ctx, &stub.answers, &mut refs));
-                if override_args.is_empty() {
-                    format!(
-                        "\tc, err := {new_fn}({call})\n",
-                        new_fn = ctx.n.new_fn,
-                        call = join_args(&args, &[&opts]),
-                    )
-                } else {
-                    format!(
-                        "\tc, err := {seam}({call})\n",
-                        seam = super::constructor::seam_fn_name(&ctx.n.new_fn),
-                        call = join_args("nil", &[&args, &overrides_joined, &opts]),
-                    )
-                }
-            }
-            // Every extern call reached during a call-carrying test is
-            // stubbed (planning validation guarantees it), so a call whose
-            // dependency is not itself stubbed but reaches only overridden
-            // extern calls still runs through the seam.
-            None => format!(
-                "\tc, err := {seam}({call})\n",
-                seam = super::constructor::seam_fn_name(&ctx.n.new_fn),
-                call = join_args("nil", &[&args, &overrides_joined, &opts]),
-            ),
+    let http_stub = ctx.test.stub.filter(|stub| stub.dep == StubDep::Http);
+    if let Some(stub) = http_stub {
+        refs.push(support_symbol("HTTPRequest"));
+        refs.push(support_symbol("HTTPResponse"));
+        refs.push(import("context", "context"));
+        let answers: Vec<&HttpAnswer> = stub
+            .answers
+            .iter()
+            .filter_map(|a| match a {
+                StubAnswer::Http(h) => Some(h),
+                _ => None,
+            })
+            .collect();
+        body.push_str(&transport_block(&answers));
+    }
+    if let Some(stub) = ctx.test.stub.filter(|stub| stub.dep == StubDep::Impl) {
+        body.push_str(&impl_stub_block(ctx, &stub.answers, &mut refs));
+    }
+    let assembled = http_stub.is_some() || !ctx.test.extern_stubs.is_empty();
+    let construct_args = join_args(&args, &[&opts]);
+    let bind = if ctx.test.call.is_some() { "c" } else { "_" };
+    let construct = if assembled {
+        let (pre, steps) = assembly_steps(ctx, &mut refs, &mut extra_decls);
+        body.push_str(&pre);
+        let transport = if http_stub.is_some() {
+            "\t\ts.Transport = transport\n"
+        } else {
+            ""
         };
-        body.push_str(&construct);
+        format!(
+            "\tbuild := func() (*{client}, error) {{\n\
+             \t\ts, err := {settings_fn}({construct_args})\n\
+             \t\tif err != nil {{\n\t\t\treturn nil, err\n\t\t}}\n\
+             {steps}{transport}\
+             \t\treturn {client_fn}(s)\n\
+             \t}}\n\
+             \t{bind}, err := build()\n",
+            client = ctx.n.client,
+            settings_fn = super::constructor::settings_fn_name(ctx.n),
+            client_fn = super::constructor::client_fn_name(ctx.n),
+        )
+    } else {
+        format!(
+            "\t{bind}, err := {new_fn}({construct_args})\n",
+            new_fn = ctx.n.new_fn,
+        )
+    };
+    body.push_str(&construct);
+    if ctx.test.call.is_some() {
         body.push_str("\tif err != nil {\n\t\tt.Fatalf(\"construct client: %v\", err)\n\t}\n");
         body.push_str(&invoke_block(ctx, &mut refs));
         body.push_str(&outcome_asserts(ctx, &mut refs));
         if let Some(patterns) = ctx.test.requests {
             body.push_str(&request_asserts(patterns, &mut refs));
         }
-    } else if override_args.is_empty() {
-        // Construction-only: the outcome pattern reads the construction error.
-        body.push_str(&format!(
-            "\t_, err := {new_fn}({call})\n",
-            new_fn = ctx.n.new_fn,
-            call = join_args(&args, &[&opts]),
-        ));
-        body.push_str(&outcome_asserts(ctx, &mut refs));
     } else {
-        body.push_str(&format!(
-            "\t_, err := {seam}({call})\n",
-            seam = super::constructor::seam_fn_name(&ctx.n.new_fn),
-            call = join_args("nil", &[&args, &overrides_joined, &opts]),
-        ));
+        // Construction-only: the outcome pattern reads the construction error.
         body.push_str(&outcome_asserts(ctx, &mut refs));
     }
     let mut decls = vec![Decl::raw_with(
@@ -656,7 +644,7 @@ fn hermetic_test_decl(ctx: &TestCtx<'_>, first_unset: &mut bool) -> Vec<Decl> {
 
 #[path = "vector_extern.rs"]
 mod vector_extern;
-use vector_extern::extern_override_args;
+use vector_extern::assembly_steps;
 #[path = "vector_values.rs"]
 mod values;
 use values::{pinned_literal, zero_literal};

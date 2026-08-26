@@ -98,6 +98,25 @@ fn a_test_group_takes_the_name_its_runner_discovers() {
 }
 
 #[test]
+fn an_ext_group_takes_the_companion_file_name_of_its_target() {
+    // The glue for one library sits beside the client that calls it, named
+    // for the library in each ecosystem's companion-file spelling.
+    let glue = Group::ext("payments.charges", "mathkit");
+    assert_eq!(
+        path_of(TargetKind::Go, &glue),
+        "go/payments/charges/mathkit_ext.go"
+    );
+    assert_eq!(
+        path_of(TargetKind::TypeScript, &glue),
+        "typescript/payments/charges/mathkit_ext.ts"
+    );
+    assert_eq!(
+        path_of(TargetKind::Rust, &glue),
+        "rust/src/payments/charges/ext_mathkit.rs"
+    );
+}
+
+#[test]
 fn rust_and_typescript_map_every_group_to_a_file() {
     assert_eq!(
         path_of(TargetKind::Rust, &Group::types("payments.common")),

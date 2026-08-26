@@ -254,7 +254,7 @@ pub fn generate(
     let langs: Vec<&[&str]> = targets.iter().map(|t| t.binding_langs()).collect();
     crate::codegen::extensions::validate_impl_coverage(model, &langs)?;
     crate::codegen::entries::validate_entries(model, targets)?;
-    crate::codegen::declared_tests::validate_declared_tests(model)?;
+    crate::codegen::declared_tests::validate_declared_tests(model, targets)?;
     crate::codegen::ops::validate_error_codes(model)?;
     let (model, union_ids, exposed) = prepare(model, config);
     let mut files = Vec::new();
@@ -287,7 +287,7 @@ pub fn generate_target(
     crate::codegen::extensions::validate_extensions(model)?;
     crate::codegen::extensions::validate_impl_coverage(model, &[target.binding_langs()])?;
     crate::codegen::entries::validate_entries(model, &[target])?;
-    crate::codegen::declared_tests::validate_declared_tests(model)?;
+    crate::codegen::declared_tests::validate_declared_tests(model, &[target])?;
     crate::codegen::ops::validate_error_codes(model)?;
     let (model, union_ids, exposed) = prepare(model, config);
     let files = emit_target(&model, target, casing, config, &union_ids, &exposed);

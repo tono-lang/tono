@@ -465,38 +465,28 @@ pub struct Client {
     pub(crate) random: RandomFn,
 }
 
-/// Resolves the client_name construction value.
-fn resolve_setting_client_name(with: Option<String>) -> String {
-    if let Some(v) = with {
-        return v;
-    }
-    "demo".to_string()
-}
+impl Client {
+    /// Builds Client over assembled settings: the runtime values
+    /// freeze here, after every construction value resolved.
+    pub(crate) fn new_client(s: Settings) -> Result<Self, TonoError> {
+        let timeout_ms = match parse_duration_ms(&s.timeout.0) {
+            Ok(ms) => ms,
+            Err(_) => {
+                return Err(TonoError::Config(ConfigError { message: format!("timeout: invalid duration {:?}", s.timeout.0) }));
+            }
+        };
+        let options = ClientOptions {
+            #[cfg(feature = "reqwest")]
+            client: s.client.clone(),
+            transport: s.transport.clone(),
+            headers: s.headers.clone(),
+        };
+        if let Err(message) = check_transport(&options) {
+            return Err(TonoError::Config(ConfigError { message }));
+        }
+        Ok(Client { settings: s, options, timeout_ms, sleep: default_sleep(), random: default_random() })
 
-/// Resolves the endpoint_version construction value.
-fn resolve_setting_endpoint_version() -> String {
-    if let Some(v) = read_env("ENDPOINT_VERSION") {
-        let parsed: String;
-        parsed = v;
-        return parsed;
     }
-    "v2".to_string()
-}
-
-/// Resolves the timeout construction value.
-fn resolve_setting_timeout(with: Option<Duration>) -> Duration {
-    if let Some(v) = with {
-        return v;
-    }
-    Duration("10s".to_string())
-}
-
-/// Resolves the max_retries construction value.
-fn resolve_setting_max_retries(with: Option<i32>) -> i32 {
-    if let Some(v) = with {
-        return v;
-    }
-    3
 }
 
 pub struct ClientBuilder {
@@ -507,33 +497,20 @@ pub struct ClientBuilder {
     max_retries: Option<i32>,
 }
 
-impl ClientBuilder {
-    /// Names the caller.
-    pub fn with_client_name(mut self, v: String) -> Self {
-        self.client_name = Some(v);
-        self
-    }
-    pub fn with_timeout(mut self, v: Duration) -> Self {
-        self.timeout = Some(v);
-        self
-    }
-    pub fn with_max_retries(mut self, v: i32) -> Self {
-        self.max_retries = Some(v);
-        self
-    }
-
-    /// Resolves the declared sources top-down, then the declared
-    /// validation.
-    pub fn build(self) -> Result<Client, TonoError> {
+impl Client {
+    /// Resolves every construction value of Client that no foreign
+    /// call reaches, in declared order, then runs the consumed-chain
+    /// requires and the declared validation over them.
+    pub(crate) fn new_settings(api_key: String, seg: String, client_name: Option<String>, timeout: Option<Duration>, max_retries: Option<i32>) -> Result<Settings, TonoError> {
         let mut s = Settings {
             api_key: String::new(), client_name: String::new(), client_key: String::new(), endpoint_env: String::new(), endpoint_version: String::new(), endpoint_v1: String::new(), endpoint_v2: String::new(), endpoint: String::new(), timeout: Duration(String::new()), max_retries: 0, settings: Conf { api_key: String::new(), region: String::new(), }, creds: Credentials { token: String::new(), account_id: String::new(), }, labels: std::collections::HashMap::new(), seg: String::new(), by_segment: String::new(),
             #[cfg(feature = "reqwest")]
             client: None,
             transport: None,
             headers: std::collections::HashMap::new(),
-        };
-            s.api_key = self.api_key;
-            s.client_name = resolve_setting_client_name(self.client_name.clone());
+            };
+            s.api_key = api_key;
+            s.client_name = resolve_setting_client_name(client_name.clone());
             s.client_key = str_upper_snake((format!("{}", s.client_name)).trim().to_string());
             s.endpoint_env = format!("ENDPOINT_{}_V2", s.client_key);
             s.endpoint_version = resolve_setting_endpoint_version();
@@ -571,8 +548,8 @@ impl ClientBuilder {
                 }
             }
             }
-            s.timeout = resolve_setting_timeout(self.timeout.clone());
-            s.max_retries = resolve_setting_max_retries(self.max_retries);
+            s.timeout = resolve_setting_timeout(timeout.clone());
+            s.max_retries = resolve_setting_max_retries(max_retries);
             {
                 let mut composed = Conf { api_key: String::new(), region: String::new(), };
                 composed.api_key = (s.api_key).clone();
@@ -619,7 +596,7 @@ impl ClientBuilder {
             } else {
                 labels_err = Some(ConfigError { message: "env SERVICE_LABELS: empty".to_string() });
             }
-            s.seg = self.seg;
+            s.seg = seg;
             let mut by_segment_err: Option<ConfigError> = None;
             if labels_err.is_some() {
                 by_segment_err = labels_err.as_ref().map(|e| ConfigError { message: format!("labels <- {}", e.message) });
@@ -648,23 +625,65 @@ impl ClientBuilder {
         }
         let _ = &creds_err;
         let _ = &by_segment_err;
-        let timeout_ms = match parse_duration_ms(&s.timeout.0) {
-            Ok(ms) => ms,
-            Err(_) => {
-                return Err(TonoError::Config(ConfigError { message: format!("timeout: invalid duration {:?}", s.timeout.0) }));
-            }
-        };
-        let options = ClientOptions {
-            #[cfg(feature = "reqwest")]
-            client: s.client.clone(),
-            transport: s.transport.clone(),
-            headers: s.headers.clone(),
-        };
-        if let Err(message) = check_transport(&options) {
-            return Err(TonoError::Config(ConfigError { message }));
-        }
-        Ok(Client { settings: s, options, timeout_ms, sleep: default_sleep(), random: default_random() })
+        Ok(s)
+    }
+}
 
+/// Resolves the client_name construction value.
+fn resolve_setting_client_name(with: Option<String>) -> String {
+    if let Some(v) = with {
+        return v;
+    }
+    "demo".to_string()
+}
+
+/// Resolves the endpoint_version construction value.
+fn resolve_setting_endpoint_version() -> String {
+    if let Some(v) = read_env("ENDPOINT_VERSION") {
+        let parsed: String;
+        parsed = v;
+        return parsed;
+    }
+    "v2".to_string()
+}
+
+/// Resolves the timeout construction value.
+fn resolve_setting_timeout(with: Option<Duration>) -> Duration {
+    if let Some(v) = with {
+        return v;
+    }
+    Duration("10s".to_string())
+}
+
+/// Resolves the max_retries construction value.
+fn resolve_setting_max_retries(with: Option<i32>) -> i32 {
+    if let Some(v) = with {
+        return v;
+    }
+    3
+}
+
+impl ClientBuilder {
+    /// Names the caller.
+    pub fn with_client_name(mut self, v: String) -> Self {
+        self.client_name = Some(v);
+        self
+    }
+    pub fn with_timeout(mut self, v: Duration) -> Self {
+        self.timeout = Some(v);
+        self
+    }
+    pub fn with_max_retries(mut self, v: i32) -> Self {
+        self.max_retries = Some(v);
+        self
+    }
+
+    /// Resolves the declared sources top-down, then the declared
+    /// validation.
+    pub fn build(self) -> Result<Client, TonoError> {
+        let ClientBuilder { api_key, seg, client_name, timeout, max_retries } = self;
+        let s = Client::new_settings(api_key, seg, client_name, timeout, max_retries)?;
+        Client::new_client(s)
     }
 }
 

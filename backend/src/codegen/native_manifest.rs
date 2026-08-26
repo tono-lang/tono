@@ -44,10 +44,12 @@ pub const RUST_TRANSPORT_FEATURES: &[(&str, &str)] = &[
     ("reqwest", "[\"dep:reqwest\"]"),
 ];
 
-/// Whether the model emits an entry client (and with it the inline HTTP
-/// transport), which is what pulls the transport dependencies in.
+/// Whether the model emits an entry client with a wire operation (and with
+/// it the inline HTTP transport), which is what pulls the transport
+/// dependencies in. An entry built entirely from foreign constructions, with
+/// no `@http`, has nothing to send over HTTP and needs neither.
 fn emits_transport(model: &Model) -> bool {
-    model.modules.iter().any(entries::has_entries)
+    entries::model_has_wire_ops(model)
 }
 
 /// The `[dependencies]` lines the Rust emitted for `model` requires. The ext
@@ -76,7 +78,7 @@ pub fn rust_features(model: &Model) -> &'static [(&'static str, &'static str)] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::test_support::structure;
+    use crate::codegen::test_support::{push_entry_op_wire, structure};
     use crate::ir::{Module, Shape, ShapeKind};
 
     fn model_with(shapes: Vec<Shape>) -> Model {
@@ -104,6 +106,33 @@ mod tests {
         }
     }
 
+    fn wire_op_shape() -> Shape {
+        Shape {
+            id: "demo#client.ping".into(),
+            kind: ShapeKind::Operation {
+                input_name: None,
+                input: None,
+                output: None,
+                output_nullable: false,
+                errors: vec![],
+                wire: None,
+                impl_call: None,
+            },
+            traits: vec![],
+        }
+    }
+
+    fn entry_with_wire_op_shape() -> Shape {
+        Shape {
+            id: "demo#client".into(),
+            kind: ShapeKind::Entry {
+                fields: vec![],
+                operations: vec![wire_op_shape()],
+            },
+            traits: vec![],
+        }
+    }
+
     fn struct_shape() -> Shape {
         structure("demo#charge", vec![])
     }
@@ -117,8 +146,20 @@ mod tests {
     }
 
     #[test]
-    fn a_model_with_an_entry_pulls_the_transport_stack() {
+    fn an_entry_with_no_wire_operation_needs_only_serde() {
+        // An entry built entirely from foreign constructions (no `@http`
+        // anywhere) has nothing to send over HTTP: it must not pull reqwest
+        // or tokio in just because it emits a client.
         let model = model_with(vec![struct_shape(), entry_shape()]);
+        let names: Vec<&str> = rust_dependencies(&model).iter().map(|d| d.0).collect();
+        assert_eq!(names, ["serde", "serde_json"]);
+        assert!(rust_features(&model).is_empty());
+    }
+
+    #[test]
+    fn a_model_with_a_wire_operation_pulls_the_transport_stack() {
+        let mut model = model_with(vec![struct_shape(), entry_with_wire_op_shape()]);
+        push_entry_op_wire(&mut model.modules[0], "GET");
         let names: Vec<&str> = rust_dependencies(&model).iter().map(|d| d.0).collect();
         assert_eq!(names, ["serde", "serde_json", "reqwest", "tokio"]);
         let features: Vec<&str> = rust_features(&model).iter().map(|f| f.0).collect();

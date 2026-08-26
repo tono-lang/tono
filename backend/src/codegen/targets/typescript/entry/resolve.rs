@@ -32,8 +32,8 @@ pub(super) struct Resolver<'a, 'b> {
     pub(super) body: &'b mut String,
     pub(super) resolve_fns: &'b mut Vec<Decl>,
     pub(super) multi: bool,
-    /// Needed only to name an extern-call field's seam variable
-    /// ([`super::ext_call::ext_seam_var`]), entry-prefixed the same way
+    /// Needed to name an extern-call field's resolver
+    /// (`ext_resolver::resolver_name`), entry-prefixed the same way
     /// `impl_op`'s own seam names are.
     pub(super) n: &'a super::Names,
 }

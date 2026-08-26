@@ -37,6 +37,81 @@ pub struct Client {
     pub(crate) random: RandomFn,
 }
 
+impl Client {
+    /// Builds Client over assembled settings: the runtime values
+    /// freeze here, after every construction value resolved.
+    pub(crate) fn new_client(s: Settings) -> Result<Self, TonoError> {
+        let timeout_ms = match parse_duration_ms(&s.timeout.0) {
+            Ok(ms) => ms,
+            Err(_) => {
+                return Err(TonoError::Config(ConfigError {
+                    message: format!("timeout: invalid duration {:?}", s.timeout.0),
+                }));
+            }
+        };
+        let options = ClientOptions {
+            #[cfg(feature = "reqwest")]
+            client: s.client.clone(),
+            transport: s.transport.clone(),
+            headers: s.headers.clone(),
+        };
+        if let Err(message) = check_transport(&options) {
+            return Err(TonoError::Config(ConfigError { message }));
+        }
+        Ok(Client {
+            settings: s,
+            options,
+            timeout_ms,
+            sleep: default_sleep(),
+            random: default_random(),
+        })
+    }
+}
+
+pub struct ClientBuilder {
+    api_key: String,
+    timeout: Option<Duration>,
+    max_retries: Option<i32>,
+}
+
+impl Client {
+    /// Resolves every construction value of Client that no foreign
+    /// call reaches, in declared order, then runs the consumed-chain
+    /// requires and the declared validation over them.
+    pub(crate) fn new_settings(
+        api_key: String,
+        timeout: Option<Duration>,
+        max_retries: Option<i32>,
+    ) -> Result<Settings, TonoError> {
+        let mut s = Settings {
+            api_key: String::new(),
+            endpoint: String::new(),
+            timeout: Duration(String::new()),
+            max_retries: 0,
+            #[cfg(feature = "reqwest")]
+            client: None,
+            transport: None,
+            headers: std::collections::HashMap::new(),
+        };
+        s.api_key = api_key;
+        s.endpoint = resolve_setting_endpoint();
+        s.timeout = resolve_setting_timeout(timeout.clone());
+        s.max_retries = resolve_setting_max_retries(max_retries);
+        let mut violations: Vec<Violation> = Vec::new();
+        if s.api_key.chars().count() < 1 {
+            violations.push(Violation {
+                field: "api_key".to_string(),
+                constraint: "length".to_string(),
+                message: "api_key length must be >= 1".to_string(),
+            });
+        }
+        if !violations.is_empty() {
+            return Err(TonoError::Validation(ValidationError { violations }));
+        }
+        Ok(s)
+    }
+}
+
 /// Resolves the endpoint construction value.
 fn resolve_setting_endpoint() -> String {
     if let Some(v) = read_env("PAYMENTS_ENDPOINT") {
@@ -63,12 +138,6 @@ fn resolve_setting_max_retries(with: Option<i32>) -> i32 {
     2
 }
 
-pub struct ClientBuilder {
-    api_key: String,
-    timeout: Option<Duration>,
-    max_retries: Option<i32>,
-}
-
 impl ClientBuilder {
     pub fn with_timeout(mut self, v: Duration) -> Self {
         self.timeout = Some(v);
@@ -85,46 +154,19 @@ impl ClientBuilder {
         self.build_with_transport(None)
     }
 
-    /// `build` plus the transport seam the generated tests construct through:
-    /// a `Some` transport replaces whatever construction resolved, so a
-    /// test answers canonically without a server.
+    /// `build` plus the transport seam a hand-written test constructs
+    /// through: a `Some` transport replaces whatever construction
+    /// resolved, so the test answers canonically without a server.
     pub(crate) fn build_with_transport(
         self,
         transport: Option<HttpTransport>,
     ) -> Result<Client, TonoError> {
-        let mut s = Settings {
-            api_key: String::new(),
-            endpoint: String::new(),
-            timeout: Duration(String::new()),
-            max_retries: 0,
-            #[cfg(feature = "reqwest")]
-            client: None,
-            transport: None,
-            headers: std::collections::HashMap::new(),
-        };
-        s.api_key = self.api_key;
-        s.endpoint = resolve_setting_endpoint();
-        s.timeout = resolve_setting_timeout(self.timeout.clone());
-        s.max_retries = resolve_setting_max_retries(self.max_retries);
-        let mut violations: Vec<Violation> = Vec::new();
-        if s.api_key.chars().count() < 1 {
-            violations.push(Violation {
-                field: "api_key".to_string(),
-                constraint: "length".to_string(),
-                message: "api_key length must be >= 1".to_string(),
-            });
-        }
-        if !violations.is_empty() {
-            return Err(TonoError::Validation(ValidationError { violations }));
-        }
-        let timeout_ms = match parse_duration_ms(&s.timeout.0) {
-            Ok(ms) => ms,
-            Err(_) => {
-                return Err(TonoError::Config(ConfigError {
-                    message: format!("timeout: invalid duration {:?}", s.timeout.0),
-                }));
-            }
-        };
+        let ClientBuilder {
+            api_key,
+            timeout,
+            max_retries,
+        } = self;
+        let mut s = Client::new_settings(api_key, timeout, max_retries)?;
         if let Some(t) = transport {
             s.transport = Some(t);
             #[cfg(feature = "reqwest")]
@@ -132,22 +174,7 @@ impl ClientBuilder {
                 s.client = None;
             }
         }
-        let options = ClientOptions {
-            #[cfg(feature = "reqwest")]
-            client: s.client.clone(),
-            transport: s.transport.clone(),
-            headers: s.headers.clone(),
-        };
-        if let Err(message) = check_transport(&options) {
-            return Err(TonoError::Config(ConfigError { message }));
-        }
-        Ok(Client {
-            settings: s,
-            options,
-            timeout_ms,
-            sleep: default_sleep(),
-            random: default_random(),
-        })
+        Client::new_client(s)
     }
 }
 

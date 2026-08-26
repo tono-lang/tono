@@ -5,7 +5,6 @@
 //! Split out of `ext_call` to keep it under the file-size ceiling; the
 //! callee-side pieces (the seam, `spell`, imports, projections) stay there.
 
-use super::checks::field_path_expr;
 use super::ext_call::{class_reference_name, spell};
 use super::ext_coerce;
 use crate::codegen::entries::EntryModel;
@@ -35,19 +34,6 @@ pub(super) fn json_literal(v: &serde_json::Value) -> String {
                 .join(", ")
         ),
     }
-}
-
-/// [`render_arg`]'s own default `Ref` resolution: a sibling entry field read
-/// off `s`, the seam function's own parameter. A handle-method call site
-/// (`ext_handle_call.rs`) reads off a different root and also recognizes the
-/// op's own input parameter, so that call site supplies its own resolver
-/// instead of this default.
-pub(super) fn field_ref(
-    entry: &EntryModel<'_>,
-    config: &crate::codegen::casing::CasingConfig,
-    path: &[String],
-) -> String {
-    field_path_expr(entry, config, path, "s")
 }
 
 /// Render one node of a `ts` language block's `call_args` template, purely

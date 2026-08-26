@@ -35,15 +35,21 @@ fn declared_tests_swap_the_construction_and_impl_seams() {
     assert!(out.contains(
         "export function swapSaveNoteImplForTest(next: typeof saveNote): typeof saveNote {"
     ));
-    // The class gains the transport seam the generated tests construct
-    // through; the override lands after construction ran, so the test
-    // transport wins over anything bespoke.
+    // The class carries no transport seam: the constructor runs the shared
+    // settings step and freezes the options, and a generated test assigns
+    // its transport over the frozen options itself.
     assert!(out.contains(
-        "static forTest(seam: { transport: HttpTransport }, apiKey: string, config: ClientConfig = {}): Client {"
-    ));
-    assert!(out.contains("options.transport = seam.transport;"));
-    assert!(out.contains("options.fetch = undefined;"));
-    // Without declared tests the impl seam stays, the test surface does not.
+        "constructor(apiKey: string, config: ClientConfig = {}) {\n    const s = Client.newSettings(apiKey, config);"
+    ), "{out}");
+    assert!(
+        out.contains(
+            "private static newSettings(apiKey: string, config: ClientConfig = {}): Settings {"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("forTest"), "{out}");
+    assert!(!out.contains("seam.transport"), "{out}");
+    // Without declared tests the impl seam stays, its swapper does not.
     module.tests.clear();
     let plain = full_text(&module);
     assert!(plain.contains("let saveNoteImpl = saveNote;"));
@@ -104,12 +110,20 @@ fn an_http_stub_generates_a_request_matching_test() {
     assert_eq!(files.len(), 1);
     let text = rendered(&files[0].file.decls, &TsRules);
     // The stubbed transport records every canonical request and answers the
-    // canned sequence, the last response repeating; construction goes through
-    // the class seam.
+    // canned sequence, the last response repeating; the test assigns it over
+    // the constructed client's frozen options, where the user's own
+    // injection would have landed.
     assert!(text.contains("seen.push(req);"));
     assert!(text.contains("{ status: 500, headers: {}, body: \"{\\\"id\\\":\\\"n1\\\"}\" },"));
     assert!(text.contains("return responses[Math.min(seen.length - 1, responses.length - 1)];"));
-    assert!(text.contains("const c = Client.forTest({ transport }, \"k\");"));
+    assert!(text.contains("const c = new Client(\"k\");"), "{text}");
+    assert!(
+        text.contains("const options = c[\"options\"] as { transport?: HttpTransport; fetch?: typeof fetch };"),
+        "{text}"
+    );
+    assert!(text.contains("options.transport = transport;"), "{text}");
+    assert!(text.contains("options.fetch = undefined;"), "{text}");
+    assert!(!text.contains("forTest"));
     // The whole request-pattern list matches all recorded requests with equal
     // length, in order; the headers compare through one lowercased copy per
     // request, with no helper function and no superfluous cast.
@@ -163,5 +177,8 @@ fn a_pinned_list_is_an_array_literal() {
     let files = super::test_files(&module, &ts_casing());
     let text = rendered(&files[0].file.decls, &TsRules);
     // The JSON spelling of a list of scalars is already the TypeScript one.
-    assert!(text.contains("const c = Client.forTest({ transport }, \"k\", [1.0,2.0,3.0]);"));
+    assert!(
+        text.contains("const c = new Client(\"k\", [1.0,2.0,3.0]);"),
+        "{text}"
+    );
 }

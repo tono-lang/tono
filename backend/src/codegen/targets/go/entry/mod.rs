@@ -347,7 +347,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     let Some((entries, multi, bound)) = plan::entry_setup(module, &BINDING_LANGS) else {
         return EntryEmission::empty();
     };
-    let tested: BTreeSet<String> = crate::codegen::declared_tests::entries_with_tests(module);
+    let tested = crate::codegen::declared_tests::entries_with_tests(module);
     let mut helpers = Helpers::default();
     let mut shared = surface::config_structs(module, config);
     shared.extend(handle_iface_decls(module, config));
@@ -357,11 +357,16 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         |op| wire_binding(op).is_some() || impl_binding(&bound, &op.id).is_some_and(|b| b.raw),
         decode::output_decode_decl,
     ));
-    let mut per_entry = Vec::new();
+    let mut emission = EntryEmission {
+        shared,
+        per_entry: Vec::new(),
+        ext: Vec::new(),
+    };
     for entry in &entries {
         let n = names(entry, multi);
         // The constructor comes right after the type.
         let mut decls = surface::entry_type_decls(entry, &n, module, config, multi);
+        let has_tests = tested.contains(entry.name);
         decls.extend(new_decl(
             entry,
             &n,
@@ -369,15 +374,20 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
             config,
             &mut helpers,
             multi,
-            tested.contains(entry.name),
+            has_tests,
         ));
         for op in entry.operations {
             decls.push(op_method_decl(entry, &n, op, module, config, &bound));
         }
         decls.extend(discriminator_decls_for(entry, &n, module, &bound));
-        per_entry.push((entry.name.to_string(), decls));
+        emission.per_entry.push((entry.name.to_string(), decls));
+        // The foreign constructions, one resolver each, filed under the
+        // library they call into.
+        for resolver in ext_resolver::resolver_decls(entry, module, config, multi) {
+            emission.push_ext(&resolver.lib, resolver.decl);
+        }
     }
-    EntryEmission { shared, per_entry }
+    emission
 }
 
 /// The interface declaration of every foreign opaque handle the module's
@@ -452,6 +462,7 @@ mod ext;
 /// see this crate's public API): not `cfg(test)`, so both can reuse the same
 /// fixture builders instead of each declaring their own copy.
 pub mod ext_fixtures;
+mod ext_resolver;
 #[cfg(test)]
 mod ext_tests;
 mod impl_op;

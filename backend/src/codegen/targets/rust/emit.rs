@@ -174,6 +174,14 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     for (name, decls) in entries.per_entry {
         files.push(ModuleFile::new(Group::entry(&module.name, &name), decls));
     }
+    for (lib, decls) in entries.ext {
+        // A resolver names the module's own error taxonomy and any
+        // declared-error type bare (`TonoError`, `ConfigError`, ...), the
+        // same reason an entry's own group carries this glob.
+        let mut lib_decls = vec![types_glob_use(&Group::types(&module.name))];
+        lib_decls.extend(decls);
+        files.push(ModuleFile::new(Group::ext(&module.name, &lib), lib_decls));
+    }
     files.extend(crate::codegen::targets::rust::entry::vector_tests::test_files(module, config));
     files
 }

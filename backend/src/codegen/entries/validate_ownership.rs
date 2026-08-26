@@ -59,7 +59,7 @@ fn call_args(field: &EntryField) -> Option<&[crate::ir::CallArg]> {
 /// naming a foreign-handle field), each paired with the forwarding call. A
 /// handle method call's receiver is not among them: reading a method
 /// borrows the handle, it does not hand it on (see [`other_readers`]).
-fn forwarded_handles<'a>(
+pub(super) fn forwarded_handles<'a>(
     module: &Module,
     declared: &[&'a EntryField],
     field: &'a EntryField,

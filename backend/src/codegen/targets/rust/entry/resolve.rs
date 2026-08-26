@@ -17,7 +17,6 @@
 //!   Rust match-pattern syntax, so one spelling covers a `String`, a numeric,
 //!   or an open-enum subject without needing its type at the call site.
 
-use super::resolve_call;
 use super::resolve_env;
 use super::resolve_requires;
 use super::*;
@@ -53,6 +52,13 @@ pub(super) struct Resolver<'a, 'b> {
     /// Entry-prefixes a resolver function's name in a multi-entry module,
     /// matching every other per-entry companion.
     pub(super) multi: bool,
+    /// When set, every sibling read spells the resolver's own parameter
+    /// (`ext_resolver::local_ident`) rather than a read off the in-progress
+    /// settings draft `s`: this is the scope a foreign construction's own
+    /// resolver function renders its body in, taking exactly what the
+    /// declaration reads as arguments instead of reaching back into
+    /// `Settings`.
+    pub(super) param_scope: bool,
 }
 
 /// An expression casting a Rust `String` into the field's target type. See
@@ -202,10 +208,25 @@ impl Emitter for Resolver<'_, '_> {
     }
 
     fn ident(&self, name: &str) -> String {
+        if self.param_scope {
+            return super::ext_resolver::local_ident(name);
+        }
         format!("s.{}", self.field_ren(name))
     }
 
     fn path_expr(&self, path: &[String]) -> String {
+        if self.param_scope {
+            let mut out = String::new();
+            for (i, seg) in path.iter().enumerate() {
+                if i == 0 {
+                    out.push_str(&super::ext_resolver::local_ident(seg));
+                } else {
+                    out.push('.');
+                    out.push_str(&field_snake(seg, self.config));
+                }
+            }
+            return out;
+        }
         let mut out = "s".to_string();
         for (i, seg) in path.iter().enumerate() {
             out.push('.');
@@ -237,17 +258,17 @@ impl Emitter for Resolver<'_, '_> {
         Leaf(format!("{dest} = ({expr}).clone();"))
     }
 
-    fn call_assign(&mut self, field: &EntryField, call: &EntryCall, dest: &str) -> String {
-        resolve_call::call_assign(self, field, call, dest)
+    fn call_assign(&mut self, field: &EntryField, _call: &EntryCall, _dest: &str) -> String {
+        super::ext_resolver::call_site(self, field)
     }
 
     fn handle_call_assign(
         &mut self,
         field: &EntryField,
-        call: &crate::ir::OpImplCall,
-        dest: &str,
+        _call: &crate::ir::OpImplCall,
+        _dest: &str,
     ) -> String {
-        super::ext::handle_call_assign(self, field, call, dest)
+        super::ext_resolver::call_site(self, field)
     }
 
     /// A call-sourced field's `@with` fallback only ever reaches this leaf
@@ -284,12 +305,27 @@ impl Emitter for Resolver<'_, '_> {
         } else {
             format!("{}.unwrap()", self.arg_take(field))
         };
+        // A forwarded handle has no Settings slot at all (its single reader
+        // takes it straight off this binding): the injected value assigns
+        // into the same pre-declared local its resolver call's `else` arm
+        // assigns too (see `resolution_steps`'s prelude), not a write into
+        // `s`.
+        if self.entry.is_forwarded(self.module, &field.name) {
+            return Leaf(format!(
+                "{} = {value};",
+                super::ext_resolver::forwarded_local_ident(field)
+            ));
+        }
         Leaf(format!("{dest} = {};", self.store(field, &value)))
     }
 
     /// An `@arg` field's own guaranteed assignment. Overridden purely to
     /// route the value through [`Self::store`]; the spelling is otherwise
-    /// the shared plan's own.
+    /// the shared plan's own. `new_settings` always owns its parameters
+    /// outright (a builder's own fields arrive destructured into locals
+    /// before the call, never borrowed), so a foreign handle here — not
+    /// `Clone` in general — moves rather than clones, same as `new`'s own
+    /// bare arguments.
     fn assign_arg(&mut self, field: &EntryField, dest: &str) -> Leaf {
         let value = self.arg_ident(field);
         Leaf(format!("{dest} = {};", self.store(field, &value)))
@@ -298,8 +334,7 @@ impl Emitter for Resolver<'_, '_> {
     /// The `decode_opening`/JSON-body `@arg` assignment (a foreign-handle
     /// field has no declared shape in `module.shapes` -- its type lives in
     /// `ext_libs` -- so it reaches `json_body`/`decode_opening`, not
-    /// [`Self::assign_arg`]). Overridden for the same reason: the value's
-    /// stored slot may be wrapped in `Option`.
+    /// [`Self::assign_arg`]). Overridden for the same reason.
     fn arg_assign(&mut self, field: &EntryField, dest: &str) -> String {
         let value = self.arg_ident(field);
         format!("{dest} = {};", self.store(field, &value))

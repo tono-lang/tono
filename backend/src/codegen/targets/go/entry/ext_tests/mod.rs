@@ -21,6 +21,7 @@ fn entry_text(module: &Module) -> String {
     let emission = emit(module, &go_casing());
     let mut decls = emission.shared;
     decls.extend(emission.per_entry.into_iter().flat_map(|(_, d)| d));
+    decls.extend(emission.ext.into_iter().flat_map(|(_, d)| d));
     rendered(&decls, &GoRules::default())
 }
 

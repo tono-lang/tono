@@ -59,6 +59,10 @@ const TEST_SUFFIX: &str = ".test";
 /// The suffix marking the live variant of an entry's test group: the same
 /// vector cases, run against the real endpoint instead of a mock.
 const LIVE_TEST_SUFFIX: &str = ".live";
+/// The suffix marking the group holding a module's construction glue for one
+/// `ext` library (`mathkit.ext`). Like the test suffixes, the dot keeps it
+/// apart from any entry's own name.
+const EXT_SUFFIX: &str = ".ext";
 
 /// The SDK-root support group's path. A symbol table names it when it maps a
 /// well-known primitive, since those are one set of types for the whole SDK
@@ -191,6 +195,30 @@ impl Group {
         strip_test_suffix(&self.name)
     }
 
+    /// The group holding a module's construction glue for one `ext` library:
+    /// the resolver function of every field constructed through that
+    /// library, so the client's constructor reads as the sequence of calls
+    /// and the foreign calls themselves sit in a file named for the library.
+    /// Internal (a consumer never names a resolver) and colocated: a resolver
+    /// returns the module's own error types and reads its own generated
+    /// handle interfaces, so it lives in the same package as the client.
+    pub fn ext(module: &str, lib: &str) -> Self {
+        Self {
+            module: Some(module.into()),
+            name: format!("{lib}{EXT_SUFFIX}"),
+            origin: Origin::Spec,
+            audience: Audience::Internal,
+            colocated: true,
+        }
+    }
+
+    /// The `ext` library an ext-glue group belongs to, or `None` for any
+    /// other group.
+    pub fn ext_of(&self) -> Option<&str> {
+        self.module.as_deref()?;
+        self.name.strip_suffix(EXT_SUFFIX)
+    }
+
     /// This group's path, the string the component tree and the import engine
     /// carry in place of a bare module name.
     pub fn path(&self) -> String {
@@ -220,7 +248,10 @@ impl Group {
             (Some(module), INTERNAL) => Self::module_internal(module),
             (Some(module), name) => match strip_test_suffix(name) {
                 Some((entry, live)) => Self::tests(module, entry, live),
-                None => Self::entry(module, name),
+                None => match name.strip_suffix(EXT_SUFFIX) {
+                    Some(lib) => Self::ext(module, lib),
+                    None => Self::entry(module, name),
+                },
             },
         })
     }
@@ -329,6 +360,7 @@ mod tests {
             Group::entry("payments.charges", "client"),
             Group::tests("payments.charges", "client", false),
             Group::tests("payments.charges", "client", true),
+            Group::ext("payments.charges", "mathkit"),
         ] {
             assert_eq!(Group::from_path(&group.path()).as_ref(), Some(&group));
         }
@@ -403,6 +435,23 @@ mod tests {
         // An entry group is not a test group, and the entry's own name never
         // carries the marker (a dot cannot occur in an identifier).
         assert_eq!(Group::entry("notes", "client").tests_of(), None);
+    }
+
+    #[test]
+    fn an_ext_group_is_internal_colocated_and_named_for_its_library() {
+        let group = Group::ext("notes", "mathkit");
+        assert_eq!(group.path(), "notes::mathkit.ext");
+        assert_eq!(group.ext_of(), Some("mathkit"));
+        assert!(group.is_internal());
+        assert!(group.colocated);
+        assert_eq!(group.origin, Origin::Spec);
+        // Neither an entry nor a test group answers as an ext group, and an
+        // ext group is neither of those.
+        assert_eq!(Group::entry("notes", "client").ext_of(), None);
+        assert_eq!(Group::tests("notes", "client", false).ext_of(), None);
+        assert_eq!(group.tests_of(), None);
+        // Two libraries in one module are two distinct groups.
+        assert_ne!(Group::ext("notes", "envkit").path(), group.path());
     }
 
     #[test]

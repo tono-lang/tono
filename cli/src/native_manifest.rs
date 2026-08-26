@@ -138,7 +138,7 @@ mod tests {
 
     fn entry_model() -> Model {
         decode_model(&format!(
-            r#"{{"tono_ir_version":{},"modules":[{{"name":"demo","shapes":[{{"id":"demo#client","kind":"entry","fields":[],"operations":[]}}],"operations":[]}}]}}"#,
+            r#"{{"tono_ir_version":{},"modules":[{{"name":"demo","shapes":[{{"id":"demo#client","kind":"entry","fields":[],"operations":[{{"id":"demo#client.ping","kind":"operation","input":null,"output":null,"errors":[],"traits":[],"wire":{{"method":"GET","uri":{{"template":[{{"lit":"/ping"}}]}},"response_bindings":{{}},"success":[200],"endpoint":null}}}}]}}],"operations":[]}}]}}"#,
             tono_backend::ir::TONO_IR_VERSION
         ))
         .unwrap()

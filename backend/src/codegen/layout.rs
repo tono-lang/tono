@@ -111,6 +111,18 @@ pub fn output_path(target: TargetKind, grp: &Group) -> PathBuf {
         };
         return root.join(module_dir(module)).join(file);
     }
+    // An ext-glue group's file is named for the library it calls, in the
+    // spelling each ecosystem gives a companion file: `mathkit_ext.go` beside
+    // `client.go`, `mathkit_ext.ts` beside `client.ts`, and the `ext_mathkit`
+    // module beside `client` in Rust. The pure `{name}.{ext}` rule would spell
+    // the dot the group name carries, so the ext groups escape it here.
+    if let (Some(module), Some(lib)) = (&grp.module, grp.ext_of()) {
+        let file = match target {
+            TargetKind::Rust => format!("ext_{lib}.{ext}"),
+            TargetKind::Go | TargetKind::TypeScript => format!("{lib}_ext.{ext}"),
+        };
+        return root.join(module_dir(module)).join(file);
+    }
     match (&grp.module, target) {
         // Each target fences an internal group with what its own ecosystem
         // reaches for, which is not the same shape in all three.

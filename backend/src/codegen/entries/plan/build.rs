@@ -161,11 +161,26 @@ pub fn presence_kind(field: &EntryField, entry: &EntryModel, module: &Module) ->
 /// resolves, so every check reads the resolved value and the error-value
 /// only decorates it.
 pub fn build_requires(entry: &EntryModel, module: &Module, e: &mut dyn Emitter) -> Stmt {
+    build_requires_for(entry, module, e, &|_| true)
+}
+
+/// [`build_requires`] restricted to the consumed paths whose head `keep`
+/// accepts: a check reads the head's error variable, so it has to be spelled
+/// in the same function that resolved the head.
+pub fn build_requires_for(
+    entry: &EntryModel,
+    module: &Module,
+    e: &mut dyn Emitter,
+    keep: &dyn Fn(&str) -> bool,
+) -> Stmt {
     let mut out: Vec<Stmt> = Vec::new();
     for path in entry.consumed_field_paths() {
         let Some(head) = path.first() else {
             continue;
         };
+        if !keep(head) {
+            continue;
+        }
         let Some(field) = entry.fields.iter().find(|f| f.name == *head) else {
             continue;
         };

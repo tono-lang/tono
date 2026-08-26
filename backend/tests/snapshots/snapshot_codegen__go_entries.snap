@@ -1,6 +1,6 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 224
+assertion_line: 228
 expression: "render_sdk(entries_module(), TargetKind::Go, Some(\"example.com/sdk\"))"
 ---
 // ==== go/internal/transport/transport.go ====
@@ -486,49 +486,25 @@ type ClientAPI interface {
 
 var _ ClientAPI = (*Client)(nil)
 
-// resolveSettingClientName resolves the client_name construction value.
-func resolveSettingClientName(with *string) string {
-	if with != nil {
-		return *with
-	}
-	return "demo"
-}
-
-// resolveSettingEndpointVersion resolves the endpoint_version construction value.
-func resolveSettingEndpointVersion() string {
-	if v, ok := os.LookupEnv("ENDPOINT_VERSION"); ok && v != "" {
-		var parsed string
-		parsed = v
-		return parsed
-	}
-	return "v2"
-}
-
-// resolveSettingTimeout resolves the timeout construction value.
-func resolveSettingTimeout(with *support.Duration) support.Duration {
-	if with != nil {
-		return *with
-	}
-	return support.Duration("10s")
-}
-
-// resolveSettingMaxRetries resolves the max_retries construction value.
-func resolveSettingMaxRetries(with *int32) int32 {
-	if with != nil {
-		return *with
-	}
-	return int32(3)
-}
-
 // New constructs Client: positional @arg values, options for @with,
 // declared sources resolved top-down, then the declared validation.
 func New(apiKey string, seg string, opts ...ClientOption) (*Client, error) {
+	s, err := newSettings(apiKey, seg, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return newClient(s)
+}
+
+// newSettings resolves every construction value of Client that no
+// foreign call reaches, in declared order, then runs the consumed-chain
+// requires and the declared validation over them.
+func newSettings(apiKey string, seg string, opts ...ClientOption) (Settings, error) {
 	w := clientOptions{}
 	for _, opt := range opts {
 		opt(&w)
 	}
 	s := Settings{Headers: map[string]string{}}
-
 	s.APIKey = apiKey
 
 	s.ClientName = resolveSettingClientName(w.clientName)
@@ -592,22 +568,22 @@ func New(apiKey string, seg string, opts ...ClientOption) (*Client, error) {
 	if raw, ok := os.LookupEnv("SERVICE_CREDENTIALS"); ok && raw != "" {
 		var probe map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(raw), &probe); err != nil {
-			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_CREDENTIALS", err)}
+			return s, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_CREDENTIALS", err)}
 		}
 		if rv, ok := probe["token"]; !ok || string(rv) == "null" {
-			return nil, &ConfigError{Message: fmt.Sprintf("%s: missing field token", "SERVICE_CREDENTIALS")}
+			return s, &ConfigError{Message: fmt.Sprintf("%s: missing field token", "SERVICE_CREDENTIALS")}
 		}
 		if rv, ok := probe["account_id"]; !ok || string(rv) == "null" {
-			return nil, &ConfigError{Message: fmt.Sprintf("%s: missing field account_id", "SERVICE_CREDENTIALS")}
+			return s, &ConfigError{Message: fmt.Sprintf("%s: missing field account_id", "SERVICE_CREDENTIALS")}
 		}
 		dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
 		dec.DisallowUnknownFields()
 		var decoded Credentials
 		if err := dec.Decode(&decoded); err != nil {
-			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_CREDENTIALS", err)}
+			return s, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_CREDENTIALS", err)}
 		}
 		if invalid := ValidateCredentials(decoded); invalid != nil {
-			return nil, invalid
+			return s, invalid
 		}
 		s.Creds = decoded
 		credsErr = nil
@@ -618,7 +594,7 @@ func New(apiKey string, seg string, opts ...ClientOption) (*Client, error) {
 	var labelsErr error
 	if raw, ok := os.LookupEnv("SERVICE_LABELS"); ok && raw != "" {
 		if err := json.Unmarshal([]byte(raw), &s.Labels); err != nil {
-			return nil, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_LABELS", err)}
+			return s, &ConfigError{Message: fmt.Sprintf("%s: %v", "SERVICE_LABELS", err)}
 		}
 		labelsErr = nil
 	} else {
@@ -645,9 +621,9 @@ func New(apiKey string, seg string, opts ...ClientOption) (*Client, error) {
 
 	if s.Endpoint == "" {
 		if endpointErr == nil {
-			return nil, &ConfigError{Message: "endpoint: no value"}
+			return s, &ConfigError{Message: "endpoint: no value"}
 		}
-		return nil, &ConfigError{Message: "endpoint <- " + endpointErr.Error(), Cause: endpointErr}
+		return s, &ConfigError{Message: "endpoint <- " + endpointErr.Error(), Cause: endpointErr}
 	}
 
 	violations := []Violation{}
@@ -655,10 +631,16 @@ func New(apiKey string, seg string, opts ...ClientOption) (*Client, error) {
 		violations = append(violations, Violation{Field: "api_key", Constraint: "length", Message: "api_key length must be >= 1"})
 	}
 	if len(violations) > 0 {
-		return nil, &ValidationError{Violations: violations}
+		return s, &ValidationError{Violations: violations}
 	}
 	_ = credsErr
 	_ = bySegmentErr
+	return s, nil
+}
+
+// newClient builds Client over assembled settings: the runtime values
+// freeze here, after every construction value resolved.
+func newClient(s Settings) (*Client, error) {
 	timeoutDuration := time.Duration(0)
 	{
 		d, err := time.ParseDuration(string(s.Timeout))
@@ -671,6 +653,40 @@ func New(apiKey string, seg string, opts ...ClientOption) (*Client, error) {
 		return nil, errors.New("Settings.HTTPClient and Settings.Transport are mutually exclusive: set the native slot or the canonical slot, not both")
 	}
 	return &Client{settings: s, timeoutDuration: timeoutDuration}, nil
+}
+
+// resolveSettingClientName resolves the client_name construction value.
+func resolveSettingClientName(with *string) string {
+	if with != nil {
+		return *with
+	}
+	return "demo"
+}
+
+// resolveSettingEndpointVersion resolves the endpoint_version construction value.
+func resolveSettingEndpointVersion() string {
+	if v, ok := os.LookupEnv("ENDPOINT_VERSION"); ok && v != "" {
+		var parsed string
+		parsed = v
+		return parsed
+	}
+	return "v2"
+}
+
+// resolveSettingTimeout resolves the timeout construction value.
+func resolveSettingTimeout(with *support.Duration) support.Duration {
+	if with != nil {
+		return *with
+	}
+	return support.Duration("10s")
+}
+
+// resolveSettingMaxRetries resolves the max_retries construction value.
+func resolveSettingMaxRetries(with *int32) int32 {
+	if with != nil {
+		return *with
+	}
+	return int32(3)
 }
 
 func (c *Client) SaveNote(ctx context.Context, input Note) (Note, error) {

@@ -145,9 +145,9 @@ fn exported_in_text_kinds(decls: &[Decl]) -> Vec<(String, bool)> {
             let Some(mut keyword) = words.next() else {
                 continue;
             };
-            // `abstract` qualifies the keyword rather than being one, so the name
-            // is one word further along.
-            if keyword == "abstract" {
+            // `abstract` and `async` qualify the keyword rather than being one,
+            // so the name is one word further along.
+            if keyword == "abstract" || keyword == "async" {
                 let Some(next) = words.next() else {
                     continue;
                 };
@@ -310,6 +310,15 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
         attach_text_refs(&mut decls, &codec_names);
         let provides = exported_in_text(&decls);
         files.push(ModuleFile::new(Group::entry(&module.name, &name), decls).providing(provides));
+    }
+    // The construction glue of each `ext` library the entries call into, in
+    // a module named for the library that the barrel never names: the
+    // client's `create` reads as the sequence of resolver calls, and the
+    // foreign calls sit together per library.
+    for (lib, mut decls) in entries.ext {
+        attach_text_refs(&mut decls, &codec_names);
+        let provides = exported_in_text(&decls);
+        files.push(ModuleFile::new(Group::ext(&module.name, &lib), decls).providing(provides));
     }
     if !codec_decls.is_empty() {
         let provides = exported_in_text(&codec_decls);

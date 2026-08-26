@@ -34,36 +34,20 @@
 //! An opaque handle's own methods (`type publisher { extern send(..) }`,
 //! invoked from an op's `impl`) are a different call site: `ext_handle_call`.
 //!
-//! ## The declared-test stub seam
+//! ## The resolver per construction
 //!
-//! A generated hermetic test stubbing a free extern-fn call (`stub
-//! companyconfig.load: ...`) needs to answer with the canned value in place
-//! of the real call, without ever letting the real third-party package
-//! resolve at Node's module-load time (a static top-level `import` is
-//! resolved eagerly, unconditionally, whether or not the call the import
-//! backs ever actually runs). The whole `try { await real(...); project;
-//! } catch { map }` body therefore lives once, module-scoped, behind a
-//! mutable `let` per extern-call field ([`seam_decls`]) rather than inline at
-//! the field's own resolution point: an ESM import is a read-only binding,
-//! so swapping *that* directly is not an option (the same reasoning
-//! `impl_op::impl_seam_var` already applies to a bespoke `ext impl`). The
-//! seam function receives the in-progress `Settings` draft as its own
-//! parameter (matching the `s.<field>` spelling every argument already reads
-//! off of), so a canned stub -- a plain `async () => value` closing over
-//! nothing -- is freely assignable to it (a function declaring fewer
-//! parameters than its target type is always assignable in TypeScript). The
-//! stub's own answer is validated against the extern's declared *logical*
-//! return type at the frontend, which is exactly what
-//! this seam's own return type is: swapping it in skips the real call, the
-//! `yields`/`returns` projection, and the error mapping in one step, rather
-//! than trying to fake a raw foreign result the projection would have to
-//! re-derive from.
+//! The whole `try { await real(...); project; } catch { map }` body lives in
+//! a named, exported function per constructed field (`ext_resolver`), in a
+//! module of its own per `ext` library that the barrel never names. The
+//! client's `create` calls each resolver in resolution order and stores what
+//! it returns; a generated hermetic test never calls the resolver of a
+//! stubbed construction at all, it assigns its fake straight into the
+//! settings it assembled, so no module-level mutable binding and no exported
+//! swapper exist anywhere in the shipped surface.
 
 use std::collections::BTreeSet;
 
-use super::{
-    field_camel, field_ts_type, foreign_handle, module_symbol, pascal, Helpers, Names, Resolver,
-};
+use super::{field_camel, field_ts_type, foreign_handle, module_symbol, pascal, Names, Resolver};
 use crate::codegen::entries::EntryModel;
 use crate::codegen::foreign_spelling;
 use crate::codegen::ops::error_names;
@@ -74,23 +58,7 @@ use crate::ir::{
     ReturnsValue, Select,
 };
 
-/// The module-local binding an extern-call field's generated leaf invokes
-/// instead of the imported foreign symbol directly: see the module-level doc
-/// for why. `swap_fn` names the exported test-only swapper it works with.
-pub(super) fn ext_seam_var(n: &Names, field: &EntryField) -> String {
-    super::camel(&format!("{}{}_ext", n.op_prefix, field.name))
-}
-
-/// The exported swapper a generated test simulates a free extern-fn stub
-/// through.
-pub(super) fn ext_swap_fn_name(n: &Names, field: &EntryField) -> String {
-    format!(
-        "swap{}ExtForTest",
-        super::pascal(&format!("{}{}", n.op_prefix, field.name))
-    )
-}
-
-pub(super) use super::ext_args::{field_ref, json_literal, render_arg};
+pub(super) use super::ext_args::{json_literal, render_arg};
 
 /// A spelling as the emitted TypeScript writes it: verbatim, with a
 /// reference to one of the module's own types rendered as the type it
@@ -251,14 +219,14 @@ pub(super) fn returns_value_expr(yields_name: &str, value: &ReturnsValue) -> Str
 /// `entries::validate_entries` (`call_resolves`) has already confirmed all of
 /// this for the typescript target before generation reaches here, so every
 /// lookup is an internal-invariant check, not a validation.
-struct Lookup<'a> {
-    lib: &'a ExtLib,
-    decl: &'a crate::ir::ExternDecl,
-    lang: &'a ExternLang,
-    params: &'a [ExternParam],
+pub(super) struct Lookup<'a> {
+    pub(super) lib: &'a ExtLib,
+    pub(super) decl: &'a crate::ir::ExternDecl,
+    pub(super) lang: &'a ExternLang,
+    pub(super) params: &'a [ExternParam],
 }
 
-fn lookup<'a>(module: &'a Module, field: &EntryField, call: &EntryCall) -> Lookup<'a> {
+pub(super) fn lookup<'a>(module: &'a Module, field: &EntryField, call: &EntryCall) -> Lookup<'a> {
     let lib = module
         .ext_libs
         .iter()
@@ -297,13 +265,12 @@ fn lookup<'a>(module: &'a Module, field: &EntryField, call: &EntryCall) -> Looku
     }
 }
 
-/// The try/catch body a seam function performs: the real call, its
+/// The try/catch body a resolver performs: the real call, its
 /// `yields`/`returns` projection (or bare pass-through), and its error
-/// boundary, ending in `return` rather than an assignment (this is always
-/// the seam's own body now -- see the module doc for why the assignment
-/// itself lives at the field's own resolution point instead).
+/// boundary, ending in `return`. `ref_expr` spells a sibling-field
+/// reference (the resolver's own parameter).
 #[allow(clippy::too_many_arguments)]
-fn call_body(
+pub(super) fn call_body(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
     module: &Module,
@@ -311,6 +278,7 @@ fn call_body(
     call: &EntryCall,
     refs: &mut Vec<Symbol>,
     sentinel_types: &mut BTreeSet<String>,
+    ref_expr: &dyn Fn(&EntryModel<'_>, &crate::codegen::casing::CasingConfig, &[String]) -> String,
 ) -> String {
     let l = lookup(module, field, call);
     let lang = l.lang;
@@ -322,7 +290,7 @@ fn call_body(
         let mut parts = Vec::with_capacity(lang.call_args.len());
         for a in &lang.call_args {
             parts.push(render_arg(
-                entry, config, module, l.lib, a, l.params, &call.args, &field_ref,
+                entry, config, module, l.lib, a, l.params, &call.args, ref_expr,
             ));
         }
         parts.join(", ")
@@ -340,9 +308,9 @@ fn call_body(
         // No projection: the extern's own construction result already is
         // the logical value (see the module doc), whether the binding left
         // the positions to the convention or named the one it returns. For
-        // a foreign-handle field that "already is" now has a real generated
-        // interface to be, so the seam narrows the honestly-`unknown` raw
-        // result into it here, once, at the exact tono-declared
+        // a foreign-handle field that "already is" has a real generated
+        // interface to be, so the resolver narrows the honestly-`unknown`
+        // raw result into it here, once, at the exact tono-declared
         // construction boundary -- not a reusable projection, just this one
         // field trusting the frontend's own guarantee that this call's
         // declared logical type is the field's own declared type.
@@ -435,143 +403,6 @@ pub(super) fn sentinel_switch(
     checks
 }
 
-/// The per-field seam bindings of an entry's extern-call fields: one mutable
-/// `let` per field sourced by a free-fn `ext` call or by a handle-method
-/// call (an async function taking the in-progress `Settings` draft and
-/// performing the real call/projection/error-mapping the field's own
-/// resolution step used to inline directly), plus (only when the entry
-/// declares tests) the exported swapper a generated test goes through to
-/// stub that call. An op's own `impl` body reaching a handle's method is a
-/// different call site with a seam of its own
-/// (`ext_handle_call::op_seam_decls`), not seamed here.
-pub(super) fn seam_decls(
-    entry: &EntryModel<'_>,
-    n: &Names,
-    module: &Module,
-    config: &crate::codegen::casing::CasingConfig,
-    helpers: &mut Helpers,
-    has_tests: bool,
-) -> Vec<Decl> {
-    let mut decls = Vec::new();
-    for field in entry.fields.iter().copied() {
-        if let Some(call) = &field.handle_call {
-            decls.push(handle_call_seam_decl(
-                entry, n, module, config, helpers, has_tests, field, call,
-            ));
-            continue;
-        }
-        let Some(call) = &field.call else { continue };
-        let l = lookup(module, field, call);
-        let seam = ext_seam_var(n, field);
-        let mut refs = Vec::new();
-        let mut sentinel_types = BTreeSet::new();
-        let body = call_body(
-            entry,
-            config,
-            module,
-            field,
-            call,
-            &mut refs,
-            &mut sentinel_types,
-        );
-        helpers.ext_error_types.extend(sentinel_types);
-        let target_ty = field_ts_type(&field.target, module);
-        refs.extend(super::type_refs(&field.target, module));
-
-        let mut text = format!(
-            "// {seam} is the call the generated field resolver goes through to reach\n\
-             // the foreign {sym} (an ESM import is a read-only binding, so a test that\n\
-             // simulates an outcome swaps this module-local one instead).\n\
-             let {seam}: (s: {settings}) => Promise<{target_ty}> = async (s) => {{\n{body}\n}};",
-            sym = foreign_spelling::constructed(&l.lang.symbol).unwrap_or(&l.lang.symbol),
-            settings = n.settings,
-            body = indent_body(&body),
-        );
-        if has_tests {
-            text.push_str(&swap_fn_text(n, field, &seam));
-        }
-        decls.push(Decl::raw_with(text, refs));
-    }
-    decls
-}
-
-/// One field's seam for a `= .field.method(args)` source: the same
-/// module-scoped `let` a free call's seam takes (so the field's own
-/// resolution step is the one-line `dest = await seam(s)` either way), with
-/// no foreign import of its own, since the call goes through the receiver
-/// field the draft already holds.
-#[allow(clippy::too_many_arguments)]
-fn handle_call_seam_decl(
-    entry: &EntryModel<'_>,
-    n: &Names,
-    module: &Module,
-    config: &crate::codegen::casing::CasingConfig,
-    helpers: &mut Helpers,
-    has_tests: bool,
-    field: &EntryField,
-    call: &crate::ir::OpImplCall,
-) -> Decl {
-    let seam = ext_seam_var(n, field);
-    let mut refs = Vec::new();
-    let mut sentinel_types = BTreeSet::new();
-    let body = super::ext_handle_call::handle_call_body(
-        entry,
-        config,
-        module,
-        field,
-        call,
-        &mut refs,
-        &mut sentinel_types,
-    );
-    helpers.ext_error_types.extend(sentinel_types);
-    let target_ty = field_ts_type(&field.target, module);
-    refs.extend(super::type_refs(&field.target, module));
-    let call_name = format!(".{}.{}", call.recv.join("."), call.method);
-    let mut text = format!(
-        "// {seam} is the call the generated field resolver goes through to reach\n\
-         // {call_name} on the resolved handle (a test that simulates an outcome swaps\n\
-         // this module-local one instead).\n\
-         let {seam}: (s: {settings}) => Promise<{target_ty}> = async (s) => {{\n{body}\n}};",
-        settings = n.settings,
-        body = indent_body(&body),
-    );
-    if has_tests {
-        text.push_str(&swap_fn_text(n, field, &seam));
-    }
-    Decl::raw_with(text, refs)
-}
-
-/// The exported swapper a generated test simulates a stub through, for one
-/// field's seam.
-fn swap_fn_text(n: &Names, field: &EntryField, seam: &str) -> String {
-    let swap = ext_swap_fn_name(n, field);
-    format!(
-        "\n\n// {swap} swaps the extern call {field} goes through and returns the\n\
-         // previous one; a test generated from the declared tests simulates an\n\
-         // outcome with it and restores the real call afterwards.\n\
-         export function {swap}(next: typeof {seam}): typeof {seam} {{\n\
-         \x20 const prev = {seam};\n\
-         \x20 {seam} = next;\n\
-         \x20 return prev;\n\
-         }}",
-        field = field.name,
-    )
-}
-
-fn indent_body(body: &str) -> String {
-    body.lines()
-        .map(|line| {
-            if line.is_empty() {
-                "\n".to_string()
-            } else {
-                format!("  {line}\n")
-            }
-        })
-        .collect::<String>()
-        .trim_end_matches('\n')
-        .to_string()
-}
-
 /// The typed-error class name a declared sentinel maps to: the bare
 /// identifier the `.tono` author wrote (`overloaded`), cased through the
 /// same engine as every other generated identifier, suffixed the way every
@@ -604,34 +435,29 @@ pub(super) fn sentinel_error_decl(sentinel_type: &str, module: &Module) -> Decl 
     )
 }
 
-/// [`plan::Emitter::call_assign`] for TypeScript: hands the field's own value
-/// off to the module-scoped seam ([`seam_decls`]), passing it the in-progress
-/// `Settings` draft any of the seam's own argument rendering reads sibling
-/// fields off of. `dest` is already a ready-to-use assignment target (a
-/// top-level field or a config member path), supplied by the shared plan.
+/// [`plan::Emitter::call_assign`] for TypeScript: a call to the field's
+/// own resolver (see `ext_resolver`), which spells the destination itself (a
+/// forwarded handle is bound to a local and never stored).
 pub(super) fn call_assign(
-    _r: &mut Resolver,
+    r: &mut Resolver,
     field: &EntryField,
     _call: &EntryCall,
-    dest: &str,
+    _dest: &str,
     n: &Names,
 ) -> String {
-    let seam = ext_seam_var(n, field);
-    format!("{dest} = await {seam}(s);")
+    super::ext_resolver::call_site_from_settings(r.entry, r.module, r.config, n, field)
 }
 
-/// [`plan::Emitter::handle_call_assign`] for TypeScript: the same hand-off
-/// to the field's own module-scoped seam a free call takes; the seam body
-/// is the handle-method call (`ext_handle_call::handle_call_body`).
+/// [`plan::Emitter::handle_call_assign`] for TypeScript: the same call to
+/// the field's own resolver a free call makes.
 pub(super) fn handle_call_assign(
-    _r: &mut Resolver,
+    r: &mut Resolver,
     field: &EntryField,
     _call: &crate::ir::OpImplCall,
-    dest: &str,
+    _dest: &str,
     n: &Names,
 ) -> String {
-    let seam = ext_seam_var(n, field);
-    format!("{dest} = await {seam}(s);")
+    super::ext_resolver::call_site_from_settings(r.entry, r.module, r.config, n, field)
 }
 
 #[cfg(test)]

@@ -255,6 +255,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     };
     let tested = crate::codegen::declared_tests::entries_with_tests(module);
     let mut helpers = Helpers::default();
+    let mut ext: Vec<(String, Vec<Decl>)> = Vec::new();
     let mut decls = Vec::new();
     decls.extend(config_interfaces(module, config));
     // A bound contract/constraint gets its boundary wrapper here too, or the
@@ -281,22 +282,6 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         let mut own = vec![settings_interface(entry, &n, config, module)];
         own.extend(config_object_interface(entry, &n, config, module));
         own.extend(impl_op::seam_decls(entry, &n, module, &bound, has_tests));
-        own.extend(ext_call::seam_decls(
-            entry,
-            &n,
-            module,
-            config,
-            &mut helpers,
-            has_tests,
-        ));
-        own.extend(ext_handle_call::op_seam_decls(
-            entry,
-            &n,
-            module,
-            config,
-            &mut helpers,
-            has_tests,
-        ));
         own.extend(class_decl(
             entry,
             &n,
@@ -309,6 +294,14 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
         ));
         own.extend(discriminator_decls_for(entry, &n, module, &bound));
         per_entry.push((entry.name.to_string(), own));
+        // The foreign constructions, one resolver each, filed under the
+        // library they call into.
+        for resolver in ext_resolver::resolver_decls(entry, &n, module, config, &mut helpers) {
+            match ext.iter_mut().find(|(lib, _)| *lib == resolver.lib) {
+                Some((_, decls)) => decls.push(resolver.decl),
+                None => ext.push((resolver.lib, vec![resolver.decl])),
+            }
+        }
     }
     // One class per distinct sentinel-mapped type name any entry's extern
     // call declared, module-wide rather than per entry: two entries mapping
@@ -341,6 +334,7 @@ pub fn emit(module: &Module, config: &CasingConfig) -> EntryEmission {
     EntryEmission {
         shared: decls,
         per_entry,
+        ext,
     }
 }
 
@@ -356,6 +350,7 @@ fn op_method(
     bound: &[BoundExtension<'_>],
     timeout_field_expr: &dyn Fn(&[String]) -> String,
     refs: &mut Vec<Symbol>,
+    ext_error_types: &mut BTreeSet<String>,
 ) -> String {
     let en = error_names();
     let name = method_name(op, config);
@@ -418,23 +413,41 @@ fn op_method(
         // present, matching the Go target's own dispatch order; otherwise the
         // operation is implemented by bespoke sources the frontend proved are
         // bound, and the generator gate proved are bound for this target.
-        if crate::codegen::ops::op_impl_call(op).is_some() {
-            // The call itself lives in the op's module-scoped seam
-            // (`ext_handle_call::op_seam_decls`), so a declared test can
-            // stub the handle method by swapping that one binding.
-            let seam = ext_handle_call::op_seam_var(n, op);
-            let args = if input.is_some() {
-                "this.settings, input"
-            } else {
-                "this.settings"
-            };
+        if let Some(call) = crate::codegen::ops::op_impl_call(op) {
+            // The call goes straight to the handle the settings hold: a
+            // declared test stubs the handle itself with a fake whose
+            // methods answer, so the method carries no seam.
+            let mut sentinel_types = BTreeSet::new();
+            let body = ext_handle_call::impl_call_body(
+                entry,
+                config,
+                module,
+                crate::codegen::ops::input_name(op),
+                call,
+                &ret,
+                &throw,
+                refs,
+                &mut sentinel_types,
+                "this.settings",
+            );
+            ext_error_types.extend(sentinel_types);
+            let body: String = body
+                .lines()
+                .map(|line| {
+                    if line.is_empty() {
+                        "\n".to_string()
+                    } else {
+                        format!("  {line}\n")
+                    }
+                })
+                .collect();
             let doc = doc_of(&op.traits)
                 .map(|d| format!("  // {}\n", d.replace('\n', "\n  // ")))
                 .unwrap_or_default();
             return format!(
                 "{doc}  async {name}({param}): Promise<{ret}> {{\n\
                  {validate_block}\
-                 \x20   return await {seam}({args});\n\
+                 {body}\
                  \x20 }}",
             );
         }
@@ -540,6 +553,7 @@ mod ext_coerce;
 pub mod ext_fixtures;
 mod ext_handle_call;
 mod ext_handle_iface;
+mod ext_resolver;
 mod impl_op;
 mod resolve;
 mod resolve_wire_call;
