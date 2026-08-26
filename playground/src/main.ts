@@ -8,6 +8,7 @@ import {
   createOutputView,
   selectSpan,
 } from "./editor";
+import { initTonoHighlighter, highlight } from "./highlight";
 import { loadTsLang, type TsLang } from "./tslang";
 import {
   bundleRun,
@@ -58,7 +59,7 @@ async function start(): Promise<void> {
 
   let compiler: Compiler;
   try {
-    compiler = await loadCompiler();
+    [compiler] = await Promise.all([loadCompiler(), initTonoHighlighter()]);
   } catch (err) {
     statusEl.textContent = `Failed to load compiler: ${String(err)}`;
     return;
@@ -79,7 +80,7 @@ async function start(): Promise<void> {
   const editor = createEditor({
     parent: $("#editor"),
     initialSource: shared?.source ?? DEFAULT_EXAMPLE.source,
-    tokenize: (source) => compiler.tokens(source),
+    highlight,
     ide: {
       completions: (src, pos) => compiler.completionsAt(src, pos.line, pos.character),
       hover: (src, pos) => compiler.hoverAt(src, pos.line, pos.character),

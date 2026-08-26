@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Build the two compiler halves the web app embeds, straight from this repo:
-#   1. OCaml frontend -> playground/src/generated/tono_frontend.js  (js_of_ocaml)
-#   2. Rust backend   -> playground/src/generated/backend/          (wasm-bindgen)
+# Build the artifacts the web app embeds, straight from this repo:
+#   1. OCaml frontend  -> playground/src/generated/tono_frontend.js  (js_of_ocaml)
+#   2. Rust backend    -> playground/src/generated/backend/          (wasm-bindgen)
+#   3. tono grammar    -> playground/src/generated/tree-sitter-tono.wasm (highlighting)
 # Requires: opam env with dune, yojson, js_of_ocaml, js_of_ocaml-ppx, lsp,
-# jsonrpc; rustup with the wasm32-unknown-unknown target; node deps installed.
+# jsonrpc; rustup with the wasm32-unknown-unknown target; node deps installed;
+# the tree-sitter CLI; git.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -31,5 +33,7 @@ fi
 (cd "$pg/backend-wasm" &&
   "$wasm_pack" build --target web --release \
     --out-dir "$pg/src/generated/backend" --no-pack)
+
+"$(dirname "$0")/build-tono-grammar.sh"
 
 echo "build: done"

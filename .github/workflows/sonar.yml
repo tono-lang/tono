@@ -55,6 +55,16 @@ jobs:
         if: env.SONAR_TOKEN != ''
         with:
           node-version: 20
+      - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
+        if: env.SONAR_TOKEN != ''
+        with:
+          tool: tree-sitter-cli@0.26.8
+      # The highlighter tests load the real tree-sitter-tono grammar; the rest
+      # of build-compiler.sh (the OCaml frontend, the Rust wasm backend) isn't
+      # needed for coverage and would slow this job down for no benefit here.
+      - name: Build the tono grammar for the highlighter tests
+        if: env.SONAR_TOKEN != ''
+        run: playground/scripts/build-tono-grammar.sh
       - name: Generate playground coverage for Sonar
         if: env.SONAR_TOKEN != ''
         working-directory: playground

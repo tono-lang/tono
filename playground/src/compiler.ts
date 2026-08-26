@@ -8,7 +8,7 @@ import initBackend, {
   symbols as backendSymbols,
 } from "./generated/backend/tono_playground_backend";
 import "./generated/tono_frontend";
-import type { CompileResult, Diagnostic, GeneratedFile, Target, TokenSpan } from "./types";
+import type { CompileResult, Diagnostic, GeneratedFile, Target } from "./types";
 
 export interface DeclInfo {
   name: string;
@@ -50,7 +50,6 @@ export interface HoverInfo {
 interface RawFrontend {
   compile(src: string, moduleName: string): { ir: string | null; diagnostics: Diagnostic[] };
   formatSource(src: string): { formatted: string | null; error: string | null };
-  tokens(src: string): TokenSpan[];
   decls(src: string): DeclInfo[];
   completionsAt(src: string, line: number, character: number): CompletionInfo[];
   hoverAt(src: string, line: number, character: number): HoverInfo | null;
@@ -67,7 +66,6 @@ declare global {
 export interface Compiler {
   compile(source: string, moduleName: string): CompileResult;
   formatSource(source: string): { formatted: string | null; error: string | null };
-  tokens(source: string): TokenSpan[];
   decls(source: string): DeclInfo[];
   completionsAt(source: string, line: number, character: number): CompletionInfo[];
   hoverAt(source: string, line: number, character: number): HoverInfo | null;
@@ -94,7 +92,6 @@ export async function loadCompiler(): Promise<Compiler> {
       return { ir: raw.ir, diagnostics: Array.from(raw.diagnostics) };
     },
     formatSource: (source) => frontend.formatSource(source),
-    tokens: (source) => Array.from(frontend.tokens(source)),
     decls: (source) => Array.from(frontend.decls(source)),
     completionsAt: (source, line, character) =>
       Array.from(frontend.completionsAt(source, line, character)),

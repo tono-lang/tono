@@ -11,22 +11,6 @@ export interface Diagnostic {
   endOffset: number;
 }
 
-export type TokenFamily =
-  | "keyword"
-  | "type"
-  | "string"
-  | "number"
-  | "ident"
-  | "attribute"
-  | "punct";
-
-export interface TokenSpan {
-  family: TokenFamily;
-  /* Byte offsets, same convention as Diagnostic. */
-  startOffset: number;
-  endOffset: number;
-}
-
 export interface CompileResult {
   ir: string | null;
   diagnostics: Diagnostic[];
