@@ -53,9 +53,13 @@ use super::transport::FieldCtx;
 use super::{field_snake, rust_type, LANG};
 
 /// The `ExtLib` and opaque type a `Tref` names, when it names a foreign
-/// handle declared in one of this module's own `ext` blocks (its id is
-/// `"{ext_name}#{type_name}"`, the same `#`-qualified shape id every other
-/// reference uses).
+/// handle declared in one of this module's own `ext` blocks. A shape id is
+/// always `"{module_name}#{local_name}"` (the frontend's one universal
+/// convention, no exception for a type declared inside an `ext` block), so
+/// only the local name after `#` identifies it here; the ext block it
+/// belongs to can differ from the module's own name and is found by
+/// searching every lib's own types, not by matching the id's prefix against
+/// a lib name.
 pub(super) fn foreign_handle<'a>(
     t: &Tref,
     module: &'a Module,
@@ -63,9 +67,11 @@ pub(super) fn foreign_handle<'a>(
     let Tref::Ref { id, .. } = t else {
         return None;
     };
-    let (lib_name, ty) = id.split_once('#')?;
-    let lib = module.ext_libs.iter().find(|l| l.name == lib_name)?;
-    lib.types.iter().find(|t| t.name == ty).map(|t| (lib, t))
+    let ty = id.split_once('#').map_or(id.as_str(), |(_, ty)| ty);
+    module
+        .ext_libs
+        .iter()
+        .find_map(|lib| lib.types.iter().find(|t| t.name == ty).map(|t| (lib, t)))
 }
 
 /// The declaring crate's own identifier, as spelled at a call site: the

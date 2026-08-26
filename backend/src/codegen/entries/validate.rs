@@ -270,16 +270,19 @@ fn pascal_ident(name: &str) -> String {
 }
 
 /// Whether a `Tref::Ref` id names an opaque handle declared in one of the
-/// module's own `ext` blocks (its id is `"{ext_name}#{type_name}"`, the same
-/// `#`-qualified shape id every other reference uses), rather than an
-/// ordinary shape in `module.shapes`.
+/// module's own `ext` blocks, rather than an ordinary shape in
+/// `module.shapes`. A shape id is always `"{module_name}#{local_name}"`
+/// (the frontend's one universal convention, no exception for a type
+/// declared inside an `ext` block), so only the local name after `#`
+/// identifies it here; the ext block it belongs to can differ from the
+/// module's own name, so every lib's own types are searched rather than
+/// matching the id's prefix against a lib name.
 pub(crate) fn is_foreign_ref(module: &crate::ir::Module, id: &str) -> bool {
-    id.split_once('#').is_some_and(|(lib, ty)| {
-        module
-            .ext_libs
-            .iter()
-            .any(|l| l.name == lib && l.types.iter().any(|t| t.name == ty))
-    })
+    let ty = id.split_once('#').map_or(id, |(_, ty)| ty);
+    module
+        .ext_libs
+        .iter()
+        .any(|l| l.types.iter().any(|t| t.name == ty))
 }
 
 /// The `Tref::Ref` id a field's target names, if it is a shape/handle

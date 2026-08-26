@@ -53,13 +53,16 @@ fn handle_lib(lib: &str, ty: &str) -> ExtLib {
 fn foreign_handle_detects_a_declared_opaque_type() {
     let mut module = bare_module();
     module.ext_libs = vec![handle_lib("bus", "publisher")];
-    let t = Tref::Ref {
-        id: "bus#publisher".into(),
+    let r = |id: &str| Tref::Ref {
+        id: id.into(),
         args: vec![],
     };
-    let (lib, ty) = foreign_handle(&t, &module).expect("declared handle");
-    assert_eq!(lib.name, "bus");
-    assert_eq!(ty.name, "publisher");
+    let (lib, ty) = foreign_handle(&r("bus#publisher"), &module).expect("declared handle");
+    assert_eq!((lib.name.as_str(), ty.name.as_str()), ("bus", "publisher"));
+    // A shape id is module-prefixed even inside an ext block ("m", the
+    // module's own name here, not "bus"); it still resolves.
+    let (lib, ty) = foreign_handle(&r("m#publisher"), &module).expect("declared handle");
+    assert_eq!((lib.name.as_str(), ty.name.as_str()), ("bus", "publisher"));
 }
 
 #[test]
