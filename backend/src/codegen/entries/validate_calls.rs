@@ -174,13 +174,18 @@ fn handle_method_of<'m>(
             "{site}: receiver {head} is not a field of this entry"
         ));
     };
+    // A shape id is always `"{module_name}#{local_name}"`, so only the local
+    // name after `#` identifies the handle here; the ext block it belongs
+    // to can differ from the module's own name, so every lib's own types
+    // are searched rather than matching the id's prefix against a lib name.
     let handle = ref_id(&recv.target).and_then(|id| {
-        let (lib_name, type_name) = id.split_once('#')?;
-        let lib = module.ext_libs.iter().find(|l| l.name == lib_name)?;
-        lib.types
-            .iter()
-            .find(|t| t.name == type_name)
-            .map(|t| (lib, t))
+        let type_name = id.split_once('#').map_or(id, |(_, ty)| ty);
+        module.ext_libs.iter().find_map(|lib| {
+            lib.types
+                .iter()
+                .find(|t| t.name == type_name)
+                .map(|t| (lib, t))
+        })
     });
     let Some((lib, handle)) = handle else {
         return Err(format!(
@@ -455,13 +460,12 @@ pub(super) fn handle_storage_declared(
     let crate::ir::Tref::Ref { id, .. } = t else {
         return Ok(());
     };
-    let Some((lib_name, ty)) = id.split_once('#') else {
-        return Ok(());
-    };
-    let Some(lib) = module.ext_libs.iter().find(|l| l.name == lib_name) else {
-        return Ok(());
-    };
-    let Some(handle) = lib.types.iter().find(|h| h.name == ty) else {
+    let ty = id.split_once('#').map_or(id.as_str(), |(_, ty)| ty);
+    let Some((lib, handle)) = module
+        .ext_libs
+        .iter()
+        .find_map(|lib| lib.types.iter().find(|h| h.name == ty).map(|h| (lib, h)))
+    else {
         return Ok(());
     };
     let binding_lang = target.binding_langs()[0];

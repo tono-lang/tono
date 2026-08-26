@@ -61,6 +61,25 @@ fn foreign_handle_detects_a_declared_opaque_type() {
 }
 
 #[test]
+fn foreign_handle_matches_by_type_name_when_the_id_is_module_prefixed() {
+    // A shape id is always "{module_name}#{local_name}" (the frontend's one
+    // universal convention, with no exception for a type declared inside an
+    // `ext` block), so a module named differently from its own `ext` block
+    // ("app", declaring `ext bus { struct publisher {...} }") still resolves
+    // this reference correctly.
+    let mut module = bare_module();
+    module.name = "app".into();
+    module.ext_libs = vec![handle_lib("bus", "publisher")];
+    let t = Tref::Ref {
+        id: "app#publisher".into(),
+        args: vec![],
+    };
+    let (lib, ty) = ext::foreign_handle(&t, &module).expect("declared handle");
+    assert_eq!(lib.name, "bus");
+    assert_eq!(ty, "publisher");
+}
+
+#[test]
 fn foreign_handle_is_none_for_an_ordinary_shape_ref() {
     let module = bare_module();
     let t = Tref::Ref {
