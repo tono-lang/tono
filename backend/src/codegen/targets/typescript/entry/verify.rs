@@ -88,8 +88,12 @@ fn probe_type(module: &Module, lib: &ExtLib, t: &Tref) -> Result<String, String>
         },
         Tref::List(inner) => Ok(format!("{}[]", probe_type(module, lib, inner)?)),
         Tref::Param(p) => Err(format!("{p} is a type parameter")),
+        // A generated map is the plain object the emitter types it as
+        // (`Record`), never the `Map` class: a probe typing it as `Map`
+        // would accept a library that wants one where the generated call
+        // hands it a plain object.
         Tref::Map(k, v) => Ok(format!(
-            "Map<{}, {}>",
+            "Record<{}, {}>",
             probe_type(module, lib, k)?,
             probe_type(module, lib, v)?
         )),
@@ -301,6 +305,19 @@ fn op_line(
     };
     let mut body = prelude;
     body.push(format!("const tonoR: {ret} = {call};"));
+    // A spelled answer is what the library gives; the emitter reads it back
+    // as the declared return through the same conversion
+    // (`ext_coerce::coerce_back`), so the probe grades that step too, when
+    // the declared return can be written without the generated SDK (a
+    // generated shape answered under a foreign spelling passes as it is,
+    // and the library's own signature above is what there is to grade).
+    if let Some(sp) = super::ext_call::spelled_answer(lang) {
+        if let Ok(declared) = probe_type(module, lib, &decl.r#return) {
+            let value =
+                super::ext_coerce::coerce_back(&decl.r#return, &qualify(sp, module), "tonoR")?;
+            body.push(format!("const tonoV: {declared} = {value};"));
+        }
+    }
     Ok(format!(
         "function {fname}({}): void {{ {} }}",
         ps.join(", "),

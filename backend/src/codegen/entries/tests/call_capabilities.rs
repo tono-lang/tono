@@ -152,6 +152,54 @@ fn a_class_reference_to_a_module_struct_renders_in_typescript_and_is_refused_els
     }
 }
 
+/// A `yields` position spelled under a foreign type, with no `returns:`,
+/// is the answer read back as the declared return: TypeScript refuses a
+/// spelling it has no conversion back from, naming both types, and
+/// accepts one it converts (a `Map` into the plain object a map is); Go
+/// and Rust bind the answer for their compiler to grade.
+#[test]
+fn a_yields_spelling_without_a_conversion_back_is_refused_for_typescript() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.yields = vec![crate::ir::YieldsPos {
+            name: "v".into(),
+            r#type: None,
+            is_error: false,
+            foreign: Some("number".into()),
+        }];
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module.clone());
+
+    let err = super::validate_entries(&model, &[TargetKind::TypeScript]).unwrap_err();
+    assert!(
+        err.contains("config = ns.load(..)"),
+        "names the site: {err}"
+    );
+    assert!(
+        err.contains("yields: position v is spelled #(number)"),
+        "{err}"
+    );
+    assert!(err.contains("no conversion from number to string"), "{err}");
+    for target in [TargetKind::Go, TargetKind::Rust] {
+        assert!(super::validate_entries(&model, &[target]).is_ok());
+    }
+
+    let table = crate::ir::Tref::Map(
+        Box::new(crate::ir::Tref::Prim(crate::ir::Prim::String)),
+        Box::new(crate::ir::Tref::Prim(crate::ir::Prim::String)),
+    );
+    module.ext_libs[0].externs[0].r#return = table;
+    for lang in module.ext_libs[0].externs[0].langs.iter_mut() {
+        lang.yields[0].foreign = Some("Map<string, string>".into());
+    }
+    assert!(super::validate_entries(&model_of(module), &[TargetKind::TypeScript]).is_ok());
+}
+
 /// A class reference with no class behind it is refused for every target,
 /// TypeScript included: a name nothing declares (hand-fed IR), a generic
 /// struct (no single class to stand as a value), or a shape that is not a

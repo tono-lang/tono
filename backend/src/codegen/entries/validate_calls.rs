@@ -275,6 +275,7 @@ fn extern_binds_every_target(
         chained_call_renders(site, *target, lang)?;
         foreign_positions_bind(site, *target, lang)?;
         param_spellings_coerce(site, *target, module, lib, decl, lang)?;
+        yields_spelling_coerces(site, *target, decl, lang)?;
         foreign_forms_declared(site, *target, module, lib, lang)?;
         if !target.emits_nested_extern_call_args() && contains_cross_extern_call(&lang.call_args) {
             return Err(format!(
@@ -417,6 +418,38 @@ pub(super) fn param_spellings_coerce(
                 target.binding_langs()[0],
             ));
         }
+    }
+    Ok(())
+}
+
+/// A `yields` position spelled under a foreign type, with no `returns:` to
+/// project it, is the call's whole answer read back as the op's declared
+/// return: the target must have a conversion from the spelling to that
+/// type (see [`TargetKind::yields_spelling_coerces`]), or the binding is
+/// refused naming both, before an emitter could hand the compiler a value
+/// of the wrong type where the check accepted the declaration.
+pub(super) fn yields_spelling_coerces(
+    site: &str,
+    target: TargetKind,
+    decl: &crate::ir::ExternDecl,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    if lang.returns.is_some() {
+        return Ok(());
+    }
+    let Some((name, spelling)) = lang
+        .yields
+        .iter()
+        .find(|y| !y.is_error)
+        .and_then(|y| y.foreign.as_deref().map(|sp| (y.name.as_str(), sp)))
+    else {
+        return Ok(());
+    };
+    if let Err(reason) = target.yields_spelling_coerces(&decl.r#return, spelling) {
+        return Err(format!(
+            "{site}: the {} block's yields: position {name} is spelled #({spelling}); {reason}",
+            target.binding_langs()[0],
+        ));
     }
     Ok(())
 }

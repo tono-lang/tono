@@ -38,7 +38,9 @@ use crate::codegen::symbol::Symbol;
 use crate::ir::{ExtLib, ExternLang, ExternParam, Module, OpImplCall};
 
 use super::checks::field_path_expr;
-use super::ext_call::{class_reference_imports, render_arg, returns_value_expr, sentinel_switch};
+use super::ext_call::{
+    answered_value, class_reference_imports, render_arg, returns_value_expr, sentinel_switch,
+};
 use super::ext_handle_iface::resolve_handle;
 use super::module_symbol;
 use std::collections::BTreeSet;
@@ -161,8 +163,13 @@ fn call_parts(
         // No projection: the interface types `raw` as the method's declared
         // return (see the module doc), whether the binding left the
         // positions to the convention or named the one it returns, so the
-        // raw result already is this site's value.
-        (_, None) => "return raw;".to_string(),
+        // raw result already is this site's value; a spelled answer is the
+        // one case the interface declares what the library answers instead,
+        // and the value converts back here.
+        (_, None) => format!(
+            "return {};",
+            answered_value(lang, &l.decl.r#return, module, "raw")
+        ),
         (None, Some(_)) => panic!(
             "handle method {call_name} declares a returns but no yields position to project from (validate_entries should have rejected this)"
         ),

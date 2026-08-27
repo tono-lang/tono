@@ -68,6 +68,60 @@ pub(super) fn spell(spelling: &str, module: &Module) -> String {
     foreign_spelling::render(spelling, &crate::codegen::entries::generated_type(module))
 }
 
+/// The imports a spelling written into generated code needs: the library's
+/// own identifiers from the lib's module, and every generated type it
+/// references (`Map<string, .mapping>`) from the module that declares it.
+pub(super) fn spelling_symbols(
+    spelling: &str,
+    lib: &ExtLib,
+    module: &Module,
+    refs: &mut Vec<Symbol>,
+) {
+    import_spelling(spelling, lib, refs);
+    for name in foreign_spelling::references(spelling) {
+        if let Some(ty) = crate::codegen::entries::generated_type_name(module, name) {
+            refs.push(module_symbol(&ty, module));
+        }
+    }
+}
+
+/// The spelling of what the library answers, when a binding's one
+/// non-error `yields` position is spelled under a foreign type and no
+/// `returns:` projects it: the call's whole answer, read back as the op's
+/// declared return through `ext_coerce::coerce_back`. `None` when the
+/// binding leaves the answer to the declared type itself.
+pub(super) fn spelled_answer(lang: &ExternLang) -> Option<&str> {
+    if lang.returns.is_some() {
+        return None;
+    }
+    lang.yields
+        .iter()
+        .find(|y| !y.is_error)
+        .and_then(|y| y.foreign.as_deref())
+}
+
+/// The expression a call's raw answer becomes when nothing projects it:
+/// the value itself, or, when the binding spells what the library answers
+/// ([`spelled_answer`]), that value converted back into the declared type
+/// (`Object.fromEntries(raw)` for a `Map` where the op declares a map).
+/// The conversion exists: `validate_calls::yields_spelling_coerces`
+/// refused the binding otherwise.
+pub(super) fn answered_value(
+    lang: &ExternLang,
+    declared: &crate::ir::Tref,
+    module: &Module,
+    raw: &str,
+) -> String {
+    let Some(spelling) = spelled_answer(lang) else {
+        return raw.to_string();
+    };
+    super::ext_coerce::coerce_back(declared, &spell(spelling, module), raw).unwrap_or_else(|why| {
+        panic!(
+            "a yields spelling reached TypeScript codegen with no conversion; validate_calls::yields_spelling_coerces should have refused it: {why}"
+        )
+    })
+}
+
 /// The library identifiers a spelling names, to import from the lib's own
 /// TypeScript module: `new ConstantCalculator` imports `ConstantCalculator`,
 /// `FormulaCalculator.parse` imports `FormulaCalculator`,
@@ -333,7 +387,10 @@ pub(super) fn call_body(
         (_, None) if foreign_handle(&field.target, module) => {
             format!("return raw as {};", field_ts_type(&field.target, module))
         }
-        (_, None) => "return raw;".to_string(),
+        (_, None) => format!(
+            "return {};",
+            answered_value(lang, &l.decl.r#return, module, "raw")
+        ),
         (None, Some(_)) => panic!(
             "extern {call_name} declares a returns but no yields position to project from (validate_entries should have rejected this)"
         ),

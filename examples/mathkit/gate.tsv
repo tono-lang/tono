@@ -78,8 +78,11 @@ bench	rust	service.tono	pass
 # constructs the instance itself (instantiateInto(name, clazz, mappings)).
 # TypeScript declares an empty class beside the struct's interface for the
 # library to construct; Rust and Go have no type as a value, so their rows
-# pass by being refused, as capability 12's do. The mappings cross as a
-# map-typed parameter.
+# pass by being refused, as capability 12's do. The mappings table is a Map
+# on the library's side and a plain object on the generated side, both
+# ways: with the class reference alone this row was build-red (tsc: Record
+# is not a Map at the argument, and the handle's Map answer does not
+# overlap the declared Record); the spelled crossings turned it green.
 20-ts-class-reference-generated-struct	typescript	probes/20-ts-class-reference-generated-struct.tono	pass
 20-go-class-reference-generated-struct-refused	go	probes/20-go-class-reference-generated-struct-refused.tono	refused
 20-rust-class-reference-generated-struct-refused	rust	probes/20-rust-class-reference-generated-struct-refused.tono	refused

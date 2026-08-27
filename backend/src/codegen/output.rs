@@ -148,6 +148,26 @@ impl TargetKind {
         }
     }
 
+    /// Whether this target can read a value the library answered under a
+    /// `yields` spelling (`yields: (table: #(Map<string, .mapping>))` with
+    /// no `returns:`) back as the op's declared return `t`. TypeScript
+    /// runs its argument conversions the other way (`Map` to the plain
+    /// object a generated map is, `number`/`bigint` across the divide) and
+    /// names both types when it has none; Go and Rust bind the answer as
+    /// the target compiler grades it, with no conversion of their own.
+    pub fn yields_spelling_coerces(
+        self,
+        t: &crate::ir::Tref,
+        spelling: &str,
+    ) -> Result<(), String> {
+        match self {
+            Self::Go | Self::Rust => Ok(()),
+            Self::TypeScript => {
+                crate::codegen::targets::typescript::entry::yields_spelling_coerces(t, spelling)
+            }
+        }
+    }
+
     /// Whether this target can pass a struct literal of the foreign form
     /// `form` under the spelling its argument declares (`opts { .. }:
     /// #(&Options)`, for a library that takes the form by pointer): the

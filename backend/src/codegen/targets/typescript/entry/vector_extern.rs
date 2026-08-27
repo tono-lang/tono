@@ -19,7 +19,7 @@ use super::{decoded_value_expr, indent, json_text, ts_str, TestCtx};
 use crate::codegen::entries::{call_deps, TailStep};
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::entry::{
-    ext_call, ext_handle_iface, ext_resolver, foreign_handle, module_symbol,
+    ext_call, ext_coerce, ext_handle_iface, ext_resolver, foreign_handle, module_symbol,
 };
 use crate::ir::{
     EntryField, ExternDecl, ExternStub, ExternStubTarget, ReturnsValue, StubAnswer, Tref,
@@ -204,10 +204,24 @@ fn fake_method_body(
             // A foreign-shaped answer is spelled under the companion type the
             // interface declares for it; a logical answer is the op's own
             // value, graded by the fake's own cast to the handle interface.
+            // A spelled answer is what the interface declares the library
+            // gives (a `Map`), so the pinned logical value crosses into it
+            // the way an argument does.
+            let literal = json_literal_ts(&raw);
+            if let Some(spelling) = ext_call::spelled_answer(lang) {
+                let spelled = ext_call::spell(spelling, ctx.module);
+                return format!(
+                    "({})",
+                    ext_coerce::coerce(&method.r#return, &spelled, &literal)
+                        .unwrap_or_else(|why| panic!(
+                            "a yields spelling reached the TypeScript fake with no conversion; validate_calls::yields_spelling_coerces should have refused it: {why}"
+                        ))
+                );
+            }
             let cast = ext_handle_iface::foreign_struct_return(lang, ctx.module)
                 .map(|(ty, _)| format!(" as {ty}"))
                 .unwrap_or_default();
-            format!("({}{cast})", json_literal_ts(&raw))
+            format!("({literal}{cast})")
         }
         StubAnswer::Error { error } => {
             let mapped = method

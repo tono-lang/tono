@@ -81,7 +81,7 @@ fn probe_types_cover_the_declared_vocabulary() {
             Box::new(Tref::Prim(Prim::U32))
         ))
         .unwrap(),
-        "Map<string, number>"
+        "Record<string, number>"
     );
     assert_eq!(
         t(&Tref::Param("T".into())).unwrap_err(),
@@ -197,6 +197,39 @@ fn a_yields_position_without_a_type_or_spelling_is_refused() {
         &"op describe: yields position raw: summary is a type the generated SDK defines"
             .to_string()
     ));
+}
+
+/// A spelled answer is what the library gives; the probe types the result
+/// as the spelling and then reads it back into the declared return
+/// through the same conversion the emitter writes, so `tsc` grades both
+/// steps: the library's own signature and the way back.
+#[test]
+fn a_spelled_answer_is_probed_as_given_and_converted_back() {
+    let mut m = gearbox_module();
+    let decl = m.ext_libs[0]
+        .externs
+        .iter_mut()
+        .find(|d| d.name == "describe")
+        .unwrap();
+    decl.r#return = Tref::Map(
+        Box::new(Tref::Prim(crate::ir::Prim::String)),
+        Box::new(Tref::Prim(crate::ir::Prim::String)),
+    );
+    decl.langs[1].yields = vec![crate::ir::YieldsPos {
+        name: "table".into(),
+        r#type: None,
+        is_error: false,
+        foreign: Some("Map<string, string>".into()),
+    }];
+    decl.langs[1].returns = None;
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(
+        p.source.contains(
+            "const tonoR: Map<string, string> = tonoLib.describe(name); const tonoV: Record<string, string> = Object.fromEntries(tonoR);"
+        ),
+        "{}",
+        p.source
+    );
 }
 
 #[test]

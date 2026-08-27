@@ -4,23 +4,35 @@
 // from a name-to-mapping table. A tono struct is an interface in
 // TypeScript, which has no value at run time, so the generated types file
 // also declares an empty class under the same name: TypeScript merges the
-// two, and `new Profile()` is what the library gets. The mappings cross as
-// a map-typed parameter of the op; the call: line itself has no map
-// literal shape.
+// two, and `new Profile()` is what the library gets.
+//
+// The table crosses both ways as a Map, the shape a library keeps a keyed
+// collection in, while the generated map type is a plain object: the
+// parameter spells the crossing (`mappings: #(Map<string, .mapping>)`, so
+// the call writes `new Map(Object.entries(..))`) and the method reading it
+// back declares what the library answers (`yields: (table: #(Map<..>))`,
+// so the value comes back through `Object.fromEntries(..)`).
 ext mathkit {
   ts { #(@tono-ext-fixture/mathkit) }
 
   struct source {
-    ts { #(Bounded<.profile>) }
+    ts { #(Filled<.profile>) }
 
     @async(ts)
     op read(): profile {
       ts { call: #(read)() }
     }
+
+    op mappings(): map[string]mapping {
+      ts {
+        call: #(mappings)()
+        yields: (table: #(Map<string, .mapping>))
+      }
+    }
   }
 
   op load(name: string, mappings: map[string]mapping): source {
-    ts { call: #(instantiateInto)(name, profile, mappings) }
+    ts { call: #(instantiateInto)(name, profile, mappings: #(Map<string, .mapping>)) }
   }
 }
 
@@ -39,4 +51,7 @@ pub struct client {
 
   op read(): profile
     impl .source.read()
+
+  op mappings(): map[string]mapping
+    impl .source.mappings()
 }

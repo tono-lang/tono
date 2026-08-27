@@ -109,6 +109,7 @@ pub(super) fn ts_lang(decl: &ExternDecl) -> Option<&crate::ir::ExternLang> {
 /// `yields` position named, when there is one, is reported back so the
 /// caller can queue its own companion type for emission.
 fn method_signature(
+    lib: &ExtLib,
     decl: &ExternDecl,
     lang: &crate::ir::ExternLang,
     module: &Module,
@@ -120,12 +121,23 @@ fn method_signature(
         .map(|p| format!("{}: {}", camel(&p.name), ts_type(&p.r#type)))
         .collect::<Vec<_>>()
         .join(", ");
-    let (ret, struct_id) = match foreign_struct_return(lang, module) {
-        Some((ty, id)) => {
+    let (ret, struct_id) = match (
+        foreign_struct_return(lang, module),
+        super::ext_call::spelled_answer(lang),
+    ) {
+        (Some((ty, id)), _) => {
             refs.push(module_symbol(&ty, module));
             (ty, Some(id))
         }
-        None => {
+        // The binding spells what the library really answers (a `Map`
+        // where the op declares a map): the interface must say so, or the
+        // library's own value fails to type-check against it; the call
+        // site converts the answer back (`ext_handle_call`).
+        (None, Some(spelling)) => {
+            super::ext_call::spelling_symbols(spelling, lib, module, refs);
+            (super::ext_call::spell(spelling, module), None)
+        }
+        (None, None) => {
             refs.extend(super::type_refs(&decl.r#return, module));
             (super::field_ts_type(&decl.r#return, module), None)
         }
@@ -181,7 +193,7 @@ pub(super) fn handle_interface_decl(
     let mut refs = Vec::new();
     for decl in &handle.methods {
         let Some(lang) = ts_lang(decl) else { continue };
-        let (sig, struct_id) = method_signature(decl, lang, module, &mut refs);
+        let (sig, struct_id) = method_signature(lib, decl, lang, module, &mut refs);
         methods.push_str(&format!("  {sig}\n"));
         if let Some(id) = struct_id {
             foreign_struct_ids.insert(id);
