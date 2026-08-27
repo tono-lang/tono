@@ -80,6 +80,7 @@ fn a_class_reference_is_refused_for_go_and_rust_and_accepted_in_typescript() {
         vec![call_field("config", "ns", "load", vec![])],
     )]);
     let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    lib.types.push(ts_handle("answer", "Answer"));
     for lang in lib.externs[0].langs.iter_mut() {
         lang.call_args = vec![CallArg::SymbolCall(crate::ir::SymbolCall {
             symbol: "Pick".into(),
@@ -95,10 +96,150 @@ fn a_class_reference_is_refused_for_go_and_rust_and_accepted_in_typescript() {
             err.contains("config = ns.load(..)"),
             "names the site: {err}"
         );
-        assert!(err.contains("handle \"answer\""), "names the handle: {err}");
+        assert!(err.contains("\"answer\""), "names the handle: {err}");
         assert!(err.contains("has no class reference to pass"), "{err}");
     }
     assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
+}
+
+/// An opaque handle with only a `ts` block naming its class.
+fn ts_handle(name: &str, class: &str) -> crate::ir::OpaqueType {
+    crate::ir::OpaqueType {
+        name: name.into(),
+        langs: vec![crate::ir::ForeignLang {
+            lang: "ts".into(),
+            name: class.into(),
+            fields: Default::default(),
+        }],
+        methods: vec![],
+    }
+}
+
+/// A wire struct of the module, with the given type parameters.
+fn wire_struct(id: &str, params: &[&str]) -> crate::ir::Shape {
+    crate::ir::Shape {
+        id: id.into(),
+        kind: crate::ir::ShapeKind::Structure {
+            params: params.iter().map(|p| (*p).to_string()).collect(),
+            members: vec![],
+        },
+        traits: vec![],
+    }
+}
+
+/// A class reference may also name one of the module's own wire structs:
+/// TypeScript gives the struct a runtime class beside its interface, so
+/// the binding renders there; Go and Rust refuse it exactly as they refuse
+/// a handle's class, naming the struct.
+#[test]
+fn a_class_reference_to_a_module_struct_renders_in_typescript_and_is_refused_elsewhere() {
+    let mut module = module_of(vec![
+        entry_shape("m#client", vec![call_field("config", "ns", "load", vec![])]),
+        wire_struct("m#profile", &[]),
+    ]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.call_args = vec![CallArg::TypeRef("profile".into())];
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module);
+
+    assert!(super::validate_entries(&model, &[TargetKind::TypeScript]).is_ok());
+    for target in [TargetKind::Go, TargetKind::Rust] {
+        let err = super::validate_entries(&model, &[target]).unwrap_err();
+        assert!(err.contains("\"profile\""), "names the struct: {err}");
+        assert!(err.contains("has no class reference to pass"), "{err}");
+    }
+}
+
+/// A `yields` position spelled under a foreign type, with no `returns:`,
+/// is the answer read back as the declared return: TypeScript refuses a
+/// spelling it has no conversion back from, naming both types, and
+/// accepts one it converts (a `Map` into the plain object a map is); Go
+/// and Rust bind the answer for their compiler to grade.
+#[test]
+fn a_yields_spelling_without_a_conversion_back_is_refused_for_typescript() {
+    let mut module = module_of(vec![entry_shape(
+        "m#client",
+        vec![call_field("config", "ns", "load", vec![])],
+    )]);
+    let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+    for lang in lib.externs[0].langs.iter_mut() {
+        lang.yields = vec![crate::ir::YieldsPos {
+            name: "v".into(),
+            r#type: None,
+            is_error: false,
+            foreign: Some("number".into()),
+        }];
+    }
+    module.ext_libs = vec![lib];
+    let model = model_of(module.clone());
+
+    let err = super::validate_entries(&model, &[TargetKind::TypeScript]).unwrap_err();
+    assert!(
+        err.contains("config = ns.load(..)"),
+        "names the site: {err}"
+    );
+    assert!(
+        err.contains("yields: position v is spelled #(number)"),
+        "{err}"
+    );
+    assert!(err.contains("no conversion from number to string"), "{err}");
+    for target in [TargetKind::Go, TargetKind::Rust] {
+        assert!(super::validate_entries(&model, &[target]).is_ok());
+    }
+
+    let table = crate::ir::Tref::Map(
+        Box::new(crate::ir::Tref::Prim(crate::ir::Prim::String)),
+        Box::new(crate::ir::Tref::Prim(crate::ir::Prim::String)),
+    );
+    module.ext_libs[0].externs[0].r#return = table;
+    for lang in module.ext_libs[0].externs[0].langs.iter_mut() {
+        lang.yields[0].foreign = Some("Map<string, string>".into());
+    }
+    assert!(super::validate_entries(&model_of(module), &[TargetKind::TypeScript]).is_ok());
+}
+
+/// A class reference with no class behind it is refused for every target,
+/// TypeScript included: a name nothing declares (hand-fed IR), a generic
+/// struct (no single class to stand as a value), or a shape that is not a
+/// wire struct (here an entry).
+#[test]
+fn a_class_reference_with_no_class_to_pass_is_refused_for_every_target() {
+    let cases: Vec<(Vec<crate::ir::Shape>, &str)> = vec![
+        (
+            vec![],
+            "names neither an opaque handle of ext ns nor a struct of module m",
+        ),
+        (vec![wire_struct("m#profile", &["t"])], "a generic struct"),
+        (
+            vec![entry_shape("m#profile", vec![])],
+            "is not a wire struct",
+        ),
+    ];
+    for (extra, why) in cases {
+        let mut shapes = vec![entry_shape(
+            "m#client",
+            vec![call_field("config", "ns", "load", vec![])],
+        )];
+        shapes.extend(extra);
+        let mut module = module_of(shapes);
+        let mut lib = ext_lib_with_extern("ns", "load", &["go", "ts", "rust"]);
+        for lang in lib.externs[0].langs.iter_mut() {
+            lang.call_args = vec![CallArg::TypeRef("profile".into())];
+        }
+        module.ext_libs = vec![lib];
+        let model = model_of(module);
+        for target in [TargetKind::Go, TargetKind::TypeScript, TargetKind::Rust] {
+            let err = super::validate_entries(&model, &[target]).unwrap_err();
+            assert!(
+                err.contains("config = ns.load(..)"),
+                "names the site: {err}"
+            );
+            assert!(err.contains("\"profile\""), "names the reference: {err}");
+            assert!(err.contains(why), "{why}: {err}");
+        }
+    }
 }
 
 /// A `call:` line chaining a method on the returned object
@@ -154,7 +295,7 @@ fn a_class_reference_in_wire_position_is_refused_for_every_target() {
     for target in [TargetKind::Go, TargetKind::TypeScript, TargetKind::Rust] {
         let err = super::validate::wire_call_resolves(&module, &call, &[target]).unwrap_err();
         assert!(err.contains("ns.sign(..)"), "{err}");
-        assert!(err.contains("handle \"signer\""), "{err}");
+        assert!(err.contains("\"signer\""), "{err}");
         assert!(err.contains("wire position"), "{err}");
     }
 }

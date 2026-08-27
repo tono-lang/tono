@@ -103,6 +103,45 @@ pub fn generated_type_name(module: &Module, canonical: &str) -> Option<String> {
         })
 }
 
+/// The module's own struct a `call:` line may pass as a class reference
+/// (the library constructs the shape itself): a structure with no type
+/// parameters, since a generic has no single class to stand as a value.
+/// `None` when `canonical` names no such shape; an entry, a config, an
+/// enum or a union is never one.
+pub fn class_struct<'a>(module: &'a Module, canonical: &str) -> Option<&'a crate::ir::Shape> {
+    module.shapes.iter().find(|s| {
+        local_name(&s.id) == canonical
+            && matches!(&s.kind, crate::ir::ShapeKind::Structure { params, .. } if params.is_empty())
+    })
+}
+
+/// Every class reference in a call's own argument tree, in argument order,
+/// walked through the same nesting shapes a `Ref` is looked for in (a ctor
+/// field's value, a list's items, a nested foreign call's arguments).
+pub fn class_references(args: &[crate::ir::CallArg]) -> Vec<&str> {
+    use crate::ir::CallArg;
+    let mut out = Vec::new();
+    for a in args {
+        match a {
+            CallArg::TypeRef(name) => out.push(name.as_str()),
+            CallArg::Ctor(ctor) => {
+                for v in ctor.fields.values() {
+                    out.extend(class_references(std::slice::from_ref(v)));
+                }
+            }
+            CallArg::List(items) => out.extend(class_references(items)),
+            CallArg::SymbolCall(sc) => out.extend(class_references(&sc.args)),
+            CallArg::Param(_)
+            | CallArg::ParamAs { .. }
+            | CallArg::Foreign(_)
+            | CallArg::Ref(_)
+            | CallArg::Lit(_)
+            | CallArg::Call(_) => {}
+        }
+    }
+    out
+}
+
 /// The resolver a target hands `foreign_spelling::qualify` for the
 /// generated-type references of `module`'s spellings. A reference no
 /// shape answers is refused before any emitter runs

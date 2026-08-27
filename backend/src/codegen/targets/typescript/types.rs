@@ -8,7 +8,8 @@ use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr, UnionDecl, Variant};
 use crate::codegen::validation::{self, Measure, ValSyntax};
-use crate::ir::{Member, Shape, Tref};
+use crate::ir::{Member, Module, Shape, Tref};
+use std::collections::BTreeSet;
 
 /// The TypeScript language key for per-language traits such as `@rename`.
 pub(crate) const LANG: &str = "typescript";
@@ -49,6 +50,50 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
             })]
         },
     )
+}
+
+/// The shapes some `call:` line of the module's ext blocks passes as a
+/// class reference (a struct the library constructs on its own), by id.
+/// A struct is an interface here, and an interface has no value at run
+/// time, so these are the structs that get a runtime class beside it.
+pub fn runtime_class_shapes(module: &Module) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for lib in &module.ext_libs {
+        let methods = lib.types.iter().flat_map(|t| t.methods.iter());
+        for decl in lib.externs.iter().chain(methods) {
+            for lang in decl
+                .langs
+                .iter()
+                .filter(|l| l.lang == "ts" || l.lang == "typescript")
+            {
+                for name in crate::codegen::entries::class_references(&lang.call_args) {
+                    if lib.types.iter().any(|t| t.name == name) {
+                        continue;
+                    }
+                    if let Some(shape) = crate::codegen::entries::class_struct(module, name) {
+                        out.insert(shape.id.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The runtime class a struct passed as a class reference gets beside its
+/// interface: an empty class under the interface's own name, which
+/// TypeScript merges with it, so `new Profile()` exists for the library
+/// that takes `new () => T` and fills the instance itself. The SDK never
+/// constructs one; the interface stays the shape a value is checked
+/// against, and the barrel keeps re-exporting the name as a type only.
+pub fn runtime_class_decl(shape: &Shape) -> Decl {
+    let name = conventions::type_ident_from_id(&shape.id);
+    Decl::raw(format!(
+        "// {name} is also a class: an ext binding hands it to a library that\n\
+         // constructs the instance itself (new () => {name}) and fills the fields\n\
+         // above. The SDK never constructs one; the interface is the shape.\n\
+         export class {name} {{}}"
+    ))
 }
 
 /// Build a union variant: the tag is the member name (overridable by `@wire`),

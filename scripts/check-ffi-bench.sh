@@ -80,8 +80,9 @@ cp -R "$bench/ext/ts" "$check_ts/node_modules/@tono-ext-fixture/mathkit"
 # generator names the rule with: capability 10 (a handle forwarded to
 # another call is owned by that call, so a second reader is refused),
 # capability 11 on Go (a static method receiver has nothing to render as,
-# Go has no static method), capability 12 on Go and Rust (a class
-# reference has nothing to render as, neither has a type as a value), and
+# Go has no static method), capabilities 12 and 20 on Go and Rust (a class
+# reference, to a handle or to a generated struct, has nothing to render
+# as, neither has a type as a value), and
 # capability 15 on Rust (a spelling asking for a conversion the target
 # cannot write is refused naming both types), and capability 17 on Rust and
 # TypeScript (a method chained on the returned object has no declared

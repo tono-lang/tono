@@ -178,10 +178,11 @@ pub(super) fn render_arg(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        // A class reference: the declared handle's own class, passed as the
-        // imported identifier (the library constructs it; tono only names
-        // it). The import itself is collected by `class_reference_imports`
-        // at the call site that owns the seam's refs.
-        CallArg::TypeRef(handle) => class_reference_name(lib, handle),
+        // A class reference: the declared handle's own class, or a generated
+        // struct's runtime class, passed as the imported identifier (the
+        // library constructs it; tono only names it). The import itself is
+        // collected by `class_reference_imports` at the call site that owns
+        // the seam's refs.
+        CallArg::TypeRef(name) => class_reference_name(lib, module, name),
     }
 }

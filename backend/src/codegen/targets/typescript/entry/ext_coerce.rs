@@ -5,9 +5,13 @@
 //! divide structure cannot cross is number/bigint: tono's 64-bit integers
 //! are `bigint` and the narrower ones `number`, so a spelling on the other
 //! side asks for a real conversion, and the emitted call must write it or
-//! `tsc` rejects generated code the check accepted. A primitive spelling
-//! with no conversion (a `string` asked to cross as `number`) is refused
-//! before generation, naming both types.
+//! `tsc` rejects generated code the check accepted. The other divide is the
+//! keyed collection: a generated map type is a plain object (`Record`),
+//! while a library keeps a table in a `Map`, and neither is assignable to
+//! the other. A primitive spelling with no conversion (a `string` asked to
+//! cross as `number`) is refused before generation, naming both types. The
+//! same divides run the other way when a `yields` position is spelled:
+//! what the library answers converts back into the declared type.
 
 use super::ts_type;
 use crate::ir::{Prim, Tref};
@@ -17,20 +21,18 @@ use crate::ir::{Prim, Tref};
 /// spelling is structural and `tsc` grades it against the library.
 const PRIMITIVES: [&str; 4] = ["boolean", "number", "bigint", "string"];
 
-/// The conversion a value of the logical type `t` goes through to cross as
-/// `spelling`: an integer crosses the number/bigint divide with
-/// `Number(..)`/`BigInt(..)`, the type's own default spelling passes as is,
-/// and any non-primitive spelling is structural. `Err` names both types
-/// when the spelling is a primitive TypeScript has no conversion for
-/// (`BigInt` of a fractional number throws, so a float never converts).
-pub(super) fn coerce(t: &Tref, spelling: &str, expr: &str) -> Result<String, String> {
-    let default = ts_type(t);
-    if spelling == default {
-        return Ok(expr.to_string());
-    }
-    if let Tref::Prim(p) = t {
-        let integer = matches!(
-            p,
+/// Whether a spelling names the keyed collection class (`Map<..>`,
+/// `ReadonlyMap<..>`), the shape a library keeps a table in, where the
+/// generated map type is a plain object.
+fn map_class(spelling: &str) -> bool {
+    let s = spelling.trim_start();
+    s.starts_with("Map<") || s.starts_with("ReadonlyMap<")
+}
+
+fn is_integer(t: &Tref) -> bool {
+    matches!(
+        t,
+        Tref::Prim(
             Prim::I8
                 | Prim::I16
                 | Prim::I32
@@ -39,20 +41,73 @@ pub(super) fn coerce(t: &Tref, spelling: &str, expr: &str) -> Result<String, Str
                 | Prim::U16
                 | Prim::U32
                 | Prim::U64
-        );
-        if integer && default == "bigint" && spelling == "number" {
-            return Ok(format!("Number({expr})"));
-        }
-        if integer && default == "number" && spelling == "bigint" {
-            return Ok(format!("BigInt({expr})"));
-        }
+        )
+    )
+}
+
+/// Which way a value crosses the boundary: into the spelling a binding
+/// declares (an argument, [`coerce`]), or back from it (a spelled answer,
+/// [`coerce_back`]). The divides are the same either way; only the
+/// expression written and the side named first in a refusal change.
+#[derive(Clone, Copy)]
+enum Way {
+    Into,
+    Back,
+}
+
+/// The one conversion cascade, run either way: the type's own default
+/// spelling passes as is; an integer crosses the number/bigint divide with
+/// `Number(..)`/`BigInt(..)`; a map crosses between the plain object a
+/// generated map is and the `Map` class a library keeps a table in; any
+/// other non-primitive spelling is structural, for `tsc` to grade. `Err`
+/// names both types when the spelling is a primitive TypeScript has no
+/// conversion for (`BigInt` of a fractional number throws, so a float
+/// never converts).
+fn convert(t: &Tref, spelling: &str, expr: &str, way: Way) -> Result<String, String> {
+    let default = ts_type(t);
+    if spelling == default {
+        return Ok(expr.to_string());
+    }
+    // The value is on the `default` side going in and on the `spelling`
+    // side coming back, so the divide reads the other way round.
+    let (from, to) = match way {
+        Way::Into => (default.as_str(), spelling),
+        Way::Back => (spelling, default.as_str()),
+    };
+    if is_integer(t) && from == "bigint" && to == "number" {
+        return Ok(format!("Number({expr})"));
+    }
+    if is_integer(t) && from == "number" && to == "bigint" {
+        return Ok(format!("BigInt({expr})"));
+    }
+    if matches!(t, Tref::Map(_, _)) && map_class(spelling) {
+        return Ok(match way {
+            Way::Into => format!("new Map(Object.entries({expr}))"),
+            Way::Back => format!("Object.fromEntries({expr})"),
+        });
     }
     if PRIMITIVES.contains(&spelling) {
+        let verb = match way {
+            Way::Into => "pass",
+            Way::Back => "read",
+        };
         return Err(format!(
-            "cannot pass a {default} as {spelling} in TypeScript: no conversion from {default} to {spelling}"
+            "cannot {verb} a {from} as {to} in TypeScript: no conversion from {from} to {to}"
         ));
     }
     Ok(expr.to_string())
+}
+
+/// The conversion a value of the logical type `t` goes through to cross as
+/// `spelling` (see [`convert`]).
+pub(super) fn coerce(t: &Tref, spelling: &str, expr: &str) -> Result<String, String> {
+    convert(t, spelling, expr, Way::Into)
+}
+
+/// The conversion a value the library answered under `spelling` goes
+/// through to become the logical type `t`: [`coerce`] run the other way.
+pub(super) fn coerce_back(t: &Tref, spelling: &str, expr: &str) -> Result<String, String> {
+    convert(t, spelling, expr, Way::Back)
 }
 
 /// The conversion a struct literal of the form `form_type` goes through to
@@ -142,6 +197,61 @@ mod tests {
         assert!(
             err.contains("no conversion from Options to string"),
             "{err}"
+        );
+    }
+
+    /// A generated map is a plain object; a library's table is a `Map`.
+    /// The spelling asks for the crossing and the call writes it, in
+    /// either direction; the default spelling passes as is.
+    #[test]
+    fn a_map_crosses_into_a_map_class_and_back() {
+        let table = Tref::Map(Box::new(prim(Prim::String)), Box::new(prim(Prim::String)));
+        assert_eq!(
+            coerce(&table, "Map<string, string>", "mappings").unwrap(),
+            "new Map(Object.entries(mappings))"
+        );
+        assert_eq!(
+            coerce(&table, "ReadonlyMap<string, string>", "mappings").unwrap(),
+            "new Map(Object.entries(mappings))"
+        );
+        assert_eq!(
+            coerce(&table, "Record<string, string>", "mappings").unwrap(),
+            "mappings"
+        );
+        assert_eq!(
+            coerce_back(&table, "Map<string, string>", "raw").unwrap(),
+            "Object.fromEntries(raw)"
+        );
+        assert_eq!(
+            coerce_back(&table, "Record<string, string>", "raw").unwrap(),
+            "raw"
+        );
+    }
+
+    /// The way back runs the same divides in reverse and refuses the same
+    /// primitives, naming both types the other way round.
+    #[test]
+    fn a_value_answered_under_a_spelling_converts_back() {
+        assert_eq!(
+            coerce_back(&prim(Prim::I64), "number", "raw").unwrap(),
+            "BigInt(raw)"
+        );
+        assert_eq!(
+            coerce_back(&prim(Prim::U32), "bigint", "raw").unwrap(),
+            "Number(raw)"
+        );
+        assert_eq!(
+            coerce_back(&prim(Prim::I64), "bigint", "raw").unwrap(),
+            "raw"
+        );
+        assert_eq!(
+            coerce_back(&prim(Prim::String), "`a-${string}`", "raw").unwrap(),
+            "raw"
+        );
+        let err = coerce_back(&prim(Prim::String), "number", "raw").unwrap_err();
+        assert_eq!(
+            err,
+            "cannot read a number as string in TypeScript: no conversion from number to string"
         );
     }
 

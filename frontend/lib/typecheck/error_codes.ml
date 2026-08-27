@@ -283,9 +283,10 @@ let extern_trait_invalid = register "TC0096"
 let lang_block_field_unknown = register "TC0097"
 
 (* A bare name in a call: line that is both a logical parameter of the op
-   and an opaque handle of the same ext block: the parameter would be read
-   where the class reference was meant (or the other way round), so the
-   collision is named instead of resolved one way. *)
+   and a class reference (an opaque handle of the same ext block, or a
+   struct of the module): the parameter would be read where the class
+   reference was meant (or the other way round), so the collision is named
+   instead of resolved one way. *)
 let extern_name_ambiguous = register "TC0098"
 
 (* A returns: whose type is an opaque handle of the same ext block. A handle

@@ -13,14 +13,16 @@
    A ctor field's own value is the general trait-value grammar (it can be a
    literal, list, or nested call, e.g. [opts { retries: 3 }]), so
    [lower_ctor_field_value] converts that richer shape down to [Ir.call_arg].
-   [handles] are the opaque handles of the enclosing ext block: a bare name
-   that names one (and no logical parameter) is a class reference, the
-   handle itself passed for a library that constructs on its own. Outside a
-   [call:] line there is no block in scope, so the list is empty. *)
-let rec lower_call_arg ?(handles = []) ?(params = []) :
+   [classes] are the names a bare name may stand for as a class reference:
+   the opaque handles of the enclosing ext block and the module's own wire
+   structs ([Roles.class_structs]). A bare name that names one (and no
+   logical parameter) is the class itself passed for a library that
+   constructs on its own. Outside a [call:] line there is no block in scope,
+   so the list is empty. *)
+let rec lower_call_arg ?(classes = []) ?(params = []) :
     Ast.call_arg -> Ir.call_arg = function
   | Ast.CaParam (n, _) ->
-      if List.mem n handles && not (List.mem n params) then Ir.Ca_type n
+      if List.mem n classes && not (List.mem n params) then Ir.Ca_type n
       else Ir.Ca_param n
   | Ast.CaParamAs (n, _, sp, _) -> Ir.Ca_param_as (n, sp)
   | Ast.CaRef r -> Ir.Ca_ref r.segs
@@ -30,15 +32,15 @@ let rec lower_call_arg ?(handles = []) ?(params = []) :
   | Ast.CaLit (Ast.LStr s, _) -> Ir.Ca_lit (`String s)
   | Ast.CaLit (Ast.LInt n, _) -> Ir.Ca_lit (`Int n)
   | Ast.CaLit (Ast.LFloat f, _) -> Ir.Ca_lit (`Float f)
-  | Ast.CaCall nc -> Ir.Ca_symbol_call (lower_nested_call ~handles ~params nc)
+  | Ast.CaCall nc -> Ir.Ca_symbol_call (lower_nested_call ~classes ~params nc)
   | Ast.CaList (items, _) ->
-      Ir.Ca_list (List.map (lower_call_arg ~handles ~params) items)
+      Ir.Ca_list (List.map (lower_call_arg ~classes ~params) items)
   | Ast.CaForeign (s, _) -> Ir.Ca_foreign s
 
-and lower_nested_call ~handles ~params (nc : Ast.nested_call) : Ir.symbol_call =
+and lower_nested_call ~classes ~params (nc : Ast.nested_call) : Ir.symbol_call =
   {
     Ir.scl_symbol = nc.nc_symbol;
-    scl_args = List.map (lower_call_arg ~handles ~params) nc.nc_args;
+    scl_args = List.map (lower_call_arg ~classes ~params) nc.nc_args;
   }
 
 and lower_call_ctor (c : Ast.ctor_arg) : Ir.call_ctor =
@@ -148,13 +150,13 @@ let lower_returns ~lower_type ~lower_select ~resolve ~diags
         r.rl_fields;
   }
 
-let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags ~handles
+let lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags ~classes
     ~params (b : Ast.extern_lang_body) : Ir.extern_lang =
   {
     Ir.el_lang = b.elb_lang;
     el_symbol = b.elb_call_symbol;
-    el_call_args = List.map (lower_call_arg ~handles ~params) b.elb_call_args;
-    el_chain = Option.map (lower_nested_call ~handles ~params) b.elb_call_chain;
+    el_call_args = List.map (lower_call_arg ~classes ~params) b.elb_call_args;
+    el_chain = Option.map (lower_nested_call ~classes ~params) b.elb_call_chain;
     el_yields =
       (match b.elb_yields with
       | None -> []
@@ -180,7 +182,7 @@ let trait_names (name : string) (traits : Ast.trait list) : string list =
     (fun acc n -> if List.mem n acc then acc else acc @ [ n ])
     [] names
 
-let lower_extern ~lower_type ~lower_select ~resolve ~diags ~handles
+let lower_extern ~lower_type ~lower_select ~resolve ~diags ~classes
     (e : Ast.extern_decl) : Ir.extern_decl =
   let params = List.map (fun (p : Ast.extern_param) -> p.ep_name) e.ed_params in
   {
@@ -197,7 +199,7 @@ let lower_extern ~lower_type ~lower_select ~resolve ~diags ~handles
     x_langs =
       List.map
         (lower_extern_lang_body ~lower_type ~lower_select ~resolve ~diags
-           ~handles ~params)
+           ~classes ~params)
         e.ed_langs;
     x_async = trait_names "async" e.ed_traits;
     x_errors =
@@ -206,23 +208,24 @@ let lower_extern ~lower_type ~lower_select ~resolve ~diags ~handles
         (trait_names "errors" e.ed_traits);
   }
 
-let lower_opaque_type ~lower_type ~lower_select ~resolve ~diags ~handles
+let lower_opaque_type ~lower_type ~lower_select ~resolve ~diags ~classes
     (t : Ast.opaque_type) : Ir.opaque_type =
   {
     Ir.opq_name = t.opq_name;
     opq_langs = List.map lower_lang_block t.opq_langs;
     opq_methods =
       List.map
-        (lower_extern ~lower_type ~lower_select ~resolve ~diags ~handles)
+        (lower_extern ~lower_type ~lower_select ~resolve ~diags ~classes)
         t.opq_methods;
   }
 
-let lower_ext_lib ~lower_type ~lower_select ~resolve ~diags (d : Ast.decl) :
-    Ir.ext_lib =
+let lower_ext_lib ~lower_type ~lower_select ~resolve ~diags ~structs
+    (d : Ast.decl) : Ir.ext_lib =
   match d.dkind with
   | Ast.DExtLib { body; _ } ->
-      let handles =
+      let classes =
         List.map (fun (t : Ast.opaque_type) -> t.opq_name) body.elib_types
+        @ structs
       in
       {
         Ir.xl_name = d.dname;
@@ -234,11 +237,11 @@ let lower_ext_lib ~lower_type ~lower_select ~resolve ~diags (d : Ast.decl) :
         xl_types =
           List.map
             (lower_opaque_type ~lower_type ~lower_select ~resolve ~diags
-               ~handles)
+               ~classes)
             body.elib_types;
         xl_externs =
           List.map
-            (lower_extern ~lower_type ~lower_select ~resolve ~diags ~handles)
+            (lower_extern ~lower_type ~lower_select ~resolve ~diags ~classes)
             body.elib_externs;
       }
   | _ -> assert false

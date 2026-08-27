@@ -1,0 +1,38 @@
+// Capability 20, the Rust side: a class reference to one of the module's
+// own structs has no more of a rendering than a handle's class (capability
+// 12): Rust has no type as a value, and a library that constructs the
+// caller's type takes a type parameter (`instantiate_into::<T>()`), a
+// different shape from an argument. The generator refuses it naming the
+// site; this probe passes when generation is refused.
+ext mathkit {
+  rust { #(mathkit) }
+
+  struct source {
+    rust { #(Memo<.profile>) }
+
+    op read(): profile {
+      rust { call: #(recall)() }
+    }
+  }
+
+  op load(name: string, mappings: map[string]mapping): source {
+    rust { call: #(instantiate_into)(name, profile, mappings) }
+  }
+}
+
+struct mapping {
+  from: string
+}
+
+struct profile {
+  endpoint: string
+}
+
+pub struct client {
+  name: string @arg
+  mappings: map[string]mapping @arg
+  source: mathkit.source = mathkit.load(.name, .mappings)
+
+  op read(): profile
+    impl .source.read()
+}

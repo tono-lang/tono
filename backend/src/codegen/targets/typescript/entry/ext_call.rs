@@ -68,6 +68,60 @@ pub(super) fn spell(spelling: &str, module: &Module) -> String {
     foreign_spelling::render(spelling, &crate::codegen::entries::generated_type(module))
 }
 
+/// The imports a spelling written into generated code needs: the library's
+/// own identifiers from the lib's module, and every generated type it
+/// references (`Map<string, .mapping>`) from the module that declares it.
+pub(super) fn spelling_symbols(
+    spelling: &str,
+    lib: &ExtLib,
+    module: &Module,
+    refs: &mut Vec<Symbol>,
+) {
+    import_spelling(spelling, lib, refs);
+    for name in foreign_spelling::references(spelling) {
+        if let Some(ty) = crate::codegen::entries::generated_type_name(module, name) {
+            refs.push(module_symbol(&ty, module));
+        }
+    }
+}
+
+/// The spelling of what the library answers, when a binding's one
+/// non-error `yields` position is spelled under a foreign type and no
+/// `returns:` projects it: the call's whole answer, read back as the op's
+/// declared return through `ext_coerce::coerce_back`. `None` when the
+/// binding leaves the answer to the declared type itself.
+pub(super) fn spelled_answer(lang: &ExternLang) -> Option<&str> {
+    if lang.returns.is_some() {
+        return None;
+    }
+    lang.yields
+        .iter()
+        .find(|y| !y.is_error)
+        .and_then(|y| y.foreign.as_deref())
+}
+
+/// The expression a call's raw answer becomes when nothing projects it:
+/// the value itself, or, when the binding spells what the library answers
+/// ([`spelled_answer`]), that value converted back into the declared type
+/// (`Object.fromEntries(raw)` for a `Map` where the op declares a map).
+/// The conversion exists: `validate_calls::yields_spelling_coerces`
+/// refused the binding otherwise.
+pub(super) fn answered_value(
+    lang: &ExternLang,
+    declared: &crate::ir::Tref,
+    module: &Module,
+    raw: &str,
+) -> String {
+    let Some(spelling) = spelled_answer(lang) else {
+        return raw.to_string();
+    };
+    super::ext_coerce::coerce_back(declared, &spell(spelling, module), raw).unwrap_or_else(|why| {
+        panic!(
+            "a yields spelling reached TypeScript codegen with no conversion; validate_calls::yields_spelling_coerces should have refused it: {why}"
+        )
+    })
+}
+
 /// The library identifiers a spelling names, to import from the lib's own
 /// TypeScript module: `new ConstantCalculator` imports `ConstantCalculator`,
 /// `FormulaCalculator.parse` imports `FormulaCalculator`,
@@ -95,21 +149,26 @@ pub(super) fn import_spelling(spelling: &str, lib: &ExtLib, refs: &mut Vec<Symbo
     }
 }
 
-/// The TypeScript spelling of a declared handle's class, for a class
-/// reference: the head of the storage type its `ts` block declares
-/// (`AnswerCalculator`), the one thing that can stand as a value. A handle
-/// with no `ts` block has no class to pass;
-/// `validate_calls::handle_storage_declared` refuses it first.
-pub(super) fn class_reference_name(lib: &ExtLib, handle: &str) -> String {
-    let ty = lib.types.iter().find(|t| t.name == handle).unwrap_or_else(|| {
-        panic!(
-            "a class reference names undeclared handle {handle:?} in ext lib {:?} (the frontend should have rejected this)",
-            lib.name
-        )
-    });
+/// The TypeScript spelling of a class reference, the one thing that can
+/// stand as a value: for a declared handle, the head of the storage type
+/// its `ts` block declares (`AnswerCalculator`); for one of the module's
+/// own structs, the type the SDK generates (`Profile`), which the types
+/// file gives a runtime class for exactly this. A handle with no `ts`
+/// block has no class to pass (`validate_calls::handle_storage_declared`
+/// refuses it first), and a name that is neither is refused by
+/// `validate_calls::class_references_resolve`.
+pub(super) fn class_reference_name(lib: &ExtLib, module: &Module, name: &str) -> String {
+    let Some(ty) = lib.types.iter().find(|t| t.name == name) else {
+        return crate::codegen::entries::generated_type_name(module, name).unwrap_or_else(|| {
+            panic!(
+                "a class reference names {name:?}, neither a handle of ext lib {:?} nor a type of module {:?}; validate_calls::class_references_resolve should have refused it",
+                lib.name, module.name
+            )
+        });
+    };
     let storage = ty.storage("ts").unwrap_or_else(|| {
         panic!(
-            "handle {handle:?} declares no ts block; validate_calls::handle_storage_declared should have refused it"
+            "handle {name:?} declares no ts block; validate_calls::handle_storage_declared should have refused it"
         )
     });
     foreign_spelling::library_names(storage, &foreign_spelling::ts_builtin)
@@ -119,24 +178,34 @@ pub(super) fn class_reference_name(lib: &ExtLib, handle: &str) -> String {
 }
 
 /// One import per class reference anywhere in a `call:` line's argument
-/// tree, from the lib's own TypeScript module path (the same module the
-/// call's symbol comes from).
-pub(super) fn class_reference_imports(args: &[CallArg], lib: &ExtLib, refs: &mut Vec<Symbol>) {
+/// tree: a handle's class from the lib's own TypeScript module path (the
+/// same module the call's symbol comes from), a generated struct's from
+/// the module that declares it.
+pub(super) fn class_reference_imports(
+    args: &[CallArg],
+    lib: &ExtLib,
+    module: &Module,
+    refs: &mut Vec<Symbol>,
+) {
     for arg in args {
         match arg {
-            CallArg::TypeRef(handle) => {
-                let name = class_reference_name(lib, handle);
-                import_spelling(&name, lib, refs);
+            CallArg::TypeRef(name) => {
+                let class = class_reference_name(lib, module, name);
+                if lib.types.iter().any(|t| &t.name == name) {
+                    import_spelling(&class, lib, refs);
+                } else {
+                    refs.push(module_symbol(&class, module));
+                }
             }
             // A nested foreign call names a symbol of the same module.
             CallArg::SymbolCall(sc) => {
                 import_spelling(&sc.symbol, lib, refs);
-                class_reference_imports(&sc.args, lib, refs);
+                class_reference_imports(&sc.args, lib, module, refs);
             }
-            CallArg::List(items) => class_reference_imports(items, lib, refs),
+            CallArg::List(items) => class_reference_imports(items, lib, module, refs),
             CallArg::Ctor(ctor) => {
                 for v in ctor.fields.values() {
-                    class_reference_imports(std::slice::from_ref(v), lib, refs);
+                    class_reference_imports(std::slice::from_ref(v), lib, module, refs);
                 }
             }
             CallArg::Param(_)
@@ -284,7 +353,7 @@ pub(super) fn call_body(
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
-    class_reference_imports(&lang.call_args, l.lib, refs);
+    class_reference_imports(&lang.call_args, l.lib, module, refs);
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());
@@ -318,7 +387,10 @@ pub(super) fn call_body(
         (_, None) if foreign_handle(&field.target, module) => {
             format!("return raw as {};", field_ts_type(&field.target, module))
         }
-        (_, None) => "return raw;".to_string(),
+        (_, None) => format!(
+            "return {};",
+            answered_value(lang, &l.decl.r#return, module, "raw")
+        ),
         (None, Some(_)) => panic!(
             "extern {call_name} declares a returns but no yields position to project from (validate_entries should have rejected this)"
         ),

@@ -225,8 +225,11 @@ and call_arg =
   | Ca_call of entry_call
   | Ca_symbol_call of symbol_call
   | Ca_type of string
-    (* a declared opaque handle passed as a class reference: the emitter
-         spells its foreign name for the binding's language *)
+    (* a class reference, for a library that constructs on its own: a
+         declared opaque handle (the emitter spells its foreign name for the
+         binding's language) or one of the module's own wire structs (the
+         emitter spells the type it generates, with a runtime class where
+         the target needs one) *)
   | Ca_foreign of string
 (* a position that is not a tono value but a declaration of what the
          target binds there, with its type ("ctx context.Context") *)

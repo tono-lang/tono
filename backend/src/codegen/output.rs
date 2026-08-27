@@ -148,6 +148,26 @@ impl TargetKind {
         }
     }
 
+    /// Whether this target can read a value the library answered under a
+    /// `yields` spelling (`yields: (table: #(Map<string, .mapping>))` with
+    /// no `returns:`) back as the op's declared return `t`. TypeScript
+    /// runs its argument conversions the other way (`Map` to the plain
+    /// object a generated map is, `number`/`bigint` across the divide) and
+    /// names both types when it has none; Go and Rust bind the answer as
+    /// the target compiler grades it, with no conversion of their own.
+    pub fn yields_spelling_coerces(
+        self,
+        t: &crate::ir::Tref,
+        spelling: &str,
+    ) -> Result<(), String> {
+        match self {
+            Self::Go | Self::Rust => Ok(()),
+            Self::TypeScript => {
+                crate::codegen::targets::typescript::entry::yields_spelling_coerces(t, spelling)
+            }
+        }
+    }
+
     /// Whether this target can pass a struct literal of the foreign form
     /// `form` under the spelling its argument declares (`opts { .. }:
     /// #(&Options)`, for a library that takes the form by pointer): the
@@ -174,13 +194,14 @@ impl TargetKind {
         }
     }
 
-    /// Whether this target can pass a declared handle's class itself as a
-    /// `call:` argument (`type handle`, for a library that takes the class
-    /// and constructs on its own). TypeScript has the class as a value
-    /// (the imported identifier, `new () => T` on the library's side). Go
-    /// and Rust have no type as a value: a Go type or a Rust struct cannot
-    /// stand where an argument goes, so there is nothing correct to spell
-    /// and generation refuses the binding.
+    /// Whether this target can pass a class itself as a `call:` argument
+    /// (a declared handle's class, or a generated struct's, for a library
+    /// that takes the class and constructs on its own). TypeScript has the
+    /// class as a value (the imported identifier, `new () => T` on the
+    /// library's side; a generated struct gets a runtime class beside its
+    /// interface for this). Go and Rust have no type as a value: a Go type
+    /// or a Rust struct cannot stand where an argument goes, so there is
+    /// nothing correct to spell and generation refuses the binding.
     pub fn emits_class_reference_args(self) -> bool {
         match self {
             Self::TypeScript => true,

@@ -269,10 +269,10 @@ let ext_lib_docs : (string * string) list =
        literals, a foreign struct literal, a nested foreign call \
        (#(FromFormula)(expr, #(WithPrecision)(precision))), a parameter under \
        its own foreign spelling when it crosses as a different type (values: \
-       #(Vec<f64>), calcs: #(...Calculator[float64])), a declared handle \
-       passed as a class reference, or a declared position the target binds \
-       itself (#(ctx context.Context) in Go). Required in every language \
-       block." );
+       #(Vec<f64>), calcs: #(...Calculator[float64])), a declared handle or a \
+       wire struct of the module passed as a class reference (the library \
+       constructs it), or a declared position the target binds itself (#(ctx \
+       context.Context) in Go). Required in every language block." );
     ( "yields",
       "Names what the call returns, position by position, so returns: can \
        project from it (e.g. yields: (cfg: go_config)). Also declares \

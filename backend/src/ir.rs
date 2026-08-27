@@ -110,7 +110,10 @@ pub use crate::ir_tests_model::*;
 /// v29 added an operation's `output_nullable` flag (omitted when false): a
 /// declared `T?` return, mirroring the member-level `required` flag since
 /// nullability is not a type node.
-pub const TONO_IR_VERSION: u32 = 31;
+/// v32 widened what `TypeRef` may name: a module's own wire struct as well
+/// as an opaque handle of the block. Same wire shape; a reader that only
+/// resolves handles would miss the struct, so the gate moves.
+pub const TONO_IR_VERSION: u32 = 32;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

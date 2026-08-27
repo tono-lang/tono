@@ -527,6 +527,13 @@ pub fn param_spelling_coerces(t: &Tref, spelling: &str) -> Result<(), String> {
     ext_coerce::coerce(t, spelling, "v").map(|_| ())
 }
 
+/// Whether TypeScript can read a value the library answered under
+/// `spelling` back as the logical type `t` (see `ext_coerce::coerce_back`);
+/// the reason names both types when it cannot.
+pub fn yields_spelling_coerces(t: &Tref, spelling: &str) -> Result<(), String> {
+    ext_coerce::coerce_back(t, spelling, "v").map(|_| ())
+}
+
 /// Whether TypeScript can pass a literal of the foreign form `form` under
 /// `spelling` (see `ext_coerce::form_coerce`); the reason names both types
 /// when it cannot.

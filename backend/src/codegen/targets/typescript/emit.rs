@@ -12,7 +12,9 @@ use crate::codegen::group::Group;
 use crate::codegen::symbol::Symbol;
 use crate::codegen::targets::typescript::codecs::emit_codecs;
 use crate::codegen::targets::typescript::errors;
-use crate::codegen::targets::typescript::types::{emit_type, emit_validators};
+use crate::codegen::targets::typescript::types::{
+    emit_type, emit_validators, runtime_class_decl, runtime_class_shapes,
+};
 use crate::codegen::taxonomy;
 use crate::codegen::tree::{Alias, Decl, FnBody, ModuleFile};
 use crate::codegen::validation;
@@ -83,6 +85,11 @@ pub fn exports_of(decls: &[Decl]) -> Exports {
     exports.types.dedup();
     exports.values.sort();
     exports.values.dedup();
+    // A struct passed as a class reference is an interface and a class under
+    // one name (`runtime_class_decl`). One name re-exports once, and as the
+    // type: the constructor exists for the library the SDK hands it to,
+    // not as surface a consumer builds values with.
+    exports.values.retain(|v| !exports.types.contains(v));
     exports
 }
 
@@ -245,8 +252,14 @@ pub fn emit_module(module: &Module, config: &CasingConfig, exposed: &Exposed) ->
     // A client only ever decodes an error response, never encodes one to send,
     // so a shape reachable only as a declared error skips its encoder.
     let error_only_shapes = crate::codegen::ops::error_only_shapes(module);
+    let runtime_classes = runtime_class_shapes(module);
     for shape in &module.shapes {
         let mut types = emit_type(shape, config);
+        // A struct an ext binding passes as a class reference needs a value
+        // to pass; it lives with the interface it merges into.
+        if runtime_classes.contains(&shape.id) {
+            types.push(runtime_class_decl(shape));
+        }
         // Validators live with the type they check.
         types.extend(emit_validators(shape, config));
         let codecs = emit_codecs(
@@ -480,6 +493,79 @@ mod tests {
         assert!(serde.contains("export function encodeCharge(value: Charge): unknown {"));
         assert!(serde.contains("amount_cents: encodeI64(value.amountCents),"));
         assert!(!serde.contains("export interface Charge"));
+    }
+
+    /// A struct an ext binding passes as a class reference is an interface
+    /// and a class under one name in the types file (TypeScript merges the
+    /// two, so `new Charge()` exists for the library), and the barrel keeps
+    /// re-exporting the name as a type only.
+    #[test]
+    fn a_struct_passed_as_a_class_reference_also_gets_a_runtime_class() {
+        let mut module = Module {
+            tests: vec![],
+            name: "billing".into(),
+            shapes: vec![Shape {
+                id: "billing#charge".into(),
+                kind: ShapeKind::Structure {
+                    params: vec![],
+                    members: vec![Member {
+                        name: "note".into(),
+                        target: Tref::Prim(Prim::String),
+                        required: true,
+                        default: None,
+                        constraints: vec![],
+                        traits: vec![],
+                    }],
+                },
+                traits: vec![],
+            }],
+            operations: vec![],
+            extensions: vec![],
+            ext_libs: vec![crate::ir::ExtLib {
+                name: "ledger".into(),
+                langs: vec![],
+                structs: vec![],
+                types: vec![],
+                externs: vec![crate::ir::ExternDecl {
+                    name: "make".into(),
+                    params: vec![],
+                    r#return: Tref::Prim(Prim::String),
+                    langs: vec![crate::ir::ExternLang {
+                        lang: "ts".into(),
+                        symbol: "make".into(),
+                        call_args: vec![crate::ir::CallArg::TypeRef("charge".into())],
+                        yields: vec![],
+                        returns: None,
+                        chain: None,
+                    }],
+                    r#async: vec![],
+                    errors: vec![],
+                }],
+            }],
+        };
+        let files = groups(&module);
+        let types = rendered(&files, TYPES);
+        assert!(types.contains("export interface Charge {"), "{types}");
+        assert!(types.contains("export class Charge {}"), "{types}");
+        let exports = exports_of(
+            &files
+                .iter()
+                .find(|f| f.group.name == TYPES)
+                .unwrap()
+                .file
+                .decls,
+        );
+        assert!(exports.types.contains(&"Charge".to_string()), "{exports:?}");
+        assert!(
+            !exports.values.contains(&"Charge".to_string()),
+            "{exports:?}"
+        );
+
+        // The class follows the reference: with none, the struct is only an
+        // interface, as before.
+        module.ext_libs.clear();
+        let types = rendered(&groups(&module), TYPES);
+        assert!(!types.contains("export class Charge"), "{types}");
     }
 
     #[test]

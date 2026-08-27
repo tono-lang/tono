@@ -552,6 +552,68 @@ fn a_class_reference_spells_the_instantiation_ts_name_verbatim() {
     assert!(!out.contains("connect(Publisher)"), "{out}");
 }
 
+/// A class reference to one of the module's own structs passes the type
+/// the SDK generates (its runtime class), imported from the module that
+/// declares it rather than from the library.
+#[test]
+fn a_class_reference_to_a_module_struct_imports_it_from_the_module() {
+    let mut module = appendix_module(appendix_fields());
+    module.ext_libs[1].externs[0].langs[0].call_args =
+        vec![crate::ir::CallArg::TypeRef("app_config".into())];
+    let decls = rendered_decls(&module);
+    let resolver = decls
+        .iter()
+        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("export async function resolveBus(")))
+        .expect("bus resolver decl");
+    let refs = crate::codegen::tree::item_refs(resolver);
+    assert!(
+        refs.iter()
+            .any(|s| s.name == "AppConfig" && s.import.as_ref().is_some_and(|i| i.module == "m")),
+        "the resolver must import the struct's class from its module: {refs:?}"
+    );
+    let out = rendered_text(&module);
+    assert!(out.contains("connect(AppConfig)"), "{out}");
+}
+
+/// A generated map is a plain object and a library's table is a `Map`: a
+/// parameter spelled `Map<..>` crosses as its entries, and a `yields`
+/// position spelled `Map<..>` (no `returns:`) comes back as the plain
+/// object the op declares.
+#[test]
+fn a_map_crosses_into_a_map_class_and_a_spelled_answer_comes_back() {
+    let table = || {
+        Tref::Map(
+            Box::new(Tref::Prim(Prim::String)),
+            Box::new(Tref::Prim(Prim::String)),
+        )
+    };
+    let mut module = appendix_module(appendix_fields());
+    let connect = &mut module.ext_libs[1].externs[0];
+    connect.params[0].r#type = table();
+    connect.langs[0].call_args = vec![
+        crate::ir::CallArg::ParamAs {
+            name: "endpoint".into(),
+            spelling: "Map<string, string>".into(),
+        },
+        crate::ir::CallArg::Param("token".into()),
+    ];
+    let load = &mut module.ext_libs[0].externs[0];
+    load.r#return = table();
+    load.langs[0].yields = vec![crate::ir::YieldsPos {
+        name: "table".into(),
+        r#type: None,
+        is_error: false,
+        foreign: Some("Map<string, string>".into()),
+    }];
+    load.langs[0].returns = None;
+    let out = rendered_text(&module);
+    assert!(
+        out.contains("connect(new Map(Object.entries(configValue.endpoint)), configValue.token)"),
+        "{out}"
+    );
+    assert!(out.contains("return Object.fromEntries(raw);"), "{out}");
+}
+
 /// A parameter spelled under its own TypeScript type passes as the value
 /// it is: the spelling is for the compiler to grade, structurally.
 #[test]

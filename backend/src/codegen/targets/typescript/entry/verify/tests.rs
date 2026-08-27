@@ -81,7 +81,7 @@ fn probe_types_cover_the_declared_vocabulary() {
             Box::new(Tref::Prim(Prim::U32))
         ))
         .unwrap(),
-        "Map<string, number>"
+        "Record<string, number>"
     );
     assert_eq!(
         t(&Tref::Param("T".into())).unwrap_err(),
@@ -199,6 +199,39 @@ fn a_yields_position_without_a_type_or_spelling_is_refused() {
     ));
 }
 
+/// A spelled answer is what the library gives; the probe types the result
+/// as the spelling and then reads it back into the declared return
+/// through the same conversion the emitter writes, so `tsc` grades both
+/// steps: the library's own signature and the way back.
+#[test]
+fn a_spelled_answer_is_probed_as_given_and_converted_back() {
+    let mut m = gearbox_module();
+    let decl = m.ext_libs[0]
+        .externs
+        .iter_mut()
+        .find(|d| d.name == "describe")
+        .unwrap();
+    decl.r#return = Tref::Map(
+        Box::new(Tref::Prim(crate::ir::Prim::String)),
+        Box::new(Tref::Prim(crate::ir::Prim::String)),
+    );
+    decl.langs[1].yields = vec![crate::ir::YieldsPos {
+        name: "table".into(),
+        r#type: None,
+        is_error: false,
+        foreign: Some("Map<string, string>".into()),
+    }];
+    decl.langs[1].returns = None;
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(
+        p.source.contains(
+            "const tonoR: Map<string, string> = tonoLib.describe(name); const tonoV: Record<string, string> = Object.fromEntries(tonoR);"
+        ),
+        "{}",
+        p.source
+    );
+}
+
 #[test]
 fn a_handle_without_storage_skips_its_methods() {
     let mut m = gearbox_module();
@@ -311,6 +344,28 @@ fn a_generated_type_reference_skips_the_binding_with_why() {
     ] {
         assert!(p.skipped.contains(&why.to_string()), "{:?}", p.skipped);
     }
+}
+
+/// A class reference to one of the module's own structs passes the SDK's
+/// runtime class, which the library alone cannot name: the binding is
+/// listed as skipped with why.
+#[test]
+fn a_class_reference_to_a_generated_struct_skips_the_binding_with_why() {
+    let mut m = gearbox_module();
+    let open = m.ext_libs[0]
+        .externs
+        .iter_mut()
+        .find(|d| d.name == "open")
+        .unwrap();
+    let open_ts = open.langs.iter_mut().find(|l| l.lang == "ts").unwrap();
+    open_ts.call_args = vec![crate::ir::CallArg::TypeRef("summary".into())];
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(
+        p.skipped
+            .contains(&"op open: summary is a type the generated SDK defines".to_string()),
+        "{:?}",
+        p.skipped
+    );
 }
 
 /// Generation refuses a chained call for TypeScript, so the probe has no
