@@ -424,11 +424,18 @@ pub struct client {
     let file = write(&dir.join("svc.tono"), src);
     let (ok, err) = run(cmd, &file, &[("go", &root)]);
     assert!(!ok, "{err}");
+    // The Go compiler's wording of the operand's type varies by release
+    // ("value of type Summary", "value of struct type Summary"): the span,
+    // the site and both types are what the finding must carry.
+    let finding = err
+        .lines()
+        .find(|l| l.contains("FX0001"))
+        .unwrap_or_else(|| panic!("no finding in:\n{err}"));
     assert!(
-        err.contains(
-            "8:18-48: error: FX0001: go binding of method dial.read in ext gearbox: cannot use tonoRecv.Read(ctx) (value of struct type Summary) as string value"
-        ),
-        "{err}"
+        finding.starts_with(
+            "8:18-48: error: FX0001: go binding of method dial.read in ext gearbox: cannot use tonoRecv.Read(ctx) (value of"
+        ) && finding.ends_with("Summary) as string value in assignment"),
+        "{finding}"
     );
     assert!(!err.contains("not checked"), "{err}");
 
