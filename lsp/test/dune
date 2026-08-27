@@ -14,8 +14,8 @@
 ; `tono`), sharing one harness.
 
 (tests
- (names server_test server_binding_test)
- (modules server_test server_binding_test server_harness)
+ (names server_test server_binding_test server_index_test)
+ (modules server_test server_binding_test server_index_test server_harness)
  (libraries yojson unix alcotest)
  (deps ../tono_lsp.exe))
 

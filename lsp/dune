@@ -13,5 +13,5 @@
 
 (executable
  (name tono_lsp)
- (modules tono_lsp workspace binding_runner)
+ (modules tono_lsp workspace binding_runner index_runner)
  (libraries tono_lsp_lib lsp jsonrpc yojson unix threads.posix))

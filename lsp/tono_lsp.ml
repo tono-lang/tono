@@ -133,7 +133,8 @@ let server_capabilities () : ServerCapabilities.t =
   in
   ServerCapabilities.create ~textDocumentSync:(`TextDocumentSyncOptions sync)
     ~hoverProvider:(`Bool true) ~definitionProvider:(`Bool true)
-    ~completionProvider:(CompletionOptions.create ())
+    ~completionProvider:
+      (CompletionOptions.create ~triggerCharacters:[ "."; "(" ] ())
     ~referencesProvider:(`Bool true) ~documentSymbolProvider:(`Bool true)
     ~renameProvider:(`Bool true) ~documentFormattingProvider:(`Bool true)
     ~codeActionProvider:(`Bool true) ~workspaceSymbolProvider:(`Bool true)
@@ -302,8 +303,13 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
             | CR.TextDocumentHover p -> (
                 match doc_text p.textDocument.uri with
                 | Some text ->
-                    Analysis.hover_at ~markdown:!client_markdown ~text
-                      ~file:(Analysis.parse text) p.position
+                    let file = Analysis.parse text in
+                    Analysis.hover_at
+                      ~foreign:
+                        (Index_runner.lookup
+                           ~path:(Lsp.Uri.to_path p.textDocument.uri)
+                           ~file)
+                      ~markdown:!client_markdown ~text ~file p.position
                 | None -> None)
             | CR.TextDocumentDefinition p -> (
                 match project_ctx p.textDocument.uri with
@@ -337,10 +343,15 @@ let on_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
             | CR.TextDocumentCompletion p -> (
                 match doc_text p.textDocument.uri with
                 | Some text ->
+                    let file = Analysis.parse text in
                     Some
                       (`List
-                         (Analysis.completions ~text ~file:(Analysis.parse text)
-                            p.position))
+                         (Analysis.completions
+                            ~foreign:
+                              (Index_runner.lookup
+                                 ~path:(Lsp.Uri.to_path p.textDocument.uri)
+                                 ~file)
+                            ~text ~file p.position))
                 | None -> Some (`List []))
             | CR.TextDocumentReferences p -> (
                 match project_ctx p.textDocument.uri with
@@ -481,7 +492,13 @@ let on_notification (n : Jsonrpc.Notification.t) : unit =
          desynchronize the buffer on non-ASCII content. *)
       let doc = Text_document.make ~position_encoding:`UTF16 p in
       with_state (fun () -> Hashtbl.replace store (key p.textDocument.uri) doc);
-      analyze_and_publish p.textDocument.uri (Text_document.text doc)
+      analyze_and_publish p.textDocument.uri (Text_document.text doc);
+      (* The libraries the file binds get their index built on the first
+         open, so completion inside #(...) is ready by the time it is
+         asked for. *)
+      Index_runner.schedule ~path:(Lsp.Uri.to_path p.textDocument.uri)
+        ~text:(Text_document.text doc) ~force:false ~log:log_message
+        ~on_done:(fun () -> ())
   | Ok (CN.TextDocumentDidChange p) -> (
       match Hashtbl.find_opt store (key p.textDocument.uri) with
       | Some doc ->
@@ -504,7 +521,10 @@ let on_notification (n : Jsonrpc.Notification.t) : unit =
           in
           Binding_runner.schedule ~path:(Lsp.Uri.to_path uri)
             ~text:(Text_document.text doc) ~clean ~log:log_message
-            ~on_done:(fun () -> publish_merged uri)
+            ~on_done:(fun () -> publish_merged uri);
+          Index_runner.schedule ~path:(Lsp.Uri.to_path uri)
+            ~text:(Text_document.text doc) ~force:true ~log:log_message
+            ~on_done:(fun () -> ())
       | None -> ())
   | Ok (CN.TextDocumentDidClose p) ->
       with_state (fun () ->
@@ -619,4 +639,5 @@ let () =
   (* A verdict still being computed is published before the session ends:
      the client asked for it with its save. *)
   Binding_runner.wait_all ();
+  Index_runner.wait_all ();
   if !dirty_exit then exit 1
