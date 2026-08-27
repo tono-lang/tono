@@ -75,6 +75,7 @@ fn a_finding_prints_like_a_frontend_diagnostic() {
     let f = Finding {
         span: "12:5-40".into(),
         message: "go binding of op open in ext gearbox: undefined: gearbox.Open".into(),
+        site: None,
     };
     assert_eq!(
         f.to_string(),
@@ -225,7 +226,8 @@ fn fold_turns_errors_on_binding_lines_into_findings_at_their_span() {
         report.findings,
         vec![Finding {
             span: "21:16-56".into(),
-            message: "go binding of op open in ext gearbox: undefined: gearbox.Open".into()
+            message: "go binding of op open in ext gearbox: undefined: gearbox.Open".into(),
+            site: Some(site("go", SiteKind::Op, None, Some("open"), "21:16-56")),
         }]
     );
     assert_eq!(
@@ -302,6 +304,7 @@ fn fold_finds_a_site_under_either_language_spelling_and_falls_back_without_one()
     fold_outcome(&mut report, outcome, &probe, &sites(), "gearbox", "ts").unwrap();
     assert_eq!(report.findings[0].span, "16:18-25");
     assert_eq!(report.findings[1].span, "0:0-0");
+    assert!(report.findings[0].site.is_some() && report.findings[1].site.is_none());
 }
 
 #[test]
@@ -336,6 +339,29 @@ fn verify_reports_every_language_without_a_root_and_rust_always() {
     ));
     assert!(report.unchecked[1].contains("--lib-root go=<dir>"));
     assert!(report.unchecked[2].contains("--lib-root ts=<dir>"));
+}
+
+#[test]
+fn a_selection_narrows_the_check_to_the_named_pairs() {
+    let model = Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![gearbox_module()],
+    };
+    let only_ts = Selection::pairs(&[("gearbox".into(), "typescript".into())]);
+    let report = verify_selected(&model, &[], &LibRoots::default(), &only_ts).unwrap();
+    assert_eq!(report.unchecked.len(), 1, "{:?}", report.unchecked);
+    assert!(report.unchecked[0].starts_with("ts bindings of ext gearbox"));
+    // A pair the model does not declare selects nothing; an empty
+    // selection is every pair, which is what `verify` runs.
+    let other = Selection::pairs(&[("elsewhere".into(), "go".into())]);
+    let report = verify_selected(&model, &[], &LibRoots::default(), &other).unwrap();
+    assert!(report.unchecked.is_empty(), "{:?}", report.unchecked);
+    assert_eq!(
+        verify_selected(&model, &[], &LibRoots::default(), &Selection::all()).unwrap(),
+        verify(&model, &[], &LibRoots::default()).unwrap()
+    );
+    assert!(only_ts.allows_lang("ts") && !only_ts.allows_lang("go"));
+    assert!(Selection::all().allows_lang("go"));
 }
 
 #[test]

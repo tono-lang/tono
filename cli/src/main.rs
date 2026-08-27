@@ -52,8 +52,9 @@ pub(crate) const USAGE: &str = "usage: tono (\n  \
     gen (--target <list> --out <dir> [--package <name>] [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [--clean] [<ir.json>]\n    \
     (with no <ir.json> and nothing piped in, the project's .tono sources are compiled;\n    \
      --clean also removes generated files this run did not produce)\n  \
-    check <file.tono> [--lib-root <lang>=<dir>]... [--config <tono.toml>] [--module <name>]\n    \
-    (an ext block's bindings are checked against the library in that target's out dir, or in --lib-root)\n  \
+    check <file.tono> [--lib-root <lang>=<dir>]... [--config <tono.toml>] [--module <name>] [--only <ext>=<lang>]... [--json]\n    \
+    (an ext block's bindings are checked against the library in that target's out dir, or in --lib-root;\n    \
+     --only narrows the check to those ext/language pairs, --json prints the binding report as JSON lines on stdout)\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
     playground [--port <n>] [--no-open]\n  \
@@ -80,7 +81,7 @@ fn run(args: &[String]) -> Result<(), String> {
     match args.get(1).map(String::as_str) {
         Some("init") => init::run(&args[2..]),
         Some("gen") => gen::run(&args[2..]),
-        Some("check") => run_check(&args[2..]),
+        Some("check") => check::run(&args[2..]),
         Some("fmt") => run_frontend("fmt", &args[2..]),
         Some("preview") => run_preview(&args[2..]),
         #[cfg(feature = "playground")]
@@ -115,26 +116,7 @@ pub(crate) fn discover_manifest() -> Result<PathBuf, String> {
 /// Relay a source-level subcommand (`check`, `fmt`) to the frontend, inheriting
 /// its stdio and exit code. The frontend owns parsing and typechecking, so these
 /// are thin passthroughs: it prints diagnostics or the formatted source itself.
-/// `tono check`: the frontend's diagnostics first (a rejected source ends
-/// here, with its exit code), then every foreign binding checked against
-/// its library. Findings print like the frontend's own diagnostics and fail
-/// the check the same way.
-fn run_check(args: &[String]) -> Result<(), String> {
-    let parsed = check::parse_args(args)?;
-    let path = parsed
-        .path
-        .clone()
-        .ok_or(format!("missing <file.tono>\n{USAGE}"))?;
-    run_frontend("check", std::slice::from_ref(&path))?;
-    if check::check_bindings(Path::new(&path), &parsed)? {
-        eprintln!("ok: {path}");
-        Ok(())
-    } else {
-        std::process::exit(1);
-    }
-}
-
-fn run_frontend(sub: &str, args: &[String]) -> Result<(), String> {
+pub(crate) fn run_frontend(sub: &str, args: &[String]) -> Result<(), String> {
     let program = frontend::resolve_program();
     let status = Command::new(&program)
         .arg(sub)

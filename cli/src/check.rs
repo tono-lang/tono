@@ -17,10 +17,15 @@
 //!
 //! `tono gen` is untouched by this: generation stays hermetic, and only the
 //! check asks for the toolchain of the targets it checks.
+//!
+//! The editor runs this same command on save (`--json`, one pair at a time
+//! with `--only`) and publishes what it prints: there is one verdict on a
+//! binding, the target compiler's, and this is its only path to a report.
 
 use std::path::{Path, PathBuf};
 
-use tono_backend::codegen::verify::{self, LibRoots, Report, TargetRoot};
+use serde::{Deserialize, Serialize};
+use tono_backend::codegen::verify::{self, LibRoots, Report, Selection, TargetRoot};
 use tono_backend::config::{self as manifest, normalize_ext_lang};
 use tono_backend::ir::decode_model;
 
@@ -37,6 +42,11 @@ pub(crate) struct Args {
     /// `--module`), which is the generated package the probe sits in; the
     /// file stem otherwise.
     pub module: Option<String>,
+    /// Print the binding report as JSON lines on stdout instead of text on
+    /// stderr.
+    pub json: bool,
+    /// The (ext, lang) pairs to check; empty means every pair.
+    pub only: Vec<(String, String)>,
 }
 
 pub(crate) fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -52,6 +62,15 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Args, String> {
                 out.lib_roots
                     .push((normalize_ext_lang(lang).to_string(), PathBuf::from(dir)));
             }
+            "--only" => {
+                let value = flag_value(args, &mut i, "--only")?;
+                let (ext, lang) = value
+                    .split_once('=')
+                    .ok_or_else(|| format!("--only expects <ext>=<lang>, got: {value}\n{USAGE}"))?;
+                out.only
+                    .push((ext.to_string(), normalize_ext_lang(lang).to_string()));
+            }
+            "--json" => out.json = true,
             "--config" => out.config = Some(flag_value(args, &mut i, "--config")?),
             "--module" => out.module = Some(flag_value(args, &mut i, "--module")?),
             flag if flag.starts_with("--") => return Err(format!("unknown flag: {flag}\n{USAGE}")),
@@ -155,25 +174,108 @@ pub(crate) fn resolve_roots(
     Ok(roots)
 }
 
-/// Render the report the way the frontend prints diagnostics: findings
-/// first, then what was left unchecked, then what passed.
+/// One line of the report, in the order the text form prints them:
+/// findings, then what was left unchecked, then what passed. The JSON form
+/// (`--json`) is this enum one object per line; `render` and `json_lines`
+/// are two spellings of the same sequence, and `parse_json_lines` reads the
+/// JSON back so a consumer can prove it lost nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub(crate) enum Line {
+    Finding {
+        code: String,
+        span: String,
+        message: String,
+        /// The binding the finding is about (see `verify::Finding::site`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        site: Option<verify::Site>,
+    },
+    Unchecked {
+        message: String,
+    },
+    Checked {
+        message: String,
+    },
+    /// The check itself could not run (a toolchain or the frontend missing,
+    /// a root that does not resolve): the message a text run prints as its
+    /// error.
+    Error {
+        message: String,
+    },
+}
+
+impl std::fmt::Display for Line {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Line::Finding {
+                code,
+                span,
+                message,
+                ..
+            } => write!(f, "{span}: error: {code}: {message}"),
+            Line::Unchecked { message } => write!(f, "not checked: {message}"),
+            Line::Checked { message } => write!(f, "checked: {message}"),
+            Line::Error { message } => write!(f, "{message}"),
+        }
+    }
+}
+
+pub(crate) fn lines(report: &Report, notes: &[String]) -> Vec<Line> {
+    let findings = report.findings.iter().map(|f| Line::Finding {
+        code: verify::FINDING_CODE.to_string(),
+        span: f.span.clone(),
+        message: f.message.clone(),
+        site: f.site.clone(),
+    });
+    let unchecked = notes
+        .iter()
+        .chain(&report.unchecked)
+        .map(|m| Line::Unchecked { message: m.clone() });
+    let checked = report
+        .checked
+        .iter()
+        .map(|m| Line::Checked { message: m.clone() });
+    findings.chain(unchecked).chain(checked).collect()
+}
+
+/// Render the report the way the frontend prints diagnostics.
+#[cfg(test)]
 pub(crate) fn render(report: &Report, notes: &[String]) -> String {
-    let mut out = String::new();
-    for f in &report.findings {
-        out.push_str(&f.to_string());
-        out.push('\n');
-    }
-    for line in notes.iter().chain(&report.unchecked) {
-        out.push_str("not checked: ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    for line in &report.checked {
-        out.push_str("checked: ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
+    render_lines(&lines(report, notes))
+}
+
+pub(crate) fn render_lines(lines: &[Line]) -> String {
+    lines.iter().map(|l| format!("{l}\n")).collect()
+}
+
+/// The report as JSON, one object per line.
+pub(crate) fn json_lines(lines: &[Line]) -> String {
+    lines
+        .iter()
+        .map(|l| {
+            let mut s = serde_json::to_string(l).expect("a report line serializes");
+            s.push('\n');
+            s
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn parse_json_lines(text: &str) -> Result<Vec<Line>, String> {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).map_err(|e| format!("report line {l:?}: {e}")))
+        .collect()
+}
+
+/// A language-level note (no root for it) belongs to a run that checks
+/// that language; a pair-scoped run has nothing to say about the others.
+/// The notes `resolve_roots` writes all start with the language.
+fn keep_selected_notes(notes: &mut Vec<String>, selection: &Selection) {
+    notes.retain(|n| {
+        n.split_once(' ')
+            .is_some_and(|(lang, _)| selection.allows_lang(lang))
+    });
 }
 
 fn frontend_error(e: FrontendError) -> String {
@@ -185,23 +287,63 @@ fn frontend_error(e: FrontendError) -> String {
     }
 }
 
-/// Run the foreign-binding check on an already frontend-clean source.
-/// Returns whether it found no divergence; the report is printed to stderr.
-pub(crate) fn check_bindings(source: &Path, args: &Args) -> Result<bool, String> {
+/// Run the foreign-binding check on an already frontend-clean source:
+/// the report lines, and whether no divergence was found.
+fn check_bindings(source: &Path, args: &Args) -> Result<(Vec<Line>, bool), String> {
     let frontend = Frontend::from_env();
     let ir = frontend
         .compile_as(source, args.module.as_deref())
         .map_err(frontend_error)?;
     let model = decode_model(&ir)?;
     if model.modules.iter().all(|m| m.ext_libs.is_empty()) {
-        return Ok(true);
+        return Ok((Vec::new(), true));
     }
     let sites = verify::parse_sites(&frontend.ext_bindings(source).map_err(frontend_error)?)?;
+    let selection = Selection::pairs(&args.only);
     let mut notes = Vec::new();
     let roots = resolve_roots(source, args, &mut notes)?;
-    let report = verify::verify(&model, &sites, &roots)?;
-    eprint!("{}", render(&report, &notes));
-    Ok(report.findings.is_empty())
+    keep_selected_notes(&mut notes, &selection);
+    let report = verify::verify_selected(&model, &sites, &roots, &selection)?;
+    let clean = report.findings.is_empty();
+    Ok((lines(&report, &notes), clean))
+}
+
+/// `tono check`: the frontend's diagnostics first (a rejected source ends
+/// here, with its exit code), then every foreign binding checked against
+/// its library. Findings print like the frontend's own diagnostics and fail
+/// the check the same way. With `--json` the binding report goes to stdout
+/// as JSON lines, an error of the check itself included, so a consumer
+/// never has to parse prose; the frontend's own diagnostics keep their
+/// stream and exit code either way.
+pub(crate) fn run(args: &[String]) -> Result<(), String> {
+    let parsed = parse_args(args)?;
+    let path = parsed
+        .path
+        .clone()
+        .ok_or(format!("missing <file.tono>\n{USAGE}"))?;
+    let outcome = crate::run_frontend("check", std::slice::from_ref(&path))
+        .and_then(|()| check_bindings(Path::new(&path), &parsed));
+    if parsed.json {
+        let (lines, clean) = match outcome {
+            Ok(result) => result,
+            Err(message) => (vec![Line::Error { message }], false),
+        };
+        print!("{}", json_lines(&lines));
+        if clean {
+            Ok(())
+        } else {
+            std::process::exit(1)
+        }
+    } else {
+        let (lines, clean) = outcome?;
+        eprint!("{}", render_lines(&lines));
+        if clean {
+            eprintln!("ok: {path}");
+            Ok(())
+        } else {
+            std::process::exit(1)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -259,8 +401,7 @@ mod tests {
                 ("go".into(), dir.join("go")),
                 ("ts".into(), dir.join("missing")),
             ],
-            config: None,
-            module: None,
+            ..Args::default()
         };
         let mut notes = Vec::new();
         let roots = resolve_roots(&source, &args, &mut notes).unwrap();
@@ -329,6 +470,7 @@ mod tests {
             findings: vec![verify::Finding {
                 span: "3:4-9".into(),
                 message: "go binding of op f in ext x: boom".into(),
+                site: None,
             }],
             unchecked: vec!["rust bindings of ext x: nightly".into()],
             checked: vec!["go bindings of ext x (go build)".into()],
@@ -341,5 +483,97 @@ mod tests {
              not checked: rust bindings of ext x: nightly\n\
              checked: go bindings of ext x (go build)\n"
         );
+    }
+
+    /// The JSON form carries the whole text form: what an editor reads
+    /// back renders byte for byte as what `tono check` prints, so the two
+    /// can never disagree.
+    #[test]
+    fn json_lines_round_trip_to_the_text_report() {
+        let report = Report {
+            findings: vec![verify::Finding {
+                span: "3:4-9".into(),
+                message: "go binding of op f in ext x: boom\n\tsecond line".into(),
+                site: Some(verify::Site {
+                    ext: "x".into(),
+                    lang: "go".into(),
+                    kind: verify::SiteKind::Op,
+                    owner: None,
+                    name: Some("f".into()),
+                    span: "3:4-9".into(),
+                }),
+            }],
+            unchecked: vec!["rust bindings of ext x: nightly".into()],
+            checked: vec!["go bindings of ext x (go build)".into()],
+        };
+        let notes = ["ts bindings: no root".to_string()];
+        let lines = lines(&report, &notes);
+        let json = json_lines(&lines);
+        assert_eq!(json.lines().count(), 4);
+        assert!(json.starts_with(
+            "{\"kind\":\"finding\",\"code\":\"FX0001\",\"span\":\"3:4-9\",\"message\":\"go binding of op f in ext x: boom\\n\\tsecond line\",\"site\":{\"ext\":\"x\",\"lang\":\"go\",\"kind\":\"op\",\"owner\":null,\"name\":\"f\",\"span\":\"3:4-9\"}}\n"
+        ), "{json}");
+        let back = parse_json_lines(&json).unwrap();
+        assert_eq!(back, lines);
+        assert_eq!(render_lines(&back), render(&report, &notes));
+        let error = json_lines(&[Line::Error {
+            message: "checking the go bindings of ext x needs go".into(),
+        }]);
+        assert_eq!(
+            error,
+            "{\"kind\":\"error\",\"message\":\"checking the go bindings of ext x needs go\"}\n"
+        );
+        assert_eq!(
+            render_lines(&parse_json_lines(&error).unwrap()),
+            "checking the go bindings of ext x needs go\n"
+        );
+        assert!(parse_json_lines("{\"kind\":\"nope\"}")
+            .unwrap_err()
+            .contains("report line"));
+    }
+
+    #[test]
+    fn parses_only_pairs_and_json() {
+        let args: Vec<String> = [
+            "a.tono",
+            "--json",
+            "--only",
+            "x=typescript",
+            "--only",
+            "y=go",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let parsed = parse_args(&args).unwrap();
+        assert!(parsed.json);
+        assert_eq!(
+            parsed.only,
+            vec![
+                ("x".to_string(), "ts".to_string()),
+                ("y".to_string(), "go".to_string())
+            ]
+        );
+        let bad: Vec<String> = vec!["a.tono".into(), "--only".into(), "x".into()];
+        assert!(parse_args(&bad).unwrap_err().contains("<ext>=<lang>"));
+    }
+
+    #[test]
+    fn a_pair_scoped_run_keeps_only_its_languages_notes() {
+        let mut notes = vec![
+            "go bindings: the library root a does not exist".to_string(),
+            "ts bindings: the library root b does not exist".to_string(),
+        ];
+        keep_selected_notes(
+            &mut notes,
+            &Selection::pairs(&[("x".into(), "typescript".into())]),
+        );
+        assert_eq!(
+            notes,
+            vec!["ts bindings: the library root b does not exist".to_string()]
+        );
+        let mut all = vec!["go bindings: gone".to_string()];
+        keep_selected_notes(&mut all, &Selection::all());
+        assert_eq!(all.len(), 1);
     }
 }

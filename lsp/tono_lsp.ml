@@ -2,9 +2,12 @@
    All the analysis lives in [Analysis] (pure, tested); this module only owns the
    transport, the open-document store, and the request/notification dispatch.
 
-   Concurrency is deliberately absent: requests are served in receive order on a
-   single thread. Editors tolerate this for a fast, in-process checker, and it
-   keeps the loop trivial to reason about. *)
+   Requests are served in receive order on a single thread: editors tolerate
+   this for a fast, in-process checker, and it keeps the loop trivial to
+   reason about. The one thing off that thread is the foreign-binding check
+   on save, which invokes the target compilers ([Binding_runner]): its
+   workers publish through the same guarded writer, and the document store
+   is read under a lock wherever a worker can reach it. *)
 
 open Lsp.Types
 module CN = Lsp.Client_notification
@@ -53,21 +56,80 @@ module Rpc = Lsp.Io.Make (Io) (Chan)
 let store : (string, Text_document.t) Hashtbl.t = Hashtbl.create 16
 let key (uri : DocumentUri.t) : string = Lsp.Uri.to_string uri
 
-let send_notification (n : SN.t) : unit =
-  Rpc.write stdout (Jsonrpc.Packet.Notification (SN.to_jsonrpc n))
+(* The store and the last frontend diagnostics per document are read by the
+   binding-check workers when they publish; every write to them from the
+   request thread and every read from a worker holds this lock. *)
+let state_lock = Mutex.create ()
 
-(* Recompute diagnostics for a document and push them to the client. Called on
-   every open and change so the editor's problem list tracks the buffer. *)
-let publish_diagnostics (uri : DocumentUri.t) (text : string) : unit =
-  let diagnostics = Analysis.lsp_diagnostics text in
+let with_state f =
+  Mutex.lock state_lock;
+  Fun.protect ~finally:(fun () -> Mutex.unlock state_lock) f
+
+(* Frames are written whole: the request thread and the workers share the
+   channel, and an interleaved frame would end the session. *)
+let out_lock = Mutex.create ()
+
+let write_packet (p : Jsonrpc.Packet.t) : unit =
+  Mutex.lock out_lock;
+  Fun.protect
+    ~finally:(fun () -> Mutex.unlock out_lock)
+    (fun () -> Rpc.write stdout p)
+
+let send_notification (n : SN.t) : unit =
+  write_packet (Jsonrpc.Packet.Notification (SN.to_jsonrpc n))
+
+let log_message (message : string) : unit =
+  send_notification
+    (SN.LogMessage (LogMessageParams.create ~type_:MessageType.Info ~message))
+
+(* The frontend's diagnostics as last published per document. What the
+   editor sees is these plus the binding verdicts cached for the file, so a
+   keystroke re-publishing the frontend's never wipes what the last save
+   found, and a save's verdict lands on top of what typing shows. *)
+let frontend_diags : (string, Diagnostic.t list) Hashtbl.t = Hashtbl.create 16
+
+let has_error (ds : Diagnostic.t list) : bool =
+  List.exists
+    (fun (d : Diagnostic.t) -> d.severity = Some DiagnosticSeverity.Error)
+    ds
+
+(* Publish the merged diagnostics of [uri]: the frontend's last, then the
+   binding verdicts re-located on the buffer as it is now. A buffer the
+   frontend rejects shows the frontend's alone (the check needs a source it
+   accepts, and a verdict about a file that no longer compiles misleads). *)
+let publish_merged (uri : DocumentUri.t) : unit =
+  let diagnostics =
+    with_state (fun () ->
+        let k = key uri in
+        let fd = Option.value ~default:[] (Hashtbl.find_opt frontend_diags k) in
+        let bd =
+          match Hashtbl.find_opt store k with
+          | Some doc when not (has_error fd) ->
+              Binding_runner.diagnostics ~path:(Lsp.Uri.to_path uri)
+                ~text:(Text_document.text doc)
+          | _ -> []
+        in
+        fd @ bd)
+  in
   send_notification
     (SN.PublishDiagnostics
        (PublishDiagnosticsParams.create ~uri ~diagnostics ()))
 
+let publish (uri : DocumentUri.t) (diagnostics : Diagnostic.t list) : unit =
+  with_state (fun () -> Hashtbl.replace frontend_diags (key uri) diagnostics);
+  publish_merged uri
+
+(* Recompute diagnostics for a document and push them to the client. Called on
+   every open and change so the editor's problem list tracks the buffer. *)
+let publish_diagnostics (uri : DocumentUri.t) (text : string) : unit =
+  publish uri (Analysis.lsp_diagnostics text)
+
 let server_capabilities () : ServerCapabilities.t =
   let sync =
     TextDocumentSyncOptions.create ~openClose:true
-      ~change:TextDocumentSyncKind.Incremental ()
+      ~change:TextDocumentSyncKind.Incremental
+      ~save:(`SaveOptions (SaveOptions.create ~includeText:false ()))
+      ()
   in
   ServerCapabilities.create ~textDocumentSync:(`TextDocumentSyncOptions sync)
     ~hoverProvider:(`Bool true) ~definitionProvider:(`Bool true)
@@ -153,11 +215,8 @@ let publish_project_root (root : string) : unit =
   Hashtbl.iter
     (fun k (r, module_) ->
       if String.equal r root then
-        send_notification
-          (SN.PublishDiagnostics
-             (PublishDiagnosticsParams.create ~uri:(Lsp.Uri.of_string k)
-                ~diagnostics:(Workspace.diagnostics ~project ~root ~module_)
-                ())))
+        publish (Lsp.Uri.of_string k)
+          (Workspace.diagnostics ~project ~root ~module_))
     doc_roots
 
 let republish_all_roots () : unit =
@@ -198,7 +257,7 @@ let register_watcher () : unit =
       ()
   in
   let params = RegistrationParams.create ~registrations:[ registration ] in
-  Rpc.write stdout
+  write_packet
     (Jsonrpc.Packet.Request
        (Jsonrpc.Request.create ~id:(`String "tono.watched-files.registration")
           ~method_:"client/registerCapability"
@@ -421,18 +480,38 @@ let on_notification (n : Jsonrpc.Notification.t) : unit =
          units, and incremental didChange ranges applied at any other encoding
          desynchronize the buffer on non-ASCII content. *)
       let doc = Text_document.make ~position_encoding:`UTF16 p in
-      Hashtbl.replace store (key p.textDocument.uri) doc;
+      with_state (fun () -> Hashtbl.replace store (key p.textDocument.uri) doc);
       analyze_and_publish p.textDocument.uri (Text_document.text doc)
   | Ok (CN.TextDocumentDidChange p) -> (
       match Hashtbl.find_opt store (key p.textDocument.uri) with
       | Some doc ->
           let doc = Text_document.apply_content_changes doc p.contentChanges in
-          Hashtbl.replace store (key p.textDocument.uri) doc;
+          with_state (fun () ->
+              Hashtbl.replace store (key p.textDocument.uri) doc);
           analyze_and_publish p.textDocument.uri (Text_document.text doc)
       | None -> ())
+  | Ok (CN.DidSaveTextDocument p) -> (
+      (* The saved text is the buffer's (the client sends no text, and the
+         check reads the file from disk, which the save just wrote). *)
+      match Hashtbl.find_opt store (key p.textDocument.uri) with
+      | Some doc ->
+          let uri = p.textDocument.uri in
+          let clean =
+            not
+              (has_error
+                 (Option.value ~default:[]
+                    (Hashtbl.find_opt frontend_diags (key uri))))
+          in
+          Binding_runner.schedule ~path:(Lsp.Uri.to_path uri)
+            ~text:(Text_document.text doc) ~clean ~log:log_message
+            ~on_done:(fun () -> publish_merged uri)
+      | None -> ())
   | Ok (CN.TextDocumentDidClose p) ->
-      Hashtbl.remove store (key p.textDocument.uri);
+      with_state (fun () ->
+          Hashtbl.remove store (key p.textDocument.uri);
+          Hashtbl.remove frontend_diags (key p.textDocument.uri));
       Hashtbl.remove doc_roots (key p.textDocument.uri);
+      Binding_runner.forget ~path:(Lsp.Uri.to_path p.textDocument.uri);
       (* Editors keep published diagnostics until told otherwise; clear them so
          a closed buffer leaves no stale problems behind. *)
       send_notification
@@ -509,7 +588,7 @@ let () =
     match read_frame stdin with
     | Eof -> running := false
     | Broken (Some id) ->
-        Rpc.write stdout
+        write_packet
           (error_response id InvalidParams
              "request params must be a structured value")
     | Broken None -> ()
@@ -523,7 +602,7 @@ let () =
               (Jsonrpc.Response.Error.make ~code:InternalError
                  ~message:(Printexc.to_string exn) ())
         in
-        Rpc.write stdout (Jsonrpc.Packet.Response response)
+        write_packet (Jsonrpc.Packet.Response response)
     | Packet (Jsonrpc.Packet.Notification n) -> (
         (* [exit] terminates the loop; every other notification is handled
            only while running (dropped before initialize and after shutdown),
@@ -537,4 +616,7 @@ let () =
         | _ -> ( try on_notification n with _ -> ()))
     | Packet _ -> ()
   done;
+  (* A verdict still being computed is published before the session ends:
+     the client asked for it with its save. *)
+  Binding_runner.wait_all ();
   if !dirty_exit then exit 1

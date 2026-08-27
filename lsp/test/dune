@@ -1,6 +1,6 @@
 (tests
- (names analysis_test analysis_ext_test)
- (modules analysis_test analysis_ext_test)
+ (names analysis_test analysis_ext_test binding_check_test)
+ (modules analysis_test analysis_ext_test binding_check_test)
  (libraries tono_lsp_lib tono_frontend lsp alcotest))
 
 ; The example ext block is the outline fixture, copied next to the test.
@@ -9,10 +9,21 @@
  (copy ../../examples/config-lib/service.tono service.tono))
 
 ; Protocol-level regressions can only be caught against the real server loop,
-; so this suite drives the built binary over a pipe.
+; so these suites drive the built binary over a pipe: the transport and
+; workspace behavior, and the binding check on save (against a stand-in
+; `tono`), sharing one harness.
 
 (tests
- (names server_test)
- (modules server_test)
+ (names server_test server_binding_test)
+ (modules server_test server_binding_test server_harness)
  (libraries yojson unix alcotest)
  (deps ../tono_lsp.exe))
+
+; The editor-side half of the FFI bench's same-verdict gate: drives the
+; server on a file and prints the binding verdict it published, in the
+; command's own format (see scripts/check-ffi-bench.sh).
+
+(executable
+ (name lsp_check_driver)
+ (modules lsp_check_driver)
+ (libraries tono_lsp_lib lsp yojson unix))
