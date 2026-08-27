@@ -247,6 +247,90 @@ fn a_go_library_is_indexed_beside_the_manifest_with_its_key() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The TypeScript compiler API this checkout can test with: the alias the
+/// codegen tests install (`npm install` in backend/codegen-tests/typescript).
+fn ts_api() -> Option<PathBuf> {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let alias = repo.join("backend/codegen-tests/typescript/node_modules/typescript-api");
+    alias.join("lib/typescript.js").is_file().then_some(alias)
+}
+
+const TS_SOURCE: &str = "\
+ext gearbox {
+  ts { #(@example/gearbox) }
+
+  struct dial {
+    ts { #(Dial) }
+
+    op read(): float {
+      ts { call: #(read)() }
+    }
+  }
+
+  op open(value: float): dial {
+    ts { call: #(new Dial)(value) }
+  }
+}
+";
+
+#[test]
+fn a_typescript_library_is_indexed_through_the_compiler_api() {
+    let mut cmd = skip_without_frontend!();
+    if !Command::new("node").arg("--version").output().is_ok() {
+        eprintln!("skipping: node is not installed");
+        return;
+    }
+    let Some(api) = ts_api() else {
+        eprintln!("skipping: no TypeScript compiler API (npm install in backend/codegen-tests/typescript)");
+        return;
+    };
+    let dir = tmp("ts");
+    let pkg = dir.join("sdk/ts/node_modules/@example/gearbox");
+    write(
+        &pkg.join("package.json"),
+        "{\"name\":\"@example/gearbox\",\"version\":\"0.0.0\",\"types\":\"index.d.ts\"}",
+    );
+    write(
+        &pkg.join("index.d.ts"),
+        "export * from \"./more\";\nexport declare class Dial { constructor(value: number); read(): number; }\n",
+    );
+    write(
+        &pkg.join("more.d.ts"),
+        "export declare function calibrate(d: Dial): void;\n",
+    );
+    write(&dir.join("sdk/ts/package-lock.json"), "{}");
+    write(
+        &dir.join("tono.toml"),
+        "[project]\nname = \"svc\"\n\n[target.typescript]\nout = \"sdk/ts\"\n\n[ext.gearbox]\nts = \"0.0.0\"\n",
+    );
+    let file = write(&dir.join("svc.tono"), TS_SOURCE);
+    cmd.env("TONO_TYPESCRIPT", &api);
+    let (ok, lines, stderr) = index_json(cmd, &file, &[]);
+    assert!(ok, "{stderr}");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["kind"], "built", "{lines:?}");
+    assert_eq!(lines[0]["symbols"], 2);
+    let path = dir.join(".tono/index/gearbox.ts.json");
+    let index: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(index["key"]["package"], "@example/gearbox");
+    assert_eq!(index["key"]["version"], "0.0.0");
+    let lockfile = index["key"]["lockfile"]["path"].as_str().unwrap();
+    assert!(lockfile.ends_with("sdk/ts/package-lock.json"), "{lockfile}");
+    // FNV-1a 64 of "{}", the lockfile's bytes.
+    assert_eq!(index["key"]["lockfile"]["digest"], "08f44b07b5901a25");
+    let names: Vec<&str> = index["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Dial", "calibrate"]);
+    assert_eq!(index["symbols"][0]["kind"], "class");
+    assert_eq!(index["symbols"][0]["members"][0]["name"], "read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_text_form_prints_the_same_lines_on_stderr() {
     let mut cmd = skip_without_frontend!();

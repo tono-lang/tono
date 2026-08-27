@@ -20,6 +20,7 @@
 mod format;
 mod go;
 mod roots;
+mod ts;
 
 use std::path::Path;
 use std::process::Command;
@@ -252,6 +253,7 @@ fn build_pair(pair: &Pair, root: &Path, version: &str) -> Result<Outcome, String
     let _ = version;
     match pair.lang.as_str() {
         "go" => go::extract(root, &pair.package),
+        "ts" => ts::extract(root, &pair.package),
         other => Ok(Outcome::Skipped(format!("no {other} extractor yet"))),
     }
 }
