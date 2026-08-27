@@ -424,7 +424,6 @@ fn op_method(
                 module,
                 crate::codegen::ops::input_name(op),
                 call,
-                &ret,
                 &throw,
                 refs,
                 &mut sentinel_types,

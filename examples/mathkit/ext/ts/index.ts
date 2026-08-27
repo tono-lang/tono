@@ -166,3 +166,44 @@ export class Memo<T> {
 export function remember<T>(value: T): Memo<T> {
   return new Memo<T>(value);
 }
+
+// A provider generic over a bound: the library takes only an object shape
+// (`T extends object`), the way a settings or cache library does when it
+// spreads or freezes what it holds. The bound is the point of this shape: a
+// handle whose method answers `unknown` cannot instantiate T, whatever the
+// call site is annotated with.
+export interface Bounded<T extends object> {
+  read(): Promise<T>;
+}
+
+export class PinnedBounded<T extends object> implements Bounded<T> {
+  constructor(private readonly value: T) {}
+
+  async read(): Promise<T> {
+    return this.value;
+  }
+}
+
+// Holds nothing and fails every read: what a fallback falls back from.
+export class AbsentBounded<T extends object> implements Bounded<T> {
+  async read(): Promise<T> {
+    throw new Error("mathkit: nothing to read");
+  }
+}
+
+// Composes two providers the caller already built into a third: reads the
+// first and answers the second when the first fails.
+export function boundedFallback<T extends object>(
+  a: Bounded<T>,
+  b: Bounded<T>,
+): Bounded<T> {
+  return {
+    async read(): Promise<T> {
+      try {
+        return await a.read();
+      } catch {
+        return b.read();
+      }
+    },
+  };
+}

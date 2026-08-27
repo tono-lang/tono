@@ -9,7 +9,8 @@
 
 use super::super::test_prelude::*;
 use crate::codegen::fixtures::handle_source::{handle_source_module, handle_source_test};
-use crate::ir::{Module, ShapeKind};
+use crate::codegen::tree::{item_refs, Decl};
+use crate::ir::{Module, ShapeKind, Tref};
 
 fn rendered_text(module: &Module) -> String {
     let emission = emit(module, &ts_casing());
@@ -93,15 +94,72 @@ fn a_tested_entry_exports_nothing_test_only() {
     assert!(out.contains("static async forTest("), "{out}");
 }
 
-#[test]
-fn a_method_without_yields_narrows_the_raw_result_to_the_field_type() {
+/// The `ts` binding of every provider method, with its `yields`/`returns`
+/// projection dropped: the call answers the declared `cfg` itself.
+fn without_projection() -> Module {
     let mut module = handle_source_module("ts");
     for method in &mut module.ext_libs[0].types[0].methods {
         method.langs[0].yields.clear();
         method.langs[0].returns = None;
     }
+    module
+}
+
+/// A method with no `yields` answers the return the `.tono` declares, and
+/// its interface says so: the generated `Cfg` shape, imported from the
+/// module's own types (the interface lives in the entry's own file), never
+/// `unknown`. The resolver then hands the raw result back with no cast.
+#[test]
+fn a_method_without_yields_declares_the_field_type_the_tono_declares() {
+    let module = without_projection();
     let out = rendered_text(&module);
-    assert!(out.contains("return raw as Cfg;"), "{out}");
+    assert!(out.contains("get(): Promise<Cfg>;"), "{out}");
+    assert!(
+        out.contains("getFor(region: string): Promise<Cfg>;"),
+        "{out}"
+    );
+    assert!(!out.contains("unknown>"), "{out}");
+    assert!(!out.contains("return raw as Cfg;"), "{out}");
+    assert!(out.contains("return raw;"), "{out}");
+
+    let emission = emit(&module, &ts_casing());
+    let iface = emission
+        .shared
+        .iter()
+        .chain(emission.per_entry.iter().flat_map(|(_, decls)| decls))
+        .chain(emission.ext.iter().flat_map(|(_, decls)| decls))
+        .find(
+            |d| matches!(d, Decl::Raw(raw) if raw.text.contains("export interface ProviderHandle")),
+        )
+        .expect("the handle interface");
+    assert!(
+        item_refs(iface)
+            .iter()
+            .any(|s| s.name == "Cfg" && s.import.as_ref().map(|i| i.module.as_str()) == Some("kvs")),
+        "the interface imports the shape it declares: {:?}",
+        item_refs(iface)
+    );
+}
+
+/// A method returning another handle of the same `ext` declares that
+/// handle's own generated interface, the type its field would hold.
+#[test]
+fn a_method_returning_a_handle_declares_that_handle_s_interface() {
+    let mut module = without_projection();
+    let get_for = module.ext_libs[0].types[0]
+        .methods
+        .iter_mut()
+        .find(|m| m.name == "get_for")
+        .unwrap();
+    get_for.r#return = Tref::Ref {
+        id: "envkit#provider".into(),
+        args: vec![],
+    };
+    let out = rendered_text(&module);
+    assert!(
+        out.contains("getFor(region: string): Promise<ProviderHandle>;"),
+        "{out}"
+    );
 }
 
 #[test]

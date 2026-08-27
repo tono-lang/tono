@@ -201,12 +201,12 @@ fn fake_method_body(
     match answer {
         StubAnswer::Value { value } => {
             let raw = raw_answer(lang, value);
-            let ret = ext_handle_iface::method_return_type(lang, ctx.module);
-            let cast = if ret == "unknown" {
-                String::new()
-            } else {
-                format!(" as {ret}")
-            };
+            // A foreign-shaped answer is spelled under the companion type the
+            // interface declares for it; a logical answer is the op's own
+            // value, graded by the fake's own cast to the handle interface.
+            let cast = ext_handle_iface::foreign_struct_return(lang, ctx.module)
+                .map(|(ty, _)| format!(" as {ty}"))
+                .unwrap_or_default();
             format!("({}{cast})", json_literal_ts(&raw))
         }
         StubAnswer::Error { error } => {

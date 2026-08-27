@@ -18,17 +18,12 @@
 //! instead of an imported free function.
 //!
 //! The receiver's own generated interface (`ext_handle_iface`) already
-//! types the call with no cast needed at the call site itself. Its own
-//! return type is honest, not a guess: `unknown` unless the method's `ts`
-//! binding declares a `yields` position naming a foreign struct. A method
-//! with no `yields` therefore hands this call site an `unknown` raw
-//! result -- true to what tono actually knows -- which this op's own body
-//! narrows with `as {op's declared output type}` before returning it. This
-//! is not the adapter the interface itself deliberately avoids: it asserts
-//! nothing about the *shape* of the value (no field mapping, no
-//! projection), only that *this op*, specifically, trusts its own
-//! frontend-checked contract that a handle method with no yields hands back
-//! exactly what the op declared.
+//! types the call with no cast needed at the call site itself: a method
+//! whose `ts` binding declares a `yields` position naming a foreign struct
+//! answers that struct's verbatim shape, which the projection below reads
+//! field by field; any other method answers the return it declares, so the
+//! raw result already is the value this site returns, and the target
+//! compiler grades that the declared type and the library's agree.
 //!
 //! `entries::validate_entries` guarantees, before this runs, that every
 //! target in the current generation call supports `emits_ext_handle_calls`
@@ -104,14 +99,12 @@ fn lookup<'a>(module: &'a Module, entry: &EntryModel<'_>, call: &OpImplCall) -> 
 
 /// The pieces of one handle-method call site that differ between an op's
 /// own `impl` body and a field's own `= .h.m(args)` source: where the
-/// receiver is read from, how a `Ref` argument resolves, what the raw
-/// result is narrowed to when the method declares no `yields`, and how a
-/// failure leaves the block.
+/// receiver is read from, how a `Ref` argument resolves, and how a failure
+/// leaves the block.
 struct CallSite<'a> {
     recv_expr: String,
     ref_expr:
         &'a dyn Fn(&EntryModel<'_>, &crate::codegen::casing::CasingConfig, &[String]) -> String,
-    ret: &'a str,
     throw: &'a dyn Fn(String) -> String,
 }
 
@@ -165,15 +158,11 @@ fn call_parts(
         lang.yields.iter().find(|y| !y.is_error),
         lang.returns.as_ref(),
     ) {
-        // No projection: the interface honestly types `raw` as `unknown`
-        // (see the module doc for why), whether the binding left the
-        // positions to the convention or named the one it returns. `void`
-        // accepts any resolved value as-is; any other declared type narrows
-        // through the site's own return type, trusting the frontend-checked
-        // contract that this call hands back exactly what was declared, not
-        // a guess this module invents.
-        (_, None) if site.ret == "void" => "return raw;".to_string(),
-        (_, None) => format!("return raw as {};", site.ret),
+        // No projection: the interface types `raw` as the method's declared
+        // return (see the module doc), whether the binding left the
+        // positions to the convention or named the one it returns, so the
+        // raw result already is this site's value.
+        (_, None) => "return raw;".to_string(),
         (None, Some(_)) => panic!(
             "handle method {call_name} declares a returns but no yields position to project from (validate_entries should have rejected this)"
         ),
@@ -226,7 +215,6 @@ pub(super) fn impl_call_body(
     module: &Module,
     input_name: Option<&str>,
     call: &OpImplCall,
-    ret: &str,
     throw: &dyn Fn(String) -> String,
     refs: &mut Vec<Symbol>,
     sentinel_types: &mut BTreeSet<String>,
@@ -239,7 +227,6 @@ pub(super) fn impl_call_body(
     let site = CallSite {
         recv_expr: field_path_expr(entry, config, &call.recv, root),
         ref_expr: &ref_expr,
-        ret,
         throw,
     };
     let (call_expr, assign, switch, fallback) =
@@ -252,27 +239,23 @@ pub(super) fn impl_call_body(
 /// A field's own `= .field.method(args)` construction source, as the body
 /// of that field's resolver (see `ext_resolver`): the receiver and every
 /// sibling field a `Ref` argument reads are the resolver's own parameters
-/// (`recv_expr`, `ref_expr`), and the raw result narrows to the field's own
-/// declared type. Ends in `return`: the assignment itself lives at the
-/// field's own resolution point.
+/// (`recv_expr`, `ref_expr`). Ends in `return`: the assignment itself lives
+/// at the field's own resolution point.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_call_body(
     entry: &EntryModel<'_>,
     config: &crate::codegen::casing::CasingConfig,
     module: &Module,
-    field: &crate::ir::EntryField,
     call: &OpImplCall,
     refs: &mut Vec<Symbol>,
     sentinel_types: &mut BTreeSet<String>,
     recv_expr: &str,
     ref_expr: &dyn Fn(&EntryModel<'_>, &crate::codegen::casing::CasingConfig, &[String]) -> String,
 ) -> String {
-    let ret = super::field_ts_type(&field.target, module);
     let throw = |expr: String| format!("throw {expr};");
     let site = CallSite {
         recv_expr: recv_expr.to_string(),
         ref_expr,
-        ret: &ret,
         throw: &throw,
     };
     let (call_expr, assign, switch, fallback) =

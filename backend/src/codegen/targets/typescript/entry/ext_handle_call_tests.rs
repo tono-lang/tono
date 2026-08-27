@@ -393,15 +393,29 @@ fn an_unmapped_failure_falls_back_to_contract_error_naming_the_call() {
     );
 }
 
+/// A method with no `yields` answers the return it declares: the interface
+/// says so (never `unknown`, which no bounded generic of the library could
+/// instantiate from), and the op hands the raw result back with no cast.
 #[test]
-fn a_method_with_no_yields_narrows_the_honestly_unknown_raw_result_to_the_op_s_own_output() {
+fn a_method_with_no_yields_declares_its_own_return_and_hands_the_raw_result_back() {
     let out = rendered_text(&module_with_ops(vec![heartbeat_op()]));
-    assert!(
-        out.contains("const raw = await this.settings.bus.ping();"),
+    assert!(out.contains("ping(): Promise<string>;"), "{out}");
+    assert!(!out.contains("unknown>"), "{out}");
+    assert_eq!(
+        line_after(&out, "const raw = await this.settings.bus.ping();"),
+        "return raw;",
         "{out}"
     );
-    assert!(out.contains("ping(): Promise<unknown>;"), "{out}");
-    assert!(out.contains("return raw as string;"), "{out}");
+}
+
+/// The trimmed line following the first line whose trimmed text is `line`.
+fn line_after<'a>(out: &'a str, line: &str) -> &'a str {
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let at = lines
+        .iter()
+        .position(|l| *l == line)
+        .unwrap_or_else(|| panic!("no line {line:?} in:\n{out}"));
+    lines[at + 1]
 }
 
 #[test]
@@ -561,10 +575,11 @@ fn a_handle_method_stub_answering_a_shape_no_ts_sentinel_maps_throws_a_plain_err
     assert!(!out.contains("ThrottledError"), "{out}");
 }
 
-/// A handle method whose `yields` list projects nothing narrows the raw
-/// result to the op's own output, the way a method with no `yields` does.
+/// A handle method whose `yields` list projects nothing hands the raw
+/// result back as the op's own output, the way a method with no `yields`
+/// does.
 #[test]
-fn a_signature_yields_list_narrows_the_raw_result_to_the_op_s_own_output() {
+fn a_signature_yields_list_hands_the_raw_result_back_as_the_op_s_own_output() {
     let mut module = module_with_ops(vec![status_op()]);
     let status = module.ext_libs[0].types[0]
         .methods
@@ -574,5 +589,9 @@ fn a_signature_yields_list_narrows_the_raw_result_to_the_op_s_own_output() {
     status.langs[0].returns = None;
     let out = rendered_text(&module);
     assert!(!out.contains("switch (raw.code)"), "{out}");
-    assert!(out.contains("return raw as Status;"), "{out}");
+    assert_eq!(
+        line_after(&out, "const raw = await this.settings.bus.status();"),
+        "return raw;",
+        "{out}"
+    );
 }
