@@ -19,6 +19,16 @@ val parse_leading_traits : Parser_state.t -> Ast.trait list
    non-"@" token or at a trait that opens a line of its own. *)
 val parse_inline_traits : Parser_state.t -> Ast.trait list
 
+(* The leading traits of a body item (member, op, case, variant): read when
+   the cursor sits on "@", kept only if [starts_item] accepts the token after
+   them, otherwise diagnosed as dangling ([what] names the item kind in the
+   message) and dropped. *)
+val parse_item_traits :
+  Parser_state.t ->
+  what:string ->
+  starts_item:(Token.kind -> bool) ->
+  Ast.trait list
+
 (* match ::= "match" ref "{" (pattern "=>" value)* "}" *)
 val parse_field_match : Parser_state.t -> Ast.field_match
 
