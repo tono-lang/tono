@@ -41,6 +41,11 @@ rust-embed = { version = "8", optional = true, features = ["include-exclude"] }
 # disk, so generation owns `exports` without discarding the rest of the file.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The Rust extractor of `tono index` reads a crate's public items from its
+# source (rustdoc's JSON output is nightly-only); quote renders the
+# signatures syn parsed back to text.
+syn = { version = "2", features = ["full", "printing"] }
+quote = "1"
 # The preview's terminal UI, behind the `preview` feature. crossterm is used
 # through ratatui's re-export (`ratatui::crossterm`) so the two never drift.
 ratatui = { version = "0.30", optional = true }

@@ -20,6 +20,9 @@
 mod format;
 mod go;
 mod roots;
+mod rust;
+mod rust_exports;
+mod rust_walk;
 mod ts;
 
 use std::path::Path;
@@ -240,8 +243,7 @@ pub(crate) fn run_helper(
             let last = stderr
                 .lines()
                 .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .last()
+                .rfind(|l| !l.is_empty())
                 .unwrap_or("printed no report");
             Err(format!("{program} extractor: {last}"))
         }
@@ -250,10 +252,10 @@ pub(crate) fn run_helper(
 
 /// Run the language's extractor over its library root.
 fn build_pair(pair: &Pair, root: &Path, version: &str) -> Result<Outcome, String> {
-    let _ = version;
     match pair.lang.as_str() {
         "go" => go::extract(root, &pair.package),
         "ts" => ts::extract(root, &pair.package),
+        "rust" => rust::extract(root, &pair.package, version),
         other => Ok(Outcome::Skipped(format!("no {other} extractor yet"))),
     }
 }

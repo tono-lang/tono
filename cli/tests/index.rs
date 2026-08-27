@@ -276,7 +276,7 @@ ext gearbox {
 #[test]
 fn a_typescript_library_is_indexed_through_the_compiler_api() {
     let mut cmd = skip_without_frontend!();
-    if !Command::new("node").arg("--version").output().is_ok() {
+    if Command::new("node").arg("--version").output().is_err() {
         eprintln!("skipping: node is not installed");
         return;
     }
@@ -328,6 +328,91 @@ fn a_typescript_library_is_indexed_through_the_compiler_api() {
     assert_eq!(names, vec!["Dial", "calibrate"]);
     assert_eq!(index["symbols"][0]["kind"], "class");
     assert_eq!(index["symbols"][0]["members"][0]["name"], "read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+const RUST_SOURCE: &str = "\
+ext gearbox {
+  rust { #(gearbox) }
+
+  struct dial {
+    rust { #(Dial<f64>) }
+
+    op read(): float {
+      rust { call: #(read)() }
+    }
+  }
+
+  op open(value: float): dial {
+    rust { call: #(open)(value) }
+  }
+}
+";
+
+#[test]
+fn a_rust_crate_is_indexed_from_its_source_through_cargo_metadata() {
+    let cmd = skip_without_frontend!();
+    if Command::new("cargo").arg("--version").output().is_err() {
+        eprintln!("skipping: cargo is not installed");
+        return;
+    }
+    let dir = tmp("rust");
+    let lib = dir.join("gearbox-rs");
+    write(
+        &lib.join("Cargo.toml"),
+        "[package]\nname = \"gearbox\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[workspace]\n",
+    );
+    write(
+        &lib.join("src/lib.rs"),
+        "mod dial;\npub use dial::Dial;\n/// Open a dial.\npub fn open<T>(value: T) -> Dial<T> { Dial { value } }\n",
+    );
+    write(
+        &lib.join("src/dial.rs"),
+        "pub struct Dial<T> { pub value: T }\nimpl<T: Copy> Dial<T> { pub fn read(&self) -> T { self.value } }\n",
+    );
+    let root = dir.join("sdk/rust");
+    write(&root.join("src/lib.rs"), "");
+    write(
+        &root.join("Cargo.toml"),
+        &format!(
+            "[package]\nname = \"sdk\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ngearbox = {{ path = {:?} }}\n\n[workspace]\n",
+            lib.display()
+        ),
+    );
+    write(
+        &dir.join("tono.toml"),
+        "[project]\nname = \"svc\"\n\n[target.rust]\nout = \"sdk/rust\"\n\n[ext.gearbox]\nrust = \"0.0.0\"\n",
+    );
+    let file = write(&dir.join("svc.tono"), RUST_SOURCE);
+    let (ok, lines, stderr) = index_json(cmd, &file, &[]);
+    assert!(ok, "{stderr}");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["kind"], "built", "{lines:?}");
+    assert_eq!(lines[0]["symbols"], 2);
+    assert!(
+        lines[0]["note"]
+            .as_str()
+            .unwrap()
+            .contains("what a macro produces is not indexed"),
+        "{lines:?}"
+    );
+    let path = dir.join(".tono/index/gearbox.rust.json");
+    let index: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let lockfile = index["key"]["lockfile"]["path"].as_str().unwrap();
+    assert!(lockfile.ends_with("sdk/rust/Cargo.lock"), "{lockfile}");
+    assert_ne!(index["key"]["lockfile"]["digest"], "none");
+    let names: Vec<&str> = index["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Dial", "open"]);
+    assert_eq!(index["symbols"][0]["kind"], "struct");
+    assert_eq!(index["symbols"][0]["members"][0]["name"], "read");
+    assert_eq!(index["symbols"][0]["members"][1]["name"], "value");
+    assert_eq!(index["symbols"][1]["doc"], "Open a dial.");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
