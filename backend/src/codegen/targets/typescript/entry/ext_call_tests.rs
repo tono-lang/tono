@@ -552,6 +552,29 @@ fn a_class_reference_spells_the_instantiation_ts_name_verbatim() {
     assert!(!out.contains("connect(Publisher)"), "{out}");
 }
 
+/// A class reference to one of the module's own structs passes the type
+/// the SDK generates (its runtime class), imported from the module that
+/// declares it rather than from the library.
+#[test]
+fn a_class_reference_to_a_module_struct_imports_it_from_the_module() {
+    let mut module = appendix_module(appendix_fields());
+    module.ext_libs[1].externs[0].langs[0].call_args =
+        vec![crate::ir::CallArg::TypeRef("app_config".into())];
+    let decls = rendered_decls(&module);
+    let resolver = decls
+        .iter()
+        .find(|d| matches!(d, Decl::Raw(raw) if raw.text.contains("export async function resolveBus(")))
+        .expect("bus resolver decl");
+    let refs = crate::codegen::tree::item_refs(resolver);
+    assert!(
+        refs.iter()
+            .any(|s| s.name == "AppConfig" && s.import.as_ref().is_some_and(|i| i.module == "m")),
+        "the resolver must import the struct's class from its module: {refs:?}"
+    );
+    let out = rendered_text(&module);
+    assert!(out.contains("connect(AppConfig)"), "{out}");
+}
+
 /// A parameter spelled under its own TypeScript type passes as the value
 /// it is: the spelling is for the compiler to grade, structurally.
 #[test]

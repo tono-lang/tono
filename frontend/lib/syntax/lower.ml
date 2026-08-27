@@ -717,6 +717,7 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
     match resolve with Some r -> r | None -> default_resolver ~module_name
   in
   let roles = Roles.classify file.Ast.decls in
+  let structs = Roles.class_structs roles file.Ast.decls in
   let shapes_rev = ref [] in
   let ops_rev = ref [] in
   let exts_rev = ref [] in
@@ -730,7 +731,8 @@ let lower_file ~module_name ?resolve ~diags (file : Ast.file) : Ir.module_ =
       | Ast.DExt { ekind = Ast.EHook; _ } -> ()
       | Ast.DExt _ -> exts_rev := lower_ext ~resolve ~diags d :: !exts_rev
       | Ast.DExtLib _ ->
-          ext_libs_rev := lower_ext_lib ~resolve ~diags d :: !ext_libs_rev
+          ext_libs_rev :=
+            lower_ext_lib ~resolve ~diags ~structs d :: !ext_libs_rev
       (* Tests lower during typecheck (their wire encoding is type-driven);
          they carry no shape and their names are free strings. *)
       | Ast.DTest _ -> ()

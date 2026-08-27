@@ -207,3 +207,34 @@ export function boundedFallback<T extends object>(
     },
   };
 }
+
+// Where a field's value comes from, for a library that fills the caller's
+// own type: one entry per field the caller wants filled.
+export interface Mapping {
+  from: string;
+}
+
+// A library that constructs the caller's own type: it takes the class
+// itself (`new () => T`) and a table saying where each field's value comes
+// from, builds the instance and fills it. The caller owns T; the library
+// never sees a value of it before it makes one, so nothing the caller
+// built can stand in for the class.
+export function instantiateInto<T extends object>(
+  name: string,
+  clazz: new () => T,
+  mappings: Record<string, Mapping>,
+): Bounded<T> {
+  return {
+    async read(): Promise<T> {
+      const entries = Object.entries(mappings);
+      if (entries.length === 0) {
+        throw new Error(`mathkit: ${name} has no mappings`);
+      }
+      const value = new clazz();
+      for (const [field, mapping] of entries) {
+        Object.assign(value, { [field]: mapping.from });
+      }
+      return value;
+    },
+  };
+}

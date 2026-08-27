@@ -12,8 +12,8 @@
    (TC0078); a language block that does not fit its struct (TC0092, TC0095,
    TC0097); @async naming a target without an asynchronous call (TC0093); a
    trait the boundary does not accept (TC0096); a bare name that is both a
-   parameter and a handle (TC0098); a returns: building an opaque handle
-   (TC0099).
+   parameter and a class reference, a handle or a module struct (TC0098); a
+   returns: building an opaque handle (TC0099).
 
    The cross-file closed accounting (decision K: TC0079-TC0081) lives in
    [Check_ext_lib_project], split out to keep this file under the line-count
@@ -51,25 +51,30 @@ and collect_trait_arg : Ast.trait_arg -> string list = function
 (* Every unknown-name diagnostic, walked the same way, anchored at the best
    span available (the arg's own span, or its ctor field's key span for a
    nested [Ast.trait_arg] which carries none of its own). A bare name may
-   also be an opaque handle of the block (a class reference); one that is
-   both a parameter and a handle is ambiguous (TC0098). *)
+   also be a class reference: an opaque handle of the block or one of the
+   module's own structs ([classes], see [Roles.class_structs]); one that is
+   both a parameter and a class reference is ambiguous (TC0098). *)
 let rec unknown_param_call_arg ~(declared : string list)
-    ~(handles : string list) : Ast.call_arg -> Diagnostic.t list = function
+    ~(handles : string list) ~(classes : string list) :
+    Ast.call_arg -> Diagnostic.t list = function
   | Ast.CaParam (n, span) ->
       let is_param = List.mem n declared and is_handle = List.mem n handles in
-      if is_param && is_handle then
+      let is_class = List.mem n classes in
+      if is_param && (is_handle || is_class) then
         [
           err Error_codes.extern_name_ambiguous span
-            "'%s' is both a logical parameter of this op and an opaque handle \
-             of this ext block; rename one so the call names one thing"
-            n;
+            "'%s' is both a logical parameter of this op and %s; rename one so \
+             the call names one thing"
+            n
+            (if is_handle then "an opaque handle of this ext block"
+             else "a struct of this module");
         ]
-      else if is_param || is_handle then []
+      else if is_param || is_handle || is_class then []
       else
         [
           err Error_codes.extern_call_unknown_param span
             "'%s' is not a declared logical parameter of this op (nor an \
-             opaque handle of this ext block)"
+             opaque handle of this ext block, nor a struct of this module)"
             n;
         ]
   | Ast.CaParamAs (n, span, _, _) ->
@@ -85,9 +90,11 @@ let rec unknown_param_call_arg ~(declared : string list)
         (fun (_, span, v) -> unknown_param_trait_arg declared span v)
         c.Ast.ctor_fields
   | Ast.CaCall nc ->
-      List.concat_map (unknown_param_call_arg ~declared ~handles) nc.Ast.nc_args
+      List.concat_map
+        (unknown_param_call_arg ~declared ~handles ~classes)
+        nc.Ast.nc_args
   | Ast.CaList (items, _) ->
-      List.concat_map (unknown_param_call_arg ~declared ~handles) items
+      List.concat_map (unknown_param_call_arg ~declared ~handles ~classes) items
 
 and unknown_param_trait_arg (declared : string list) (span : Span.span) :
     Ast.trait_arg -> Diagnostic.t list = function
@@ -106,7 +113,7 @@ and unknown_param_trait_arg (declared : string list) (span : Span.span) :
         c.Ast.ctor_fields
   | Ast.ACall ce ->
       List.concat_map
-        (unknown_param_call_arg ~declared ~handles:[])
+        (unknown_param_call_arg ~declared ~handles:[] ~classes:[])
         ce.Ast.ce_args
   | Ast.AString _ | Ast.AInt _ | Ast.AFloat _ | Ast.ARef _ -> []
 
@@ -424,7 +431,7 @@ let check_extern_traits ~(tbl : Symtab.t) ~(langs : string list)
 
 let check_extern ~(tbl : Symtab.t) ~(langs : string list)
     (structs : (string, Ast.foreign_struct) Hashtbl.t) ~(handles : string list)
-    (e : Ast.extern_decl) : Diagnostic.t list =
+    ~(classes : string list) (e : Ast.extern_decl) : Diagnostic.t list =
   let declared =
     List.map (fun (p : Ast.extern_param) -> p.Ast.ep_name) e.Ast.ed_params
   in
@@ -432,7 +439,7 @@ let check_extern ~(tbl : Symtab.t) ~(langs : string list)
   @ List.concat_map
       (fun (b : Ast.extern_lang_body) ->
         List.concat_map
-          (unknown_param_call_arg ~declared ~handles)
+          (unknown_param_call_arg ~declared ~handles ~classes)
           (call_line_args b)
         @ List.concat_map
             (fun a -> check_ctor_projection_arg structs e.Ast.ed_params a)
@@ -622,6 +629,7 @@ let is_foreign_name (decls : Ast.decl list) (name : string) : bool =
 (* ── Per-module entry point ────────────────────────────────────────────── *)
 
 let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
+  let classes = Roles.class_structs (Roles.classify decls) decls in
   List.concat_map
     (fun (d : Ast.decl) ->
       match d.Ast.dkind with
@@ -649,13 +657,13 @@ let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
               ~allowed_what:"no target is named" ~fields ~is_handle blocks
           in
           List.concat_map
-            (check_extern ~tbl ~langs structs ~handles)
+            (check_extern ~tbl ~langs structs ~handles ~classes)
             body.Ast.elib_externs
           @ List.concat_map
               (fun (t : Ast.opaque_type) ->
                 blocks_of ~fields:[] ~is_handle:true t.Ast.opq_langs
                 @ List.concat_map
-                    (check_extern ~tbl ~langs structs ~handles)
+                    (check_extern ~tbl ~langs structs ~handles ~classes)
                     t.Ast.opq_methods)
               body.Ast.elib_types
           @ List.concat_map

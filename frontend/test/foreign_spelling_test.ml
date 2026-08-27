@@ -5,8 +5,9 @@ open Tono_frontend
    a call: line: the callee (a function, a class under new, a static method
    on a type), a parameter crossing under its own spelling, a nested call,
    and a declared position the target binds itself. A bare name that is an
-   opaque handle of the block (and no parameter) is a class reference; one
-   that is both is ambiguous (TC0098). *)
+   opaque handle of the block or a wire struct of the module (and no
+   parameter) is a class reference; one that is both is ambiguous
+   (TC0098). *)
 
 let check src =
   let file, _ = Parser.parse src in
@@ -285,6 +286,62 @@ let unknown_bare_name_rejected () =
   let src = with_call "#(instantiate)(seed, other)" in
   Alcotest.(check bool) "TC0070" true (has "TC0070" src)
 
+(* The ext above beside the module's own shapes: a wire struct (profile),
+   a generic one (box), and a config (cfg). *)
+let with_module ?(params = "answer: string, seed: string") call =
+  Printf.sprintf
+    {|ext mathkit {
+  ts { #(@tono-ext-fixture/mathkit) }
+
+  struct calculator {
+    ts { #(Calculator<number>) }
+  }
+
+  op make(%s): calculator {
+    ts { call: %s }
+  }
+}
+
+struct profile {
+  endpoint: string
+}
+
+struct box[t] {
+  value: t
+}
+
+struct cfg {
+  host: string @env(HOST)
+}
+|}
+    params call
+
+let struct_name_is_a_class_reference () =
+  let src = with_module "#(instantiate)(answer, seed, profile)" in
+  Alcotest.(check bool) "not TC0070" false (has "TC0070" src);
+  let file, _ = Parser.parse src in
+  let m = Lower.lower_file ~module_name:"m" ~diags:(ref []) file in
+  let make = extern_named (List.hd m.Ir.ext_libs) "make" in
+  Alcotest.(check bool)
+    "the struct lowers as the class, the parameters as themselves" true
+    ((lang make "ts").el_call_args
+    = [ Ir.Ca_param "answer"; Ir.Ca_param "seed"; Ir.Ca_type "profile" ])
+
+let only_a_wire_struct_is_a_class_reference () =
+  Alcotest.(check bool)
+    "generic: TC0070" true
+    (has "TC0070" (with_module "#(instantiate)(answer, seed, box)"));
+  Alcotest.(check bool)
+    "config: TC0070" true
+    (has "TC0070" (with_module "#(instantiate)(answer, seed, cfg)"))
+
+let parameter_and_struct_collide () =
+  let src =
+    with_module ~params:"profile: string, seed: string"
+      "#(instantiate)(profile, seed)"
+  in
+  Alcotest.(check bool) "TC0098" true (has "TC0098" src)
+
 let spelling_required_after_parameter_colon () =
   let _, diags = Parser.parse (with_call "#(instantiate)(answer: string)") in
   Alcotest.(check bool)
@@ -334,6 +391,8 @@ let () =
             nested_call_and_bound_position;
           Alcotest.test_case "handle name is a class reference" `Quick
             handle_name_is_a_class_reference;
+          Alcotest.test_case "struct name is a class reference" `Quick
+            struct_name_is_a_class_reference;
           Alcotest.test_case "prints back and round-trips" `Quick
             prints_back_and_roundtrips;
         ] );
@@ -343,6 +402,10 @@ let () =
             parameter_and_handle_collide;
           Alcotest.test_case "unknown bare name" `Quick
             unknown_bare_name_rejected;
+          Alcotest.test_case "only a wire struct is a class" `Quick
+            only_a_wire_struct_is_a_class_reference;
+          Alcotest.test_case "parameter and struct collide" `Quick
+            parameter_and_struct_collide;
           Alcotest.test_case "spelling after colon" `Quick
             spelling_required_after_parameter_colon;
           Alcotest.test_case "spelling after a literal's colon" `Quick

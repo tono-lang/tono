@@ -1,0 +1,42 @@
+// Capability 20 (TypeScript): the library takes the class of one of the
+// module's own structs and constructs the instance itself
+// (instantiateInto(name, clazz: new () => T, mappings)), filling its fields
+// from a name-to-mapping table. A tono struct is an interface in
+// TypeScript, which has no value at run time, so the generated types file
+// also declares an empty class under the same name: TypeScript merges the
+// two, and `new Profile()` is what the library gets. The mappings cross as
+// a map-typed parameter of the op; the call: line itself has no map
+// literal shape.
+ext mathkit {
+  ts { #(@tono-ext-fixture/mathkit) }
+
+  struct source {
+    ts { #(Bounded<.profile>) }
+
+    @async(ts)
+    op read(): profile {
+      ts { call: #(read)() }
+    }
+  }
+
+  op load(name: string, mappings: map[string]mapping): source {
+    ts { call: #(instantiateInto)(name, profile, mappings) }
+  }
+}
+
+struct mapping {
+  from: string
+}
+
+struct profile {
+  endpoint: string
+}
+
+pub struct client {
+  name: string @arg
+  mappings: map[string]mapping @arg
+  source: mathkit.source = mathkit.load(.name, .mappings)
+
+  op read(): profile
+    impl .source.read()
+}

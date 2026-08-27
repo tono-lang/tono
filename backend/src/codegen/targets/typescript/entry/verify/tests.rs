@@ -313,6 +313,28 @@ fn a_generated_type_reference_skips_the_binding_with_why() {
     }
 }
 
+/// A class reference to one of the module's own structs passes the SDK's
+/// runtime class, which the library alone cannot name: the binding is
+/// listed as skipped with why.
+#[test]
+fn a_class_reference_to_a_generated_struct_skips_the_binding_with_why() {
+    let mut m = gearbox_module();
+    let open = m.ext_libs[0]
+        .externs
+        .iter_mut()
+        .find(|d| d.name == "open")
+        .unwrap();
+    let open_ts = open.langs.iter_mut().find(|l| l.lang == "ts").unwrap();
+    open_ts.call_args = vec![crate::ir::CallArg::TypeRef("summary".into())];
+    let p = probe(&m, &m.ext_libs[0]);
+    assert!(
+        p.skipped
+            .contains(&"op open: summary is a type the generated SDK defines".to_string()),
+        "{:?}",
+        p.skipped
+    );
+}
+
 /// Generation refuses a chained call for TypeScript, so the probe has no
 /// expression to mirror: the binding is listed as skipped with why, and
 /// the rest of the library is still probed.

@@ -19,7 +19,7 @@ bumped by one on every incompatible change to this encoding. A decoder that sees
 a version it does not recognize fails loudly rather than attempting a partial
 decode; there is no negotiation or multi-version support.
 
-The current version is **28**.
+The current version is **32**.
 
 ## Modules
 
@@ -296,8 +296,9 @@ Every string that is not a tono name is a foreign spelling, the text of a
   ref path), `{"ctor": <string>, "fields": {<name>: <call_arg>}}` (a
   struct-literal mapper), `{"lit": <json>}` (a bare scalar literal),
   `{"list": [<call_arg>]}`, `{"symbol": <string>, "symbol_args": [...]}` (a
-  nested foreign call), `{"type": <string>}` (a declared handle passed as a
-  class reference), or `{"call": <entry_call>}` (a call into another
+  nested foreign call), `{"type": <string>}` (a class reference: a declared
+  handle, or one of the module's own wire structs, passed for a library
+  that constructs it), or `{"call": <entry_call>}` (a call into another
   declared extern, only inside a ctor field's value). `entry_call` is
   `{"ns", "fn", "args": [<call_arg>]}`, the same shape an entry field's
   `call` key and a trait argument's own `{"call": <entry_call>}` form both

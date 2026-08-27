@@ -147,16 +147,16 @@ fn arg_expr(
             super::ext_coerce::coerce(&param.r#type, spelling, name)
         }
         CallArg::Lit(v) => Ok(literal(v)),
-        CallArg::TypeRef(handle) => {
-            let declared = lib
-                .types
-                .iter()
-                .find(|t| &t.name == handle)
-                .and_then(|t| t.storage("ts"));
-            if declared.is_none() {
-                return Err(format!("the handle {handle} declares no ts block"));
+        // A generated struct's class is the SDK's own, so a call passing it
+        // cannot be written against the library alone.
+        CallArg::TypeRef(name) => {
+            let Some(handle) = lib.types.iter().find(|t| &t.name == name) else {
+                return Err(format!("{name} is a type the generated SDK defines"));
+            };
+            if handle.storage("ts").is_none() {
+                return Err(format!("the handle {name} declares no ts block"));
             }
-            Ok(format!("{LIB}.{}", class_reference_name(lib, handle)))
+            Ok(format!("{LIB}.{}", class_reference_name(lib, module, name)))
         }
         CallArg::SymbolCall(sc) => {
             let args = sc

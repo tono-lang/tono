@@ -189,5 +189,5 @@ val lang_block_field_unknown : string
 val extern_name_ambiguous : string
 
 val extern_returns_handle : string
-(** A call: argument passing a class reference that names no opaque handle of
-    its own ext block. *)
+(** A call: argument passing a class reference that names neither an opaque
+    handle of its own ext block nor a struct of the module. *)

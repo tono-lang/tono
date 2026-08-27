@@ -21,3 +21,7 @@ val member_has_bind : Ast.member -> bool
    the table are wire. *)
 val classify : Ast.decl list -> (string, role) Hashtbl.t
 val role_of : (string, role) Hashtbl.t -> string -> role
+
+(* The names a call: line may pass as a class reference: the file's
+   non-generic wire structs (never an entry, a config, or a foreign shape). *)
+val class_structs : (string, role) Hashtbl.t -> Ast.decl list -> string list

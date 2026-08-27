@@ -1,0 +1,37 @@
+// Capability 20, the Go side: a class reference to one of the module's own
+// structs has no more of a rendering than a handle's class (capability 12):
+// Go has no type as a value, and a library takes a constructor function or
+// a zero value for this. The generator refuses it naming the site; this
+// probe passes when generation is refused.
+ext mathkit {
+  go { #(tono-ext-fixture/mathkit) }
+
+  struct source {
+    go { #(*Memo[.profile]) }
+
+    op read(): profile {
+      go { call: #(Recall)() }
+    }
+  }
+
+  op load(name: string, mappings: map[string]mapping): source {
+    go { call: #(InstantiateInto)(name, profile, mappings) }
+  }
+}
+
+struct mapping {
+  from: string
+}
+
+struct profile {
+  endpoint: string
+}
+
+pub struct client {
+  name: string @arg
+  mappings: map[string]mapping @arg
+  source: mathkit.source = mathkit.load(.name, .mappings)
+
+  op read(): profile
+    impl .source.read()
+}

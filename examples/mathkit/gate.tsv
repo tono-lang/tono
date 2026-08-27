@@ -74,3 +74,12 @@ bench	rust	service.tono	pass
 # interface declares the return the .tono declares, so T instantiates; an
 # interface answering unknown cannot satisfy the bound.
 19-ts-bounded-generic	typescript	probes/19-ts-bounded-generic.tono	pass
+# 20: the library takes the class of one of the module's own structs and
+# constructs the instance itself (instantiateInto(name, clazz, mappings)).
+# TypeScript declares an empty class beside the struct's interface for the
+# library to construct; Rust and Go have no type as a value, so their rows
+# pass by being refused, as capability 12's do. The mappings cross as a
+# map-typed parameter.
+20-ts-class-reference-generated-struct	typescript	probes/20-ts-class-reference-generated-struct.tono	pass
+20-go-class-reference-generated-struct-refused	go	probes/20-go-class-reference-generated-struct-refused.tono	refused
+20-rust-class-reference-generated-struct-refused	rust	probes/20-rust-class-reference-generated-struct-refused.tono	refused

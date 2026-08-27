@@ -95,21 +95,26 @@ pub(super) fn import_spelling(spelling: &str, lib: &ExtLib, refs: &mut Vec<Symbo
     }
 }
 
-/// The TypeScript spelling of a declared handle's class, for a class
-/// reference: the head of the storage type its `ts` block declares
-/// (`AnswerCalculator`), the one thing that can stand as a value. A handle
-/// with no `ts` block has no class to pass;
-/// `validate_calls::handle_storage_declared` refuses it first.
-pub(super) fn class_reference_name(lib: &ExtLib, handle: &str) -> String {
-    let ty = lib.types.iter().find(|t| t.name == handle).unwrap_or_else(|| {
-        panic!(
-            "a class reference names undeclared handle {handle:?} in ext lib {:?} (the frontend should have rejected this)",
-            lib.name
-        )
-    });
+/// The TypeScript spelling of a class reference, the one thing that can
+/// stand as a value: for a declared handle, the head of the storage type
+/// its `ts` block declares (`AnswerCalculator`); for one of the module's
+/// own structs, the type the SDK generates (`Profile`), which the types
+/// file gives a runtime class for exactly this. A handle with no `ts`
+/// block has no class to pass (`validate_calls::handle_storage_declared`
+/// refuses it first), and a name that is neither is refused by
+/// `validate_calls::class_references_resolve`.
+pub(super) fn class_reference_name(lib: &ExtLib, module: &Module, name: &str) -> String {
+    let Some(ty) = lib.types.iter().find(|t| t.name == name) else {
+        return crate::codegen::entries::generated_type_name(module, name).unwrap_or_else(|| {
+            panic!(
+                "a class reference names {name:?}, neither a handle of ext lib {:?} nor a type of module {:?}; validate_calls::class_references_resolve should have refused it",
+                lib.name, module.name
+            )
+        });
+    };
     let storage = ty.storage("ts").unwrap_or_else(|| {
         panic!(
-            "handle {handle:?} declares no ts block; validate_calls::handle_storage_declared should have refused it"
+            "handle {name:?} declares no ts block; validate_calls::handle_storage_declared should have refused it"
         )
     });
     foreign_spelling::library_names(storage, &foreign_spelling::ts_builtin)
@@ -119,24 +124,34 @@ pub(super) fn class_reference_name(lib: &ExtLib, handle: &str) -> String {
 }
 
 /// One import per class reference anywhere in a `call:` line's argument
-/// tree, from the lib's own TypeScript module path (the same module the
-/// call's symbol comes from).
-pub(super) fn class_reference_imports(args: &[CallArg], lib: &ExtLib, refs: &mut Vec<Symbol>) {
+/// tree: a handle's class from the lib's own TypeScript module path (the
+/// same module the call's symbol comes from), a generated struct's from
+/// the module that declares it.
+pub(super) fn class_reference_imports(
+    args: &[CallArg],
+    lib: &ExtLib,
+    module: &Module,
+    refs: &mut Vec<Symbol>,
+) {
     for arg in args {
         match arg {
-            CallArg::TypeRef(handle) => {
-                let name = class_reference_name(lib, handle);
-                import_spelling(&name, lib, refs);
+            CallArg::TypeRef(name) => {
+                let class = class_reference_name(lib, module, name);
+                if lib.types.iter().any(|t| &t.name == name) {
+                    import_spelling(&class, lib, refs);
+                } else {
+                    refs.push(module_symbol(&class, module));
+                }
             }
             // A nested foreign call names a symbol of the same module.
             CallArg::SymbolCall(sc) => {
                 import_spelling(&sc.symbol, lib, refs);
-                class_reference_imports(&sc.args, lib, refs);
+                class_reference_imports(&sc.args, lib, module, refs);
             }
-            CallArg::List(items) => class_reference_imports(items, lib, refs),
+            CallArg::List(items) => class_reference_imports(items, lib, module, refs),
             CallArg::Ctor(ctor) => {
                 for v in ctor.fields.values() {
-                    class_reference_imports(std::slice::from_ref(v), lib, refs);
+                    class_reference_imports(std::slice::from_ref(v), lib, module, refs);
                 }
             }
             CallArg::Param(_)
@@ -284,7 +299,7 @@ pub(super) fn call_body(
     let lang = l.lang;
 
     refs.push(module_symbol(&error_names().contract, module));
-    class_reference_imports(&lang.call_args, l.lib, refs);
+    class_reference_imports(&lang.call_args, l.lib, module, refs);
 
     let args = {
         let mut parts = Vec::with_capacity(lang.call_args.len());

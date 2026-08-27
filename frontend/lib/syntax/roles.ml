@@ -83,3 +83,19 @@ let classify (decls : Ast.decl list) : (string, role) Hashtbl.t =
 
 let role_of (roles : (string, role) Hashtbl.t) (name : string) : role =
   Option.value ~default:Wire (Hashtbl.find_opt roles name)
+
+(* The structs a call: line may pass as a class reference (the library
+   constructs the shape itself): wire data only, since an entry or a config
+   is built by the generated client, never handed out for a library to
+   instantiate; and never generic, since a type with parameters has no
+   single class to stand as a value. One definition, so the checker and the
+   lowering agree on which bare names are classes. *)
+let class_structs (roles : (string, role) Hashtbl.t) (decls : Ast.decl list) :
+    string list =
+  List.filter_map
+    (fun (d : Ast.decl) ->
+      match d.Ast.dkind with
+      | Ast.DStruct { params = []; _ } when role_of roles d.dname = Wire ->
+          Some d.dname
+      | _ -> None)
+    decls

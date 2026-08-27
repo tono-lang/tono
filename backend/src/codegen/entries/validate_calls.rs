@@ -270,6 +270,7 @@ fn extern_binds_every_target(
                 ));
             }
         }
+        class_references_resolve(site, module, lib, lang)?;
         class_reference_renders(site, *target, lang)?;
         chained_call_renders(site, *target, lang)?;
         foreign_positions_bind(site, *target, lang)?;
@@ -286,19 +287,66 @@ fn extern_binds_every_target(
     Ok(())
 }
 
-/// A `call:` line passing a class reference (a declared handle's class
-/// itself, for a library that constructs it) is rejected for a target that
-/// has no type as a value to pass (see
+/// A class reference names something with a class to pass: an opaque
+/// handle of the lib (its `ts` block names the class) or one of the
+/// module's own wire structs (the generated type, given a runtime class
+/// where the target needs one). Anything else has no class: a name nothing
+/// declares (hand-fed IR bypasses the frontend), a generic struct (no
+/// single class to stand as a value), an entry, an enum or a union.
+/// Refused naming the site, whatever the target, so no emitter meets it.
+pub(super) fn class_references_resolve(
+    site: &str,
+    module: &Module,
+    lib: &crate::ir::ExtLib,
+    lang: &crate::ir::ExternLang,
+) -> Result<(), String> {
+    use crate::ir::ShapeKind;
+    for name in super::class_references(&lang.call_args) {
+        if lib.types.iter().any(|t| t.name == name) {
+            continue;
+        }
+        let shape = module
+            .shapes
+            .iter()
+            .find(|s| super::local_name(&s.id) == name);
+        match shape.map(|s| &s.kind) {
+            Some(ShapeKind::Structure { params, .. }) if params.is_empty() => {}
+            Some(ShapeKind::Structure { .. }) => {
+                return Err(format!(
+                    "{site}: the {} block's call: line passes {name:?} as a class reference, but {name} is a generic struct; a generic has no single class to pass",
+                    lang.lang
+                ));
+            }
+            Some(_) => {
+                return Err(format!(
+                    "{site}: the {} block's call: line passes {name:?} as a class reference, but {name} is not a wire struct; only an opaque handle of ext {} or a wire struct of module {} has a class to pass",
+                    lang.lang, lib.name, module.name
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "{site}: the {} block's call: line passes {name:?} as a class reference, but it names neither an opaque handle of ext {} nor a struct of module {}",
+                    lang.lang, lib.name, module.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A `call:` line passing a class reference (a declared handle's class or
+/// a generated struct's, for a library that constructs it) is rejected for
+/// a target that has no type as a value to pass (see
 /// [`TargetKind::emits_class_reference_args`]), naming the site and the
-/// handle, before any emitter could spell a type where a value goes.
+/// name, before any emitter could spell a type where a value goes.
 pub(super) fn class_reference_renders(
     site: &str,
     target: TargetKind,
     lang: &crate::ir::ExternLang,
 ) -> Result<(), String> {
     match first_class_reference(&lang.call_args) {
-        Some(handle) if !target.emits_class_reference_args() => Err(format!(
-            "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument; {} has no class reference to pass, bind a function that constructs it instead",
+        Some(name) if !target.emits_class_reference_args() => Err(format!(
+            "{site}: the {} block's call: line passes {name:?} as a class reference; {} has no class reference to pass, bind a function that constructs it instead",
             target.binding_langs()[0],
             target.dir()
         )),
@@ -553,35 +601,17 @@ pub(super) fn class_reference_in_wire_position(
     lang: &crate::ir::ExternLang,
 ) -> Result<(), String> {
     match first_class_reference(&lang.call_args) {
-        Some(handle) => Err(format!(
-            "{site}: the {} block's call: line passes the class of handle {handle:?} as an argument; a call in wire position passes the trait's own arguments and cannot carry a class reference",
+        Some(name) => Err(format!(
+            "{site}: the {} block's call: line passes {name:?} as a class reference; a call in wire position passes the trait's own arguments and cannot carry a class reference",
             target.binding_langs()[0],
         )),
         None => Ok(()),
     }
 }
 
-/// The first class reference anywhere in a call's own argument tree, walked
-/// through the same nesting shapes [`ref_paths`] does.
+/// The first class reference anywhere in a call's own argument tree.
 fn first_class_reference(args: &[crate::ir::CallArg]) -> Option<&str> {
-    use crate::ir::CallArg;
-    args.iter().find_map(|a| match a {
-        CallArg::TypeRef(handle) => Some(handle.as_str()),
-        CallArg::Ctor(ctor) => {
-            let fields: Vec<&CallArg> = ctor.fields.values().collect();
-            fields
-                .iter()
-                .find_map(|v| first_class_reference(std::slice::from_ref(*v)))
-        }
-        CallArg::List(items) => first_class_reference(items),
-        CallArg::SymbolCall(sc) => first_class_reference(&sc.args),
-        CallArg::Param(_)
-        | CallArg::ParamAs { .. }
-        | CallArg::Foreign(_)
-        | CallArg::Ref(_)
-        | CallArg::Lit(_)
-        | CallArg::Call(_) => None,
-    })
+    super::class_references(args).into_iter().next()
 }
 
 /// Whether a call's own argument tree uses a cross-extern call
