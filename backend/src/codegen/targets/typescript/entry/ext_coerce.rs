@@ -45,61 +45,69 @@ fn is_integer(t: &Tref) -> bool {
     )
 }
 
-/// The conversion a value of the logical type `t` goes through to cross as
-/// `spelling`: an integer crosses the number/bigint divide with
-/// `Number(..)`/`BigInt(..)`, a map crosses into a `Map` as its entries,
-/// the type's own default spelling passes as is, and any non-primitive
-/// spelling is structural. `Err` names both types when the spelling is a
-/// primitive TypeScript has no conversion for (`BigInt` of a fractional
-/// number throws, so a float never converts).
-pub(super) fn coerce(t: &Tref, spelling: &str, expr: &str) -> Result<String, String> {
+/// Which way a value crosses the boundary: into the spelling a binding
+/// declares (an argument, [`coerce`]), or back from it (a spelled answer,
+/// [`coerce_back`]). The divides are the same either way; only the
+/// expression written and the side named first in a refusal change.
+#[derive(Clone, Copy)]
+enum Way {
+    Into,
+    Back,
+}
+
+/// The one conversion cascade, run either way: the type's own default
+/// spelling passes as is; an integer crosses the number/bigint divide with
+/// `Number(..)`/`BigInt(..)`; a map crosses between the plain object a
+/// generated map is and the `Map` class a library keeps a table in; any
+/// other non-primitive spelling is structural, for `tsc` to grade. `Err`
+/// names both types when the spelling is a primitive TypeScript has no
+/// conversion for (`BigInt` of a fractional number throws, so a float
+/// never converts).
+fn convert(t: &Tref, spelling: &str, expr: &str, way: Way) -> Result<String, String> {
     let default = ts_type(t);
     if spelling == default {
         return Ok(expr.to_string());
     }
-    if is_integer(t) && default == "bigint" && spelling == "number" {
+    // The value is on the `default` side going in and on the `spelling`
+    // side coming back, so the divide reads the other way round.
+    let (from, to) = match way {
+        Way::Into => (default.as_str(), spelling),
+        Way::Back => (spelling, default.as_str()),
+    };
+    if is_integer(t) && from == "bigint" && to == "number" {
         return Ok(format!("Number({expr})"));
     }
-    if is_integer(t) && default == "number" && spelling == "bigint" {
+    if is_integer(t) && from == "number" && to == "bigint" {
         return Ok(format!("BigInt({expr})"));
     }
     if matches!(t, Tref::Map(_, _)) && map_class(spelling) {
-        return Ok(format!("new Map(Object.entries({expr}))"));
+        return Ok(match way {
+            Way::Into => format!("new Map(Object.entries({expr}))"),
+            Way::Back => format!("Object.fromEntries({expr})"),
+        });
     }
     if PRIMITIVES.contains(&spelling) {
+        let verb = match way {
+            Way::Into => "pass",
+            Way::Back => "read",
+        };
         return Err(format!(
-            "cannot pass a {default} as {spelling} in TypeScript: no conversion from {default} to {spelling}"
+            "cannot {verb} a {from} as {to} in TypeScript: no conversion from {from} to {to}"
         ));
     }
     Ok(expr.to_string())
 }
 
+/// The conversion a value of the logical type `t` goes through to cross as
+/// `spelling` (see [`convert`]).
+pub(super) fn coerce(t: &Tref, spelling: &str, expr: &str) -> Result<String, String> {
+    convert(t, spelling, expr, Way::Into)
+}
+
 /// The conversion a value the library answered under `spelling` goes
-/// through to become the logical type `t`, [`coerce`] run the other way: an
-/// integer crosses the number/bigint divide back, a `Map` becomes the plain
-/// object a generated map type is, the default spelling and any
-/// non-primitive spelling pass as they are. `Err` names both types when
-/// the spelling is a primitive TypeScript has no conversion for.
+/// through to become the logical type `t`: [`coerce`] run the other way.
 pub(super) fn coerce_back(t: &Tref, spelling: &str, expr: &str) -> Result<String, String> {
-    let default = ts_type(t);
-    if spelling == default {
-        return Ok(expr.to_string());
-    }
-    if is_integer(t) && default == "bigint" && spelling == "number" {
-        return Ok(format!("BigInt({expr})"));
-    }
-    if is_integer(t) && default == "number" && spelling == "bigint" {
-        return Ok(format!("Number({expr})"));
-    }
-    if matches!(t, Tref::Map(_, _)) && map_class(spelling) {
-        return Ok(format!("Object.fromEntries({expr})"));
-    }
-    if PRIMITIVES.contains(&spelling) {
-        return Err(format!(
-            "cannot read a {spelling} as {default} in TypeScript: no conversion from {spelling} to {default}"
-        ));
-    }
-    Ok(expr.to_string())
+    convert(t, spelling, expr, Way::Back)
 }
 
 /// The conversion a struct literal of the form `form_type` goes through to
