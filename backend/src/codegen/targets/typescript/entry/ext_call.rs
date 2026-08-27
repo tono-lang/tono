@@ -309,11 +309,12 @@ pub(super) fn call_body(
         // the logical value (see the module doc), whether the binding left
         // the positions to the convention or named the one it returns. For
         // a foreign-handle field that "already is" has a real generated
-        // interface to be, so the resolver narrows the honestly-`unknown`
-        // raw result into it here, once, at the exact tono-declared
-        // construction boundary -- not a reusable projection, just this one
-        // field trusting the frontend's own guarantee that this call's
-        // declared logical type is the field's own declared type.
+        // interface to be, so the resolver narrows the raw result (whatever
+        // the library's constructor answers, a concrete class or `unknown`)
+        // into it here, once, at the exact tono-declared construction
+        // boundary -- not a reusable projection, just this one field
+        // trusting the frontend's own guarantee that this call's declared
+        // logical type is the field's own declared type.
         (_, None) if foreign_handle(&field.target, module) => {
             format!("return raw as {};", field_ts_type(&field.target, module))
         }

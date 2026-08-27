@@ -69,3 +69,8 @@ bench	rust	service.tono	pass
 # with no returns: is the call's whole signature, so `(c: session)` binds one
 # value and implies no error.
 18-go-infallible-constructor	go	probes/18-go-infallible-constructor.tono	pass
+# 19: a generic with a bound (Bounded<T extends object>) and a composition
+# that consumes two handles (boundedFallback(a, b)). The handle's generated
+# interface declares the return the .tono declares, so T instantiates; an
+# interface answering unknown cannot satisfy the bound.
+19-ts-bounded-generic	typescript	probes/19-ts-bounded-generic.tono	pass

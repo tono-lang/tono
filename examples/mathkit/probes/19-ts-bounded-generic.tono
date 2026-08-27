@@ -1,0 +1,46 @@
+// Capability 19 (TypeScript): a generic with a bound. Bounded<T extends
+// object> accepts only an object shape, and boundedFallback(a, b) composes
+// two providers the client already built into a third. The handle's
+// generated interface must declare read() as this file declares it,
+// Promise<Profile>, for T to instantiate: an interface answering
+// Promise<unknown> cannot satisfy the bound, and no annotation at the call
+// repairs it, since the value comes from the handle field itself.
+ext mathkit {
+  ts { #(@tono-ext-fixture/mathkit) }
+
+  struct source {
+    ts { #(Bounded<.profile>) }
+
+    @async(ts)
+    op read(): profile {
+      ts { call: #(read)() }
+    }
+  }
+
+  op absent(): source {
+    ts { call: #(new AbsentBounded)() }
+  }
+
+  op pinned(value: profile): source {
+    ts { call: #(new PinnedBounded)(value) }
+  }
+
+  op fallback(a: source, b: source): source {
+    ts { call: #(boundedFallback)(a, b) }
+  }
+}
+
+struct profile {
+  endpoint: string
+  retries: u8
+}
+
+pub struct client {
+  defaults: profile @arg
+  primary: mathkit.source = mathkit.absent()
+  backup: mathkit.source = mathkit.pinned(.defaults)
+  source: mathkit.source = mathkit.fallback(.primary, .backup)
+
+  op read(): profile
+    impl .source.read()
+}

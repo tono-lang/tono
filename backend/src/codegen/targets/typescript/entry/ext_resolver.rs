@@ -314,7 +314,6 @@ fn handle_resolver(
         entry,
         config,
         module,
-        field,
         call,
         &mut refs,
         &mut sentinel_types,
