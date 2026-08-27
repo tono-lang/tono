@@ -140,8 +140,10 @@ jobs:
       - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
         with:
           ocaml-compiler: "5.2"
-      - name: Install the frontend's OCaml dependencies
-        run: opam install yojson --yes
+      # The FFI bench also builds the language server and its editor driver
+      # (the same-verdict gate), which need the lsp libraries.
+      - name: Install the frontend's and the language server's OCaml dependencies
+        run: opam install yojson lsp jsonrpc --yes
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: rustfmt
