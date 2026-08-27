@@ -86,3 +86,10 @@ bench	rust	service.tono	pass
 20-ts-class-reference-generated-struct	typescript	probes/20-ts-class-reference-generated-struct.tono	pass
 20-go-class-reference-generated-struct-refused	go	probes/20-go-class-reference-generated-struct-refused.tono	refused
 20-rust-class-reference-generated-struct-refused	rust	probes/20-rust-class-reference-generated-struct-refused.tono	refused
+# 21: a wrong binding inside the family that names a generated type: the
+# handle is Memo over the module's own reading, and the method declares a
+# string where the library answers that reading. The check compiles the
+# probe beside the generated types, so it refuses the binding on the .tono
+# before anything is generated.
+21-ts-generated-type-wrong-binding	typescript	probes/21-ts-generated-type-wrong-binding.tono	check-red
+21-go-generated-type-wrong-binding	go	probes/21-go-generated-type-wrong-binding.tono	check-red

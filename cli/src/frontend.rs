@@ -62,7 +62,19 @@ impl Frontend {
     /// Compile `path` to canonical IR JSON. The module name is left to the
     /// frontend, which derives it from the file stem.
     pub fn compile(&self, path: &Path) -> Result<String, FrontendError> {
-        self.invoke("compile", path)
+        self.compile_as(path, None)
+    }
+
+    /// Compile `path` to canonical IR JSON under `module`, the name the
+    /// generated SDK's package takes (the frontend's `--module`); `None`
+    /// leaves it to the file stem.
+    pub fn compile_as(&self, path: &Path, module: Option<&str>) -> Result<String, FrontendError> {
+        let mut extra = Vec::new();
+        if let Some(m) = module {
+            extra.push("--module".to_string());
+            extra.push(m.to_string());
+        }
+        self.invoke_with("compile", path, &extra)
     }
 
     /// Compile every `.tono` under `root` into one multi-module IR model: a
@@ -80,7 +92,21 @@ impl Frontend {
     }
 
     fn invoke(&self, sub: &str, path: &Path) -> Result<String, FrontendError> {
-        match Command::new(&self.program).arg(sub).arg(path).output() {
+        self.invoke_with(sub, path, &[])
+    }
+
+    fn invoke_with(
+        &self,
+        sub: &str,
+        path: &Path,
+        extra: &[String],
+    ) -> Result<String, FrontendError> {
+        match Command::new(&self.program)
+            .arg(sub)
+            .arg(path)
+            .args(extra)
+            .output()
+        {
             Ok(out) => interpret(
                 out.status.success(),
                 &String::from_utf8_lossy(&out.stdout),

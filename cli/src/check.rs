@@ -9,14 +9,18 @@
 //! `.tono` span that declared it, in the same shape as the frontend's own
 //! diagnostics. The library is resolved the way the generated SDK resolves
 //! it: from that target's output directory in `tono.toml`, or from the
-//! directory `--lib-root <lang>=<dir>` names.
+//! directory `--lib-root <lang>=<dir>` names. A binding that names one of
+//! the module's own types is checked beside the SDK's type declarations,
+//! generated in memory under the manifest's layout for that target and
+//! written into the probe's scratch tree, so the user need not have run
+//! `tono gen`.
 //!
 //! `tono gen` is untouched by this: generation stays hermetic, and only the
 //! check asks for the toolchain of the targets it checks.
 
 use std::path::{Path, PathBuf};
 
-use tono_backend::codegen::verify::{self, LibRoots, Report};
+use tono_backend::codegen::verify::{self, LibRoots, Report, TargetRoot};
 use tono_backend::config::{self as manifest, normalize_ext_lang};
 use tono_backend::ir::decode_model;
 
@@ -29,6 +33,10 @@ pub(crate) struct Args {
     pub path: Option<String>,
     pub lib_roots: Vec<(String, PathBuf)>,
     pub config: Option<String>,
+    /// The module name the source compiles under (the frontend's
+    /// `--module`), which is the generated package the probe sits in; the
+    /// file stem otherwise.
+    pub module: Option<String>,
 }
 
 pub(crate) fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -45,6 +53,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Args, String> {
                     .push((normalize_ext_lang(lang).to_string(), PathBuf::from(dir)));
             }
             "--config" => out.config = Some(flag_value(args, &mut i, "--config")?),
+            "--module" => out.module = Some(flag_value(args, &mut i, "--module")?),
             flag if flag.starts_with("--") => return Err(format!("unknown flag: {flag}\n{USAGE}")),
             p if out.path.is_none() => out.path = Some(p.to_string()),
             p => return Err(format!("unexpected extra argument: {p}\n{USAGE}")),
@@ -72,27 +81,32 @@ fn manifest_for(source: &Path, config: Option<&str>) -> Option<PathBuf> {
 /// Where each language resolves its libraries: an explicit `--lib-root`
 /// wins; otherwise the target's output directory from the manifest, which
 /// is the tree the generated SDK builds in. A root that does not exist on
-/// disk is reported, not used.
+/// disk is reported, not used. Either way the target's layout (module
+/// mapping, casing) comes from the manifest when it declares the target,
+/// so the types the probe compiles beside are the ones `tono gen` writes.
 pub(crate) fn resolve_roots(
     source: &Path,
     args: &Args,
     notes: &mut Vec<String>,
 ) -> Result<LibRoots, String> {
     let mut roots = LibRoots::default();
-    let mut set = |lang: &str, dir: PathBuf, notes: &mut Vec<String>| {
-        if !dir.is_dir() {
+    let mut set = |lang: &str, root: TargetRoot, notes: &mut Vec<String>| {
+        if !root.dir.is_dir() {
             notes.push(format!(
                 "{lang} bindings: the library root {} does not exist (run tono gen first, or pass --lib-root {lang}=<dir>)",
-                dir.display()
+                root.dir.display()
             ));
             return;
         }
         match lang {
-            "go" => roots.go = Some(dir),
-            "ts" => roots.ts = Some(dir),
+            "go" => roots.go = Some(root),
+            "ts" => roots.ts = Some(root),
             _ => {}
         }
     };
+    // The layout of each manifest target, by language, for a root the
+    // command line names instead of the manifest's own output directory.
+    let mut layouts: Vec<(&str, TargetRoot)> = Vec::new();
     if let Some(path) = manifest_for(source, args.config.as_deref()) {
         let cfg = manifest::Config::load(&path)?;
         let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -102,15 +116,35 @@ pub(crate) fn resolve_roots(
                 tono_backend::codegen::TargetKind::TypeScript => "ts",
                 tono_backend::codegen::TargetKind::Rust => continue,
             };
+            let root = TargetRoot {
+                dir: base.join(&target.out),
+                config: crate::gen::codegen_config_for(target),
+                casing: target.casing.clone(),
+            };
             if args.lib_roots.iter().any(|(l, _)| l == lang) {
+                layouts.push((lang, root));
                 continue;
             }
-            set(lang, base.join(&target.out), notes);
+            set(lang, root, notes);
         }
     }
     for (lang, dir) in &args.lib_roots {
         match lang.as_str() {
-            "go" | "ts" => set(lang, dir.clone(), notes),
+            "go" | "ts" => {
+                let layout = layouts
+                    .iter()
+                    .find(|(l, _)| l == lang)
+                    .map(|(_, r)| r.clone())
+                    .unwrap_or_default();
+                set(
+                    lang,
+                    TargetRoot {
+                        dir: dir.clone(),
+                        ..layout
+                    },
+                    notes,
+                )
+            }
             other => {
                 return Err(format!(
                     "--lib-root: no signature check for {other} (go and ts are checked; rust waits on rustdoc JSON)"
@@ -155,7 +189,9 @@ fn frontend_error(e: FrontendError) -> String {
 /// Returns whether it found no divergence; the report is printed to stderr.
 pub(crate) fn check_bindings(source: &Path, args: &Args) -> Result<bool, String> {
     let frontend = Frontend::from_env();
-    let ir = frontend.compile(source).map_err(frontend_error)?;
+    let ir = frontend
+        .compile_as(source, args.module.as_deref())
+        .map_err(frontend_error)?;
     let model = decode_model(&ir)?;
     if model.modules.iter().all(|m| m.ext_libs.is_empty()) {
         return Ok(true);
@@ -180,12 +216,15 @@ mod tests {
             "go=dist/go",
             "--lib-root",
             "typescript=dist/ts",
+            "--module",
+            "svc",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
         let parsed = parse_args(&args).unwrap();
         assert_eq!(parsed.path.as_deref(), Some("a.tono"));
+        assert_eq!(parsed.module.as_deref(), Some("svc"));
         assert_eq!(
             parsed.lib_roots,
             vec![
@@ -221,10 +260,11 @@ mod tests {
                 ("ts".into(), dir.join("missing")),
             ],
             config: None,
+            module: None,
         };
         let mut notes = Vec::new();
         let roots = resolve_roots(&source, &args, &mut notes).unwrap();
-        assert_eq!(roots.go, Some(dir.join("go")));
+        assert_eq!(roots.go, Some(TargetRoot::plain(dir.join("go"))));
         assert_eq!(roots.ts, None);
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("does not exist"));
@@ -246,7 +286,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("out/go")).unwrap();
         std::fs::write(
             dir.join("tono.toml"),
-            "[project]\nname = \"demo\"\n[target.go]\nout = \"out/go\"\n[target.typescript]\nout = \"out/ts\"\n[target.rust]\n",
+            "[project]\nname = \"demo\"\n[target.go]\nout = \"out/go\"\npackage = \"example.com/demo\"\n[target.typescript]\nout = \"out/ts\"\n[target.rust]\n",
         )
         .unwrap();
         let source = dir.join("spec/svc.tono");
@@ -254,8 +294,13 @@ mod tests {
         let mut notes = Vec::new();
         let roots = resolve_roots(&source, &Args::default(), &mut notes).unwrap();
         assert_eq!(
-            roots.go.map(|p| p.canonicalize().unwrap()),
+            roots.go.as_ref().map(|r| r.dir.canonicalize().unwrap()),
             Some(dir.join("out/go").canonicalize().unwrap())
+        );
+        // The manifest's layout for the target rides along with its root.
+        assert_eq!(
+            roots.go.as_ref().and_then(|r| r.config.go_module.clone()),
+            Some("example.com/demo".to_string())
         );
         assert_eq!(roots.ts, None);
         assert!(
@@ -265,13 +310,16 @@ mod tests {
             "{notes:?}"
         );
 
-        // An explicit root for a language wins over the manifest's.
+        // An explicit root for a language wins over the manifest's directory
+        // and keeps the manifest's layout for that target.
         let explicit = Args {
             lib_roots: vec![("go".into(), dir.join("spec"))],
             ..Args::default()
         };
         let roots = resolve_roots(&source, &explicit, &mut Vec::new()).unwrap();
-        assert_eq!(roots.go, Some(dir.join("spec")));
+        let go = roots.go.unwrap();
+        assert_eq!(go.dir, dir.join("spec"));
+        assert_eq!(go.config.go_module.as_deref(), Some("example.com/demo"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

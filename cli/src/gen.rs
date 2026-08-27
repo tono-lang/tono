@@ -343,7 +343,7 @@ fn sweep_dir(
 /// the most specific remap wins, so the table is ordered longest-prefix-first
 /// before the engine's first-match rule sees it. `package` becomes the Go module
 /// path; other targets ignore it.
-fn codegen_config_for(target: &manifest::ResolvedTarget) -> CodegenConfig {
+pub(crate) fn codegen_config_for(target: &manifest::ResolvedTarget) -> CodegenConfig {
     let mut remap: Vec<(String, String)> = target
         .module_remap
         .iter()

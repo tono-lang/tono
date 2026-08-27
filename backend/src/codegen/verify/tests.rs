@@ -357,7 +357,7 @@ fn verify_runs_the_probes_where_a_root_is_given() {
         modules: vec![gearbox_module()],
     };
     let roots = LibRoots {
-        go: Some(root.clone()),
+        go: Some(TargetRoot::plain(root.clone())),
         ts: None,
     };
     let report = verify(&model, &[], &roots).unwrap();
@@ -372,4 +372,98 @@ fn verify_runs_the_probes_where_a_root_is_given() {
         report.unchecked
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn sdk_absence_names_what_needed_it_and_why() {
+    assert_eq!(Sdk::Present.require("x"), Ok(()));
+    assert_eq!(
+        Sdk::Absent("refused".into()).require("#(Memo<.reading>), which references .reading,"),
+        Err("#(Memo<.reading>), which references .reading, needs the generated SDK's types, which are not beside the probe (refused)".to_string())
+    );
+}
+
+#[test]
+fn the_go_module_is_read_from_the_nearest_go_mod() {
+    let root = std::env::temp_dir().join(format!("tono-go-mod-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let nested = root.join("sdk/deep");
+    std::fs::create_dir_all(&nested).unwrap();
+    assert!(go_module_of(&nested)
+        .unwrap_err()
+        .contains("no go.mod above"));
+    std::fs::write(
+        root.join("go.mod"),
+        "// the consumer\n\nmodule \"example.com/consumer\"\n\ngo 1.21\n",
+    )
+    .unwrap();
+    assert_eq!(
+        go_module_of(&nested).unwrap(),
+        ("example.com/consumer".to_string(), root.clone())
+    );
+    // A nearer go.mod wins, and one without a module directive is an error
+    // rather than a silent walk past it.
+    std::fs::write(root.join("sdk/go.mod"), "go 1.21\n").unwrap();
+    assert!(go_module_of(&nested)
+        .unwrap_err()
+        .contains("declares no module path"));
+    std::fs::write(root.join("sdk/go.mod"), "module example.com/sdk\n").unwrap();
+    let scratch = nested.join(".tono-check-go-1");
+    std::fs::create_dir_all(&scratch).unwrap();
+    assert_eq!(
+        scratch_go_module(&scratch, &nested).unwrap(),
+        "example.com/sdk/deep/.tono-check-go-1"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The generated types land under the scratch directory laid out as the
+/// target's own tree, the `<target>/` prefix dropped, so the probe beside a
+/// module's types file resolves the same relative imports the SDK does.
+#[test]
+fn generated_types_are_written_as_the_target_lays_them_out() {
+    let mut module = gearbox_module();
+    let lib = &mut module.ext_libs[0];
+    lib.langs.retain(|l| l.lang == "ts");
+    for decl in lib
+        .externs
+        .iter_mut()
+        .chain(lib.types.iter_mut().flat_map(|t| t.methods.iter_mut()))
+    {
+        decl.langs.retain(|l| l.lang == "ts");
+    }
+    let model = Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![module],
+    };
+    let types = generated_types(
+        &model,
+        TargetKind::TypeScript,
+        &CodegenConfig::default(),
+        &TargetRoot::default(),
+    )
+    .unwrap();
+    assert_eq!(types.paths(), vec![PathBuf::from("svc/types.ts")]);
+    let dir = std::env::temp_dir().join(format!("tono-types-write-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    types.write(&dir).unwrap();
+    let text = std::fs::read_to_string(dir.join("svc/types.ts")).unwrap();
+    assert!(text.contains("export interface Summary"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // A model generation refuses (the ext bound in two languages with no
+    // declared test covering it) yields the refusal, which the check turns
+    // into the reason a binding is left unchecked.
+    let refused = Model {
+        tono_ir_version: crate::ir::TONO_IR_VERSION,
+        modules: vec![gearbox_module()],
+    };
+    let err = generated_types(
+        &refused,
+        TargetKind::TypeScript,
+        &CodegenConfig::default(),
+        &TargetRoot::default(),
+    )
+    .unwrap_err();
+    assert!(err.contains("no declared test stubs it"), "{err}");
 }

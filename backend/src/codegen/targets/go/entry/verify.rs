@@ -10,6 +10,12 @@
 //! position marks it, or the `yields:` list is the call's whole signature).
 //! Nothing is inferred from the library: a binding the probe cannot express
 //! in declared terms is listed as skipped, with why.
+//!
+//! The probe file is a file of the module's own package in the scratch
+//! tree, beside the generated `types.go` (see `verify::generated_types`), so
+//! a generated type a binding names (a reference inside a spelling,
+//! `Memo[.reading]`; a parameter typed by the module's own shape) is written
+//! bare, exactly as the emitted ext glue writes it in that package.
 
 use std::path::Path;
 
@@ -17,43 +23,82 @@ use super::ext::ext_render::{coerce, form_coerce, literal_of_json};
 use super::ext::{binds_ctx, handle_go_type, lib_ident, qualify};
 use super::{go_type, go_type_label};
 use crate::codegen::verify::{
-    parse_go_errors, run_probe, Probe, ProbeRun, RunOutcome, Scratch, SiteKey,
+    parse_go_errors, run_probe, Probe, ProbeRun, RunOutcome, Scratch, Sdk, SiteKey,
 };
 use crate::ir::{
-    CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpaqueType, Prim, Tref,
+    CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpaqueType, Prim, ShapeKind, Tref,
 };
 
 const PROBE_FILE: &str = "probe.go";
 
-/// Whether a spelling can be written without the generated SDK: one that
-/// references a generated type (`Memo[.reading]`) cannot, and the binding
-/// is listed with why.
-fn sdk_terms(spelling: &str) -> Result<(), String> {
-    match crate::codegen::foreign_spelling::references(spelling).first() {
-        Some(name) => Err(format!(
-            "#({spelling}) references .{name}, a type the generated SDK defines"
-        )),
-        None => Ok(()),
+/// What every probe line is written against: the module, the library, its
+/// import alias, and whether the generated types stand beside the probe.
+struct Ctx<'a> {
+    module: &'a Module,
+    lib: &'a ExtLib,
+    alias: String,
+    sdk: &'a Sdk,
+}
+
+impl Ctx<'_> {
+    /// Whether a spelling can be written here: one that references a
+    /// generated type (`Memo[.reading]`) needs the generated types beside
+    /// the probe, and without them the binding is listed with why.
+    fn sdk_terms(&self, spelling: &str) -> Result<(), String> {
+        match crate::codegen::foreign_spelling::references(spelling).first() {
+            Some(name) => self
+                .sdk
+                .require(&format!("#({spelling}), which references .{name},")),
+            None => Ok(()),
+        }
+    }
+
+    fn qualify(&self, spelling: &str) -> String {
+        qualify(spelling, &self.alias, self.module)
+    }
+
+    /// The generated type `canonical` names, bare: the probe is a file of
+    /// the package that declares it. `Err` when the types are not beside
+    /// the probe, or when the name is an entry (a construction type, not
+    /// a declaration of the types file).
+    fn generated(&self, canonical: &str, what: &str) -> Result<String, String> {
+        self.sdk.require(what)?;
+        let shape = self
+            .module
+            .shapes
+            .iter()
+            .find(|s| crate::codegen::entries::local_name(&s.id) == canonical);
+        if let Some(shape) = shape {
+            if matches!(
+                shape.kind,
+                ShapeKind::Entry { .. } | ShapeKind::Config { .. }
+            ) {
+                return Err(format!("{canonical} is an entry, not a type"));
+            }
+        }
+        crate::codegen::entries::generated_type_name(self.module, canonical)
+            .ok_or_else(|| format!("{canonical} is not a type of module {}", self.module.name))
+    }
+
+    /// The handle's declared Go storage, qualified, when the probe can spell
+    /// it: `Err` names a reference the types cannot answer or a missing go
+    /// block.
+    fn handle_storage(&self, handle: &OpaqueType) -> Result<String, String> {
+        let storage = handle
+            .storage("go")
+            .ok_or_else(|| format!("the handle {} declares no go block", handle.name))?;
+        self.sdk_terms(storage)?;
+        handle_go_type(self.lib, handle, self.module, &mut Vec::new())
+            .ok_or_else(|| "the lib declares no go module path".to_string())
     }
 }
 
-/// The handle's declared Go storage, qualified, when the probe can spell
-/// it: `Err` names a reference to a generated type or a missing go block.
-fn handle_storage(lib: &ExtLib, handle: &OpaqueType, module: &Module) -> Result<String, String> {
-    let storage = handle
-        .storage("go")
-        .ok_or_else(|| format!("the handle {} declares no go block", handle.name))?;
-    sdk_terms(storage)?;
-    handle_go_type(lib, handle, module, &mut Vec::new())
-        .ok_or_else(|| "the lib declares no go module path".to_string())
-}
-
-/// The Go type a declared position has in the probe, when it can be spelled
-/// without the generated SDK: builtins, lists and maps of them, handles by
-/// their storage, foreign forms by their name. `Err` says what cannot be
-/// spelled: a tono shape (a generated type), a support type, a form with
-/// no go block.
-fn probe_type(module: &Module, lib: &ExtLib, t: &Tref) -> Result<String, String> {
+/// The Go type a declared position has in the probe: builtins, lists and
+/// maps of them, handles by their storage, foreign forms by their name, the
+/// module's own shapes by the name the types file declares. `Err` says what
+/// cannot be spelled: a support type, a form with no go block, a type of
+/// another module, a generated type when the SDK is not beside the probe.
+fn probe_type(cx: &Ctx<'_>, t: &Tref) -> Result<String, String> {
     match t {
         Tref::Prim(p) => match p {
             Prim::Bool
@@ -73,30 +118,42 @@ fn probe_type(module: &Module, lib: &ExtLib, t: &Tref) -> Result<String, String>
                 go_type_label(t)
             )),
         },
-        Tref::List(inner) => Ok(format!("[]{}", probe_type(module, lib, inner)?)),
+        Tref::List(inner) => Ok(format!("[]{}", probe_type(cx, inner)?)),
         Tref::Param(p) => Err(format!("{p} is a type parameter")),
-        Tref::Map(k, v) => Ok(format!(
-            "map[{}]{}",
-            probe_type(module, lib, k)?,
-            probe_type(module, lib, v)?
-        )),
+        Tref::Map(k, v) => Ok(format!("map[{}]{}", probe_type(cx, k)?, probe_type(cx, v)?)),
         // A type written inside the ext block resolves by its bare name
         // under the module (`svc#calculator`), a handle field's type outside
         // it under the lib (`mathkit#calculator`): both name this lib's own
-        // handle or form.
-        Tref::Ref { id, .. } => {
+        // handle or form. Anything else is one of the module's own shapes,
+        // which the generated types file declares in this package.
+        Tref::Ref { id, args } => {
             let name = crate::codegen::entries::local_name(id);
-            if let Some(handle) = lib.types.iter().find(|h| h.name == name) {
-                return handle_storage(lib, handle, module);
+            if let Some(handle) = cx.lib.types.iter().find(|h| h.name == name) {
+                return cx.handle_storage(handle);
             }
-            if let Some(form) = lib.structs.iter().find(|s| s.name == name) {
+            if let Some(form) = cx.lib.structs.iter().find(|s| s.name == name) {
                 let go = form
                     .lang("go")
                     .ok_or_else(|| format!("the struct {name} declares no go block"))?;
-                sdk_terms(&go.name)?;
-                return Ok(qualify(&go.name, &lib_ident(&lib.name), module));
+                cx.sdk_terms(&go.name)?;
+                return Ok(cx.qualify(&go.name));
             }
-            Err(format!("{name} is a type the generated SDK defines"))
+            if let Some((owner, _)) = id.split_once('#') {
+                if owner != cx.module.name {
+                    return Err(format!(
+                        "{name} is a type of module {owner}, outside the ext's module"
+                    ));
+                }
+            }
+            let head = cx.generated(name, &format!("{name}, one of the module's own types,"))?;
+            if args.is_empty() {
+                return Ok(head);
+            }
+            let args = args
+                .iter()
+                .map(|a| probe_type(cx, a))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(format!("{head}[{}]", args.join(", ")))
         }
     }
 }
@@ -105,13 +162,7 @@ fn probe_type(module: &Module, lib: &ExtLib, t: &Tref) -> Result<String, String>
 /// under its own spelling goes through the same conversion the emitter
 /// applies (`ext_render::coerce`), wherever in the argument tree it sits.
 /// `Err` names a shape the probe has no declared terms for.
-fn arg_expr(
-    module: &Module,
-    lib: &ExtLib,
-    alias: &str,
-    params: &[ExternParam],
-    arg: &CallArg,
-) -> Result<String, String> {
+fn arg_expr(cx: &Ctx<'_>, params: &[ExternParam], arg: &CallArg) -> Result<String, String> {
     match arg {
         CallArg::Param(n) => Ok(n.clone()),
         CallArg::ParamAs { name, spelling } => {
@@ -119,7 +170,8 @@ fn arg_expr(
                 .iter()
                 .find(|p| &p.name == name)
                 .ok_or_else(|| format!("{name} is not a parameter of the op"))?;
-            coerce(module, lib, &param.r#type, spelling, name, None)
+            cx.sdk_terms(spelling)?;
+            coerce(cx.module, cx.lib, &param.r#type, spelling, name, None)
         }
         CallArg::Foreign(_) => Ok("ctx".to_string()),
         CallArg::Lit(v) => Ok(literal_of_json(v)),
@@ -127,38 +179,35 @@ fn arg_expr(
             let args = sc
                 .args
                 .iter()
-                .map(|a| arg_expr(module, lib, alias, params, a))
+                .map(|a| arg_expr(cx, params, a))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(format!(
-                "{}({})",
-                qualify(&sc.symbol, alias, module),
-                args.join(", ")
-            ))
+            cx.sdk_terms(&sc.symbol)?;
+            Ok(format!("{}({})", cx.qualify(&sc.symbol), args.join(", ")))
         }
         CallArg::Ctor(c) => {
-            let form = lib
+            let form = cx
+                .lib
                 .structs
                 .iter()
                 .find(|s| s.name == c.name)
                 .and_then(|s| s.lang("go"))
                 .ok_or_else(|| format!("the struct literal {} has no go block", c.name))?;
-            sdk_terms(&form.name)?;
+            cx.sdk_terms(&form.name)?;
             let fields = c
                 .fields
                 .iter()
-                .map(|(k, v)| Ok(format!("{k}: {}", arg_expr(module, lib, alias, params, v)?)))
+                .map(|(k, v)| Ok(format!("{k}: {}", arg_expr(cx, params, v)?)))
                 .collect::<Result<Vec<_>, String>>()?;
-            let literal = format!(
-                "{}{{{}}}",
-                qualify(&form.name, alias, module),
-                fields.join(", ")
-            );
+            let literal = format!("{}{{{}}}", cx.qualify(&form.name), fields.join(", "));
             // A spelled literal crosses here exactly as the emitted call
             // passes it (`&mathkit.Options{..}`); the form itself is still
             // probed as the value type its block declares.
             match &c.spelling {
                 None => Ok(literal),
-                Some(spelling) => form_coerce(module, lib, form, spelling, &literal),
+                Some(spelling) => {
+                    cx.sdk_terms(spelling)?;
+                    form_coerce(cx.module, cx.lib, form, spelling, &literal)
+                }
             }
         }
         CallArg::TypeRef(_) => Err("Go has no class reference to pass".to_string()),
@@ -172,16 +221,10 @@ fn arg_expr(
 /// Go type (what the generated method receives; a spelling of its own is
 /// applied at the argument, as the emitter does), plus the context when a
 /// position declares it.
-fn params(
-    module: &Module,
-    lib: &ExtLib,
-    decl: &ExternDecl,
-    lang: &ExternLang,
-) -> Result<Vec<String>, String> {
+fn params(cx: &Ctx<'_>, decl: &ExternDecl, lang: &ExternLang) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for p in &decl.params {
-        let ty = probe_type(module, lib, &p.r#type)
-            .map_err(|why| format!("parameter {}: {why}", p.name))?;
+        let ty = probe_type(cx, &p.r#type).map_err(|why| format!("parameter {}: {why}", p.name))?;
         out.push(format!("{} {ty}", p.name));
     }
     if binds_ctx(lang) {
@@ -191,17 +234,10 @@ fn params(
 }
 
 /// The result types the call is assigned to, by the emitter's convention.
-fn results(
-    module: &Module,
-    lib: &ExtLib,
-    alias: &str,
-    decl: &ExternDecl,
-    lang: &ExternLang,
-) -> Result<Vec<String>, String> {
+fn results(cx: &Ctx<'_>, decl: &ExternDecl, lang: &ExternLang) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     if lang.yields.is_empty() {
-        let ty = probe_type(module, lib, &decl.r#return)
-            .map_err(|why| format!("the return type: {why}"))?;
+        let ty = probe_type(cx, &decl.r#return).map_err(|why| format!("the return type: {why}"))?;
         out.push(ty);
         out.push("error".to_string());
         return Ok(out);
@@ -211,11 +247,11 @@ fn results(
         if y.is_error {
             out.push("error".to_string());
         } else if let Some(sp) = &y.foreign {
-            out.push(qualify(sp, alias, module));
+            cx.sdk_terms(sp)?;
+            out.push(cx.qualify(sp));
         } else if let Some(t) = &y.r#type {
             out.push(
-                probe_type(module, lib, t)
-                    .map_err(|why| format!("yields position {}: {why}", y.name))?,
+                probe_type(cx, t).map_err(|why| format!("yields position {}: {why}", y.name))?,
             );
         }
     }
@@ -229,21 +265,19 @@ fn results(
 
 /// The whole probe line for one binding.
 fn op_line(
-    module: &Module,
-    lib: &ExtLib,
-    alias: &str,
+    cx: &Ctx<'_>,
     owner: Option<&OpaqueType>,
     decl: &ExternDecl,
     lang: &ExternLang,
 ) -> Result<String, String> {
     for sp in crate::codegen::entries::spellings::of_lang(lang) {
-        sdk_terms(sp)?;
+        cx.sdk_terms(sp)?;
     }
-    let mut ps = params(module, lib, decl, lang)?;
+    let mut ps = params(cx, decl, lang)?;
     let head = match owner {
-        None => qualify(&lang.symbol, alias, module),
+        None => cx.qualify(&lang.symbol),
         Some(handle) => {
-            let storage = handle_storage(lib, handle, module)?;
+            let storage = cx.handle_storage(handle)?;
             ps.insert(0, format!("tonoRecv {storage}"));
             format!("tonoRecv.{}", lang.symbol)
         }
@@ -251,7 +285,7 @@ fn op_line(
     let args = lang
         .call_args
         .iter()
-        .map(|a| arg_expr(module, lib, alias, &decl.params, a))
+        .map(|a| arg_expr(cx, &decl.params, a))
         .collect::<Result<Vec<_>, _>>()?;
     // The chained method is probed exactly as the emitter writes it: one
     // expression, the results bound off its last link.
@@ -261,12 +295,12 @@ fn op_line(
             let chain_args = chain
                 .args
                 .iter()
-                .map(|a| arg_expr(module, lib, alias, &decl.params, a))
+                .map(|a| arg_expr(cx, &decl.params, a))
                 .collect::<Result<Vec<_>, _>>()?;
             format!(".{}({})", chain.symbol, chain_args.join(", "))
         }
     };
-    let rs = results(module, lib, alias, decl, lang)?;
+    let rs = results(cx, decl, lang)?;
     let names: Vec<String> = (0..rs.len()).map(|i| format!("tonoR{i}")).collect();
     let decls: Vec<String> = names
         .iter()
@@ -292,38 +326,36 @@ fn go_lang(decl: &ExternDecl) -> Option<&ExternLang> {
     decl.langs.iter().find(|l| l.lang == "go")
 }
 
-/// Build the Go probe for `lib`. Empty when the lib declares no Go module.
-pub fn probe(module: &Module, lib: &ExtLib) -> Probe {
+/// Build the Go probe for `lib` as a file of `package`, the module's own
+/// package where the generated types are declared when `sdk` says they
+/// stand beside it. Empty when the lib declares no Go module.
+pub fn probe(module: &Module, lib: &ExtLib, sdk: &Sdk, package: &str) -> Probe {
     let mut probe = Probe::default();
     let Some(path) = lib.langs.iter().find(|l| l.lang == "go") else {
         return probe;
     };
-    let alias = lib_ident(&lib.name);
+    let cx = Ctx {
+        module,
+        lib,
+        alias: lib_ident(&lib.name),
+        sdk,
+    };
     let ops: Vec<(Option<&OpaqueType>, &ExternDecl)> = lib
         .types
         .iter()
         .flat_map(|t| t.methods.iter().map(move |m| (Some(t), m)))
         .chain(lib.externs.iter().map(|d| (None, d)))
         .collect();
-    let needs_ctx = ops.iter().any(|(_, d)| go_lang(d).is_some_and(binds_ctx));
-
-    probe.push_plain("package tonocheck");
-    probe.push_plain("");
-    probe.push_plain("import (");
-    if needs_ctx {
-        probe.push_plain("\t\"context\"");
-    }
-    probe.push(&SiteKey::path(), &format!("\t{alias} {:?}", path.path));
-    probe.push_plain(")");
-    probe.push_plain("");
-
+    // The body is written first: which imports it uses is only known once
+    // every line is, and Go refuses an import nothing uses.
+    let mut body: Vec<(SiteKey, String)> = Vec::new();
     for handle in &lib.types {
         let key = SiteKey::handle(&handle.name);
         if handle.storage("go").is_none() {
             continue;
         }
-        match handle_storage(lib, handle, module) {
-            Ok(storage) => probe.push(&key, &format!("var _ {storage}")),
+        match cx.handle_storage(handle) {
+            Ok(storage) => body.push((key, format!("var _ {storage}"))),
             Err(why) => probe.skip(&key, &why),
         }
     }
@@ -332,59 +364,97 @@ pub fn probe(module: &Module, lib: &ExtLib) -> Probe {
             continue;
         };
         let key = SiteKey::form(&form.name);
-        if let Err(why) = sdk_terms(&go.name) {
+        if let Err(why) = cx.sdk_terms(&go.name) {
             probe.skip(&key, &why);
             continue;
         }
-        let ty = qualify(&go.name, &alias, module);
+        let ty = cx.qualify(&go.name);
         let mut checks = Vec::new();
         for f in &form.fields {
             let field_ty = match go.fields.get(&f.name) {
-                Some(sp) => sdk_terms(sp).map(|()| qualify(sp, &alias, module)),
-                None => probe_type(module, lib, &f.r#type),
+                Some(sp) => cx.sdk_terms(sp).map(|()| cx.qualify(sp)),
+                None => probe_type(&cx, &f.r#type),
             };
             match field_ty {
                 Ok(t) => checks.push(format!("var _ {t} = tonoForm.{}", f.name)),
                 Err(why) => probe.skip(&key, &format!("field {}: {why}", f.name)),
             }
         }
-        probe.push(
-            &key,
-            &format!(
+        body.push((
+            key,
+            format!(
                 "func tonoForm_{}(tonoForm {ty}) {{ {} }}",
                 form.name,
                 checks.join("; ")
             ),
-        );
+        ));
     }
     for (owner, decl) in ops {
         let Some(lang) = go_lang(decl) else {
             continue;
         };
         let key = SiteKey::op(owner.map(|h| h.name.as_str()), &decl.name);
-        match op_line(module, lib, &alias, owner, decl, lang) {
-            Ok(line) => probe.push(&key, &line),
+        match op_line(&cx, owner, decl, lang) {
+            Ok(line) => body.push((key, line)),
             Err(reason) => probe.skip(&key, &reason),
         }
+    }
+    let needs_ctx = body.iter().any(|(_, l)| l.contains("ctx context.Context"));
+    // A library no line reaches (every binding skipped) is still imported,
+    // blank, so the import line stands for the module path either way: an
+    // unresolvable path is reported there, and a resolvable one is not an
+    // unused-import error masquerading as a missing library.
+    let selector = format!("{}.", cx.alias);
+    let alias = if body.iter().any(|(_, l)| l.contains(&selector)) {
+        cx.alias.as_str()
+    } else {
+        "_"
+    };
+
+    probe.push_plain(&format!("package {package}"));
+    probe.push_plain("");
+    probe.push_plain("import (");
+    if needs_ctx {
+        probe.push_plain("\t\"context\"");
+    }
+    probe.push(&SiteKey::path(), &format!("\t{alias} {:?}", path.path));
+    probe.push_plain(")");
+    probe.push_plain("");
+    for (key, line) in body {
+        probe.push(&key, &line);
     }
     probe
 }
 
-/// Write the probe under `root` (a directory inside the consumer's Go
-/// module) and build it.
-pub fn run(root: &Path, probe: &Probe) -> std::io::Result<RunOutcome> {
-    let scratch = Scratch::create(root, "go")?;
-    std::fs::write(scratch.dir.join(PROBE_FILE), &probe.source)?;
-    let dir_name = scratch
+/// Write the probe into the module's package directory of the scratch tree
+/// (beside the generated `types.go`, when it is there) and build that
+/// package from the consumer's root, so the library resolves through the
+/// consumer's module.
+pub fn run(scratch: &Scratch, module_dir: &Path, probe: &Probe) -> std::io::Result<RunOutcome> {
+    let dir = scratch.dir.join(module_dir);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join(PROBE_FILE), &probe.source)?;
+    let root = scratch
         .dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| scratch.dir.clone());
+    let package_dir = Path::new(
+        scratch
+            .dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .as_str(),
+    )
+    .join(module_dir)
+    .to_string_lossy()
+    .replace('\\', "/");
     let run = ProbeRun {
         program: "go".into(),
-        args: vec!["build".into(), format!("./{dir_name}")],
-        cwd: root.to_path_buf(),
-        file_label: format!("{dir_name}/{PROBE_FILE}"),
+        args: vec!["build".into(), format!("./{package_dir}")],
+        cwd: root,
+        file_label: format!("{package_dir}/{PROBE_FILE}"),
         parse: parse_go_errors,
     };
     Ok(run_probe(&run))

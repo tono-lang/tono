@@ -52,7 +52,7 @@ pub(crate) const USAGE: &str = "usage: tono (\n  \
     gen (--target <list> --out <dir> [--package <name>] [--flatten] [--module-remap <from>=<to>]... [--go-module <path>] | [--config <tono.toml>]) [--clean] [<ir.json>]\n    \
     (with no <ir.json> and nothing piped in, the project's .tono sources are compiled;\n    \
      --clean also removes generated files this run did not produce)\n  \
-    check <file.tono> [--lib-root <lang>=<dir>]... [--config <tono.toml>]\n    \
+    check <file.tono> [--lib-root <lang>=<dir>]... [--config <tono.toml>] [--module <name>]\n    \
     (an ext block's bindings are checked against the library in that target's out dir, or in --lib-root)\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \

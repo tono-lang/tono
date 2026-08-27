@@ -130,7 +130,7 @@ run_check() {
     # The bindings against the stand-in library, reported on the .tono. A
     # finding here is what the target compiler would have said about a
     # generated line; the gate wants it said about the declaration instead.
-    if ! "$tono" check "$bench/$source" --lib-root "go=$check_go" --lib-root "ts=$check_ts" >>"$log" 2>&1; then
+    if ! "$tono" check "$bench/$source" --module mathkit --lib-root "go=$check_go" --lib-root "ts=$check_ts" >>"$log" 2>&1; then
         echo check-red
         return
     fi
@@ -311,6 +311,17 @@ while IFS=$'\t' read -r id target source expected; do
         sed -n '1,12p' "$work/$id/log" | sed 's/^/    | /'
     fi
 done <"$bench/gate.tsv"
+
+# The check compiles its probe beside the generated types, so a binding that
+# names one of the module's own types is graded, never listed as unchecked
+# for that reason: a row whose report still says so has lost that ground.
+retired_reason="a type the generated SDK defines"
+for log in "$work"/*/log; do
+    if grep -q "not checked: .*$retired_reason" "$log"; then
+        echo "$(basename "$(dirname "$log")"): a binding was left unchecked as '$retired_reason'" >&2
+        mismatches=$((mismatches + 1))
+    fi
+done
 
 if [[ "$mismatches" -ne 0 ]]; then
     echo "ffi bench: $mismatches check(s) ended elsewhere than examples/mathkit/gate.tsv records" >&2
