@@ -42,7 +42,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::codegen::casing::CaseStyle;
 use crate::codegen::modules::{self, CodegenConfig};
@@ -56,7 +56,7 @@ use crate::ir::{ExtLib, Model, Module};
 pub const FINDING_CODE: &str = "FX0001";
 
 /// What a binding site is, as the frontend's `ext-bindings` listing names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SiteKind {
     /// The per-language module path.
@@ -72,7 +72,7 @@ pub enum SiteKind {
 }
 
 /// One binding's source location, keyed the way the IR names it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Site {
     pub ext: String,
     pub lang: String,
@@ -185,6 +185,10 @@ impl Probe {
 pub struct Finding {
     pub span: String,
     pub message: String,
+    /// The binding the finding is about, when its site was listed: what a
+    /// consumer keeping the verdict across edits re-locates it by, since
+    /// `span` is only good for the text the check read.
+    pub site: Option<Site>,
 }
 
 impl fmt::Display for Finding {
@@ -562,7 +566,7 @@ fn fold_outcome(
         "go" => "go build",
         _ => "tsc",
     };
-    let site_span = |key: &SiteKey| -> Option<String> {
+    let site_of = |key: &SiteKey| -> Option<Site> {
         sites
             .iter()
             .find(|s| {
@@ -572,7 +576,7 @@ fn fold_outcome(
                     && s.owner == key.owner
                     && s.name == key.name
             })
-            .map(|s| s.span.clone())
+            .cloned()
     };
     let skipped: Vec<String> = probe
         .skipped
@@ -605,14 +609,20 @@ fn fold_outcome(
                             "{lang} bindings of ext {ext}: no type source ({reason})"
                         ));
                     }
-                    Some(k) => findings.push(Finding {
-                        span: site_span(k).unwrap_or_else(|| "0:0-0".to_string()),
-                        message: format!(
-                            "{lang} binding of {} in ext {ext}: {}",
-                            k.label(),
-                            e.message
-                        ),
-                    }),
+                    Some(k) => {
+                        let site = site_of(k);
+                        findings.push(Finding {
+                            span: site
+                                .as_ref()
+                                .map_or_else(|| "0:0-0".to_string(), |s| s.span.clone()),
+                            message: format!(
+                                "{lang} binding of {} in ext {ext}: {}",
+                                k.label(),
+                                e.message
+                            ),
+                            site,
+                        })
+                    }
                     None => report.unchecked.push(format!(
                         "{lang} bindings of ext {ext}: the probe failed outside a binding ({})",
                         e.message.lines().next().unwrap_or_default()
@@ -637,12 +647,35 @@ fn lang_declared(lib: &ExtLib, lang: &str) -> bool {
         .any(|p| normalize_ext_lang(&p.lang) == lang)
 }
 
+/// What one check runs against: the sites to attribute findings to, the
+/// roots to resolve the libraries in, and the pairs it covers.
+struct Check<'a> {
+    sites: &'a [Site],
+    roots: &'a LibRoots,
+    selection: &'a Selection,
+}
+
 /// Check every ext of `model` whose language has a root, and report.
 pub fn verify(model: &Model, sites: &[Site], roots: &LibRoots) -> Result<Report, String> {
+    verify_selected(model, sites, roots, &Selection::all())
+}
+
+/// [`verify`] over the selected pairs only.
+pub fn verify_selected(
+    model: &Model,
+    sites: &[Site],
+    roots: &LibRoots,
+    selection: &Selection,
+) -> Result<Report, String> {
+    let check = Check {
+        sites,
+        roots,
+        selection,
+    };
     let mut report = Report::default();
     for module in &model.modules {
         for lib in &module.ext_libs {
-            verify_lib(&mut report, model, module, lib, sites, roots)?;
+            verify_lib(&mut report, model, module, lib, &check)?;
         }
     }
     Ok(report)
@@ -653,16 +686,21 @@ fn verify_lib(
     model: &Model,
     module: &Module,
     lib: &ExtLib,
-    sites: &[Site],
-    roots: &LibRoots,
+    check: &Check<'_>,
 ) -> Result<(), String> {
-    if lang_declared(lib, "rust") {
+    let Check {
+        sites,
+        roots,
+        selection,
+    } = *check;
+    let wanted = |lang: &str| lang_declared(lib, lang) && selection.allows(&lib.name, lang);
+    if wanted("rust") {
         report.unchecked.push(format!(
             "rust bindings of ext {}: reading a crate's signatures needs rustdoc JSON, nightly only",
             lib.name
         ));
     }
-    if lang_declared(lib, "go") {
+    if wanted("go") {
         match &roots.go {
             None => report.unchecked.push(format!(
                 "go bindings of ext {}: no Go module to resolve the library in (set the go target's out in tono.toml, or pass --lib-root go=<dir>)",
@@ -693,7 +731,7 @@ fn verify_lib(
             }
         }
     }
-    if lang_declared(lib, "ts") {
+    if wanted("ts") {
         match &roots.ts {
             None => report.unchecked.push(format!(
                 "ts bindings of ext {}: no node_modules tree to resolve the package in (set the typescript target's out in tono.toml, or pass --lib-root ts=<dir>)",
@@ -732,6 +770,9 @@ fn materialize(
         Err(reason) => Ok(Sdk::Absent(reason)),
     }
 }
+
+pub mod select;
+pub use select::Selection;
 
 #[cfg(test)]
 pub(crate) mod fixtures;

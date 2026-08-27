@@ -183,6 +183,70 @@ fn a_go_binding_that_diverges_is_reported_at_its_tono_span() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The JSON report is the text report in another spelling: rendering the
+/// lines the editor reads gives the findings `tono check` prints, and a
+/// pair-scoped run says for that pair what the whole check says.
+#[test]
+fn the_json_report_carries_the_text_verdict_and_only_narrows_it() {
+    let cmd = skip_without_frontend!();
+    skip_without!("go");
+    let dir = tmp("go-json");
+    let root = go_root(&dir);
+    let src = GO_OK.replace("#(Open[float64])(value)", "#(Open[float64])(value, value)");
+    let file = write(&dir.join("svc.tono"), &src);
+    let (ok, text) = run(skip_without_frontend!(), &file, &[("go", &root)]);
+    assert!(!ok);
+    let finding = text
+        .lines()
+        .find(|l| l.contains("FX0001"))
+        .unwrap_or_else(|| panic!("no finding in:\n{text}"));
+
+    let mut json = cmd;
+    json.arg("check")
+        .arg(&file)
+        .arg("--lib-root")
+        .arg(format!("go={}", root.display()))
+        .arg("--json");
+    let out = json.output().unwrap();
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let found = lines
+        .iter()
+        .find(|l| l["kind"] == "finding")
+        .unwrap_or_else(|| panic!("no finding in:\n{stdout}"));
+    let rendered = format!(
+        "{}: error: {}: {}",
+        found["span"].as_str().unwrap(),
+        found["code"].as_str().unwrap(),
+        found["message"].as_str().unwrap()
+    );
+    assert_eq!(rendered.lines().next().unwrap(), finding);
+
+    // Only the ts pair: no Go probe runs, and the report says only that
+    // the ts side has nowhere to resolve the package.
+    let mut only = skip_without_frontend!();
+    only.arg("check")
+        .arg(&file)
+        .arg("--lib-root")
+        .arg(format!("go={}", root.display()))
+        .arg("--json")
+        .arg("--only")
+        .arg("gearbox=ts");
+    let out = only.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.trim().is_empty(), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn ts_bindings_are_checked_against_the_declarations_file() {
     let cmd = skip_without_frontend!();

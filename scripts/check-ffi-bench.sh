@@ -35,6 +35,13 @@ tono="$root/target/debug/tono"
 if [[ ! -x "$tono" ]]; then
     (cd "$root" && cargo build -p tono-cli --quiet)
 fi
+# The language server and the driver that plays the editor for the
+# same-verdict gate (a check-red row must read the same in the editor).
+lsp="$root/_build/default/lsp/tono_lsp.exe"
+driver="$root/_build/default/lsp/test/lsp_check_driver.exe"
+if [[ ! -x "$lsp" || ! -x "$driver" ]]; then
+    (cd "$root" && opam exec -- dune build lsp/tono_lsp.exe lsp/test/lsp_check_driver.exe)
+fi
 tsc="$root/backend/codegen-tests/typescript/node_modules/.bin/tsc"
 vitest="$root/backend/codegen-tests/typescript/node_modules/.bin/vitest"
 for tool in "$tsc" "$vitest"; do
@@ -114,6 +121,57 @@ ts = "0.0.0"
 TOML
 }
 
+# The editor must say about a wrong binding exactly what the command says:
+# the language server runs `tono check --json` per (ext, language) pair on
+# save and publishes what it prints, never a verdict of its own. The probe
+# is copied into a project whose manifest resolves the libraries from the
+# same consumer trees, the command is run on that copy, the server is driven
+# on it like an editor would, and the findings and unchecked notes of the
+# two are diffed line by line (order aside: the command groups by kind, the
+# editor by pair).
+same_verdict_in_the_editor() {
+    local dir="$1" source="$2"
+    local proj="$dir/editor"
+    local log="$dir/log"
+    mkdir -p "$proj"
+    cp "$bench/$source" "$proj/mathkit.tono"
+    cat >"$proj/tono.toml" <<TOML
+[project]
+name = "mathkit-sdk"
+
+[target.go]
+enabled = true
+package = "example.com/check"
+out = "$check_go"
+
+[target.typescript]
+enabled = true
+package = "mathkit-sdk"
+out = "$check_ts"
+
+[ext.mathkit]
+rust = "0.0.0"
+go = "v0.0.0"
+ts = "0.0.0"
+TOML
+    "$tono" check "$proj/mathkit.tono" >/dev/null 2>"$proj/command.txt" || true
+    grep -E 'FX0001|^not checked: ' "$proj/command.txt" | sort >"$proj/command.lines"
+    if ! TONO_BIN="$tono" "$driver" "$lsp" "$proj/mathkit.tono" >"$proj/editor.txt" 2>>"$log"; then
+        echo "the editor driver failed on $proj/mathkit.tono" >>"$log"
+        return 1
+    fi
+    grep -E 'FX0001|^not checked: ' "$proj/editor.txt" | sort >"$proj/editor.lines"
+    if [[ ! -s "$proj/command.lines" ]]; then
+        echo "the command reported no finding on $proj/mathkit.tono (nothing to compare)" >>"$log"
+        return 1
+    fi
+    if ! diff -u "$proj/command.lines" "$proj/editor.lines" >>"$log"; then
+        echo "the editor's verdict differs from the command's (diff above)" >>"$log"
+        return 1
+    fi
+    echo "editor: the same verdict on every line" >>"$log"
+}
+
 # One check. Prints the outcome it reached to stdout; every tool log goes to
 # $work/<id>/log so a mismatch can quote it.
 run_check() {
@@ -131,7 +189,11 @@ run_check() {
     # finding here is what the target compiler would have said about a
     # generated line; the gate wants it said about the declaration instead.
     if ! "$tono" check "$bench/$source" --module mathkit --lib-root "go=$check_go" --lib-root "ts=$check_ts" >>"$log" 2>&1; then
-        echo check-red
+        if same_verdict_in_the_editor "$dir" "$source"; then
+            echo check-red
+        else
+            echo editor-red
+        fi
         return
     fi
     write_tono_toml "$dir" "$target"

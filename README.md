@@ -73,6 +73,17 @@ unchecked, and the report says so; Rust bindings are always reported
 unchecked until rustdoc's JSON output leaves nightly. Only the check needs a
 target toolchain; `tono gen` never does.
 
+The editor runs the same check on save. `tono-lsp` invokes `tono check
+<file> --json --only <ext>=<lang>` for each (ext, language) pair whose text
+changed since its last verdict (the pair's own blocks, the parts every
+language shares, and its pin in `tono.toml`), the dirty pairs in parallel,
+and publishes what the command printed: the `FX0001` findings at their
+bindings, and a note at the ext's path line for what was left unchecked. It
+is the command's report, never a second checker, so the editor and `tono
+check` cannot disagree; `--json` is that report as one object per line,
+`--only` narrows a run to the named pairs. The server finds `tono` through
+`TONO_BIN`, next to itself, or on `PATH`.
+
 Renaming or deleting a module leaves its old output behind, since generation
 only writes. `--clean` sweeps each output directory of generated files the run
 did not produce, and removes the directories that leaves empty. Only files

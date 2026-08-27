@@ -1,9 +1,15 @@
 (library
  (name tono_lsp_lib)
- (modules analysis analysis_ext analysis_match hover_docs project)
- (libraries tono_frontend lsp))
+ (modules
+  analysis
+  analysis_ext
+  analysis_match
+  hover_docs
+  project
+  binding_check)
+ (libraries tono_frontend lsp yojson))
 
 (executable
  (name tono_lsp)
- (modules tono_lsp workspace)
- (libraries tono_lsp_lib lsp jsonrpc yojson))
+ (modules tono_lsp workspace binding_runner)
+ (libraries tono_lsp_lib lsp jsonrpc yojson unix threads.posix))

@@ -4,7 +4,10 @@
 # directions: a regression on a green row, and a red row that starts passing
 # (update this record and README.md together, that is the progress report).
 #
-# outcome: pass | frontend-red | check-red | gen-red | build-red | test-red | run-red | refused
+# outcome: pass | frontend-red | check-red | editor-red | gen-red | build-red | test-red | run-red | refused
+# (check-red also requires the language server to publish the command's
+# verdict on the same file, line for line; editor-red is a check-red where
+# it did not)
 # id	target	source	expected
 bench	go	service.tono	pass
 bench	typescript	service.tono	pass
