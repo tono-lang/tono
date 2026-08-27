@@ -97,6 +97,7 @@ fn fresh_mode_writes_manifest_and_native_manifests() {
     // A starter .gitignore, with the dist entry left as the user's call.
     let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
     assert!(gitignore.contains("node_modules/"), "{gitignore}");
+    assert!(gitignore.contains(".tono/"), "{gitignore}");
     assert!(gitignore.contains("# /dist"), "{gitignore}");
 
     let _ = std::fs::remove_dir_all(&dir);

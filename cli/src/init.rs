@@ -349,6 +349,9 @@ fn scaffold_gitignore(dir: &Path) -> Result<(), String> {
          node_modules/\n\
          target/\n\
          \n\
+         # Editor indexes of the ext libraries (tono index).\n\
+         .tono/\n\
+         \n\
          # Generated SDKs land under dist/. Keep it committed when a mirror\n\
          # uses split_mode = \"subtree\"; uncomment to ignore it when mirrors\n\
          # use snapshot mode (the default) or there are no mirrors at all.\n\

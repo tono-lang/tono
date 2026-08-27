@@ -85,7 +85,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Args, String> {
 /// The manifest that governs `source`: `--config`, else the nearest
 /// `tono.toml` above the file. `None` when there is none, which leaves
 /// every language without a root of its own unchecked.
-fn manifest_for(source: &Path, config: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn manifest_for(source: &Path, config: Option<&str>) -> Option<PathBuf> {
     if let Some(c) = config {
         return Some(PathBuf::from(c));
     }
@@ -278,7 +278,7 @@ fn keep_selected_notes(notes: &mut Vec<String>, selection: &Selection) {
     });
 }
 
-fn frontend_error(e: FrontendError) -> String {
+pub(crate) fn frontend_error(e: FrontendError) -> String {
     match e {
         FrontendError::Unavailable { program } => {
             format!("could not run {program}; set TONO_FRONTEND to the frontend binary")
