@@ -1,5 +1,5 @@
 use super::*;
-use crate::codegen::verify::fixtures::gearbox_module;
+use crate::codegen::verify::fixtures::{gearbox_module, probe_consumer_module, scratch_free};
 use crate::codegen::verify::SiteKind;
 use crate::ir::{Prim, YieldsPos};
 
@@ -321,37 +321,14 @@ fn go_installed() -> bool {
 }
 
 /// A consumer module whose `gearbox` package is `source`, with the model
-/// bound to Go only (an ext bound in several languages is gated on a
-/// declared test covering it, and this is a generation of the types).
+/// bound to Go only.
 fn consumer(name: &str, source: &str) -> (std::path::PathBuf, Module) {
     let root = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("gearbox")).unwrap();
     std::fs::write(root.join("go.mod"), "module example.test\n\ngo 1.21\n").unwrap();
     std::fs::write(root.join("gearbox/gearbox.go"), source).unwrap();
-    let mut m = gearbox_module();
-    let lib = &mut m.ext_libs[0];
-    lib.langs.retain(|l| l.lang == "go");
-    lib.structs.clear();
-    lib.externs.retain(|d| d.name == "open");
-    lib.types[0].methods.truncate(1);
-    for decl in lib
-        .externs
-        .iter_mut()
-        .chain(lib.types.iter_mut().flat_map(|t| t.methods.iter_mut()))
-    {
-        decl.langs.retain(|l| l.lang == "go");
-    }
-    (root, m)
-}
-
-fn scratch_free(root: &Path) -> bool {
-    std::fs::read_dir(root).unwrap().all(|e| {
-        !e.unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".tono-check")
-    })
+    (root, probe_consumer_module("go"))
 }
 
 /// The real toolchain, when installed: the probe against a stand-in module

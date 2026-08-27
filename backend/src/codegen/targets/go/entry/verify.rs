@@ -26,7 +26,7 @@ use crate::codegen::verify::{
     parse_go_errors, run_probe, Probe, ProbeRun, RunOutcome, Scratch, Sdk, SiteKey,
 };
 use crate::ir::{
-    CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpaqueType, Prim, ShapeKind, Tref,
+    CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpaqueType, Prim, Tref,
 };
 
 const PROBE_FILE: &str = "probe.go";
@@ -55,29 +55,6 @@ impl Ctx<'_> {
 
     fn qualify(&self, spelling: &str) -> String {
         qualify(spelling, &self.alias, self.module)
-    }
-
-    /// The generated type `canonical` names, bare: the probe is a file of
-    /// the package that declares it. `Err` when the types are not beside
-    /// the probe, or when the name is an entry (a construction type, not
-    /// a declaration of the types file).
-    fn generated(&self, canonical: &str, what: &str) -> Result<String, String> {
-        self.sdk.require(what)?;
-        let shape = self
-            .module
-            .shapes
-            .iter()
-            .find(|s| crate::codegen::entries::local_name(&s.id) == canonical);
-        if let Some(shape) = shape {
-            if matches!(
-                shape.kind,
-                ShapeKind::Entry { .. } | ShapeKind::Config { .. }
-            ) {
-                return Err(format!("{canonical} is an entry, not a type"));
-            }
-        }
-        crate::codegen::entries::generated_type_name(self.module, canonical)
-            .ok_or_else(|| format!("{canonical} is not a type of module {}", self.module.name))
     }
 
     /// The handle's declared Go storage, qualified, when the probe can spell
@@ -138,14 +115,7 @@ fn probe_type(cx: &Ctx<'_>, t: &Tref) -> Result<String, String> {
                 cx.sdk_terms(&go.name)?;
                 return Ok(cx.qualify(&go.name));
             }
-            if let Some((owner, _)) = id.split_once('#') {
-                if owner != cx.module.name {
-                    return Err(format!(
-                        "{name} is a type of module {owner}, outside the ext's module"
-                    ));
-                }
-            }
-            let head = cx.generated(name, &format!("{name}, one of the module's own types,"))?;
+            let head = crate::codegen::verify::generated_shape(cx.module, cx.sdk, id)?;
             if args.is_empty() {
                 return Ok(head);
             }

@@ -37,16 +37,8 @@ fn generate_types_keeps_the_types_and_root_files_only() {
     for (target, lang) in [(TargetKind::Go, "go"), (TargetKind::TypeScript, "ts")] {
         // The library bound in the one language generated here: an ext bound
         // in several languages is gated on a declared test covering it.
-        let mut lib = crate::codegen::verify::fixtures::gearbox();
-        lib.langs.retain(|l| l.lang == lang);
-        for decl in lib
-            .externs
-            .iter_mut()
-            .chain(lib.types.iter_mut().flat_map(|t| t.methods.iter_mut()))
-        {
-            decl.langs.retain(|l| l.lang == lang);
-        }
-        model.modules[0].ext_libs = vec![lib];
+        model.modules[0].ext_libs = vec![crate::codegen::verify::fixtures::gearbox()];
+        crate::codegen::verify::fixtures::bind_only(&mut model.modules[0], lang);
         let files = generate_types(&model, target, &config, &casing_for(target)).unwrap();
         let paths: Vec<String> = files.iter().map(|f| f.path.display().to_string()).collect();
         let whole = generate_target(&model, target, &config, &casing_for(target)).unwrap();

@@ -423,15 +423,7 @@ fn the_go_module_is_read_from_the_nearest_go_mod() {
 #[test]
 fn generated_types_are_written_as_the_target_lays_them_out() {
     let mut module = gearbox_module();
-    let lib = &mut module.ext_libs[0];
-    lib.langs.retain(|l| l.lang == "ts");
-    for decl in lib
-        .externs
-        .iter_mut()
-        .chain(lib.types.iter_mut().flat_map(|t| t.methods.iter_mut()))
-    {
-        decl.langs.retain(|l| l.lang == "ts");
-    }
+    fixtures::bind_only(&mut module, "ts");
     let model = Model {
         tono_ir_version: crate::ir::TONO_IR_VERSION,
         modules: vec![module],

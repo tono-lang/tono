@@ -32,7 +32,7 @@ use crate::codegen::verify::{
     parse_tsc_errors, run_probe, Probe, ProbeRun, RunOutcome, Scratch, Sdk, SiteKey,
 };
 use crate::ir::{
-    CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpaqueType, Prim, ShapeKind, Tref,
+    CallArg, ExtLib, ExternDecl, ExternLang, ExternParam, Module, OpaqueType, Prim, Tref,
 };
 
 const PROBE_FILE: &str = "probe.ts";
@@ -59,27 +59,10 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// The generated type `canonical` names, rendered as the emitter renders
-    /// it and imported from the types file. `Err` when the types are not
-    /// beside the probe, or when the name is an entry (the entry file is
-    /// not a types file).
-    fn generated(&self, canonical: &str, what: &str) -> Result<String, String> {
-        self.sdk.require(what)?;
-        let shape = self
-            .module
-            .shapes
-            .iter()
-            .find(|s| crate::codegen::entries::local_name(&s.id) == canonical);
-        if let Some(shape) = shape {
-            if matches!(
-                shape.kind,
-                ShapeKind::Entry { .. } | ShapeKind::Config { .. }
-            ) {
-                return Err(format!("{canonical} is an entry, not a type"));
-            }
-        }
-        let name = crate::codegen::entries::generated_type_name(self.module, canonical)
-            .ok_or_else(|| format!("{canonical} is not a type of module {}", self.module.name))?;
+    /// The generated type `id` names (see `verify::generated_shape`),
+    /// rendered as the emitter renders it and imported from the types file.
+    fn generated(&self, id: &str) -> Result<String, String> {
+        let name = crate::codegen::verify::generated_shape(self.module, self.sdk, id)?;
         self.generated.borrow_mut().insert(name.clone());
         Ok(name)
     }
@@ -181,14 +164,7 @@ fn probe_type(cx: &Ctx<'_>, t: &Tref) -> Result<String, String> {
                 cx.sdk_terms(&ts.name)?;
                 return Ok(cx.qualify(&ts.name));
             }
-            if let Some((owner, _)) = id.split_once('#') {
-                if owner != cx.module.name {
-                    return Err(format!(
-                        "{name} is a type of module {owner}, outside the ext's module"
-                    ));
-                }
-            }
-            let head = cx.generated(name, &format!("{name}, one of the module's own types,"))?;
+            let head = cx.generated(id)?;
             if args.is_empty() {
                 return Ok(head);
             }
@@ -244,10 +220,7 @@ fn arg_expr(
                     class_reference_name(cx.lib, cx.module, name)
                 ))
             }
-            None => cx.generated(
-                name,
-                &format!("{name}, a struct passed as a class reference,"),
-            ),
+            None => cx.generated(&format!("{}#{name}", cx.module.name)),
         },
         CallArg::SymbolCall(sc) => {
             let args = sc

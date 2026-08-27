@@ -1,5 +1,5 @@
 use super::*;
-use crate::codegen::verify::fixtures::gearbox_module;
+use crate::codegen::verify::fixtures::{gearbox_module, probe_consumer_module, scratch_free};
 use crate::ir::Prim;
 
 const PRESENT: Sdk = Sdk::Present;
@@ -359,9 +359,7 @@ fn tsc_installed() -> bool {
 }
 
 /// A consumer tree whose `@example/gearbox` package declares `dts`, with
-/// the model bound to TypeScript only (an ext bound in several languages is
-/// gated on a declared test covering it, and this is a generation of the
-/// types).
+/// the model bound to TypeScript only.
 fn consumer(name: &str, dts: &str) -> (std::path::PathBuf, Module) {
     let root = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -373,29 +371,7 @@ fn consumer(name: &str, dts: &str) -> (std::path::PathBuf, Module) {
     )
     .unwrap();
     std::fs::write(pkg.join("index.d.ts"), dts).unwrap();
-    let mut m = gearbox_module();
-    let lib = &mut m.ext_libs[0];
-    lib.langs.retain(|l| l.lang == "ts");
-    lib.structs.clear();
-    lib.externs.retain(|d| d.name == "open");
-    lib.types[0].methods.truncate(1);
-    for decl in lib
-        .externs
-        .iter_mut()
-        .chain(lib.types.iter_mut().flat_map(|t| t.methods.iter_mut()))
-    {
-        decl.langs.retain(|l| l.lang == "ts");
-    }
-    (root, m)
-}
-
-fn scratch_free(root: &Path) -> bool {
-    std::fs::read_dir(root).unwrap().all(|e| {
-        !e.unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".tono-check")
-    })
+    (root, probe_consumer_module("ts"))
 }
 
 /// The real toolchain, when installed: the probe against a stand-in package
@@ -609,7 +585,7 @@ fn a_class_reference_to_a_generated_struct_is_imported_or_listed_with_why() {
     let p = probe(&m, &m.ext_libs[0], &absent);
     assert!(
         p.skipped.contains(
-            &"op open: summary, a struct passed as a class reference, needs the generated SDK's types, which are not beside the probe (refused)"
+            &"op open: summary, one of the module's own types, needs the generated SDK's types, which are not beside the probe (refused)"
                 .to_string()
         ),
         "{:?}",

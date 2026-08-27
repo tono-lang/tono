@@ -259,6 +259,37 @@ impl Sdk {
     }
 }
 
+/// The name a probe writes for one of the module's own shapes (`id` as the
+/// IR names it), as the generated types file declares it: `Err` when the
+/// types are not beside the probe, when the shape belongs to another module
+/// (the check materializes the ext's own module), or when it is an entry or
+/// a config (construction, not a declaration of the types file).
+pub fn generated_shape(module: &Module, sdk: &Sdk, id: &str) -> Result<String, String> {
+    let name = crate::codegen::entries::local_name(id);
+    if let Some((owner, _)) = id.split_once('#') {
+        if owner != module.name {
+            return Err(format!(
+                "{name} is a type of module {owner}, outside the ext's module"
+            ));
+        }
+    }
+    sdk.require(&format!("{name}, one of the module's own types,"))?;
+    let shape = module
+        .shapes
+        .iter()
+        .find(|s| crate::codegen::entries::local_name(&s.id) == name);
+    if let Some(shape) = shape {
+        if matches!(
+            shape.kind,
+            crate::ir::ShapeKind::Entry { .. } | crate::ir::ShapeKind::Config { .. }
+        ) {
+            return Err(format!("{name} is an entry, not a type"));
+        }
+    }
+    crate::codegen::entries::generated_type_name(module, name)
+        .ok_or_else(|| format!("{name} is not a type of module {}", module.name))
+}
+
 /// The SDK's type declarations for one target, generated in memory by the
 /// pipeline `tono gen` runs (`pipeline::generate_types`): each module's
 /// `types` file and the SDK-root files it may import, nothing that imports
